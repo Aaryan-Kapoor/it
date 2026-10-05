@@ -1,0 +1,16 @@
+{
+  "name": "it-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE.md",
+  "description": "Brings what the user does on It pages into this conversation, and teaches Pi to use the it command.",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./extensions/it.js"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  }
+}

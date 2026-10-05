@@ -1,0 +1,19 @@
+{
+  "name": "it-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE.md",
+  "description": "Brings what the user does on It pages into the OpenClaw conversation that made the page, and teaches the agent to use the it command.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.9.6"
+    },
+    "install": {
+      "minHostVersion": ">=2026.9.6"
+    }
+  }
+}

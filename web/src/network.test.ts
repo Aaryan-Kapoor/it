@@ -1,0 +1,296 @@
+// Adding a display and adding a machine, in a stand-in browser with a stand-in backend. What
+// they must get right: the address given is one another device can really open, which on the
+// machine It runs on is the one the service told the backend and never `localhost`; while the
+// network is off the person is told how to turn it on, and the address appears by itself when
+// it is; and a code that has run out is taken down.
+import { getFunctionName } from 'convex/server'
+import { act, createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+
+const CODE = 'abcdefghij0123456789'
+const LAN = 'http://192.168.1.20:4700'
+const WIRE = 'http://192.168.1.31:4700'
+const SIX = 'http://[fd7a:115c:a1e0::cc01:2c98]:4700'
+
+const calls: string[] = []
+/** What the stand-in backend answers, by function. */
+const answers: Record<string, () => unknown> = {}
+/** What the queries the site watches say, by function. */
+let watched: Record<string, unknown>
+const ask = async (fn: unknown, _args?: unknown) => {
+  const name = getFunctionName(fn as never)
+  calls.push(name)
+  return answers[name]?.() ?? null
+}
+const client = { mutation: vi.fn(ask), query: vi.fn(ask), action: vi.fn(ask) }
+vi.mock('convex/react', () => ({
+  useConvex: () => client,
+  useMutation: (fn: unknown) => (args: unknown) => client.mutation(fn, args),
+  useQuery: (fn: unknown) => watched[getFunctionName(fn as never)],
+}))
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+/** The stand-in browser itself, for giving the site another address to have been reached by. */
+const browser = (globalThis as unknown as { jsdom: { reconfigure(to: { url: string }): void } }).jsdom
+const HOME = location.href
+let root: Root
+let host: HTMLElement
+let shown: React.ReactElement
+const show = async (what: React.ReactElement) => {
+  shown = what
+  host = document.body.appendChild(document.createElement('div'))
+  root = createRoot(host)
+  await act(async () => root.render(what))
+}
+/** What the backend says of the network changes, as it does under a browser that is watching. */
+const networkIs = async (said: { on: boolean; addresses: string[] } | undefined) => {
+  watched['network:get'] = said
+  // Shown again as the same thing, so that everything it remembers is kept
+  await act(async () => root.render(createElement(shown.type, shown.props as object)))
+}
+const button = (label: string) => [...host.querySelectorAll('button')].find((b) => b.textContent === label)
+const press = (label: string) => act(async () => button(label)!.click())
+const choose = (address: string) =>
+  act(async () => {
+    const select = host.querySelector('select')!
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, address)
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+const text = (selector: string) => host.querySelector(selector)?.textContent ?? null
+
+beforeEach(() => {
+  calls.length = 0
+  for (const name of Object.keys(answers)) delete answers[name]
+  answers['sessions:inviteScreen'] = () => ({ code: CODE, expiresAt: Date.now() + 600_000 })
+  answers['sessions:inviteMachine'] = () => ({ code: CODE, expiresAt: Date.now() + 600_000 })
+  watched = { 'displays:list': [], 'machines:list': [], 'network:get': { on: false, addresses: [] } }
+  localStorage.clear()
+  vi.stubGlobal('matchMedia', () => ({ matches: false }))
+})
+afterEach(async () => {
+  await act(async () => root.unmount())
+  host.remove()
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+  browser.reconfigure({ url: HOME })
+})
+
+describe('adding a display, in the browser on the machine It runs on', () => {
+  const displays = async () => {
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+  }
+
+  test('with the network on, the owner is given the machine’s address on the network to open on the other screen, a QR code of it, and the code in letters', async () => {
+    watched['network:get'] = { on: true, addresses: [LAN] }
+    await displays()
+    // Nothing is asked of the backend until the person asks for it
+    expect(calls).toEqual([])
+    expect(host.querySelector('.qr')).toBeNull()
+    await press('Add a display')
+    expect(calls).toEqual(['sessions:inviteScreen'])
+    expect(text('.pair-address')).toBe(`${LAN}/pair#${CODE}`)
+    expect(host.querySelector('.qr path')!.getAttribute('d')).toMatch(/^(M\d+ \d+h1v1h-1z)+$/)
+    expect(text('.pair-code')).toBe('abcd efgh ij01 2345 6789')
+    expect(host.textContent).toContain(`Or open ${LAN} there and type this code:`)
+    expect(host.textContent).toContain('The code pairs one browser, once, and works for ten minutes.')
+    // Nothing of the name this browser reached the site by, which opens nothing on another screen
+    expect(host.querySelector('.pairing')!.textContent).not.toContain('localhost')
+    // With one address there is nothing to choose
+    expect(host.querySelector('select')).toBeNull()
+  })
+
+  test('with the network off, it says to run `it network on` and gives no address, and the address appears by itself once the network is on', async () => {
+    await displays()
+    await press('Add a display')
+    expect(host.querySelector('.pair-address')).toBeNull()
+    expect(host.querySelector('.qr')).toBeNull()
+    expect(host.textContent).toContain('It answers only the machine it runs on until the network is turned on, so no other device can open it yet.')
+    expect(host.textContent).toContain('Run it network on on that machine, and the address to open on the other screen appears here.')
+    // A second browser on the same machine can be paired with the code meanwhile
+    expect(host.textContent).toContain('open http://localhost:3000 in it and type this code:')
+    expect(text('.pair-code')).toBe('abcd efgh ij01 2345 6789')
+    // `it network on` is run: the service tells the backend, and the panel changes under the person's eyes, with the same code
+    await networkIs({ on: true, addresses: [LAN] })
+    expect(text('.pair-address')).toBe(`${LAN}/pair#${CODE}`)
+    expect(host.querySelector('.qr')).not.toBeNull()
+    expect(host.textContent).not.toContain('it network on')
+    expect(calls).toEqual(['sessions:inviteScreen'])
+    // And back, when it is turned off again
+    await networkIs({ on: false, addresses: [] })
+    expect(host.querySelector('.pair-address')).toBeNull()
+    expect(host.textContent).toContain('Run it network on on that machine')
+  })
+
+  test('with several addresses, the one most likely to work is shown first and the others can be chosen, each with a QR code of its own', async () => {
+    watched['network:get'] = { on: true, addresses: [LAN, WIRE, SIX] }
+    await displays()
+    await press('Add a display')
+    expect(text('.pair-address')).toBe(`${LAN}/pair#${CODE}`)
+    const first = host.querySelector('.qr path')!.getAttribute('d')
+    expect([...host.querySelectorAll('option')].map((o) => o.textContent)).toEqual([LAN, WIRE, SIX])
+    expect(host.textContent).toContain('The machine It runs on has more than one address. If the other device cannot open that one, choose another:')
+    await choose(SIX)
+    expect(text('.pair-address')).toBe(`${SIX}/pair#${CODE}`)
+    expect(host.querySelector('.qr path')!.getAttribute('d')).not.toBe(first)
+    expect(host.textContent).toContain(`Or open ${SIX} there`)
+    // An address that has stopped being the machine's is not kept to: the first of those it has now is shown
+    await networkIs({ on: true, addresses: [WIRE] })
+    expect(text('.pair-address')).toBe(`${WIRE}/pair#${CODE}`)
+    expect(host.querySelector('select')).toBeNull()
+  })
+
+  test('with the network on and the machine on no network, it says that, and until the backend has said anything it says nothing of the network', async () => {
+    watched['network:get'] = undefined
+    await displays()
+    await press('Add a display')
+    expect(host.querySelector('.pair-address')).toBeNull()
+    expect(host.textContent).not.toContain('it network on')
+    expect(host.textContent).not.toContain('no address')
+    expect(text('.pair-code')).toBe('abcd efgh ij01 2345 6789')
+    await networkIs({ on: true, addresses: [] })
+    expect(host.textContent).toContain('The network is on, but the machine It runs on has no address on a network just now.')
+    expect(host.textContent).not.toContain('it network on')
+    expect(host.querySelector('.pair-address')).toBeNull()
+  })
+
+  test('a code that has run out is taken down, and another can be made', async () => {
+    vi.useFakeTimers()
+    watched['network:get'] = { on: true, addresses: [LAN] }
+    answers['sessions:inviteScreen'] = () => ({ code: CODE, expiresAt: Date.now() + 20_000 })
+    await displays()
+    await press('Add a display')
+    expect(host.querySelector('.pair-code')).not.toBeNull()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000)
+    })
+    expect(host.querySelector('.pair-code')).toBeNull()
+    expect(host.querySelector('.pair-address')).toBeNull()
+    expect(host.textContent).toContain('That code has run out.')
+    expect(button('Add a display')).toBeDefined()
+  })
+
+  test('when the backend will not make a code, what it said is shown and nothing else is', async () => {
+    const { ConvexError } = await import('convex/values')
+    answers['sessions:inviteScreen'] = () => Promise.reject(new ConvexError({ code: 'rate_limited', message: 'Too many at once. Try again in a moment.' }))
+    await displays()
+    await press('Add a display')
+    expect(text('[role="alert"]')).toBe('Too many at once. Try again in a moment.')
+    expect(host.querySelector('.pair-code')).toBeNull()
+  })
+})
+
+describe('adding a display, in an owner’s browser that reached the site over the network', () => {
+  test('the address this browser itself reached the site by is given first, since it is known to work, with the service’s others to choose from', async () => {
+    browser.reconfigure({ url: 'http://192.168.1.31:4700/displays' })
+    watched['network:get'] = { on: true, addresses: [LAN, WIRE, SIX] }
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    await press('Add a display')
+    expect(text('.pair-address')).toBe(`${WIRE}/pair#${CODE}`)
+    expect([...host.querySelectorAll('option')].map((o) => o.textContent)).toEqual([WIRE, LAN, SIX])
+    // It is given whatever the backend has or has not said yet
+    await networkIs(undefined)
+    expect(text('.pair-address')).toBe(`${WIRE}/pair#${CODE}`)
+  })
+})
+
+describe('what is said of an agent app on a machine', () => {
+  const machine = (seen: number, harnesses: unknown[], wanted: string[]) => ({
+    id: 'machine-1',
+    name: 'the desk',
+    lastSeenAt: seen,
+    connectorVersion: '0.1.0',
+    harnesses,
+    wanted,
+  })
+  const notes = () => [...host.querySelectorAll('.check-note')].map((note) => note.textContent)
+
+  test('an installed add-on is said to be installed, and a click is said to reach a conversation only while the machine is online', async () => {
+    const connected = [{ id: 'claude-code', version: '2.1.0', addon: 'connected' }]
+    watched['machines:list'] = [machine(Date.now(), connected, ['claude-code'])]
+    const { Machines } = await import('./machines')
+    await show(createElement(Machines))
+    expect(notes()).toEqual([
+      'Its add-on is installed, and this machine is online. What you do on a page is handed to the conversation that made it, where the app lets an add-on speak there.',
+    ])
+    await act(async () => root.unmount())
+    host.remove()
+    // The same machine, last heard from an hour ago
+    watched['machines:list'] = [machine(Date.now() - 3_600_000, connected, ['claude-code'])]
+    await show(createElement(Machines))
+    expect(notes()).toEqual(['Its add-on is installed. Nothing is handed to a conversation there until this machine is online.'])
+    expect(host.textContent).not.toContain('reaches the conversation')
+  })
+})
+
+describe('revoking a machine', () => {
+  test('the owner is asked first, and told how a machine that joined is used again: by leaving and being added again', async () => {
+    const asked: string[] = []
+    vi.stubGlobal('confirm', (words: string) => {
+      asked.push(words)
+      return asked.length > 1
+    })
+    watched['machines:list'] = [{ id: 'machine-1', name: 'the desk', lastSeenAt: Date.now(), connectorVersion: '0.1.0', harnesses: [], wanted: [] }]
+    const { Machines } = await import('./machines')
+    await show(createElement(Machines))
+    await press('Revoke')
+    expect(asked).toEqual([
+      'Revoke “the desk”? Its agents can ask nothing more of It from this moment, though an upload already begun may still finish. To use it again, run it logout on it and add it again with “Add a machine”.',
+    ])
+    // Not confirmed, nothing is asked of the backend
+    expect(calls).toEqual([])
+    await press('Revoke')
+    expect(calls).toEqual(['machines:revoke'])
+  })
+})
+
+describe('adding a machine', () => {
+  const machines = async () => {
+    const { Machines } = await import('./machines')
+    await show(createElement(Machines))
+  }
+
+  test('with the network on, the owner is given the one command to run on the other computer, with the machine’s address on the network and a code that works once', async () => {
+    watched['network:get'] = { on: true, addresses: [LAN, SIX] }
+    await machines()
+    expect(calls).toEqual([])
+    await press('Add a machine')
+    expect(calls).toEqual(['sessions:inviteMachine'])
+    expect(text('.pair-command')).toBe(`it login --url ${LAN} --code ${CODE}`)
+    expect(host.textContent).toContain('The code joins one machine, once, and works for ten minutes.')
+    expect(host.querySelector('.pairing')!.textContent).not.toContain('localhost')
+    // Another of the machine's addresses can be chosen, and one under IPv6 is written so that a shell reads it as one word
+    await choose(SIX)
+    expect(text('.pair-command')).toBe(`it login --url "${SIX}" --code ${CODE}`)
+  })
+
+  test('with the network off, it says to run `it network on` first, since another computer cannot reach It, and the command appears once it is on', async () => {
+    await machines()
+    await press('Add a machine')
+    expect(host.querySelector('.pair-command')).toBeNull()
+    expect(host.textContent).toContain('Run it network on on that machine, and the command to run on the other computer appears here.')
+    await networkIs({ on: true, addresses: [LAN] })
+    expect(text('.pair-command')).toBe(`it login --url ${LAN} --code ${CODE}`)
+    expect(calls).toEqual(['sessions:inviteMachine'])
+  })
+
+  test('a code that has run out is taken down, and what the backend refused is said', async () => {
+    vi.useFakeTimers()
+    watched['network:get'] = { on: true, addresses: [LAN] }
+    answers['sessions:inviteMachine'] = () => ({ code: CODE, expiresAt: Date.now() + 20_000 })
+    await machines()
+    await press('Add a machine')
+    expect(host.querySelector('.pair-command')).not.toBeNull()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000)
+    })
+    expect(host.querySelector('.pair-command')).toBeNull()
+    expect(host.textContent).toContain('That code has run out. Make another when the other computer is ready.')
+    const { ConvexError } = await import('convex/values')
+    answers['sessions:inviteMachine'] = () => Promise.reject(new ConvexError({ code: 'rate_limited', message: 'Too many at once. Try again in a moment.' }))
+    await press('Add a machine')
+    expect(text('[role="alert"]')).toBe('Too many at once. Try again in a moment.')
+  })
+})

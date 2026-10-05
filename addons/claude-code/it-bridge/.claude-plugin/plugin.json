@@ -1,0 +1,6 @@
+{
+  "name": "it-bridge",
+  "version": "0.1.0",
+  "description": "Brings what the user does on It pages into this conversation, and teaches Claude to use the it command.",
+  "author": { "name": "It" }
+}

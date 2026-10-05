@@ -1,0 +1,60 @@
+name: Contributor agreement
+
+# Asks every contributor with a commit in a pull request, apart from those on the list below,
+# to sign docs/CONTRIBUTOR_LICENSE_AGREEMENT.md, once, by posting one sentence as a comment on the
+# pull request. The signatures are kept in this repository, in signatures/cla.json on the branch
+# `cla-signatures`. The check this workflow reports is "Contributor agreement". Whether a pull
+# request can be merged without it is not decided here: it is the repository's branch
+# protection that makes the check required on master.
+#
+# It runs on pull_request_target, which gives it a token that can write and the workflow as it
+# is on the base branch, never as the pull request has it. It checks nothing out and runs none
+# of the pull request's code.
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+
+permissions: {}
+
+jobs:
+  cla:
+    name: Contributor agreement
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # A comment counts only on a pull request, and only when it holds the sentence or is "recheck"
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request &&
+        (github.event.comment.body == 'recheck' ||
+         contains(github.event.comment.body, 'I have read the CLA Document and I hereby sign the CLA')))
+    permissions:
+      # To run the check again once a signature is in
+      actions: write
+      # To write the signature to the branch that keeps them
+      contents: write
+      # To ask for the signature, and to lock a merged pull request so that one cannot be withdrawn
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-document: https://github.com/Aaryan-Kapoor/it/blob/master/docs/CONTRIBUTOR_LICENSE_AGREEMENT.md
+          path-to-signatures: signatures/cla.json
+          branch: cla-signatures
+          # The licensor does not sign an agreement with himself, and a bot cannot sign one. A
+          # repository variable named CLA_ALLOWLIST replaces this list when it is set.
+          allowlist: ${{ vars.CLA_ALLOWLIST || 'Aaryan-Kapoor,dependabot[bot]' }}
+          # The action's own wording is replaced: this is what a first-time contributor reads
+          custom-notsigned-prcomment: >-
+            Thank you for the contribution. Before it can be merged, $you need to sign the
+            [Contributor License Agreement](https://github.com/Aaryan-Kapoor/it/blob/master/docs/CONTRIBUTOR_LICENSE_AGREEMENT.md),
+            which is three sentences long. To sign it, post a comment on this pull request with
+            the sentence below. It is needed once, and covers later pull requests too.
+          custom-allsigned-prcomment: Every contributor with a commit in this pull request who is asked to sign the Contributor License Agreement has signed it.
+          signed-commit-message: $contributorName signed the contributor agreement
+          create-file-commit-message: Start the record of contributor agreement signatures
+          lock-pullrequest-aftermerge: true

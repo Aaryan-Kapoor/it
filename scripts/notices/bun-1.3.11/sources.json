@@ -1,0 +1,633 @@
+{
+  "bun": {
+    "repository": "https://github.com/oven-sh/bun",
+    "reports": "1.3.11+af24e281e",
+    "commit": "af24e281ebacd6ac77c0f14b4206599cf4ae1c9f",
+    "tag": "bun-v1.3.11",
+    "tagged": "a04817ce2b7f1a1e8b7cbf8af8f2c027ab072f1d",
+    "says": "Bun itself is MIT-licensed.",
+    "note": "Bun's repository at that commit has no license file but that statement at its root, and none of `LICENSE.md`, `README.md`, `package.json` and `docs/project/license.mdx` there has the words of the MIT license or says who holds the copyright in Bun. These are the words of the MIT license as mimalloc's `LICENSE` gives them at the commit named for it below, with the line that names mimalloc's copyright holders left out.",
+    "texts": [
+      {
+        "from": null,
+        "kept": "bun-MIT.txt"
+      }
+    ]
+  },
+  "webkit": {
+    "says": "## JavaScriptCore",
+    "repository": "https://github.com/oven-sh/WebKit",
+    "commit": "00e825523d549a556d75985f486e4954af6ab8c7",
+    "pinned": "cmake/tools/SetupWebKit.cmake",
+    "note": "The folders of it that Bun's statement names, `Source/JavaScriptCore` and `Source/WebCore`, hold these license files.",
+    "texts": [
+      {
+        "from": "Source/JavaScriptCore/COPYING.LIB",
+        "kept": "webkit-JavaScriptCore-COPYING.LIB.txt"
+      },
+      {
+        "from": "Source/WebCore/LICENSE-LGPL-2",
+        "kept": "webkit-WebCore-LICENSE-LGPL-2.txt"
+      },
+      {
+        "from": "Source/WebCore/LICENSE-LGPL-2.1",
+        "kept": "webkit-WebCore-LICENSE-LGPL-2.1.txt"
+      },
+      {
+        "from": "Source/WebCore/LICENSE-APPLE",
+        "kept": "webkit-WebCore-LICENSE-APPLE.txt"
+      }
+    ]
+  },
+  "links": {
+    "https://boringssl.googlesource.com/boringssl/+/refs/heads/master/LICENSE": "https://github.com/oven-sh/boringssl/blob/4f4f5ef8ebc6e23cbf393428f0ab1b526773f7ac/LICENSE",
+    "https://github.com/libarchive/libarchive/blob/master/COPYING": "https://github.com/libarchive/libarchive/blob/9525f90ca4bd14c7b335e2f8c84a4607b0af6bdf/COPYING",
+    "https://github.com/cloudflare/lol-html/tree/master/c-api": "https://github.com/cloudflare/lol-html/tree/e3aa54798602dd27250fafde1b5a66f080046252/c-api",
+    "https://github.com/unicode-org/icu/blob/main/icu4c/LICENSE": "https://github.com/unicode-org/icu/blob/ff3514f257ea10afe7e710e9f946f68d256704b1/icu4c/LICENSE",
+    "https://github.com/aklomp/base64/blob/master/LICENSE": "https://github.com/aklomp/base64/blob/bf058e571ac5002b75b03fed38e33ed4e8d45eff/LICENSE"
+  },
+  "libraries": [
+    {
+      "named": "boringssl",
+      "repository": "https://github.com/oven-sh/boringssl",
+      "commit": "4f4f5ef8ebc6e23cbf393428f0ab1b526773f7ac",
+      "pinned": "cmake/targets/BuildBoringSSL.cmake",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "boringssl-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "brotli",
+      "repository": "https://github.com/google/brotli",
+      "commit": "ed738e842d2fbdf2d6459e39267a633c4a9b2f5d",
+      "pinned": "cmake/targets/BuildBrotli.cmake",
+      "note": "Bun's repository names the tag `v1.1.0`, which is this commit.",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "brotli-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "libarchive",
+      "repository": "https://github.com/libarchive/libarchive",
+      "commit": "9525f90ca4bd14c7b335e2f8c84a4607b0af6bdf",
+      "pinned": "cmake/targets/BuildLibArchive.cmake",
+      "texts": [
+        {
+          "from": "COPYING",
+          "kept": "libarchive-COPYING.txt"
+        }
+      ]
+    },
+    {
+      "named": "lol-html",
+      "repository": "https://github.com/cloudflare/lol-html",
+      "commit": "e3aa54798602dd27250fafde1b5a66f080046252",
+      "pinned": "cmake/targets/BuildLolHtml.cmake",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "lol-html-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "mimalloc",
+      "repository": "https://github.com/oven-sh/mimalloc",
+      "commit": "1beadf9651a7bfdec6b5367c380ecc3fe1c40d1a",
+      "pinned": "cmake/targets/BuildMimalloc.cmake",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "mimalloc-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "picohttp",
+      "repository": "https://github.com/h2o/picohttpparser",
+      "commit": "066d2b1e9ab820703db0837a7255d92d30f0c9f5",
+      "pinned": "cmake/targets/BuildBun.cmake",
+      "note": "The library has no license file. This is the comment that its source file opens with.",
+      "texts": [
+        {
+          "from": "picohttpparser.c",
+          "kept": "picohttpparser-picohttpparser.c.txt"
+        }
+      ]
+    },
+    {
+      "named": "zstd",
+      "repository": "https://github.com/facebook/zstd",
+      "commit": "f8745da6ff1ad1e7bab384bd1f9d742439278e99",
+      "pinned": "cmake/targets/CloneZstd.cmake",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "zstd-LICENSE.txt"
+        },
+        {
+          "from": "COPYING",
+          "kept": "zstd-COPYING.txt"
+        }
+      ]
+    },
+    {
+      "named": "simdutf",
+      "repository": "https://github.com/oven-sh/WebKit",
+      "commit": "00e825523d549a556d75985f486e4954af6ab8c7",
+      "pinned": "cmake/tools/SetupWebKit.cmake",
+      "note": "Bun uses the simdutf that WebKit carries, and this is the license file WebKit keeps beside it.",
+      "texts": [
+        {
+          "from": "Source/WTF/wtf/simdutf/LICENSE-simdutf.txt",
+          "kept": "simdutf-LICENSE-simdutf.txt"
+        }
+      ]
+    },
+    {
+      "named": "tinycc",
+      "repository": "https://github.com/oven-sh/tinycc",
+      "commit": "12882eee073cfe5c7621bcfadf679e1372d4537b",
+      "pinned": "cmake/targets/BuildTinyCC.cmake",
+      "texts": [
+        {
+          "from": "COPYING",
+          "kept": "tinycc-COPYING.txt"
+        },
+        {
+          "from": "RELICENSING",
+          "kept": "tinycc-RELICENSING.txt"
+        }
+      ]
+    },
+    {
+      "named": "uSockets",
+      "repository": "https://github.com/oven-sh/bun",
+      "commit": "af24e281ebacd6ac77c0f14b4206599cf4ae1c9f",
+      "pinned": null,
+      "note": "Bun keeps this library in its own repository, and the text is from there.",
+      "texts": [
+        {
+          "from": "packages/bun-usockets/LICENSE",
+          "kept": "usockets-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "zlib-cloudflare",
+      "repository": "https://github.com/cloudflare/zlib",
+      "commit": "886098f3f339617b4243b286f5ed364b9989e245",
+      "pinned": "cmake/targets/BuildZlib.cmake",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "zlib-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "c-ares",
+      "repository": "https://github.com/c-ares/c-ares",
+      "commit": "3ac47ee46edd8ea40370222f91613fc16c434853",
+      "pinned": "cmake/targets/BuildCares.cmake",
+      "texts": [
+        {
+          "from": "LICENSE.md",
+          "kept": "c-ares-LICENSE.md.txt"
+        }
+      ]
+    },
+    {
+      "named": "libicu",
+      "repository": "https://github.com/unicode-org/icu",
+      "commit": "ff3514f257ea10afe7e710e9f946f68d256704b1",
+      "pinned": null,
+      "note": "Bun's build files name no commit of ICU. On Linux and on Windows `cmake/targets/BuildBun.cmake` links the ICU that comes with the WebKit Bun is built with, and on macOS the system's own, and Bun's statement calls it version 72. Which commit of ICU that WebKit was built with is not established. The text is from the tag `release-72-1` of ICU's repository, which is this commit.",
+      "texts": [
+        {
+          "from": "icu4c/LICENSE",
+          "kept": "icu-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "libbase64",
+      "repository": "https://github.com/aklomp/base64",
+      "commit": "bf058e571ac5002b75b03fed38e33ed4e8d45eff",
+      "pinned": null,
+      "note": "Bun's build files name no commit of this library, and Bun's repository keeps no source of it: what it keeps under `src/base64` is a file of its own and one compiled file, `neonbase64`, which names no version. So which commit of the library is linked is not established. The text is from the commit that the library's `master` branch stood at on 2026-10-04.",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "libbase64-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "libuv",
+      "repository": "https://github.com/libuv/libuv",
+      "commit": "f3ce527ea940d926c40878ba5de219640c362811",
+      "pinned": "cmake/targets/BuildLibuv.cmake",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "libuv-LICENSE.txt"
+        },
+        {
+          "from": "LICENSE-extra",
+          "kept": "libuv-LICENSE-extra.txt"
+        }
+      ]
+    },
+    {
+      "named": "libdeflate",
+      "repository": "https://github.com/ebiggers/libdeflate",
+      "commit": "c8c56a20f8f621e6a966b716b31f1dedab6a41e3",
+      "pinned": "cmake/targets/BuildLibDeflate.cmake",
+      "texts": [
+        {
+          "from": "COPYING",
+          "kept": "libdeflate-COPYING.txt"
+        }
+      ]
+    },
+    {
+      "named": "uucode",
+      "repository": "https://github.com/oven-sh/bun",
+      "commit": "af24e281ebacd6ac77c0f14b4206599cf4ae1c9f",
+      "pinned": null,
+      "note": "Bun keeps this library in its own repository, and the text is from there. The licenses folder that the text speaks of is not in Bun's copy.",
+      "texts": [
+        {
+          "from": "src/deps/uucode/LICENSE.md",
+          "kept": "uucode-LICENSE.md.txt"
+        }
+      ]
+    },
+    {
+      "named": "uWebsockets",
+      "repository": "https://github.com/oven-sh/bun",
+      "commit": "af24e281ebacd6ac77c0f14b4206599cf4ae1c9f",
+      "pinned": null,
+      "note": "Bun keeps its fork of this library in its own repository, and the text is from there.",
+      "texts": [
+        {
+          "from": "packages/bun-uws/LICENSE",
+          "kept": "uwebsockets-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "Tigerbeetle's IO code",
+      "repository": "https://github.com/tigerbeetle/tigerbeetle",
+      "commit": "532c8b70b9142c17e07737ab6d3da68d7500cbca",
+      "pinned": null,
+      "note": "Bun's statement names this commit itself.",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "tigerbeetle-LICENSE.txt"
+        }
+      ]
+    }
+  ],
+  "polyfills": [
+    {
+      "named": "assert",
+      "package": "assert",
+      "version": "2.1.0",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-assert-2.1.0-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "browserify-zlib",
+      "package": "browserify-zlib",
+      "version": "0.2.0",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-browserify-zlib-0.2.0-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "buffer",
+      "package": "buffer",
+      "version": "6.0.3",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-buffer-6.0.3-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "constants-browserify",
+      "package": "constants-browserify",
+      "version": "1.0.0",
+      "note": "The package has no license file. This is what its `README.md` says under the heading \"License\".",
+      "texts": [
+        {
+          "from": "README.md",
+          "kept": "npm-constants-browserify-1.0.0-README.md.txt"
+        }
+      ]
+    },
+    {
+      "named": "crypto-browserify",
+      "package": "crypto-browserify",
+      "version": "3.12.1",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-crypto-browserify-3.12.1-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "domain-browser",
+      "package": "domain-browser",
+      "version": "4.23.0",
+      "texts": [
+        {
+          "from": "LICENSE.md",
+          "kept": "npm-domain-browser-4.23.0-LICENSE.md.txt"
+        }
+      ]
+    },
+    {
+      "named": "events",
+      "package": "events",
+      "version": "3.3.0",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-events-3.3.0-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "https-browserify",
+      "package": "https-browserify",
+      "version": "1.0.0",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-https-browserify-1.0.0-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "os-browserify",
+      "package": "os-browserify",
+      "version": "0.3.0",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-os-browserify-0.3.0-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "path-browserify",
+      "package": "path-browserify",
+      "version": "1.0.1",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-path-browserify-1.0.1-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "process",
+      "package": "process",
+      "version": "0.11.10",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-process-0.11.10-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "punycode",
+      "package": "punycode",
+      "version": "2.3.1",
+      "texts": [
+        {
+          "from": "LICENSE-MIT.txt",
+          "kept": "npm-punycode-2.3.1-LICENSE-MIT.txt"
+        }
+      ]
+    },
+    {
+      "named": "querystring-es3",
+      "package": "querystring-es3",
+      "version": "1.0.0-0",
+      "texts": [
+        {
+          "from": "License.md",
+          "kept": "npm-querystring-es3-1.0.0-0-License.md.txt"
+        }
+      ]
+    },
+    {
+      "named": "stream-browserify",
+      "without": "`src/node-fallbacks/bun.lock` in Bun's repository names no version of this package at that commit, and `src/node-fallbacks/package.json` there does not ask for it, so no text of it is given. `src/node-fallbacks/stream.js` there takes the package `readable-stream` in its place, which the lock file has at 4.7.0."
+    },
+    {
+      "named": "stream-http",
+      "package": "stream-http",
+      "version": "3.2.0",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-stream-http-3.2.0-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "string_decoder",
+      "package": "string_decoder",
+      "version": "1.3.0",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-string_decoder-1.3.0-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "timers-browserify",
+      "package": "timers-browserify",
+      "version": "2.0.12",
+      "texts": [
+        {
+          "from": "LICENSE.md",
+          "kept": "npm-timers-browserify-2.0.12-LICENSE.md.txt"
+        }
+      ]
+    },
+    {
+      "named": "tty-browserify",
+      "package": "tty-browserify",
+      "version": "0.0.1",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-tty-browserify-0.0.1-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "url",
+      "package": "url",
+      "version": "0.11.4",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-url-0.11.4-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "util",
+      "package": "util",
+      "version": "0.12.5",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-util-0.12.5-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "vm-browserify",
+      "package": "vm-browserify",
+      "version": "1.1.2",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "npm-vm-browserify-1.1.2-LICENSE.txt"
+        }
+      ]
+    }
+  ],
+  "unnamed": [
+    {
+      "named": "ls-hpack",
+      "repository": "https://github.com/litespeedtech/ls-hpack",
+      "commit": "8905c024b6d052f083a3d11d0a169b3c2735c8a1",
+      "pinned": "cmake/targets/BuildLshpack.cmake",
+      "note": "Bun's build file has it built with the xxHash it keeps under `deps/xxhash`, and on Windows with the `queue.h` it keeps under `compat/queue`. Neither has a license file of its own, and what is given for each is the comment its source file opens with.",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "lshpack-LICENSE.txt"
+        },
+        {
+          "from": "deps/xxhash/xxhash.c",
+          "kept": "lshpack-xxhash.c.txt"
+        },
+        {
+          "from": "compat/queue/sys/queue.h",
+          "kept": "lshpack-queue.h.txt"
+        }
+      ]
+    },
+    {
+      "named": "highway",
+      "repository": "https://github.com/google/highway",
+      "commit": "ac0d5d297b13ab1b89f48484fc7911082d76a93f",
+      "pinned": "cmake/targets/BuildHighway.cmake",
+      "texts": [
+        {
+          "from": "LICENSE",
+          "kept": "highway-LICENSE.txt"
+        },
+        {
+          "from": "LICENSE-BSD3",
+          "kept": "highway-LICENSE-BSD3.txt"
+        }
+      ]
+    },
+    {
+      "named": "HdrHistogram_c",
+      "repository": "https://github.com/HdrHistogram/HdrHistogram_c",
+      "commit": "be60a9987ee48d0abf0d7b6a175bad8d6c1585d1",
+      "pinned": "cmake/targets/BuildHdrHistogram.cmake",
+      "texts": [
+        {
+          "from": "LICENSE.txt",
+          "kept": "hdrhistogram-LICENSE.txt"
+        },
+        {
+          "from": "COPYING.txt",
+          "kept": "hdrhistogram-COPYING.txt"
+        }
+      ]
+    },
+    {
+      "named": "SQLite",
+      "repository": "https://github.com/oven-sh/bun",
+      "commit": "af24e281ebacd6ac77c0f14b4206599cf4ae1c9f",
+      "pinned": null,
+      "note": "Bun keeps SQLite in its own repository as one file. Its build files build that file in on every system but macOS, where `cmake/Options.cmake` has the system's own SQLite used. The file says that it is made of the source files of SQLite version 3.51.2. SQLite has no license file there, and this is the comment that the first of those source files opens with.",
+      "texts": [
+        {
+          "from": "src/bun.js/bindings/sqlite/sqlite3.c",
+          "kept": "sqlite-sqlite3.c.txt"
+        }
+      ]
+    },
+    {
+      "named": "zig-clap",
+      "repository": "https://github.com/oven-sh/bun",
+      "commit": "af24e281ebacd6ac77c0f14b4206599cf4ae1c9f",
+      "pinned": null,
+      "note": "Bun keeps this library in its own repository, and the text is from there. `src/deps/zig-clap/gyro.zzz` there gives its version as 0.3.0 and its source as <https://github.com/Hejsil/zig-clap>.",
+      "texts": [
+        {
+          "from": "src/deps/zig-clap/LICENSE",
+          "kept": "zig-clap-LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "named": "What WebKit's WTF carries",
+      "repository": "https://github.com/oven-sh/WebKit",
+      "commit": "00e825523d549a556d75985f486e4954af6ab8c7",
+      "pinned": "cmake/tools/SetupWebKit.cmake",
+      "note": "These are the license files that WebKit keeps in `Source/WTF`, beside the code of others that it carries there.",
+      "texts": [
+        {
+          "from": "Source/WTF/LICENSE-dragonbox.txt",
+          "kept": "webkit-WTF-LICENSE-dragonbox.txt"
+        },
+        {
+          "from": "Source/WTF/LICENSE-libc++.txt",
+          "kept": "webkit-WTF-LICENSE-libc++.txt"
+        },
+        {
+          "from": "Source/WTF/LICENSE-LLVM.txt",
+          "kept": "webkit-WTF-LICENSE-LLVM.txt"
+        },
+        {
+          "from": "Source/WTF/LICENSE-simde.txt",
+          "kept": "webkit-WTF-LICENSE-simde.txt"
+        }
+      ]
+    }
+  ]
+}

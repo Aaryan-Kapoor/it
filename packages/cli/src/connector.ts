@@ -1,0 +1,1136 @@
+// The connector: one background program on each machine where agents run. It holds a live
+// connection to It, hears about clicks on pages this machine's agents made, and gets each one
+// into the conversation that owns the page, by the best route that harness offers:
+//
+//   1. the add-on inside that conversation, which asks this program for its clicks
+//   2. the harness's own queue (Codex), which delivers when the conversation is next idle
+//   3. otherwise the click waits, visibly, until something listens (`it wait`, or the site)
+//
+// A click is leased before anything is done with it, so a connector that dies mid-delivery
+// loses nothing: the lease runs out and the click is offered again. Delivery is at least once.
+// Every click carries its own id in the text the agent reads, so a repeat can be told apart.
+import { execFile } from 'node:child_process'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { appendFileSync, chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import http from 'node:http'
+import path from 'node:path'
+import { type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson } from '@it/protocol'
+import { api, ask, call, enrolledHere, harnessEnv, home, inHome, live, Problem, readJson, VERSION, why, writePrivate } from './lib'
+import { alone } from './serve/backend'
+import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
+import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
+
+/** A click as the backend offers it: its data as JSON text, and the conversation it is for. */
+interface Offered {
+  id: string
+  artifact: string
+  title: string
+  name: string
+  payload: string
+  at: number
+  attended: boolean | null
+  session: { harness: string; id: string } | null
+  version?: number
+  stateRevision?: number
+  nowVersion?: number
+  nowStateRevision?: number
+}
+/** A click as an add-on receives it: its data as a value, and the one wording agents read. */
+export interface Delivered extends Click {
+  text: string
+}
+interface Held {
+  click: Offered
+  key: string
+  claimedAt: number
+  /** Until when the backend has confirmed this machine holds the click. Nothing is served past it. */
+  leaseUntil: number
+  /** Held for a running Codex turn's next hook, not for an add-on that is asking. */
+  forHook: boolean
+  /** An add-on has been given it and may be handing it to its agent this moment. */
+  served: boolean
+}
+export interface ConnectorInfo {
+  /** A socket only this user can open, where the system has them. */
+  socket?: string
+  port?: number
+  token: string
+  pid: number
+  version: string
+  startedAt: number
+}
+
+const LIVE_MS = 5_000 // an add-on that asked this recently is listening
+const KNOWN_MS = 90_000 // and one that asked this recently is still worth watching clicks for
+const HOLD_MS = 20_000 // how long a claimed click waits for an add-on that has stopped asking
+const RENEW_MS = 10_000 // how often the lease on a held click is extended
+const FRESH_MS = 8_000 // a click this new, in a running Codex turn, is held for the turn's next hook
+const HOOK_HOLD_MS = 60_000 // and this is how long it is held before Codex's queue gets it instead
+const TURN_QUIET_MS = 30 * 60_000 // a turn that has run no hook for this long is taken to be over
+const WAIT_MS = 5_000 // an `it wait` that said so this recently is still waiting
+const QUEUE_WAITS = [0, 10_000, 60_000, 600_000] // how long before each try at a harness's own queue; after the last, the click is left waiting
+const QUEUE_AT_ONCE = 3 // how many of a harness's queue commands run at the same time
+const QUEUES = ['codex'] // the harnesses that have a queue of their own
+const SERVE_MOST = 8 // how many clicks one answer to an add-on carries
+const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads no more than a quarter of a megabyte
+const keyOf = (harness: string, id: string) => `${harness}:${id}`
+/** Everything an add-on or a command asks the connector for. */
+const ROUTES = ['/health', '/session', '/clicks', '/waiting', '/ack']
+/** What was asked for, as it may be written down: one of the connector's own routes, or one fixed word for anything else. */
+const routeOf = (asked: string | undefined): string => {
+  const route = (asked ?? '').split('?')[0]!
+  return ROUTES.includes(route) ? route : 'unknown_route'
+}
+export const infoFile = () => inHome('connector.json')
+const socketFile = () => inHome('connector.sock')
+const journalFile = () => inHome('journal.jsonl')
+const aliasFile = () => inHome('aliases.json')
+const lockFile = () => inHome('connector.lock')
+
+function journal(event: string, id: string): void {
+  try {
+    if (existsSync(journalFile()) && statSync(journalFile()).size > 1_000_000)
+      writeFileSync(journalFile(), readFileSync(journalFile(), 'utf8').split('\n').slice(-500).join('\n'))
+    appendFileSync(journalFile(), `${JSON.stringify({ t: Date.now(), event, id })}\n`, { mode: 0o600 })
+  } catch {}
+}
+/** Clicks the journal says a harness's queue accepted, but which were never confirmed to It. */
+function queuedButUnconfirmed(): Set<string> {
+  const out = new Set<string>()
+  try {
+    for (const line of readFileSync(journalFile(), 'utf8').split('\n')) {
+      if (!line) continue
+      const e = JSON.parse(line) as { event: string; id: string }
+      // "queueing" is only the intent. If nothing follows it, the command may never have run,
+      // so the click is sent again: a repeat can be told apart by its id, a loss cannot be undone.
+      if (e.event === 'queued') out.add(e.id)
+      if (e.event === 'confirmed') out.delete(e.id)
+    }
+  } catch {}
+  return out
+}
+
+/**
+ * The words that start Codex with no shell in between. Elsewhere that is just `codex`. On
+ * Windows, Codex installed through npm is a .cmd file, which only a shell can start, and a
+ * shell would read a page's title as part of the command. So the program behind the .cmd file
+ * is started directly: Codex's own .exe when there is one, or Node with Codex's script.
+ * Null when neither is found; the click then waits where the person can see it.
+ */
+export function codexCommand(platform: string, pathVar: string, exists: (file: string) => boolean): string[] | null {
+  if (platform !== 'win32') return ['codex']
+  const dirs = pathVar.split(';').filter(Boolean)
+  const find = (name: string) => dirs.map((d) => path.win32.join(d, name)).find(exists)
+  const exe = find('codex.exe')
+  if (exe) return [exe]
+  const cmd = find('codex.cmd')
+  const node = find('node.exe')
+  if (!cmd || !node) return null
+  const script = path.win32.join(path.win32.dirname(cmd), 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+  return exists(script) ? [node, script] : null
+}
+
+/**
+ * Bytes as the text they are, or null when they are not UTF-8. Read loosely, a byte that is no
+ * character becomes a mark that stands for any such byte: the text would then not be what was
+ * sent, and a seal made over the text would hold for bytes it was never made over.
+ */
+function textOfBytes(bytes: Buffer): string | null {
+  try {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+  } catch {
+    return null
+  }
+}
+
+/** Null when Codex took the message. Otherwise why it did not, for the log: never what Codex printed, which may repeat the message. */
+export function codexQueue(thread: string, text: string): Promise<string | null> {
+  // A thread id is letters, digits and dashes. Anything else is not one, and is never put on a command line.
+  if (!/^[A-Za-z0-9_-]{1,200}$/.test(thread)) return Promise.resolve('its conversation id is not one Codex would have made')
+  const env = harnessEnv()
+  const codex = codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync)
+  if (!codex) return Promise.resolve('Codex was not found')
+  // No shell, ever: the text holds a page's title and what a person typed into it
+  return new Promise((resolve) => {
+    try {
+      execFile(codex[0]!, [...codex.slice(1), 'queue', `--thread=${thread}`, `--message=${text}`], { env, timeout: 30_000, windowsHide: true }, (err) => {
+        if (!err) return resolve(null)
+        const e = err as { code?: unknown; signal?: unknown; killed?: boolean }
+        resolve(
+          e.killed
+            ? 'Codex did not answer in thirty seconds'
+            : e.code === 'ENOENT'
+              ? 'Codex was not found'
+              : `Codex exited with ${e.signal ?? e.code ?? 'an error'}`,
+        )
+      })
+    } catch {
+      // Refused before it started: a message that cannot be an argument at all, which a title
+      // with a character no command line can carry makes it. Said in words of this program's
+      // own, since the error's words repeat the message, and counted like any other refusal.
+      resolve('Codex could not be started with that message')
+    }
+  })
+}
+
+const asClick = (c: Offered): Click => ({
+  id: c.id,
+  artifact: c.artifact,
+  title: c.title,
+  name: c.name,
+  payload: parseJson(c.payload) ?? null,
+  at: c.at,
+  ...(c.attended === null ? {} : { attended: c.attended }),
+  ...(c.version === undefined ? {} : { version: c.version }),
+  ...(c.stateRevision === undefined ? {} : { stateRevision: c.stateRevision }),
+  ...(c.nowVersion === undefined ? {} : { nowVersion: c.nowVersion }),
+  ...(c.nowStateRevision === undefined ? {} : { nowStateRevision: c.nowStateRevision }),
+})
+const asDelivered = (c: Offered): Delivered => ({ ...asClick(c), text: describeClick(asClick(c)) })
+
+/** Whether a connector is already answering for this folder. */
+async function alreadyRunning(): Promise<number | null> {
+  const existing = readJson<ConnectorInfo>(infoFile())
+  if (!existing || existing.pid === process.pid) return null
+  return (await local<{ ok: boolean }>('/health'))?.ok ? existing.pid : null
+}
+
+// A connector that cannot start says why as a Problem. Its code is one of a few fixed words, and
+// is all that is written to the connector's log; its message is for the person who ran the
+// command, and may name their folders.
+const alreadyThere = (pid?: number) => new Problem(`A connector is already running for this folder${pid ? ` (pid ${pid})` : ''}.`, 'already_running')
+/** Whom the lock names at this moment, where there is one that says. */
+const lockHolder = (): number | undefined => {
+  const pid = readJson<{ pid?: unknown }>(lockFile())?.pid
+  return typeof pid === 'number' ? pid : undefined
+}
+/** Whether the lock is this program's at this moment. */
+const holdsLock = () => lockHolder() === process.pid
+/** What a connector stops with when the lock it took has come to be another's: it does nothing more as the folder's connector. */
+const lockLost = () => new Problem('Another connector has taken this folder’s lock, so this one goes no further.', 'lock_lost')
+
+/**
+ * One connector for a folder, for as long as it runs. The lock is a file in It's folder, taken
+ * as the backend's is, by the one exclusion there is for a lock that is free and for one that
+ * was left behind: of however many programs come for it at the same moment, one has it.
+ *
+ * A lock is taken from its holder only when the holder is shown to be gone. One whose holder
+ * lives is that holder's, however long it takes to begin answering, and a connector that finds
+ * it so gives up and says that one is already running. And the lock is looked at again before
+ * anything is done as the folder's connector that another could not undo: before it listens,
+ * and before it writes down where it listens.
+ */
+export async function runConnector(say: (line: string) => void): Promise<void> {
+  const other = await alreadyRunning()
+  if (other) throw alreadyThere(other)
+  const left = lockHolder()
+  let mine = false
+  try {
+    await alone(
+      'connector',
+      () => {
+        mine = true
+        if (left !== undefined && left !== process.pid) say(`took over from a connector that is gone and left its lock behind (pid ${left})`)
+        return connecting(say)
+      },
+      0,
+    )
+  } catch (err) {
+    // Another has the lock, and lives
+    if (!mine && err instanceof Problem && err.code === 'busy') throw alreadyThere(lockHolder())
+    throw err
+  }
+}
+
+/** Everything the connector does once the folder's lock is its own. */
+async function connecting(say: (line: string) => void): Promise<void> {
+  // Something that goes wrong again and again (the backend cannot be reached, say) is said once
+  // every ten minutes for each thing it is about, however many other lines come in between
+  const saidAt = new Map<string, number>()
+  const seldom = (about: string, line: string) => {
+    if (Date.now() - (saidAt.get(about) ?? 0) < 600_000) return
+    if (saidAt.size > 500) saidAt.clear()
+    saidAt.set(about, Date.now())
+    say(line)
+  }
+  /** A conversation's id as it is written down: a short hash of it, enough to tell two apart in this log and to say nothing else, since some harnesses put a chat's own name in the id. */
+  const short = (id: string) => createHash('sha256').update(id).digest('hex').slice(0, 8)
+
+  // Which agent apps the person has connected on this machine, as It says, and what was found
+  // of each app the last time the machine was looked at. Nothing has been heard yet, and until
+  // It has said, no app is taken to be connected.
+  let wantedNow: string[] | null = null
+  let found: HarnessStatus[] = []
+  /**
+   * Whether the person has chosen this agent app, in `it setup` or on the site. The connector
+   * does nothing for an app that was not chosen: its conversations are not listened for, its
+   * add-on is given no click, and no command of its own is ever run. A click on a page such an
+   * app made waits, where the person sees it and `it wait` takes it.
+   */
+  const chosen = (harness: string) => wantedNow?.includes(harness) === true
+  /**
+   * Whether the app is connected as `it status` says it: chosen, and with It's add-on in it
+   * when it was last looked at. That is what running the app's own command rests on. An add-on
+   * that asks for its clicks has shown that it is there, and is answered once its app is chosen.
+   */
+  const connected = (harness: string) => chosen(harness) && found.some((h) => h.id === harness && (h.addon === 'connected' || h.addon === 'needs_approval'))
+
+  const sessions = new Map<string, { seen: number; busy: boolean; busyAt: number }>()
+  // A conversation that was cleared carries on under a new id; its pages follow it
+  const aliases = new Map<string, string>(Object.entries(readJson<Record<string, string>>(aliasFile()) ?? {}))
+  const follow = (key: string) => {
+    for (let hops = 0; hops < 10 && aliases.has(key); hops++) key = aliases.get(key)!
+    return key
+  }
+  // `it wait` on this machine: the agent is blocked on the click, so it goes there and nowhere
+  // else. A waiter names a page, or, naming none, waits for its own conversation's clicks only.
+  // The ids a waiter watches are the ones it was told (its own and its latest few earlier ones),
+  // and only clicks recorded under exactly those are left for it.
+  const waiters = new Map<string, { slug: string | null; sessions: Set<string>; seen: number }>()
+  const waitedFor = (w: { slug: string | null; sessions: Set<string> }, click: Offered) =>
+    w.slug === null ? click.session !== null && w.sessions.has(keyOf(click.session.harness, click.session.id)) : w.slug === click.artifact
+  const awaited = (click: Offered, now: number) => [...waiters.values()].some((w) => now - w.seen < WAIT_MS && waitedFor(w, click))
+  const held = new Map<string, Held>()
+  /** Handed to an agent, and not yet confirmed to It: confirmed again and again until it is. */
+  const toConfirm = new Map<string, string>()
+  /**
+   * For usage reporting, which counts a delivery once It has confirmed it: when the click was
+   * made, which harness it was for, and whether it joined a running turn or started one.
+   */
+  const counting = new Map<string, { at: number; harness: string | undefined; path: 'heard' | 'woke' }>()
+  /** Given up on by this machine, and It has not yet been told to set it aside. Told again until it has. */
+  const toPark = new Map<string, { for: { harness: string; id: string } | null; tag: string }>()
+  /** Set aside, and It has confirmed it. Should one come back on offer, it is left alone. */
+  const parked = new Set<string>()
+  /** Being put in a harness's queue right now; how often that has been tried, and when last. */
+  const queueing = new Set<string>()
+  /**
+   * Claimed, and given to the harness's own command, which has not yet said whether it took it.
+   * An agent that begins to wait for such a click is given it as well (see `/waiting`), and
+   * that is noted here, so that a refusal by the command is then no failure.
+   */
+  const submitting = new Map<string, { click: Offered; toWaiter: boolean }>()
+  /**
+   * Taken by Codex's queue while the conversation's turn was running. Codex hands such a click
+   * over only when that turn is done, so an agent that begins to wait for it in the same turn
+   * would wait for a message that stands behind its own turn. It is given the click as well
+   * (see `/waiting`). Kept, by the conversation it is for, until the conversation is heard to
+   * end the turn or begin another, which is when Codex itself hands the click over.
+   */
+  const behindTurn = new Map<string, { click: Offered; key: string }>()
+  const turnRunning = (key: string, now: number) => {
+    const s = sessions.get(key)
+    return s?.busy === true && now - s.busyAt < TURN_QUIET_MS
+  }
+  const queueTries = new Map<string, { n: number; at: number }>()
+  /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
+  const queues = new Map<string, Promise<void>>()
+  const unconfirmed = queuedButUnconfirmed()
+  let inbox: Offered[] = []
+  let routing = false
+  let stopping: ((code: number) => void) | null = null
+
+  let confirming = false
+  async function confirmAll(): Promise<void> {
+    if (confirming) return
+    confirming = true
+    try {
+      await confirmEach()
+    } finally {
+      confirming = false
+    }
+  }
+  async function confirmEach(): Promise<void> {
+    for (const [id, route] of toConfirm) {
+      try {
+        const done = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route })
+        journal('confirmed', id)
+        toConfirm.delete(id)
+        const how = counting.get(id)
+        counting.delete(id)
+        // Counted once: not when It already had it down as handed over
+        if (how && done && !done.already) record('answer.delivered', { path: how.path, after: timeBand(Date.now() - how.at), agent: agentOf(how.harness) })
+      } catch (err) {
+        // Another machine took it over, or it is gone: either way it is not this one's to confirm
+        if (/conflict|not_found/.test(String((err as { code?: string }).code))) {
+          toConfirm.delete(id)
+          counting.delete(id)
+        }
+        // Otherwise it is tried again a second from now, for as long as it takes
+        else seldom('confirm', `could not tell It that click ${id} was handed over (${why(err)}); trying again`)
+      }
+    }
+  }
+  // What this machine remembers about a click (how often it was tried, that it was set aside)
+  // is about the click for one conversation. If its page changes hands, even to another
+  // conversation on this machine, it is a fresh click for the new one.
+  const tag = (click: Offered) => `${click.id}|${click.session ? keyOf(click.session.harness, click.session.id) : ''}`
+  const taken = (click: Offered) => held.has(click.id) || toConfirm.has(click.id) || queueing.has(click.id) || toPark.has(click.id) || parked.has(tag(click))
+  /** Tells It to set aside the clicks this machine has given up on, until It has heard. */
+  let parking = false
+  async function parkAll(): Promise<void> {
+    if (parking) return
+    parking = true
+    try {
+      for (const [id, { for: tried, tag: which }] of toPark) {
+        // The backend says whether it is set aside. While another machine holds the click it is
+        // not, and it is asked about again. A conversation that took nothing in all its tries
+        // has everything else that is waiting for it set aside with this click.
+        const done = await call<boolean>('mutation', api.delivery.park, { id, ...(tried ? { for: tried, all: true } : {}) }).then(
+          (set) => set !== false,
+          (err) => {
+            if (/not_found/.test(String((err as { code?: string }).code))) return true
+            seldom('park', `could not tell It that click ${id} was set aside (${why(err)}); trying again`)
+            return false
+          },
+        )
+        if (!done) continue
+        toPark.delete(id)
+        parked.add(which)
+        journal('parked', id)
+        if (parked.size > 2000) parked.delete(parked.values().next().value!)
+      }
+    } finally {
+      parking = false
+    }
+  }
+
+  /** For each conversation, the click that failed and is waiting to be tried again: nothing behind it goes first. */
+  const stalled = new Map<string, string>()
+  const stalledAt = new Map<string, number>()
+  async function queueNow(click: Offered): Promise<void> {
+    let keeping: ReturnType<typeof setInterval> | undefined
+    const line = click.session!.id
+    try {
+      // An earlier click for this conversation failed while this one was already in line
+      // behind it: this one waits its turn, and is put in line again on a later pass
+      if (stalled.has(line) && stalled.get(line) !== click.id) return
+      // While this click stood in line (behind an earlier one, or for one of the few places a
+      // command may run in), its agent may have begun to wait for it with `it wait`. The agent
+      // is then blocked on the click, and Codex's queue would only hand it over once that turn
+      // is done: so it is left where the waiter takes it.
+      if (awaited(click, Date.now())) return
+      // Nor is Codex's command run once Codex is not connected any more: the person may have
+      // disconnected it while the click stood in line
+      if (!connected('codex')) return
+      // Only if it is still for this conversation on this machine: the page may have changed
+      // hands while the click stood in line here
+      const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session! })
+      if (!got) return
+      // And looked at once more, now that the claim is answered: a waiter that began while it
+      // was being asked for cannot take what this machine holds, so it is given back to it. It
+      // is given back as well when Codex was disconnected in that time.
+      if (awaited(click, Date.now()) || !connected('codex')) {
+        journal('released', click.id)
+        await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+        return
+      }
+      // The command can take as long as a lease lasts, so the lease is kept up while it runs
+      keeping = setInterval(() => void call('mutation', api.delivery.renew, { ids: [click.id] }).catch(() => {}), RENEW_MS)
+      journal('queueing', click.id)
+      const sent = { click, toWaiter: false }
+      submitting.set(click.id, sent)
+      // What the person chose or typed is not put on a command line, where other users of the
+      // machine could read it: the agent is told the action, and where to read what it carried
+      const refused = await codexQueue(click.session!.id, describeClick(asClick(click), 0))
+      // Refused by the command, and given meanwhile to an agent that is waiting for it: the
+      // waiter has it and says so to It itself, so there is nothing to try again or set aside
+      if (refused !== null && sent.toWaiter) return
+      if (refused === null) {
+        journal('queued', click.id)
+        toConfirm.set(click.id, 'queue')
+        // Codex's queue starts a turn in a conversation that was not working
+        counting.set(click.id, { at: click.at, harness: 'codex', path: 'woke' })
+        record('agent.woken', { result: 'resumed', agent: 'codex' })
+        if (stalled.get(line) === click.id) stalled.delete(line)
+        const key = follow(keyOf('codex', line))
+        if (!sent.toWaiter && turnRunning(key, Date.now())) {
+          behindTurn.set(click.id, { click, key })
+          if (behindTurn.size > 200) behindTurn.delete(behindTurn.keys().next().value!)
+        }
+        await confirmAll()
+      } else {
+        const n = (queueTries.get(tag(click))?.n ?? 0) + 1
+        queueTries.set(tag(click), { n, at: Date.now() })
+        stalled.set(line, click.id)
+        stalledAt.set(click.id, Date.now())
+        record('agent.woken', { result: n >= QUEUE_WAITS.length ? 'failed' : 'declined', agent: 'codex' })
+        if (n >= QUEUE_WAITS.length) {
+          stalled.delete(line)
+          // Given up on from here. It is set aside so that it does not hide clicks that can be
+          // delivered; it is still waiting, and the person and `it wait` still see it.
+          say(`click ${click.id} could not be put in Codex's queue after ${n} tries (${refused}); it stays waiting`)
+          toPark.set(click.id, { for: click.session, tag: tag(click) })
+          await parkAll()
+        } else {
+          say(`click ${click.id} was not taken by Codex's queue (${refused}); try ${n} of ${QUEUE_WAITS.length}`)
+          await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+        }
+      }
+    } catch (err) {
+      say(`queue: click ${click.id}: ${why(err)}`)
+    } finally {
+      clearInterval(keeping)
+      submitting.delete(click.id)
+      queueing.delete(click.id)
+    }
+  }
+  // Only a few such commands at a time, however many clicks are waiting
+  let running = 0
+  const waitingForSlot: (() => void)[] = []
+  const withSlot = async (work: () => Promise<void>) => {
+    if (running >= QUEUE_AT_ONCE) await new Promise<void>((go) => waitingForSlot.push(go))
+    running++
+    try {
+      await work()
+    } finally {
+      running--
+      waitingForSlot.shift()?.()
+    }
+  }
+  /**
+   * Puts a click in its harness's own queue, behind any earlier click for the same conversation.
+   * False when it has to wait before it is tried again: the clicks behind it for the same
+   * conversation then wait too, so that what was pressed first still arrives first.
+   */
+  function queue(click: Offered): boolean {
+    const tried = queueTries.get(tag(click))
+    if (queueing.has(click.id)) return true
+    // Its tries are used up and it is on offer again (the machine that had taken it let it
+    // go): it is set aside again, and does not hold up its conversation's later clicks
+    if (tried && tried.n >= QUEUE_WAITS.length) {
+      toPark.set(click.id, { for: click.session, tag: tag(click) })
+      return true
+    }
+    if (queueing.size >= 50 || (tried && Date.now() - tried.at < QUEUE_WAITS[tried.n]!)) return false
+    queueing.add(click.id)
+    const key = click.session!.id
+    const next = (queues.get(key) ?? Promise.resolve()).then(() => withSlot(() => queueNow(click)))
+    queues.set(key, next)
+    void next.then(() => {
+      if (queues.get(key) === next) queues.delete(key)
+    })
+    return true
+  }
+
+  async function route(): Promise<void> {
+    if (routing) return
+    routing = true
+    try {
+      const now = Date.now()
+      // Telling It what was handed over is done beside this, never ahead of it: a slow answer
+      // there must not hold up renewing leases or taking new clicks
+      void confirmAll()
+      void parkAll()
+      // A held click stays held while something will come for it: an add-on that is asking, or
+      // a Codex turn that is still running and will reach a hook. Otherwise it goes back, so
+      // another route can have it.
+      /** Gives back a click that is held for an app the person has since disconnected: it is given to nothing there. Whether it was. */
+      const disconnected = async (id: string, h: Held): Promise<boolean> => {
+        if (!h.click.session || chosen(h.click.session.harness)) return false
+        held.delete(id)
+        journal('released', id)
+        say(`click ${id} was kept for an agent app that is not connected any more; it goes back to waiting`)
+        await call('mutation', api.delivery.release, { id }).catch(() => {})
+        return true
+      }
+      for (const [id, h] of held) {
+        if (await disconnected(id, h)) continue
+        const s = sessions.get(h.key)
+        const listening = !h.forHook && s !== undefined && now - s.seen < LIVE_MS
+        const hookComing = h.forHook && s?.busy === true && now - s.busyAt < TURN_QUIET_MS && now - h.claimedAt < HOOK_HOLD_MS
+        if (listening || hookComing) {
+          if (now < h.leaseUntil - LEASE_MS + RENEW_MS) continue
+          // Only a renewal the backend confirmed extends the lease. Past it the click may be
+          // someone else's, so serving it from here stops.
+          // Counted from before the request went out: the backend's clock started no later than that
+          const asked = Date.now()
+          const kept = await call<string[]>('mutation', api.delivery.renew, { ids: [id] }).catch(() => null)
+          // While that was being asked, the click may have been handed over or given to a waiting
+          // agent: it is not held here then, and nothing about it is lost
+          if (held.get(id) !== h) continue
+          // Or the person may have disconnected its app, and then it is not kept a moment longer
+          if (await disconnected(id, h)) continue
+          if (kept?.includes(id)) h.leaseUntil = asked + LEASE_MS
+          else if (kept !== null || now > h.leaseUntil - 2000) {
+            held.delete(id)
+            journal('lost', id)
+            say(
+              `click ${id} is not this machine's to deliver any more (${kept === null ? 'It could not be reached to keep it' : 'It gave it to another'}); it goes back to waiting`,
+            )
+          }
+        } else if (now - h.claimedAt > HOLD_MS && !h.served) {
+          held.delete(id)
+          journal('released', id)
+          say(`click ${id} was kept for ${h.forHook ? 'a Codex turn that ended without taking it' : 'an add-on that stopped asking'}; it goes back to waiting`)
+          await call('mutation', api.delivery.release, { id }).catch(() => {})
+        } else if (now > h.leaseUntil - 2000) {
+          held.delete(id)
+          journal('lost', id)
+        }
+      }
+      // Oldest first, so that what was pressed first arrives first. A conversation whose earlier
+      // click is waiting to be tried again has its later ones wait behind it.
+      const waitingBehind = new Set<string>()
+      // A click that held its conversation's line holds it until it is known to be done with:
+      // delivered, set aside, or so long gone from what is offered that something else has it.
+      // Being absent for a moment proves nothing: it is absent while its lease is given back.
+      for (const [line, id] of stalled) {
+        const done = toConfirm.has(id) || toPark.has(id) || [...parked].some((p) => p.startsWith(`${id}|`))
+        const longGone = !queueing.has(id) && !inbox.some((c) => c.id === id) && now - (stalledAt.get(id) ?? 0) > LEASE_MS + 90_000
+        if (done || longGone) {
+          stalled.delete(line)
+          stalledAt.delete(id)
+        }
+      }
+      for (const click of [...inbox].sort((a, b) => a.at - b.at)) {
+        if (taken(click)) continue
+        if (unconfirmed.has(click.id)) {
+          // Its harness's queue took it before a restart; all that was missing was telling It
+          unconfirmed.delete(click.id)
+          toConfirm.set(click.id, 'queue')
+          continue
+        }
+        if (!click.session || awaited(click, now)) continue
+        // A click for an app that is not connected is left where it is, for the person and `it wait`
+        if (!chosen(click.session.harness)) continue
+        const key = follow(keyOf(click.session.harness, click.session.id))
+        if (waitingBehind.has(key)) continue
+        const s = sessions.get(key)
+        const codex = click.session.harness === 'codex'
+        // An add-on that asks every second is listening. Codex's hooks only run at moments in a
+        // turn, so having heard from one says nothing about the next.
+        const listening = !codex && s !== undefined && now - s.seen < LIVE_MS
+        // A Codex turn that is running will reach a hook: after its next command, or when it stops
+        const inTurn = codex && turnRunning(key, now)
+        if (listening || (inTurn && now - click.at < FRESH_MS)) {
+          // Route 1: the add-on will ask for it, or the running turn's next hook will
+          const asked = Date.now()
+          const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session })
+          // An agent may have begun to wait for it while the claim was being asked for. A waiter
+          // cannot take what this machine holds, so the click is given back for it to take. It
+          // is given back as well when the person disconnected its app in that time.
+          if (got && (awaited(click, Date.now()) || !chosen(click.session.harness))) {
+            journal('released', click.id)
+            await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+          } else if (got) {
+            held.set(click.id, { click, key, claimedAt: now, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
+            journal('claimed', click.id)
+          }
+        } else if (codex && connected('codex')) {
+          // Route 2: Codex's own queue starts a turn when idle, or runs it after the current one.
+          // Not waited for here: one slow command must not hold up every other click.
+          if (!queue(click)) waitingBehind.add(key)
+        }
+        // Route 3: nothing to do. The click stays waiting and the site shows it.
+      }
+    } catch (err) {
+      say(`delivery: ${why(err)}`)
+    } finally {
+      routing = false
+    }
+  }
+
+  // ---- what add-ons on this machine ask ----
+  const token = randomBytes(24).toString('hex')
+  const handle = async (req: http.IncomingMessage, bodyText: string, gone: () => boolean): Promise<[number, unknown]> => {
+    // Who is asking comes first: nothing about the request is looked at before that. Over the
+    // socket, which only this user can open, knowing the token is enough. Over a port, which
+    // any program on the machine can connect to, the token itself is never sent: the request
+    // carries a code made from it, and so does the answer (see `sealed` below).
+    const known = info.socket
+      ? req.headers['x-it-token'] === token
+      : macOk(token, String(req.headers['x-it-nonce'] ?? ''), `${req.method}\n${req.url}\n${bodyText}`, String(req.headers['x-it-mac'] ?? ''))
+    if (!known) {
+      // Something on this machine that does not know the token: an add-on from before a
+      // restart, for a moment, or something that should not be asking at all
+      seldom('stranger', 'a request to the connector without its token was refused')
+      return [401, { error: 'not for you' }]
+    }
+    // What was asked for is whatever the caller wrote. Something that is no address is answered as that, and nothing is made of it
+    let url: URL
+    try {
+      url = new URL(req.url ?? '/', 'http://local')
+    } catch {
+      return [400, { error: 'that is no address' }]
+    }
+    if (req.method === 'GET' && url.pathname === '/health') {
+      const now = Date.now()
+      return [
+        200,
+        {
+          ok: true,
+          version: VERSION,
+          pid: process.pid,
+          waiting: inbox.length,
+          held: held.size,
+          sessions: [...sessions].filter(([, v]) => now - v.seen < LIVE_MS).map(([k]) => k),
+        },
+      ]
+    }
+    let body: Record<string, any> = {}
+    if (req.method === 'POST') {
+      const parsed = parseJson(bodyText || '{}')
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return [400, { error: 'send a JSON object' }]
+      body = parsed as Record<string, any>
+    }
+    const harness = String(url.searchParams.get('harness') ?? body.harness ?? '').slice(0, 40)
+    const id = String(url.searchParams.get('session') ?? body.session ?? '').slice(0, 200)
+    if (url.pathname === '/session' || url.pathname === '/clicks') {
+      if (!harness || !id) return [400, { error: 'say which harness and session' }]
+      // An add-on in an app that is not connected (one the person has disconnected, still
+      // running in a conversation that was open) is answered, given nothing, and not listened for
+      if (!chosen(harness)) {
+        if (wantedNow !== null)
+          seldom(
+            `unconnected:${agentOf(harness)}`,
+            `a ${agentOf(harness)} conversation asked for its clicks, and that app is not connected here; it is given none`,
+          )
+        return [200, url.pathname === '/session' ? { ok: true } : { clicks: [] }]
+      }
+      const key = keyOf(harness, id)
+      const s = sessions.get(key) ?? { seen: 0, busy: false, busyAt: 0 }
+      const isNew = Date.now() - s.seen > KNOWN_MS
+      s.seen = Date.now()
+      if (typeof body.busy === 'boolean') {
+        s.busy = body.busy
+        s.busyAt = Date.now()
+        // A turn has ended or a new one has begun: what Codex's queue held behind the turn is
+        // now handed over by Codex itself, and is not a waiter's to be given
+        if (url.pathname === '/session') for (const [clickId, b] of behindTurn) if (b.key === follow(key)) behindTurn.delete(clickId)
+      }
+      sessions.set(key, s)
+      let changed = false
+      // A conversation that is here under its own id is not somewhere else under another
+      if (aliases.delete(key)) changed = true
+      if (typeof body.was === 'string' && body.was && body.was !== id && body.was.length <= 200) {
+        const was = keyOf(harness, body.was)
+        // Whatever led to the old id leads straight to the new one, so no chain grows
+        for (const [from, to] of aliases) if (to === was) aliases.set(from, key)
+        aliases.set(was, key)
+        while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
+        changed = true
+      }
+      if (changed) writePrivate(aliasFile(), Object.fromEntries(aliases))
+      // The harness as It knows it, and never as whoever asked spelled it
+      if (isNew) say(`a ${agentOf(harness)} conversation is listening (${short(id)})`)
+      if (changed && typeof body.was === 'string') say(`a ${agentOf(harness)} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
+      if (isNew || changed) watch()
+      if (url.pathname === '/session') return [200, { ok: true }]
+      // A pass is started, and waited for only a moment: an add-on must have its answer at
+      // once, whatever the backend is doing, and what was claimed meanwhile is there next time
+      await Promise.race([route(), new Promise((r) => setTimeout(r, 300))])
+      // The person may have disconnected the app while that pass was asking It. Whether the app
+      // is connected is what counts at the moment a click is handed over, so it is looked at
+      // again here: nothing is handed to it now, and what was claimed for it goes back.
+      if (!chosen(harness)) return [200, { clicks: [] }]
+      const now = Date.now()
+      // A few at a time, oldest first, and never more than an add-on will read: the rest are
+      // given on its next asking, a second later
+      const mine: Held[] = []
+      // Measured as it will be sent, in bytes: a click in another alphabet takes three bytes a letter
+      let size = 20
+      for (const h of [...held.values()].filter((h) => h.key === key && now < h.leaseUntil - 1000).sort((a, b) => a.click.at - b.click.at)) {
+        size += Buffer.byteLength(JSON.stringify(asDelivered(h.click))) + 1
+        if (mine.length >= SERVE_MOST || (mine.length > 0 && size > SERVE_BYTES)) break
+        mine.push(h)
+      }
+      // Counted as given only if whoever asked is still there to be answered
+      if (gone()) return [200, { clicks: [] }]
+      for (const h of mine) {
+        if (!h.served) journal('served', h.click.id)
+        h.served = true
+      }
+      return [200, { clicks: mine.map((h) => asDelivered(h.click)) }]
+    }
+    if (req.method === 'POST' && url.pathname === '/waiting') {
+      const who = String(body.id ?? '')
+      if (!who) return [400, { error: 'say who is waiting' }]
+      if (body.done) waiters.delete(who)
+      else {
+        const slug = typeof body.slug === 'string' ? body.slug : null
+        // With no page named, the waiter says which conversation it is, and only that
+        // conversation's clicks are left for it: everyone else's are delivered as usual. A
+        // conversation that was cleared made its earlier pages under earlier ids; the waiter is
+        // told the latest few, and waits for clicks on those pages too.
+        const s = body.session as { harness?: unknown; id?: unknown } | undefined
+        const session =
+          slug === null && typeof s?.harness === 'string' && typeof s?.id === 'string' ? follow(keyOf(s.harness.slice(0, 40), s.id.slice(0, 200))) : null
+        const watched = session
+          ? [
+              session,
+              ...[...aliases]
+                .filter(([, to]) => follow(to) === session)
+                .map(([from]) => from)
+                .slice(-5),
+            ]
+          : []
+        const waiter = { slug, sessions: new Set(watched), seen: Date.now() }
+        waiters.set(who, waiter)
+        const handedBack: Offered[] = []
+        for (const [clickId, h] of held) {
+          if (!waitedFor(waiter, h.click)) continue
+          held.delete(clickId)
+          // What an add-on has been given and has not reported may be something it can only
+          // hand over with a command's result, and the command now running is the waiter. So
+          // the waiter is given it too, still held for this machine. Should the add-on hand it
+          // over as well, the agent can tell by its id that it is the same click.
+          if (h.served && Date.now() < h.leaseUntil - 1000) handedBack.push(h.click)
+          // Anything set aside for an add-on and not yet given to it goes back, so the waiter
+          // can have it. Not waited for: the waiter must have its answer at once.
+          else void call('mutation', api.delivery.release, { id: clickId }).catch(() => {})
+        }
+        // A click that Codex's own command has been started with, and has not yet answered for,
+        // cannot be taken back: Codex may have it already, and would hand it over only
+        // after the turn that is now waiting. So the waiter is given it too, still held for
+        // this machine. Should Codex hand it over as well, its id shows it is the same click.
+        for (const sent of submitting.values()) {
+          if (!waitedFor(waiter, sent.click)) continue
+          sent.toWaiter = true
+          handedBack.push(sent.click)
+        }
+        // And a click that Codex's queue has taken, and holds until the turn now running is
+        // done: the waiter is that turn, so it is given the click too, and given it once
+        for (const [clickId, b] of behindTurn) {
+          if (!turnRunning(b.key, Date.now())) behindTurn.delete(clickId)
+          else if (waitedFor(waiter, b.click)) {
+            behindTurn.delete(clickId)
+            handedBack.push(b.click)
+          }
+        }
+        const sessions = watched.map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
+        return [200, { ok: true, ...(session ? { sessions } : {}), ...(handedBack.length ? { clicks: handedBack } : {}) }]
+      }
+      return [200, { ok: true }]
+    }
+    if (req.method === 'POST' && url.pathname === '/ack') {
+      // The agent has it. It is never offered again from here, whatever happens to the report of that.
+      const ids: string[] = Array.isArray(body.ids) ? body.ids.filter((x: unknown): x is string => typeof x === 'string' && held.has(x)) : []
+      // An add-on that knows says whether the click started a turn or joined one that was
+      // running. One that does not say is taken to have been heard at once.
+      const woke = body.woke === true
+      // One report is one turn, however many clicks it carried: counted as one waking
+      if (woke && ids.length) record('agent.woken', { result: 'resumed', agent: agentOf(held.get(ids[0]!)!.click.session?.harness) })
+      for (const clickId of ids) {
+        const click = held.get(clickId)!.click
+        counting.set(clickId, { at: click.at, harness: click.session?.harness, path: woke ? 'woke' : 'heard' })
+        if (counting.size > 2000) counting.delete(counting.keys().next().value!)
+        held.delete(clickId)
+        toConfirm.set(clickId, 'addon')
+        journal('acked', clickId)
+      }
+      void confirmAll()
+      return [200, { ok: true, acked: ids.length }]
+    }
+    return [404, { error: 'no such thing' }]
+  }
+  const server = http.createServer((req, res) => {
+    // What is sent is kept as bytes and read as text once it is all here. It arrives in pieces
+    // that can end in the middle of a character, and a piece read by itself would turn that
+    // character into another: the text would then be neither what was sent nor what was sealed.
+    const pieces: Buffer[] = []
+    let size = 0
+    let tooLarge = false
+    // Whoever asked hung up before being answered
+    let hungUp = false
+    res.on('close', () => {
+      if (!res.writableFinished) hungUp = true
+    })
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > 65_536) tooLarge = true
+      else pieces.push(chunk)
+    })
+    req.on('end', () => {
+      const sent = tooLarge ? null : textOfBytes(Buffer.concat(pieces))
+      ;(tooLarge
+        ? Promise.resolve<[number, unknown]>([413, { error: 'too large' }])
+        : sent === null
+          ? Promise.resolve<[number, unknown]>([400, { error: 'send text' }])
+          : handle(req, sent, () => hungUp)
+      )
+        .catch((err): [number, unknown] => {
+          // A fault of the connector's own, and the only trace of it: an add-on is told nothing more than "that did not work".
+          // What was asked for is written as one of the connector's own words for it, and never as the caller wrote it
+          const asked = `${req.method === 'GET' || req.method === 'POST' ? req.method : 'other'} ${routeOf(req.url)}`
+          seldom(`fault:${asked}`, `a request to the connector failed (${asked}: ${why(err)})`)
+          return [500, { error: 'that did not work' }]
+        })
+        .then(([status, body]) => {
+          const text = JSON.stringify(body)
+          // The answer is sealed with the token too, so whoever asked can tell it came from the
+          // real connector and not from something else that took its port
+          const nonce = String(req.headers['x-it-nonce'] ?? '')
+          res.writeHead(status, {
+            'content-type': 'application/json',
+            ...(status !== 401 && nonce ? { 'x-it-mac': mac(token, nonce, `${status}\n${text}`) } : {}),
+          })
+          res.end(text)
+        })
+    })
+  })
+  server.on('clientError', (_err, socket) => socket.destroy())
+
+  // On systems that have them, a socket in It's own folder, which only this user can open: no
+  // other user of the machine can take its place if this program stops. Elsewhere, a port on
+  // this machine only, and the token.
+  const info: ConnectorInfo = { token, pid: process.pid, version: VERSION, startedAt: Date.now() }
+  // IT_CONNECTOR_PORT=1 is for testing the port route on a system that has sockets
+  const useSocket = process.platform !== 'win32' && process.env.IT_CONNECTOR_PORT !== '1'
+  // A socket's path can only be so long. Falling back to a port would give up what the socket
+  // is for, so a folder too deep for one is refused instead.
+  if (useSocket && Buffer.byteLength(socketFile()) > 100)
+    throw new Problem(`${home()} is too long a path for the connector's socket.`, 'home_too_long', 'Set IT_HOME to a shorter one.')
+  if (useSocket) {
+    rmSync(socketFile(), { force: true })
+    // Where the socket is, is where add-ons ask: only the holder of the lock may be found there
+    if (!holdsLock()) throw lockLost()
+    await new Promise<void>((resolve, reject) => server.once('error', reject).listen(socketFile(), resolve))
+    chmodSync(socketFile(), 0o600)
+    info.socket = socketFile()
+  } else {
+    if (!holdsLock()) throw lockLost()
+    await new Promise<void>((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve))
+    info.port = (server.address() as { port: number }).port
+  }
+  // The note says to every add-on and command where the folder's connector is. One that has
+  // come to be another's meanwhile is not written over: this one closes what it opened and stops
+  if (!holdsLock()) {
+    server.close()
+    if (info.socket) rmSync(info.socket, { force: true })
+    throw lockLost()
+  }
+  writePrivate(infoFile(), info)
+  // Where it listens is said by kind: the socket's own address would name the person's home folder
+  say(`connector ${VERSION} started (pid ${process.pid}); connector listening on ${info.socket ? 'its socket' : `127.0.0.1:${info.port}`}`)
+  // Usage counts are sent from here, in the background, for every command on this machine
+  const usage = startSender()
+  record('service.started', thisProgram())
+  let countedAt = Date.now()
+
+  // ---- what It says ----
+  let notOurs = false
+  /** It does not take this machine for one of the person's machines any more: it was revoked on the site, or everything It held was erased. Nothing more can be done from here, so the connector stops. */
+  const notOursNow = () => {
+    if (notOurs) return
+    say("this machine is not one of It's machines any more; stopping")
+    notOurs = true
+    stopping?.(0)
+  }
+  const client = live(
+    notOursNow,
+    // Waited out, and said: with no network, a busy backend or a clock that is wrong, nothing
+    // else would show why no click arrives
+    (err) => seldom('token', `could not get a token from It (${why(err)}); trying again`),
+  )
+  // Clicks are watched for the conversations that are here, and for harnesses with a queue of
+  // their own, of the apps the person has connected. When who is here changes, or which apps are
+  // connected, so does what is watched.
+  let watching = ''
+  let saidTooMany = false
+  let unwatch: (() => void) | null = null
+  function watch(): void {
+    const now = Date.now()
+    // The conversations that are here, the one heard from most recently first
+    const here = [...sessions]
+      .filter(([k, s]) => chosen(k.slice(0, k.indexOf(':'))) && (now - s.seen < KNOWN_MS || (s.busy && now - s.busyAt < TURN_QUIET_MS)))
+      .sort((a, b) => b[1].seen - a[1].seen)
+      .map(([k]) => k)
+    // A page made before a conversation was cleared is still recorded under its old id. Those
+    // ids come after every conversation that is here, so they never take a live one's place.
+    const before = [...aliases].filter(([from, to]) => here.includes(follow(to)) && !here.includes(from)).map(([from]) => from)
+    const named = [...here, ...before.reverse()]
+    if (named.length > LISTENING_MOST && !saidTooMany) {
+      saidTooMany = true
+      say(`more than ${LISTENING_MOST} conversations are open here; clicks for the ones heard from least recently wait until there is room`)
+    }
+    const listening = named
+      .slice(0, LISTENING_MOST)
+      // In a fixed order, so that the same set is not taken for a different one
+      .sort()
+      .map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
+    // A click is asked for an app's own queue only while that app is connected
+    const args = { listening, queues: QUEUES.filter(connected) }
+    const next = JSON.stringify(args)
+    if (next === watching) return
+    watching = next
+    unwatch?.()
+    unwatch = client.onUpdate(
+      api.delivery.inbox,
+      args,
+      (clicks: Offered[]) => {
+        inbox = clicks
+        void route()
+      },
+      (err) => say(`inbox: ${why(err)}`),
+    )
+  }
+  watch()
+
+  // A newer copy of this program has installed an add-on since this one started: the program
+  // was brought up to date and this connector went on running. It stops, with a failure so
+  // that whatever keeps it running starts it again, as the newer program.
+  const makeWay = () => {
+    if (!newerProgramSeen() || notOurs) return
+    say('a newer It has been installed on this machine; stopping, to be started again as it')
+    stopping?.(1)
+  }
+  // Nothing has been heard yet. The first answer is acted on whatever it says: an add-on
+  // unticked while the connector was off is removed even if nothing is wanted any more.
+  let wanted: string | null = null
+  // What is installed on the machine is looked at when the connector starts, when what is
+  // wanted changes, and every half hour: each look runs every harness's own command. The
+  // report in between says the connector is alive, with what was found last time.
+  found = await detectAll()
+  watch()
+  let lookedAt = Date.now()
+  let looking = false
+  const report = async (look = false) => {
+    if ((look || Date.now() - lookedAt > 30 * 60_000) && !looking) {
+      // One look at a time, and the time of it noted before it starts: a harness that is slow
+      // to answer must not have look after look queued up behind it
+      looking = true
+      lookedAt = Date.now()
+      try {
+        // Every half hour what is installed is also made to match what is wanted again, in
+        // case an install or a removal could not be finished the last time
+        // Not once this machine has left: what `it logout` took out stays out
+        if (!look && wantedNow && enrolledHere()) await reconcile(() => wantedNow ?? [], say, true).catch((err) => say(`add-ons: ${why(err)}`))
+        makeWay()
+        found = await detectAll()
+        watch()
+      } finally {
+        looking = false
+      }
+    }
+    await call('mutation', api.machines.report, { connectorVersion: VERSION, harnesses: found }).catch((err) => {
+      // The bridge would give this machine no token, even a fresh one: it has been revoked.
+      // Found out here within a minute, where the live connection would take until its own
+      // token ran out.
+      if ((err as { code?: string }).code === 'unauthenticated') notOursNow()
+      else say(`report: ${why(err)}`)
+    })
+  }
+  client.onUpdate(
+    api.machines.me,
+    {},
+    (me: { wanted: string[] }) => {
+      const next = [...me.wanted].sort().join(',')
+      if (next === wanted) return
+      wanted = next
+      wantedNow = me.wanted
+      // What is watched and what is held follow at once, before anything is installed or taken out
+      watch()
+      void route()
+      void reconcile(() => wantedNow ?? me.wanted, say, true)
+        .catch((err) => say(`add-ons: ${why(err)}`))
+        .then(() => report(true))
+        .then(makeWay)
+    },
+    (err) => say(`settings: ${why(err)}`),
+  )
+  await report()
+  const tick = setInterval(() => void route(), 1000)
+  const beat = setInterval(() => {
+    void report()
+    const now = Date.now()
+    for (const [k, s] of sessions) if (now - s.seen > 3_600_000) sessions.delete(k)
+    for (const [k, w] of waiters) if (now - w.seen > 60_000) waiters.delete(k)
+    // Another connector has the lock, which it could only take by finding no sign that this one lived: this one stops
+    if (!holdsLock()) {
+      say('another connector has taken over; stopping')
+      stopping?.(0)
+    }
+    if (queueTries.size > 1000) queueTries.clear()
+    // Anything still remembered about a click that has not stalled a line for an hour is forgotten
+    for (const [id, at] of stalledAt) if (now - at > 3_600_000) stalledAt.delete(id)
+    watch()
+    // Once a day while it runs, so that an installation left running is still counted as in use
+    if (now - countedAt > 86_400_000) {
+      countedAt = now
+      record('service.started', thisProgram())
+    }
+  }, 60_000)
+
+  const code = await new Promise<number>((resolve) => {
+    stopping = resolve
+    // It may have been found out before this point was reached
+    if (notOurs) resolve(0)
+    for (const sig of ['SIGINT', 'SIGTERM'] as const)
+      process.once(sig, () => {
+        say(`stopping (${sig})`)
+        resolve(0)
+      })
+  })
+  clearInterval(tick)
+  clearInterval(beat)
+  usage.stop()
+  // What is held goes back, and what was handed over is confirmed, all at once and for a few
+  // seconds at most: whoever asked this program to stop will not wait long, and anything not
+  // given back in that time goes back by itself when its lease runs out
+  await Promise.race([
+    Promise.allSettled([...[...held].filter(([, h]) => !h.served).map(([id]) => call('mutation', api.delivery.release, { id })), confirmAll()]),
+    new Promise((r) => setTimeout(r, 5000)),
+  ])
+  server.close()
+  await Promise.race([client.close(), new Promise((r) => setTimeout(r, 2000))])
+  // Only what is still this program's own: another connector may have started meanwhile and
+  // written its own file and socket in the same places
+  if (readJson<ConnectorInfo>(infoFile())?.pid === process.pid) {
+    rmSync(infoFile(), { force: true })
+    if (info.socket) rmSync(info.socket, { force: true })
+  }
+  say('stopped')
+  process.exitCode = code
+}
+
+/** The code that proves a message came from someone who knows the token, without the token being sent. */
+export const mac = (token: string, nonce: string, what: string) => createHmac('sha256', token).update(`${nonce}\n${what}`).digest('hex')
+function macOk(token: string, nonce: string, what: string, given: string): boolean {
+  if (!/^[0-9a-f]{16,64}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(given)) return false
+  return timingSafeEqual(Buffer.from(mac(token, nonce, what)), Buffer.from(given))
+}
+
+/**
+ * How `it hook` and `it wait` reach the connector on this machine. Null when it is not running.
+ * The request is sent to the connector itself, on a connection of this program's own: over a
+ * port, a runtime's own way of asking could be sent through a proxy named in the environment,
+ * and what is asked and answered here is a person's clicks.
+ */
+export async function local<T>(path: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<T | null> {
+  const info = readJson<ConnectorInfo>(infoFile())
+  if (!info || typeof info.token !== 'string') return null
+  const where =
+    typeof info.socket === 'string'
+      ? { path: info.socket }
+      : Number.isInteger(info.port) && info.port! > 0 && info.port! < 65536
+        ? { host: '127.0.0.1', port: info.port! }
+        : null
+  if (!where) return null
+  const body = init.body === undefined ? undefined : JSON.stringify(init.body)
+  const method = init.method ?? 'GET'
+  // Over the socket the token is shown. Over a port it never is: the request and the answer
+  // are each sealed with it instead, so a program that took the port learns nothing and can
+  // answer nothing that will be believed.
+  const nonce = randomBytes(16).toString('hex')
+  const proof: Record<string, string> =
+    'path' in where ? { 'x-it-token': info.token } : { 'x-it-nonce': nonce, 'x-it-mac': mac(info.token, nonce, `${method}\n${path}\n${body ?? ''}`) }
+  try {
+    const answered = await ask(where, {
+      method,
+      path,
+      headers: { ...proof, 'content-type': 'application/json' },
+      body,
+      // The whole exchange has this long, however slowly an answer trickles in, and an answer may
+      // be only so large: over a port, whatever is answering may not be the connector at all
+      signal: AbortSignal.timeout(init.timeoutMs ?? 1500),
+      most: 1_000_000,
+    })
+    // Read as text once it is all there: its seal is over the text as it was sent
+    const text = textOfBytes(answered.body)
+    const genuine = text !== null && ('path' in where || macOk(info.token, nonce, `${answered.status}\n${text}`, answered.headers.get('x-it-mac') ?? ''))
+    return answered.status === 200 && genuine ? ((parseJson(text) ?? null) as T | null) : null
+  } catch {
+    return null
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "it-bridge",
+  "name": "It",
+  "description": "Brings what the user does on It pages into the OpenClaw conversation that made the page, and teaches the agent to use the it command.",
+  "version": "0.1.0",
+  "categories": ["integrations"],
+  "activation": {
+    "onStartup": true
+  },
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,14 @@
+# The It add-on for Hermes Agent. Hermes loads it from ~/.hermes/plugins/it-bridge/ once it
+# is listed under plugins.enabled, which `hermes plugins enable it-bridge` does.
+name: it-bridge
+version: "0.1.0"
+description: "Brings what the user does on It pages into the Hermes conversation that made the page."
+author: "It"
+# The first Hermes whose plugins can address a message to one conversation by its session key.
+# An older Hermes does not know this line and ignores it; there the add-on loads and does nothing.
+requires_hermes: ">=0.20.1"
+provides_hooks:
+  - pre_llm_call
+  - on_session_end
+  - on_session_finalize
+  - subagent_start

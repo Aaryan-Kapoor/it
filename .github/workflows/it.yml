@@ -1,0 +1,434 @@
+name: It
+
+# Every action is pinned to a commit, no job keeps the checkout's credentials,
+# and the token each job is given can only read. No job is given a secret:
+# nothing here needs an account anywhere, so a pull request from a fork runs
+# exactly what a branch of this repository runs.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces the run before it. On master every
+# commit's run is left to finish: it is the record of whether that commit passed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # What It is built and tested with. The Node bundle itself
+  # runs on Node 22.13 or a later Node 22, on 23.4 or a later Node 23, and on
+  # any Node after that. The shipped CLI is a standalone program, so Node is
+  # the build's and the tests' runtime, never a user's.
+  NODE_VERSION: 24
+  # The Bun inside the standalone programs, which is the one the third-party
+  # notices describe. The programs are built with it and with no other.
+  BUN_VERSION: 1.3.11
+
+jobs:
+  # Lint, types and a build of everything the program carries: the in-page
+  # script, the add-ons, the site and the backend's functions.
+  check:
+    name: Lint, types, site build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # With every commit that leads to this one, which no other job needs: the check for
+      # credentials below reads all of them, from the first commit of the repository it is
+      # run in, and fails on a checkout that holds only the newest
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # Builds the site among the rest, having checked its types
+      - run: npm run generate
+      # Each check is run whatever became of the ones before it, so that one run says
+      # everything that is wrong. The job fails with any of them all the same.
+      - if: ${{ !cancelled() }}
+        run: npm run check:ci
+      - name: Nothing committed, now or in any earlier commit, holds a credential
+        if: ${{ !cancelled() }}
+        run: npm run check:history
+      - name: The third-party notices are what the bundles say
+        if: ${{ !cancelled() }}
+        run: npm run check:notices
+      - if: ${{ !cancelled() }}
+        run: npm run typecheck
+      - name: Nothing that git tracks was changed by the build
+        if: ${{ !cancelled() }}
+        run: git diff --exit-code -- .
+
+  # The unit tests: backend, content service, CLI, service and door, in-page
+  # script, site and add-ons, then the Hermes add-on's own in Python.
+  #
+  # Some of the service's tests start the real backend program. They find it by
+  # IT_BACKEND_BIN, and are skipped where that names nothing, so each system
+  # comes by the program first, the way a person's machine does: a first run of
+  # `it setup`, in a folder of its own, fetches it from its release and checks
+  # it against the checksum in the source.
+  #
+  # The content service's tests also run pages in Chromium and in Firefox, to
+  # see that It is put where each browser runs it first. Those are skipped where
+  # Playwright has no browser, so both are installed before the tests run.
+  #
+  # The door and the content service listen and keep their records differently
+  # under Bun, which is what the standalone program runs under, and Bun sends
+  # a request by other means than Node does. So their tests are run a second
+  # time under it, and with them the service's own tests and the test that
+  # nothing It asks of its own backend or its own door goes through a proxy.
+  #
+  # Linux and macOS are the gate. On Windows the four add-ons' tests are left
+  # out, because their stand-in connector listens at a socket in a folder, which
+  # nothing can on Windows, and the tests that run the command or the service
+  # as a program skip themselves there. What is left does not all pass on
+  # Windows yet, and the job there does not block.
+  test:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            experimental: false
+          - os: macos-latest
+            experimental: false
+          - os: windows-latest
+            experimental: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: npm ci
+      - run: npm run generate
+      # The whole of a first run but the background service and the agent apps: the program
+      # is fetched and checked, It's settings are made, the backend is started and given its
+      # functions, this machine is enrolled, and the backend is stopped again.
+      - name: A first run fetches the backend program and sets It up
+        timeout-minutes: 10
+        env:
+          IT_HOME: ${{ runner.temp }}/it-first-run
+        run: |
+          node packages/cli/dist/it.mjs setup --none --no-service
+          program="$(find "$IT_HOME/backend/bin" -type f -name 'convex-local-backend*' 2>/dev/null || true)"
+          [ -f "$program" ] || { echo "::error::the first run left no backend program under $IT_HOME/backend/bin"; exit 1; }
+          echo "IT_BACKEND_BIN=$program" >> "$GITHUB_ENV"
+      - name: Install the browsers that pages are run in
+        if: ${{ !cancelled() }}
+        run: npx playwright install --with-deps chromium firefox
+      # The tests are run whatever became of the steps before them, so that a system where
+      # one fails still says which tests pass there. The job fails with it all the same.
+      # Where the first run left no backend program, the tests that start it skip themselves,
+      # and that is said first, so that what passes is not read as the whole suite passing.
+      - name: Say so where the tests that start the backend program will be skipped
+        if: ${{ !cancelled() && env.IT_BACKEND_BIN == '' }}
+        run: echo "::warning::The first run left no backend program on this system, so the tests that start it are skipped in what follows, and the job fails for the first run all the same"
+      - if: ${{ !cancelled() }}
+        run: npm test
+      # Two steps, so that a system where the door's tests fail under Bun still says whether the
+      # content service's pass there
+      - name: The door, its notifications and what It asks of itself, under Bun
+        if: ${{ !cancelled() }}
+        run: bun test ./packages/cli/door.test.ts ./packages/cli/push.test.ts ./packages/cli/direct.test.ts
+      # On Linux alone: on macOS Bun's own test runner ends with a fault of Bun's in the middle
+      # of these, and the standalone program's first run, which is what they stand for, is run
+      # there by the job that starts the programs
+      - name: The service, under Bun
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: bun test ./packages/cli/serve.test.ts
+      - name: The content service, under Bun
+        if: ${{ !cancelled() }}
+        run: npm run test:bun -w @it/content
+      - if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: npm run test:hermes
+
+  # The programs people install: one file per system, built once. Every job
+  # that runs one downloads this artifact, so they all run the same bytes.
+  programs:
+    name: Standalone programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: npm ci
+      - run: npm run generate
+      # Refuses a program that does not carry the backend's functions
+      - id: build
+        run: node packages/cli/release.mjs
+      # Each of the three checks of what was built is run whatever became of the others, and
+      # the programs are kept only when all three passed
+      - name: The checksums match and the Linux program runs
+        run: |
+          set -euo pipefail
+          cd packages/cli/dist/bin
+          sha256sum -c SHA256SUMS
+          ./it-linux-x64 --version
+          ./it-linux-x64 --help > /dev/null
+      - name: The install script installs it, from a stand-in for the releases on this machine
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node e2e/install.mjs
+      - name: Bun bundles what the third-party notices say it does, and is the build of Bun they describe
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/notices.mjs --check --bun
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: it-programs
+          path: packages/cli/dist/bin/
+          retention-days: 7
+          if-no-files-found: error
+
+  # The macOS and Windows programs, which are built on Linux, each started on
+  # the system it is for, and that system's own install script run there. Both
+  # are part of the gate, so that an install script that stops working on
+  # either system stops a merge.
+  programs-smoke:
+    name: Program starts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    needs: programs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            program: it-darwin-arm64
+          - os: windows-latest
+            program: it-windows-x64.exe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: it-programs
+          path: ${{ runner.temp }}/it-programs
+      # It says its version and its commands. It is not set up here, and starts no service.
+      - name: Start it, in a folder of its own
+        working-directory: ${{ runner.temp }}/it-programs
+        env:
+          PROGRAM: ${{ matrix.program }}
+        run: |
+          set -euo pipefail
+          chmod +x "$PROGRAM"
+          export IT_HOME="$RUNNER_TEMP/it-home"
+          "./$PROGRAM" --version
+          "./$PROGRAM" --help > /dev/null
+      # install.sh on macOS and install.ps1 on Windows, neither of which the build machine can run
+      - name: The install script for this system installs it
+        run: node e2e/install.mjs "$RUNNER_TEMP/it-programs"
+
+  # Everything together on the runner, as a person has it: It running as one
+  # service, which starts the backend program, opens the door and runs the
+  # connector; the `it` command; and a real browser, paired with it. Run once
+  # with the command as the Node bundle (the whole suite) and once as the
+  # standalone program people install (the quick suite).
+  #
+  # e2e/stack.mjs starts It in a folder of its own, with a first run and then
+  # `it serve`, and stops it when it is asked to. The first start fetches the
+  # backend program, which is most of what e2e/ready.mjs waits for. That folder
+  # holds the keys It runs its backend with, so it is kept apart from the logs,
+  # which are uploaded. The stack runs the command it is given, IT_CLI for a
+  # bundle or IT_BIN for a standalone program, and builds none of its own.
+  #
+  # The whole suite takes about eleven and a quarter minutes, and the quick one
+  # four and a half to five. On a runner, where CI is set, the suite also turns
+  # the network on for the It it started and reaches it by the runner's own
+  # address.
+  e2e:
+    name: End to end (${{ matrix.cli }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    needs: programs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cli: node bundle
+            suite: ""
+          - cli: standalone program
+            suite: --quick
+    steps:
+      - name: Where this run keeps things
+        run: |
+          # The folder It lives in for this run, and the port everything in it is counted from
+          echo "IT_HOME=$RUNNER_TEMP/it-home" >> "$GITHUB_ENV"
+          echo "IT_PORT=4700" >> "$GITHUB_ENV"
+          # Where the stack keeps the service's log and where it is, and where the run keeps
+          # what its own programs wrote and what the backend kept, for the upload below
+          echo "IT_STACK_LOGS=$RUNNER_TEMP/it-logs" >> "$GITHUB_ENV"
+          echo "IT_E2E_LOGS=$RUNNER_TEMP/it-logs/run" >> "$GITHUB_ENV"
+          # And where the run notes the credentials it holds itself, for the check below to look
+          # for. Never part of what is uploaded.
+          echo "IT_E2E_INVENTORY=$RUNNER_TEMP/it-run-holds.jsonl" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+      # The Node bundle, with the site and the backend's functions inside it, named so that
+      # every script of the suite runs this one
+      - name: Build the Node bundle, and use it
+        if: matrix.cli == 'node bundle'
+        run: |
+          npm run generate
+          echo "IT_CLI=$GITHUB_WORKSPACE/packages/cli/dist/it.mjs" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        if: matrix.cli == 'standalone program'
+        with:
+          name: it-programs
+          path: ${{ runner.temp }}/it-programs
+      - name: Use the standalone program
+        if: matrix.cli == 'standalone program'
+        run: |
+          chmod +x "$RUNNER_TEMP/it-programs/it-linux-x64"
+          echo "IT_BIN=$RUNNER_TEMP/it-programs/it-linux-x64" >> "$GITHUB_ENV"
+      # The stack goes on running behind the steps that follow. What it ends with is written
+      # down beside its process id, which is how the step that stops it learns whether It
+      # stopped when it was asked to.
+      - name: Start It
+        id: stack
+        run: |
+          mkdir -p "$IT_STACK_LOGS"
+          nohup bash -c 'node e2e/stack.mjs & echo $! > "$RUNNER_TEMP/it-stack.pid"; wait $!; echo $? > "$RUNNER_TEMP/it-stack.ended"' > "$IT_STACK_LOGS/stack.log" 2>&1 &
+          # Waits until It answers: the backend program has been fetched and started, and the site is served
+          node e2e/ready.mjs 300
+      - name: The whole product, in a browser
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: node e2e/run.mjs $SUITE
+      # Run whatever became of the suite before it, where It was started: it needs the stack
+      # and nothing the suite did
+      - name: Notifications, as a browser with the site closed gets them
+        if: ${{ !cancelled() && matrix.cli == 'node bundle' && steps.stack.outcome == 'success' }}
+        run: node e2e/push.mjs
+      # Nothing is read while it can still be written to. The stack is asked to stop and waited
+      # for, and it asks the service in its turn: the service stops its connector, closes its
+      # door, and asks the backend program to stop. The step waits longer than the stack itself
+      # gives the service and the backend program between them. A stack that has not ended by
+      # then fails the step, and nothing it wrote is copied, read or kept. Once the stack has
+      # ended, what it and the run left behind is copied to one side: that copy is what is
+      # read, and what is kept. A stack that ended with anything but 0 fails the step after the
+      # copy is made: It did not stop when it was asked to, or stopped by itself before.
+      - name: Stop It, and set aside what was written
+        id: stop
+        if: always() && steps.stack.outcome != 'skipped'
+        working-directory: ${{ runner.temp }}
+        env:
+          # How many seconds the stack is given to end: more than it gives setup, the service
+          # and the backend program together
+          WAITS: 300
+        run: |
+          [ -f it-stack.pid ] && kill "$(cat it-stack.pid)" 2>/dev/null || true
+          for _ in $(seq 1 "$WAITS"); do [ -s it-stack.ended ] && break; sleep 1; done
+          [ -s it-stack.ended ] || { echo "::error::The stack had not ended $WAITS seconds after it was asked to stop, so nothing it wrote is read or kept"; exit 1; }
+          rm -rf it-kept && mkdir it-kept
+          [ -d it-logs ] && cp -R it-logs/. it-kept/
+          echo "set-aside=yes" >> "$GITHUB_OUTPUT"
+          ended="$(cat it-stack.ended)"
+          [ "$ended" = 0 ] || { echo "::error::The stack ended with $ended: It did not stop when it was asked to, or the stack had stopped by itself"; exit 1; }
+      # Every file of the copy is read to its end, for anything shaped like a credential, the
+      # credentials the run noted that it held, and what a page or a person sent. If the run's
+      # own check already found one, this fails whatever it finds itself. It runs only once the
+      # copy has been made, which is only once the stack has ended.
+      - name: Nothing that was written down holds a credential
+        id: scan
+        if: always() && steps.stop.outputs.set-aside == 'yes'
+        run: node e2e/logs.mjs "$RUNNER_TEMP/it-kept"
+      # Kept only when that check passed: a log found to hold a credential is not then put
+      # where everyone with access to the repository can download it. The check itself says
+      # which file and line.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: it-e2e-logs-${{ matrix.cli == 'node bundle' && 'bundle' || 'program' }}
+          path: ${{ runner.temp }}/it-kept/
+          retention-days: 7
+          if-no-files-found: warn
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # What ships is what blocks: a fault in something only the build or the tests use is
+      # reported, and does not stop every pull request until someone else fixes it
+      - name: What the product itself depends on
+        run: npm audit --omit=dev --audit-level=high
+      - name: Everything, the build's and the tests' tools included
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+  # The one check to require on the branch: green only when every job above
+  # is. It runs whatever became of them, so that it is never itself skipped,
+  # which a required check would count as passing. A job that failed, was
+  # cancelled, or was skipped because one it needs failed counts as red, and
+  # so does a result that is missing.
+  ok:
+    name: It is ready to merge
+    if: always()
+    needs: [check, test, programs, programs-smoke, e2e, audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every blocking job passed
+        working-directory: ${{ runner.temp }}
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          # How many jobs this one waits for: there must be that many results, each a pass
+          WAITED_FOR: 6
+        run: |
+          echo "results: $RESULTS"
+          passed=0
+          for result in $RESULTS; do
+            [ "$result" = "success" ] || { echo "::error::a job this one waits for did not pass"; exit 1; }
+            passed=$((passed + 1))
+          done
+          [ "$passed" -eq "$WAITED_FOR" ] || { echo "::error::there are results for $passed of the $WAITED_FOR jobs this one waits for"; exit 1; }

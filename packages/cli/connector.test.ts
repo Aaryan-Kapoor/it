@@ -1,0 +1,845 @@
+// The connector itself, started in a folder of its own, with stand-ins for the backend, for
+// Codex's own command and for usage reporting. What add-ons and `it wait` ask of it is asked for
+// real, over its socket and over its port.
+import { randomBytes } from 'node:crypto'
+import fs, { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import http from 'node:http'
+import { syncBuiltinESMExports } from 'node:module'
+import net from 'node:net'
+import os from 'node:os'
+import path from 'node:path'
+import { getFunctionName } from 'convex/server'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+
+const stand = vi.hoisted(() => ({
+  /** What the connector watches the backend for, by the name of the function, and how to tell it something new. */
+  watching: new Map<string, (value: any) => void>(),
+  /** What it last asked to be told of, for each function it watches. */
+  asking: new Map<string, any>(),
+  /** What a look at this machine finds of its agent apps. */
+  found: [] as { id: string; version?: string; addon: string }[],
+  /** Every call the connector made to the backend. */
+  calls: [] as { name: string; args: any }[],
+  /** What a call answers, when the test wants something other than the usual. Undefined leaves it to the usual. */
+  answer: null as null | ((name: string, args: any) => unknown),
+  /** Every time Codex's own command was started, and how the test ends it. */
+  codex: [] as { args: string[]; end: (err?: unknown) => void }[],
+}))
+vi.mock('node:child_process', async (original) => ({
+  ...(await original<typeof import('node:child_process')>()),
+  execFile: (_bin: string, args: string[], _options: unknown, done: (err: unknown) => void) => {
+    stand.codex.push({ args, end: (err) => done(err ?? null) })
+  },
+}))
+vi.mock('./src/setup', () => ({ detectAll: async () => stand.found, newerProgramSeen: () => false, reconcile: async () => {} }))
+vi.mock('./src/usage', () => ({
+  agentOf: (harness: unknown) => String(harness ?? 'unknown'),
+  record: () => {},
+  startSender: () => ({ stop: () => {} }),
+  thisProgram: () => ({}),
+  timeBand: () => '',
+}))
+vi.mock('./src/lib', async (original) => {
+  const real = await original<typeof import('./src/lib')>()
+  return {
+    ...real,
+    live: () => ({
+      onUpdate: (fn: any, args: unknown, heard: (value: any) => void) => {
+        stand.watching.set(getFunctionName(fn), heard)
+        stand.asking.set(getFunctionName(fn), args)
+        return () => {}
+      },
+      close: async () => {},
+    }),
+    call: async (_kind: string, fn: any, args: any) => {
+      const name = getFunctionName(fn)
+      stand.calls.push({ name, args })
+      const said = await stand.answer?.(name, args)
+      if (said !== undefined) return said
+      // The backend as it answers when nothing is in the way: what is asked for is given
+      if (name === 'delivery:claim' || name === 'delivery:renew') return args.ids
+      if (name === 'delivery:handedOff') return { already: false }
+      return null
+    },
+  }
+})
+
+import { type ConnectorInfo, infoFile, local, mac, runConnector } from './src/connector'
+import { readJson } from './src/lib'
+import { alone, startOf } from './src/serve/backend'
+
+// The real clock, kept from before any test puts a stand-in in its place
+const really = setTimeout
+const reallyNext = setImmediate
+const pause = (ms: number) => new Promise((r) => really(r, ms))
+async function until(what: () => boolean | Promise<boolean>, ms = 8000): Promise<void> {
+  const end = performance.now() + ms
+  while (!(await what())) {
+    if (performance.now() > end) throw new Error('what the test waited for did not happen')
+    await pause(10)
+  }
+}
+/**
+ * Everything that is ready to run has run. Told something, the connector waits on nothing but
+ * It's answers and Codex's own command before it has done all it does about it, and both of
+ * those are a test's to give here. So by the end of a turn it has done what it does, and what
+ * it has not done by then it does not do.
+ */
+const settled = () => new Promise((r) => reallyNext(r))
+/** The connector's once-a-second timer is a stand-in, and its other waits too when asked: its passes run when a test says. To be called before it starts. */
+const standIn = (waits = false) => vi.useFakeTimers({ toFake: [...(waits ? (['setTimeout', 'clearTimeout'] as const) : []), 'setInterval', 'clearInterval'] })
+/** A second passes for the connector whose timer is a stand-in: it makes the pass it makes every second, and that pass is over. */
+async function pass(times = 1): Promise<void> {
+  for (let i = 0; i < times; i++) {
+    vi.advanceTimersByTime(1000)
+    await settled()
+  }
+}
+
+const before = { ...process.env }
+let home = ''
+let stop: (() => Promise<void>) | null = null
+/** What the connector wrote to its log. */
+const said: string[] = []
+/** Codex and Pi as a look finds them when the person has connected both. */
+const CONNECTED = [
+  { id: 'codex', version: '1.0.0', addon: 'connected' },
+  { id: 'pi', version: '1.0.0', addon: 'connected' },
+]
+/**
+ * Starts a connector in a folder of its own. It is stopped, and the folder removed, when the
+ * test ends. Unless a test says otherwise, the person has chosen Codex and Pi and both have
+ * It's add-on in them, which is what It tells the connector once it is watching.
+ */
+async function start(
+  over: 'socket' | 'port' = 'socket',
+  apps: { wanted?: string[]; found?: typeof stand.found } = {},
+  /** What is put into the folder before the connector starts in it. */
+  first: (home: string) => void = () => {},
+): Promise<ConnectorInfo> {
+  stand.found = apps.found ?? CONNECTED
+  home = mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
+  process.env.IT_HOME = home
+  first(home)
+  if (over === 'port') process.env.IT_CONNECTOR_PORT = '1'
+  else delete process.env.IT_CONNECTOR_PORT
+  const had = { SIGTERM: new Set(process.listeners('SIGTERM')), SIGINT: new Set(process.listeners('SIGINT')) }
+  const running = runConnector((line) => said.push(line))
+  // It is up once it answers, watches the backend, and can be told to stop
+  const stopper = () => process.listeners('SIGTERM').find((l) => !had.SIGTERM.has(l)) as ((signal: string) => void) | undefined
+  await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inbox') && stand.watching.has('machines:me') && stopper() !== undefined)
+  wants(apps.wanted ?? ['codex', 'pi'])
+  stop = async () => {
+    stopper()!('SIGTERM')
+    await running
+    for (const sig of ['SIGTERM', 'SIGINT'] as const) for (const l of process.listeners(sig)) if (!had[sig].has(l)) process.removeListener(sig, l)
+  }
+  return readJson<ConnectorInfo>(infoFile())!
+}
+/** What It tells the connector the person has chosen on this machine. */
+const wants = (wanted: string[]) => stand.watching.get('machines:me')!({ wanted })
+afterEach(async () => {
+  // Whatever Codex command is still open is ended, so that nothing waits on it
+  for (const c of stand.codex) c.end()
+  await stop?.()
+  stop = null
+  vi.useRealTimers()
+  stand.watching.clear()
+  stand.asking.clear()
+  stand.calls.length = 0
+  said.length = 0
+  stand.codex.length = 0
+  stand.answer = null
+  if (home) rmSync(home, { recursive: true, force: true })
+  home = ''
+  for (const k of Object.keys(process.env)) if (!(k in before)) delete process.env[k]
+  Object.assign(process.env, before)
+})
+
+/** How to reach a connector, and what proves a request is from someone who may ask: its token over the socket, a code made from it over a port. */
+function reach(info: ConnectorInfo, method: string, pathname: string, body: string) {
+  if (info.socket) return { where: { socketPath: info.socket }, proof: { 'x-it-token': info.token } }
+  const nonce = randomBytes(16).toString('hex')
+  return {
+    where: { host: '127.0.0.1', port: info.port },
+    proof: { 'x-it-nonce': nonce, 'x-it-mac': mac(info.token, nonce, `${method}\n${pathname}\n${body}`) },
+  }
+}
+/** Sends a request whose body arrives in two pieces, cut at the byte the test chooses. Resolves with the status of the answer. */
+function sentInTwoPieces(info: ConnectorInfo, pathname: string, body: string, cut: number): Promise<number> {
+  const bytes = Buffer.from(body)
+  const { where, proof } = reach(info, 'POST', pathname, body)
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { ...where, path: pathname, method: 'POST', headers: { ...proof, 'content-type': 'application/json', 'content-length': bytes.length } },
+      (res) => {
+        res.resume().on('end', () => resolve(res.statusCode ?? 0))
+      },
+    )
+    req.on('error', reject)
+    req.write(bytes.subarray(0, cut))
+    setTimeout(() => req.end(bytes.subarray(cut)), 40)
+  })
+}
+
+describe('the lock one connector holds for a folder', () => {
+  const lock = () => path.join(home, 'connector.lock')
+  const TOOK = (pid: number) => `took over from a connector that is gone and left its lock behind (pid ${pid})`
+  /** A process number that no process has, and a process that lives and is no connector: the one this one was started by. */
+  const NOBODY = 999_999_999
+  const ALIVE = process.ppid
+  const kept = () => JSON.parse(readFileSync(lock(), 'utf8')) as { pid: number; holder: string }
+  /** A folder of this test's own, with nothing running in it yet. */
+  const folder = () => {
+    stand.found = CONNECTED
+    home = mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
+    process.env.IT_HOME = home
+  }
+  /** A lock as one is made on this machine, learnt by holding this folder's for a moment. */
+  const aLock = async () => {
+    let made: Record<string, unknown> = {}
+    await alone('connector', async () => {
+      made = JSON.parse(readFileSync(lock(), 'utf8'))
+    })
+    return made
+  }
+  /** The lock as a program that is gone left it, and as a program that lives holds it. */
+  const leftBehind = (shape: Record<string, unknown>) => JSON.stringify({ ...shape, pid: NOBODY, started: 'never', holder: 'a'.repeat(16) })
+  const heldByAnother = (shape: Record<string, unknown>) => JSON.stringify({ ...shape, pid: ALIVE, started: startOf(ALIVE) || '', holder: 'b'.repeat(16) })
+  /** Starts a connector in the folder as it is, and gives how its start ended: the code it failed with, or that it is running. */
+  const starting = async () => {
+    const had = { SIGTERM: new Set(process.listeners('SIGTERM')), SIGINT: new Set(process.listeners('SIGINT')) }
+    const stopper = () => process.listeners('SIGTERM').find((l) => !had.SIGTERM.has(l)) as ((signal: string) => void) | undefined
+    let failed: { code?: string; message?: string } | undefined
+    const running = runConnector((line) => said.push(line)).catch((err: { code?: string; message?: string }) => {
+      failed = err
+    })
+    stop = async () => {
+      stopper()?.('SIGTERM')
+      await running
+      for (const sig of ['SIGTERM', 'SIGINT'] as const) for (const l of process.listeners(sig)) if (!had[sig].has(l)) process.removeListener(sig, l)
+    }
+    await until(() => failed !== undefined || stopper() !== undefined)
+    return failed ? { code: failed.code, message: failed.message } : 'running'
+  }
+
+  test('names its holder for as long as the connector runs, is let go when it stops, and leaves nothing beside it', async () => {
+    await start()
+    expect(kept().pid).toBe(process.pid)
+    await stop?.()
+    stop = null
+    expect(readdirSync(home).filter((name) => name.startsWith('connector.'))).toEqual([])
+  })
+
+  test('is given its name only once it is whole: it is written under another name first, and nothing is ever under its own name that names no holder', async () => {
+    // Whom the lock named at the moment it was given its name, and whether anything had that name then
+    const given: { pid: unknown; there: boolean }[] = []
+    const real = fs.linkSync
+    fs.linkSync = ((from: string, to: string) => {
+      if (path.basename(to) === 'connector.lock') given.push({ pid: JSON.parse(readFileSync(from, 'utf8')).pid, there: existsSync(to) })
+      return real(from, to)
+    }) as typeof fs.linkSync
+    syncBuiltinESMExports()
+    try {
+      await start()
+    } finally {
+      fs.linkSync = real
+      syncBuiltinESMExports()
+    }
+    expect(given).toEqual([{ pid: process.pid, there: false }])
+  })
+
+  test('one left behind by a connector that is gone is taken over, and that is written down', async () => {
+    folder()
+    writeFileSync(lock(), leftBehind(await aLock()))
+    expect(await starting()).toBe('running')
+    expect([kept().pid, said.includes(TOOK(NOBODY))]).toEqual([process.pid, true])
+  })
+
+  test('one whose holder lives is never taken from it, however long that holder has had it and whatever it answers: the connector that finds it gives up and says that one is already running', async () => {
+    folder()
+    const theirs = heldByAnother(await aLock())
+    writeFileSync(lock(), theirs)
+    // Held since long ago, by a program that answers nothing where a connector would
+    const longAgo = new Date(Date.now() - 3_600_000)
+    utimesSync(lock(), longAgo, longAgo)
+    for (let n = 0; n < 2; n++) {
+      expect(await starting()).toEqual({ code: 'already_running', message: `A connector is already running for this folder (pid ${ALIVE}).` })
+      // Nothing of the holder's was touched, and nothing was opened in its place
+      expect([readFileSync(lock(), 'utf8'), existsSync(infoFile()), existsSync(path.join(home, 'connector.sock'))]).toEqual([theirs, false, false])
+    }
+    expect(said.filter((line) => line.startsWith('took over'))).toEqual([])
+  })
+
+  for (const over of ['socket', 'port'] as const) {
+    /** Runs a start of the connector with the lock made another's at a moment of the test's choosing, and gives how the start ended. */
+    const lostAt = async (moment: 'before it listens' | 'before it writes its note') => {
+      folder()
+      if (over === 'port') process.env.IT_CONNECTOR_PORT = '1'
+      else delete process.env.IT_CONNECTOR_PORT
+      const theirs = heldByAnother(await aLock())
+      const another = () => writeFileSync(lock(), theirs)
+      const [read, listen] = [fs.readFileSync, http.Server.prototype.listen]
+      /** How often anything was told to listen. */
+      let listened = 0
+      // The first thing a connector reads once the lock is its own is its note of conversations' earlier ids
+      if (moment === 'before it listens')
+        fs.readFileSync = ((file: fs.PathOrFileDescriptor, ...more: unknown[]) => {
+          if (typeof file === 'string' && path.basename(file) === 'aliases.json') another()
+          return (read as (...given: unknown[]) => unknown)(file, ...more)
+        }) as typeof fs.readFileSync
+      // And the last thing before its note is written is that it has begun to listen
+      http.Server.prototype.listen = function (this: http.Server, ...given: unknown[]) {
+        listened++
+        const listening = given.pop() as () => void
+        return (listen as (...all: unknown[]) => http.Server).call(this, ...given, () => {
+          if (moment === 'before it writes its note') another()
+          listening()
+        })
+      } as typeof http.Server.prototype.listen
+      syncBuiltinESMExports()
+      try {
+        return { ended: await starting(), theirs, listened }
+      } finally {
+        fs.readFileSync = read
+        http.Server.prototype.listen = listen
+        syncBuiltinESMExports()
+      }
+    }
+
+    test(`a connector whose lock has come to be another’s before it listens on its ${over} does not listen, and leaves that other’s lock and note alone`, async () => {
+      const { ended, theirs, listened } = await lostAt('before it listens')
+      expect([ended, listened]).toEqual([expect.objectContaining({ code: 'lock_lost' }), 0])
+      expect([readFileSync(lock(), 'utf8'), existsSync(infoFile()), existsSync(path.join(home, 'connector.sock'))]).toEqual([theirs, false, false])
+    })
+
+    test(`a connector whose lock has come to be another’s before it has written where it listens on its ${over} writes no note, and closes what it had opened`, async () => {
+      const { ended, theirs, listened } = await lostAt('before it writes its note')
+      expect([ended, listened]).toEqual([expect.objectContaining({ code: 'lock_lost' }), 1])
+      expect([readFileSync(lock(), 'utf8'), existsSync(infoFile()), existsSync(path.join(home, 'connector.sock'))]).toEqual([theirs, false, false])
+    })
+  }
+})
+
+describe.skipIf(process.platform === 'win32')('text that arrives in pieces, cut in the middle of a character', () => {
+  // Two characters of three bytes each: the cut falls after the first byte of the first
+  const NAME = '支付-1'
+  const body = JSON.stringify({ harness: 'pi', session: NAME })
+  const cut = Buffer.from(body).indexOf(Buffer.from('支')) + 1
+
+  for (const over of ['socket', 'port'] as const)
+    test(`a request to the connector over its ${over} is read as it was sent`, async () => {
+      const info = await start(over)
+      expect(over === 'socket' ? typeof info.socket : typeof info.port).toBe(over === 'socket' ? 'string' : 'number')
+      // Over a port the request is sealed, and a body read wrongly would not match its seal
+      expect(await sentInTwoPieces(info, '/session', body, cut)).toBe(200)
+      expect((await local<{ sessions: string[] }>('/health'))?.sessions).toEqual([`pi:${NAME}`])
+    })
+
+  for (const over of ['socket', 'port'] as const)
+    test(`an answer from the connector over its ${over} is read as it was sent`, async () => {
+      home = mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
+      process.env.IT_HOME = home
+      const token = 'ab'.repeat(24)
+      const text = JSON.stringify({ clicks: [{ id: 'click-1', payload: { note: NAME } }] })
+      const bytes = Buffer.from(text)
+      const at = bytes.indexOf(Buffer.from('支')) + 1
+      // Something answering as the connector would, in two pieces
+      const server = http.createServer((req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json', 'x-it-mac': mac(token, String(req.headers['x-it-nonce'] ?? ''), `200\n${text}`) })
+        res.write(bytes.subarray(0, at))
+        setTimeout(() => res.end(bytes.subarray(at)), 40)
+      })
+      const socket = path.join(home, 'stand-in.sock')
+      await new Promise<void>((r) => (over === 'socket' ? server.listen(socket, r) : server.listen(0, '127.0.0.1', r)))
+      try {
+        const where = over === 'socket' ? { socket } : { port: (server.address() as { port: number }).port }
+        writeFileSync(path.join(home, 'connector.json'), JSON.stringify({ ...where, token, pid: 1, version: 'x', startedAt: 0 }))
+        expect(await local('/clicks?harness=pi&session=s')).toEqual({ clicks: [{ id: 'click-1', payload: { note: NAME } }] })
+      } finally {
+        await new Promise((r) => server.close(r))
+      }
+    })
+})
+
+describe.skipIf(process.platform === 'win32')('a request whose bytes are not text', () => {
+  for (const over of ['socket', 'port'] as const)
+    test(`is refused over the connector’s ${over}, though it is sealed as the text it would be read as`, async () => {
+      const info = await start(over)
+      // Read loosely, a byte that is no character becomes the mark that stands for any such byte
+      const read = '{"harness":"pi","session":"\ufffd"}'
+      const bytes = Buffer.from(read)
+      const at = bytes.indexOf(Buffer.from('\ufffd'))
+      const sent = Buffer.concat([bytes.subarray(0, at), Buffer.from([0xff]), bytes.subarray(at + 3)])
+      const { where, proof } = reach(info, 'POST', '/session', read)
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.request({ ...where, method: 'POST', path: '/session', headers: { ...proof, 'content-length': sent.length } }, (res) => {
+          res.resume().on('end', () => resolve(res.statusCode ?? 0))
+        })
+        req.on('error', reject)
+        req.end(sent)
+      })
+      expect(status).toBe(400)
+      expect((await local<{ sessions: string[] }>('/health'))?.sessions).toEqual([])
+    })
+})
+
+describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s own queue, and an agent that begins to wait for it', () => {
+  const click = (n: number) => ({
+    id: `click-${n}`,
+    artifact: `page-${n}`,
+    title: 'A page',
+    name: 'approve',
+    payload: '{"plan":"B"}',
+    at: Date.now() - 10_000 + n,
+    attended: true,
+    session: { harness: 'codex', id: `thread-${n}` },
+  })
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inbox')!(clicks)
+  const waitingFor = (n: number) =>
+    local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
+      method: 'POST',
+      body: { id: `waiter-${n}`, session: { harness: 'codex', id: `thread-${n}` } },
+    })
+  const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
+
+  test('one that stood in line for a place is left for the waiter once its place comes', async () => {
+    await start()
+    // Three commands may run at once, so the fourth click waits for one of them to end
+    offered(click(0), click(1), click(2), click(3))
+    await until(() => stand.codex.length === 3)
+    expect(called('delivery:claim')).not.toContain('click-3')
+    expect(await waitingFor(3)).toMatchObject({ ok: true })
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-0'))
+    await settled()
+    // Its place came, and it was neither claimed nor given to Codex: the waiter takes it from It
+    expect(called('delivery:claim')).not.toContain('click-3')
+    expect(stand.codex.map((c) => c.args.find((a) => a.startsWith('--thread=')))).toEqual(['--thread=thread-0', '--thread=thread-1', '--thread=thread-2'])
+  })
+
+  test('one whose claim is answered after the waiter began is given back, and never reaches Codex', async () => {
+    await start()
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    offered(click(7))
+    await until(() => called('delivery:claim').includes('click-7'))
+    expect(await waitingFor(7)).toMatchObject({ ok: true })
+    answerClaim(['click-7'])
+    await until(() => called('delivery:release').includes('click-7'))
+    await settled()
+    expect(stand.codex).toEqual([])
+  })
+
+  test('one that Codex’s command already has is given to the waiter as well, and a refusal by the command is then no failure', async () => {
+    await start()
+    offered(click(5))
+    await until(() => stand.codex.length === 1)
+    // The command has been started and has not answered: the waiter is given the click itself
+    expect((await waitingFor(5))?.clicks?.map((c) => c.id)).toEqual(['click-5'])
+    stand.codex[0]!.end(Object.assign(new Error('refused'), { code: 1 }))
+    await settled()
+    // Nothing is given back or set aside from here: the waiter has it, and says so to It itself
+    expect(called('delivery:release')).toEqual([])
+    expect(called('delivery:park')).toEqual([])
+  })
+
+  const turn = (n: number, busy: boolean) => local('/session', { method: 'POST', body: { harness: 'codex', session: `thread-${n}`, busy } })
+  /** Offers a click, lets Codex's command take it, and waits until It has been told so. */
+  const takenByTheQueue = async (n: number) => {
+    const commands = stand.codex.length
+    offered(click(n))
+    await until(() => stand.codex.length === commands + 1)
+    stand.codex[commands]!.end()
+    await until(() => called('delivery:handedOff').includes(`click-${n}`))
+    // It has stopped having the click down as waiting, so only the connector can still give it to anyone
+    offered()
+  }
+
+  test('one that Codex’s queue took while the conversation’s turn was running is given to a waiter that begins in that turn, and only once', async () => {
+    await start()
+    expect(await turn(6, true)).toEqual({ ok: true })
+    await takenByTheQueue(6)
+    // Codex hands the click over only when the turn is done, and the turn is now waiting for the click
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    expect((await waitingFor(6))?.clicks).toBeUndefined()
+    // It was told once, by the queue, that the click was handed over
+    expect(called('delivery:handedOff')).toEqual(['click-6'])
+  })
+
+  test('one that Codex’s queue took is not given to a waiter once the turn has ended or another has begun, nor when no turn was running', async () => {
+    await start()
+    // The turn ends: Codex now starts one with the click, and the agent has it from Codex
+    await turn(4, true)
+    await takenByTheQueue(4)
+    await turn(4, false)
+    expect((await waitingFor(4))?.clicks).toBeUndefined()
+    // Another turn begins, which is the one Codex started with the click
+    await turn(2, true)
+    await takenByTheQueue(2)
+    await turn(2, true)
+    expect((await waitingFor(2))?.clicks).toBeUndefined()
+    // The conversation was not working, so Codex started a turn with the click at once
+    await takenByTheQueue(1)
+    expect((await waitingFor(1))?.clicks).toBeUndefined()
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('an agent app that is not connected', () => {
+  const click = (harness: string, n: number) => ({
+    id: `click-${n}`,
+    artifact: `page-${n}`,
+    title: 'A page',
+    name: 'approve',
+    payload: '{}',
+    at: Date.now() - 10_000 + n,
+    attended: true,
+    session: { harness, id: `conversation-${n}` },
+  })
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inbox')!(clicks)
+  const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
+  const session = (harness: string, n: number, more: Record<string, unknown> = {}) =>
+    local('/session', { method: 'POST', body: { harness, session: `conversation-${n}`, ...more } })
+  const clicksFor = (harness: string, n: number) => local<{ clicks: { id: string }[] }>(`/clicks?harness=${harness}&session=conversation-${n}`)
+
+  test('with none connected, Codex’s own command is never run for a click, and the connector asks It for no click of Codex’s queue', async () => {
+    standIn()
+    // Codex is on the machine, with nothing of It's in it, and the person chose no app
+    await start('socket', { wanted: [], found: [{ id: 'codex', version: '1.0.0', addon: 'not_connected' }] })
+    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: [] })
+    // Should a click for a Codex conversation be offered all the same, it is left where it is:
+    // when it is offered, and at each pass the connector makes afterwards
+    offered(click('codex', 1))
+    await settled()
+    await pass(2)
+    expect(stand.codex).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+  })
+
+  test('before It has said which apps the person chose, none is taken to be connected', async () => {
+    standIn()
+    await start('socket', { wanted: ['codex'] })
+    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: ['codex'] })
+    await stop?.()
+    stop = null
+    stand.watching.clear()
+    stand.asking.clear()
+    // The same machine, with It not yet heard from
+    home = mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
+    process.env.IT_HOME = home
+    const had = new Set(process.listeners('SIGTERM'))
+    const running = runConnector((line) => said.push(line))
+    await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inbox'))
+    stop = async () => {
+      ;(process.listeners('SIGTERM').find((l) => !had.has(l)) as (signal: string) => void)('SIGTERM')
+      await running
+    }
+    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: [] })
+    offered(click('codex', 2))
+    await settled()
+    await pass(2)
+    expect(stand.codex).toEqual([])
+    expect(called('delivery:claim')).toEqual([])
+  })
+
+  test('an app the person chose is not run either while It’s add-on is not in it: one that is too old, or has the add-on switched off', async () => {
+    standIn()
+    for (const addon of ['too_old', 'not_connected', 'unavailable', 'error']) {
+      await start('socket', { wanted: ['codex'], found: [{ id: 'codex', version: '1.0.0', addon }] })
+      expect([addon, stand.asking.get('delivery:inbox')]).toEqual([addon, { listening: [], queues: [] }])
+      offered(click('codex', 3))
+      await settled()
+      await pass(2)
+      expect([addon, stand.codex.length, called('delivery:claim')]).toEqual([addon, 0, []])
+      await stop?.()
+      stop = null
+    }
+    // One whose hooks the person has still to approve is connected, and its queue is how a click reaches it until they have
+    await start('socket', { wanted: ['codex'], found: [{ id: 'codex', version: '1.0.0', addon: 'needs_approval' }] })
+    offered(click('codex', 4))
+    await until(() => stand.codex.length === 1)
+  })
+
+  test('an add-on that asks from an app the person did not choose is answered and given nothing, and its conversation is not listened for', async () => {
+    standIn()
+    await start('socket', { wanted: ['codex'] })
+    expect(await session('pi', 5)).toEqual({ ok: true })
+    expect(await clicksFor('pi', 5)).toEqual({ clicks: [] })
+    expect((await local<{ sessions: string[] }>('/health'))?.sessions).toEqual([])
+    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: ['codex'] })
+    offered(click('pi', 5))
+    await settled()
+    await pass(2)
+    expect(called('delivery:claim')).toEqual([])
+    // It is said once, by the app's own name and nothing of the conversation's
+    expect(said.filter((line) => line.includes('is not connected here'))).toEqual([
+      'a pi conversation asked for its clicks, and that app is not connected here; it is given none',
+    ])
+    // Chosen, the same add-on is listened for and given its click
+    wants(['codex', 'pi'])
+    expect(await session('pi', 5)).toEqual({ ok: true })
+    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [{ harness: 'pi', id: 'conversation-5' }], queues: ['codex'] })
+    offered(click('pi', 5))
+    await until(() => called('delivery:claim').includes('click-5'))
+    expect((await clicksFor('pi', 5))?.clicks.map((c) => c.id)).toEqual(['click-5'])
+  })
+
+  test('a click held for an add-on goes back to waiting when the person disconnects its app, and Codex’s command is not run for one that stood in line', async () => {
+    await start()
+    await session('pi', 6)
+    offered(click('pi', 6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    expect((await local<{ held: number }>('/health'))?.held).toBe(1)
+    // Three of Codex's commands may run at once, so a fourth click stands in line behind them
+    offered(click('pi', 6), click('codex', 10), click('codex', 11), click('codex', 12), click('codex', 13))
+    await until(() => stand.codex.length === 3)
+    wants([])
+    await until(() => called('delivery:release').includes('click-6'))
+    expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: [] })
+    expect((await clicksFor('pi', 6))?.clicks).toEqual([])
+    // A place comes free for the click that stood in line, and Codex is not run for it
+    stand.codex[0]!.end()
+    await settled()
+    expect(stand.codex.length).toBe(3)
+    expect(called('delivery:claim')).not.toContain('click-13')
+  })
+
+  test('a click that was being claimed for an add-on when the person disconnected its app is not handed to the add-on that was asking, and goes back to waiting', async () => {
+    await start()
+    // The click is there before its conversation is heard from, so nothing is done with it yet
+    offered(click('pi', 8))
+    await settled()
+    expect(called('delivery:claim')).toEqual([])
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    // The add-on asks, and its asking is what has the click claimed for it
+    const asking = clicksFor('pi', 8)
+    await until(() => called('delivery:claim').includes('click-8'))
+    // While It is still answering the claim, the person disconnects the app
+    wants(['codex'])
+    answerClaim(['click-8'])
+    expect((await asking)?.clicks).toEqual([])
+    await until(() => called('delivery:release').includes('click-8'))
+    expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+    expect((await clicksFor('pi', 8))?.clicks).toEqual([])
+  })
+
+  test('a click already kept for an add-on is not handed to it when the person disconnects its app while the add-on’s asking is being answered', async () => {
+    // Every wait of the connector's is a stand-in here: no pass of its own runs unless the test
+    // says, and an asking is answered when the test has the moment it is given go by
+    standIn(true)
+    await start()
+    // One click is kept for a conversation that is listening, and another waits for a conversation not heard from yet
+    await session('pi', 20)
+    offered(click('pi', 20))
+    await until(() => called('delivery:claim').includes('click-20'))
+    offered(click('pi', 20), click('pi', 21))
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    // The second conversation is heard from, and the first one's add-on asks: answering it begins
+    // with a pass that claims the second click, and It is slow to answer that
+    await session('pi', 21)
+    let answered = false
+    const asking = clicksFor('pi', 20).finally(() => (answered = true))
+    await until(() => called('delivery:claim').includes('click-21'))
+    // The person disconnects the app, and then the moment the add-on's asking is given goes by with It still not heard from
+    wants(['codex'])
+    await settled()
+    expect(answered).toBe(false)
+    vi.advanceTimersByTime(300)
+    expect((await asking)?.clicks).toEqual([])
+    // The click that was being claimed goes back when It answers, and the one that was kept at the connector's next pass
+    answerClaim(['click-21'])
+    await settled()
+    expect(called('delivery:release')).toEqual(['click-21'])
+    await pass()
+    expect(called('delivery:release').sort()).toEqual(['click-20', 'click-21'])
+    expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+  })
+
+  test('a click that was being claimed for a running Codex turn’s next hook when the person disconnected Codex is not handed to that hook', async () => {
+    await start()
+    // A turn is running, and the click is fresh: it is kept for the turn's next hook, which asks as an add-on does
+    await session('codex', 9, { busy: true })
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    offered({ ...click('codex', 9), at: Date.now() })
+    await until(() => called('delivery:claim').includes('click-9'))
+    wants(['pi'])
+    answerClaim(['click-9'])
+    await until(() => called('delivery:release').includes('click-9'))
+    expect((await clicksFor('codex', 9))?.clicks).toEqual([])
+    expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+    expect(stand.codex).toEqual([])
+  })
+
+  test('a click that was being claimed for Codex’s own queue when the person disconnected Codex is given back, and Codex’s command is never run for it', async () => {
+    await start()
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    offered(click('codex', 14))
+    await until(() => called('delivery:claim').includes('click-14'))
+    wants(['pi'])
+    answerClaim(['click-14'])
+    await until(() => called('delivery:release').includes('click-14'))
+    await settled()
+    expect(stand.codex).toEqual([])
+  })
+
+  test('a click whose keeping was being renewed when the person disconnected its app goes back to waiting, and is handed to nothing', async () => {
+    await start()
+    await session('pi', 15)
+    offered(click('pi', 15))
+    await until(() => called('delivery:claim').includes('click-15'))
+    // The add-on has asked and been given it, and goes on asking, so the click is kept and its keeping renewed
+    expect((await clicksFor('pi', 15))?.clicks.map((c) => c.id)).toEqual(['click-15'])
+    let answerRenewal: (ids: string[]) => void = () => {}
+    stand.answer = (name) => (name === 'delivery:renew' ? new Promise<string[]>((r) => (answerRenewal = r)) : undefined)
+    const asking = setInterval(() => void session('pi', 15), 500)
+    try {
+      await until(() => called('delivery:renew').includes('click-15'), 25_000)
+      wants(['codex'])
+      answerRenewal(['click-15'])
+      await until(() => called('delivery:release').includes('click-15'))
+      expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+      expect((await clicksFor('pi', 15))?.clicks).toEqual([])
+    } finally {
+      clearInterval(asking)
+    }
+  }, 40_000)
+
+  test('an agent that waits for a click still gets it there, connected or not', async () => {
+    await start('socket', { wanted: [] })
+    const waiting = await local<{ ok: boolean; sessions?: { harness: string; id: string }[] }>('/waiting', {
+      method: 'POST',
+      body: { id: 'waiter-7', session: { harness: 'codex', id: 'conversation-7' } },
+    })
+    expect(waiting).toEqual({ ok: true, sessions: [{ harness: 'codex', id: 'conversation-7' }] })
+    expect(await local('/waiting', { method: 'POST', body: { id: 'waiter-8', slug: 'page-8' } })).toEqual({ ok: true })
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('what the connector writes down when something goes wrong', () => {
+  const session = { harness: 'pi', id: 'conversation-1' }
+  const offer = () =>
+    stand.watching.get('delivery:inbox')!([
+      { id: 'click-1', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
+    ])
+  /** The line the connector writes when asking It for a click fails with this error. */
+  const written = async (err: unknown) => {
+    await start()
+    await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-1' } })
+    stand.answer = (name) => (name === 'delivery:claim' ? Promise.reject(err) : undefined)
+    offer()
+    await until(() => said.some((line) => line.startsWith('delivery: ')))
+    const line = said.find((line) => line.startsWith('delivery: '))!
+    await stop?.()
+    stop = null
+    said.length = 0
+    return line
+  }
+
+  test('a refusal’s code, a system’s code and a kind of error are written as they are', async () => {
+    expect(await written(Object.assign(new Error('no'), { data: { code: 'rate_limited' } }))).toBe('delivery: rate_limited')
+    expect(await written(Object.assign(new Error('no'), { code: 'ECONNREFUSED' }))).toBe('delivery: ECONNREFUSED')
+    expect(await written(new TypeError('/home/chris/plans could not be read'))).toBe('delivery: TypeError')
+  })
+
+  test('a code or a name that is not one word is not written: it could repeat a folder’s name or what a person typed', async () => {
+    expect(await written(Object.assign(new Error('no'), { code: '/home/chris/My Plans' }))).toBe('delivery: Error')
+    expect(await written(Object.assign(new Error('no'), { code: 'a b', name: 'Chris’s plan failed' }))).toBe('delivery: error')
+    expect(await written(Object.assign(new Error('no'), { data: '{"code":"not_found","message":"C:\\Users\\Chris"}' }))).toBe('delivery: not_found')
+    expect(await written('the plan for Chris')).toBe('delivery: error')
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('what a caller wrote as the thing it asks for', () => {
+  const PRIVATE = 'PRIVATE-NAME-of-a-plan'
+  /** Sends a request by the bytes, with the connector's token, and gives the status it was answered with. */
+  const asked = (info: ConnectorInfo, first: string, body = '') =>
+    new Promise<number>((resolve, reject) => {
+      const socket = net.connect({ path: info.socket! })
+      let got = ''
+      socket
+        .on('data', (piece) => (got += piece))
+        .on('error', reject)
+        .on('close', () => resolve(Number(got.split(' ')[1])))
+      socket.write(
+        `${first} HTTP/1.1\r\nHost: local\r\nConnection: close\r\nx-it-token: ${info.token}\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+      )
+    })
+
+  test('is answered as no address when it is none, and is written into the log by neither that answer nor a fault', async () => {
+    const info = await start()
+    // Something that is no address at all, with a name in it that must go nowhere
+    expect(await asked(info, `GET http://[${PRIVATE}`)).toBe(400)
+    expect(await asked(info, `GET /${PRIVATE}?name=${PRIVATE}`)).toBe(404)
+    // And a fault of the connector's own, on the way to answering a request that names the same thing: where it keeps the ids a conversation had cannot be written
+    mkdirSync(path.join(home, 'aliases.json'))
+    expect(await asked(info, `POST /session?name=${PRIVATE}`, JSON.stringify({ harness: 'pi', session: 'now', was: 'before' }))).toBe(500)
+    const fault = said.find((line) => line.startsWith('a request to the connector failed'))
+    expect(fault).toMatch(/^a request to the connector failed \(POST \/session: [A-Za-z][A-Za-z0-9_]*\)$/)
+    expect(said.join('\n')).not.toContain(PRIVATE)
+    expect(said.filter((line) => line.startsWith('a request to the connector failed'))).toHaveLength(1)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('a click claimed for an add-on that is not the one to be given it after all', () => {
+  test('one whose claim is answered after the waiter began is given back, and is not kept for the add-on', async () => {
+    await start()
+    const session = { harness: 'pi', id: 'conversation-1' }
+    // The add-on is listening: it has just asked
+    expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-1' } })).toEqual({ ok: true })
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    stand.watching.get('delivery:inbox')!([
+      { id: 'click-9', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
+    ])
+    const asked = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
+    await until(() => asked('delivery:claim').includes('click-9'))
+    expect(await local('/waiting', { method: 'POST', body: { id: 'waiter-9', session } })).toMatchObject({ ok: true })
+    answerClaim(['click-9'])
+    await until(() => asked('delivery:release').includes('click-9'))
+    expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+  })
+
+  test('an add-on that went away while its asking was being answered is counted as given nothing: the click claimed for it meanwhile is not written down as handed over, and is handed to it when it asks again', async () => {
+    const info = await start()
+    const session = { harness: 'pi', id: 'conversation-1' }
+    const click = { id: 'click-1', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session }
+    const asked = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
+    /** What the connector wrote down of the click, in the order it wrote it. */
+    const journal = () =>
+      (existsSync(path.join(home, 'journal.jsonl')) ? readFileSync(path.join(home, 'journal.jsonl'), 'utf8') : '')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { event: string; id: string })
+        .filter((line) => line.id === 'click-1')
+        .map((line) => line.event)
+    // The click is there before its conversation is heard from, so nothing is done with it yet
+    stand.watching.get('delivery:inbox')!([click])
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    // The add-on asks, by the bytes, on a connection of its own, and its asking is what has the click claimed for it
+    const asking = net.connect({ path: info.socket! })
+    asking.on('error', () => {})
+    let answered = ''
+    asking.on('data', (piece) => (answered += piece))
+    asking.write(`GET /clicks?harness=pi&session=conversation-1 HTTP/1.1\r\nHost: local\r\nx-it-token: ${info.token}\r\n\r\n`)
+    await until(() => asked('delivery:claim').includes('click-1'))
+    // It goes away while It is still answering the claim, and the connector has heard that it has before the claim is answered
+    asking.destroy()
+    await local('/health')
+    await local('/health')
+    answerClaim(['click-1'])
+    await until(async () => (await local<{ held: number }>('/health'))?.held === 1)
+    // Whatever was to be done for that asking is done by the time another has been answered
+    await local('/health')
+    expect([journal(), answered]).toEqual([['claimed'], ''])
+    // Asked again by an add-on that is there, the click is handed over, and that is written down
+    stand.answer = null
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=pi&session=conversation-1'))?.clicks.map((c) => c.id)).toEqual(['click-1'])
+    expect(journal()).toEqual(['claimed', 'served'])
+  })
+})

@@ -1,0 +1,9 @@
+{
+  "description": "It: one fixed command for every event. All the logic is inside the it program, so this text never changes and Codex never needs to ask you to approve it again.",
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "it hook codex", "timeout": 5 }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "it hook codex", "timeout": 5 }] }],
+    "PostToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "it hook codex", "timeout": 5 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "it hook codex", "timeout": 5 }] }]
+  }
+}

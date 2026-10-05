@@ -1,0 +1,13 @@
+{
+  "name": "@it/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE.md",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

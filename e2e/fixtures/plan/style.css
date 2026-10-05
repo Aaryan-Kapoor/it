@@ -1,0 +1,9 @@
+body {
+  font: 16px system-ui;
+  margin: 40px;
+}
+button {
+  font: inherit;
+  padding: 8px 14px;
+  margin: 4px;
+}

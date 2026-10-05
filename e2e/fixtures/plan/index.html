@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Deploy plan e2e-private-page</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <h1>Deploy plan e2e-private-page</h1>
+    <img id="logo" src="img/e2e-private-logo.svg" alt="logo" width="40" height="40" />
+    <p>Status: <strong id="status" data-it-bind="status">unknown</strong></p>
+    <p id="done" data-it-show="finished">Finished.</p>
+    <button id="approve" onclick="It.action('approve', { plan: 'e2e-private-B' }).then(() => (document.getElementById('sent').textContent = 'accepted'))">Approve plan B</button>
+    <span id="sent"></span>
+    <fieldset>
+      <button id="pick-a" onclick="It.stage('region', 'e2e-private-eu')">EU</button>
+      <button id="pick-b" onclick="It.stage('size', 'e2e-private-large')">Large</button>
+      <button id="commit" onclick="It.commit('configure').then(() => (document.getElementById('committed').textContent = JSON.stringify(It.staged())))">Submit</button>
+      <span id="committed"></span>
+    </fieldset>
+    <button id="remember" onclick="It.store.set('draft', 'hello from the page e2e-private-draft')">Remember</button>
+    <p>Draft: <span id="draft" data-it-bind="_page.draft"></span></p>
+    <script src="app.js"></script>
+  </body>
+</html>

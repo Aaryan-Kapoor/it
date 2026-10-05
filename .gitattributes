@@ -1,0 +1,6 @@
+# Every text file is checked out with LF line endings on every system. The add-ons, the agent
+# skill and the install scripts are packed and run exactly as they are in the checkout, and a
+# checkout on Windows would otherwise give them CRLF.
+* text=auto eol=lf
+*.png binary
+*.gif binary

@@ -1,0 +1,11 @@
+{
+  "name": "it",
+  "owner": { "name": "It" },
+  "plugins": [
+    {
+      "name": "it-bridge",
+      "source": "./it-bridge",
+      "description": "Brings what the user does on It pages into this conversation, and teaches Claude to use the it command."
+    }
+  ]
+}

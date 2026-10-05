@@ -1,0 +1,25 @@
+{
+  "name": "@it/web",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE.md",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host localhost --port 5173 --strictPort",
+    "build": "tsc -p . --noEmit && vite build",
+    "preview": "vite preview --host localhost --port 5173 --strictPort"
+  },
+  "dependencies": {
+    "@it/protocol": "*",
+    "convex": "^1.46.0",
+    "qrcode-generator": "^2.0.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "vite": "^7.0.0"
+  }
+}

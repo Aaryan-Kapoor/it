@@ -1,0 +1,180 @@
+import { HARNESSES, LIMITS, QUOTA } from '@it/protocol'
+import { v } from 'convex/values'
+import { internal } from './_generated/api'
+import type { Doc } from './_generated/dataModel'
+import { internalMutation, mutation, query } from './_generated/server'
+import { ownMachine, requireMachine, requireOwner } from './lib/authz'
+import { fail } from './lib/errors'
+import { lineOf, pairedOf, revokeMachine } from './sessions'
+
+const view = (m: Doc<'machines'>) => ({
+  id: m._id,
+  name: m.name,
+  lastSeenAt: m.lastSeenAt,
+  connectorVersion: m.connectorVersion ?? null,
+  harnesses: m.harnesses ?? [],
+  wanted: m.wanted ?? [],
+})
+
+/**
+ * The person's machines. Shown, and changed, only in the owner's browser. Beside each is what
+ * revoking it would take along: how many paired browsers descend from it, whether the browser
+ * that asks is one of them, and how many machines. `runsIt` says that the machine was enrolled
+ * by the service itself and with nobody's code: it is the machine It runs on.
+ */
+export const list = query({
+  args: {},
+  handler: async (ctx) => {
+    const { user, session } = await requireOwner(ctx)
+    const all = await ctx.db
+      .query('machines')
+      .withIndex('by_user', (q) => q.eq('userId', user._id).eq('revoked', false))
+      .take(QUOTA.machines)
+    const paired = await pairedOf(ctx, user._id)
+    return all.map((m) => {
+      // The machine itself, and every machine that enrolled with a code it or one of its own asked for
+      const line = lineOf(all, [m._id])
+      const browsers = paired.filter((s) => s.byMachine && line.has(s.byMachine))
+      return {
+        ...view(m),
+        runsIt: !m.byMachine && !m.bySession,
+        descendants: { browsers: browsers.length, mine: browsers.some((s) => s._id === session._id), machines: line.size - 1 },
+      }
+    })
+  },
+})
+
+/** The person revokes a machine. What descends from it goes with it. */
+export const revoke = mutation({
+  args: { machineId: v.id('machines') },
+  handler: async (ctx, { machineId }) => {
+    const { user } = await requireOwner(ctx)
+    const m = await ownMachine(ctx, user._id, machineId)
+    // One that was revoked already has nothing left to end
+    if (!m.revoked) await revokeMachine(ctx, m, 'person')
+    return null
+  },
+})
+
+export const rename = mutation({
+  args: { machineId: v.id('machines'), name: v.string() },
+  handler: async (ctx, { machineId, name }) => {
+    const { user } = await requireOwner(ctx)
+    const m = await ownMachine(ctx, user._id, machineId)
+    const clean = name.trim()
+    if (!clean || clean.length > LIMITS.machineName) fail('invalid', `A machine name is 1 to ${LIMITS.machineName} characters.`)
+    await ctx.db.patch(m._id, { name: clean })
+    return null
+  },
+})
+
+/** The person ticks or unticks one of the harnesses found on a machine. Two in quick succession each change their own harness, and neither undoes the other. */
+export const toggle = mutation({
+  args: { machineId: v.id('machines'), harness: v.string(), on: v.boolean() },
+  handler: async (ctx, { machineId, harness, on }) => {
+    const { user } = await requireOwner(ctx)
+    const m = await ownMachine(ctx, user._id, machineId)
+    if (!(HARNESSES as readonly string[]).includes(harness)) fail('invalid', 'That is not an agent app It knows.')
+    const wanted = new Set(m.wanted ?? [])
+    if (on) wanted.add(harness)
+    else wanted.delete(harness)
+    await ctx.db.patch(m._id, { wanted: [...wanted] })
+    return null
+  },
+})
+
+/** Which harnesses are to be connected, chosen on the machine itself by `it setup`. */
+export const choose = mutation({
+  args: { harnesses: v.array(v.string()) },
+  handler: async (ctx, { harnesses }) => {
+    const { machine } = await requireMachine(ctx)
+    const known = harnesses.filter((h) => (HARNESSES as readonly string[]).includes(h))
+    await ctx.db.patch(machine._id, { wanted: [...new Set(known)] })
+    return null
+  },
+})
+
+/** The machine gives up its own access. Its key is useless from here on, and what descends from it goes with it, as when the person revokes it. */
+export const leave = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const { machine } = await requireMachine(ctx)
+    await revokeMachine(ctx, machine, 'itself')
+    return null
+  },
+})
+
+/** The pages one identity of a computer made go to the identity that replaced it, a batch at a time, and their waiting clicks with them. */
+export const inherit = internalMutation({
+  args: { from: v.id('machines'), to: v.id('machines'), cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, { from, to, cursor }) => {
+    // The identity these were to go to may itself have been replaced since, more than once:
+    // they go to whichever identity of the computer is live now, however many came between
+    let heir = await ctx.db.get(to)
+    const passed = new Set<string>()
+    while (heir?.revoked && heir.replacedBy && !passed.has(heir._id) && passed.size < 100) {
+      passed.add(heir._id)
+      heir = await ctx.db.get(heir.replacedBy)
+    }
+    if (!heir || heir.revoked) return null
+    const owner = heir.userId
+    const batch = await ctx.db
+      .query('artifacts')
+      .withIndex('by_user_slug', (q) => q.eq('userId', owner))
+      .paginate({ cursor: cursor ?? null, numItems: 100 })
+    for (const a of batch.page) {
+      if (a.machineId !== from) continue
+      await ctx.db.patch(a._id, { machineId: heir._id })
+      await ctx.scheduler.runAfter(0, internal.actions.readdress, { artifactId: a._id })
+    }
+    if (!batch.isDone) await ctx.scheduler.runAfter(0, internal.machines.inherit, { from, to: heir._id, cursor: batch.continueCursor })
+    return null
+  },
+})
+
+/** What the connector on this machine should be doing. It subscribes to this. */
+export const me = query({
+  args: {},
+  handler: async (ctx) => {
+    const { machine } = await requireMachine(ctx)
+    return view(machine)
+  },
+})
+
+/** The harnesses found on a machine, as it reports them, and as they are kept: only the ones It knows, and nothing long. */
+const found = v.array(v.object({ id: v.string(), version: v.optional(v.string()), addon: v.string(), detail: v.optional(v.string()) }))
+const kept = (harnesses: { id: string; version?: string; addon: string; detail?: string }[]) =>
+  harnesses
+    .filter((h) => (HARNESSES as readonly string[]).includes(h.id))
+    .slice(0, HARNESSES.length)
+    .map((h) => ({ id: h.id, version: h.version?.slice(0, 40), addon: h.addon.slice(0, 40), detail: h.detail?.slice(0, 200) }))
+
+/**
+ * `it setup` says what it found on the machine, so that the site can show it before a connector
+ * has ever run there. It says nothing about a connector: when the machine was last heard from
+ * and which connector it runs are the connector's own to say (`report`), and are what the site
+ * reads to call a machine online.
+ */
+export const inventory = mutation({
+  args: { harnesses: found },
+  handler: async (ctx, { harnesses }) => {
+    const { machine } = await requireMachine(ctx)
+    const clean = kept(harnesses)
+    if (JSON.stringify(machine.harnesses ?? []) !== JSON.stringify(clean)) await ctx.db.patch(machine._id, { harnesses: clean })
+    return null
+  },
+})
+
+/** The connector reports what it found on the machine, and that it is alive. */
+export const report = mutation({
+  args: { connectorVersion: v.string(), harnesses: found },
+  handler: async (ctx, { connectorVersion, harnesses }) => {
+    const { machine } = await requireMachine(ctx)
+    const clean = kept(harnesses)
+    const same = JSON.stringify(machine.harnesses ?? []) === JSON.stringify(clean) && machine.connectorVersion === connectorVersion
+    if (!same || Date.now() - machine.lastSeenAt > 120_000) {
+      await ctx.db.patch(machine._id, { harnesses: clean, connectorVersion: connectorVersion.slice(0, 40), lastSeenAt: Date.now() })
+    }
+    return null
+  },
+})
