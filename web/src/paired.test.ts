@@ -99,7 +99,7 @@ describe('the paired browsers on the Displays page', () => {
       'Kitchen TV, Safari on iPadScreen',
       'No displayYours',
     ])
-    const said = rows().map((li) => li.querySelector('.muted')!.textContent)
+    const said = rows().map((li) => li.querySelector('.row-sub')!.textContent)
     expect(said[0]).toContain('Paired 2 d ago with a code the machine “the laptop” asked for')
     expect(said[1]).toContain('with a code the browser “Laptop” asked for')
     expect(said[1]).toContain('Last used 5 h ago')
@@ -118,7 +118,7 @@ describe('the paired browsers on the Displays page', () => {
     }
     const { PairedBrowsers } = await import('./paired')
     await show(createElement(PairedBrowsers))
-    const said = rows().map((li) => li.querySelector('.muted')!.textContent)
+    const said = rows().map((li) => li.querySelector('.row-sub')!.textContent)
     expect(said[1]).toContain('Paired 1 d ago with a code a paired browser asked for')
     expect(said[2]).toContain('Paired 2 h ago with a code asked for by a browser whose pairing has ended since')
   })
@@ -162,10 +162,6 @@ describe('the paired browsers on the Displays page', () => {
     await press(button('End all others'))
     expect(asked[1]).toBe(
       'End all others? The 2 paired browsers besides this one are signed out at once, and each has to be paired again before it can be used. 2 machines that came from them are ended with them. This browser came from one of them, and stays paired.',
-    )
-    // The page says what an ending takes along, and what signing out does not
-    expect(host.querySelector('p.muted')!.textContent).toContain(
-      'What it let in is ended with it: the screens it paired, the machines it added, and whatever came from those. A browser that signs itself out ends only its own pairing, and what it let in stays.',
     )
   })
 

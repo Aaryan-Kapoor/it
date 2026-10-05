@@ -1,12 +1,16 @@
 // The person's pages: the grid of all of them, and one of them shown.
 import { NOUN } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { type CSSProperties, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { copy, IconBack, IconLink, IconPin, IconX, Mark } from './brand'
 import { ago, api, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
+import { Bell, say } from './notifications'
 import { onItsWayUntil, outboxChanges, unsaved, unsent, watchOutbox } from './outbox'
+import { Preview } from './preview'
+import { Welcome } from './welcome'
 
-interface Card {
+export interface Card {
   id: string
   slug: string
   title: string
@@ -19,80 +23,154 @@ interface Card {
 }
 
 const AGENTS: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', openclaw: 'OpenClaw', hermes: 'Hermes', opencode: 'OpenCode', pi: 'Pi' }
-const agentName = (a: string | null) => (a ? (AGENTS[a] ?? a) : null)
+export const agentName = (a: string | null) => (a ? (AGENTS[a] ?? a) : null)
+
+/** A hue for a page, from its id: the same page has the same one on every display, and two neighbours seldom share one. */
+function hueOf(id: string): number {
+  let h = 2166136261
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619)
+  return (h >>> 0) % 360
+}
+
+type Sort = 'newest' | 'oldest' | 'az' | 'za'
+const SORTS: Record<Sort, (a: Card, b: Card) => number> = {
+  newest: (a, b) => b.updatedAt - a.updatedAt,
+  oldest: (a, b) => a.updatedAt - b.updatedAt,
+  az: (a, b) => a.title.localeCompare(b.title),
+  za: (a, b) => b.title.localeCompare(a.title),
+}
+
+/** A page changed this lately is marked as live on its card. */
+const LIVE_MS = 60_000
 
 /** Every page there is. Pinning one and deleting one are the owner's to do, and a screen is not offered them. */
-export function Grid({ pages, owner }: { pages: Card[] | undefined; owner: boolean }) {
+export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefined; owner: boolean; query: string; onQuery: (q: string) => void }) {
   const now = useNow()
-  const [find, setFind] = useState('')
+  const [sort, setSort] = useState<Sort>('newest')
+  const [by, setBy] = useState<string | null>(null)
   const organize = useMutation(api.artifacts.organize)
   const remove = useMutation(api.artifacts.remove)
-  const [error, setError] = useState('')
+  // The agent apps that made these pages, offered as a filter when there is more than one
+  const agents = useMemo(() => [...new Set((pages ?? []).map((p) => p.agent).filter((a): a is string => a !== null))].sort(), [pages])
+  const filter = by !== null && agents.includes(by) ? by : null
   const shown = useMemo(() => {
-    const q = find.trim().toLowerCase()
+    const q = query.trim().toLowerCase()
     return (pages ?? [])
-      .filter((p) => !q || p.title.toLowerCase().includes(q) || p.slug.includes(q))
-      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt)
-  }, [pages, find])
+      .filter((p) => (!q || p.title.toLowerCase().includes(q) || p.slug.includes(q)) && (filter === null || p.agent === filter))
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || SORTS[sort](a, b))
+  }, [pages, query, sort, filter])
 
-  if (pages === undefined) return <main className="empty" role="status" />
+  if (pages === undefined) return <main className="grid-view" role="status" />
   if (pages.length === 0) return <Welcome owner={owner} />
-  const act = (p: Promise<unknown>) =>
-    p.then(
-      () => setError(''),
-      (err) => setError(refusal(err).message),
-    )
+  const act = (p: Promise<unknown>) => p.catch((err) => say(refusal(err).message, 'error'))
   return (
     <main className="grid-view">
-      <div className="grid-head">
-        <input type="search" placeholder={`Find a ${NOUN.one}`} aria-label={`Find a ${NOUN.one}`} value={find} onChange={(e) => setFind(e.target.value)} />
-        {error && (
-          <span className="error" role="alert">
-            {error}
-          </span>
-        )}
+      <div className="grid-toolbar">
+        {/* biome-ignore lint/a11y/useSemanticElements: a row of toggles, which a fieldset would draw a box around */}
+        <div className="grid-toolbar-left" role="group" aria-label="Filter by agent app">
+          {agents.length > 1 &&
+            [null, ...agents].map((a) => (
+              <button
+                key={a ?? ''}
+                type="button"
+                className={`grid-chip${filter === a ? ' grid-chip--active' : ''}`}
+                aria-pressed={filter === a}
+                onClick={() => setBy(a)}
+              >
+                {a === null ? 'All' : agentName(a)}
+              </button>
+            ))}
+        </div>
+        <select className="grid-sort" aria-label={`Sort ${NOUN.many}`} value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="az">A–Z</option>
+          <option value="za">Z–A</option>
+        </select>
       </div>
-      {shown.length === 0 && <p className="muted">Nothing matches “{find}”.</p>}
       <ul className="grid">
-        {shown.map((p) => (
-          <li key={p.id} className="card">
-            <a
-              href={`/p/${p.slug}`}
-              className="cover"
-              onClick={(e) => {
-                e.preventDefault()
-                navigate(`/p/${p.slug}`)
-              }}
-            >
-              <span className="cover-title">{p.title}</span>
-              {p.pending > 0 && (
-                <span className="badge" title="Waiting for your agent">
-                  {p.pending} waiting
-                </span>
-              )}
-            </a>
-            <div className="caption">
-              <span className="card-title">{p.title}</span>
-              <span className="card-meta">{[agentName(p.agent), p.machine, ago(p.updatedAt, now)].filter(Boolean).join(' · ')}</span>
+        {shown.length === 0 && (
+          <li className="grid-empty">
+            <p className="grid-empty-line">{query.trim() ? `No ${NOUN.many} match “${query.trim()}”` : 'Nothing in this filter'}</p>
+            {query.trim() && (
+              <button type="button" className="grid-empty-reset" onClick={() => onQuery('')}>
+                Clear search
+              </button>
+            )}
+          </li>
+        )}
+        {shown.map((p, i) => (
+          <li key={p.id} className="card page-card" style={i < 12 ? ({ '--card-delay': `${i * 0.035}s` } as CSSProperties) : undefined}>
+            <div className="card-frame-box">
+              <a
+                href={`/p/${p.slug}`}
+                className="cover card-preview"
+                aria-label={p.title}
+                onClick={(e) => {
+                  e.preventDefault()
+                  navigate(`/p/${p.slug}`)
+                }}
+              >
+                <Preview
+                  // A new version is a new showing, and so a new picture
+                  key={`${p.id}:${p.version}`}
+                  artifactId={p.id as Id<'artifacts'>}
+                  title={p.title}
+                  cover={
+                    <span className="card-fallback card-fallback--bare" style={{ '--seed-h': hueOf(p.id) } as CSSProperties}>
+                      <span className="card-fallback-kind">{agentName(p.agent) ?? NOUN.One}</span>
+                    </span>
+                  }
+                />
+                {now - p.updatedAt < LIVE_MS && <span className="card-live">live</span>}
+                {p.pending > 0 && (
+                  <span className="badge card-badge" title="Waiting for your agent">
+                    {p.pending > 9 ? '9+' : p.pending}
+                    <span className="offscreen"> waiting</span>
+                  </span>
+                )}
+              </a>
               {owner && (
-                <span className="tray">
+                <span className="tray card-actions">
                   <button
                     type="button"
+                    className="card-action"
+                    title="Copy link"
+                    aria-label="Copy link"
+                    onClick={async () => say((await copy(`${location.origin}/p/${p.slug}`)) ? 'Link copied' : 'Copy failed')}
+                  >
+                    <IconLink />
+                  </button>
+                  <button
+                    type="button"
+                    className="card-action"
                     aria-pressed={p.pinned}
                     title={p.pinned ? 'Unpin' : 'Pin to the front'}
+                    aria-label={p.pinned ? 'Unpin' : 'Pin'}
                     onClick={() => act(organize({ artifactId: p.id as Id<'artifacts'>, pinned: !p.pinned }))}
                   >
-                    {p.pinned ? 'Pinned' : 'Pin'}
+                    <IconPin />
                   </button>
                   <button
                     type="button"
-                    className="danger"
+                    className="card-action card-action--danger"
+                    title="Delete"
+                    aria-label="Delete"
                     onClick={() => confirm(`Delete “${p.title}”? This removes it from every display.`) && act(remove({ artifactId: p.id as Id<'artifacts'> }))}
                   >
-                    Delete
+                    <IconX />
                   </button>
                 </span>
               )}
+            </div>
+            <div className="caption card-body">
+              <div className="card-text">
+                <span className="card-title" title={p.title}>
+                  {p.pinned && <span className="card-pin" role="img" aria-label="Pinned" />}
+                  {p.title}
+                </span>
+                <span className="card-meta card-sub">{[agentName(p.agent), p.machine, ago(p.updatedAt, now)].filter(Boolean).join(' · ')}</span>
+              </div>
             </div>
           </li>
         ))}
@@ -101,70 +179,66 @@ export function Grid({ pages, owner }: { pages: Card[] | undefined; owner: boole
   )
 }
 
-/**
- * What is shown while there are no pages: how the first one gets here. The site comes from the
- * program that is already on the person's machine, so what is left to do is connecting their
- * agents to it, which is the owner's to do and is done on that machine.
- */
-function Welcome({ owner }: { owner: boolean }) {
-  if (!owner)
-    return (
-      <main className="empty">
-        <h2>Nothing here yet</h2>
-        <p className="muted">This display is ready. {NOUN.Many} appear here when one of your agents makes them.</p>
-      </main>
-    )
-  return (
-    <main className="empty">
-      <h2>Nothing here yet</h2>
-      <p className="muted">
-        This display is ready. {NOUN.Many} appear here when one of your agents makes them. To connect your agents, run this on the machine It runs on:
-      </p>
-      <pre className="steps">
-        <code>it setup</code>
-      </pre>
-      <p className="muted">
-        It looks for the agent apps on that machine and offers to connect each one. Then ask your agent to show you something. You can see what is connected
-        under{' '}
-        <a
-          href="/machines"
-          onClick={(e) => {
-            e.preventDefault()
-            navigate('/machines')
-          }}
-        >
-          Machines
-        </a>
-        .
-      </p>
-    </main>
-  )
-}
-
 export function PageView({ slug, user }: { slug: string; user: string }) {
   const page = useQuery(api.artifacts.get, { slug })
+  const now = useNow()
   useEffect(() => {
     if (page) document.title = `${page.title} · It`
     return () => {
       document.title = 'It'
     }
   }, [page])
-  if (!page) return <main className="empty" role="status" />
+  // Escape goes back, from wherever on the site's own part of the screen the keyboard is
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.modal-overlay, .finder-overlay') && navigate('/')
+    document.addEventListener('keydown', key)
+    return () => document.removeEventListener('keydown', key)
+  }, [])
+  if (!page) return <main className="page-view" role="status" />
   return (
     <main className="page-view">
-      <header className="page-bar">
-        <button type="button" className="icon" aria-label={`Back to your ${NOUN.many}`} onClick={() => navigate('/')}>
-          ←
+      <header className="page-bar page-nav">
+        <button type="button" className="back-btn" aria-label={`Back to your ${NOUN.many}`} title="Back (esc)" onClick={() => navigate('/')}>
+          <IconBack />
         </button>
-        <span className="page-title">{page.title}</span>
-        <span className="grow" />
+        <a
+          className="page-nav-mark"
+          href="/"
+          onClick={(e) => {
+            e.preventDefault()
+            navigate('/')
+          }}
+        >
+          <Mark />
+        </a>
+        <div className="page-nav-titlewrap">
+          <h1 className="page-title page-nav-title">{page.title}</h1>
+          <div className="page-meta page-nav-meta">
+            {[agentName(page.agent), page.machine, ago(page.updatedAt, now)].filter(Boolean).map((part, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: a fixed few, in a fixed order
+              <span key={i} className="page-nav-meta-part">
+                {i > 0 && <span className="page-nav-meta-dot" />}
+                {part}
+              </span>
+            ))}
+          </div>
+        </div>
         <ActionStatus artifactId={page.id as Id<'artifacts'>} user={user} machine={page.machine} machineSeenAt={page.machineSeenAt} />
-        <span className="page-meta">{[agentName(page.agent), page.machine].filter(Boolean).join(' · ')}</span>
+        <div className="page-nav-actions">
+          <Bell compact />
+          <button
+            type="button"
+            className="nav-action"
+            title="Copy link"
+            aria-label="Copy link"
+            onClick={async () => say((await copy(`${location.origin}/p/${slug}`)) ? 'Link copied' : 'Copy failed')}
+          >
+            <IconLink />
+          </button>
+        </div>
       </header>
       {page.version === null ? (
-        <div className="empty">
-          <p className="muted">This {NOUN.one} has nothing published yet.</p>
-        </div>
+        <div className="page-frame-unavailable">This {NOUN.one} has nothing published yet.</div>
       ) : (
         // A new version is a new showing: the session a page gets is for one version only
         <Mount key={`${page.id}:${page.version}`} artifactId={page.id as Id<'artifacts'>} title={page.title} user={user} />

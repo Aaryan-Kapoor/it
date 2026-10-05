@@ -84,57 +84,57 @@ export function PairedBrowsers() {
   const others = paired.filter((s) => !s.mine).length
   const me = paired.find((s) => s.mine)?.id
   return (
-    <section className="panel">
-      <h3>Paired browsers</h3>
-      <p className="muted">
-        Every browser that is paired with It, whether or not it is a display. Ending one signs it out at once: pages open on it stop working, and it has to be
-        paired again before it can be used. What it let in is ended with it: the screens it paired, the machines it added, and whatever came from those. A
-        browser that signs itself out ends only its own pairing, and what it let in stays.
-      </p>
+    <section>
+      <header className="section-head">
+        <h3>Paired browsers</h3>
+        <button type="button" className="link danger" disabled={others === 0} onClick={() => confirm(endingOthers(paired)) && act(endOthers({}))}>
+          End all others
+        </button>
+      </header>
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
-      <ul className="rows">
+      <ul className="rows panel">
         {paired.map((s) => (
           <li key={s.id} className="row">
-            <span className="row-name">
-              {s.displays.length ? s.displays.map((d) => d.name).join(', ') : 'No display'}
-              {s.mine && <span className="chip quiet">This browser</span>}
-              <span className="chip quiet">{s.role === 'owner' ? 'Yours' : 'Screen'}</span>
+            <span className="row-main">
+              <span className="row-name">
+                {s.displays.length ? s.displays.map((d) => d.name).join(', ') : 'No display'}
+                {s.mine && <span className="chip quiet">This browser</span>}
+                <span className="chip quiet">{s.role === 'owner' ? 'Yours' : 'Screen'}</span>
+              </span>
+              <span className="row-sub">
+                Paired {ago(s.pairedAt, now)}
+                {letInBy(s.invitedBy)}
+                {/* A browser's use is noted once an hour, so nothing finer than that is said of it */}
+                {s.mine ? ' · Open now' : now - s.lastSeenAt < 3_600_000 ? ' · Used within the last hour' : ` · Last used ${ago(s.lastSeenAt, now)}`}
+              </span>
             </span>
-            <span className="muted">
-              Paired {ago(s.pairedAt, now)}
-              {letInBy(s.invitedBy)}
-              {/* A browser's use is noted once an hour, so nothing finer than that is said of it */}
-              {s.mine ? ' · Open now' : now - s.lastSeenAt < 3_600_000 ? ' · Used within the last hour' : ` · Last used ${ago(s.lastSeenAt, now)}`}
+            <span className="row-actions">
+              <button
+                type="button"
+                className="link danger"
+                onClick={() =>
+                  confirm(
+                    [
+                      s.mine
+                        ? 'End this browser’s pairing? This browser is signed out, and has to be paired again before it can be used.'
+                        : 'End this paired browser? It is signed out at once, and pages open on it stop working. It has to be paired again before it can be used.',
+                      goesAlong(s.along, me),
+                    ]
+                      .filter(Boolean)
+                      .join(' '),
+                  ) && act(end({ session: s.id as Id<'sessions'> }))
+                }
+              >
+                End
+              </button>
             </span>
-            <span className="grow" />
-            <button
-              type="button"
-              className="link danger"
-              onClick={() =>
-                confirm(
-                  [
-                    s.mine
-                      ? 'End this browser’s pairing? This browser is signed out, and has to be paired again before it can be used.'
-                      : 'End this paired browser? It is signed out at once, and pages open on it stop working. It has to be paired again before it can be used.',
-                    goesAlong(s.along, me),
-                  ]
-                    .filter(Boolean)
-                    .join(' '),
-                ) && act(end({ session: s.id as Id<'sessions'> }))
-              }
-            >
-              End
-            </button>
           </li>
         ))}
       </ul>
-      <button type="button" className="danger" disabled={others === 0} onClick={() => confirm(endingOthers(paired)) && act(endOthers({}))}>
-        End all others
-      </button>
     </section>
   )
 }

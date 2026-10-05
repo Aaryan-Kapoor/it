@@ -91,11 +91,11 @@ describe('what each kind of session is offered', () => {
     await show(createElement(Displays, { thisDisplay: 'display-1' }))
     const said = [...host.querySelectorAll('ul.rows')[0]!.querySelectorAll('li')].map((li) => [
       li.querySelector('.row-name')!.textContent,
-      li.querySelector(':scope > .muted')!.textContent,
+      li.querySelector('.row-sub')!.textContent,
     ])
     expect(said).toEqual([
-      ['Chrome on LinuxThis display (not named yet)', 'Open now'],
-      ['Kitchen TVNot paired', 'Its browser’s pairing has ended. It shows nothing until that browser is paired again'],
+      ['Chrome on LinuxThis display', 'Open now'],
+      ['Kitchen TVNot paired', 'Shows nothing until its browser is paired again'],
     ])
     // It can still be named and forgotten
     expect([...host.querySelectorAll('ul.rows')[0]!.querySelectorAll('li')][1]!.textContent).toContain('RenameForget')
@@ -137,7 +137,7 @@ describe('what each kind of session is offered', () => {
     const { Settings } = await import('./settings')
     await show(createElement(Settings, { user: 'user-1', owner: false, display: mine, onSignOut }))
     expect([...host.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Rename', 'Sign out'])
-    expect(host.textContent).toContain('paired with It as a screen')
+    expect(host.textContent).toContain('Paired as a screen')
     for (const theOwners of ['Download my data', 'Erase everything', 'Forget', 'Add a display']) expect(host.textContent).not.toContain(theOwners)
     await press('Rename')
     await type(host.querySelector('input[aria-label="Display name"]') as HTMLInputElement, 'Kitchen TV')
@@ -168,25 +168,12 @@ describe('erasing everything', () => {
     localStorage.setItem('another-programs', 'kept')
     const { Settings } = await import('./settings')
     await show(createElement(Settings, { user: 'user-1', owner: true, display: DISPLAYS[0]!, onSignOut: () => {} }))
-    // Before anything is erased, the person is told what is removed, what stays, and what it takes to use It again afterwards
-    const said = [...host.querySelectorAll('section')].find((x) => x.querySelector('h3')?.textContent === 'Erase everything')!.textContent
-    expect(said).toContain(
-      'removes every page, its files and every record of them from what It holds on the computer It runs on, with the copies of its database that It kept from before an update',
-    )
-    expect(said).toContain(
-      'This browser lets go of what it keeps too, in every tab the site is open in: the cookie that is its pairing, which display it is, anything done on a page that it had not sent yet, and, where notifications were on, the script that shows them and any notification still showing. Every other browser that was paired does the same the next time the site is opened in it. For a day more each keeps one thing, the name of the cookie it held, which is no secret and opens nothing: with it the browser asks again for that cookie to be cleared, should an answer that was on its way have put it back. What a browser keeps for itself of your having used the site, such as its history and whether it lets the site notify you, stays until you clear it there.',
-    )
-    expect(said).toContain('The backend program keeps what was removed inside its database’s file for about an hour more')
-    expect(said).toContain(
-      'For about an hour it also keeps a note of each task it ran in the background, by the id of the machine, the page, the notification or the conversation the task was about, with nothing that was on a page.',
-    )
-    expect(said).toContain(
-      'The part of It that shows pages keeps two notes, by ids alone, so that nothing from before can be used: that every display was signed out, which it clears away the next time a page is shown more than a day later, and that the files were deleted, which it clears away the next time something is deleted more than an hour later.',
-    )
-    expect(said).toContain('A copy of its folder that you made yourself, and the records you downloaded, are yours to remove.')
-    expect(said).toContain(
-      'Afterwards It is as it was before it was first set up: to use it again, run it setup on the machine It runs on, and then it site to pair a browser.',
-    )
+    // The row opens a dialog, which says in two sentences what is removed and what it takes to use It again
+    expect(host.querySelector('input[aria-label="Type erase everything to confirm"]')).toBeNull()
+    await press('Erase…')
+    const said = host.querySelector('[role="dialog"]')!.textContent
+    expect(said).toContain('This removes every page, its files and every record of them, and signs out every display and machine. It cannot be undone.')
+    expect(said).toContain('Afterwards, run it setup to use It again.')
     expect(said).not.toMatch(/this machine|this computer/)
     const erase = () => button('Erase everything') as HTMLButtonElement
     const phrase = host.querySelector('input[aria-label="Type erase everything to confirm"]') as HTMLInputElement
@@ -211,6 +198,7 @@ describe('erasing everything', () => {
     const { Settings } = await import('./settings')
     const { isLeaving } = await import('./lib')
     await show(createElement(Settings, { user: 'user-1', owner: true, display: DISPLAYS[0]!, onSignOut: () => {} }))
+    await press('Erase…')
     await type(host.querySelector('input[aria-label="Type erase everything to confirm"]') as HTMLInputElement, 'erase everything')
     await press('Erase everything')
     expect(host.querySelector('[role="alert"]')!.textContent).toBe('Nothing was erased.')

@@ -106,7 +106,7 @@ async function start(at = '/') {
   })
   return session
 }
-const button = (label: string) => [...host.querySelectorAll('button')].find((b) => b.textContent === label)
+const button = (label: string) => [...host.querySelectorAll('button')].find((b) => b.textContent === label || b.getAttribute('aria-label') === label)
 const press = (label: string) =>
   act(async () => {
     button(label)!.click()
@@ -167,10 +167,10 @@ afterEach(async () => {
 describe('a browser that is not paired', () => {
   test('it is shown how to pair it, and asks the backend for nothing', async () => {
     await start()
-    expect(host.textContent).toContain('This browser is not paired with It yet.')
+    expect(host.textContent).toContain('Connect this browser')
     // On the machine It runs on, and on any other screen
-    expect(host.textContent).toContain('run it site')
-    expect(host.textContent).toContain('open the address a paired display shows under Displays')
+    expect(host.querySelector('.copyable-text')!.textContent).toBe('it site')
+    expect(host.textContent).toContain('A second screen is added from Displays')
     expect(host.querySelector('input[aria-label="Pairing code"]')).not.toBeNull()
     expect(names()).toEqual(['/session/token'])
   })
@@ -185,16 +185,17 @@ describe('a browser that is not paired', () => {
       { what: '/session/token' },
       { what: 'displays:register', args: { key: localStorage.getItem('it.display'), userAgent: navigator.userAgent } },
     ])
-    expect(host.textContent).toContain('Nothing here yet')
-    // The owner is told how to connect their agents, on the machine It runs on
-    expect(host.querySelector('.steps')!.textContent).toBe('it setup')
+    expect(host.textContent).toContain('What should I make?')
+    // The owner is offered the tour, and is not sent to connect an agent app while it is not known that none is connected
+    expect(button('Start the tour')).toBeDefined()
+    expect(host.querySelector('.empty-connect')).toBeNull()
   })
 
   test('the person’s own code in the address pairs it without a word, and the address is left without it', async () => {
     await start('/pair#ownercode00000000001')
     expect(location.pathname + location.hash).toBe('/')
     expect(names().slice(0, 4)).toEqual(['/session/code', '/session/redeem', '/session/token', 'displays:register'])
-    expect(host.textContent).toContain('Nothing here yet')
+    expect(host.textContent).toContain('What should I make?')
   })
 
   test('a screen’s code in the address pairs it only when the person says this browser is that screen', async () => {
@@ -202,8 +203,8 @@ describe('a browser that is not paired', () => {
     expect(location.pathname + location.hash).toBe('/')
     // Opened, and nothing redeemed: the browser is shown what the address is for, and how to pair it otherwise
     expect(names()).toEqual(['/session/code', '/session/token'])
-    expect(host.querySelector('.offer')!.textContent).toContain('This address was made to pair one screen with It')
-    expect(host.textContent).toContain('This browser is not paired with It yet.')
+    expect(host.querySelector('.offer')!.textContent).toContain('This address pairs one screen, once.')
+    expect(host.textContent).toContain('Connect this browser')
     await press('Make this browser a screen of It')
     expect(asked.slice(2, 5)).toEqual([
       { what: '/session/redeem', args: { code: 'screencode0000000002' } },
@@ -216,7 +217,7 @@ describe('a browser that is not paired', () => {
   test('a code that is wrong, used or run out is said to be, in so many words', async () => {
     await start('/pair#notacode000000000000')
     expect(host.querySelector('[role="alert"]')!.textContent).toBe('That code is wrong, has already been used, or has run out. Get a new one and try again.')
-    expect(host.textContent).toContain('This browser is not paired with It yet.')
+    expect(host.textContent).toContain('Connect this browser')
     expect(names()).not.toContain('displays:register')
   })
 
@@ -240,7 +241,7 @@ describe('a browser that is not paired', () => {
     // The same code, put again once the minute is over, pairs the browser
     wrongCodesFor = null
     await press('Pair this browser')
-    expect(host.textContent).toContain('Nothing here yet')
+    expect(host.textContent).toContain('What should I make?')
     expect(asked.filter((a) => a.what === '/session/redeem').map((a) => a.args)).toEqual(Array(4).fill({ code: 'ownercode00000000001' }))
   })
 
@@ -267,10 +268,10 @@ describe('what the site keeps in this browser', () => {
     try {
       // Paired, shown, and signed out again: everything the site ever remembers has been remembered by then
       await start('/pair#ownercode00000000001')
-      await press('⋯')
+      await press('More')
       await press('Sign out')
       await settle()
-      expect(host.textContent).toContain('This browser is not paired with It yet.')
+      expect(host.textContent).toContain('Connect this browser')
       expect(written).toEqual([])
       expect(document.cookie).toBe('')
       // What it does keep is in the storage a browser holds apart for each port
@@ -303,7 +304,7 @@ describe('a display the person forgot', () => {
     expect(registered[1]).not.toBe('the-forgotten-display-key')
     expect(localStorage.getItem('it.display')).toBe(registered[1])
     expect(names()).not.toContain('/session/end')
-    expect(host.textContent).toContain('Nothing here yet')
+    expect(host.textContent).toContain('What should I make?')
   })
 
   test('it does not come back under the session it had: the browser is signed out, and its key let go of', async () => {
@@ -316,7 +317,7 @@ describe('a display the person forgot', () => {
     expect(asked.filter((a) => a.what === 'displays:register').length).toBe(1)
     expect(names()).toContain('/session/end')
     expect(localStorage.getItem('it.display')).toBeNull()
-    expect(host.textContent).toContain('This browser is not paired with It yet.')
+    expect(host.textContent).toContain('Connect this browser')
   })
 })
 
@@ -338,7 +339,7 @@ describe('a display key that another paired browser holds', () => {
     expect(localStorage.getItem('it.display')).toBe(registered[1])
     expect(registered[1]).not.toBe('another-browsers-display-key')
     expect(names()).not.toContain('/session/end')
-    expect(host.textContent).toContain('Nothing here yet')
+    expect(host.textContent).toContain('What should I make?')
   })
 })
 
@@ -358,15 +359,15 @@ describe('what each kind of session is shown', () => {
       }
       await start(at)
       expect(sections()).toEqual(['Pages'])
-      expect(host.textContent).toContain('Nothing here yet')
+      expect(host.textContent).toContain('What should I make?')
       // Nor is it told to set anything up: that is done on the machine It runs on, by the owner
-      expect(host.querySelector('.steps')).toBeNull()
+      expect(host.querySelector('.empty-connect')).toBeNull()
     }
     expect(names().filter((n) => /^(machines|sessions|account):|^displays:(list|forget)$/.test(n))).toEqual([])
     await act(async () => root.unmount())
     host.remove()
     await start('/settings')
-    expect(host.textContent).toContain('paired with It as a screen')
+    expect(host.textContent).toContain('Paired as a screen')
     expect([...host.querySelectorAll('main button')].map((b) => b.textContent)).toEqual(['Rename', 'Sign out'])
   })
 
@@ -401,7 +402,7 @@ describe('what each kind of session is shown', () => {
     // The session is named to the backend only after it refused the browser a token, for that session's cookie to be cleared
     expect(asked.filter((a) => a.what === '/session/end')).toEqual([{ what: '/session/end', args: { session: 'session-1' } }])
     expect(names().lastIndexOf('/session/token')).toBeLessThan(names().indexOf('/session/end'))
-    expect(host.textContent).toContain('This browser is not paired with It yet.')
+    expect(host.textContent).toContain('Connect this browser')
     expect(errors).toEqual([])
   })
 
@@ -418,7 +419,7 @@ describe('what each kind of session is shown', () => {
       return []
     }
     // The person comes back to this tab and goes somewhere in it, and what it asks is refused
-    await press('⋯')
+    await press('More')
     await press('Settings')
     await settle()
     expect(names()).not.toContain('/session/end')
@@ -426,7 +427,7 @@ describe('what each kind of session is shown', () => {
     // It is a display again under the session it has now, and shows what was asked for
     expect(asked.filter((a) => a.what === 'displays:register').length).toBe(1)
     expect(localStorage.getItem('it.display.session')).toBe('session-3')
-    expect(host.textContent).toContain('This browser is paired with It as yours')
+    expect(host.textContent).toContain('Paired as yours')
     expect(host.textContent).not.toContain('Something went wrong')
     expect(errors).toEqual([])
   })
@@ -459,6 +460,8 @@ describe('erasing everything', () => {
     }
     await start('/settings')
     expect(Object.keys(localStorage).filter((name) => name.startsWith('it.')).length).toBeGreaterThan(2)
+    // The phrase is asked for in a dialog of its own, which the row's button opens
+    await press('Erase…')
     const phrase = host.querySelector('input[aria-label="Type erase everything to confirm"]') as HTMLInputElement
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(phrase, 'erase everything')
@@ -467,12 +470,9 @@ describe('erasing everything', () => {
     await press('Erase everything')
     await settle()
     expect(asked.find((a) => a.what === 'account:requestDeletion')!.args).toEqual({ confirm: 'erase everything', user: 'user-1' })
-    expect(host.querySelector('[role="status"]')!.textContent).toBe(
-      'Everything It held is being erased, and every browser and machine is let go of. This browser is not paired with It.',
-    )
+    expect(host.querySelector('[role="status"]')!.textContent).toBe('Everything It held is being erased. This browser is not paired with It.')
     // `it site` alone would be refused: the machine has to be set up again first
-    expect(host.textContent).toContain('To use It again, run it setup on the machine It runs on, and then it site')
-    expect(host.textContent).not.toContain('This browser is not paired with It yet.')
+    expect(host.querySelector('.copyable-text')!.textContent).toBe('it setup && it site')
     // All that is left of the site's is the name of the session's cookie, kept a day to have the cookie cleared again if need be
     expect([...Object.keys(localStorage), ...Object.keys(sessionStorage)].filter((name) => name.startsWith('it.'))).toEqual(['it.cookies'])
     expect(JSON.parse(localStorage.getItem('it.cookies')!).map((o: { id: string }) => o.id)).toEqual(['session-1'])
@@ -481,6 +481,8 @@ describe('erasing everything', () => {
   /** What the site keeps in either of the browser's stores, by name, but for the names of the sessions whose cookies are still to be cleared. */
   const kept = () => [...Object.keys(localStorage), ...Object.keys(sessionStorage)].filter((name) => name.startsWith('it.') && name !== 'it.cookies').sort()
   const confirmErasing = async () => {
+    // The phrase is asked for in a dialog of its own, which the row's button opens
+    await press('Erase…')
     const phrase = host.querySelector('input[aria-label="Type erase everything to confirm"]') as HTMLInputElement
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(phrase, 'erase everything')
@@ -604,7 +606,7 @@ describe('erasing everything', () => {
       await tick()
     })
     await settle()
-    expect(host.textContent).toContain('This browser is not paired with It yet.')
+    expect(host.textContent).toContain('Connect this browser')
     expect(kept()).toEqual([])
     expect(errors).toEqual([])
   })
@@ -612,7 +614,7 @@ describe('erasing everything', () => {
 
 describe('signing out', () => {
   const signOut = async () => {
-    await press('⋯')
+    await press('More')
     await press('Sign out')
     await settle()
   }
@@ -626,7 +628,7 @@ describe('signing out', () => {
     // The session is ended last. It is named once more when the browser is found not to be paired, in case its cookie was given again meanwhile
     expect(order).toEqual(['displays:signOut', 'displays:signOutConfirmed', '/session/end', '/session/end'])
     expect(asked.find((a) => a.what === 'displays:signOut')!.args).toEqual({ key: localStorage.getItem('it.display') })
-    expect(host.textContent).toContain('This browser is not paired with It yet.')
+    expect(host.textContent).toContain('Connect this browser')
     // It was confirmed that the pages had stopped, so nothing is said about their going on a while
     expect(host.textContent).not.toContain('may go on working')
     // The display's key is kept: paired again, this browser is the display it was

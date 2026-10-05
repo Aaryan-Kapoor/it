@@ -6,6 +6,7 @@
 // `it network off` is run.
 import { useQuery } from 'convex/react'
 import { useState } from 'react'
+import { Copyable } from './dialog'
 import { api, pairingAddress } from './lib'
 
 export interface Where {
@@ -43,35 +44,32 @@ export function useWhere(): Where {
 export function OtherAddresses({ where }: { where: Where }) {
   if (where.all.length < 2 || where.address === null) return null
   return (
-    <p className="muted">
-      <label>
-        The machine It runs on has more than one address. If the other device cannot open that one, choose another:{' '}
-        <select value={where.address} onChange={(e) => where.choose(e.target.value)}>
-          {where.all.map((address) => (
-            <option key={address} value={address}>
-              {address}
-            </option>
-          ))}
-        </select>
-      </label>
-    </p>
+    <label className="pair-other">
+      <span>Cannot open it? Try another address</span>
+      <select value={where.address} onChange={(e) => where.choose(e.target.value)}>
+        {where.all.map((address) => (
+          <option key={address} value={address}>
+            {address}
+          </option>
+        ))}
+      </select>
+    </label>
   )
 }
 
 /**
- * What is said in place of an address when there is none to give: that the network has to be
- * turned on, or that the machine is on no network. `appears` names what will show here once
- * there is one.
+ * What is shown in place of an address when there is none to give: the command that turns the
+ * network on, or that the machine is on no network. What is waited for appears by itself once
+ * there is an address.
  */
-export function NoAddress({ where, appears }: { where: Where; appears: string }) {
+export function NoAddress({ where }: { where: Where }) {
   if (where.state === 'off')
     return (
-      <p>
-        It answers only the machine it runs on until the network is turned on, so no other device can open it yet. Run <code>it network on</code> on that
-        machine, and {appears} appears here.
-      </p>
+      <>
+        <p className="modal-lede">It answers only its own machine for now. Turn the network on there:</p>
+        <Copyable prompt text="it network on" />
+      </>
     )
-  if (where.state === 'nowhere')
-    return <p>The network is on, but the machine It runs on has no address on a network just now. Once it is on one, {appears} appears here.</p>
+  if (where.state === 'nowhere') return <p className="modal-lede">The network is on, but the machine It runs on has no address on a network just now.</p>
   return null
 }

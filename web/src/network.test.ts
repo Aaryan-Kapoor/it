@@ -93,8 +93,8 @@ describe('adding a display, in the browser on the machine It runs on', () => {
     expect(text('.pair-address')).toBe(`${LAN}/pair#${CODE}`)
     expect(host.querySelector('.qr path')!.getAttribute('d')).toMatch(/^(M\d+ \d+h1v1h-1z)+$/)
     expect(text('.pair-code')).toBe('abcd efgh ij01 2345 6789')
-    expect(host.textContent).toContain(`Or open ${LAN} there and type this code:`)
-    expect(host.textContent).toContain('The code pairs one browser, once, and works for ten minutes.')
+    expect(host.textContent).toContain(`Or open ${LAN} and type`)
+    expect(host.textContent).toContain('One screen, once, for ten minutes.')
     // Nothing of the name this browser reached the site by, which opens nothing on another screen
     expect(host.querySelector('.pairing')!.textContent).not.toContain('localhost')
     // With one address there is nothing to choose
@@ -106,10 +106,10 @@ describe('adding a display, in the browser on the machine It runs on', () => {
     await press('Add a display')
     expect(host.querySelector('.pair-address')).toBeNull()
     expect(host.querySelector('.qr')).toBeNull()
-    expect(host.textContent).toContain('It answers only the machine it runs on until the network is turned on, so no other device can open it yet.')
-    expect(host.textContent).toContain('Run it network on on that machine, and the address to open on the other screen appears here.')
+    expect(host.textContent).toContain('It answers only its own machine for now. Turn the network on there:')
+    expect(text('.copyable-text')).toBe('it network on')
     // A second browser on the same machine can be paired with the code meanwhile
-    expect(host.textContent).toContain('open http://localhost:3000 in it and type this code:')
+    expect(host.textContent).toContain('A browser on this machine can use http://localhost:3000 with')
     expect(text('.pair-code')).toBe('abcd efgh ij01 2345 6789')
     // `it network on` is run: the service tells the backend, and the panel changes under the person's eyes, with the same code
     await networkIs({ on: true, addresses: [LAN] })
@@ -120,7 +120,7 @@ describe('adding a display, in the browser on the machine It runs on', () => {
     // And back, when it is turned off again
     await networkIs({ on: false, addresses: [] })
     expect(host.querySelector('.pair-address')).toBeNull()
-    expect(host.textContent).toContain('Run it network on on that machine')
+    expect(text('.copyable-text')).toBe('it network on')
   })
 
   test('with several addresses, the one most likely to work is shown first and the others can be chosen, each with a QR code of its own', async () => {
@@ -130,11 +130,11 @@ describe('adding a display, in the browser on the machine It runs on', () => {
     expect(text('.pair-address')).toBe(`${LAN}/pair#${CODE}`)
     const first = host.querySelector('.qr path')!.getAttribute('d')
     expect([...host.querySelectorAll('option')].map((o) => o.textContent)).toEqual([LAN, WIRE, SIX])
-    expect(host.textContent).toContain('The machine It runs on has more than one address. If the other device cannot open that one, choose another:')
+    expect(host.textContent).toContain('Cannot open it? Try another address')
     await choose(SIX)
     expect(text('.pair-address')).toBe(`${SIX}/pair#${CODE}`)
     expect(host.querySelector('.qr path')!.getAttribute('d')).not.toBe(first)
-    expect(host.textContent).toContain(`Or open ${SIX} there`)
+    expect(host.textContent).toContain(`Or open ${SIX} and type`)
     // An address that has stopped being the machine's is not kept to: the first of those it has now is shown
     await networkIs({ on: true, addresses: [WIRE] })
     expect(text('.pair-address')).toBe(`${WIRE}/pair#${CODE}`)
@@ -207,21 +207,19 @@ describe('what is said of an agent app on a machine', () => {
   })
   const notes = () => [...host.querySelectorAll('.check-note')].map((note) => note.textContent)
 
-  test('an installed add-on is said to be installed, and a click is said to reach a conversation only while the machine is online', async () => {
+  test('an installed add-on is said to be connected, and to be offline while its machine is not heard from', async () => {
     const connected = [{ id: 'claude-code', version: '2.1.0', addon: 'connected' }]
     watched['machines:list'] = [machine(Date.now(), connected, ['claude-code'])]
     const { Machines } = await import('./machines')
     await show(createElement(Machines))
-    expect(notes()).toEqual([
-      'Its add-on is installed, and this machine is online. What you do on a page is handed to the conversation that made it, where the app lets an add-on speak there.',
-    ])
+    expect(notes()).toEqual(['Connected'])
     await act(async () => root.unmount())
     host.remove()
     // The same machine, last heard from an hour ago
     watched['machines:list'] = [machine(Date.now() - 3_600_000, connected, ['claude-code'])]
     await show(createElement(Machines))
-    expect(notes()).toEqual(['Its add-on is installed. Nothing is handed to a conversation there until this machine is online.'])
-    expect(host.textContent).not.toContain('reaches the conversation')
+    // Its add-on is installed, and nothing is handed to a conversation there until the machine is online
+    expect(notes()).toEqual(['Connected, offline'])
   })
 })
 
@@ -258,21 +256,21 @@ describe('adding a machine', () => {
     expect(calls).toEqual([])
     await press('Add a machine')
     expect(calls).toEqual(['sessions:inviteMachine'])
-    expect(text('.pair-command')).toBe(`it login --url ${LAN} --code ${CODE}`)
-    expect(host.textContent).toContain('The code joins one machine, once, and works for ten minutes.')
+    expect(text('.pair-command code')).toBe(`it login --url ${LAN} --code ${CODE}`)
+    expect(host.textContent).toContain('One machine, once, for ten minutes.')
     expect(host.querySelector('.pairing')!.textContent).not.toContain('localhost')
     // Another of the machine's addresses can be chosen, and one under IPv6 is written so that a shell reads it as one word
     await choose(SIX)
-    expect(text('.pair-command')).toBe(`it login --url "${SIX}" --code ${CODE}`)
+    expect(text('.pair-command code')).toBe(`it login --url "${SIX}" --code ${CODE}`)
   })
 
   test('with the network off, it says to run `it network on` first, since another computer cannot reach It, and the command appears once it is on', async () => {
     await machines()
     await press('Add a machine')
     expect(host.querySelector('.pair-command')).toBeNull()
-    expect(host.textContent).toContain('Run it network on on that machine, and the command to run on the other computer appears here.')
+    expect(text('.pairing .copyable-text')).toBe('it network on')
     await networkIs({ on: true, addresses: [LAN] })
-    expect(text('.pair-command')).toBe(`it login --url ${LAN} --code ${CODE}`)
+    expect(text('.pair-command code')).toBe(`it login --url ${LAN} --code ${CODE}`)
     expect(calls).toEqual(['sessions:inviteMachine'])
   })
 
@@ -287,10 +285,10 @@ describe('adding a machine', () => {
       await vi.advanceTimersByTimeAsync(30_000)
     })
     expect(host.querySelector('.pair-command')).toBeNull()
-    expect(host.textContent).toContain('That code has run out. Make another when the other computer is ready.')
+    expect(host.textContent).toContain('That code has run out.')
     const { ConvexError } = await import('convex/values')
     answers['sessions:inviteMachine'] = () => Promise.reject(new ConvexError({ code: 'rate_limited', message: 'Too many at once. Try again in a moment.' }))
-    await press('Add a machine')
+    await press('Make another')
     expect(text('[role="alert"]')).toBe('Too many at once. Try again in a moment.')
   })
 })

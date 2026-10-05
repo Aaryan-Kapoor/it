@@ -8,9 +8,8 @@ import type { Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 const CODE = 'screencode0000000002'
-const SENTENCE =
-  'This browser is already paired with It as the owner’s, so the code was not used here. The address is for the other screen: open it there, and press “Make this browser a screen of It” there.'
-const OFFER = 'This address was made to pair one screen with It, and its code works once: use it here only if this browser is that screen.'
+const SENTENCE = 'This browser is already paired with It as the owner’s, so the code was not used here. Open the address on the other screen.'
+const OFFER = 'This address pairs one screen, once. Use it here only if this browser is that screen.'
 
 /** Everything asked of the door and of the backend, in the order it was asked. */
 const asked: string[] = []
@@ -164,7 +163,7 @@ describe('what the person is shown', () => {
     // Everything the owner's browser shows is there: it is paired as it was, and registers as the display it is
     expect([...host.querySelectorAll('nav a')].map((a) => a.textContent)).toEqual(['Pages', 'Machines', 'Displays'])
     expect(asked).toContain('displays:register')
-    expect(host.textContent).not.toContain('This browser is not paired with It yet.')
+    expect(host.textContent).not.toContain('Connect this browser')
     const notice = host.querySelector('.notice[role="status"]')!
     expect(notice.querySelector('span')!.textContent).toBe(SENTENCE)
     // There is nothing to press that would make this browser a screen
@@ -181,7 +180,7 @@ describe('what the person is shown', () => {
     redeemed = { status: 200, body: { ok: true } }
     await start()
     expect(host.querySelector('.offer[role="status"] span')!.textContent).toBe(OFFER)
-    expect(host.textContent).toContain('This browser is not paired with It yet.')
+    expect(host.textContent).toContain('Connect this browser')
     expect(asked.filter((path) => path.startsWith('/session/'))).toEqual(['/session/code', '/session/token'])
     // Nothing more is asked however long the tab is left open, and closing it leaves the code for the screen it was made for
     await act(async () => tick(200))

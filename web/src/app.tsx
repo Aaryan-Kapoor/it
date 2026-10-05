@@ -1,8 +1,12 @@
 // The site: pairing, this display's registration, and the frame around everything else.
 import { NOUN } from '@it/protocol'
 import { useConvex, useConvexAuth, useMutation, useQuery } from 'convex/react'
-import { Component, type ReactNode, useEffect, useRef, useState } from 'react'
+import { Component, type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { version } from '../package.json'
 import { askTwice } from './backend'
+import { IconGuide, IconMore, Mark } from './brand'
+import { Copyable } from './dialog'
+import { Finder } from './finder'
 import {
   api,
   displayKey,
@@ -33,6 +37,7 @@ import { Grid, PageView } from './pages'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
 import { codeSeen, current, signOut as endSession, pair, pairAsScreen, recheck, useSession } from './session'
 import { Displays, Settings } from './settings'
+import { TourDialog } from './welcome'
 
 export function App() {
   const { loaded, paired, user, session } = useSession()
@@ -104,7 +109,9 @@ function Connecting({ stuck }: { stuck: boolean }) {
 
 const Splash = ({ note }: { note?: string }) => (
   <main className="splash" role="status">
-    <span className="mark">It</span>
+    <span className="mark">
+      <Mark />
+    </span>
     {note && <span className="muted">{note}</span>}
   </main>
 )
@@ -131,7 +138,7 @@ function ScreenOffered({ onDecline }: { onDecline?: () => void }) {
   const [busy, setBusy] = useState(false)
   return (
     <div className={onDecline ? 'notice' : 'offer'} role="status">
-      <span>This address was made to pair one screen with It, and its code works once: use it here only if this browser is that screen.</span>
+      <span>This address pairs one screen, once. Use it here only if this browser is that screen.</span>
       {wait !== null && !busy && (
         <span className="error" role="alert">
           {waitFirst(wait)}
@@ -156,7 +163,7 @@ function ScreenOffered({ onDecline }: { onDecline?: () => void }) {
   )
 }
 
-/** What a browser that is not paired shows: the two ways to pair it, and a place to type a code. */
+/** What a browser that is not paired shows: the command that gets a code, and where to put the code. */
 function NotPaired() {
   const { code, wait } = useSession()
   // Signing out went ahead before it was confirmed that pages open on this display had stopped
@@ -168,57 +175,65 @@ function NotPaired() {
   })
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
+  const erased = wasErasedHere()
   return (
     <main className="door">
       <div className="door-card">
-        <h1 className="mark">It</h1>
+        <h1 className="mark door-mark">
+          <Mark />
+        </h1>
+        <p className="door-line">Connect this browser</p>
         {note && (
-          <p className="muted" role="status">
+          <p className="door-note" role="status">
             This browser is signed out. A page that was open on this display may go on working for a moment yet; close its tab to be sure.
           </p>
         )}
-        <p className="door-line">Live {NOUN.many} from your agents, on any display you own.</p>
-        {code === 'screen' && <ScreenOffered />}
-        {wasErasedHere() ? (
-          <>
-            <p role="status">Everything It held is being erased, and every browser and machine is let go of. This browser is not paired with It.</p>
-            <p className="muted">
-              To use It again, run <code>it setup</code> on the machine It runs on, and then <code>it site</code>, which opens the site in a browser there,
-              already paired.
-            </p>
-          </>
-        ) : (
-          <>
-            <p>This browser is not paired with It yet.</p>
-            <p className="muted">
-              On the machine It runs on, run <code>it site</code>. It opens the site in a browser there, already paired.
-            </p>
-          </>
+        {erased && (
+          <p className="door-note" role="status">
+            Everything It held is being erased. This browser is not paired with It.
+          </p>
         )}
-        <p className="muted">On any other screen, open the address a paired display shows under Displays when you add a display, or type the code it shows:</p>
-        <form
-          className="inline"
-          onSubmit={(e) => {
-            e.preventDefault()
-            setBusy(true)
-            void pair(typed).finally(() => setBusy(false))
-          }}
-        >
-          <input
-            className="mono"
-            aria-label="Pairing code"
-            autoCapitalize="none"
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-            maxLength={60}
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-          />
-          <button type="submit" disabled={busy || !typed.trim()}>
-            {busy ? 'Pairing…' : 'Pair this browser'}
-          </button>
-        </form>
+        {code === 'screen' && <ScreenOffered />}
+        <ol className="door-steps">
+          <li>
+            <span className="door-n">1</span>
+            <div className="door-step">
+              <h2>Run this where It runs</h2>
+              <Copyable prompt text={erased ? 'it setup && it site' : 'it site'} />
+            </div>
+          </li>
+          <li>
+            <span className="door-n">2</span>
+            <div className="door-step">
+              <h2>Open the address it prints, or enter its code</h2>
+              <form
+                className="inline"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  setBusy(true)
+                  // The whole address may be pasted: the code is what follows the last #
+                  void pair(typed.slice(typed.lastIndexOf('#') + 1)).finally(() => setBusy(false))
+                }}
+              >
+                <input
+                  className="mono"
+                  aria-label="Pairing code"
+                  placeholder="abcd efgh ijkl mnop qrst"
+                  autoCapitalize="none"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  maxLength={300}
+                  value={typed}
+                  onChange={(e) => setTyped(e.target.value)}
+                />
+                <button type="submit" className="primary" disabled={busy || !typed.trim()}>
+                  {busy ? 'Pairing…' : 'Pair this browser'}
+                </button>
+              </form>
+            </div>
+          </li>
+        </ol>
         {wait !== null && code !== 'screen' && !busy ? (
           <p className="error" role="alert">
             {waitFirst(wait)}
@@ -234,6 +249,7 @@ function NotPaired() {
             </p>
           )
         )}
+        <p className="door-foot">A second screen is added from Displays, on a browser that is already paired.</p>
       </div>
     </main>
   )
@@ -303,7 +319,9 @@ function Paired() {
   if (state.error)
     return (
       <main className="splash" role="alert">
-        <span className="mark">It</span>
+        <span className="mark">
+          <Mark />
+        </span>
         <p>{state.error}</p>
         <button
           type="button"
@@ -336,10 +354,7 @@ function Paired() {
 function CodeForAnotherScreen() {
   return (
     <p className="notice" role="status">
-      <span>
-        This browser is already paired with It as the owner’s, so the code was not used here. The address is for the other screen: open it there, and press
-        “Make this browser a screen of It” there.
-      </span>
+      <span>This browser is already paired with It as the owner’s, so the code was not used here. Open the address on the other screen.</span>
       <button type="button" onClick={codeSeen}>
         OK
       </button>
@@ -358,6 +373,22 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const heartbeat = useMutation(api.displays.heartbeat)
   const [leaving, setLeaving] = useState(false)
   const [stillIn, setStillIn] = useState(false)
+  // What is typed into the search, the finder and the tour's dialog, which the bar opens and the shell shows
+  const [query, setQuery] = useState('')
+  const [finding, setFinding] = useState(false)
+  const [tour, setTour] = useState(false)
+  const closeFinder = useCallback(() => setFinding(false), [])
+  const closeTour = useCallback(() => setTour(false), [])
+  // The finder opens on its key from anywhere on the site
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+      e.preventDefault()
+      setFinding(true)
+    }
+    document.addEventListener('keydown', key)
+    return () => document.removeEventListener('keydown', key)
+  }, [])
 
   // Presence, so a notification knows whether this display is open. The answer carries the
   // backend's clock, which is what "recent" is judged by everywhere on the site.
@@ -603,7 +634,9 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   if (stillIn)
     return (
       <main className="splash" role="alert">
-        <span className="mark">It</span>
+        <span className="mark">
+          <Mark />
+        </span>
         <p>
           This browser could not be signed out, because It could not be reached to end its pairing. It is still paired with It: try again when the connection is
           back, or stay paired.
@@ -624,25 +657,61 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     )
 
   const slug = safeDecode(/^\/p\/([^/]+)$/.exec(path)?.[1])
-  return (
-    <div className="shell" data-view={slug ? 'page' : 'site'}>
-      {!slug && <TopBar display={display ?? null} owner={owner} onSignOut={signOut} />}
+  const view = (
+    <Guard key={path}>
+      {slug ? (
+        <PageView slug={slug} user={user} />
+      ) : owner && path === '/machines' ? (
+        <Machines />
+      ) : owner && path === '/displays' ? (
+        <Displays thisDisplay={display?.id} />
+      ) : path === '/settings' ? (
+        <Settings user={user} owner={owner} display={display ?? null} onSignOut={signOut} />
+      ) : (
+        <Grid pages={pages} owner={owner} query={query} onQuery={setQuery} />
+      )}
+    </Guard>
+  )
+  const notices = (
+    <>
       {code === 'owner' && <CodeForAnotherScreen />}
       {code === 'screen' && <ScreenOffered onDecline={codeSeen} />}
-      <Guard key={path}>
-        {slug ? (
-          <PageView slug={slug} user={user} />
-        ) : owner && path === '/machines' ? (
-          <Machines />
-        ) : owner && path === '/displays' ? (
-          <Displays thisDisplay={display?.id} />
-        ) : path === '/settings' ? (
-          <Settings user={user} owner={owner} display={display ?? null} onSignOut={signOut} />
-        ) : (
-          <Grid pages={pages} owner={owner} />
-        )}
-      </Guard>
+    </>
+  )
+  return (
+    <div className="shell" data-view={slug ? 'page' : 'site'}>
+      {slug ? (
+        <>
+          {notices}
+          {view}
+        </>
+      ) : (
+        <Site>
+          <TopBar
+            display={display ?? null}
+            owner={owner}
+            count={pages?.length}
+            onSignOut={signOut}
+            search={path === '/' && (pages?.length ?? 0) > 0 ? { query, onQuery: setQuery, onFind: () => setFinding(true) } : null}
+            onTour={() => setTour(true)}
+          />
+          {notices}
+          {view}
+        </Site>
+      )}
+      {finding && pages && <Finder pages={pages} onClose={closeFinder} />}
+      {tour && <TourDialog onClose={closeTour} />}
       <Toasts />
+    </div>
+  )
+}
+
+/** Everything of the site but a page that is shown: it scrolls under its own bar, which draws a line once something has passed under it. */
+function Site({ children }: { children: ReactNode }) {
+  const [scrolled, setScrolled] = useState(false)
+  return (
+    <div className={`site${scrolled ? ' is-scrolled' : ''}`} onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 4)}>
+      {children}
     </div>
   )
 }
@@ -654,11 +723,46 @@ interface DisplayView {
   push: boolean
 }
 
-function TopBar({ display, owner, onSignOut }: { display: DisplayView | null; owner: boolean; onSignOut: () => void }) {
+interface Search {
+  query: string
+  onQuery: (q: string) => void
+  onFind: () => void
+}
+
+/** The bar over the site: the name, the sections, the search, how things stand, and the few buttons. */
+function TopBar({
+  display,
+  owner,
+  count,
+  search,
+  onSignOut,
+  onTour,
+}: {
+  display: DisplayView | null
+  owner: boolean
+  count: number | undefined
+  search: Search | null
+  onSignOut: () => void
+  onTour: () => void
+}) {
+  const convex = useConvex()
   const path = usePath()
   const [menu, setMenu] = useState(false)
+  // Whether the connection to It is up, which is what the dot says
+  const live = useSyncExternalStore(
+    useCallback((fn: () => void) => convex.subscribeToConnectionState(fn), [convex]),
+    () => convex.connectionState().isWebSocketConnected,
+  )
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!menu) return
+    const away = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setMenu(false)
+    document.addEventListener('mousedown', away)
+    return () => document.removeEventListener('mousedown', away)
+  }, [menu])
   const tab = (href: string, label: string) => (
     <a
+      className="grid-chip"
       href={href}
       aria-current={path === href ? 'page' : undefined}
       onClick={(e) => {
@@ -670,40 +774,79 @@ function TopBar({ display, owner, onSignOut }: { display: DisplayView | null; ow
     </a>
   )
   return (
-    <header className="bar">
-      <a
-        className="mark"
-        href="/"
-        onClick={(e) => {
-          e.preventDefault()
-          navigate('/')
-        }}
-      >
-        It
-      </a>
-      <nav aria-label="Sections">
-        {tab('/', NOUN.Many)}
-        {owner && tab('/machines', 'Machines')}
-        {owner && tab('/displays', 'Displays')}
-      </nav>
-      <span className="grow" />
-      {display && <Reminders display={display} />}
-      <Bell />
-      <div className="menu">
-        <button type="button" className="icon" aria-haspopup="menu" aria-expanded={menu} aria-label="More" onClick={() => setMenu(!menu)}>
-          ⋯
+    <header className="bar grid-header">
+      <div className="grid-brand">
+        <a
+          className="mark grid-title"
+          href="/"
+          onClick={(e) => {
+            e.preventDefault()
+            navigate('/')
+          }}
+        >
+          <Mark />
+        </a>
+        <nav aria-label="Sections">
+          {tab('/', NOUN.Many)}
+          {owner && tab('/machines', 'Machines')}
+          {owner && tab('/displays', 'Displays')}
+        </nav>
+      </div>
+      <div className="grid-header-spacer" />
+      {search && (
+        <span className="grid-search-wrap">
+          <input
+            type="search"
+            className="grid-search"
+            placeholder={`Search ${NOUN.many}`}
+            aria-label={`Search ${NOUN.many}`}
+            spellCheck={false}
+            autoComplete="off"
+            value={search.query}
+            onChange={(e) => search.onQuery(e.target.value)}
+          />
+          <button type="button" className="grid-kbd" title={`Find a ${NOUN.one} (⌘K)`} aria-label={`Find a ${NOUN.one}`} onClick={search.onFind}>
+            ⌘K
+          </button>
+        </span>
+      )}
+      <div className={`grid-meta${live ? ' online' : ''}`}>
+        {display && <Reminders display={display} />}
+        {search && count !== undefined && <span className="grid-meta-count">{`${count} ${count === 1 ? NOUN.one : NOUN.many}`}</span>}
+        <span className="grid-meta-live" role="status">
+          <span className="live-dot" />
+        </span>
+        <span className="grid-version">{`v${version}`}</span>
+      </div>
+      <div className="grid-actions">
+        <Bell />
+        <button type="button" className="grid-icon-btn" title="Take the tour" aria-label="Take the tour" onClick={onTour}>
+          <IconGuide />
         </button>
-        {menu && (
-          // biome-ignore lint/a11y/useKeyWithClickEvents: the items themselves are buttons
-          <div className="menu-list" role="menu" onClick={() => setMenu(false)}>
-            <button type="button" role="menuitem" onClick={() => navigate('/settings')}>
-              Settings
-            </button>
-            <button type="button" role="menuitem" onClick={onSignOut}>
-              Sign out
-            </button>
-          </div>
-        )}
+        <div className="menu" ref={box}>
+          <button
+            type="button"
+            className="icon grid-icon-btn"
+            aria-haspopup="menu"
+            aria-expanded={menu}
+            aria-label="More"
+            title="More"
+            onClick={() => setMenu(!menu)}
+          >
+            <IconMore />
+          </button>
+          {menu && (
+            // biome-ignore lint/a11y/useKeyWithClickEvents: the items themselves are buttons
+            <div className="menu-list" role="menu" onClick={() => setMenu(false)}>
+              <button type="button" role="menuitem" onClick={() => navigate('/settings')}>
+                Settings
+              </button>
+              <button type="button" role="menuitem" onClick={onSignOut}>
+                Sign out
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   )
@@ -855,7 +998,9 @@ class Root extends Component<{ children: ReactNode; onRefused: () => Promise<voi
     if (this.state.asking) return <Splash note="Connecting…" />
     return (
       <main className="splash" role="alert">
-        <span className="mark">It</span>
+        <span className="mark">
+          <Mark />
+        </span>
         <p className="muted">Something went wrong.</p>
         <button type="button" onClick={() => location.assign('/')}>
           Start again
@@ -880,7 +1025,7 @@ class Guard extends Component<{ children: ReactNode }, { error: unknown }> {
       <main className="empty" role="alert">
         <h2>{r.code === 'not_found' ? `No such ${NOUN.one}` : 'That did not work'}</h2>
         <p className="muted">{r.code === 'not_found' ? 'It may have been deleted, or the address is wrong.' : r.message}</p>
-        <button type="button" onClick={() => navigate('/')}>
+        <button type="button" className="primary" onClick={() => navigate('/')}>
           Back to your {NOUN.many}
         </button>
       </main>

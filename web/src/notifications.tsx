@@ -1,7 +1,9 @@
 // Notifications: an agent speaking to the person outside any one page. They are stored, so
-// they survive a reload; a new one shows as a toast; all of them wait in the tray.
+// they survive a reload; a new one shows as a toast; all of them wait in the tray. The site's
+// own short words ("Link copied") are shown in the same place, and are kept nowhere.
 import { useMutation, useQuery } from 'convex/react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { IconBell } from './brand'
 import { ago, api, displayKey, type Id, navigate, refusal, useNow } from './lib'
 import { NOT_SECURE, notSecure } from './push'
 
@@ -17,18 +19,50 @@ interface Note {
 }
 const TOAST_MS = 8_000
 
-function Body({ n, onDone }: { n: Note; onDone?: () => void }) {
+// ---------- the site's own words ----------
+
+interface Said {
+  id: number
+  text: string
+  tone: 'info' | 'error'
+}
+let said: Said[] = []
+let nextId = 1
+const hearers = new Set<() => void>()
+const tell = () => {
+  for (const fn of hearers) fn()
+}
+/** Shows a few words over whatever is on screen, for a moment. */
+export function say(text: string, tone: Said['tone'] = 'info'): void {
+  const id = nextId++
+  said = [...said, { id, text, tone }]
+  tell()
+  setTimeout(
+    () => {
+      said = said.filter((s) => s.id !== id)
+      tell()
+    },
+    tone === 'error' ? 6000 : 2600,
+  )
+}
+const watchSaid = (fn: () => void) => {
+  hearers.add(fn)
+  return () => void hearers.delete(fn)
+}
+
+function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast' | 'notif-item' }) {
   const answer = useMutation(api.notifications.answer)
   const [error, setError] = useState('')
   return (
     <>
-      <p className="note-text">{n.text}</p>
+      <p className={`note-text ${kind}-text`}>{n.text}</p>
       {n.buttons.length > 0 && (
-        <div className="note-buttons">
+        <div className="note-buttons toast-actions">
           {n.buttons.map((b) => (
             <button
               key={b.action}
               type="button"
+              className={`toast-btn${n.answer === b.action ? ' toast-btn--chosen' : ''}`}
               aria-pressed={n.answer === b.action}
               disabled={n.answer !== null}
               onClick={(e) => {
@@ -52,6 +86,7 @@ function Body({ n, onDone }: { n: Note; onDone?: () => void }) {
 /** New notifications, shown over whatever is on screen. */
 export function Toasts() {
   const notes = useQuery(api.notifications.list, { key: displayKey() }) as Note[] | undefined
+  const own = useSyncExternalStore(watchSaid, () => said)
   // A toast is for what arrives while the site is open. Whatever was already there when it
   // loaded is in the tray; "already there" is the newest one at that moment, so no clock of
   // this browser's is compared with the backend's.
@@ -72,9 +107,14 @@ export function Toasts() {
     return () => timers.forEach(clearTimeout)
   }, [passing])
 
-  if (!fresh.length) return null
+  if (!fresh.length && !own.length) return null
   return (
-    <div className="toasts" aria-live="polite">
+    <div className="toasts toast-stack" aria-live="polite">
+      {own.map((s) => (
+        <div key={`own-${s.id}`} className={`toast toast--own${s.tone === 'error' ? ' toast--error' : ''}`} role={s.tone === 'error' ? 'alert' : 'status'}>
+          <p className="toast-text">{s.text}</p>
+        </div>
+      ))}
       {fresh.map((n) => (
         // biome-ignore lint/a11y/useKeyWithClickEvents: the same notification is reachable from the tray
         // biome-ignore lint/a11y/noStaticElementInteractions: see above
@@ -87,10 +127,10 @@ export function Toasts() {
             hide(n.id)
           }}
         >
-          <Body n={n} onDone={() => hide(n.id)} />
+          <Body n={n} kind="toast" onDone={() => hide(n.id)} />
           <button
             type="button"
-            className="icon x"
+            className="icon x toast-close"
             aria-label="Dismiss"
             onClick={(e) => {
               e.stopPropagation()
@@ -105,8 +145,8 @@ export function Toasts() {
   )
 }
 
-/** The bell and its tray, with a count of what has not been seen on this display. */
-export function Bell() {
+/** The bell and its tray, with a count of what has not been seen on this display. `compact` is the bell of the bar over a page. */
+export function Bell({ compact = false }: { compact?: boolean }) {
   const notes = useQuery(api.notifications.list, { key: displayKey() }) as Note[] | undefined
   const seen = useMutation(api.notifications.seen)
   const dismiss = useMutation(api.notifications.dismiss)
@@ -121,59 +161,60 @@ export function Bell() {
   useEffect(() => {
     if (open && unseenIds) void seen({ key: displayKey(), ids: unseenIds.split(',') as Id<'notifications'>[] }).catch(() => {})
   }, [open, unseenIds, seen])
+  // A click anywhere else closes it, and so does Escape
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const away = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false)
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', key)
+    }
+  }, [open])
   return (
-    <div className="menu">
+    <div className="menu" ref={box}>
       <button
         type="button"
-        className="icon bell"
+        className={`icon bell notif-btn ${compact ? 'nav-action' : 'grid-icon-btn'}`}
         aria-haspopup="dialog"
         aria-expanded={open}
+        title="Notifications"
         aria-label={unseen ? `Notifications, ${unseen} new` : 'Notifications'}
         onClick={() => setOpen(!open)}
       >
-        <svg
-          viewBox="0 0 24 24"
-          width="18"
-          height="18"
-          aria-hidden="true"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6" />
-          <path d="M10 20a2 2 0 0 0 4 0" />
-        </svg>
-        {unseen > 0 && <span className="count">{unseen > 9 ? '9+' : unseen}</span>}
+        <IconBell />
+        {unseen > 0 && <span className="count notif-badge">{unseen > 9 ? '9+' : unseen}</span>}
       </button>
       {open && (
-        <div className="tray-panel" role="dialog" aria-label="Notifications">
-          <div className="tray-head">
-            <span>Notifications</span>
+        <div className={`tray-panel notif-panel${compact ? ' notif-panel--low' : ''}`} role="dialog" aria-label="Notifications">
+          <div className="tray-head notif-head">
+            <span className="notif-head-title">Notifications</span>
             {(notes?.length ?? 0) > 0 && (
               <button
                 type="button"
-                className="link"
+                className="link notif-clear"
                 onClick={() => void dismiss({ key: displayKey(), ids: (notes ?? []).map((n) => n.id as Id<'notifications'>) })}
               >
                 Clear all
               </button>
             )}
           </div>
-          {(notes ?? []).length === 0 && <p className="muted">Nothing new. When an agent has something to tell you, it shows up here.</p>}
+          {(notes ?? []).length === 0 && <p className="notif-empty">Nothing new.</p>}
           {/* Said where notifications are read, on a screen that cannot be told of one once the site is closed */}
-          {notSecure() && <p className="muted tray-note">{NOT_SECURE}</p>}
+          {notSecure() && <p className="tray-note notif-note">{NOT_SECURE}</p>}
           <ul>
             {(notes ?? []).map((n) => (
-              <li key={n.id} className="note">
-                <Body n={n} />
+              <li key={n.id} className={`note notif-item${n.answer !== null ? ' notif-item--done' : ''}`}>
+                <Body n={n} kind="notif-item" />
                 <div className="note-foot">
-                  <span className="muted">{ago(n.at, now)}</span>
+                  <span className="notif-item-meta">{ago(n.at, now)}</span>
                   {n.slug && (
                     <button
                       type="button"
-                      className="link"
+                      className="link notif-clear"
                       onClick={() => {
                         setOpen(false)
                         navigate(`/p/${n.slug}`)
@@ -182,7 +223,7 @@ export function Bell() {
                       Open
                     </button>
                   )}
-                  <button type="button" className="link" onClick={() => void dismiss({ key: displayKey(), ids: [n.id as Id<'notifications'>] })}>
+                  <button type="button" className="link notif-clear" onClick={() => void dismiss({ key: displayKey(), ids: [n.id as Id<'notifications'>] })}>
                     Dismiss
                   </button>
                 </div>

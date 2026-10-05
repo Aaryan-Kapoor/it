@@ -3,8 +3,10 @@
 import { parseJson } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import qrcode from 'qrcode-generator'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { REMOVED_STAYS, TASKS_STAY, WhatItDoes } from './about'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { version } from '../package.json'
+import { About } from './about'
+import { Dialog } from './dialog'
 import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow } from './lib'
 import { NoAddress, OtherAddresses, useWhere } from './network'
 import { thisPairing } from './outbox'
@@ -46,17 +48,27 @@ function DisplayItem({
   const rename = useMutation(api.displays.rename)
   const forget = useMutation(api.displays.forget)
   const [name, setName] = useState<string | null>(null)
+  const support = pushSupport()
   return (
-    <li className="panel row">
+    <li className="row">
       {name !== null ? (
         <form
-          className="inline"
+          className="inline row-main"
           onSubmit={(e) => {
             e.preventDefault()
             void act(rename({ displayId: d.id as Id<'displays'>, name }).then(() => setName(null)))
           }}
         >
-          <input aria-label="Display name" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
+          <input
+            // biome-ignore lint/a11y/noAutofocus: opened by the person a moment ago
+            autoFocus
+            aria-label="Display name"
+            placeholder="Kitchen TV"
+            maxLength={60}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Escape' && setName(null)}
+          />
           <button type="submit" disabled={!name.trim()}>
             Save
           </button>
@@ -65,64 +77,68 @@ function DisplayItem({
           </button>
         </form>
       ) : (
-        <span className="row-name">
-          {d.name}
-          {here && <span className="chip quiet">This display</span>}
-          {d.paired === false && <span className="chip quiet">Not paired</span>}
-          {!d.named && <span className="muted"> (not named yet)</span>}
+        <span className="row-main">
+          <span className="row-name">
+            {d.name}
+            {here && <span className="chip quiet">This display</span>}
+            {d.paired === false && (
+              <span className="chip quiet" title="Its browser’s pairing has ended. It shows nothing until that browser is paired again.">
+                Not paired
+              </span>
+            )}
+          </span>
+          <span className="row-sub">
+            {here ? 'Open now' : d.paired === false ? 'Shows nothing until its browser is paired again' : `Last open ${ago(d.lastSeenAt, now)}`}
+          </span>
         </span>
       )}
-      <span className="muted">
-        {here
-          ? 'Open now'
-          : d.paired === false
-            ? 'Its browser’s pairing has ended. It shows nothing until that browser is paired again'
-            : `Last open ${ago(d.lastSeenAt, now)}`}
-        {d.push ? ' · notifications on' : ''}
+      <span className="row-actions">
+        {here && support !== 'unsupported' && (
+          <label className="switch" title={support === 'needs-install' ? 'On an iPhone or iPad, add this site to the Home Screen first' : undefined}>
+            <span>Notifications</span>
+            <input
+              type="checkbox"
+              role="switch"
+              aria-checked={d.push}
+              checked={d.push}
+              onChange={() => {
+                // Turned off for the session that asked, and for no later one
+                const began = thisPairing()
+                return act(
+                  d.push
+                    ? turnOffPush(convex, () => thisPairing() === began)
+                    : turnOnPush(convex).then((r) => (r === 'on' ? undefined : Promise.reject(new Error(r)))),
+                )
+              }}
+            />
+          </label>
+        )}
+        {(owner || here) && name === null && (
+          <button type="button" className="link" onClick={() => setName(d.named ? d.name : '')}>
+            Rename
+          </button>
+        )}
+        {owner && (
+          <button
+            type="button"
+            className="link danger"
+            onClick={() =>
+              confirm(
+                [
+                  here
+                    ? 'Forget this display? This browser is signed out, and has to be paired again before it can be used.'
+                    : `Forget “${d.name}”? It is signed out, and pages open on it stop working, usually at once. It has to be paired again before it can be used.`,
+                  along,
+                ]
+                  .filter(Boolean)
+                  .join(' '),
+              ) && act(forget({ displayId: d.id as Id<'displays'> }))
+            }
+          >
+            Forget
+          </button>
+        )}
       </span>
-      <span className="grow" />
-      {here && pushSupport() !== 'unsupported' && (
-        <button
-          type="button"
-          className="link"
-          onClick={() => {
-            // Turned off for the session that asked, and for no later one
-            const began = thisPairing()
-            return act(
-              d.push
-                ? turnOffPush(convex, () => thisPairing() === began)
-                : turnOnPush(convex).then((r) => (r === 'on' ? undefined : Promise.reject(new Error(r)))),
-            )
-          }}
-        >
-          {d.push ? 'Turn off notifications' : 'Turn on notifications'}
-        </button>
-      )}
-      {(owner || here) && (
-        <button type="button" className="link" onClick={() => setName(d.named ? d.name : '')}>
-          Rename
-        </button>
-      )}
-      {owner && (
-        <button
-          type="button"
-          className="link danger"
-          onClick={() =>
-            confirm(
-              [
-                here
-                  ? 'Forget this display? This browser is signed out, and has to be paired again before it can be used.'
-                  : `Forget “${d.name}”? It is signed out, and pages open on it stop working, usually at once. It has to be paired again before it can be used.`,
-                along,
-              ]
-                .filter(Boolean)
-                .join(' '),
-            ) && act(forget({ displayId: d.id as Id<'displays'> }))
-          }
-        >
-          Forget
-        </button>
-      )}
     </li>
   )
 }
@@ -147,26 +163,29 @@ export function Displays({ thisDisplay }: { thisDisplay?: string }) {
   const alongWith = (display: string) => goesAlong(paired?.find((s) => s.displays.some((d) => d.id === display))?.along, me)
   const now = useNow()
   const [error, act] = useAct()
-  if (displays === undefined) return <main className="empty" role="status" />
+  const [adding, setAdding] = useState(false)
+  const done = useCallback(() => setAdding(false), [])
+  if (displays === undefined) return <main className="list-view" role="status" />
   return (
     <main className="list-view">
-      <h2>Displays</h2>
-      <p className="muted">
-        A display is a browser you have paired with It. Give each a name and an agent can send a page to it: “put it on the kitchen TV”. A display whose
-        browser’s pairing has ended stays here as not paired: paired again, that browser is the same display, and forgetting it removes it.
-      </p>
+      <header className="list-head">
+        <h2>Displays</h2>
+        <button type="button" className="primary" onClick={() => setAdding(true)}>
+          Add a display
+        </button>
+      </header>
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
-      <ul className="rows">
+      <ul className="rows panel">
         {displays.map((d) => (
           <DisplayItem key={d.id} d={d} here={d.id === thisDisplay} owner now={now} act={act} along={alongWith(d.id)} />
         ))}
       </ul>
-      <AddDisplay />
       <PairedBrowsers />
+      {adding && <AddDisplay onClose={done} />}
     </main>
   )
 }
@@ -181,70 +200,59 @@ const CODE_MS = 10 * 60_000
  * site is told once the network is on; until then the panel says how to turn it on, and the
  * address appears by itself when that is done.
  */
-function AddDisplay() {
+function AddDisplay({ onClose }: { onClose: () => void }) {
   const convex = useConvex()
   const where = useWhere()
   const [made, setMade] = useState<{ code: string; expiresAt: number } | null>(null)
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const now = useNow(5_000)
-  const add = async () => {
-    setBusy(true)
+  const add = useCallback(async () => {
     try {
       const r: { code: string; expiresAt?: number } = await convex.mutation(api.sessions.inviteScreen, {})
       setMade({ code: r.code, expiresAt: typeof r.expiresAt === 'number' ? r.expiresAt : serverNow() + CODE_MS })
       setError('')
     } catch (err) {
       setError(refusal(err).message)
-    } finally {
-      setBusy(false)
     }
-  }
+  }, [convex])
+  // A code is made as the dialog opens: opening it is the asking
+  const asked = useRef(false)
+  useEffect(() => {
+    if (asked.current) return
+    asked.current = true
+    void add()
+  }, [add])
   const ranOut = made !== null && made.expiresAt <= now
+  const address = made && where.address ? `${where.address}/pair#${encodeURIComponent(made.code)}` : null
   return (
-    <section className="panel pairing">
-      <h3>Add a display</h3>
-      {!made || ranOut ? (
+    <Dialog eyebrow="Displays" title="Add a display" onClose={onClose} className="pairing">
+      {ranOut ? (
         <>
-          <p className="muted">
-            {ranOut
-              ? 'That code has run out. Make another when the other screen is ready.'
-              : 'Pair another screen with It: a TV, a tablet, a phone. A paired screen can open every page you have and answer on any of them, so pair only screens that are your own. It cannot delete a page, and it cannot see or change your machines, your other displays or what It holds.'}
-          </p>
-          <button type="button" disabled={busy} onClick={() => void add()}>
-            Add a display
+          <p className="modal-lede">That code has run out.</p>
+          <button type="button" className="primary" onClick={() => void add()}>
+            Make another
           </button>
         </>
-      ) : where.address ? (
+      ) : !made ? (
+        !error && <p className="modal-lede">Making a code…</p>
+      ) : address ? (
         <>
-          <p>On the other screen, open this address, or read it with that screen’s camera from the square below.</p>
-          <p className="mono pair-address">{`${where.address}/pair#${encodeURIComponent(made.code)}`}</p>
-          <Qr text={`${where.address}/pair#${encodeURIComponent(made.code)}`} />
+          <p className="modal-lede">Scan this on the other screen, or open the address there.</p>
+          <Qr text={address} />
+          <p className="mono pair-address">{address}</p>
           <OtherAddresses where={where} />
-          <p>
-            Or open <span className="mono">{where.address}</span> there and type this code:
+          <p className="pair-or">
+            Or open <span className="mono">{where.address}</span> and type
           </p>
           <p className="mono pair-code">{spaced(made.code)}</p>
         </>
       ) : (
         <>
-          <NoAddress where={where} appears="the address to open on the other screen" />
-          <p>
-            A browser on the machine It runs on can be paired as a screen meanwhile: open <span className="mono">{location.origin}</span> in it and type this
-            code:
+          <NoAddress where={where} />
+          <p className="pair-or">
+            A browser on this machine can use <span className="mono">{location.origin}</span> with
           </p>
           <p className="mono pair-code">{spaced(made.code)}</p>
-        </>
-      )}
-      {made && !ranOut && (
-        <>
-          <p className="muted">
-            The code pairs one browser, once, and works for ten minutes. A browser that opens the address is asked whether it is the screen to pair, so opening
-            it anywhere else uses nothing.
-          </p>
-          <button type="button" onClick={() => setMade(null)}>
-            Done
-          </button>
         </>
       )}
       {error && (
@@ -252,7 +260,13 @@ function AddDisplay() {
           {error}
         </p>
       )}
-    </section>
+      <div className="modal-actions">
+        <button type="button" onClick={onClose}>
+          Done
+        </button>
+        {made && !ranOut && <span className="modal-sub">One screen, once, for ten minutes. It can open and answer every page, so pair only your own.</span>}
+      </div>
+    </Dialog>
   )
 }
 
@@ -411,104 +425,103 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
       setBusy(false)
     }
   }
+  const [erasing, setErasing] = useState(false)
+  const closeErase = useCallback(() => {
+    setErasing(false)
+    setTyped('')
+  }, [])
   return (
     <main className="list-view">
-      <h2>Settings</h2>
-      {!owner && display && (
-        <ul className="rows">
-          <DisplayItem d={display} here owner={false} now={now} act={act} />
-        </ul>
-      )}
+      <header className="list-head">
+        <h2>Settings</h2>
+      </header>
       {rowError && (
         <p className="error" role="alert">
           {rowError}
         </p>
       )}
-      <section className="panel">
+      <section>
         <h3>This browser</h3>
-        {owner ? (
-          <p className="muted">
-            This browser is paired with It as yours, and everything on the site can be done from it. Signing out ends that. To pair it again, run{' '}
-            <code>it site</code> on the machine It runs on.
-          </p>
-        ) : (
-          <p className="muted">
-            This browser is paired with It as a screen. It can open every page and answer on any of them. Machines, other displays and what It holds are looked
-            after from a browser that is paired as yours. Signing out ends the pairing, and the display has to be added again before it can be used.
-          </p>
-        )}
-        <button type="button" onClick={onSignOut}>
-          Sign out
-        </button>
+        <ul className="rows panel">
+          {display && <DisplayItem d={display} here owner={false} now={now} act={act} />}
+          <li className="row">
+            <span className="row-main">
+              <span className="row-name">{owner ? 'Paired as yours' : 'Paired as a screen'}</span>
+              <span className="row-sub">{owner ? 'Everything on the site can be done from here.' : 'It can open every page and answer on it.'}</span>
+            </span>
+            <span className="row-actions">
+              <button type="button" onClick={onSignOut}>
+                Sign out
+              </button>
+            </span>
+          </li>
+        </ul>
       </section>
       {owner && (
         <>
-          <section className="panel">
-            <h3>Your data</h3>
-            <p className="muted">
-              Download the records It holds: your pages and their state, what was done on them, your displays and machines, and for each version of a page the
-              names, sizes and checksums of its files. The files themselves are not in the download, so it is a record of your pages and not a way to put them
-              back.
-            </p>
-            <button type="button" disabled={busy} onClick={() => void download()}>
-              Download my data
-            </button>
+          <section>
+            <h3>Data</h3>
+            <ul className="rows panel">
+              <li className="row">
+                <span className="row-main">
+                  <span className="row-name">Records</span>
+                  <span className="row-sub">Pages, their state and what was done on them, as JSON. The files are not in it.</span>
+                </span>
+                <span className="row-actions">
+                  <button type="button" disabled={busy} onClick={() => void download()}>
+                    Download my data
+                  </button>
+                </span>
+              </li>
+              <li className="row">
+                <span className="row-main">
+                  <span className="row-name">Erase everything</span>
+                  <span className="row-sub">Every page, file and record, and every pairing.</span>
+                </span>
+                <span className="row-actions">
+                  <button type="button" className="danger" onClick={() => setErasing(true)}>
+                    Erase…
+                  </button>
+                </span>
+              </li>
+            </ul>
           </section>
-          <section className="panel">
-            <h3>Erase everything</h3>
-            <p className="muted">
-              This ends what every display and machine can do at once, and then removes every page, its files and every record of them from what It holds on the
-              computer It runs on, with the copies of its database that It kept from before an update. A page that is open on a display may go on showing for a
-              moment. It cannot be undone.
-            </p>
-            <p className="muted">
-              This browser lets go of what it keeps too, in every tab the site is open in: the cookie that is its pairing, which display it is, anything done on
-              a page that it had not sent yet, and, where notifications were on, the script that shows them and any notification still showing. Every other
-              browser that was paired does the same the next time the site is opened in it. For a day more each keeps one thing, the name of the cookie it held,
-              which is no secret and opens nothing: with it the browser asks again for that cookie to be cleared, should an answer that was on its way have put
-              it back. What a browser keeps for itself of your having used the site, such as its history and whether it lets the site notify you, stays until
-              you clear it there.
-            </p>
-            <p className="muted">
-              Some of it stays a while longer. The backend program keeps what was removed inside its database’s file for {REMOVED_STAYS} more, as it does with
-              anything that is deleted, where nothing of It reads it, and traces of it can stay in the file’s unused space until the program writes over them.
-              For {TASKS_STAY} it also keeps a note of each task it ran in the background, by the id of the machine, the page, the notification or the
-              conversation the task was about, with nothing that was on a page. The part of It that shows pages keeps two notes, by ids alone, so that nothing
-              from before can be used: that every display was signed out, which it clears away the next time a page is shown more than a day later, and that the
-              files were deleted, which it clears away the next time something is deleted more than an hour later. The program stays, with its settings, its
-              keys and what it wrote down while it ran, which holds ids and counts and nothing that was on a page. A copy of its folder that you made yourself,
-              and the records you downloaded, are yours to remove.
-            </p>
-            <p className="muted">
-              Afterwards It is as it was before it was first set up: to use it again, run <code>it setup</code> on the machine It runs on, and then{' '}
-              <code>it site</code> to pair a browser. Type “{PHRASE}” to confirm.
-            </p>
-            <div className="inline">
-              <input aria-label={`Type ${PHRASE} to confirm`} value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={PHRASE} />
-              <button type="button" className="danger" disabled={busy || typed.trim().toLowerCase() !== PHRASE} onClick={() => void erase()}>
-                Erase everything
-              </button>
-            </div>
-          </section>
-          <WhatItDoes />
+          <About />
         </>
       )}
-      {error && (
+      {error && !erasing && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
-      <p className="muted">
-        It is source-available under the It License. You can read{' '}
+      <p className="list-foot">
+        <span>{`It ${version}`}</span>
         <a href="/LICENSE.md" target="_blank" rel="noreferrer">
-          the license
-        </a>{' '}
-        and{' '}
-        <a href="/THIRD_PARTY_NOTICES.md" target="_blank" rel="noreferrer">
-          the notices of what It includes
+          License
         </a>
-        .
+        <a href="/THIRD_PARTY_NOTICES.md" target="_blank" rel="noreferrer">
+          Third-party notices
+        </a>
       </p>
+      {erasing && (
+        <Dialog eyebrow="Settings" title="Erase everything" onClose={closeErase}>
+          <p className="modal-lede">
+            This removes every page, its files and every record of them, and signs out every display and machine. It cannot be undone. Afterwards, run{' '}
+            <code>it setup</code> to use It again.
+          </p>
+          <div className="inline">
+            <input autoFocus aria-label={`Type ${PHRASE} to confirm`} value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={PHRASE} />
+            <button type="button" className="danger solid" disabled={busy || typed.trim().toLowerCase() !== PHRASE} onClick={() => void erase()}>
+              Erase everything
+            </button>
+          </div>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+        </Dialog>
+      )}
     </main>
   )
 }
