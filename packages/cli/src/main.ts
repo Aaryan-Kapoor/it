@@ -12,6 +12,7 @@ import { describeClick, HARNESSES, type Harness, isSlug, NOUN, PROTOCOL_VERSION,
 import { SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, parse, text } from './args'
 import { local } from './connector'
+import * as flow from './flow'
 import { hook } from './hooks'
 import {
   api,
@@ -58,6 +59,7 @@ import { noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
 import { reachable } from './serve/network'
+import { tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
 import { AFTER, detectAll, type HarnessStatus, holdsAddons, KNOWN, reconcile, shim, supported } from './setup'
 import { GUIDE, STEPS, TOUR_PREFIX, tourPage } from './tour'
@@ -178,7 +180,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   status: [0, 'status'],
   setup: [0, 'setup [--all | --only a,b | --none] [--name <name>] [--no-service]'],
   site: [0, 'site [--no-open]'],
-  network: [1, 'network [on | off]'],
+  network: [1, 'network [on | off | tailscale]'],
   serve: [0, 'serve [--log <file>]'],
   service: [1, 'service install | uninstall | status | logs'],
   skill: [0, 'skill'],
@@ -768,8 +770,205 @@ async function noneAbandoned(): Promise<void> {
   }
 }
 
+/** Whether this command was run from another computer, over SSH: a browser opened here would open on a screen nobody is at. */
+const fromAfar = (): boolean => Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY)
+
+/**
+ * Whether a setup is led step by step: by a person at a terminal, on the machine It runs on,
+ * who is there to be asked. With `--none`, on a machine that joined an It elsewhere, or where
+ * what is printed is read by a program, it goes as it always has.
+ */
+const led = (a: Args): boolean => forPerson(a) && flow.live() && !elsewhere() && !a.flags.none
+
+/** Waits until a display is there that was not before, and gives its name. Nothing when the time runs out first. */
+async function newDisplay(before: Set<string>, forMs: number): Promise<string | undefined> {
+  const until = Date.now() + forMs
+  while (Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    const now = await call<{ id: string; name: string }[]>('query', api.displays.list).catch(() => [])
+    const made = now.find((d) => !before.has(d.id))
+    if (made) return made.name
+  }
+  return undefined
+}
+
+/**
+ * A setup that leads a person through: the same things `settingUp` does, in the same order,
+ * said as a few steps, and with two more at the end that the person would otherwise have to
+ * know to ask for: how It is to be reached from their other devices, and the pairing of the
+ * first screen. It ends by saying the one thing to do next.
+ */
+async function settingUpLed(a: Args) {
+  // What the parts say in sentences is kept, and said at the end where the person has to act on it
+  const kept: string[] = []
+  const quiet = (line: string) => void kept.push(line)
+  if (!process.env.IT_INSTALL_FLOW) flow.banner('setup')
+  await noneAbandoned()
+  const inBackground = !a.flags['no-service']
+  let at = flow.step('Backend program')
+  let fetched = false
+  let begun: Awaited<ReturnType<typeof begin>>
+  try {
+    begun = await begin({
+      say: quiet,
+      background: inBackground,
+      name: text(a, 'name'),
+      progress: (got, of) => at.say(flow.bar(got, of)),
+      stage: (stage, how) => {
+        if (stage === 'program') fetched = how === 'fetching'
+        else if (stage === 'service') {
+          at.done(fetched ? 'fetched' : 'ready')
+          at = flow.step(inBackground ? 'Background service' : 'It', 'starting')
+        }
+      },
+    })
+  } catch (err) {
+    at.fail(err instanceof Problem ? err.message : 'failed')
+    throw err
+  }
+  /** What is left for the person to do, said at the end. */
+  const left: string[] = []
+  let trouble = begun.trouble
+  try {
+    if (trouble) at.warn('not running in the background')
+    else at.done(begun.own ? 'running until this setup ends' : 'running')
+    const me = machine()
+    flow.step('This machine').done(me.name)
+
+    // ---------- the agent apps
+    const found = await detectAll()
+    const usable = found.filter((h) => supported(h.id) && h.addon !== 'too_old')
+    let wanted: Harness[]
+    const only = text(a, 'only')
+    if (only !== undefined) {
+      wanted = only
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean) as Harness[]
+      const bad = wanted.filter((id) => !(HARNESSES as readonly string[]).includes(id))
+      if (bad.length) throw new Problem(`Not an agent app It knows: ${bad.join(', ')}`, 'invalid', `It knows: ${HARNESSES.join(', ')}`)
+    } else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
+    // Nothing is asked where there is nothing to choose: no app was found, or none that It can connect
+    else if (!usable.length) wanted = []
+    else {
+      // On a first run every app that can be connected is ticked. Later, what was chosen before
+      const before = begun.enrolled ? null : ((await call<{ wanted?: string[] } | null>('query', api.machines.me).catch(() => null))?.wanted ?? [])
+      wanted = await flow.pickMany(
+        'Connect your agent apps',
+        found.map((h) => ({
+          value: h.id,
+          label: `${KNOWN[h.id].label}${h.version ? ` ${h.version}` : ''}`,
+          on: before === null || before.includes(h.id) || h.addon === 'connected' || h.addon === 'needs_approval',
+          no: !supported(h.id) ? 'not available yet' : h.addon === 'too_old' ? 'this version is too old' : undefined,
+        })),
+      )
+    }
+    const apps = flow.step('Agent apps', found.length ? 'connecting' : '')
+    const connectedBefore = new Set(found.filter((h) => h.addon === 'connected').map((h) => h.id))
+    // The backend is told of the choice before anything is changed on this machine, as in `settingUp`
+    const told = await call('mutation', api.machines.choose, { harnesses: wanted }).then(
+      () => true,
+      () => false,
+    )
+    await reconcile(wanted, quiet)
+    if (!told) await call('mutation', api.machines.choose, { harnesses: wanted })
+    const after = await detectAll()
+    await call('mutation', api.machines.inventory, { harnesses: after })
+    const on = after.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval')
+    const failed = after.filter((h) => wanted.includes(h.id) && h.addon !== 'connected' && h.addon !== 'needs_approval')
+    if (!usable.length) apps.warn(found.length ? 'none found that It can connect yet' : 'none found on this machine')
+    else if (failed.length) apps.warn(`${on.map((h) => KNOWN[h.id].label).join(', ') || 'none'} connected`)
+    else apps.done(on.length ? on.map((h) => KNOWN[h.id].label).join(', ') : 'none connected')
+    for (const h of failed) left.push(`${KNOWN[h.id].label} could not be connected${h.detail ? `: ${h.detail}` : '.'}`)
+    for (const h of after) {
+      if (h.addon === 'needs_approval' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
+      else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !connectedBefore.has(h.id)) left.push(`${KNOWN[h.id].label}: ${AFTER[h.id]}`)
+    }
+
+    // Registered is not yet running. The connector itself is asked, and given a little while to answer
+    if (inBackground && !trouble && !(await answering()))
+      trouble = 'It was registered as a background service, but it is not answering. Run `it service logs` to read why.'
+    if (trouble) left.push(trouble, 'Until It runs on this machine, nothing done on a page reaches an agent here. Run `it serve` yourself to keep it going.')
+    if (begun.background && 'note' in begun.background && begun.background.note) left.push(begun.background.note)
+    if (begun.own) left.push('It stops when this setup ends. Run `it serve`, in a terminal or under a supervisor of your own, to keep it going.')
+
+    // ---------- how It is reached, and the first screen: only where It goes on running to be reached
+    const config = readConfig()
+    if (config && !begun.own && !trouble) {
+      const tail = tailnetAddresses()
+      const home = reachable(config.port)[0]
+      const start = config.network ? (config.tailnet ? 2 : 1) : fromAfar() ? (tail.length ? 2 : 1) : 0
+      const reach = await flow.pick<'off' | 'on' | 'tailscale'>(
+        'How will you reach It?',
+        [
+          { value: 'off', label: 'From this computer only', hint: `localhost:${config.port}` },
+          { value: 'on', label: 'From my home network', hint: home ? new URL(home).host : undefined },
+          { value: 'tailscale', label: 'Over Tailscale', hint: tailnetName() ?? tail[0], no: tail.length ? undefined : 'not found on this machine' },
+        ],
+        start,
+      )
+      const net = flow.step('Network', 'opening')
+      try {
+        await turnNetwork(config, true, reach !== 'off', reach === 'tailscale')
+        net.done(reach === 'off' ? 'this computer only' : reach === 'tailscale' ? 'your tailnet only' : 'your home network')
+      } catch (err) {
+        net.warn('this computer only')
+        left.push(err instanceof Problem ? inWords(err) : String(err))
+      }
+      const addresses = readConfig()?.network ? reachable(config.port, undefined, reach === 'tailscale') : []
+
+      const displays = await call<{ id: string; name: string; paired?: boolean }[]>('query', api.displays.list).catch(() => [])
+      if (displays.some((d) => d.paired !== false)) {
+        const screens = displays.filter((d) => d.paired !== false)
+        flow.step('Screens').done(screens.length === 1 ? screens[0]!.name : `${screens.length} paired`)
+      } else {
+        const { code } = await call<{ code: string }>('mutation', api.sessions.inviteOwner)
+        if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(code)) throw new Problem('It answered with something that is no invite.', 'error')
+        const here = `http://localhost:${config.port}/pair#${code}`
+        const opened = !fromAfar() && openBrowser(here)
+        flow.line()
+        if (opened) flow.line(`${flow.bold('Your browser is opening It.')} ${flow.dim('If it does not, open:')}`)
+        else flow.line(flow.bold(addresses.length ? 'Open this on the screen you want to use:' : 'Open this in a browser on this computer:'))
+        flow.line()
+        const there = addresses.map((address) => `${address}/pair#${code}`)
+        flow.line(`  ${opened || !there.length ? here : there[0]}`)
+        if (!opened && there.length) {
+          flow.line()
+          for (const row of flow.qr(there[0]!)) flow.line(`  ${row}`)
+          for (const other of there.slice(1, 3)) flow.line(`  ${flow.dim(`or ${other}`)}`)
+        }
+        flow.line()
+        const screen = flow.step('First screen', 'waiting for a browser to pair · enter to skip')
+        const paired = await flow.unlessEnter(newDisplay(new Set(displays.map((d) => d.id)), 10 * 60_000))
+        if (paired) screen.done(paired)
+        else screen.warn('not paired yet')
+        if (!paired) left.push('No screen is paired yet. `it site` prints a new address to open.')
+      }
+    }
+
+    const add = pathLine()
+    if (add) left.push(`\`it\` is not on your PATH yet, so an agent that runs it by name will not find it. ${add}`)
+    flow.line()
+    if (left.length) {
+      flow.line(flow.bold('Left for you'))
+      for (const said of left) for (const [i, row] of said.split('\n').entries()) flow.line(`${i === 0 ? flow.yellow('!') : ' '} ${row}`)
+      flow.line()
+    }
+    if (on.length) {
+      flow.line(`${flow.bold('It is ready.')} Say this to your agent:`)
+      flow.line()
+      flow.line(`  ${flow.green('Give me the It tour.')}`)
+    } else flow.line(`${flow.bold('It is ready.')} No agent app is connected: \`it skill\` prints what to give any agent, and \`it setup\` connects one later.`)
+    flow.line()
+    if (trouble) process.exitCode = 1
+  } finally {
+    await begun.done()
+  }
+}
+
 /** The whole of a setup, once it is known that something is to be set up here: see `setup`. */
 async function settingUp(a: Args, joined: boolean) {
+  if (!joined && led(a)) return settingUpLed(a)
   // Where It is set up already, `--none` leaves the background service as it is, registered or
   // not. A machine that has only just joined is not set up yet, though it has its identity
   const leaves = a.flags.none === true && !joined && enrolledHere() && (elsewhere() || existsSync(settingsFile()))
@@ -941,14 +1140,82 @@ async function doorStands(config: { port: number; adminKey: string }): Promise<{
 }
 
 /**
- * `it network on` and `it network off` say whether It answers the person's other devices on the
- * same network, and `it network` says which it is. Turned on or off, the setting is written and
- * the running service opens its door anew by itself, within a second or two: the command waits
- * until the service has done as the setting says, and says so if it could not.
+ * Writes whether the network is to be on, and for the tailnet alone, and waits until the service
+ * that is running has done as the setting says. With no service running the setting is all
+ * there is, and it takes effect when one starts. Where the service could not listen on the
+ * network, the network is left off and that is the problem said.
+ */
+async function turnNetwork(
+  config: { port: number; adminKey: string; network: boolean; tailnet?: boolean },
+  running: boolean,
+  on: boolean,
+  tailnet: boolean,
+): Promise<void> {
+  /**
+   * Waits until the running service has looked at a setting and said so, and gives how its
+   * door then stands. Nothing when no service is running to be waited for.
+   */
+  const taken = async (setting: boolean) => {
+    if (!running) return undefined
+    const until = Date.now() + TAKEN_MS
+    let stands = await doorStands(config)
+    while (stands !== undefined && stands.wanted !== setting && Date.now() < until) {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      stands = await doorStands(config)
+    }
+    return stands
+  }
+  // What the service last said may be a moment behind the settings as they are: it is let catch up first
+  let stands = await taken(config.network)
+  // A service that was to listen on the network and could not is asked afresh, and not taken at its last word
+  if (on && stands?.wanted && !stands.on) {
+    noteNetwork(false)
+    stands = await taken(false)
+  }
+  // Whom the door answers changes with nothing else changing when only the tailnet is turned
+  // to or from. The service opens its door anew for that at its next look, which is waited out
+  const onlyWhom = running && on && config.network && (config.tailnet === true) !== tailnet
+  noteNetwork(on, tailnet)
+  // The service that is running takes it by itself. With none running there is nothing to wait for.
+  stands = await taken(on)
+  if (onlyWhom) await new Promise((resolve) => setTimeout(resolve, 2500))
+  if (stands !== undefined && stands.wanted !== on)
+    throw new Problem(
+      `The network is turned ${on ? 'on' : 'off'} in It’s settings, and the service that is running has not taken that.`,
+      'not_taken',
+      'Stop It and start it again. `it service logs` says what the service met.',
+    )
+  if (stands !== undefined && stands.on !== on) {
+    // Asked to listen on the network, the service could not. Left on in the settings, it would try the same each time it started
+    noteNetwork(false)
+    await taken(false)
+    throw new Problem(
+      'It could not listen on this machine’s network addresses, so the network is left off.',
+      'cannot_listen',
+      'Another program may have one of the ports It listens on, on one of those addresses. `it service logs` says what the service met.',
+    )
+  }
+}
+
+/** What is said where the tailnet is asked for on a machine that is on none. */
+const noTailnet = () =>
+  new Problem(
+    'This machine is on no tailnet, so there is none to keep It to.',
+    'no_tailnet',
+    'Install Tailscale on this machine and sign in to it, and run this again. `it network on` opens It to every network this machine is on instead.',
+  )
+
+/**
+ * `it network on` and `it network off` say whether It answers the person's other devices, and
+ * `it network tailscale` that it answers them on their tailnet alone. `it network` says which it
+ * is. The setting is written and the running service opens its door anew by itself, within a
+ * second or two: the command waits until the service has done as the setting says, and says so
+ * if it could not.
  */
 async function network(a: Args) {
   const to = a._[0]
-  if (to !== undefined && to !== 'on' && to !== 'off') throw new Problem('It is `it network`, `it network on` or `it network off`.', 'invalid')
+  if (to !== undefined && to !== 'on' && to !== 'off' && to !== 'tailscale')
+    throw new Problem('It is `it network`, `it network on`, `it network tailscale` or `it network off`.', 'invalid')
   if (!existsSync(settingsFile()) || elsewhere()) {
     if (enrolledHere() && elsewhere())
       throw new Problem(
@@ -959,53 +1226,14 @@ async function network(a: Args) {
     throw notSetUp()
   }
   const config = readConfig()!
-  const on = to === undefined ? config.network : to === 'on'
+  const on = to === undefined ? config.network : to !== 'off'
+  const tailnet = on && (to === undefined ? config.tailnet === true : to === 'tailscale')
+  if (to === 'tailscale' && !tailnetAddresses().length) throw noTailnet()
   // Whether a service is running, to take the setting or to be asked how its door stands, is
   // whether It's door answers. What the backend was last told of the door does not say: the
   // backend program may be running by itself, with what a service told it before it stopped.
   const running = await runs()
-  if (to !== undefined) {
-    /**
-     * Waits until the running service has looked at a setting and said so, and gives how its
-     * door then stands. Nothing when no service is running to be waited for.
-     */
-    const taken = async (setting: boolean) => {
-      if (!running) return undefined
-      const until = Date.now() + TAKEN_MS
-      let stands = await doorStands(config)
-      while (stands !== undefined && stands.wanted !== setting && Date.now() < until) {
-        await new Promise((resolve) => setTimeout(resolve, 200))
-        stands = await doorStands(config)
-      }
-      return stands
-    }
-    // What the service last said may be a moment behind the settings as they are: it is let catch up first
-    let stands = await taken(config.network)
-    // A service that was to listen on the network and could not is asked afresh, and not taken at its last word
-    if (on && stands?.wanted && !stands.on) {
-      noteNetwork(false)
-      stands = await taken(false)
-    }
-    noteNetwork(on)
-    // The service that is running takes it by itself. With none running there is nothing to wait for.
-    stands = await taken(on)
-    if (stands !== undefined && stands.wanted !== on)
-      throw new Problem(
-        `The network is turned ${to} in It’s settings, and the service that is running has not taken that.`,
-        'not_taken',
-        'Stop It and start it again. `it service logs` says what the service met.',
-      )
-    if (stands !== undefined && stands.on !== on) {
-      // Asked to listen on the network, the service could not. Left on in the settings, it would try the same each time it started
-      noteNetwork(false)
-      await taken(false)
-      throw new Problem(
-        'It could not listen on this machine’s network addresses, so the network is left off.',
-        'cannot_listen',
-        'Another program may have one of the ports It listens on, on one of those addresses. `it service logs` says what the service met.',
-      )
-    }
-  }
+  if (to !== undefined) await turnNetwork(config, running, on, tailnet)
   // Asked only how things stand: a service that was to listen on the network and could not is said as it is
   if (to === undefined && on && running) {
     const stands = await doorStands(config)
@@ -1017,24 +1245,23 @@ async function network(a: Args) {
       return out({ network: false, addresses: [] })
     }
   }
-  const addresses = on ? reachable(config.port) : []
-  const [first, ...others] = addresses
+  const addresses = on ? reachable(config.port, undefined, tailnet) : []
   const said = !on
-    ? 'The network is off. It answers this machine only. Screens on your other devices stay paired, and cannot reach It until the network is turned on again.'
-    : first === undefined
-      ? 'The network is on, but this machine has no address on a network just now, so no other device can reach It. It answers at this machine’s addresses as soon as it has some.'
-      : `The network is on. Other devices on the same network can open It’s site at ${first}.${
-          others.length
-            ? ` For a device that cannot open that one, this machine has ${others.length === 1 ? 'one other address, which is listed below' : `${others.length} other addresses, which are listed below`}.`
-            : ''
-        } Anyone on that network can reach the pairing screen, and nothing else without a code. To add a screen, open Displays on the site and choose “Add a display”.`
+    ? 'The network is off. It answers this machine only.'
+    : addresses.length === 0
+      ? tailnet
+        ? 'The network is on, for your tailnet only, but this machine has no address there just now.'
+        : 'The network is on, but this machine has no address on a network just now.'
+      : tailnet
+        ? 'The network is on, for your tailnet only. Your devices on it can open It at:'
+        : 'The network is on. Devices on the same network can open It at:'
   // With no service running the setting is all there is: nothing listens anywhere until It starts
   const later = running ? undefined : 'It is not running on this machine at the moment, so this takes effect when it starts.'
-  // To a person the sentences are what is printed, with the other addresses under them. Anywhere else they are said beside the JSON
-  if (forPerson(a)) return tell([said, ...others.map((address) => `  ${address}`), later])
-  say(said)
+  // To a person the sentence is what is printed, with the addresses under it. Anywhere else it is said beside the JSON
+  if (forPerson(a)) return tell([said, ...addresses.map((address) => `  ${address}`), later])
+  say(addresses.length ? `${said} ${addresses.join(', ')}` : said)
   if (later) say(later)
-  return out({ network: on, addresses })
+  return out({ network: on, ...(tailnet ? { tailnet: true } : {}), addresses })
 }
 
 /**
@@ -1272,9 +1499,10 @@ This machine
                                  every app it would otherwise ask about.
   it site [--no-open]            Open It's site in a browser on this machine, already paired.
                                  --no-open only prints the address.
-  it network [on | off]          Say whether It answers your other devices on the same network,
-                                 or turn that on or off. It answers this machine only until
-                                 it is turned on.
+  it network [on | off | tailscale]
+                                 Say whether It answers your other devices, or turn that on or
+                                 off. With tailscale it answers your tailnet alone. It answers
+                                 this machine only until it is turned on.
   it status                      Say whether It is running, where its site is, and what is connected.
   it whoami                      Say what It knows this machine as.
   it serve [--log <file>]        Run It here yourself, in this terminal, as the background
@@ -1424,15 +1652,23 @@ async function main(argv: string[]): Promise<void> {
       if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(code)) throw new Problem('It answered with something that is no invite.', 'error')
       // After the mark that begins it, nothing of an address is sent to a server or kept in its logs
       const url = `${site}/pair#${code}`
+      // Where the network is on, the same code pairs a browser on another device, at each address this machine is reached by
+      const elsewhereToo = networkNow().addresses.map((address) => `${address}/pair#${code}`)
       const opening = !a.flags['no-open'] && openBrowser(url)
-      if (!forPerson(a)) return out({ url })
+      if (!forPerson(a)) return out({ url, ...(elsewhereToo.length ? { urls: elsewhereToo } : {}) })
+      if (opening) return tell(['It’s site is opening in your browser, already paired:', `  ${url}`])
+      // Nobody is at this machine's own screen, or it has none: the address to open is the one another device can reach
+      const there = fromAfar() || a.flags['no-open'] ? elsewhereToo : []
       return tell([
-        opening
-          ? 'It’s site is opening in your browser, already paired, at this address:'
-          : // The site of an It that runs here is at an address only this machine can open
-            `Open this address in a browser${existsSync(settingsFile()) ? ' on this machine' : ''}, and It’s site opens there already paired:`,
-        `  ${url}`,
-        'The address pairs one browser, once, and works for ten minutes.',
+        there.length ? 'Open this on the screen you want to pair:' : `Open this in a browser${existsSync(settingsFile()) ? ' on this machine' : ''}:`,
+        `  ${there[0] ?? url}`,
+        ...(there.length && flow.live() ? ['', ...flow.qr(there[0]!).map((row) => `  ${row}`), ''] : []),
+        ...there.slice(1).map((other) => `  or ${other}`),
+        ...(there.length ? [`  or, on this machine, ${url}`] : []),
+        'It pairs one browser, once, within ten minutes.',
+        !there.length && fromAfar() && existsSync(settingsFile())
+          ? 'No other device can open that: `it network tailscale` or `it network on` lets one, and this then prints an address for it.'
+          : undefined,
       ])
     }
     case 'network':

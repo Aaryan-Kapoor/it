@@ -3261,6 +3261,38 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
       )
 })
 
+describe('Kept to the tailnet', () => {
+  /** What a door answers a caller at an address who asks for the site by a name the machine always answers to. */
+  const asked = async (kept: ServiceConfig, address: string, port = door.base) => {
+    const answer = await makeDoor(kept, backend, () => {}, parts()).answer({
+      method: 'GET',
+      target: '/',
+      headers: new Headers({ host: `localhost:${port}` }),
+      body: null,
+      port,
+      address,
+    } satisfies Arrival)
+    return answer.status
+  }
+
+  test('The door answers this machine and callers from a tailnet, and no caller from any other network the machine is on', async () => {
+    const tailnet = { ...config(door.base, true), tailnet: true }
+    for (const here of ['127.0.0.1', '::1']) expect(await asked(tailnet, here), here).not.toBe(421)
+    for (const there of ['100.109.44.60', '100.64.0.9', 'fd7a:115c:a1e0::cc01:2c98']) expect(await asked(tailnet, there), there).not.toBe(421)
+    // The home network, an address of the wider internet, and a private range that is not a tailnet's
+    for (const other of ['192.168.1.50', '10.0.0.74', '203.0.113.9', '2601:cb:8100:c690::4f1a', 'fd00::51', '100.128.0.1'])
+      expect(await asked(tailnet, other), other).toBe(421)
+    // The pages' port is held to the same
+    expect(await asked(tailnet, '192.168.1.50', contentPort(door.base))).toBe(421)
+    expect(await asked(tailnet, '100.109.44.60', contentPort(door.base))).not.toBe(421)
+  })
+
+  test('Open to every network, the same callers are answered', async () => {
+    const open = config(door.base, true)
+    for (const anyone of ['192.168.1.50', '100.109.44.60', '2601:cb:8100:c690::4f1a']) expect(await asked(open, anyone), anyone).not.toBe(421)
+  })
+})
+
 describe('Opening and closing', () => {
   /** Holds a port, as some other program would. */
   const hold = (port: number) =>

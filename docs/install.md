@@ -15,7 +15,9 @@ curl -fsSL https://itcan.do/install.sh | sh        # macOS and Linux
 irm https://itcan.do/install.ps1 | iex             # Windows
 ```
 
-Each command downloads one program for your system, checks it against its published checksum and puts it in `~/.it/bin`, with the license and the third-party notices beside it in `~/.it`. It asks for no administrator rights, and it installs no runtime and no package manager. It also adds `~/.it/bin` to your PATH, by a line in your shell's profile or in your user settings on Windows, and, when it is you who runs it at a terminal, leaves a note that you have been told about usage reporting. The checksum is published in the same place as the program, so it guards against a download that was damaged or cut short, and it is not a signature.
+Each command downloads one program for your system, checks it against its published checksum and puts it in `~/.it/bin`, with the license and the third-party notices beside it in `~/.it`. It asks for no administrator rights, and it installs no runtime and no package manager. It also adds `~/.it/bin` to your PATH, by a line in your shell's profile or in your user settings on Windows. The checksum is published in the same place as the program, so it guards against a download that was damaged or cut short, and it is not a signature.
+
+Run at a terminal on macOS or Linux, the command says what it did in a few lines and goes straight on into the setup, which the next section describes. Run by a script or an agent, it installs, says in sentences what it did, and names the command that sets It up. On Windows it ends by naming that command. Either way it says, once, that It reports counts of its use, and how to turn that off.
 
 No release is published yet, so these two commands have nothing to download, and the scripts are not served at that address. Until one is, It is run from a checkout of this repository, as [Contributing](CONTRIBUTING.md#running-it-from-a-checkout) describes.
 
@@ -27,20 +29,22 @@ The programs are built for five systems: Linux and macOS on Intel and ARM chips,
 it setup
 ```
 
-`it setup` does everything It needs to exist on this machine, in this order, and says what it is doing as it goes.
+`it setup` does everything It needs to exist on this machine, and at a terminal it leads you through it as a short list of steps.
 
-1. It fetches the backend program, once, and checks it against a checksum written in It's own source. It is about 60 MB to download.
+1. It fetches the backend program, once, and checks it against a checksum written in It's own source. It is about 60 MB to download, and a bar shows how far it has got.
 2. It makes It's settings, which hold the port It listens on and the secrets it works with, in `~/.it/service.json`.
 3. It registers It as a background service for your user, and starts it.
 4. It enrols this machine as the one your agents run on.
-5. It looks for the agent apps on this machine, asks which of them to connect, and installs It's add-on into each one you choose.
-6. It tells you where the site is.
+5. It lists the agent apps it found on this machine, for you to tick the ones to connect, and installs It's add-on into each.
+6. It asks how you will reach It: from this computer only, from your home network, or over Tailscale. [Screens](screens.md#the-network) says what each lets in.
+7. It pairs your first screen. On your own computer it opens the site in your browser. Over SSH, or on a machine with no screen, it prints the address for another device to open, with a QR code of it, and waits until a browser has paired or you press Enter.
+8. It says what is left for you to do, if anything is, and the one sentence to say to your agent: "Give me the It tour."
 
-Then `it site` opens the site in your browser, paired, as [Screens](screens.md) describes.
+Then `it site` pairs another browser whenever you want one, as [Screens](screens.md) describes.
 
 Running `it setup` again is safe. It finds what is already done and puts right what is not, and one setup or joining at a time works in a folder: a second one started meanwhile says that it is waiting, and goes on when the first has finished. It is also how you change which agent apps are connected: `--all` connects every one it finds, `--only claude-code,codex` connects the ones named, `--none` connects none, and `--yes` connects every one it would otherwise ask about. `--name` gives the machine a name other than its host name. `--no-service` leaves the background service out.
 
-It asks which apps to connect only where there is a terminal to ask at. Run with none, as an agent or a script runs it, and with none of those four options, it connects no app that is not connected already: it says which apps it found, and which command connects them.
+It leads you through only where there is a terminal to ask at. Run with none, as an agent or a script runs it, it asks nothing: with none of those four options it connects no app that is not connected already, it leaves the network as it is, it pairs no screen, and it says in sentences which apps it found and which commands do the rest.
 
 `it setup --none` does one of three things, by where it is run. On a machine that has never been set up it is a whole first run that connects no agent app. Where It is set up, it takes out every add-on It had put in and touches nothing else: the background service is neither registered nor started again. And in a folder that holds only what an earlier use of It left behind, it takes those add-ons out and starts nothing.
 

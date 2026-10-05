@@ -92,15 +92,26 @@ async function known(config: ServiceConfig, machine: Machine): Promise<boolean> 
  * done, and when nothing is running It already, the backend is run from here for as long as
  * setup takes, so that setup can finish; `done` stops it again.
  */
-export async function begin(opts: { say: (line: string) => void; background: boolean; name?: string }): Promise<Begun> {
+export async function begin(opts: {
+  say: (line: string) => void
+  background: boolean
+  name?: string
+  /** Told how far the fetching of the backend program has got, where it is fetched. */
+  progress?: (got: number, of: number | undefined) => void
+  /** Told as each part of the first run is begun: `program`, `service`, `machine`. */
+  stage?: (stage: 'program' | 'service' | 'machine', how?: 'fetching') => void
+}): Promise<Begun> {
   const { say } = opts
   // The program comes first: the settings hold a key that only it can make
-  if (!process.env.IT_BACKEND_BIN && !existsSync(programFile()))
+  const fetching = !process.env.IT_BACKEND_BIN && !existsSync(programFile())
+  opts.stage?.('program', fetching ? 'fetching' : undefined)
+  if (fetching)
     say(
       `Fetching the backend program that It runs on this machine, from ${process.env.IT_BACKEND_RELEASES ? 'the place IT_BACKEND_RELEASES names' : 'its release on GitHub'}. It is about 60 MB. It is fetched the first time It is set up, and again when a newer It runs a newer one.`,
     )
-  await program(() => {})
+  await program(() => {}, undefined, opts.progress)
   const config = readConfig() ?? makeConfig()
+  opts.stage?.('service')
   const begun: Begun = { config, enrolled: false, own: false, done: async () => {} }
   if (opts.background) {
     try {
@@ -123,6 +134,7 @@ export async function begin(opts: { say: (line: string) => void; background: boo
     }
   }
   try {
+    opts.stage?.('machine')
     // One enrolment at a time for a folder. Whether this machine is enrolled is looked at only
     // once the folder is this setup's alone: another may have enrolled it a moment ago.
     await alone('enrol', async () => {

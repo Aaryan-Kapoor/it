@@ -6,7 +6,9 @@
 it site
 ```
 
-The site is where your pages are shown. It is at `http://localhost:4700`, and a browser has to be paired with It before the site shows it anything. `it site` pairs the browser on the machine It runs on: it asks It for a code, opens the site in your browser with the code in the address, and says that it is opening there, with the address under the sentence. The code works once, and for ten minutes. `--no-open` only prints the address, which is also what happens when you are on the machine over SSH.
+The site is where your pages are shown. It is at `http://localhost:4700`, and a browser has to be paired with It before the site shows it anything. `it site` pairs one: it asks It for a code, and opens the site in your browser with the code in the address. The code works once, and for ten minutes. `--no-open` only prints the address.
+
+Where you are on the machine over SSH, or it has no screen, no browser is opened there. With the network on, `it site` prints the address for another device to open, at each address the machine is reached by, and at a terminal draws the first of them as a QR code for a phone's camera. With the network off it prints the address for the machine itself, and says which command lets another device in.
 
 A browser paired this way is yours: everything on the site can be done from it. It becomes a display at once, so pages can be shown on it, and the site's Displays page lets you name it. The site also has a page for your pages, one for your machines and their agent apps, and settings, where you can download the records It holds or erase everything.
 
@@ -34,7 +36,13 @@ A screen paired this way can open every one of your pages and answer on any of t
 
 ## The network
 
-`it network on` makes It answer other devices on the same network, `it network off` returns it to this machine only, and `it network` says which of the two it is. At a terminal each says how the network stands in a sentence, with the address other devices open the site at, and the machine's other addresses under it. With `--json`, or where a program reads it, each prints `{ "network": true or false, "addresses": [...] }`. `it status` says the same of the network.
+`it network on` makes It answer other devices on the same network, `it network tailscale` makes it answer the devices of your tailnet and no others, `it network off` returns it to this machine only, and `it network` says which it is. At a terminal each says how the network stands in a sentence, with the addresses other devices open the site at under it. With `--json`, or where a program reads it, each prints `{ "network": true or false, "addresses": [...] }`, with `"tailnet": true` beside them where It is kept to the tailnet. `it status` says the same of the network. `it setup`, run at a terminal, asks which of the three you want as one of its steps.
+
+### Over Tailscale
+
+A tailnet is the private network Tailscale makes of your own devices, wherever each of them is. `it network tailscale` is for a machine with no screen of its own, and for reaching It from outside your home. It needs Tailscale installed and signed in on the machine It runs on, and on each device that is to open the site.
+
+Kept to the tailnet, It answers a caller only from an address of the tailnet, or from the machine itself. A device on the home network that is not on your tailnet is answered nothing, at any of the machine's addresses and whatever name it asks for. The addresses It gives are the machine's name on the tailnet, such as `http://studio.tail1234.ts.net:4700`, where Tailscale's own command is there to say it, and then its addresses there. Tailscale carries what passes between your devices encrypted, so on a tailnet the first of the cautions below does not apply between them.
 
 The addresses are the ones another device can open, such as `http://192.168.1.20:4700`, with the likeliest to work first: an address of a home network, then any other IPv4 address, then one of a private tunnel such as a VPN, then IPv6. The list is empty while the network is off. Addresses that mean this machine only or one link only, and the ones that lead to the machine's own containers and virtual machines, are left out.
 

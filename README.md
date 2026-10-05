@@ -28,13 +28,13 @@ curl -fsSL https://itcan.do/install.sh | sh        # macOS and Linux
 irm https://itcan.do/install.ps1 | iex             # Windows
 ```
 
-Each command downloads one program for your system, checks it against its published checksum and puts it in `~/.it/bin`. It asks for no administrator rights and installs nothing else. No release is published yet, so until one is, It is run from a checkout, as [Contributing](docs/CONTRIBUTING.md#running-it-from-a-checkout) describes.
+Each command downloads one program for your system, checks it against its published checksum and puts it in `~/.it/bin`. It asks for no administrator rights and installs nothing else. At a terminal it goes straight on into the setup. No release is published yet, so until one is, It is run from a checkout, as [Contributing](docs/CONTRIBUTING.md#running-it-from-a-checkout) describes.
 
 ## The first two minutes
 
-1. Run `it setup`. It fetches the one program that It runs beside itself, starts It in the background, and connects the agent apps you choose.
-2. Run `it site`. It opens the site in your browser, paired, and that browser is now a screen.
-3. Ask an agent for something to look at: "show me the plan as a page I can approve", or "put the test results on my screen and keep them current".
+1. The setup leads you through. It starts It in the background, connects the agent apps you tick, asks how you will reach It (this computer, your home network, or Tailscale), and pairs your first screen: your browser opens, or you scan a code with your phone. `it setup` runs it again at any time.
+2. Say "Give me the It tour" to your agent. It shows you five things on your own screen and plays along with what you do on each.
+3. Ask for something of your own to look at: "show me the plan as a page I can approve", or "put the test results on my screen and keep them current".
 4. Use the page. What you do arrives in the agent's conversation, and the page shows what the agent made of it.
 
 ## Read more

@@ -38,6 +38,18 @@ say() { printf '%s\n' "$1"; }
 # A path as one word a shell reads back exactly, whatever characters are in it
 quoted() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
+# A person at a terminal is shown a few short lines, each with a mark, and is then led through
+# the setup by the program itself. Anywhere else (a script, an agent, a file) everything is said
+# in whole sentences, since whatever reads it there reads words. An agent app may give the
+# commands it runs a terminal, so one that names its conversation is not taken for a person.
+# IT_INSTALL_PLAIN, set to anything, asks for the sentences at a terminal too.
+agent="${CLAUDE_CODE_SESSION_ID:-}${CODEX_THREAD_ID:-}${OPENCLAW_SESSION_ID:-}${HERMES_SESSION_ID:-}${OPENCODE_SESSION_ID:-}${PI_SESSION_ID:-}${IT_SESSION:-}"
+led=0
+if [ -t 1 ] && [ -z "${agent}" ] && [ -z "${IT_INSTALL_PLAIN:-}" ]; then led=1; fi
+did() { printf '  \033[32m\342\234\223\033[0m %s\n' "$1"; }
+mind() { printf '  \033[33m!\033[0m %s\n' "$1"; }
+quietly() { printf '  \033[2m%s\033[0m\n' "$1"; }
+
 BASE="${IT_INSTALL_BASE:-https://github.com/Aaryan-Kapoor/it/releases}"
 BASE="${BASE%/}"
 VERSION="${IT_VERSION:-latest}"
@@ -263,7 +275,9 @@ checked() {
     exit 1
   fi
 }
-say "It is being downloaded for ${os} ${arch}."
+if [ "${led}" = 1 ]; then printf '\n  \033[1mit\033[0m\033[32m.\033[0m  \033[2minstall\033[0m\n\n'
+else say "It is being downloaded for ${os} ${arch}."
+fi
 fetch "${FROM}/SHA256SUMS" "${stage}/sums"
 fetch "${FROM}/${name}" "${stage}/program"
 checked "${name}" "${stage}/program"
@@ -279,6 +293,7 @@ if ! IT_HOME="${stage}" "${stage}/program" --version < /dev/null > /dev/null 2>&
   say "The program for ${os} ${arch} does not start on this system. Nothing was installed." >&2
   exit 1
 fi
+if [ "${led}" = 1 ]; then did "Downloaded for ${os} ${arch}, and checked"; fi
 
 # From here until the lock is given up, a signal does not stop this. Taking the lock and
 # noting that it was taken are two steps, and stopped between them it would leave a lock that
@@ -334,6 +349,7 @@ trap 'exit 141' PIPE
 trap 'exit 143' TERM
 
 it_quoted=$(quoted "${DIR}/it")
+if [ "${led}" = 1 ]; then did "Installed in ${DIR}"; fi
 
 # The folder is put on the PATH by one line in the file the person's shell reads when it
 # starts. Which file that is depends on the shell, and it is made if it is not there. The line
@@ -353,7 +369,9 @@ on_path=0
 case ":${PATH:-}:" in *":${DIR}:"*) on_path=1 ;; esac
 if [ -z "${IT_INSTALL_NO_PATH:-}" ] && [ "${on_path}" = 0 ]; then
   if [ -z "${HOME:-}" ]; then
-    say "HOME is not set, so your PATH was left alone. Add ${DIR} to it yourself."
+    if [ "${led}" = 1 ]; then mind "HOME is not set, so your PATH was left alone. Add ${DIR} to it yourself."
+    else say "HOME is not set, so your PATH was left alone. Add ${DIR} to it yourself."
+    fi
   else
     line="export PATH=$(quoted "${DIR}"):\"\$PATH\""
     case "$(basename -- "${SHELL:-sh}")" in
@@ -377,7 +395,13 @@ if [ -z "${IT_INSTALL_NO_PATH:-}" ] && [ "${on_path}" = 0 ]; then
     esac
     # Where one file was changed and another could not be, a new terminal has the folder on
     # its PATH only if it reads the one that was changed, and so none is promised
-    if [ -n "${changed}" ] && [ -n "${refused}" ]; then say "Added ${DIR} to your PATH, in${changed}, but${refused} could not be changed, and a terminal that reads that file will not find It until the line is in it. Add it there yourself, or run:  ${line}"
+    if [ "${led}" = 1 ]; then
+      if [ -n "${changed}" ] && [ -n "${refused}" ]; then mind "On your PATH in${changed}, but${refused} could not be changed. Add this line there:  ${line}"
+      elif [ -n "${changed}" ]; then did "On your PATH from the next terminal (${changed# })"
+      elif [ -n "${refused}" ]; then mind "Your PATH could not be changed. Add ${DIR} to it yourself:  ${line}"
+      else did "On your PATH from the next terminal"
+      fi
+    elif [ -n "${changed}" ] && [ -n "${refused}" ]; then say "Added ${DIR} to your PATH, in${changed}, but${refused} could not be changed, and a terminal that reads that file will not find It until the line is in it. Add it there yourself, or run:  ${line}"
     elif [ -n "${changed}" ]; then say "Added ${DIR} to your PATH, in${changed}. Open a new terminal, or run:  ${line}"
     elif [ -n "${refused}" ]; then say "Your PATH could not be changed. Add ${DIR} to it yourself:  ${line}"
     else say "${DIR} is already on the PATH of every new terminal. To use it in this one, run:  ${line}"
@@ -396,7 +420,9 @@ reporting=1
 if [ -e "${HOME_DIR}/telemetry-off" ] || [ -L "${HOME_DIR}/telemetry-off" ]; then reporting=0; fi
 if [ -n "${IT_TELEMETRY_ENABLED:-}${DO_NOT_TRACK:-}" ]; then reporting=0; fi
 if [ "${reporting}" = 1 ]; then
-  say "It reports usage counts under a random id for this installation, and never what is on a page. Turn it off with \`${it_quoted} telemetry off\` or IT_TELEMETRY_ENABLED=false. What is sent: https://github.com/Aaryan-Kapoor/it/blob/master/docs/usage-reporting.md"
+  if [ "${led}" = 1 ]; then quietly "It reports usage counts under a random id, and never what is on a page. \`it telemetry off\` turns that off."
+  else say "It reports usage counts under a random id for this installation, and never what is on a page. Turn it off with \`${it_quoted} telemetry off\` or IT_TELEMETRY_ENABLED=false. What is sent: https://github.com/Aaryan-Kapoor/it/blob/master/docs/usage-reporting.md"
+  fi
   # The note left in It's folder is how the program knows this has been said to a person, so
   # that it does not say it again. So it is left only once the sentence is printed, and only
   # where a person was there to read it: at a terminal, and not inside an agent's conversation,
@@ -404,13 +430,26 @@ if [ "${reporting}" = 1 ]; then
   # first command at a terminal says it. The note is made only where nothing at all is,
   # readable by this user alone, and by a write that makes a new file or fails: a link put
   # there is never written through.
-  agent="${CLAUDE_CODE_SESSION_ID:-}${CODEX_THREAD_ID:-}${OPENCLAW_SESSION_ID:-}${HERMES_SESSION_ID:-}${OPENCODE_SESSION_ID:-}${PI_SESSION_ID:-}${IT_SESSION:-}"
   if [ -t 1 ] && [ -z "${agent}" ] && [ ! -e "${note}" ] && [ ! -L "${note}" ]; then
     ( umask 077; set -C; printf '{"told": %s000}\n' "$(date +%s)" > "${note}" ) 2>/dev/null || true
   fi
 fi
-say "It is source-available software under the It License, which is in ${HOME_DIR}/LICENSE.md."
-say "It is installed. Start it, and connect your agents, with:"
-say ""
-say "  ${it_quoted} setup"
+if [ "${led}" = 0 ]; then
+  say "It is source-available software under the It License, which is in ${HOME_DIR}/LICENSE.md."
+  say "It is installed. Start it, and connect your agents, with:"
+  say ""
+  say "  ${it_quoted} setup"
+  exit 0
+fi
+quietly "Source-available under the It License, which is in ${HOME_DIR}/LICENSE.md."
+# The setup follows at once, led by the program. This script was read from a pipe, so what the
+# person types is read from the terminal itself. The folder is on the PATH of the setup, as it
+# will be in every terminal opened from now on, and what was downloaded into is cleared first:
+# the setup may be at work for as long as the person takes.
+if ( : < /dev/tty ) 2>/dev/null; then
+  if [ -n "${stage}" ]; then rm -rf -- "${stage}" || true; stage=""; fi
+  IT_INSTALL_FLOW=1 PATH="${DIR}:${PATH:-}" "${DIR}/it" setup < /dev/tty || exit $?
+else
+  printf '\n  Next:  %s setup\n\n' "${it_quoted}"
+fi
 }

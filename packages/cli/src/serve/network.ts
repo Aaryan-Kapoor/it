@@ -3,6 +3,7 @@
 // interfaces. The one most likely to work comes first, and the ones no other device could use
 // are left out.
 import os from 'node:os'
+import { inTailnet, tailnetName } from './tailnet'
 
 /** An address of this machine as the system lists it, under the name of the interface it is on. */
 type Listed = Pick<os.NetworkInterfaceInfo, 'address' | 'family' | 'internal'>
@@ -46,13 +47,23 @@ const MOST = 8
  * addresses with the port, the one most likely to work first: an address of the home network,
  * then any other under IPv4, then those of a tunnel, then IPv6. Loopback, addresses that mean
  * something on one link only, and the bridges to this machine's own containers and virtual
- * machines are left out.
+ * machines are left out. With `tailnet`, It answers the person's tailnet alone: the machine's
+ * name there comes first, where it is known, and then its addresses there, and nothing else.
  */
-export function reachable(port: number, interfaces: Interfaces = os.networkInterfaces()): string[] {
+export function reachable(
+  port: number,
+  interfaces: Interfaces = os.networkInterfaces(),
+  tailnet = false,
+  named: () => string | undefined = tailnetName,
+): string[] {
   const found: { at: string; rank: number }[] = []
+  // On a tailnet the machine has a name there, which goes on working when its addresses change
+  const name = tailnet ? named() : undefined
+  if (name) found.push({ at: `http://${name}:${port}`, rank: -1 })
   for (const [name, addresses] of Object.entries(interfaces))
     for (const a of addresses ?? []) {
-      const ranked = rank(name, a)
+      // Kept to the tailnet, only its addresses there are ones another device can use
+      const ranked = tailnet ? (a.internal || !inTailnet(a.address) ? undefined : a.family === 'IPv4' ? 0 : 1) : rank(name, a)
       if (ranked === undefined) continue
       let at: string
       try {

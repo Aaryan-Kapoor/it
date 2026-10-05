@@ -1063,7 +1063,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       /--no-setup joins and\s+connects no agent app/,
       /With --json, and wherever a program reads what they print,\s+they print JSON/,
       /^ {2}it site \[--no-open\] {2,}\S/m,
-      /^ {2}it network \[on \| off\] {2,}\S/m,
+      /^ {2}it network \[on \| off \| tailscale\]$/m,
       /^ {2}it status {2,}\S/m,
       /^ {2}it whoami {2,}\S/m,
       /^ {2}it logout \[--force\] {2,}\S/m,
@@ -1339,22 +1339,15 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     const b = await backend(m, () => ({ code: 'Ab3dEf6hIj9kLm2nOp5q' }))
     const url = `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`
     try {
-      expect((await atTerminal(m, ['site'], b.env)).shown.split('\n')).toEqual([
-        'It’s site is opening in your browser, already paired, at this address:',
-        `  ${url}`,
-        'The address pairs one browser, once, and works for ten minutes.',
+      expect((await atTerminal(m, ['site'], b.env)).shown.split('\n')).toEqual(['It’s site is opening in your browser, already paired:', `  ${url}`, ''])
+      const ASKED = ['Open this in a browser on this machine:', `  ${url}`, 'It pairs one browser, once, within ten minutes.']
+      expect((await atTerminal(m, ['site', '--no-open'], b.env)).shown.split('\n')).toEqual([...ASKED, ''])
+      // Run from another computer, with the network off: nothing there can open the address, and the person is told what lets a device in
+      expect((await atTerminal(m, ['site'], { ...b.env, SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22' })).shown.split('\n')).toEqual([
+        ...ASKED,
+        'No other device can open that: `it network tailscale` or `it network on` lets one, and this then prints an address for it.',
         '',
       ])
-      for (const [args, env] of [
-        [['site', '--no-open'], {}],
-        [['site'], { SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22' }],
-      ] as const)
-        expect((await atTerminal(m, [...args], { ...b.env, ...env })).shown.split('\n')).toEqual([
-          'Open this address in a browser on this machine, and It’s site opens there already paired:',
-          `  ${url}`,
-          'The address pairs one browser, once, and works for ten minutes.',
-          '',
-        ])
       expect(JSON.parse((await atTerminal(m, ['site', '--no-open', '--json'], b.env)).shown)).toEqual({ url })
     } finally {
       await b.close()
@@ -1365,9 +1358,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     const m = await setUp()
     const STOPPED = 'It is not running on this machine at the moment, so this takes effect when it starts.'
     // Nothing is running here, and each of these says so: the setting is all there is until It starts
-    expect((await atTerminal(m, ['network'])).shown).toBe(
-      `The network is off. It answers this machine only. Screens on your other devices stay paired, and cannot reach It until the network is turned on again.\n${STOPPED}\n`,
-    )
+    expect((await atTerminal(m, ['network'])).shown).toBe(`The network is off. It answers this machine only.\n${STOPPED}\n`)
     const on = (await atTerminal(m, ['network', 'on'])).shown.split('\n')
     expect(on[0]).toMatch(/^The network is on[.,] /)
     expect(on.at(-2)).toBe(STOPPED)

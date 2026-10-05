@@ -274,7 +274,11 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
       message: 'This machine joined an It that runs on another machine, and has no network of It’s own to turn on.',
       hint: 'Run `it network` on the machine It runs on.',
     })
-    expect(await refused(['network', 'maybe'])).toMatchObject({ exit: 2, code: 'invalid', message: 'It is `it network`, `it network on` or `it network off`.' })
+    expect(await refused(['network', 'maybe'])).toMatchObject({
+      exit: 2,
+      code: 'invalid',
+      message: 'It is `it network`, `it network on`, `it network tailscale` or `it network off`.',
+    })
     expect(await refused(['network', 'on', 'now'])).toMatchObject({ exit: 2, code: 'invalid' })
   })
 

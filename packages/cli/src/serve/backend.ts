@@ -160,7 +160,13 @@ const ARCHIVE_MOST = 400 * 1024 * 1024
  *
  * An address that is `plain` is a place on this machine (see `releases`).
  */
-export async function fetchProgram(from: { url: string; sha256: string; plain?: boolean }, file: string, signal?: AbortSignal): Promise<void> {
+export async function fetchProgram(
+  from: { url: string; sha256: string; plain?: boolean },
+  file: string,
+  signal?: AbortSignal,
+  /** Told how much has arrived, and of how much where the answer said: for whoever shows a person how far it has got. */
+  progress?: (got: number, of: number | undefined) => void,
+): Promise<void> {
   const elsewhere = Boolean(process.env.IT_BACKEND_RELEASES)
   const unreachable = () =>
     new Problem(
@@ -194,9 +200,12 @@ export async function fetchProgram(from: { url: string; sha256: string; plain?: 
     } else {
       const answer = await fetch(from.url, { redirect: 'follow', signal })
       if (!answer.ok || !answer.body) throw unreachable()
+      const length = Number(answer.headers.get('content-length'))
+      const of = Number.isInteger(length) && length > 0 ? length : undefined
       for await (const piece of answer.body as unknown as AsyncIterable<Uint8Array>) {
         size += piece.length
         if (size > ARCHIVE_MOST) break
+        progress?.(size, of)
         hash.update(piece)
         pieces.push(piece)
       }
@@ -265,7 +274,7 @@ async function unpack(archive: Uint8Array[], name: string, to: string): Promise<
 }
 
 /** Where the backend program is, having fetched and checked it first if it is not on this machine yet. */
-export async function program(say: (line: string) => void, signal?: AbortSignal): Promise<string> {
+export async function program(say: (line: string) => void, signal?: AbortSignal, progress?: (got: number, of: number | undefined) => void): Promise<string> {
   const file = programFile()
   if (existsSync(file)) return file
   if (process.env.IT_BACKEND_BIN) throw new Problem(`IT_BACKEND_BIN names ${file}, and no file is there.`, 'backend_program')
@@ -285,7 +294,7 @@ export async function program(say: (line: string) => void, signal?: AbortSignal)
     }
   const from = releases()
   say('backend: fetching the program')
-  await fetchProgram({ url: `${from.base}/${RELEASE}/${archive.name}`, sha256: archive.sha256, plain: from.plain }, file, signal)
+  await fetchProgram({ url: `${from.base}/${RELEASE}/${archive.name}`, sha256: archive.sha256, plain: from.plain }, file, signal, progress)
   say('backend: the program is in place')
   // A program kept for another release is of no more use. One that cannot be removed now, as one that is still running on Windows cannot, is left for the next time.
   try {

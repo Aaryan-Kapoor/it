@@ -145,10 +145,10 @@ const LOOK_MS = 1000
  * is registered with the system to start by itself from this folder (`background`), and whether
  * counts of its use are being sent at this moment (`usage`).
  */
-export const standsAs = (door: { network: boolean }, wanted: boolean, port: number) => ({
+export const standsAs = (door: { network: boolean; tailnet?: boolean }, wanted: boolean, port: number) => ({
   on: door.network,
   wanted,
-  addresses: door.network ? reachable(port) : [],
+  addresses: door.network ? reachable(port, undefined, door.tailnet === true) : [],
   background: startsByItself(),
   usage: counting(),
 })
@@ -228,18 +228,22 @@ export function erasing(say: (line: string) => void): (person: string) => void {
 async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: string) => void, lost: () => void): Promise<{ stop(): Promise<void> }> {
   const erased = erasing(say)
   const content = makeContent(config, backend, say, erased)
-  const open = async (network: boolean) => {
+  const open = async (network: boolean, tailnet: boolean) => {
     try {
-      return { door: await startDoor({ ...config, network }, backend, say, { content, erased }), network }
+      return {
+        door: await startDoor({ ...config, network, tailnet: network && tailnet }, backend, say, { content, erased }),
+        network,
+        tailnet: network && tailnet,
+      }
     } catch (err) {
       if (!network) throw err
       say(`door: could not listen on the network (${why(err)}); it answers this machine only`)
-      return { door: await startDoor({ ...config, network: false }, backend, say, { content, erased }), network: false }
+      return { door: await startDoor({ ...config, network: false, tailnet: false }, backend, say, { content, erased }), network: false, tailnet: false }
     }
   }
   let now: Awaited<ReturnType<typeof open>>
   try {
-    now = await open(config.network)
+    now = await open(config.network, config.tailnet === true)
   } catch (err) {
     // No door was opened to ask anything of it
     await content.close().catch(() => {})
@@ -247,6 +251,7 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   }
   /** What the settings last said, which is what was last tried. */
   let wanted = config.network
+  let wantedTailnet = config.network && config.tailnet === true
   const report = teller((said) => asAdmin(backend, 'network:report', said), backend.behind !== undefined)
   const tell = () => report(standsAs(now, wanted, config.port))
   /** Whether it has been said that the backend could not be told. Said once, until it has been told again. */
@@ -270,14 +275,19 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
     try {
       // Settings that cannot be read just now say nothing, and the door stays as it is
       let said: boolean | undefined
+      let saidTailnet = false
       try {
-        said = readConfig()?.network
+        const kept = readConfig()
+        said = kept?.network
+        saidTailnet = kept?.network === true && kept.tailnet === true
       } catch {}
-      if (said !== undefined && said !== wanted) {
+      if (said !== undefined && (said !== wanted || saidTailnet !== wantedTailnet)) {
         wanted = said
-        if (said !== now.network) {
+        wantedTailnet = saidTailnet
+        // Whom the door answers is part of how it was opened, so it is opened anew for that too
+        if (said !== now.network || saidTailnet !== now.tailnet) {
           await now.door.stop()
-          now = await open(said)
+          now = await open(said, saidTailnet)
         }
       }
       await telling()

@@ -35,6 +35,7 @@ import type { Backend } from './backend'
 import { doorKey, type ServiceConfig } from './config'
 import { createPush, type Push } from './push'
 import { answerSite, BUILT, hostOf, type Site, spelled } from './site'
+import { inTailnet, isLoopback, tailnetName } from './tailnet'
 
 /** The content package: it shows pages on their port, takes uploads, and does what the backend asks of it. */
 export type Content = ReturnType<typeof createContent>
@@ -224,9 +225,10 @@ function placeOf(address: string): { name: string; port: number; rest: string } 
  * The names this machine answers to. Its own three always. When the network is on, every
  * address it has on its networks, its host name, and that name as a home network looks it up.
  * A machine's addresses change as it moves between networks, so they are read again when the
- * last reading is a few seconds old.
+ * last reading is a few seconds old. Kept to the tailnet, the names are the machine's addresses
+ * there, its host name, and its name on the tailnet.
  */
-function knownNames(network: boolean): (name: string) => boolean {
+function knownNames(network: boolean, tailnet = false): (name: string) => boolean {
   const own = new Set(['localhost', '127.0.0.1', '[::1]'])
   let others = new Set<string>()
   let readAt = 0
@@ -237,10 +239,17 @@ function knownNames(network: boolean): (name: string) => boolean {
       readAt = Date.now()
       others = new Set()
       for (const addresses of Object.values(os.networkInterfaces()))
-        for (const a of addresses ?? []) others.add(a.family === 'IPv6' ? spelled(`[${a.address.split('%')[0]}]`) : a.address)
+        for (const a of addresses ?? []) {
+          // Kept to the tailnet, the machine answers to its addresses there and to no other it has
+          if (tailnet && !inTailnet(a.address)) continue
+          others.add(a.family === 'IPv6' ? spelled(`[${a.address.split('%')[0]}]`) : a.address)
+        }
       const host = os.hostname().toLowerCase()
       if (host) others.add(host)
-      if (host && !host.includes('.')) others.add(`${host}.local`)
+      if (host && !host.includes('.') && !tailnet) others.add(`${host}.local`)
+      // And to the name it has on the tailnet, where Tailscale says what that is
+      const there = tailnet ? tailnetName() : undefined
+      if (there) others.add(there)
     }
     return others.has(name)
   }
@@ -353,7 +362,10 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
   const content = parts.content ?? makeContent(config, backend, say, parts.erased)
   const push = parts.push ?? createPush({ backendSite: site, refused: noted })
   const files = parts.site ?? BUILT
-  const known = knownNames(config.network)
+  const known = knownNames(config.network, config.tailnet === true)
+  // Kept to the tailnet, a caller is answered only from an address of the tailnet, or from this
+  // machine itself: a device on another network this machine is on gets nothing, whatever name it asks for
+  const answered = (address: string) => !config.tailnet || isLoopback(address) || inTailnet(address)
   const now = parts.now ?? Date.now
 
   // Codes that were refused, counted for each address that sent them by itself. An address that
@@ -385,10 +397,10 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
     noted(code)
     return json(status, { error: code }, headers)
   }
-  /** Whether a request was sent to a name this machine answers to, on the port it arrived at. */
+  /** Whether a request was sent to a name this machine answers to, on the port it arrived at, from somewhere it answers. */
   const named = (a: Arrival): boolean => {
     const host = hostOf(a.headers.get('host'))
-    return host !== null && host.port === a.port && known(host.name)
+    return host !== null && host.port === a.port && known(host.name) && answered(a.address)
   }
   /**
    * Where a request asks for, as an address. One that was sent written out in full is taken
@@ -1564,7 +1576,9 @@ export async function startDoor(
     await close()
     throw err
   }
-  say(`door open on port ${config.port} (${config.network ? 'the network is on: every address this machine has' : 'the network is off: this machine only'})`)
+  say(
+    `door open on port ${config.port} (${!config.network ? 'the network is off: this machine only' : config.tailnet ? 'the network is on: this machine’s tailnet only' : 'the network is on: every address this machine has'})`,
+  )
   return {
     async stop() {
       await close()
