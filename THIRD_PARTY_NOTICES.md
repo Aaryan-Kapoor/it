@@ -12,7 +12,7 @@ The `it` program is what a person is given. The service that shows pages is part
 
 | Part | Packages built into it |
 |---|---|
-| The `it` program | `agent-base@7.1.4`, `asn1.js@5.4.1`, `bn.js@4.12.5`, `buffer-equal-constant-time@1.0.1`, `convex@1.46.0`, `debug@4.4.3`, `ecdsa-sig-formatter@1.0.11`, `fflate@0.8.3`, `http_ece@1.2.0`, `https-proxy-agent@7.0.6`, `inherits@2.0.4`, `jose@6.2.12`, `jwa@2.0.1`, `jws@4.0.1`, `minimalistic-assert@1.0.1`, `ms@2.1.3`, `safe-buffer@5.2.1`, `safer-buffer@2.1.2`, `web-push@3.6.7` |
+| The `it` program | `agent-base@7.1.4`, `asn1.js@5.4.1`, `bn.js@4.12.5`, `buffer-equal-constant-time@1.0.1`, `convex@1.46.0`, `debug@4.4.3`, `ecdsa-sig-formatter@1.0.11`, `fflate@0.8.3`, `http_ece@1.2.0`, `https-proxy-agent@7.0.6`, `inherits@2.0.4`, `jose@6.2.12`, `jwa@2.0.1`, `jws@4.0.1`, `minimalistic-assert@1.0.1`, `ms@2.1.3`, `qrcode-generator@2.0.4`, `safe-buffer@5.2.1`, `safer-buffer@2.1.2`, `web-push@3.6.7` |
 | The backend's functions | `convex@1.46.0`, `jose@6.2.12` |
 | The site | `convex@1.46.0`, `qrcode-generator@2.0.4`, `react-dom@19.3.0`, `react@19.3.0`, `scheduler@0.28.0`, `vite@7.3.6` |
 | The script in every page | None |
@@ -7607,7 +7607,7 @@ SOFTWARE.
 
 ### qrcode-generator 2.0.4
 
-License: MIT. Built into: the site. Source: <https://github.com/kazuhikoarase/qrcode-generator>.
+License: MIT. Built into: the `it` program; the site. Source: <https://github.com/kazuhikoarase/qrcode-generator>.
 
 This package ships no license file of its own. The file of it that is built in opens with this notice:
 

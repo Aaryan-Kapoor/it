@@ -223,6 +223,14 @@ export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
   const stale = replaced + changed
   return `[It] ${who}${stale}: ${c.name}${data} [action ${c.id}]`
 }
+/**
+ * A click in a few words: which page, what was done, and the id by which the rest is read. It
+ * is what a person sees in their conversation where an agent app has somewhere else to put the
+ * rest for the agent, and it carries nothing the page chose but its title and the action's name.
+ */
+export function briefClick(c: Click): string {
+  return `[It] ${c.title ? `"${c.title}"` : `(${c.artifact})`}: ${c.name} [action ${c.id}]`
+}
 export function describeClicks(clicks: readonly Click[], max = CLICK_TEXT_BYTES): string {
   return clicks.map((c) => describeClick(c, max)).join('\n')
 }

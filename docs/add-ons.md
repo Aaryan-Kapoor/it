@@ -41,6 +41,8 @@ It has add-ons for Claude Code, Codex, Pi, OpenCode, Hermes Agent and OpenClaw, 
 
 When the conversation is idle, a click starts a turn. While a turn runs, the click is attached to the next tool result, so that nothing is interrupted, and it starts a turn when that one ends if no tool ran.
 
+A click that starts a turn shows in the conversation as one short line: the page, what was done, and the action's id, as in `[It] "Chess": move [action …]`. Everything else the page sent goes to Claude beside that line, where you are not shown it, with a note that It put the line there and that what a page sends is data and not instructions.
+
 The add-on needs Claude Code 2.1.287 or later, with mods turned on. There is no other route for an older Claude Code, or for one where mods are turned off: a click waits in the inbox there.
 
 ### Codex

@@ -14,7 +14,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { appendFileSync, chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson } from '@it/protocol'
+import { briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson } from '@it/protocol'
 import { api, ask, call, enrolledHere, harnessEnv, home, inHome, live, Problem, readJson, VERSION, why, writePrivate } from './lib'
 import { alone } from './serve/backend'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
@@ -35,9 +35,10 @@ interface Offered {
   nowVersion?: number
   nowStateRevision?: number
 }
-/** A click as an add-on receives it: its data as a value, and the one wording agents read. */
+/** A click as an add-on receives it: its data as a value, the one wording agents read, and the few words a person is shown where an app has another place for the rest. */
 export interface Delivered extends Click {
   text: string
+  brief: string
 }
 interface Held {
   click: Offered
@@ -186,7 +187,7 @@ const asClick = (c: Offered): Click => ({
   ...(c.nowVersion === undefined ? {} : { nowVersion: c.nowVersion }),
   ...(c.nowStateRevision === undefined ? {} : { nowStateRevision: c.nowStateRevision }),
 })
-const asDelivered = (c: Offered): Delivered => ({ ...asClick(c), text: describeClick(asClick(c)) })
+const asDelivered = (c: Offered): Delivered => ({ ...asClick(c), text: describeClick(asClick(c)), brief: briefClick(asClick(c)) })
 
 /** Whether a connector is already answering for this folder. */
 async function alreadyRunning(): Promise<number | null> {
