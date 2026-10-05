@@ -17,7 +17,7 @@ It runs on your own computer, with no account anywhere and no service to sign up
 
 It is one program. The same `it` is the service that shows your pages and the command an agent publishes them with.
 
-It works with the agent apps you already use, and never runs an agent for you. It has add-ons for Claude Code and Codex, which are proven end to end, and for Pi, OpenCode, Hermes Agent and OpenClaw, which are proven less or not yet. Any other agent can drive It with the `it` command. [Agents](docs/agents.md) says exactly what works where.
+It works with the agent apps you already use, and brings no agent of its own. What you do on a page goes to the conversation that made it, and where that conversation has been closed and you have allowed it, It reopens it for you. It has add-ons for Claude Code and Codex, which are proven end to end, and for Pi, OpenCode, Hermes Agent and OpenClaw, which are proven less or not yet. Any other agent can drive It with the `it` command. [Agents](docs/agents.md) says exactly what works where.
 
 A page an agent wrote is kept apart. It cannot reach the site that shows it, your pairing, or another page, and nothing is shown to a browser until you have paired it.
 

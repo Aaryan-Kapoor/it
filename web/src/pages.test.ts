@@ -49,7 +49,7 @@ async function shown() {
   outbox.outboxBelongsTo('user-1', 'session-1')
   host = document.body.appendChild(document.createElement('div'))
   root = createRoot(host)
-  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1' })))
+  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: true })))
   return outbox
 }
 

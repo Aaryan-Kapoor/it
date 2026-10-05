@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN } from '@it/protocol'
-import { api, call, direct, doorRefusal, Problem, sessionAsked, sessionNote, throughDoor } from './lib'
+import { api, call, direct, doorRefusal, inHome, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
 import { agentOf, record, sizeBand } from './usage'
 
 interface Gathered {
@@ -135,6 +135,36 @@ export function projectKey(remote: string): string | undefined {
   return plain(owner) && plain(repo) ? `${owner}/${repo}` : undefined
 }
 
+/** Where the note of each conversation's folder is kept: in It's folder on this machine, and nowhere else. */
+export const conversationsFile = () => inHome('conversations.json')
+/** How many conversations' folders are remembered. */
+const CONVERSATIONS = 300
+/**
+ * Notes the folder a conversation is working in, when it publishes a page. A conversation that
+ * has been closed is reopened from the folder it was held in, and only this machine knows which
+ * that was. The note is kept here and sent nowhere.
+ */
+export function noteConversation(session: { harness: string; id: string }, cwd = process.cwd()): void {
+  try {
+    const kept = readJson<Record<string, { cwd: string; at: number }>>(conversationsFile()) ?? {}
+    const key = `${session.harness}:${session.id}`
+    if (kept[key]?.cwd === cwd) return
+    kept[key] = { cwd, at: Date.now() }
+    const newest = Object.entries(kept)
+      .filter(([, noted]) => typeof noted?.cwd === 'string' && typeof noted.at === 'number')
+      .sort((a, b) => b[1].at - a[1].at)
+      .slice(0, CONVERSATIONS)
+    writePrivate(conversationsFile(), Object.fromEntries(newest))
+  } catch {
+    // A note that cannot be kept keeps nothing from being published
+  }
+}
+/** The folder a conversation was last known to be working in, if it is still there. */
+export function conversationFolder(session: { harness: string; id: string }): string | undefined {
+  const cwd = readJson<Record<string, { cwd?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]?.cwd
+  return typeof cwd === 'string' && path.isAbsolute(cwd) && existsSync(cwd) ? cwd : undefined
+}
+
 /** A stable name for the project a command runs in: its git remote, or failing that its folder. */
 export function project(): { key: string; name: string } | undefined {
   try {
@@ -205,6 +235,7 @@ export async function publish(input: {
   if (bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
   const asked = sessionAsked()
   const session = asked?.session
+  if (session) noteConversation(session)
   const begun = await call<{ artifactId: string; slug: string; version: number; upload: { url: string; grant: string } }>('action', api.publish.begin, {
     slug: input.slug,
     title: input.title,

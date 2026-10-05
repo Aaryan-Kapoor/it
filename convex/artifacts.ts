@@ -67,8 +67,11 @@ export const get = query({
       .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
       .unique()
     const machine = a.machineId ? await ctx.db.get(a.machineId) : null
+    const project = a.projectId ? await ctx.db.get(a.projectId) : null
     return {
       ...card(a, a.waiting ?? 0, machine?.name ?? null),
+      // The project the page was made in, and whether a closed conversation may be reopened for it
+      project: project ? { id: project._id, name: project.name, wake: project.wake === true } : null,
       // When the machine whose agent made this page was last heard from, for the site to judge
       // whether it is there to hear a click. Null when it has no connector, or was revoked.
       machineSeenAt: machine !== null && !machine.revoked && machine.connectorVersion !== undefined ? machine.lastSeenAt : null,

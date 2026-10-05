@@ -114,6 +114,10 @@ A command that goes past one of these is refused with the code `limit`, and one 
 | `it actions [--id <id>]` · `it action <action-id>` · `it ack <action-id> [--failed]` | List the actions still waiting, print one action in full, and mark one as handled |
 | `it list` · `it read <id>` · `it delete <id>` · `it displays` · `it status` | List the pages, print one, delete one, list the displays, and say whether It is running and connected. Each display has `paired`, which is `false` for one whose browser's pairing was ended: it shows nothing until that browser is paired again |
 
+## When you are reopened
+
+The user can allow It to reopen this conversation after it has been closed, when they use one of its pages. You are then started with the click as your prompt, and nobody is watching. Do what the click asks and nothing more: show on the page that you have, by its state, and leave anything that would want their eye for when they are back.
+
 ## The tour
 
 When the user asks for the It tour, run `it tour` and follow what it prints, its rules first. It shows pages that come with It, which `it tour show` brings up, so do not write pages of your own for it.

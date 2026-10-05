@@ -33,6 +33,7 @@ import type * as machines from "../machines.js";
 import type * as mounts from "../mounts.js";
 import type * as network from "../network.js";
 import type * as notifications from "../notifications.js";
+import type * as projects from "../projects.js";
 import type * as publish from "../publish.js";
 import type * as push from "../push.js";
 import type * as retention from "../retention.js";
@@ -71,6 +72,7 @@ declare const fullApi: ApiFromModules<{
   mounts: typeof mounts;
   network: typeof network;
   notifications: typeof notifications;
+  projects: typeof projects;
   publish: typeof publish;
   push: typeof push;
   retention: typeof retention;

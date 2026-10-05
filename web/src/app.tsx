@@ -660,7 +660,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const view = (
     <Guard key={path}>
       {slug ? (
-        <PageView slug={slug} user={user} />
+        <PageView slug={slug} user={user} owner={owner} />
       ) : owner && path === '/machines' ? (
         <Machines />
       ) : owner && path === '/displays' ? (

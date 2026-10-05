@@ -1,6 +1,6 @@
 # Agents
 
-It connects the agents you already run. It never runs an agent for you, and it reaches each one as a plugin to the unmodified program.
+It connects the agents you already run, and brings none of its own. It reaches each one as a plugin to the unmodified program. The one thing it starts by itself is a conversation of yours that was closed, when you use a page it made, and only for a project you have allowed that for: [add-ons](add-ons.md#a-conversation-that-has-been-closed) says how.
 
 An agent drives It with one command, `it`, and learns how from the agent skill, which every add-on carries and `it skill` prints. It writes a page, publishes it with `it create`, and asks your displays to show it. What you do on the page goes back to the conversation that made it.
 

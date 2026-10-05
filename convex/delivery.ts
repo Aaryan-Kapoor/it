@@ -22,6 +22,8 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
   const pages = new Map<string, Doc<'artifacts'> | null>()
   // Which revision each page's state is at now: a small record of its own, never the state
   const revisions = new Map<string, number>()
+  // Whether the person has allowed a closed conversation to be reopened for each page's project
+  const wakes = new Map<string, boolean>()
   const out = []
   for (const x of rows) {
     if (!pages.has(x.artifactId)) pages.set(x.artifactId, await ctx.db.get(x.artifactId))
@@ -34,6 +36,7 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
     const replaced = a.currentVersion !== undefined && a.currentVersion !== x.contentVersion
     if (x.baseStateRevision !== undefined && !revisions.has(x.artifactId)) revisions.set(x.artifactId, await revisionNow(ctx, x.artifactId))
     const stateNow = x.baseStateRevision === undefined ? undefined : revisions.get(x.artifactId)
+    if (!wakes.has(x.artifactId)) wakes.set(x.artifactId, a.projectId ? (await ctx.db.get(a.projectId))?.wake === true : false)
     out.push({
       id: x._id,
       artifact: a.slug,
@@ -50,6 +53,8 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
       // Only when it is another version, or another revision: what the person acted on has changed since
       ...(replaced ? { nowVersion: a.currentVersion } : {}),
       ...(stateNow !== undefined && stateNow !== x.baseStateRevision ? { nowStateRevision: stateNow } : {}),
+      // Only when it is so: the machine may then reopen the conversation this is for, where it is closed
+      ...(wakes.get(x.artifactId) ? { wake: true } : {}),
     })
   }
   return out

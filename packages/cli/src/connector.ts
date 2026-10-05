@@ -9,13 +9,14 @@
 // A click is leased before anything is done with it, so a connector that dies mid-delivery
 // loses nothing: the lease runs out and the click is offered again. Delivery is at least once.
 // Every click carries its own id in the text the agent reads, so a repeat can be told apart.
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson } from '@it/protocol'
 import { api, ask, call, enrolledHere, harnessEnv, home, inHome, live, Problem, readJson, VERSION, why, writePrivate } from './lib'
+import { conversationFolder } from './publish'
 import { alone } from './serve/backend'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
@@ -34,6 +35,8 @@ interface Offered {
   stateRevision?: number
   nowVersion?: number
   nowStateRevision?: number
+  /** Whether the person has allowed the conversation this is for to be reopened where it is closed. */
+  wake?: boolean
 }
 /** A click as an add-on receives it: its data as a value, the one wording agents read, and the few words a person is shown where an app has another place for the rest. */
 export interface Delivered extends Click {
@@ -71,7 +74,11 @@ const TURN_QUIET_MS = 30 * 60_000 // a turn that has run no hook for this long i
 const WAIT_MS = 5_000 // an `it wait` that said so this recently is still waiting
 const QUEUE_WAITS = [0, 10_000, 60_000, 600_000] // how long before each try at a harness's own queue; after the last, the click is left waiting
 const QUEUE_AT_ONCE = 3 // how many of a harness's queue commands run at the same time
-const QUEUES = ['codex'] // the harnesses that have a queue of their own
+// The harnesses a click can be given to while its conversation is not listening: Codex has a
+// queue of its own, and a Claude Code conversation that is closed can be reopened
+const QUEUES = ['codex', 'claude-code']
+/** How long a click waits for a conversation that is open to ask for it, before the conversation is taken to be closed. */
+const CLOSED_MS = 8000
 const SERVE_MOST = 8 // how many clicks one answer to an add-on carries
 const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads no more than a quarter of a megabyte
 const keyOf = (harness: string, id: string) => `${harness}:${id}`
@@ -171,6 +178,52 @@ export function codexQueue(thread: string, text: string): Promise<string | null>
       // own, since the error's words repeat the message, and counted like any other refusal.
       resolve('Codex could not be started with that message')
     }
+  })
+}
+
+/**
+ * Reopens a Claude Code conversation that has been closed, with a click as what it is asked:
+ * Claude Code's own command for carrying a conversation on without a window, run in the folder
+ * the conversation was held in. The click is given on the command's input and never on its
+ * command line, where other users of the machine could read it. The commands the conversation
+ * may run by itself there are the ones the person's own settings allow, and `it`.
+ *
+ * Null when Claude Code ran the turn. Otherwise why it did not, for the log: never what Claude
+ * Code printed.
+ */
+export function claudeResume(session: string, cwd: string, text: string, command = 'claude', patience = 15 * 60_000): Promise<string | null> {
+  // Claude Code names a conversation with a UUID. The id here came with the page, which is to say
+  // from whatever published it, and it is put on a command line: one of any other shape is not
+  // put there, since the command would read a word that begins with dashes as an option of its own
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(session))
+    return Promise.resolve('its conversation id is not one Claude Code would have made')
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(command, ['--resume', session, '--print', '--allowedTools', 'Bash(it:*)'], {
+        cwd,
+        env: { ...harnessEnv(), IT_HARNESS: 'claude-code', IT_SESSION: session },
+        stdio: ['pipe', 'ignore', 'ignore'],
+        windowsHide: true,
+      })
+    } catch {
+      return resolve('Claude Code could not be started')
+    }
+    let over = false
+    const end = (why: string | null) => {
+      if (over) return
+      over = true
+      clearTimeout(timer)
+      resolve(why)
+    }
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM')
+      end('Claude Code had not finished in fifteen minutes')
+    }, patience)
+    child.once('error', (err) => end((err as NodeJS.ErrnoException).code === 'ENOENT' ? 'Claude Code was not found' : 'Claude Code could not be started'))
+    child.once('exit', (code, signal) => end(code === 0 ? null : `Claude Code exited with ${signal ?? code ?? 'an error'}`))
+    child.stdin?.on('error', () => {})
+    child.stdin?.end(text)
   })
 }
 
@@ -399,9 +452,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** For each conversation, the click that failed and is waiting to be tried again: nothing behind it goes first. */
   const stalled = new Map<string, string>()
   const stalledAt = new Map<string, number>()
+  /** Reopens the Claude Code conversation a click is for, in the folder it was held in. Null when it ran, and otherwise why it did not. */
+  async function reopen(click: Offered): Promise<string | null> {
+    const cwd = conversationFolder(click.session!)
+    if (!cwd) return 'the folder its conversation was held in is not known on this machine'
+    return claudeResume(click.session!.id, cwd, describeClick(asClick(click)))
+  }
   async function queueNow(click: Offered): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
     const line = click.session!.id
+    const harness = click.session!.harness
+    // What the route is called where it is written down: Codex's own queue, or the reopening of a conversation that was closed
+    const route = harness === 'codex' ? 'Codex’s queue' : 'the reopening of its conversation'
     try {
       // An earlier click for this conversation failed while this one was already in line
       // behind it: this one waits its turn, and is put in line again on a later pass
@@ -411,9 +473,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // is then blocked on the click, and Codex's queue would only hand it over once that turn
       // is done: so it is left where the waiter takes it.
       if (awaited(click, Date.now())) return
-      // Nor is Codex's command run once Codex is not connected any more: the person may have
+      // Nor is the app's command run once the app is not connected any more: the person may have
       // disconnected it while the click stood in line
-      if (!connected('codex')) return
+      if (!connected(harness)) return
       // Only if it is still for this conversation on this machine: the page may have changed
       // hands while the click stood in line here
       const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session! })
@@ -421,7 +483,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // And looked at once more, now that the claim is answered: a waiter that began while it
       // was being asked for cannot take what this machine holds, so it is given back to it. It
       // is given back as well when Codex was disconnected in that time.
-      if (awaited(click, Date.now()) || !connected('codex')) {
+      if (awaited(click, Date.now()) || !connected(harness)) {
         journal('released', click.id)
         await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
         return
@@ -433,7 +495,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
       submitting.set(click.id, sent)
       // What the person chose or typed is not put on a command line, where other users of the
       // machine could read it: the agent is told the action, and where to read what it carried
-      const refused = await codexQueue(click.session!.id, describeClick(asClick(click), 0))
+      const refused =
+        harness === 'codex'
+          ? await codexQueue(line, describeClick(asClick(click), 0))
+          : // Given on the command's input, where nobody else on the machine reads it, so in full
+            await reopen(click)
       // Refused by the command, and given meanwhile to an agent that is waiting for it: the
       // waiter has it and says so to It itself, so there is nothing to try again or set aside
       if (refused !== null && sent.toWaiter) return
@@ -441,11 +507,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
         journal('queued', click.id)
         toConfirm.set(click.id, 'queue')
         // Codex's queue starts a turn in a conversation that was not working
-        counting.set(click.id, { at: click.at, harness: 'codex', path: 'woke' })
-        record('agent.woken', { result: 'resumed', agent: 'codex' })
+        counting.set(click.id, { at: click.at, harness, path: 'woke' })
+        record('agent.woken', { result: 'resumed', agent: agentOf(harness) })
         if (stalled.get(line) === click.id) stalled.delete(line)
-        const key = follow(keyOf('codex', line))
-        if (!sent.toWaiter && turnRunning(key, Date.now())) {
+        const key = follow(keyOf(harness, line))
+        // Only Codex's queue hands a click over behind a turn that is running
+        if (harness === 'codex' && !sent.toWaiter && turnRunning(key, Date.now())) {
           behindTurn.set(click.id, { click, key })
           if (behindTurn.size > 200) behindTurn.delete(behindTurn.keys().next().value!)
         }
@@ -455,16 +522,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
         queueTries.set(tag(click), { n, at: Date.now() })
         stalled.set(line, click.id)
         stalledAt.set(click.id, Date.now())
-        record('agent.woken', { result: n >= QUEUE_WAITS.length ? 'failed' : 'declined', agent: 'codex' })
+        record('agent.woken', { result: n >= QUEUE_WAITS.length ? 'failed' : 'declined', agent: agentOf(harness) })
         if (n >= QUEUE_WAITS.length) {
           stalled.delete(line)
           // Given up on from here. It is set aside so that it does not hide clicks that can be
           // delivered; it is still waiting, and the person and `it wait` still see it.
-          say(`click ${click.id} could not be put in Codex's queue after ${n} tries (${refused}); it stays waiting`)
+          say(`click ${click.id} was not taken by ${route} after ${n} tries (${refused}); it stays waiting`)
           toPark.set(click.id, { for: click.session, tag: tag(click) })
           await parkAll()
         } else {
-          say(`click ${click.id} was not taken by Codex's queue (${refused}); try ${n} of ${QUEUE_WAITS.length}`)
+          say(`click ${click.id} was not taken by ${route} (${refused}); try ${n} of ${QUEUE_WAITS.length}`)
           await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
         }
       }
@@ -622,8 +689,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // Route 2: Codex's own queue starts a turn when idle, or runs it after the current one.
           // Not waited for here: one slow command must not hold up every other click.
           if (!queue(click)) waitingBehind.add(key)
+        } else if (click.session.harness === 'claude-code' && click.wake === true && connected('claude-code') && now - click.at >= CLOSED_MS) {
+          // Route 3: the conversation is closed, and the person has allowed it to be reopened
+          // for this page's project. A conversation that is open asks for its clicks every
+          // second, so one not heard from for this long is not open in a Claude Code It is
+          // connected to. It is run in line like a queue, one click of a conversation at a time.
+          if (!queue(click)) waitingBehind.add(key)
         }
-        // Route 3: nothing to do. The click stays waiting and the site shows it.
+        // Route 4: nothing to do. The click stays waiting and the site shows it.
       }
     } catch (err) {
       say(`delivery: ${why(err)}`)

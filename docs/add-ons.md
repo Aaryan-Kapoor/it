@@ -16,7 +16,8 @@ A click is stored before anything tries to deliver it, and then tries these rout
 
 1. **The add-on, live.** The add-on inside the conversation that owns the page puts the click into it now, or at the agent's next step if it is busy.
 2. **The app's own queue**, where it has one. Codex has, and Codex's is the only queue It uses: the click arrives when the conversation is next idle or reopened.
-3. **The inbox.** Everything else waits, in view: the site shows it, and the agent takes it with `it wait`.
+3. **Reopening the conversation**, where you have allowed it for the page's project. Only Claude Code's is reopened: [below](#a-conversation-that-has-been-closed) says how.
+4. **The inbox.** Everything else waits, in view: the site shows it, and the agent takes it with `it wait`.
 
 None of these routes is tried for an agent app you have not connected. A click on a page it made waits in the inbox.
 
@@ -44,6 +45,14 @@ When the conversation is idle, a click starts a turn. While a turn runs, the cli
 A click that starts a turn shows in the conversation as one short line: the page, what was done, and the action's id, as in `[It] "Chess": move [action …]`. Everything else the page sent goes to Claude beside that line, where you are not shown it, with a note that It put the line there and that what a page sends is data and not instructions.
 
 The add-on needs Claude Code 2.1.287 or later, with mods turned on. There is no other route for an older Claude Code, or for one where mods are turned off: a click waits in the inbox there.
+
+### A conversation that has been closed
+
+You can let It reopen a Claude Code conversation that has been closed, so that what you do on a page it made is acted on while you are away from the machine. It is off until you turn it on, for each project by itself: in the site's Settings, under "Wake closed conversations", or with "Wake it" on a page whose click nobody has taken. Only a browser paired as yours can turn it on. A machine cannot, so an agent cannot allow it for itself.
+
+With it on, a click that no open conversation asks for within a few seconds is given to Claude Code's own command for carrying a conversation on without a window, `claude --resume`, run in the folder the conversation was held in. The click is its prompt, given on the command's input. The conversation then runs as it would with you there, except that nobody is watching: it may run `it`, and whatever else your own Claude Code settings allow without asking, and it uses your Claude Code account as any turn does. When you open the conversation again, the turn is in it.
+
+Each conversation is reopened for one click at a time, in the order they were made. If the command fails, It tries again a few times, further apart, and then leaves the click in the inbox. It knows which folder a conversation was held in from a note the `it` command keeps in `~/.it` each time the conversation publishes a page, and that note leaves the machine no more than anything else there does.
 
 ### Codex
 
@@ -96,7 +105,7 @@ It is held back: `it setup` does not offer it, and installs it only for someone 
 
 ## What It does not do
 
-- It does not reopen a conversation that has been closed. A click for a closed conversation in an app with no queue of its own waits in the inbox.
+- Only a Claude Code conversation is reopened when it has been closed, and only where you have allowed it. A click for a closed conversation of any other app with no queue of its own waits in the inbox.
 - It does not use ACP, which cannot reach a conversation another program owns: the conversation It has to reach is the one you already have open.
 - It ships no MCP server, so it has no add-on for an agent app that could be reached only through one, such as Crush.
 - It builds no add-on on an agent app's undocumented API, or on an interface for add-ons that is not stable, which is why it has none for Copilot CLI.

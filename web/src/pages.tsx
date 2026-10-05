@@ -179,7 +179,7 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
   )
 }
 
-export function PageView({ slug, user }: { slug: string; user: string }) {
+export function PageView({ slug, user, owner }: { slug: string; user: string; owner: boolean }) {
   const page = useQuery(api.artifacts.get, { slug })
   const now = useNow()
   useEffect(() => {
@@ -223,7 +223,14 @@ export function PageView({ slug, user }: { slug: string; user: string }) {
             ))}
           </div>
         </div>
-        <ActionStatus artifactId={page.id as Id<'artifacts'>} user={user} machine={page.machine} machineSeenAt={page.machineSeenAt} />
+        <ActionStatus
+          artifactId={page.id as Id<'artifacts'>}
+          user={user}
+          machine={page.machine}
+          machineSeenAt={page.machineSeenAt}
+          // Only the owner may allow a conversation to be reopened, and only Claude Code's can be
+          wakes={owner && page.agent === 'claude-code' ? page.project : null}
+        />
         <div className="page-nav-actions">
           <Bell compact />
           <button
@@ -256,13 +263,17 @@ function ActionStatus({
   user,
   machine,
   machineSeenAt,
+  wakes,
 }: {
   artifactId: Id<'artifacts'>
   user: string
   machine: string | null
   machineSeenAt: number | null
+  /** The page's project, where the person may allow its closed conversations to be reopened. */
+  wakes: { id: string; name: string; wake: boolean } | null
 }) {
   const convex = useConvex()
+  const setWake = useMutation(api.projects.setWake)
   const recent = useQuery(api.actions.forArtifact, { artifactId })
   const now = useNow(5_000)
   // What is said of a click is said again the moment one is saved here or let go of, and the
@@ -323,5 +334,30 @@ function ActionStatus({
   const online = machineSeenAt !== null && now - machineSeenAt < ONLINE_MS
   if (!online)
     return <span className="status" data-tone="wait">{`Waiting for ${machine ?? 'your machine'} to come online${waiting > 1 ? ` (${waiting})` : ''}`}</span>
-  return <span className="status" data-tone="wait">{`Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}</span>
+  // Sent, and not taken for a while: its conversation may be closed. The owner can allow such
+  // a conversation to be reopened for this page's project, once, and it is so from then on
+  const offer = wakes && !wakes.wake && now - last.at > WAKE_OFFER_MS
+  return (
+    <>
+      <span className="status" data-tone="wait">{`Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}</span>
+      {offer && (
+        <button
+          type="button"
+          className="link"
+          title="Its conversation may be closed. Reopen it for this click, and from now on."
+          onClick={() =>
+            confirm(wakeAsked(wakes.name)) && setWake({ projectId: wakes.id as Id<'projects'>, wake: true }).catch((err) => say(refusal(err).message, 'error'))
+          }
+        >
+          Wake it
+        </button>
+      )}
+    </>
+  )
 }
+
+/** How long a click has gone untaken before the owner is offered the reopening of its conversation. */
+const WAKE_OFFER_MS = 12_000
+/** What the person is asked before a project's closed conversations may be reopened. */
+export const wakeAsked = (name: string): string =>
+  `Let It reopen closed conversations for “${name}”? It then runs your agent on its machine, with nobody watching, when you use one of that project’s pages while its conversation is closed.`

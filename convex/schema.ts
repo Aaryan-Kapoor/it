@@ -125,7 +125,14 @@ export default defineSchema({
     .index('by_machine', ['byMachine', 'revoked'])
     .index('by_session', ['bySession', 'revoked']),
 
-  projects: defineTable({ userId: v.id('users'), key: v.string(), name: v.string(), createdAt: v.number() }).index('by_user_key', ['userId', 'key']),
+  projects: defineTable({
+    userId: v.id('users'),
+    key: v.string(),
+    name: v.string(),
+    createdAt: v.number(),
+    /** Whether the person has allowed a closed conversation to be reopened for what is done on this project's pages. */
+    wake: v.optional(v.boolean()),
+  }).index('by_user_key', ['userId', 'key']),
 
   // A page. Its bytes are kept by the content service; this is everything else.
   artifacts: defineTable({

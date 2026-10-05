@@ -466,12 +466,23 @@ try {
       const file = path.join(r.folder, 'telemetry.json')
       return existsSync(file) ? { ...JSON.parse(readFileSync(file, 'utf8')), mode: statSync(file).mode & 0o777 } : null
     }
+    // What a person at a terminal is told of it: the same thing in fewer words, among the few lines the install prints there
+    const TOLD = 'It reports usage counts under a random id, and never what is on a page. `it telemetry off` turns that off.'
     const watched = await install('watched', {}, { terminal: true })
     const noted = noteOf(watched)
     check(
-      'run at a terminal, where a person reads it, the install says the sentence and leaves a note that it was said, which only this user can read',
+      'run at a terminal, where a person reads it, the install says what it did in a few marked lines and what to run next, in place of the sentences',
       watched.code === 0 &&
-        watched.said.includes(noticeFor(watched)) &&
+        /✓.* Downloaded for \S+ \S+, and checked/.test(watched.said) &&
+        /✓.* Installed in /.test(watched.said) &&
+        /Next: {2}.* setup/.test(watched.said) &&
+        !/It is installed\. Start it/.test(watched.said),
+      watched.said,
+    )
+    check(
+      'and it says there that It reports usage and leaves a note that it was said, which only this user can read',
+      watched.code === 0 &&
+        watched.said.includes(TOLD) &&
         noted &&
         Object.keys(noted).join() === 'told,mode' &&
         Math.abs(Date.now() - noted.told) < 120_000 &&
@@ -482,7 +493,7 @@ try {
     const watchedAgain = await install('watched', {}, { terminal: true })
     check(
       'installing again there says it again and leaves the note as it was',
-      watchedAgain.code === 0 && watchedAgain.said.includes(noticeFor(watched)) && noteOf(watchedAgain)?.told === noted?.told,
+      watchedAgain.code === 0 && watchedAgain.said.includes(TOLD) && noteOf(watchedAgain)?.told === noted?.told,
       `${watchedAgain.said} ${JSON.stringify(noteOf(watchedAgain))}`,
     )
     const byAnAgent = await install('by-an-agent', { CODEX_THREAD_ID: 'a-conversation' }, { terminal: true })
@@ -513,7 +524,7 @@ try {
       'a note that says reporting is off, which the program does not go by, does not keep the install from saying that It reports usage, and is left as it is',
       noteSaysOff.code === 0 &&
         existsSync(noteSaysOff.it) &&
-        noteSaysOff.said.includes(noticeFor(noteSaysOff)) &&
+        noteSaysOff.said.includes(TOLD) &&
         read(path.join(noteSaysOff.folder, 'telemetry.json')) === saysOff,
       noteSaysOff.said,
     )

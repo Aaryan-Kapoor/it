@@ -10,6 +10,7 @@ import { Dialog } from './dialog'
 import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow } from './lib'
 import { NoAddress, OtherAddresses, useWhere } from './network'
 import { thisPairing } from './outbox'
+import { wakeAsked } from './pages'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
 import { pushSupport, turnOffPush, turnOnPush } from './push'
 import { current, signOut as endSession, recheck, spaced } from './session'
@@ -297,6 +298,41 @@ function Qr({ text }: { text: string }) {
   )
 }
 
+/**
+ * The projects the person's pages were made in, each with a switch: whether a conversation that
+ * has been closed is reopened when they use one of its pages. Nothing is shown while there is
+ * no project.
+ */
+function Waking({ act }: { act: (p: Promise<unknown>) => Promise<void> }) {
+  const projects = useQuery(api.projects.list, {}) as { id: string; name: string; wake: boolean }[] | undefined
+  const setWake = useMutation(api.projects.setWake)
+  if (!projects?.length) return null
+  return (
+    <section>
+      <h3>Wake closed conversations</h3>
+      <ul className="rows panel">
+        {projects.map((p) => (
+          <li key={p.id} className="row">
+            <label className="row-main switch-row">
+              <input
+                type="checkbox"
+                role="switch"
+                aria-checked={p.wake}
+                checked={p.wake}
+                onChange={(e) =>
+                  (!e.target.checked || confirm(wakeAsked(p.name))) && act(setWake({ projectId: p.id as Id<'projects'>, wake: e.target.checked }))
+                }
+              />
+              <span className="row-name">{p.name}</span>
+            </label>
+            <span className="row-sub">{p.wake ? 'Reopened when you use its pages' : 'What you do waits for you to reopen it'}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 /** What the person types to confirm, which is also the word the backend asks for with a request of that weight. */
 const PHRASE = 'erase everything'
 
@@ -486,6 +522,7 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
               </li>
             </ul>
           </section>
+          <Waking act={act} />
           <About />
         </>
       )}
