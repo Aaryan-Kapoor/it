@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/dist", "!**/_generated", "!**/*.generated.ts", "!e2e/fixtures"]
+    "includes": ["**", "!**/node_modules", "!**/dist", "!**/_generated", "!**/*.generated.ts", "!e2e/fixtures", "!packages/cli/tour/pages"]
   },
   "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 160 },
   "javascript": { "formatter": { "quoteStyle": "single", "semicolons": "asNeeded" } },

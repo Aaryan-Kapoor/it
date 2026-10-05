@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-// What the program carries inside it is written first: the add-ons, the site, and the backend functions
+// What the program carries inside it is written first: the add-ons, the tour, the site, and the backend functions
 await import('./addons.mjs')
+await import('./tour.mjs')
 await import('./site.mjs')
 await import('../../scripts/functions.mjs')
 await build({

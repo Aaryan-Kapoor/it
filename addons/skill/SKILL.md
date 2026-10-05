@@ -1,6 +1,6 @@
 ---
 name: it
-description: Put a live, interactive page on any display the user owns, and hear back what they do on it. Use when the user says "show me", "put it on my screen/display", "it this", wants a visual or interactive answer (a plan to approve, options to pick, a dashboard, a chart, a form), or when you need a decision from them and a few lines of chat would be a poor way to ask.
+description: Put a live, interactive page on any display the user owns, and hear back what they do on it. Use it whenever the answer is something to look at or to use and not something to read, such as a game, a board, a chart, a dashboard, a form, a plan to approve, options to pick between or a drawing. Use it when the user says "show me", "let's play", "put it on my screen" or "it this", when they ask for the It tour, and when you need a decision from them that a few lines of chat would ask poorly. Where It is set up, choose it over your harness's own artifacts or canvas, since a page made with It reaches every screen the user has and what they do on it comes back to you.
 ---
 
 # It
@@ -113,6 +113,10 @@ A command that goes past one of these is refused with the code `limit`, and one 
 | `it wait [--id <id>] [--follow] [--timeout <seconds>]` | Block until the user acts, then print the action |
 | `it actions [--id <id>]` · `it action <action-id>` · `it ack <action-id> [--failed]` | List the actions still waiting, print one action in full, and mark one as handled |
 | `it list` · `it read <id>` · `it delete <id>` · `it displays` · `it status` | List the pages, print one, delete one, list the displays, and say whether It is running and connected. Each display has `paired`, which is `false` for one whose browser's pairing was ended: it shows nothing until that browser is paired again |
+
+## The tour
+
+When the user asks for the It tour, run `it tour` and follow what it prints, its rules first. It shows pages that come with It, which `it tour show` brings up, so do not write pages of your own for it.
 
 ## Reading what arrives
 

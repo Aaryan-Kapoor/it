@@ -2272,11 +2272,11 @@ try {
     await two.page.goto(`${APP}/${managing}`)
     offered[managing] = (await until(() => two.page.locator('main.grid-view').isVisible()))
       ? 'the pages'
-      : (await two.page.locator('main h2').allInnerTexts()).join()
+      : (await two.page.locator('main h2').allTextContents()).join()
   }
   await two.page.goto(`${APP}/settings`)
-  await awaited('the screen was not shown its settings', () => two.page.getByText('paired with It as a screen').isVisible(), 20_000)
-  offered.settings = (await two.page.locator('main h3').allInnerTexts()).join()
+  await awaited('the screen was not shown its settings', () => two.page.getByText('Paired as a screen').isVisible(), 20_000)
+  offered.settings = (await two.page.locator('main h3').allTextContents()).join()
   offered.buttons = (await two.page.locator('main button').allInnerTexts()).join()
   check(
     'the site offers a screen its pages and its own settings, and nothing that manages: no machines, no other displays, no pinning or deleting, no export and no erasing',
@@ -4391,6 +4391,7 @@ try {
   const displayAtTheLast = await displayOf(page)
   const toldOfItAtTheLast = toldItIsOver(displayAtTheLast)
   await page.goto(`${APP}/settings`)
+  await page.getByRole('button', { name: 'Erase…' }).click()
   await page.getByLabel('Type erase everything to confirm').fill('erase everything')
   // Every browser that was paired learns that it is not: each tab that is open asks, and names
   // the session it held; the one that is closed does when it is opened again; and the run asks
@@ -4499,7 +4500,7 @@ try {
   check(
     'and a browser paired after that finds nothing left of what was there',
     (await until(
-      async () => (await three.page.getByText('Nothing here yet').isVisible()) && (await three.page.locator('a.cover').count()) === 0,
+      async () => (await three.page.getByText('What should I make?').isVisible()) && (await three.page.locator('a.cover').count()) === 0,
       60_000,
       1000,
     )) &&

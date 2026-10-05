@@ -31,8 +31,9 @@ if (have !== described) {
   )
   process.exit(1)
 }
-// What each program carries inside it is written first: the add-ons, the site, and the backend functions
+// What each program carries inside it is written first: the add-ons, the tour, the site, and the backend functions
 await import('./addons.mjs')
+await import('./tour.mjs')
 await import('./site.mjs')
 const { FUNCTIONS_HASH } = await import('../../scripts/functions.mjs')
 const out = path.join(here, 'dist/bin')

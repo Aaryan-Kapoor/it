@@ -60,6 +60,7 @@ import { serve } from './serve/index'
 import { reachable } from './serve/network'
 import * as service from './service'
 import { AFTER, detectAll, type HarnessStatus, holdsAddons, KNOWN, reconcile, shim, supported } from './setup'
+import { GUIDE, STEPS, TOUR_PREFIX, tourPage } from './tour'
 import * as usage from './usage'
 
 // Everything is written through `written`, which follows each write until it has left the
@@ -181,6 +182,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   serve: [0, 'serve [--log <file>]'],
   service: [1, 'service install | uninstall | status | logs'],
   skill: [0, 'skill'],
+  tour: [2, 'tour [show <name> [--step <n>] | clear]'],
   telemetry: [1, 'telemetry [on | off]'],
   create: [1, 'create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)'],
   update: [1, 'update <id> (--file f | --dir d | --html "<…>" | pipe)'],
@@ -244,6 +246,42 @@ async function published(done: { slug: string; version: number; url: string; not
     })
     process.exitCode = 1
   }
+}
+
+/**
+ * The tour an agent gives of It. With nothing after it, the guide is printed for the agent to
+ * follow. `show` publishes one of the tour's pages and brings it up, starting afresh each time,
+ * and `clear` removes every page of the tour and nothing else.
+ */
+async function tour(a: Args) {
+  const USAGE = 'tour [show <name> [--step <n>] | clear]'
+  const what = a._[0]
+  if (what === undefined) return written(process.stdout, GUIDE)
+  if (what === 'clear') {
+    const pages = await call<{ slug: string }[]>('query', api.artifacts.list)
+    const gone: string[] = []
+    for (const { slug } of pages.filter((p) => p.slug.startsWith(TOUR_PREFIX))) {
+      await call('mutation', api.artifacts.remove, { slug })
+      gone.push(slug)
+    }
+    return out({ deleted: gone })
+  }
+  if (what !== 'show') throw new Problem(`It does not know what to do with "${what}".`, 'invalid', `Usage: it ${USAGE}`)
+  const name = need(a._[1], `which page of the tour (menu, ${STEPS.join(', ')})`, USAGE)
+  const given: Record<string, unknown> = {}
+  for (const param of a.many.param ?? []) {
+    const eq = param.indexOf('=')
+    if (eq < 1) throw new Problem('--param is written name=value.', 'invalid')
+    given[param.slice(0, eq)] = loose(param.slice(eq + 1))
+  }
+  const step = text(a, 'step')
+  const made = tourPage(name, given, step === undefined ? undefined : Number(step))
+  // The page is this conversation's from now on, whoever showed it last
+  const done = await publish({ slug: made.slug, title: made.title, files: gather({ html: made.html }), agent: text(a, 'agent'), state: made.state, take: true })
+  // And it starts as it was first made, whatever a tour before this one left in it
+  await call('mutation', api.state.patch, { slug: made.slug, patch: made.state, replace: true })
+  a.flags.open = true
+  await published(done, a)
 }
 
 async function update(a: Args) {
@@ -1251,6 +1289,8 @@ This machine
   it logout [--force]            Leave the It this machine joined. --force leaves though
                                  that It cannot be told.
   it skill                       Print the instructions an agent needs to use It.
+  it tour [show <name> | clear]  Print the tour an agent gives of It. With show, bring up one of
+                                 its pages, and with clear, remove them all.
   it telemetry [on | off]        Say whether It reports usage counts, or turn that on or off.
                                  It reports them until it is turned off.
   it version | it help
@@ -1300,6 +1340,8 @@ async function main(argv: string[]): Promise<void> {
     case 'skill':
       written(process.stdout, SKILL)
       return
+    case 'tour':
+      return tour(a)
     case 'login': {
       /** What a folder is that has nothing to join, or has joined already. */
       const refused = () => {

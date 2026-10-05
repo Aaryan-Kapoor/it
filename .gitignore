@@ -5,6 +5,7 @@ dist/
 *.tsbuildinfo
 packages/content/src/runtime.generated.ts
 packages/cli/src/addons.generated.ts
+packages/cli/src/tour.generated.ts
 packages/cli/src/functions.generated.ts
 packages/cli/src/site.generated.ts
 # What is kept beside the code on its makers' own machines and is no part of what is published

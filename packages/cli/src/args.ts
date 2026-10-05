@@ -36,6 +36,8 @@ export const VALUED = new Set([
   'url',
   'code',
   'log',
+  'step',
+  'param',
 ])
 export interface Args {
   _: string[]

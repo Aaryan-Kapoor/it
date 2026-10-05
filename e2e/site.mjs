@@ -471,20 +471,17 @@ export async function pairAsOwner(page, opts) {
  * minute, and a run asks for more than a person does. Whatever else the panel comes to show is
  * left for whoever reads the panel next.
  */
-async function pressedForACode(panel, name, given) {
-  const page = panel.page()
-  const button = panel.getByRole('button', { name })
+async function pressedForACode(page, name, given) {
+  const dialog = page.locator('.pairing')
   for (let tries = 1; tries <= 6 && !(await given.isVisible()); tries++) {
-    await button.click()
-    // While the panel is asking, its button cannot be pressed. It has answered once it shows
-    // what was asked for, or has its button back and says why there is nothing to show.
-    await page.waitForTimeout(200)
+    // The button on the page opens the dialog, and the dialog asks for a code as it opens
+    if (!(await dialog.isVisible())) await page.getByRole('button', { name, exact: true }).first().click()
     let toldToWait = false
     for (const end = Date.now() + 15_000; Date.now() < end && !toldToWait && !(await given.isVisible()); await page.waitForTimeout(100)) {
-      const asking = await button.isDisabled({ timeout: 100 }).catch(() => false)
-      toldToWait = !asking && (await panel.getByText('Try again shortly').isVisible())
+      toldToWait = await dialog.getByText('Try again shortly').isVisible()
     }
     if (!toldToWait) return
+    await dialog.getByRole('button', { name: 'Done' }).click()
     await page.waitForTimeout(2000)
   }
 }
@@ -498,7 +495,7 @@ export async function screenCode(owner) {
   const tab = await owner.context.newPage()
   try {
     await tab.goto(`${APP}/displays`)
-    await pressedForACode(tab.locator('.pairing'), 'Add a display', tab.locator('.pair-code'))
+    await pressedForACode(tab, 'Add a display', tab.locator('.pair-code'))
     const shown = (await tab.locator('.pair-code').innerText({ timeout: 15_000 })).trim()
     const address = await tab
       .locator('.pair-address')
@@ -547,10 +544,11 @@ export async function machineCommand(owner) {
   const tab = await owner.context.newPage()
   try {
     await tab.goto(`${APP}/machines`)
-    await pressedForACode(tab.locator('.pairing'), 'Add a machine', tab.locator('.pairing').getByRole('button', { name: 'Done' }))
-    await tab.locator('.pairing').getByRole('button', { name: 'Done' }).waitFor({ timeout: 15_000 })
+    // The dialog has answered once it shows something to copy: the command, or the one that turns the network on
+    await pressedForACode(tab, 'Add a machine', tab.locator('.pairing .copyable'))
+    await tab.locator('.pairing .copyable').waitFor({ timeout: 15_000 })
     const command = await tab
-      .locator('.pair-command')
+      .locator('.pair-command code')
       .innerText({ timeout: 2000 })
       .then(
         (text) => text.trim(),
