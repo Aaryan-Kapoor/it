@@ -96,11 +96,13 @@ However it is stopped, It is asked to stop and waited for. It stops its connecto
 - **On Linux and macOS** the backend program is asked to stop and waited for, however long that takes. Nothing kills it for being slow.
 - **On Windows** the backend program cannot be counted on to hear that it is to stop. Once It has closed its ports, it gives the program a second to finish what it was doing, asks it to stop, and ends it where it cannot be asked or has not gone three seconds later. The program's database comes through that as it comes through a power cut: everything it had answered for is kept, and only what it was in the middle of is lost.
 
-To remove It altogether:
+To remove It altogether, run `it uninstall`. It asks first, because every page It holds on the machine goes with it, and then does these four things in order. Each can also be done by hand:
 
-1. Run `it setup --none`, which takes It's add-on out of every agent app.
-2. Run `it service uninstall`.
-3. Delete `~/.it`. Everything It kept goes with it, the program included.
-4. Take `~/.it/bin` off your PATH. The install script added it with a comment, `# It`, and one line in your shell's profile, or to your user's PATH on Windows.
+1. It takes It's add-on out of every agent app, as `it setup --none` does.
+2. It stops the background service and takes its registration away, as `it service uninstall` does, and asks an `it serve` you started yourself in that folder to stop.
+3. It takes `~/.it/bin` off your PATH. The install script added it with a comment, `# It`, and one line in your shell's profile, and those lines are removed; a profile that held nothing else was made by the installer and is removed too. On Windows the folder is on your user's PATH, and you take it off yourself.
+4. It deletes `~/.it`. Everything It kept goes with it, the program included.
+
+It also clears what Codex and Claude Code keep of an add-on after it is removed: their copy of it, and Codex's note that you trusted its hooks. The conversations you held are yours and are left as they are, with the messages that begin `[It]` in them.
 
 The site's settings can also erase everything It holds and leave It installed, which [What It keeps](data.md#erasing-everything) describes.

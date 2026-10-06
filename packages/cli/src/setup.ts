@@ -897,7 +897,8 @@ export function codexLetsItOut(config: string | null | false = codexConfig()): b
     const [, key, value] = kv
     if (table === '' && (key === 'profile' || key === 'default_permissions')) return undefined
     if (table === '' && key === 'sandbox_mode') mode = value!.replace(/["']/g, '')
-    if ((table === 'sandbox_workspace_write' && key === 'network_access') || (table === '' && key === 'sandbox_workspace_write.network_access')) network = value === 'true'
+    if ((table === 'sandbox_workspace_write' && key === 'network_access') || (table === '' && key === 'sandbox_workspace_write.network_access'))
+      network = value === 'true'
   }
   if (mode === 'danger-full-access') return true
   if (mode === 'read-only') return false

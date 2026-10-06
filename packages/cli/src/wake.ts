@@ -41,7 +41,6 @@ const APP: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Code
 export const WOKEN =
   '[It] It reopened this conversation for what follows, which someone did on a page of yours while it was closed. You can do here what you could do while they were with you: the same commands, run the same way. The one difference is that nobody is watching, so nobody can answer a question or approve anything. Run `it` by that name alone, with no folder in front of it and no `export` before it: it is on your PATH, and in that form it is never held for approval. Do what was asked and nothing more, and show on the page that you have. Try what the work needs before you conclude that you may not. Only if a command is in fact refused, say so where they will see it, with `it notify` or the page’s state, and run `it ack <action id> --failed`.'
 
-
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
   argv: string[]
@@ -150,7 +149,12 @@ export function carryOn(
         // The folder is said in the environment as well. This program's own PWD is wherever it
         // was started, and an app that believes PWD over the folder it is in (OpenCode does)
         // would hold the conversation in one folder and wait for it in another, and never end.
-        env: { ...Object.fromEntries(Object.entries(harnessEnv()).filter(([k]) => k !== 'OLDPWD')), PWD: cwd, IT_HARNESS: marks.harness, IT_SESSION: marks.session },
+        env: {
+          ...Object.fromEntries(Object.entries(harnessEnv()).filter(([k]) => k !== 'OLDPWD')),
+          PWD: cwd,
+          IT_HARNESS: marks.harness,
+          IT_SESSION: marks.session,
+        },
         stdio: ['pipe', 'ignore', 'ignore'],
         windowsHide: true,
         // In a group of its own, so that stopping it stops what it started as well: a command

@@ -404,6 +404,51 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
   })
 })
 
+describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
+  test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    const line = `export PATH='${path.join(m.it, 'bin')}':"$PATH"`
+    // A profile the person had, with the installer's three lines at its end; one the installer made; and one It was never in
+    writeFileSync(path.join(m.home, '.bashrc'), `alias ll='ls -l'\n\n# It\n${line}\n`)
+    writeFileSync(path.join(m.home, '.profile'), `\n# It\n${line}\n`)
+    writeFileSync(path.join(m.home, '.zshrc'), 'export EDITOR=vi\n')
+    // What Codex and Claude Code keep of an add-on after their own commands have removed it
+    mkdirSync(path.join(m.home, '.codex', 'plugins', 'cache', 'it', 'it-bridge'), { recursive: true })
+    mkdirSync(path.join(m.home, '.claude', 'plugins', 'cache', 'it'), { recursive: true })
+    writeFileSync(
+      path.join(m.home, '.codex', 'config.toml'),
+      'model = "gpt-6"\n\n[hooks.state]\n\n[hooks.state."it-bridge@it:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:aa"\n\n[hooks.state."it-bridge@it:hooks/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:bb"\n\n[projects."/work"]\ntrust_level = "trusted"\n',
+    )
+    mkdirSync(path.join(m.home, '.config', 'systemd', 'user'), { recursive: true })
+    // Not at a terminal and not told --yes: nothing is changed, and it says how it is asked for
+    const unasked = await run(m, ['uninstall'])
+    expect(unasked.code).toBe(2)
+    expect(error(unasked).hint).toBe('Run `it uninstall` at a terminal, where it asks first, or `it uninstall --yes`.')
+    expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)
+    const done = await run(m, ['uninstall', '--yes'])
+    expect([done.code, printed(done)]).toEqual([0, { removed: true, folder: m.it, said: expect.any(Array) }])
+    expect(existsSync(m.it)).toBe(false)
+    // Its lines are out, with the comment and the blank line above them, and nothing else is touched
+    expect(readFileSync(path.join(m.home, '.bashrc'), 'utf8')).toBe("alias ll='ls -l'\n")
+    expect(existsSync(path.join(m.home, '.profile'))).toBe(false)
+    expect(readFileSync(path.join(m.home, '.zshrc'), 'utf8')).toBe('export EDITOR=vi\n')
+    expect(readFileSync(path.join(m.home, '.codex', 'config.toml'), 'utf8')).toBe('model = "gpt-6"\n\n[projects."/work"]\ntrust_level = "trusted"\n')
+    expect(existsSync(path.join(m.home, '.codex', 'plugins', 'cache', 'it'))).toBe(false)
+    expect(existsSync(path.join(m.home, '.claude', 'plugins', 'cache', 'it'))).toBe(false)
+    expect(existsSync(path.join(m.home, '.config', 'systemd'))).toBe(false)
+    // A folder that does not hold It is never removed, whatever names it
+    const stray = mkdtempSync(path.join(scratch, 'not-it-'))
+    writeFileSync(path.join(stray, 'thesis.txt'), 'mine')
+    const wrong = await run(m, ['uninstall', '--yes'], { IT_HOME: stray })
+    expect([wrong.code, existsSync(path.join(stray, 'thesis.txt'))]).toEqual([2, true])
+    expect(wrong.err).toContain('does not hold It')
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('a picture an action carried', () => {
   test('`it action --save` writes it to the file as the picture it is, and prints the action without its text', async () => {
     const m = machine()
@@ -469,7 +514,11 @@ describe.skipIf(process.platform === 'win32')('a page that stays another convers
       expect(printed(await run(m, ['update', 'board', '--html', '<p>hi</p>'], mine)).note).toBe(NOTE)
       // Taken, it is this conversation's, and there is nothing to say
       elsewhere = false
-      expect(printed(await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>', '--take'], mine))).toEqual({ id: 'board', version: 2, url: `${b.url}/p/board` })
+      expect(printed(await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>', '--take'], mine))).toEqual({
+        id: 'board',
+        version: 2,
+        url: `${b.url}/p/board`,
+      })
     } finally {
       await b.close()
     }

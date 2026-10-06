@@ -177,10 +177,21 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     process.env.OLDPWD = path.join(scratch, 'and before that')
     try {
       // The program itself and no shell, which would put PWD right before anything could read it
-      const how = { argv: [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify([process.env.PWD, process.env.OLDPWD ?? null, process.cwd()]))`], input: '', app: 'OpenCode' }
+      const how = {
+        argv: [
+          process.execPath,
+          '-e',
+          `require('fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify([process.env.PWD, process.env.OLDPWD ?? null, process.cwd()]))`,
+        ],
+        input: '',
+        app: 'OpenCode',
+      }
       expect(await carryOn(how, folder, { harness: 'opencode', session: 'x' })).toBeNull()
     } finally {
-      for (const [k, v] of [['PWD', pwd], ['OLDPWD', oldpwd]] as const) {
+      for (const [k, v] of [
+        ['PWD', pwd],
+        ['OLDPWD', oldpwd],
+      ] as const) {
         if (v === undefined) delete process.env[k]
         else process.env[k] = v
       }

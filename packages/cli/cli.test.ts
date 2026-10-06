@@ -1744,7 +1744,10 @@ describe('add-ons carried by the CLI', () => {
       process.env.IT_HOME = other
       expect(supported('openclaw')).toBe(false)
     } finally {
-      for (const [name, value] of [['IT_EXPERIMENTAL', before.asked], ['IT_HOME', before.home]] as const) {
+      for (const [name, value] of [
+        ['IT_EXPERIMENTAL', before.asked],
+        ['IT_HOME', before.home],
+      ] as const) {
         if (value === undefined) delete process.env[name]
         else process.env[name] = value
       }

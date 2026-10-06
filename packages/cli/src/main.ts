@@ -5,7 +5,8 @@
 // and `it service status`) print a few plain sentences where standard output is a terminal, and
 // the same JSON as ever where it is not, or when `--json` is given.
 import { spawn } from 'node:child_process'
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
 import { describeClick, firstFile, HARNESSES, type Harness, isSlug, NOUN, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
@@ -48,6 +49,7 @@ import {
   siteAddress,
   textOf,
   VERSION,
+  why,
   windowsPathCommand,
   written,
 } from './lib'
@@ -61,7 +63,21 @@ import { serve } from './serve/index'
 import { reachable } from './serve/network'
 import { tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
-import { AFTER, CODEX_NO_NETWORK, codexLetsItOut, detectAll, type HarnessStatus, holdsAddons, KNOWN, reconcile, shim, supported, whyHeldBack } from './setup'
+import {
+  AFTER,
+  CODEX_NO_NETWORK,
+  codexLetsItOut,
+  detectAll,
+  disconnect,
+  type HarnessStatus,
+  holdsAddons,
+  KNOWN,
+  reconcile,
+  shim,
+  stampFile,
+  supported,
+  whyHeldBack,
+} from './setup'
 import { GUIDE, STEPS, TOUR_PREFIX, tourPage } from './tour'
 import * as usage from './usage'
 
@@ -179,6 +195,7 @@ const LOGIN = 'login --url <address> --code <invite> [--name <name>] [--no-setup
 const WORDS: Record<string, [most: number, usage: string]> = {
   login: [0, LOGIN],
   logout: [0, 'logout [--force]'],
+  uninstall: [0, 'uninstall [--yes]'],
   whoami: [0, 'whoami'],
   status: [0, 'status'],
   setup: [0, 'setup [--all | --only a,b | --none] [--name <name>] [--no-service]'],
@@ -678,6 +695,153 @@ function pathLine(): string | undefined {
  * background service is registered unless `--no-service` says not, and the person is told
  * where the site is and what is left for them to do.
  */
+/**
+ * Takes It off this machine, in the order a person would do it by hand: its add-ons out of the
+ * agent apps while it can still say which files were its own, then the background service,
+ * then its line in the shell's profile, and last its folder, with everything it kept. Asked
+ * first, in words that say what goes: the pages go with the folder, and nothing brings them back.
+ */
+async function uninstall(a: Args) {
+  const folder = home()
+  const said: string[] = []
+  const say = (line: string) => {
+    said.push(line)
+    if (forPerson(a)) tell([line])
+  }
+  // Only a folder that is It's is ever removed: one a variable names by mistake is left alone
+  const its = ['service.json', 'machine.json', 'addons', path.join('bin', process.platform === 'win32' ? 'it.exe' : 'it')].some((name) =>
+    existsSync(path.join(folder, name)),
+  )
+  if (!its) throw new Problem(`${folder} does not hold It, so there is nothing here to take off this machine.`, 'invalid')
+  if (path.resolve(folder) === path.resolve(os.homedir()) || path.resolve(folder) === path.parse(folder).root)
+    throw new Problem(`${folder} is not a folder It may remove.`, 'invalid')
+  if (!a.flags.yes) {
+    if (!flow.live())
+      throw new Problem(
+        'This takes It off this machine with everything it holds, the pages among them, and is not done without being asked for twice.',
+        'invalid',
+        'Run `it uninstall` at a terminal, where it asks first, or `it uninstall --yes`.',
+      )
+    const go = await flow.pick(`Take It off this machine? Every page it holds here goes with it, and its folder (${folder}) is deleted.`, [
+      { value: false, label: 'No, leave it' },
+      { value: true, label: 'Yes, remove It' },
+    ])
+    if (!go) return forPerson(a) ? tell(['Nothing was changed.']) : out({ removed: false })
+  }
+  const left: string[] = []
+  // 1. The add-ons, each from where this folder put it
+  for (const id of HARNESSES) {
+    if (!existsSync(stampFile(id))) continue
+    const gone = await disconnect(id, say).catch(() => false)
+    if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
+    else left.push(`${KNOWN[id].label} still has It’s add-on, which could not be taken out. Its own command for add-ons removes it.`)
+  }
+  // 2. The background service, and an `it serve` someone started by hand in this folder
+  try {
+    service.uninstall()
+  } catch (err) {
+    left.push(`The background service could not be taken away (${why(err)}).`)
+  }
+  service.askToStop(folder, 30_000)
+  if (service.runningFor(folder)) left.push('It is still running, and was asked to stop: end the `it serve` you started, in its terminal.')
+  // 3. Its line in the shell's profile, with the comment above it
+  const bin = path.join(folder, 'bin')
+  const profiles = process.platform === 'win32' ? [] : unlisted(bin)
+  for (const file of profiles) say(`${file}: the line that put It on your PATH is out.`)
+  if (process.platform === 'win32') left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
+  // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
+  crumbs()
+  // 5. Its folder, the program in it included. A program that is running may delete its own file on every system but Windows.
+  try {
+    rmSync(folder, { recursive: true, force: true })
+  } catch (err) {
+    left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
+  }
+  if (existsSync(folder) && !left.some((line) => line.startsWith(folder))) left.push(`${folder} could not be deleted whole. Delete it to finish.`)
+  if (!forPerson(a)) return out({ removed: left.length === 0, folder, ...(left.length ? { left } : {}), said })
+  tell([
+    left.length ? 'It is off this machine, but for this:' : 'It is off this machine.',
+    ...left.map((line) => `  ${line}`),
+    'A terminal that is open still has the old PATH: a new one does not.',
+  ])
+}
+
+/**
+ * Takes the installer's line out of every shell profile it may have put it in, with the comment
+ * and the blank line it wrote above it, and says which files it was in. A profile that held
+ * nothing else was made by the installer, and goes too.
+ */
+function unlisted(bin: string): string[] {
+  const line = `export PATH='${bin.replaceAll("'", `'\\''`)}':"$PATH"`
+  const dirs = [process.env.ZDOTDIR, os.homedir()].filter((d): d is string => typeof d === 'string' && d !== '')
+  const files = [...new Set(dirs.flatMap((d) => ['.zshrc', '.bashrc', '.bash_profile', '.bash_login', '.profile'].map((name) => path.join(d, name))))]
+  const changed: string[] = []
+  for (const file of files) {
+    let text: string
+    try {
+      text = readFileSync(file, 'utf8')
+    } catch {
+      continue
+    }
+    const lines = text.split('\n')
+    const kept: string[] = []
+    let found = false
+    for (const l of lines) {
+      if (l !== line) {
+        kept.push(l)
+        continue
+      }
+      found = true
+      // The comment the installer wrote above it, and the blank line above that
+      if (kept.at(-1) === '# It') kept.pop()
+      if (kept.at(-1) === '') kept.pop()
+    }
+    if (!found) continue
+    const after = kept.join('\n')
+    try {
+      if (after.trim() === '') rmSync(file, { force: true })
+      else writeFileSync(file, after.endsWith('\n') || !text.endsWith('\n') ? after : `${after}\n`)
+      changed.push(file)
+    } catch {}
+  }
+  return changed
+}
+
+/**
+ * What the agent apps keep of It's add-ons after their own commands have removed them, and
+ * do not clear away: Codex's note that the person trusted the add-on's hooks, and the copies of
+ * the add-on that Codex and Claude Code keep. Each is taken out only where it is plainly It's,
+ * and nothing here is ever said to have failed: none of it does anything once the add-on is gone.
+ */
+function crumbs(): void {
+  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
+  try {
+    const file = path.join(codexHome, 'config.toml')
+    const text = readFileSync(file, 'utf8')
+    // A table of its own for each hook, holding the one line that says it was trusted
+    const without = text
+      .replace(/\n?\[hooks\.state\."it-bridge@it:[^"\n]*"\]\n(?:trusted_hash = "[^"\n]*"\n?)?/g, '\n')
+      .replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
+    if (without !== text) writeFileSync(file, without.replace(/\n{3,}/g, '\n\n'))
+  } catch {}
+  for (const kept of [
+    path.join(codexHome, 'plugins', 'cache', 'it'),
+    path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'plugins', 'cache', 'it'),
+  ]) {
+    try {
+      rmSync(kept, { recursive: true, force: true })
+    } catch {}
+  }
+  if (process.platform === 'linux') {
+    // The folders the service's definition was written into, where nothing else is in them
+    for (const dir of [path.join(os.homedir(), '.config', 'systemd', 'user'), path.join(os.homedir(), '.config', 'systemd')]) {
+      try {
+        rmdirSync(dir)
+      } catch {}
+    }
+  }
+}
+
 async function setup(a: Args, joined = false) {
   if (a.flags.none && !enrolledHere()) {
     const leftBehind = !existsSync(settingsFile()) && (hasLeft() || holdsAddons())
@@ -1547,6 +1711,10 @@ This machine
                                  connects no agent app.
   it logout [--force]            Leave the It this machine joined. --force leaves though
                                  that It cannot be told.
+  it uninstall [--yes]           Take It off this machine: its add-ons out of your agent apps,
+                                 its background service, its line in your shell's profile, and
+                                 its folder with every page in it. It asks first, and --yes
+                                 answers for you.
   it skill                       Print the instructions an agent needs to use It.
   it tour [show <name> | clear]  Print the tour an agent gives of It. With show, bring up one of
                                  its pages, and with clear, remove them all.
@@ -1712,6 +1880,8 @@ async function main(argv: string[]): Promise<void> {
       return status(a)
     case 'setup':
       return setup(a)
+    case 'uninstall':
+      return uninstall(a)
     case 'service':
       return serviceCommand(a)
     case 'create':
@@ -1836,7 +2006,11 @@ async function main(argv: string[]): Promise<void> {
       try {
         writeFileSync(at, bytes)
       } catch (err) {
-        throw new Problem(`${at} could not be written (${(err as NodeJS.ErrnoException).code ?? 'an error'}).`, 'invalid', 'Give a file in a folder you may write to, such as the one you are in.')
+        throw new Problem(
+          `${at} could not be written (${(err as NodeJS.ErrnoException).code ?? 'an error'}).`,
+          'invalid',
+          'Give a file in a folder you may write to, such as the one you are in.',
+        )
       }
       // Printed without the picture's text, which is what the file is for
       return out({ ...all, data: withoutFiles(click.payload).payload, saved: { file: at, type: file.type, bytes: bytes.length } })
