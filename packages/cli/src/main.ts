@@ -778,8 +778,10 @@ async function uninstall(a: Args) {
   // The one service a machine has belongs to the It folder its definition names. One that runs
   // It from another folder is another It's, and is left as it is.
   if (service.definedFor() !== 'another folder') {
+    const was = service.definedFor() === 'this folder'
     try {
       service.uninstall()
+      if (was) say('The background service is stopped, and no longer starts by itself.')
     } catch (err) {
       left.push(`The background service could not be taken away (${why(err)}).`)
     }
@@ -876,7 +878,11 @@ function crumbs(): void {
   }
   if (process.platform === 'linux') {
     // The folders the service's definition was written into, where nothing else is in them
-    for (const dir of [path.join(os.homedir(), '.config', 'systemd', 'user'), path.join(os.homedir(), '.config', 'systemd')]) {
+    for (const dir of [
+      path.join(os.homedir(), '.config', 'systemd', 'user'),
+      path.join(os.homedir(), '.config', 'systemd'),
+      path.join(os.homedir(), '.config'),
+    ]) {
       try {
         rmdirSync(dir)
       } catch {}

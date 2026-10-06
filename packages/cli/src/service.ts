@@ -383,6 +383,9 @@ let registeredOnWindows: boolean | undefined
  * container, or in a session that has no bus of its own, and there nothing registers It to
  * start by itself. True on any system but Linux, where this is not how it is asked.
  */
+/** A note that It is what made this account stay after logout, kept in It's folder. */
+const lingerNote = () => path.join(home(), 'linger-by-it')
+
 export function reachable(): boolean {
   if (process.platform !== 'linux') return true
   const asked = run('systemctl', ['--user', 'show-environment'], ASKED_MS)
@@ -416,7 +419,14 @@ export function install(): ServiceStatus {
       } catch {}
       throw err
     }
-    // Without this the service stops when the person logs out, which on a server is always
+    // Without this the service stops when the person logs out, which on a server is always.
+    // Whether the account already stayed after logout is noted first: where It is what
+    // turned that on, taking It off the machine turns it off again, and where the person
+    // had it so for reasons of their own, it is left as they had it.
+    const stayed = /^Linger=yes$/m.test(run('loginctl', ['show-user', os.userInfo().username, '--property=Linger'], ASKED_MS).out ?? '')
+    try {
+      if (!stayed && !existsSync(lingerNote())) writeFileSync(lingerNote(), '', { mode: 0o600 })
+    } catch {}
     if (!run('loginctl', ['enable-linger', os.userInfo().username]).ok)
       return {
         ...status(),
@@ -454,6 +464,11 @@ export function uninstall(patience = STOP_MS): void {
     run('systemctl', ['--user', 'disable', '--now', `${NAME}.service`])
     rmSync(unitPath(), { force: true })
     run('systemctl', ['--user', 'daemon-reload'])
+    // The account stays after logout only because It asked for that: it stops doing so
+    if (existsSync(lingerNote())) {
+      run('loginctl', ['disable-linger', os.userInfo().username])
+      rmSync(lingerNote(), { force: true })
+    }
   } else if (process.platform === 'darwin') {
     run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`])
     rmSync(plistPath(), { force: true })

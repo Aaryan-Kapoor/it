@@ -455,6 +455,35 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
   })
 })
 
+describe.skipIf(process.platform !== 'linux')('an account that stays after logout because It asked', () => {
+  /** A machine whose system answers, notes every asking, and says whether the account stays after logout as the test has it. */
+  const withSystem = (stays: boolean) => {
+    const m = machine(true, true)
+    const asked = path.join(m.home, 'asked.txt')
+    for (const name of ['systemctl', 'loginctl']) {
+      writeFileSync(
+        path.join(m.bin, name),
+        `#!/bin/sh\necho "${name} $*" >> ${JSON.stringify(asked)}\ncase " $* " in *" show-user "*) echo Linger=${stays ? 'yes' : 'no'} ;; ${SAYS_IT_RUNS} esac\nexit 0\n`,
+      )
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    return { m, asked: () => (existsSync(asked) ? readFileSync(asked, 'utf8') : '') }
+  }
+  test('stops staying when It is taken off, and one that stayed before It came is left as it was', async () => {
+    // It turned it on: it turns it off again
+    const fresh = withSystem(false)
+    expect((await run(fresh.m, ['service', 'install'])).code).toBe(0)
+    expect(fresh.asked()).toMatch(/loginctl enable-linger/)
+    expect((await run(fresh.m, ['service', 'uninstall'])).code).toBe(0)
+    expect(fresh.asked()).toMatch(/loginctl disable-linger/)
+    // The person had it so before: It leaves it
+    const theirs = withSystem(true)
+    expect((await run(theirs.m, ['service', 'install'])).code).toBe(0)
+    expect((await run(theirs.m, ['service', 'uninstall'])).code).toBe(0)
+    expect(theirs.asked()).not.toMatch(/disable-linger/)
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
     const m = machine(true, true)
@@ -482,6 +511,8 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)
     const done = await run(m, ['uninstall', '--yes'])
     expect([done.code, printed(done)]).toEqual([0, { removed: true, folder: m.it, said: expect.any(Array) }])
+    // The folders the service's definition was written into are gone with it, where nothing else was in them
+    expect(existsSync(path.join(m.home, '.config'))).toBe(false)
     expect(existsSync(m.it)).toBe(false)
     // Its lines are out, with the comment and the blank line above them, and nothing else is touched
     expect(readFileSync(path.join(m.home, '.bashrc'), 'utf8')).toBe("alias ll='ls -l'\n")
