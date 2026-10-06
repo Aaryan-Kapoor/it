@@ -404,7 +404,8 @@ function ActionStatus({
   if (last.delivery === 'handed_off') {
     // The agent has changed the page since: its answer is on the page, and the bar has nothing to add.
     // Left up, "Your agent has it" read as an agent still at work, minutes after it had answered.
-    if (last.outcome === null && answeredAt !== null && answeredAt > last.at) return null
+    // (Handed over and not yet said to be done is what `running` means: every click an add-on took is that, until its agent says more)
+    if ((last.outcome === null || last.outcome === 'running') && answeredAt !== null && answeredAt > last.at) return null
     // When what became of it cannot be told, the person is told exactly that, so they can decide whether to do it again
     const said =
       last.outcome === 'failed'

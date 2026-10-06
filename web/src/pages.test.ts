@@ -93,7 +93,8 @@ describe('what the page’s bar says of the last thing the person did', () => {
   })
 
   test('once the agent has changed the page since, the bar says nothing more of it: the answer is on the page', async () => {
-    recent = [{ at: NOW - 5000, delivery: 'handed_off', outcome: null }]
+    // As It records a click an add-on has taken: handed over, and running until its agent says more
+    recent = [{ at: NOW - 5000, delivery: 'handed_off', outcome: 'running' }]
     Object.assign(PAGE, { answeredAt: NOW - 9000 })
     await shown()
     expect(said()).toBe('Your agent has it')
