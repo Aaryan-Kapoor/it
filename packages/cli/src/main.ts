@@ -1781,7 +1781,7 @@ This machine
                                  It reports them until it is turned off.
   it version | it help
 
-Run at a terminal, it setup, it site, it network, it status, it service, it list,
+Run at a terminal, it setup, it site, it network, it status, it service status, it list,
 it displays, it whoami and it uninstall say how things stand in a few sentences. With --json,
 wherever a program reads what they print, and for an agent, they print JSON.
 `

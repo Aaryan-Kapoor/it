@@ -181,20 +181,23 @@ describe('the agent skill', () => {
   })
 
   test('says that an agent is given JSON by the commands that speak to a person at a terminal, and how to ask for it', () => {
-    // What the program says of itself: the five commands, and what makes them print JSON
+    // What the program says of itself: the commands that speak, and what makes them print JSON
     const spoken =
-      /Run at a terminal, (.*?) say how\s+things stand in a few sentences\. With --json, and wherever a program reads what they print,\s+they print JSON\./.exec(
+      /Run at a terminal, ([\s\S]*?) say how things stand in a few sentences\. With --json,\s+wherever a program reads what they print, and for an agent, they print JSON\./.exec(
         help,
       )![1]!
-    const five = spoken.split(/, | and /).map((command) => command.trim())
-    expect(five).toEqual(['it setup', 'it site', 'it network', 'it status', 'it service status'])
+    const nine = spoken
+      .replace(/\s+/g, ' ')
+      .split(/, | and /)
+      .map((command) => command.trim())
+    expect(nine).toEqual(['it setup', 'it site', 'it network', 'it status', 'it service status', 'it list', 'it displays', 'it whoami', 'it uninstall'])
     expect(skill).toContain(
-      `Five of them, ${five
+      `Nine of them, ${nine
         .slice(0, -1)
         .map((command) => `\`${command}\``)
-        .join(', ')} and \`${five.at(-1)}\`, speak in sentences to a person at a terminal.`,
+        .join(', ')} and \`${nine.at(-1)}\`, speak in sentences to a person at a terminal.`,
     )
-    expect(skill).toContain('What you run does not print to a terminal, so you get JSON from those too, and `--json` asks for it')
+    expect(skill).toContain('What you run is known to be an agent’s, so you get JSON from those too, and `--json` asks for it')
     expect(main).toMatch(/const forPerson = \(a: Args\): boolean => process\.stdout\.isTTY === true && a\.flags\.json !== true/)
   })
 
