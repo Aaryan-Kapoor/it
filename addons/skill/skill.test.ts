@@ -32,7 +32,7 @@ describe('the agent skill', () => {
         const flag = /^[[(]?(--[a-z-]+)/.exec(word)?.[1]
         if (flag) flags.set(words[1]!, (flags.get(words[1]!) ?? new Set()).add(flag))
       }
-    expect([...flags.keys()].sort()).toEqual(['ack', 'actions', 'create', 'notify', 'open', 'patch', 'update', 'wait'])
+    expect([...flags.keys()].sort()).toEqual(['ack', 'action', 'actions', 'create', 'notify', 'open', 'patch', 'update', 'wait'])
     for (const [command, taken] of flags) {
       // What the program's own help says of that command
       const said = help
@@ -234,7 +234,11 @@ describe('the agent skill', () => {
   })
 
   test('says where the command is when its name is not found', () => {
-    expect(skill).toContain('If the name `it` is not found, the command is at `~/.it/bin/it`')
+    // By its name alone first. From where it is only when the name is not found, and then with the path
+    // written out: a harness that cannot read a command plainly (`$HOME/.it/bin/it …`) stops and asks the person
+    expect(skill).toContain('Run it by that name alone, `it`, every time.')
+    expect(skill).toMatch(/Only if the name is not found .* is the command run from where it is, `~\/\.it\/bin\/it`/)
+    expect(skill).toContain('with no variable such as `$HOME` in it')
     expect(source('../../packages/cli/src/setup.ts')).toContain("inHome('bin', windows ? 'it.exe' : 'it')")
   })
 
