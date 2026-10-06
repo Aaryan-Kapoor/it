@@ -55,7 +55,7 @@ import {
 } from './lib'
 import { login } from './login'
 import { nodeTooOld, quietAboutItsDatabase } from './node'
-import { gather, publish } from './publish'
+import { gather, noteConversation, publish } from './publish'
 import { alone, asAdmin, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
@@ -1973,7 +1973,25 @@ async function main(argv: string[]): Promise<void> {
 
     case 'open': {
       const slug = need(a._[0], `which ${NOUN.one}`, 'open <id> [--on "<display>"]')
-      return out({ id: slug, ...shownAs(await show(slug, a)) })
+      // A conversation that brings a page up for its person is the one they are talking to: the
+      // page is its page from now on, also where another conversation made it. Someone who says
+      // "show me the board again" the next day gets an agent that opens what is there, and what
+      // they then do on it went to a conversation that was closed.
+      const mine = sessionAsked()?.session
+      let took = false
+      if (mine) {
+        noteConversation(mine)
+        // A page that is not there, or anything else in the way, is said by the showing itself, below
+        took = await call<{ took: boolean }>('mutation', api.artifacts.take, { slug, session: mine, agent: mine.harness }).then(
+          (r) => r.took === true,
+          () => false,
+        )
+      }
+      return out({
+        id: slug,
+        ...shownAs(await show(slug, a)),
+        ...(took ? { note: `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.` } : {}),
+      })
     }
     case 'notify': {
       const body = need(a._.join(' ') || (await piped()), 'what to say', 'notify "<text>"')

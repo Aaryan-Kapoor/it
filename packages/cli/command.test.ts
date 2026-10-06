@@ -515,15 +515,19 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
         ? { title: 'Board' }
         : asked.path === 'publish:begin'
           ? { artifactId: 'artifact-1', slug: 'board', version: 2, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
-          : asked.path === 'publish:finish'
-            ? // The backend's word on what became of the page: taken by a publish that asked for it, left where it was by one that did not
-              {
-                slug: 'board',
-                version: 2,
-                url: 'https://site.example/p/board',
-                ...(b.asked.findLast((x) => x.path === 'publish:begin')!.args.take ? { took: true } : { elsewhere: true }),
-              }
-            : null,
+          : asked.path === 'artifacts:take'
+            ? { took: true }
+            : asked.path === 'displays:show'
+              ? { displays: ['Kitchen'] }
+              : asked.path === 'publish:finish'
+                ? // The backend's word on what became of the page: taken by a publish that asked for it, left where it was by one that did not
+                  {
+                    slug: 'board',
+                    version: 2,
+                    url: 'https://site.example/p/board',
+                    ...(b.asked.findLast((x) => x.path === 'publish:begin')!.args.take ? { took: true } : { elsewhere: true }),
+                  }
+                : null,
     )
     try {
       const mine = { ...b.env, CODEX_THREAD_ID: 'codex-today' }
@@ -550,6 +554,19 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
       // Made by a script, in no conversation, there is nobody to give it to: nothing is asked for
       await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], b.env)
       expect(begun().take).toBeUndefined()
+      // A conversation that only brings the page up for its person takes it as well: it is the one they are talking to
+      b.asked.length = 0
+      const opened = await run(m, ['open', 'board'], mine)
+      expect(b.asked.find((x) => x.path === 'artifacts:take')!.args).toEqual({
+        slug: 'board',
+        session: { harness: 'codex', id: 'codex-today' },
+        agent: 'codex',
+      })
+      expect(printed(opened).note).toBe('This page was another conversation’s, and is this one’s now: what is done on it comes here.')
+      // Brought up from no conversation, it stays where it is and nothing is asked
+      b.asked.length = 0
+      expect(printed(await run(m, ['open', 'board'], b.env)).note).toBeUndefined()
+      expect(b.asked.some((x) => x.path === 'artifacts:take')).toBe(false)
     } finally {
       await b.close()
     }

@@ -1144,6 +1144,33 @@ describe('publishing', () => {
     expect(await owner()).toEqual(['laptop', { harness: 'claude-code', id: 'sess-2' }])
   })
 
+  test('a conversation that shows a page takes it, with what was waiting on it, and the one that has it already takes nothing', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice', 'laptop')
+    const yesterday = { harness: 'claude-code', id: 'sess-yesterday' }
+    const today = { harness: 'claude-code', id: 'sess-today' }
+    const p = await publish(laptop, 'board', { session: yesterday })
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: p.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    const owner = async () => (await alice.browser.query(api.artifacts.get, { slug: 'board' })).session
+    expect(await laptop.as.mutation(api.artifacts.take, { slug: 'board', session: yesterday })).toEqual({ took: false })
+    expect(await laptop.as.mutation(api.artifacts.take, { slug: 'board', session: today, agent: 'claude-code' })).toEqual({ took: true })
+    expect(await owner()).toEqual(today)
+    await settle(t)
+    // What was done on it before it changed hands is today's conversation's to answer
+    expect((await inbox(laptop, [today])).map((c) => c.id)).toEqual([actionId])
+    expect((await inbox(laptop, [yesterday])).map((c) => c.id)).toEqual([])
+    // A browser cannot hand a page to a conversation, and nor can another person's machine
+    expect(await code(alice.browser.mutation(api.artifacts.take, { slug: 'board', session: today }))).toBe('forbidden')
+    await person(t, 'bob')
+    const theirs = await machineOf(t, 'bob', 'desk')
+    expect(await code(theirs.as.mutation(api.artifacts.take, { slug: 'board', session: today }))).toBe('not_found')
+  })
+
   test('a publish that cannot be prepared leaves nothing behind, and says it may be tried again', async () => {
     const t = backend()
     await person(t, 'alice')

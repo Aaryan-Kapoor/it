@@ -4,11 +4,12 @@ import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { mutation, type QueryCtx, query } from './_generated/server'
 import { removeLater } from './content'
-import { artifactBySlug, ownArtifact, requireBrowser, requireCaller, requireMachineOrOwner, requireOwner } from './lib/authz'
+import { artifactBySlug, ownArtifact, requireBrowser, requireCaller, requireMachine, requireMachineOrOwner, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
 import { bump } from './lib/tally'
+import { session } from './schema'
 
 export const prefixOf = (userId: Id<'users'>, artifactId: Id<'artifacts'>, n?: number) => `u/${userId}/${artifactId}/${n === undefined ? '' : `${n}/`}`
 
@@ -122,6 +123,26 @@ export const remove = mutation({
     // A publish of this page may be under way, with a grant that is still good
     await removeLater(ctx, prefixOf(user._id, a._id), { grantMayBeLive: true })
     return null
+  },
+})
+
+/**
+ * Gives a page to the conversation that is showing it. A conversation that brings a page up for
+ * its person is the one they are talking to, also where another conversation made the page
+ * the day before: what they then do on it must come to the one in front of them, and not to
+ * one that is closed. Asked by the conversation that has it already, nothing changes.
+ */
+export const take = mutation({
+  args: { ...ref, session, agent: v.optional(v.string()) },
+  handler: async (ctx, { session: mine, agent, ...which }) => {
+    const { user, machine } = await requireMachine(ctx)
+    const a = await resolve(ctx, user._id, which)
+    if (a.machineId === machine._id && a.session?.harness === mine.harness && a.session?.id === mine.id) return { took: false }
+    await rateLimit(ctx, 'take', user._id)
+    await ctx.db.patch(a._id, { machineId: machine._id, session: mine, agent: agent?.slice(0, 60) ?? a.agent })
+    // Clicks already waiting on the page go where the page went
+    await ctx.scheduler.runAfter(0, internal.actions.readdress, { artifactId: a._id })
+    return { took: true }
   },
 })
 

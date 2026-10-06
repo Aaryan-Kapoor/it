@@ -43,6 +43,8 @@ const RULES = {
   /** Fetching the token a display keeps for signing out later. Apart from signing out itself, so that one never uses up the other. */
   signOutToken: { perMinute: 30, burst: 30 },
   remove: { perMinute: 120, burst: 60 },
+  // A page changing hands because a conversation showed it: as often as pages are shown
+  take: { perMinute: 120, burst: 60 },
 } as const
 export type Rule = keyof typeof RULES
 
