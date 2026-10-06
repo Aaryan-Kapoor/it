@@ -165,6 +165,28 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
       await carryOn({ argv: [path.join(scratch, 'never')], input: '', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, { signal: stop.signal }),
     ).toBe(STOPPED)
   })
+
+  test('the app is told the folder it is in, and not the one this program was started in', async () => {
+    // OpenCode believes PWD over the folder it is started in. Left with this program's own, it
+    // held the conversation in one folder, waited for it in another, and never ended.
+    const folder = path.join(scratch, 'held here')
+    mkdirSync(folder)
+    const log = path.join(scratch, 'where.json')
+    const [pwd, oldpwd] = [process.env.PWD, process.env.OLDPWD]
+    process.env.PWD = path.join(scratch, 'started here')
+    process.env.OLDPWD = path.join(scratch, 'and before that')
+    try {
+      // The program itself and no shell, which would put PWD right before anything could read it
+      const how = { argv: [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify([process.env.PWD, process.env.OLDPWD ?? null, process.cwd()]))`], input: '', app: 'OpenCode' }
+      expect(await carryOn(how, folder, { harness: 'opencode', session: 'x' })).toBeNull()
+    } finally {
+      for (const [k, v] of [['PWD', pwd], ['OLDPWD', oldpwd]] as const) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    }
+    expect(JSON.parse(readFileSync(log, 'utf8'))).toEqual([folder, null, folder])
+  })
 })
 
 describe('how often a conversation is reopened', () => {

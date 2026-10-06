@@ -147,7 +147,10 @@ export function carryOn(
     try {
       child = spawn(how.argv[0]!, how.argv.slice(1), {
         cwd,
-        env: { ...harnessEnv(), IT_HARNESS: marks.harness, IT_SESSION: marks.session },
+        // The folder is said in the environment as well. This program's own PWD is wherever it
+        // was started, and an app that believes PWD over the folder it is in (OpenCode does)
+        // would hold the conversation in one folder and wait for it in another, and never end.
+        env: { ...Object.fromEntries(Object.entries(harnessEnv()).filter(([k]) => k !== 'OLDPWD')), PWD: cwd, IT_HARNESS: marks.harness, IT_SESSION: marks.session },
         stdio: ['pipe', 'ignore', 'ignore'],
         windowsHide: true,
         // In a group of its own, so that stopping it stops what it started as well: a command
