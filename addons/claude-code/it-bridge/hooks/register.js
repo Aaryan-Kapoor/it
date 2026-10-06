@@ -37,11 +37,15 @@ async function ownFolder($) {
   return ((await $.env.get('OS')) === 'Windows_NT' ? profile || home : home || profile) || ''
 }
 
+/** It's folder: the environment's word first, then what setup wrote down, then the usual place. */
+async function itFolder($) {
+  return (await $.env.get('IT_HOME')) || (typeof IT_HOME_AT_SETUP === 'string' && IT_HOME_AT_SETUP ? IT_HOME_AT_SETUP : `${await ownFolder($)}/.it`)
+}
+
 async function find($) {
   if (Date.now() - lookedAt < (connector ? 30000 : 3000)) return connector
   lookedAt = Date.now()
-  // The environment's word first, then what setup wrote down, then the usual place
-  const home = (await $.env.get('IT_HOME')) || (typeof IT_HOME_AT_SETUP === 'string' && IT_HOME_AT_SETUP ? IT_HOME_AT_SETUP : `${await ownFolder($)}/.it`)
+  const home = await itFolder($)
   connector = null
   try {
     const c = JSON.parse(await $.fs.read(`${home}/connector.json`))
@@ -224,6 +228,15 @@ async function checkOnce($) {
     // And where It's folder is, when it is not the usual place: the `it` command they run must
     // use the same one as this add-on
     if (typeof IT_HOME_AT_SETUP === 'string' && IT_HOME_AT_SETUP && !(await $.env.get('IT_HOME'))) await $.env.set('IT_HOME', IT_HOME_AT_SETUP)
+    // And where the `it` command is. A Claude Code started from the terminal It was installed
+    // in has a PATH from before It was on it, and the agent's first `it` is not found. Put
+    // last, so that an `it` the person has put on their PATH themselves comes first.
+    try {
+      const windows = (await $.env.get('OS')) === 'Windows_NT'
+      const bin = `${await itFolder($)}${windows ? '\\' : '/'}bin`
+      const now = (await $.env.get('PATH')) || ''
+      if (now && !now.split(windows ? ';' : ':').includes(bin)) await $.env.set('PATH', `${now}${windows ? ';' : ':'}${bin}`)
+    } catch {}
     // Anything but /clear that changes the id (the person resumed another conversation in this
     // window) is a different conversation: the first one keeps its pages, and what was taken
     // for it is not handed to this one.

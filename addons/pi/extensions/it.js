@@ -57,6 +57,14 @@ const seal = (token, nonce, what) => createHmac('sha256', token).update(`${nonce
 export default function (pi) {
   // The commands the agent runs are told where It's folder is too, when it is not the usual place: the `it` command they run must use the same one as this add-on
   if (!process.env.IT_HOME && typeof IT_HOME_AT_SETUP === 'string' && IT_HOME_AT_SETUP) process.env.IT_HOME = IT_HOME_AT_SETUP
+  // And where the `it` command is. A Pi that was started from the terminal It was installed in,
+  // or that was already open, has a PATH from before It was on it, and its agent's first `it`
+  // would not be found. Put last, so that an `it` the person has put on their PATH themselves comes first.
+  try {
+    const bin = path.join(process.env.IT_HOME || path.join(os.homedir(), '.it'), 'bin')
+    const now = process.env.PATH ?? ''
+    if (!now.split(path.delimiter).includes(bin)) process.env.PATH = now ? `${now}${path.delimiter}${bin}` : bin
+  } catch {}
   let connector = null // { socket | port, token }, read from the connector's own file
   let lookedAt = 0
   let ctx = null // Pi's handle on this conversation, from when it starts until it is shut down

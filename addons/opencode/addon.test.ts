@@ -292,8 +292,13 @@ describe('the OpenCode add-on', () => {
     if (file !== NO_FILE) writeFileSync(path.join(home, 'connector.json'), typeof file === 'string' ? file : JSON.stringify(file))
     return c
   }
-  /** A command the agent runs in a conversation, as OpenCode announces it to plugins. */
+  /** A command the agent runs in a conversation, as OpenCode announces it to plugins: what it is told besides where to look for programs. */
   async function command(hooks: Hooks, sessionID?: string) {
+    const { PATH: _, ...told } = await commandEnv(hooks, sessionID)
+    return told
+  }
+  /** Everything such a command is told. */
+  async function commandEnv(hooks: Hooks, sessionID?: string) {
     const output = { env: {} as Record<string, string> }
     await hooks['shell.env']({ cwd: home, ...(sessionID ? { sessionID, callID: 'call_1' } : {}) }, output)
     return output.env
@@ -349,6 +354,19 @@ describe('the OpenCode add-on', () => {
   it('sets IT_HARNESS and IT_SESSION for the commands a conversation runs', async () => {
     const { hooks } = await load()
     expect(await command(hooks, 'ses_one')).toEqual({ IT_HARNESS: 'opencode', IT_SESSION: 'ses_one' })
+    // It is told where the `it` command is as well, after everything that was on its PATH: an OpenCode started
+    // from the terminal It was installed in does not have It's folder there yet
+    const bin = path.join(home, 'bin')
+    const before = process.env.PATH
+    try {
+      process.env.PATH = ['/usr/local/bin', '/usr/bin'].join(path.delimiter)
+      expect((await commandEnv(hooks, 'ses_one')).PATH).toBe(['/usr/local/bin', '/usr/bin', bin].join(path.delimiter))
+      // And not a second time where it is there already
+      process.env.PATH = ['/usr/bin', bin].join(path.delimiter)
+      expect((await commandEnv(hooks, 'ses_one')).PATH).toBeUndefined()
+    } finally {
+      process.env.PATH = before
+    }
     // Each conversation gets its own id, however many one OpenCode holds
     expect(await command(hooks, 'ses_two')).toEqual({ IT_HARNESS: 'opencode', IT_SESSION: 'ses_two' })
     // A terminal the person opened belongs to no conversation

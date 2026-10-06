@@ -574,6 +574,16 @@ def register(ctx):
     # place: the `it` command they run must use the same one as this add-on
     if not os.environ.get("IT_HOME") and isinstance(IT_HOME_AT_SETUP, str) and IT_HOME_AT_SETUP:
         os.environ["IT_HOME"] = IT_HOME_AT_SETUP
+    # And where the `it` command is. A Hermes started from the terminal It was installed in has a
+    # PATH from before It was on it, and the agent then runs `$HOME/.it/bin/it`, which Hermes's
+    # own scan of commands stops and asks the person about. Put last, so an `it` of theirs comes first.
+    try:
+        folder = os.path.join(_it_home(), "bin")
+        now = os.environ.get("PATH", "")
+        if folder not in now.split(os.pathsep):
+            os.environ["PATH"] = now + os.pathsep + folder if now else folder
+    except Exception:
+        pass
     bridge = _Bridge(ctx)
     # Nothing is asked of the connector, and no thread runs, until a conversation has a turn
     ctx.register_hook("pre_llm_call", bridge.turn_started)

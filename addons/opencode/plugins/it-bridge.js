@@ -416,6 +416,11 @@ export const ItBridge = async ({ client }) => {
         output.env.IT_SESSION = root
         // The commands the agent runs are told where It's folder is too, when it is not the usual place: the `it` command they run must use the same one as this add-on
         if (!process.env.IT_HOME && typeof IT_HOME_AT_SETUP === 'string' && IT_HOME_AT_SETUP) output.env.IT_HOME = IT_HOME_AT_SETUP
+        // And where the `it` command is: an OpenCode started from the terminal It was installed
+        // in has a PATH from before It was on it. Put last, so that an `it` of the person's own comes first.
+        const bin = path.join(itHome(), 'bin')
+        const now = output.env.PATH ?? process.env.PATH ?? ''
+        if (!now.split(path.delimiter).includes(bin)) output.env.PATH = now ? `${now}${path.delimiter}${bin}` : bin
         listen(root)
       } catch {}
     },
