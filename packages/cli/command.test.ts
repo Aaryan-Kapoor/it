@@ -455,7 +455,7 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
   })
 })
 
-describe.skipIf(process.platform !== 'linux')('an account that stays after logout because It asked', () => {
+describe.skipIf(process.platform === 'win32' || process.platform !== 'linux')('an account that stays after logout because It asked', () => {
   /** A machine whose system answers, notes every asking, and says whether the account stays after logout as the test has it. */
   const withSystem = (stays: boolean) => {
     const m = machine(true, true)
