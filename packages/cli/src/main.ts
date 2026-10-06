@@ -737,10 +737,14 @@ async function uninstall(a: Args) {
     else left.push(`${KNOWN[id].label} still has It’s add-on, which could not be taken out. Its own command for add-ons removes it.`)
   }
   // 2. The background service, and an `it serve` someone started by hand in this folder
-  try {
-    service.uninstall()
-  } catch (err) {
-    left.push(`The background service could not be taken away (${why(err)}).`)
+  // The one service a machine has belongs to the It folder its definition names. One that runs
+  // It from another folder is another It's, and is left as it is.
+  if (service.definedFor() !== 'another folder') {
+    try {
+      service.uninstall()
+    } catch (err) {
+      left.push(`The background service could not be taken away (${why(err)}).`)
+    }
   }
   service.askToStop(folder, 30_000)
   if (service.runningFor(folder)) left.push('It is still running, and was asked to stop: end the `it serve` you started, in its terminal.')
@@ -1648,6 +1652,11 @@ async function serviceCommand(a: Args) {
         'Run this with IT_HOME set to that folder to take it away.',
       )
     service.uninstall()
+    // To a person, in a sentence: it is the last thing some of them ever ask It
+    if (forPerson(a))
+      return tell([
+        'It is no longer registered to start by itself, and the background service is stopped. An `it serve` you started yourself runs on until you end it.',
+      ])
     return out({ ok: true })
   }
   if (sub === 'logs') {

@@ -440,6 +440,21 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     expect(existsSync(path.join(m.home, '.codex', 'plugins', 'cache', 'it'))).toBe(false)
     expect(existsSync(path.join(m.home, '.claude', 'plugins', 'cache', 'it'))).toBe(false)
     expect(existsSync(path.join(m.home, '.config', 'systemd'))).toBe(false)
+    // The background service of another It folder is another It's, and is not taken away with this one
+    const other = machine(true, true)
+    const log = path.join(other.home, 'asked.txt')
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(other.bin, name), `#!/bin/sh\necho "$*" >> ${JSON.stringify(log)}\nexit 0\n`)
+      chmodSync(path.join(other.bin, name), 0o755)
+    }
+    if (process.platform === 'linux') {
+      mkdirSync(path.join(other.home, '.config', 'systemd', 'user'), { recursive: true })
+      const unit = path.join(other.home, '.config', 'systemd', 'user', 'it.service')
+      writeFileSync(unit, '[Service]\nEnvironment="IT_HOME=/somewhere/else/.it"\nExecStart=/somewhere/else/.it/bin/it serve\n')
+      expect((await run(other, ['uninstall', '--yes'])).code).toBe(0)
+      expect(existsSync(unit)).toBe(true)
+      expect(existsSync(log) ? readFileSync(log, 'utf8') : '').not.toMatch(/disable/)
+    }
     // A folder that does not hold It is never removed, whatever names it
     const stray = mkdtempSync(path.join(scratch, 'not-it-'))
     writeFileSync(path.join(stray, 'thesis.txt'), 'mine')
