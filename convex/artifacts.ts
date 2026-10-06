@@ -1,4 +1,4 @@
-import { LIMITS, QUOTA } from '@it/protocol'
+import { LIMITS, QUOTA, WAKES } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -67,11 +67,14 @@ export const get = query({
       .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
       .unique()
     const machine = a.machineId ? await ctx.db.get(a.machineId) : null
-    const project = a.projectId ? await ctx.db.get(a.projectId) : null
     return {
       ...card(a, a.waiting ?? 0, machine?.name ?? null),
-      // The project the page was made in, and whether a closed conversation may be reopened for it
-      project: project ? { id: project._id, name: project.name, wake: project.wake === true } : null,
+      // Where the page's conversation is in an agent app It can reopen a closed conversation of:
+      // the machine that would do it, and whether the person has switched that on there
+      wake:
+        machine !== null && !machine.revoked && a.session && (WAKES as readonly string[]).includes(a.session.harness)
+          ? { machineId: machine._id, harness: a.session.harness, on: (machine.wakes ?? []).some((w) => w.harness === a.session?.harness) }
+          : null,
       // When the machine whose agent made this page was last heard from, for the site to judge
       // whether it is there to hear a click. Null when it has no connector, or was revoked.
       machineSeenAt: machine !== null && !machine.revoked && machine.connectorVersion !== undefined ? machine.lastSeenAt : null,

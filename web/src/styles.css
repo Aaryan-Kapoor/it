@@ -3280,6 +3280,23 @@ form.row-main {
 .check-note {
   padding-right: 4px;
 }
+.row:has(.wake-row) {
+  padding-top: 16px;
+  padding-bottom: 12px;
+}
+.wake-row {
+  display: flex;
+  gap: 12px;
+  padding: 4px 0 6px 48px;
+}
+.wake-name {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--fg);
+}
+.wake-row .row-sub {
+  margin-left: -4px;
+}
 
 .list-foot {
   display: flex;

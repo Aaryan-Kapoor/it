@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { claudeResume } from './src/connector'
+import { claudeResume, mayWake } from './src/connector'
 import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
 
 let scratch: string
@@ -69,6 +69,28 @@ describe.skipIf(process.platform === 'win32')('reopening a Claude Code conversat
     ])
       expect(await claudeResume(id, scratch, 'a click', never.command), id).toBe('its conversation id is not one Claude Code would have made')
     expect(never.ran()).toBeNull()
+  })
+})
+
+describe('whether a closed conversation may be reopened for a click', () => {
+  const MINUTE = 60_000
+  const at = 1_800_000_000_000
+  test('only for an agent app the person has switched it on for, on this machine', () => {
+    expect(mayWake(new Map(), 'claude-code', at)).toBe(false)
+    expect(mayWake(new Map([['claude-code', at]]), 'claude-code', at + MINUTE)).toBe(true)
+  })
+
+  test('never for an app It has no way to reopen, whatever is written down for it', () => {
+    for (const harness of ['codex', 'openclaw', 'pi', 'made-up']) expect(mayWake(new Map([[harness, at]]), harness, at + MINUTE)).toBe(false)
+  })
+
+  test('for what was done from about the moment it was switched on, and not for all that had been waiting before', () => {
+    const on = new Map([['claude-code', at]])
+    // The click that made the person switch it on, a moment before they did
+    expect(mayWake(on, 'claude-code', at - MINUTE)).toBe(true)
+    expect(mayWake(on, 'claude-code', at - 10 * MINUTE)).toBe(true)
+    expect(mayWake(on, 'claude-code', at - 11 * MINUTE)).toBe(false)
+    expect(mayWake(on, 'claude-code', at - 24 * 60 * MINUTE)).toBe(false)
   })
 })
 

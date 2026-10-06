@@ -14,7 +14,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { appendFileSync, chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson } from '@it/protocol'
+import { briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson, WAKES } from '@it/protocol'
 import { api, ask, call, enrolledHere, harnessEnv, home, inHome, live, Problem, readJson, VERSION, why, writePrivate } from './lib'
 import { conversationFolder } from './publish'
 import { alone } from './serve/backend'
@@ -35,8 +35,6 @@ interface Offered {
   stateRevision?: number
   nowVersion?: number
   nowStateRevision?: number
-  /** Whether the person has allowed the conversation this is for to be reopened where it is closed. */
-  wake?: boolean
 }
 /** A click as an add-on receives it: its data as a value, the one wording agents read, and the few words a person is shown where an app has another place for the rest. */
 export interface Delivered extends Click {
@@ -74,11 +72,14 @@ const TURN_QUIET_MS = 30 * 60_000 // a turn that has run no hook for this long i
 const WAIT_MS = 5_000 // an `it wait` that said so this recently is still waiting
 const QUEUE_WAITS = [0, 10_000, 60_000, 600_000] // how long before each try at a harness's own queue; after the last, the click is left waiting
 const QUEUE_AT_ONCE = 3 // how many of a harness's queue commands run at the same time
-// The harnesses a click can be given to while its conversation is not listening: Codex has a
-// queue of its own, and a Claude Code conversation that is closed can be reopened
-const QUEUES = ['codex', 'claude-code']
+// The harness a click can be given to while its conversation is not listening, because it has a
+// queue of its own. A closed conversation of the apps in WAKES can be reopened as well, where
+// the person has switched that on.
+const QUEUES = ['codex']
 /** How long a click waits for a conversation that is open to ask for it, before the conversation is taken to be closed. */
 const CLOSED_MS = 8000
+/** How far back from the moment the person switched reopening on a click may have been made and still have its conversation reopened: long enough for the click that made them switch it on. */
+const WAKE_BACK_MS = 10 * 60_000
 const SERVE_MOST = 8 // how many clicks one answer to an add-on carries
 const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads no more than a quarter of a megabyte
 const keyOf = (harness: string, id: string) => `${harness}:${id}`
@@ -227,6 +228,18 @@ export function claudeResume(session: string, cwd: string, text: string, command
   })
 }
 
+/**
+ * Whether a closed conversation of an agent app may be reopened for a click made at a moment,
+ * given what the person has switched on for this machine and since when. Only an app It has a
+ * way to reopen, only where the person has switched that on for it, and only for what they did
+ * from about then on: what had been waiting longer is not all run at once the moment the
+ * switch is turned.
+ */
+export function mayWake(switched: ReadonlyMap<string, number>, harness: string, at: number): boolean {
+  const since = switched.get(harness)
+  return (WAKES as readonly string[]).includes(harness) && since !== undefined && at >= since - WAKE_BACK_MS
+}
+
 const asClick = (c: Offered): Click => ({
   id: c.id,
   artifact: c.artifact,
@@ -328,6 +341,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * that asks for its clicks has shown that it is there, and is answered once its app is chosen.
    */
   const connected = (harness: string) => chosen(harness) && found.some((h) => h.id === harness && (h.addon === 'connected' || h.addon === 'needs_approval'))
+  // The agent apps the person has switched reopening on for on this machine, and since when, as
+  // It says. Until It has said, none is.
+  let wakesNow = new Map<string, number>()
+  const wakes = (harness: string, at: number) => mayWake(wakesNow, harness, at)
 
   const sessions = new Map<string, { seen: number; busy: boolean; busyAt: number }>()
   // A conversation that was cleared carries on under a new id; its pages follow it
@@ -476,6 +493,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Nor is the app's command run once the app is not connected any more: the person may have
       // disconnected it while the click stood in line
       if (!connected(harness)) return
+      // Nor is a conversation reopened once the person has switched that off
+      if (harness !== 'codex' && !wakes(harness, click.at)) return
       // Only if it is still for this conversation on this machine: the page may have changed
       // hands while the click stood in line here
       const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session! })
@@ -483,7 +502,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // And looked at once more, now that the claim is answered: a waiter that began while it
       // was being asked for cannot take what this machine holds, so it is given back to it. It
       // is given back as well when Codex was disconnected in that time.
-      if (awaited(click, Date.now()) || !connected(harness)) {
+      if (awaited(click, Date.now()) || !connected(harness) || (harness !== 'codex' && !wakes(harness, click.at))) {
         journal('released', click.id)
         await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
         return
@@ -689,10 +708,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // Route 2: Codex's own queue starts a turn when idle, or runs it after the current one.
           // Not waited for here: one slow command must not hold up every other click.
           if (!queue(click)) waitingBehind.add(key)
-        } else if (click.session.harness === 'claude-code' && click.wake === true && connected('claude-code') && now - click.at >= CLOSED_MS) {
-          // Route 3: the conversation is closed, and the person has allowed it to be reopened
-          // for this page's project. A conversation that is open asks for its clicks every
-          // second, so one not heard from for this long is not open in a Claude Code It is
+        } else if (wakes(click.session.harness, click.at) && connected(click.session.harness) && now - click.at >= CLOSED_MS) {
+          // Route 3: the conversation is closed, and the person has switched on reopening for
+          // its agent app on this machine. A conversation that is open asks for its clicks
+          // every second, so one not heard from for this long is not open in a Claude Code It is
           // connected to. It is run in line like a queue, one click of a conversation at a time.
           if (!queue(click)) waitingBehind.add(key)
         }
@@ -1023,8 +1042,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // In a fixed order, so that the same set is not taken for a different one
       .sort()
       .map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
-    // A click is asked for an app's own queue only while that app is connected
-    const args = { listening, queues: QUEUES.filter(connected) }
+    // A click is asked for an app's own queue only while that app is connected, and for a
+    // conversation that is closed only where it may be reopened
+    const args = { listening, queues: [...QUEUES, ...WAKES.filter((h) => wakesNow.has(h))].filter(connected) }
     const next = JSON.stringify(args)
     if (next === watching) return
     watching = next
@@ -1088,7 +1108,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
   client.onUpdate(
     api.machines.me,
     {},
-    (me: { wanted: string[] }) => {
+    (me: { wanted: string[]; wakes?: { harness: string; since: number }[] }) => {
+      // Read each time, whatever else changed or did not: it changes nothing that is installed
+      const before = [...wakesNow.keys()].sort().join(',')
+      wakesNow = new Map((me.wakes ?? []).map((w) => [w.harness, w.since]))
+      if ([...wakesNow.keys()].sort().join(',') !== before) {
+        watch()
+        void route()
+      }
       const next = [...me.wanted].sort().join(',')
       if (next === wanted) return
       wanted = next

@@ -751,6 +751,7 @@ describe('what a paired screen may do, and what it may not', () => {
       () => s.mutation(api.machines.revoke, { machineId: m.id }),
       () => s.mutation(api.machines.rename, { machineId: m.id, name: 'mine' }),
       () => s.mutation(api.machines.toggle, { machineId: m.id, harness: 'codex', on: true }),
+      () => s.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true }),
       () => s.mutation(api.artifacts.remove, { slug: 'plan' }),
       () => s.mutation(api.artifacts.organize, { artifactId: p.artifactId, pinned: true }),
       () => s.mutation(api.artifacts.rollback, { slug: 'plan', version: 1 }),
@@ -878,6 +879,7 @@ describe("two people cannot see or touch each other's things", () => {
       () => b.mutation(api.machines.revoke, { machineId: am.id }),
       () => b.mutation(api.machines.rename, { machineId: am.id, name: 'mine' }),
       () => b.mutation(api.machines.toggle, { machineId: am.id, harness: 'codex', on: true }),
+      () => b.mutation(api.machines.wake, { machineId: am.id, harness: 'claude-code', on: true }),
       () => b.mutation(api.notifications.answer, { id: note.id, action: 'yes', displayKey: displayKey('bob') }),
       () => b.mutation(api.notifications.dismiss, { ids: [note.id], key: displayKey('bob') }),
       () => b.query(api.artifacts.get, { slug: 'plan' }),
@@ -2211,6 +2213,51 @@ describe('displays and machines', () => {
     // And on the machine itself, by `it setup`: the same choice, with what It does not know left out
     await m.as.mutation(api.machines.choose, { harnesses: ['pi', 'made-up', 'pi'] })
     expect((await m.as.query(api.machines.me, {})).wanted).toEqual(['pi'])
+  })
+
+  test('reopening a closed conversation is off for every agent app on every machine until the owner switches it on, for that app on that machine alone', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const other = await machineOf(t, 'alice', 'desktop')
+    await publish(m, 'plan', { session: { harness: 'claude-code', id: 'c-1' } })
+    await publish(m, 'sketch', { session: { harness: 'codex', id: 'x-1' } })
+    await publish(m, 'note')
+    const onPage = async (slug: string) => (await alice.browser.query(api.artifacts.get, { slug })).wake
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+    expect(await onPage('plan')).toEqual({ machineId: m.id, harness: 'claude-code', on: false })
+    // A page whose agent app It cannot reopen, or that no conversation made, has nothing to switch on
+    expect(await onPage('sketch')).toBeNull()
+    expect(await onPage('note')).toBeNull()
+    const at = Date.now()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([{ harness: 'claude-code', since: at }])
+    expect((await alice.browser.query(api.machines.list, {})).map((x) => [x.name, x.wakes.map((w) => w.harness)])).toEqual([
+      ['laptop', ['claude-code']],
+      ['desktop', []],
+    ])
+    expect((await other.as.query(api.machines.me, {})).wakes).toEqual([])
+    expect(await onPage('plan')).toEqual({ machineId: m.id, harness: 'claude-code', on: true })
+    // Switched on again while it is on, it is on since when it was: asking twice lets in nothing older
+    await vi.advanceTimersByTimeAsync(60_000)
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([{ harness: 'claude-code', since: at }])
+    // What the machine chooses for itself, as `it setup` does, leaves it as the person set it
+    await m.as.mutation(api.machines.choose, { harnesses: ['codex'] })
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([{ harness: 'claude-code', since: at }])
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: false })
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+    expect(await onPage('plan')).toEqual({ machineId: m.id, harness: 'claude-code', on: false })
+  })
+
+  test('a machine cannot switch reopening on, so no agent switches it on for itself, and it is only for an agent app It can reopen', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    expect(await code(m.as.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true }))).toBe('forbidden')
+    for (const harness of ['codex', 'pi', 'made-up'])
+      expect(await code(alice.browser.mutation(api.machines.wake, { machineId: m.id, harness, on: true }))).toBe('invalid')
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
   })
 
   test('what `it setup` found on a machine is shown without the machine counting as heard from: only a connector’s own report does that', async () => {

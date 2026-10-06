@@ -1,7 +1,7 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import { HARNESSES } from '@it/protocol'
+import { HARNESSES, WAKES } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -32,6 +32,7 @@ interface Machine {
   connectorVersion: string | null
   harnesses: Harness[]
   wanted: string[]
+  wakes: { harness: string; since: number }[]
 }
 
 /**
@@ -152,6 +153,7 @@ function AddMachine({ onClose }: { onClose: () => void }) {
 
 function MachineCard({ m, now }: { m: Machine; now: number }) {
   const toggle = useMutation(api.machines.toggle)
+  const wake = useMutation(api.machines.wake)
   const rename = useMutation(api.machines.rename)
   const [error, setError] = useState('')
   const [name, setName] = useState<string | null>(null)
@@ -215,6 +217,9 @@ function MachineCard({ m, now }: { m: Machine; now: number }) {
             const wanted = m.wanted.includes(h.id)
             const fixed = h.addon === 'unavailable' || h.addon === 'too_old'
             const is = standing(h, wanted, online)
+            // Only for an app It can reopen a closed conversation of, and only while it is connected
+            const wakeable = wanted && !fixed && (WAKES as readonly string[]).includes(h.id)
+            const wakes = m.wakes.some((w) => w.harness === h.id)
             return (
               <li key={h.id} className="row">
                 <label className="row-main switch-row">
@@ -237,6 +242,25 @@ function MachineCard({ m, now }: { m: Machine; now: number }) {
                 </span>
                 {/* Only what the person has to do something about is spelled out */}
                 {is.tone && is.tone !== 'ok' && is.detail && <span className="row-detail">{is.detail}</span>}
+                {wakeable && (
+                  <label
+                    className="row-detail switch-row wake-row"
+                    title="Runs this agent on this machine, with nobody watching, when you use a page whose conversation is closed."
+                  >
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-checked={wakes}
+                      aria-label={`Auto-wake ${LABEL[h.id] ?? h.id}`}
+                      checked={wakes}
+                      onChange={(e) => act(wake({ machineId, harness: h.id, on: e.target.checked }))}
+                    />
+                    <span className="wake-name">Auto-wake</span>
+                    <span className="row-sub">
+                      {wakes ? 'Closed conversations are reopened for a click' : 'A click waits until you reopen its conversation'}
+                    </span>
+                  </label>
+                )}
               </li>
             )
           })}

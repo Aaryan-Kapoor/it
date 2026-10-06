@@ -14,13 +14,16 @@ const WIRE = 'http://192.168.1.31:4700'
 const SIX = 'http://[fd7a:115c:a1e0::cc01:2c98]:4700'
 
 const calls: string[] = []
+/** What each was asked with, in the same order. */
+const asked: unknown[] = []
 /** What the stand-in backend answers, by function. */
 const answers: Record<string, () => unknown> = {}
 /** What the queries the site watches say, by function. */
 let watched: Record<string, unknown>
-const ask = async (fn: unknown, _args?: unknown) => {
+const ask = async (fn: unknown, args?: unknown) => {
   const name = getFunctionName(fn as never)
   calls.push(name)
+  asked.push(args)
   return answers[name]?.() ?? null
 }
 const client = { mutation: vi.fn(ask), query: vi.fn(ask), action: vi.fn(ask) }
@@ -61,6 +64,7 @@ const text = (selector: string) => host.querySelector(selector)?.textContent ?? 
 
 beforeEach(() => {
   calls.length = 0
+  asked.length = 0
   for (const name of Object.keys(answers)) delete answers[name]
   answers['sessions:inviteScreen'] = () => ({ code: CODE, expiresAt: Date.now() + 600_000 })
   answers['sessions:inviteMachine'] = () => ({ code: CODE, expiresAt: Date.now() + 600_000 })
@@ -197,13 +201,14 @@ describe('adding a display, in an owner’s browser that reached the site over t
 })
 
 describe('what is said of an agent app on a machine', () => {
-  const machine = (seen: number, harnesses: unknown[], wanted: string[]) => ({
+  const machine = (seen: number, harnesses: unknown[], wanted: string[], wakes: string[] = []) => ({
     id: 'machine-1',
     name: 'the desk',
     lastSeenAt: seen,
     connectorVersion: '0.1.0',
     harnesses,
     wanted,
+    wakes: wakes.map((harness) => ({ harness, since: seen })),
   })
   const notes = () => [...host.querySelectorAll('.check-note')].map((note) => note.textContent)
 
@@ -221,6 +226,36 @@ describe('what is said of an agent app on a machine', () => {
     // Its add-on is installed, and nothing is handed to a conversation there until the machine is online
     expect(notes()).toEqual(['Connected, offline'])
   })
+
+  test('each connected app It can reopen a closed conversation of has a switch for that, off until the owner turns it on, and no other app has one', async () => {
+    const found = [
+      { id: 'claude-code', version: '2.1.0', addon: 'connected' },
+      { id: 'codex', version: '0.160.0', addon: 'connected' },
+      { id: 'openclaw', addon: 'unavailable' },
+    ]
+    const switches = () => [...host.querySelectorAll<HTMLInputElement>('.wake-row input')].map((input) => [input.getAttribute('aria-label'), input.checked])
+    watched['machines:list'] = [machine(Date.now(), found, ['claude-code', 'codex'])]
+    const { Machines } = await import('./machines')
+    await show(createElement(Machines))
+    expect(switches()).toEqual([['Auto-wake Claude Code', false]])
+    await act(async () => host.querySelector<HTMLInputElement>('.wake-row input')!.click())
+    expect(calls).toEqual(['machines:wake'])
+    expect(asked).toEqual([{ machineId: 'machine-1', harness: 'claude-code', on: true }])
+    await act(async () => root.unmount())
+    host.remove()
+    // As the backend then says it is, and turned off the same way
+    watched['machines:list'] = [machine(Date.now(), found, ['claude-code', 'codex'], ['claude-code'])]
+    await show(createElement(Machines))
+    expect(switches()).toEqual([['Auto-wake Claude Code', true]])
+    await act(async () => host.querySelector<HTMLInputElement>('.wake-row input')!.click())
+    expect(asked.at(-1)).toEqual({ machineId: 'machine-1', harness: 'claude-code', on: false })
+    await act(async () => root.unmount())
+    host.remove()
+    // An app that is not connected has nothing to reopen
+    watched['machines:list'] = [machine(Date.now(), [{ id: 'claude-code', version: '2.1.0', addon: 'not_connected' }], [])]
+    await show(createElement(Machines))
+    expect(switches()).toEqual([])
+  })
 })
 
 describe('revoking a machine', () => {
@@ -230,7 +265,7 @@ describe('revoking a machine', () => {
       asked.push(words)
       return asked.length > 1
     })
-    watched['machines:list'] = [{ id: 'machine-1', name: 'the desk', lastSeenAt: Date.now(), connectorVersion: '0.1.0', harnesses: [], wanted: [] }]
+    watched['machines:list'] = [{ id: 'machine-1', name: 'the desk', lastSeenAt: Date.now(), connectorVersion: '0.1.0', harnesses: [], wanted: [], wakes: [] }]
     const { Machines } = await import('./machines')
     await show(createElement(Machines))
     await press('Revoke')

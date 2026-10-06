@@ -129,6 +129,12 @@ export const INSTALL = {
 
 export const HARNESSES = ['claude-code', 'codex', 'openclaw', 'hermes', 'opencode', 'pi'] as const
 export type Harness = (typeof HARNESSES)[number]
+/**
+ * The agent apps a closed conversation of which It can reopen for a click: the ones with a
+ * command of their own for carrying a conversation on without a window. Each is reopened only
+ * on a machine where the person has switched that on for it.
+ */
+export const WAKES: readonly Harness[] = ['claude-code']
 
 /** The conversation that made a page and should hear about clicks on it. */
 export interface AgentSession {

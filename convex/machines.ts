@@ -1,4 +1,4 @@
-import { HARNESSES, LIMITS, QUOTA } from '@it/protocol'
+import { HARNESSES, LIMITS, QUOTA, WAKES } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
@@ -14,6 +14,7 @@ const view = (m: Doc<'machines'>) => ({
   connectorVersion: m.connectorVersion ?? null,
   harnesses: m.harnesses ?? [],
   wanted: m.wanted ?? [],
+  wakes: m.wakes ?? [],
 })
 
 /**
@@ -79,6 +80,27 @@ export const toggle = mutation({
     if (on) wanted.add(harness)
     else wanted.delete(harness)
     await ctx.db.patch(m._id, { wanted: [...wanted] })
+    return null
+  },
+})
+
+/**
+ * The person says whether a closed conversation of one agent app on a machine is reopened when
+ * they use a page it made. Reopening runs their agent there with nobody watching, so it is
+ * theirs alone to switch on: from a browser paired as their own, and never by a machine, which
+ * is to say never by an agent for itself.
+ */
+export const wake = mutation({
+  args: { machineId: v.id('machines'), harness: v.string(), on: v.boolean() },
+  handler: async (ctx, { machineId, harness, on }) => {
+    const { user } = await requireOwner(ctx)
+    const m = await ownMachine(ctx, user._id, machineId)
+    if (!(WAKES as readonly string[]).includes(harness)) fail('invalid', 'It cannot reopen a closed conversation of that agent app.')
+    const now = m.wakes ?? []
+    const is = now.some((w) => w.harness === harness)
+    // Switched on again while it is on, it stays on since when it was: nothing older is let in by asking twice
+    if (on && !is) await ctx.db.patch(m._id, { wakes: [...now, { harness, since: Date.now() }] })
+    if (!on && is) await ctx.db.patch(m._id, { wakes: now.filter((w) => w.harness !== harness) })
     return null
   },
 })

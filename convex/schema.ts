@@ -112,6 +112,8 @@ export default defineSchema({
     /** What the connector found installed, and what the person asked to be connected. */
     harnesses: v.optional(v.array(v.object({ id: v.string(), version: v.optional(v.string()), addon: v.string(), detail: v.optional(v.string()) }))),
     wanted: v.optional(v.array(v.string())),
+    /** The agent apps whose closed conversations may be reopened on this machine for a click, and since when. The person's alone to say, from a browser of their own. */
+    wakes: v.optional(v.array(v.object({ harness: v.string(), since: v.number() }))),
     /** When it was last written down that this machine, revoked, asked for a token: said once an hour and not each time. */
     refusalSaidAt: v.optional(v.number()),
     /** The earlier identity of the same computer whose place this one took, if it took one's. */
@@ -130,8 +132,6 @@ export default defineSchema({
     key: v.string(),
     name: v.string(),
     createdAt: v.number(),
-    /** Whether the person has allowed a closed conversation to be reopened for what is done on this project's pages. */
-    wake: v.optional(v.boolean()),
   }).index('by_user_key', ['userId', 'key']),
 
   // A page. Its bytes are kept by the content service; this is everything else.
