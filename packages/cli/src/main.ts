@@ -61,7 +61,7 @@ import { serve } from './serve/index'
 import { reachable } from './serve/network'
 import { tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
-import { AFTER, detectAll, type HarnessStatus, holdsAddons, KNOWN, reconcile, shim, supported } from './setup'
+import { AFTER, CODEX_NO_NETWORK, codexLetsItOut, detectAll, type HarnessStatus, holdsAddons, KNOWN, reconcile, shim, supported } from './setup'
 import { GUIDE, STEPS, TOUR_PREFIX, tourPage } from './tour'
 import * as usage from './usage'
 
@@ -84,7 +84,8 @@ function appsSaid(found: HarnessStatus[], advise = true): string[] {
   if (!found.length) return ['No agent app was found on this machine.']
   const lines = found.map((h) => {
     const app = KNOWN[h.id].label
-    if (h.addon === 'connected') return `${app} is connected.`
+    // Said each time it is asked for as long as it is so: the first thing a Codex user would otherwise learn of it is a page that never appears
+    if (h.addon === 'connected') return h.id === 'codex' && codexLetsItOut() === false ? `${app} is connected. ${CODEX_NO_NETWORK}` : `${app} is connected.`
     if (h.addon === 'needs_approval') return `${app} is connected, and one thing is left for you to do: ${h.detail}`
     return `${app} is not connected${h.detail && h.addon !== 'not_connected' ? `: ${h.detail}` : '.'}`
   })

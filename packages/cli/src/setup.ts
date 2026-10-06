@@ -555,10 +555,13 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       return undefined
     },
     pending() {
-      // Codex runs no hook until the person has approved it, and says nothing when it skips one
-      return existsSync(hookSeenFile('codex'))
-        ? undefined
-        : 'Start Codex once and choose "Trust all and continue" when it says the hooks need review. Until then clicks still arrive, as a new message when Codex is idle.'
+      // Codex runs no hook until the person has approved it, and says nothing when it skips one.
+      // That one has run is the proof; so is Codex's own note of the approval, which it writes
+      // the moment the person gives it, a turn before any hook runs.
+      if (existsSync(hookSeenFile('codex')) || /^\[hooks\.state\."it-bridge@it:/m.test(codexConfig() || '')) return undefined
+      const hooks =
+        'Start Codex once and choose "Trust all and continue" when it says the hooks need review. Until then clicks still arrive, as a new message when Codex is idle.'
+      return codexLetsItOut() === false ? `${hooks} ${CODEX_NO_NETWORK}` : hooks
     },
   },
 }
@@ -858,6 +861,52 @@ export function afterHermes(version: string | undefined): string {
   return `Restart Hermes. What you do on a page arrives by itself in the plain \`hermes\` terminal. For the Hermes TUI or desktop app, also run \`hermes config set plugins.entries.it-bridge.allow_gateway_injection true\` once, which lets It put what you do into those conversations. If this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`
 }
 
+/** Codex's own settings file, as text. Null when there is none, and false when one is there and cannot be read. */
+function codexConfig(home = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')): string | null | false {
+  try {
+    return readFileSync(path.join(home, 'config.toml'), 'utf8')
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? null : false
+  }
+}
+/**
+ * Whether Codex, as its settings stand, gives the commands its agent runs the network, which
+ * `it` needs to reach It. As it comes it does not, and the agent's first `it create` then
+ * fails where nothing It runs can see it. True and false only where the settings say it
+ * plainly; undefined where they are arranged some other way (a profile, permissions of the
+ * person's own), which is not guessed at. Someone who runs Codex with full access by a switch
+ * on its command line is not seen here either, so what is said of this is said as advice.
+ */
+export function codexLetsItOut(config: string | null | false = codexConfig()): boolean | undefined {
+  if (config === false) return undefined
+  if (config === null) return false
+  let table = ''
+  let mode: string | undefined
+  let network: boolean | undefined
+  for (const raw of config.split('\n')) {
+    const line = raw.replace(/#.*$/, '').trim()
+    const header = /^\[\[?\s*([^\]]+?)\s*\]\]?$/.exec(line)
+    if (header) {
+      table = header[1]!
+      // Settings of another shape than the two looked at: a profile that is chosen, or permissions written out by hand
+      if (/^(profiles|permissions)\b/.test(table)) return undefined
+      continue
+    }
+    const kv = /^([A-Za-z0-9_.-]+)\s*=\s*(.+)$/.exec(line)
+    if (!kv) continue
+    const [, key, value] = kv
+    if (table === '' && (key === 'profile' || key === 'default_permissions')) return undefined
+    if (table === '' && key === 'sandbox_mode') mode = value!.replace(/["']/g, '')
+    if ((table === 'sandbox_workspace_write' && key === 'network_access') || (table === '' && key === 'sandbox_workspace_write.network_access')) network = value === 'true'
+  }
+  if (mode === 'danger-full-access') return true
+  if (mode === 'read-only') return false
+  return network === true
+}
+/** What a person is told where Codex, as it is set, would keep `it` from reaching It. */
+export const CODEX_NO_NETWORK =
+  'As it is set, Codex gives the commands its agent runs no network, and `it` needs it to reach It on this machine, so Codex would fail to make its first page. To let it, add the two lines `[sandbox_workspace_write]` and `network_access = true` to `~/.codex/config.toml` and start Codex again. You need not if you run Codex with full access, or would sooner approve `it` each time Codex asks.'
+
 /** What the person still has to do themselves once an add-on is in, if anything. Shown once, by `it setup`. */
 export const AFTER: Partial<Record<Harness, string>> = {
   get hermes() {
@@ -865,7 +914,10 @@ export const AFTER: Partial<Record<Harness, string>> = {
   },
   opencode: 'Restart OpenCode: it reads its plugins when it starts.',
   pi: 'Restart Pi, or run /reload in it.',
-  codex: 'Start Codex once and choose "Trust all and continue" when it says the hooks need review.',
+  get codex() {
+    const hooks = 'Start Codex once and choose "Trust all and continue" when it says the hooks need review.'
+    return codexLetsItOut() === false ? `${hooks} ${CODEX_NO_NETWORK}` : hooks
+  },
 }
 
 /**

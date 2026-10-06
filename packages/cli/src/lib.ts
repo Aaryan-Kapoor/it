@@ -283,11 +283,15 @@ export const unreachable = (where: string) =>
  * cannot tell whether It is running: it is not said to be stopped, and nobody is told to start
  * it. What helps is running the command where it may reach It.
  */
-export const shutIn = () =>
+export const shutIn = (e: NodeJS.ProcessEnv = process.env) =>
   new Problem(
     'It could not be asked from here: this command is run where it may not open a connection, as an agent app runs commands when it gives them no network. It may well be running.',
     'blocked',
-    'Run `it` outside that sandbox, or let commands use the network there. Do not start It again.',
+    // Codex is the app that does this as it comes, and the person is the one who can change it:
+    // the agent is given the line to tell them, since nothing else can get word out of here
+    e.CODEX_THREAD_ID
+      ? 'Run `it` outside that sandbox if you may ask for that. If you may not, tell the user this, in these words: Codex gives the commands its agent runs no network, and `it` needs it to reach It on this machine. Adding the two lines `[sandbox_workspace_write]` and `network_access = true` to `~/.codex/config.toml`, and starting Codex again, lets it. Do not start It again.'
+      : 'Run `it` outside that sandbox, or let commands use the network there. Do not start It again.',
   )
 /** Whether an error says that the system refused the connecting itself, and not that nothing answered. */
 export function notLet(err: unknown): boolean {

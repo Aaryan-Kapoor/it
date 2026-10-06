@@ -30,7 +30,7 @@ import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
 import { startOf } from './src/serve/backend'
-import { AFTER, afterHermes, alone, connect, detectAll, disconnect, reconcile, shim, stampFile, unpack } from './src/setup'
+import { AFTER, afterHermes, alone, codexLetsItOut, connect, detectAll, disconnect, reconcile, shim, stampFile, unpack } from './src/setup'
 
 const fake = vi.hoisted(() => ({ execFile: vi.fn(), randomBytes: undefined as ((size: number) => Buffer) | undefined }))
 vi.mock('node:child_process', async (original) => ({ ...(await original<typeof import('node:child_process')>()), execFile: fake.execFile }))
@@ -1402,5 +1402,27 @@ describe('on Windows', () => {
     // Nothing was asked of the app but what it has, so what was installed is still there
     expect(commands(bin).filter((said) => /uninstall|remove|add|install/.test(said))).toEqual([])
     expect(kept[bin]!.get(folderOf(bin))!.on).toBe(true)
+  })
+})
+
+describe('whether Codex, as it is set, lets `it` reach It', () => {
+  test('is read from the two settings that say it plainly, and not guessed where the settings are arranged another way', () => {
+    // As it comes, and with no settings file at all: no network for the agent's commands
+    expect(codexLetsItOut(null)).toBe(false)
+    expect(codexLetsItOut('model = "gpt-6"\n[tui]\nnotifications = true\n')).toBe(false)
+    // Allowed for the sandbox it uses for a workspace, written either way
+    expect(codexLetsItOut('model = "gpt-6"\n\n[sandbox_workspace_write]\nnetwork_access = true\n')).toBe(true)
+    expect(codexLetsItOut('sandbox_workspace_write.network_access = true\n')).toBe(true)
+    expect(codexLetsItOut('[sandbox_workspace_write]\nnetwork_access = false # not yet\n')).toBe(false)
+    expect(codexLetsItOut('[sandbox_workspace_write]\n# network_access = true\n')).toBe(false)
+    // No sandbox at all, or one that may do nothing
+    expect(codexLetsItOut('sandbox_mode = "danger-full-access"\n')).toBe(true)
+    expect(codexLetsItOut('sandbox_mode = "read-only"\n[sandbox_workspace_write]\nnetwork_access = true\n')).toBe(false)
+    // A profile that is chosen, or permissions written out: nothing is said of what is not understood
+    expect(codexLetsItOut('profile = "work"\n[profiles.work]\nsandbox_mode = "danger-full-access"\n')).toBeUndefined()
+    expect(codexLetsItOut('[permissions.mine]\n')).toBeUndefined()
+    expect(codexLetsItOut('default_permissions = "mine"\n')).toBeUndefined()
+    // And a file that is there and cannot be read
+    expect(codexLetsItOut(false)).toBeUndefined()
   })
 })
