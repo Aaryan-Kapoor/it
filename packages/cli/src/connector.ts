@@ -15,7 +15,23 @@ import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, rmSyn
 import http from 'node:http'
 import path from 'node:path'
 import { briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson, QUEUES, WAKE_MOST, WAKES } from '@it/protocol'
-import { api, ask, call, enrolledHere, harnessEnv, home, inHome, live, Problem, readJson, shellLearned, VERSION, why, writePrivate } from './lib'
+import {
+  api,
+  ask,
+  call,
+  enrolledHere,
+  harnessEnv,
+  home,
+  inHome,
+  live,
+  Problem,
+  readJson,
+  shellLearned,
+  shellMayHaveChanged,
+  VERSION,
+  why,
+  writePrivate,
+} from './lib'
 import { conversationFolder, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
@@ -551,6 +567,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       )
       // It ran: what was set aside for this conversation after too many tries is its to be given again
       if (ended === null) revive(now.harness, now.id)
+      // It ended badly by itself: a key it lacked may be in the person's shell by the next try
+      else if (ended !== STOPPED) shellMayHaveChanged()
       // Stopped by the person, and not by this connector closing: its next turn is told so
       if (ended === STOPPED && !closing) {
         if (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)

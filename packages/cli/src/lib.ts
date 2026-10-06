@@ -1277,6 +1277,13 @@ export function askShell(said?: (line: string) => void): void {
   })
 }
 /**
+ * An app that this program ran has ended badly, and what it lacked may be something the person
+ * has since put in their shell's files: the shell is asked again before the next app is run.
+ */
+export function shellMayHaveChanged(): void {
+  shellAskedAt = 0
+}
+/**
  * Resolves once the shell has been asked, where it is asked at all. What was learned more than
  * a few minutes ago is asked for again without being waited for, so that a key someone adds to
  * their shell's files is there the next time, and no reopening waits for a shell twice.
