@@ -559,9 +559,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       // That one has run is the proof; so is Codex's own note of the approval, which it writes
       // the moment the person gives it, a turn before any hook runs.
       if (existsSync(hookSeenFile('codex')) || /^\[hooks\.state\."it-bridge@it:/m.test(codexConfig() || '')) return undefined
-      const hooks =
-        'Start Codex once and choose "Trust all and continue" when it says the hooks need review. Until then clicks still arrive, as a new message when Codex is idle.'
-      return codexLetsItOut() === false ? `${hooks} ${CODEX_NO_NETWORK}` : hooks
+      return 'Start Codex once and choose "Trust all and continue" when it says the hooks need review. Until then clicks still arrive, as a new message when Codex is idle.'
     },
   },
 }
@@ -906,7 +904,10 @@ export function codexLetsItOut(config: string | null | false = codexConfig()): b
 }
 /** What a person is told where Codex, as it is set, would keep `it` from reaching It. */
 export const CODEX_NO_NETWORK =
-  'As it is set, Codex gives the commands its agent runs no network, and `it` needs it to reach It on this machine, so Codex would fail to make its first page. To let it, add the two lines `[sandbox_workspace_write]` and `network_access = true` to `~/.codex/config.toml` and start Codex again. You need not if you run Codex with full access, or would sooner approve `it` each time Codex asks.'
+  'As it is set, Codex gives the commands its agent runs no network, and `it` needs it to reach It on this machine: Codex would fail to make its first page.\nTo let it, add these two lines to `~/.codex/config.toml` and start Codex again:\n    [sandbox_workspace_write]\n    network_access = true\nYou need not if you run Codex with full access, or would sooner approve `it` each time Codex asks.'
+/** The same in one line, for where a line is all there is room for. */
+export const CODEX_NO_NETWORK_SHORT =
+  'As it is set, Codex gives the commands its agent runs no network, and `it` needs it: add `network_access = true` under `[sandbox_workspace_write]` in `~/.codex/config.toml` and start Codex again, unless you run Codex with full access.'
 
 /** What the person still has to do themselves once an add-on is in, if anything. Shown once, by `it setup`. */
 export const AFTER: Partial<Record<Harness, string>> = {
@@ -915,10 +916,7 @@ export const AFTER: Partial<Record<Harness, string>> = {
   },
   opencode: 'Restart OpenCode: it reads its plugins when it starts.',
   pi: 'Restart Pi, or run /reload in it.',
-  get codex() {
-    const hooks = 'Start Codex once and choose "Trust all and continue" when it says the hooks need review.'
-    return codexLetsItOut() === false ? `${hooks} ${CODEX_NO_NETWORK}` : hooks
-  },
+  codex: 'Start Codex once and choose "Trust all and continue" when it says the hooks need review.',
 }
 
 /**

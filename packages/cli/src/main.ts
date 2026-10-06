@@ -66,6 +66,7 @@ import * as service from './service'
 import {
   AFTER,
   CODEX_NO_NETWORK,
+  CODEX_NO_NETWORK_SHORT,
   codexLetsItOut,
   detectAll,
   disconnect,
@@ -101,8 +102,9 @@ function appsSaid(found: HarnessStatus[], advise = true): string[] {
   const lines = found.map((h) => {
     const app = KNOWN[h.id].label
     // Said each time it is asked for as long as it is so: the first thing a Codex user would otherwise learn of it is a page that never appears
-    if (h.addon === 'connected') return h.id === 'codex' && codexLetsItOut() === false ? `${app} is connected. ${CODEX_NO_NETWORK}` : `${app} is connected.`
-    if (h.addon === 'needs_approval') return `${app} is connected, and one thing is left for you to do: ${h.detail}`
+    const shut = h.id === 'codex' && codexLetsItOut() === false ? ` ${CODEX_NO_NETWORK_SHORT}` : ''
+    if (h.addon === 'connected') return `${app} is connected.${shut}`
+    if (h.addon === 'needs_approval') return `${app} is connected, and ${shut ? 'two things are' : 'one thing is'} left for you to do: ${h.detail}${shut}`
     return `${app} is not connected${h.detail && h.addon !== 'not_connected' ? `: ${h.detail}` : '.'}`
   })
   if (advise && found.some((h) => h.addon === 'not_connected' && supported(h.id))) lines.push('Run `it setup` to choose which agent apps are connected.')
@@ -1067,6 +1069,9 @@ async function settingUpLed(a: Args) {
     else if (failed.length) apps.warn(`${on.map((h) => KNOWN[h.id].label).join(', ') || 'none'} connected`)
     else apps.done(on.length ? on.map((h) => KNOWN[h.id].label).join(', ') : 'none connected')
     for (const h of failed) left.push(`${KNOWN[h.id].label} could not be connected${h.detail ? `: ${h.detail}` : '.'}`)
+    // What decides whether Codex's first page appears at all is said by itself, and first
+    if (after.some((h) => h.id === 'codex' && (h.addon === 'connected' || h.addon === 'needs_approval')) && codexLetsItOut() === false)
+      left.push(`Codex: ${CODEX_NO_NETWORK}`)
     for (const h of after) {
       if (h.addon === 'needs_approval' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !connectedBefore.has(h.id)) left.push(`${KNOWN[h.id].label}: ${AFTER[h.id]}`)
@@ -1289,7 +1294,10 @@ async function settingUp(a: Args, joined: boolean) {
     }
     // A person is told in a sentence for each app what the JSON says of them to a program, before what is left for them to do
     if (forPerson(a)) tell(appsSaid(after, false))
-    // What the person still has to do themselves, for each harness that was just connected
+    // What the person still has to do themselves, for each harness that was just connected.
+    // What decides whether Codex's first page appears at all is said by itself, and first.
+    if (after.some((h) => h.id === 'codex' && (h.addon === 'connected' || h.addon === 'needs_approval')) && codexLetsItOut() === false)
+      say(`\nCodex: ${CODEX_NO_NETWORK}`)
     for (const h of after) {
       if (h.addon === 'needs_approval') say(`\n${KNOWN[h.id].label}: ${h.detail}`)
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !before.has(h.id)) say(`\n${KNOWN[h.id].label}: ${AFTER[h.id]}`)
