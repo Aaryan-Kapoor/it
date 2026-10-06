@@ -426,7 +426,7 @@ appendFileSync(path.join(here, 'calls.jsonl'), JSON.stringify({ app, args }) + '
 const hold = process.env.E2E_APPS_HOLD
 for (let waited = 0; hold && waited < 600 && existsSync(hold); waited++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
 if (app !== 'codex') process.exit(1)
-if (args[0] === '--version') console.log('codex-cli 0.159.0')
+if (args[0] === '--version') console.log('codex-cli 0.160.0')
 if (args[0] !== 'plugin') process.exit(0)
 const kept = path.join(process.env.CODEX_HOME ?? here, 'stand-in.json')
 let has = { from: null, added: false }

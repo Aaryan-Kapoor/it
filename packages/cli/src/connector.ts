@@ -20,7 +20,7 @@ import { conversationFolder, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
-import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexWroteAt, mayWake, NUDGE, STOPPED, WOKEN } from './wake'
+import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexHeld, mayWake, STOPPED, WOKEN } from './wake'
 
 /** A click as the backend offers it: its data as JSON text, and the conversation it is for. */
 interface Offered {
@@ -80,9 +80,6 @@ const RUNS_AT_ONCE = 3 // and how many conversations are reopened and running at
 const WAKE_RATE = { most: 10, everyMs: 20_000 }
 const WAKE_RATE_UNATTENDED = { most: 3, everyMs: 5 * 60_000 }
 const WAKE_RATE_MACHINE = { most: 30, everyMs: 10_000 }
-/** How long Codex is given to take a queued message by itself, and how long it must have written nothing of the conversation, before the conversation is taken to be closed. */
-const CODEX_GRACE_MS = 4_000
-const CODEX_QUIET_MS = 45_000
 /** How long Claude Code must have written nothing of a conversation that is not listening before it is taken to be closed and not at work in a window It cannot see into. */
 const CLAUDE_QUIET_MS = 20_000
 /**
@@ -348,7 +345,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const s = sessions.get(key)
     return s?.busy === true && now - s.busyAt < TURN_QUIET_MS
   }
-  const queueTries = new Map<string, { n: number; at: number }>()
+  const queueTries = new Map<string, { n: number; at: number; reopening: boolean }>()
   /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
   const queues = new Map<string, Promise<void>>()
   const unconfirmed = queuedButUnconfirmed()
@@ -424,8 +421,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** For each conversation, the click that failed and is waiting to be tried again: nothing behind it goes first. */
   const stalled = new Map<string, string>()
   const stalledAt = new Map<string, number>()
-  /** Whether an app has a queue of its own, which takes a click whether or not its conversation is open. Any other is reopened with the click itself. */
-  const queued = (harness: string) => (QUEUES as readonly string[]).includes(harness)
   /** The conversations this machine has reopened and that are running now, each with the way to stop it. */
   const reopenedNow = new Map<string, AbortController>()
   /** Whether this connector is stopping: what it reopened is then ended with it, and is not taken for something a person stopped. */
@@ -531,55 +526,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const ours = ranUntil.get(follow(keyOf(session.harness, session.id)))
     return ours === undefined || wrote > ours + 3000
   }
-  const nudges = new Map<string, ReturnType<typeof setTimeout>>()
-  /**
-   * Codex took a click into its queue. A conversation that is open takes it from there by
-   * itself, and one that is closed does not until it is opened. So where the person has
-   * switched reopening on, the conversation is looked at a little later, and reopened if Codex
-   * has written nothing of it since: reopened, it takes what is in its queue.
-   */
-  function nudgeLater(session: { harness: string; id: string }, since: number, wait = CODEX_GRACE_MS): void {
-    const key = follow(keyOf(session.harness, session.id))
-    if (nudges.has(key)) return
-    const t = setTimeout(() => {
-      nudges.delete(key)
-      void nudge(session, key, since).catch((err) => say(`reopening: ${why(err)}`))
-    }, wait)
-    t.unref?.()
-    nudges.set(key, t)
-  }
-  async function nudge(session: { harness: string; id: string }, key: string, since: number): Promise<void> {
-    const now = Date.now()
-    if (!wakesNow.has(session.harness) || !connected(session.harness) || reopenedNow.has(key)) return
-    // A turn its hooks tell of, or anything Codex wrote of the conversation since, says that it was taken
-    const s = sessions.get(key)
-    if (turnRunning(key, now) || (s !== undefined && s.seen > since)) return
-    const wrote = codexWroteAt(session.id)
-    if (wrote === null)
-      return void seldom(
-        `nudge:${key}`,
-        `whether a Codex conversation (${short(session.id)}) is open cannot be told, so it is not reopened: what was done waits in Codex’s queue`,
-      )
-    if (wrote > since) return
-    // Written of a moment ago, it may be open and at work on something long: it is looked at
-    // again once it is quiet. What this machine's own reopening of it wrote is not that.
-    const ours = ranUntil.get(key)
-    if (now - wrote < CODEX_QUIET_MS && (ours === undefined || wrote > ours + 3000)) return nudgeLater(session, since, CODEX_QUIET_MS - (now - wrote) + 1000)
-    if (!room(key, true, true)) return nudgeLater(session, since, WAKE_RATE.everyMs)
-    await withRunSlot(async () => {
-      const refused = await carry(session, NUDGE)
-      if (refused === STOPPED) say(`a Codex conversation (${short(session.id)}) was stopped by the person`)
-      else if (refused !== null) {
-        say(`a Codex conversation (${short(session.id)}) was not reopened (${refused}); what was done waits in Codex’s queue`)
-        notReopened(session, refused)
-      }
-    })
-  }
-  async function queueNow(click: Offered): Promise<void> {
+  /** The id Codex knows a conversation by now: the one it carries on under, if it was cleared. */
+  const threadOf = (key: string) => key.slice(key.indexOf(':') + 1)
+  async function queueNow(click: Offered, reopening: boolean): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
     const line = click.session!.id
     const harness = click.session!.harness
-    const reopening = !queued(harness)
     // What the route is called where it is written down: Codex's own queue, or the reopening of a conversation that was closed
     const route = reopening ? 'the reopening of its conversation' : 'Codex’s queue'
     const key = follow(keyOf(harness, line))
@@ -608,6 +560,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!connected(harness)) return
       // Nor is a conversation reopened once the person has switched that off, or more often than it may be
       if (reopening && (!wakes(harness, click.at) || !room(key, someoneThere(click)))) return
+      // Codex's queue is for a conversation some Codex has open. One that was closed while this
+      // click stood in line is not given it: the click is looked at afresh on the next pass.
+      if (!reopening && !codexHeld(threadOf(key))) return
       // Only if it is still for this conversation on this machine: the page may have changed
       // hands while the click stood in line here
       const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session! })
@@ -659,7 +614,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       const refused = reopening
         ? // Given on the command's input, where nobody else on the machine reads it, so in full
           await carry(click.session!, `${WOKEN}\n\n${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}`)
-        : await codexQueue(line, describeClick(asClick(click), 0))
+        : await codexQueue(threadOf(key), describeClick(asClick(click), 0))
       // A conversation the person stopped had what was done all the same: it is handed over,
       // and nothing is tried again for it
       // Ended because this connector is stopping, it is given back, to be reopened for by the
@@ -694,12 +649,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
           behindTurn.set(click.id, { click, key })
           if (behindTurn.size > 200) behindTurn.delete(behindTurn.keys().next().value!)
         }
-        // A closed conversation takes nothing from Codex's queue until it is opened
-        if (!reopening && wakes(harness, click.at)) nudgeLater(click.session!, Date.now())
         await confirmAll()
       } else {
         const n = (queueTries.get(tag(click))?.n ?? 0) + 1
-        queueTries.set(tag(click), { n, at: Date.now() })
+        queueTries.set(tag(click), { n, at: Date.now(), reopening })
         stalled.set(line, click.id)
         stalledAt.set(click.id, Date.now())
         record('agent.woken', { result: n >= QUEUE_WAITS.length ? 'failed' : 'declined', agent: agentOf(harness) })
@@ -749,9 +702,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * False when it has to wait before it is tried again: the clicks behind it for the same
    * conversation then wait too, so that what was pressed first still arrives first.
    */
-  function queue(click: Offered): boolean {
-    const tried = queueTries.get(tag(click))
+  function queue(click: Offered, reopening: boolean): boolean {
+    let tried = queueTries.get(tag(click))
     if (queueing.has(click.id)) return true
+    // Tried one way and now to go the other: its conversation was closed and is open, or was
+    // open and is closed. What stood in the way of the one says nothing of the other, so it is
+    // tried at once, and nothing behind it waits out a pause that was for something else.
+    if (tried && tried.reopening !== reopening) {
+      queueTries.delete(tag(click))
+      tried = undefined
+    }
     // Its tries are used up and it is on offer again (the machine that had taken it let it
     // go): it is set aside again, and does not hold up its conversation's later clicks
     if (tried && tried.n >= QUEUE_WAITS.length) {
@@ -761,7 +721,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (queueing.size >= 50 || (tried && Date.now() - tried.at < QUEUE_WAITS[tried.n]!)) return false
     queueing.add(click.id)
     const key = click.session!.id
-    const next = (queues.get(key) ?? Promise.resolve()).then(() => (queued(click.session!.harness) ? withSlot : withRunSlot)(() => queueNow(click)))
+    const next = (queues.get(key) ?? Promise.resolve()).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening)))
     queues.set(key, next)
     void next.then(() => {
       if (queues.get(key) === next) queues.delete(key)
@@ -883,10 +843,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
             held.set(click.id, { click, key, claimedAt: now, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
             journal('claimed', click.id)
           }
-        } else if (codex && connected('codex')) {
-          // Route 2: Codex's own queue starts a turn when idle, or runs it after the current one.
-          // Not waited for here: one slow command must not hold up every other click.
-          if (!queue(click)) waitingBehind.add(key)
+        } else if (codex && connected('codex') && !reopenedNow.has(key) && codexHeld(threadOf(key))) {
+          // Route 2: some Codex has the conversation open, and takes a message from Codex's own
+          // queue by itself: at once when it is idle, after its turn when it is not. Not waited
+          // for here: one slow command must not hold up every other click. A conversation this
+          // machine is itself running is not given one that way: that run ends with its turn,
+          // and would cut off whatever Codex began for the message.
+          if (!queue(click, false)) waitingBehind.add(key)
         } else if (wakes(click.session.harness, click.at) && connected(click.session.harness)) {
           // Route 3: the conversation is not listening, which is to say closed, and the person
           // has switched on reopening for its agent app on this machine. It is reopened at once,
@@ -897,7 +860,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           if (now - click.at < SETTLE_MS) {
             waitingBehind.add(key)
             soon(SETTLE_MS - (now - click.at) + 10)
-          } else if (atWork(click.session, now) || !room(key, someoneThere(click)) || !queue(click)) waitingBehind.add(key)
+          } else if (atWork(click.session, now) || !room(key, someoneThere(click)) || !queue(click, true)) waitingBehind.add(key)
         }
         // Route 4: nothing to do. The click stays waiting and the site shows it.
       }
@@ -1366,7 +1329,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // started: nothing It runs with nobody watching runs on once It has been stopped. What each
   // was reopened for is given back, and is reopened for again when It next starts.
   closing = true
-  for (const t of nudges.values()) clearTimeout(t)
   for (const run of reopenedNow.values()) run.abort()
   // What is held goes back, and what was handed over is confirmed, all at once and for a few
   // seconds at most: whoever asked this program to stop will not wait long, and anything not

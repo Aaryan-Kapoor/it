@@ -451,7 +451,7 @@ describe('what a program a run starts is given', () => {
       const from = path.join(dir, 'an add-on')
       mkdirSync(from, { recursive: true })
       expect([asked('claude', '--version'), asked('claude', 'plugin', 'list', '--json')]).toEqual(['failed (1)', 'failed (1)'])
-      expect(asked('codex', '--version')).toBe('codex-cli 0.159.0')
+      expect(asked('codex', '--version')).toBe('codex-cli 0.160.0')
       expect(asked('codex', 'plugin', 'list', '--marketplace', 'it')).toBe('No plugins.')
       // Nothing is added from a place that was never named
       expect(asked('codex', 'plugin', 'add', 'it-bridge@it')).toBe('failed (1)')
@@ -496,7 +496,7 @@ describe('what a program a run starts is given', () => {
       expect([appCalls().length, said]).toEqual([1, ''])
       rmSync(keepsIt)
       expect(await ended).toBe(0)
-      expect(said.trim()).toBe('codex-cli 0.159.0')
+      expect(said.trim()).toBe('codex-cli 0.160.0')
     },
   )
 })

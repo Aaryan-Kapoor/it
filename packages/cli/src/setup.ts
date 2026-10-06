@@ -44,7 +44,8 @@ interface Known {
 }
 export const KNOWN: Record<Harness, Known> = {
   'claude-code': { label: 'Claude Code', bin: 'claude', min: '2.1.287' },
-  codex: { label: 'Codex', bin: 'codex', min: '0.159.0' },
+  // 0.160.0 is the first that says which conversations are open (see `codexHeld`), which is how a click knows whether Codex's queue will take it
+  codex: { label: 'Codex', bin: 'codex', min: '0.160.0' },
   openclaw: { label: 'OpenClaw', bin: 'openclaw', min: '2026.9.6' },
   hermes: { label: 'Hermes Agent', bin: 'hermes', min: '0.20.1' },
   opencode: { label: 'OpenCode', bin: 'opencode', min: '1.18.32' },

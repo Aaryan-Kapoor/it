@@ -32,7 +32,7 @@ It has add-ons for Claude Code, Codex, Pi, OpenCode, Hermes Agent and OpenClaw, 
 | Agent app | The oldest version `it setup` installs into |
 |---|---|
 | Claude Code | 2.1.287 |
-| Codex | 0.159.0 |
+| Codex | 0.160.0 |
 | Pi | 0.82.0 |
 | OpenCode | 1.18.32 |
 | Hermes Agent | 0.20.1 |

@@ -15,7 +15,7 @@
 // where CI is set or IT_E2E_NETWORK=1 says it may.
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, createHmac, generateKeyPairSync, randomBytes } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -3510,7 +3510,13 @@ try {
       new Set([...wentToAnAddOn, ...wentToAnAgent]).size === 6,
     JSON.stringify({ wentToAnAddOn, wentToAnAgent }),
   )
-  // Chosen, with no hook running, the click goes into Codex's own queue for that conversation
+  // Chosen, with no hook running, the click goes into Codex's own queue for that conversation.
+  // That queue is for a conversation some Codex has open, which Codex says with a file it keeps
+  // open for as long as the conversation is being written. This run stands in for that Codex.
+  const locks = path.join(process.env.IT_E2E_APPS, 'codex', 'thread-writer-locks')
+  mkdirSync(locks, { recursive: true })
+  writeFileSync(path.join(locks, `${thread}.lock`), '')
+  openSync(path.join(locks, `${thread}.lock`), 'r')
   const choseCodex = await chooses('codex')
   const queued = await until(() => queuedInCodex()[0], 25_000)
   const message = queued?.find((arg) => arg.startsWith('--message=')) ?? ''
@@ -3565,7 +3571,7 @@ try {
   })
   check(
     'the connector reports itself and what it found on the machine',
-    report?.harnesses?.some((h) => h.id === 'codex' && h.version === '0.159.0'),
+    report?.harnesses?.some((h) => h.id === 'codex' && h.version === '0.160.0'),
     JSON.stringify(report),
   )
   await page.goto(`${APP}/machines`)

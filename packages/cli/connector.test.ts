@@ -25,6 +25,14 @@ const stand = vi.hoisted(() => ({
   answer: null as null | ((name: string, args: any) => unknown),
   /** Every time Codex's own command was started, and how the test ends it. */
   codex: [] as { args: string[]; end: (err?: unknown) => void }[],
+  /** The Codex conversations that no Codex has open. Every other one is open somewhere, as it is in a window. */
+  closed: new Set<string>(),
+}))
+// Whether some Codex has a conversation open is read from Codex's own folder and from the system
+// (wake.test.ts tries that against real files). Here the test says which are closed.
+vi.mock('./src/wake', async (original) => ({
+  ...(await original<typeof import('./src/wake')>()),
+  codexHeld: (thread: string) => !stand.closed.has(thread),
 }))
 vi.mock('node:child_process', async (original) => ({
   ...(await original<typeof import('node:child_process')>()),
@@ -150,6 +158,7 @@ afterEach(async () => {
   stand.calls.length = 0
   said.length = 0
   stand.codex.length = 0
+  stand.closed.clear()
   stand.answer = null
   if (home) rmSync(home, { recursive: true, force: true })
   home = ''

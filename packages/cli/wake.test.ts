@@ -1,11 +1,11 @@
 // Reopening a conversation that was closed: the command Claude Code is run with, where it is
 // run, how the click is given to it, and the note of each conversation's folder that says where.
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
-import { Budget, carrying, carryOn, claudeModeOf, claudeResume, claudeWroteAt, codexWroteAt, mayWake, STOPPED, WOKEN } from './src/wake'
+import { Budget, carrying, carryOn, claudeModeOf, claudeResume, claudeWroteAt, codexHeld, codexWroteAt, mayWake, STOPPED, WOKEN } from './src/wake'
 
 let scratch: string
 let was: string | undefined
@@ -189,6 +189,40 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
   })
 })
 
+describe('whether some Codex has a conversation open', () => {
+  test('says so by the file Codex keeps for each conversation that is being written, and only while a program has that file open', () => {
+    const codexHome = path.join(scratch, 'codex-home')
+    const locks = path.join(codexHome, 'thread-writer-locks')
+    mkdirSync(locks, { recursive: true })
+    const lock = (thread: string) => path.join(locks, `${thread}.lock`)
+    // No Codex has ever had it open, or Codex has put its file away again
+    expect(codexHeld('thread-none', codexHome)).toBe(false)
+    // Open in some Codex: the file is there, and a program has it open (this one stands in for Codex)
+    writeFileSync(lock('thread-open'), '')
+    const held = openSync(lock('thread-open'), 'r')
+    try {
+      expect(codexHeld('thread-open', codexHome)).toBe(true)
+    } finally {
+      closeSync(held)
+    }
+    // Left behind by a Codex that was ended without warning: where the system says who has a file
+    // open, that is not taken for an open conversation. Elsewhere the file is all there is to go by.
+    writeFileSync(lock('thread-left'), '')
+    expect(codexHeld('thread-left', codexHome)).toBe(process.platform !== 'linux' && process.platform !== 'darwin')
+    // What was found is good for a moment only: closed a moment later, it is found closed
+    const t = Date.now()
+    writeFileSync(lock('thread-then'), '')
+    const then = openSync(lock('thread-then'), 'r')
+    expect(codexHeld('thread-then', codexHome, t)).toBe(true)
+    closeSync(then)
+    rmSync(lock('thread-then'))
+    expect(codexHeld('thread-then', codexHome, t + 500)).toBe(true)
+    expect(codexHeld('thread-then', codexHome, t + 2000)).toBe(false)
+    // An id that is not one Codex makes names no file at all
+    expect(codexHeld('../thread-open', codexHome)).toBe(false)
+  })
+})
+
 describe('how often a conversation is reopened', () => {
   test('so many at once, and then one more for each while that passes, never more than it holds', () => {
     const t = 1_800_000_000_000
@@ -297,6 +331,10 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     expect(WOKEN).toContain('Run `it` by that name alone')
     expect(WOKEN).toContain('`it notify`')
     expect(WOKEN).toContain('`it ack <action id> --failed`')
+    // It is not a rule that only `it` may run: a real agent once read an earlier wording as one, and refused its own work
+    expect(WOKEN).toContain('You can do here what you could do while they were with you')
+    expect(WOKEN).toContain('Try what the work needs before you conclude that you may not')
+    expect(WOKEN).not.toMatch(/not already allowed|is refused\. Run/)
   })
 })
 

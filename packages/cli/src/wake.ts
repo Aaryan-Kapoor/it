@@ -3,7 +3,7 @@
 // conversation may be reopened. None of it is done for an app the person has not switched
 // Auto-wake on for, which is the connector's to see to.
 import { execFileSync, spawn } from 'node:child_process'
-import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { WAKE_BACK_MS, WAKES } from '@it/protocol'
@@ -28,19 +28,19 @@ export function mayWake(switched: ReadonlyMap<string, number>, harness: string, 
 const APP: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi', opencode: 'OpenCode', hermes: 'Hermes', openclaw: 'OpenClaw' }
 
 /**
- * What a conversation is told when It reopens it, before what was done on its page: that nobody
- * is there to approve anything, how `it` is to be run so that it is not refused, and what to do
- * where the thing cannot be done, which is to say so where the person will see it. A woken
- * conversation that is refused a command and says so only in its own reply has told nobody.
+ * What a conversation is told when It reopens it, before what was done on its page: that it can
+ * do what it could do with the person there, that nobody is there to answer or approve, how `it`
+ * is run so that it is never held for approval, and what to do where a command is in fact
+ * refused, which is to say so where the person will see it. A woken conversation that is
+ * refused a command and says so only in its own reply has told nobody.
+ *
+ * It must not read as a rule that only `it` may run. An earlier wording did, to a real agent:
+ * "a command you are not already allowed to run is refused. Run `it` … it is allowed" had a
+ * woken Pi, which may run anything, decline three times to try anything else.
  */
 export const WOKEN =
-  '[It] It reopened this conversation for what follows, which someone did on a page of yours while it was closed. Nobody is watching, so nothing can be approved for you: a command you are not already allowed to run is refused. Run `it` by that name alone, with no folder in front of it and no `export` before it: it is on your PATH and is allowed. Do what was asked and nothing more, and show on the page that you have. If you cannot do it, say so where they will see it, with `it notify` or the page’s state, and run `it ack <action id> --failed`.'
+  '[It] It reopened this conversation for what follows, which someone did on a page of yours while it was closed. You can do here what you could do while they were with you: the same commands, run the same way. The one difference is that nobody is watching, so nobody can answer a question or approve anything. Run `it` by that name alone, with no folder in front of it and no `export` before it: it is on your PATH, and in that form it is never held for approval. Do what was asked and nothing more, and show on the page that you have. Try what the work needs before you conclude that you may not. Only if a command is in fact refused, say so where they will see it, with `it notify` or the page’s state, and run `it ack <action id> --failed`.'
 
-/** What a conversation is told when it is reopened only so that it takes what is waiting in its app's own queue. */
-export const NUDGE = WOKEN.replace(
-  'for what follows, which someone did on a page of yours while it was closed',
-  'for the message before this one, which is what someone did on a page of yours while it was closed',
-)
 
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
@@ -285,6 +285,78 @@ export class Budget {
     this.left--
     return true
   }
+}
+
+const heldAsked = new Map<string, { at: number; held: boolean }>()
+/**
+ * Whether some Codex on this machine has a conversation open: in its window, in an editor or
+ * another app that runs Codex, or for the minute after it was closed. Such a Codex takes a
+ * message from Codex's queue by itself, at once when it is idle and after its turn when it is
+ * not. One that nobody has open takes nothing until it is opened, and then only when a turn
+ * of it ends, so a message put in its queue would wait for that, and be cut off if the turn
+ * that ended was one this program ran.
+ *
+ * Codex lets one program at a time write a conversation, and says which conversations are
+ * being written with a file each: `thread-writer-locks/<id>.lock` in its folder, there for as
+ * long as the conversation is open in some Codex. A Codex that was ended without warning
+ * leaves its file behind, so where the system says who has a file open, that is asked too.
+ */
+export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), now = Date.now()): boolean {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(thread)) return false
+  const lock = path.join(codexHome, 'thread-writer-locks', `${thread}.lock`)
+  // Asked for every action that waits, on every pass: what was found is good for a moment
+  const asked = heldAsked.get(lock)
+  if (asked && now - asked.at < 1500) return asked.held
+  const held = existsSync(lock) && openSomewhere(lock) !== false
+  if (heldAsked.size > 500) heldAsked.clear()
+  heldAsked.set(lock, { at: now, held })
+  return held
+}
+
+/**
+ * Whether any program of this person's has a file open, as the system tells it. Null where it
+ * cannot be asked: the file being there is then all that is known.
+ */
+export function openSomewhere(file: string): boolean | null {
+  let real: string
+  try {
+    real = realpathSync(file)
+  } catch {
+    return false
+  }
+  if (process.platform === 'linux') {
+    let pids: string[]
+    try {
+      pids = readdirSync('/proc').filter((name) => /^\d+$/.test(name))
+    } catch {
+      return null
+    }
+    const me = process.getuid?.()
+    let looked = 0
+    for (const pid of pids) {
+      try {
+        if (me !== undefined && statSync(`/proc/${pid}`).uid !== me) continue
+        const dir = `/proc/${pid}/fd`
+        for (const fd of readdirSync(dir)) {
+          looked++
+          try {
+            if (readlinkSync(`${dir}/${fd}`) === real) return true
+          } catch {}
+        }
+      } catch {}
+    }
+    // Nothing of this person's could be looked into at all: that is not knowing, and is not "nobody"
+    return looked === 0 ? null : false
+  }
+  if (process.platform === 'darwin') {
+    try {
+      return execFileSync('lsof', ['-t', '--', real], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() !== ''
+    } catch (err) {
+      // lsof ends with 1 and prints nothing when nobody has the file open
+      return (err as { status?: number }).status === 1 ? false : null
+    }
+  }
+  return null
 }
 
 /**
