@@ -313,6 +313,8 @@ export type PageToSite =
   | { type: 'it:store'; requestId: string; key: string; value: unknown }
   /** The page's showing is over. The site shows the page again. */
   | { type: 'it:lapsed' }
+  /** The page's own script failed with this. The site says so above the page: left unsaid, a button that does nothing looks like an agent that does not answer. */
+  | { type: 'it:fault'; message: string }
 
 export type SiteToPage =
   | { type: 'it:state'; state: unknown; revision: number }

@@ -82,7 +82,18 @@ function jsonText(value: unknown, max: number): string {
   return text
 }
 
-export function Mount({ artifactId, title, user }: { artifactId: Id<'artifacts'>; title: string; user: string }) {
+export function Mount({
+  artifactId,
+  title,
+  user,
+  onFault,
+}: {
+  artifactId: Id<'artifacts'>
+  title: string
+  user: string
+  /** Told what the page's own script failed with, each time it says so. */
+  onFault?: (message: string) => void
+}) {
   const convex = useConvex()
   const frame = useRef<HTMLIFrameElement>(null)
   const [attempt, setAttempt] = useState(0)
@@ -93,6 +104,9 @@ export function Mount({ artifactId, title, user }: { artifactId: Id<'artifacts'>
   /** These outlive a remount, so a page cannot reset them by asking to be shown again. */
   const lastRemount = useRef(0)
   const failures = useRef(0)
+  /** Whoever is told of the page's faults now: kept apart from the channel, which is set up once for a showing. */
+  const told = useRef(onFault)
+  told.current = onFault
   const state = useQuery(api.state.get, { artifactId })
   const latest = useRef(state)
   latest.current = state
@@ -208,6 +222,11 @@ export function Mount({ artifactId, title, user }: { artifactId: Id<'artifacts'>
           lastRemount.current = Date.now()
           again()
         }
+        return
+      }
+      if (message.type === 'it:fault') {
+        // Only ever shown as text, and no more of it than fits a line
+        if (typeof message.message === 'string') told.current?.(message.message.replace(/\s+/g, ' ').slice(0, 200))
         return
       }
       if (message.type !== 'it:action' && message.type !== 'it:store') return

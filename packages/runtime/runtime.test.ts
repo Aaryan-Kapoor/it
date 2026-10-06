@@ -198,6 +198,24 @@ describe('the script inside a page', () => {
     expect(port.sent).toEqual([{ type: 'it:lapsed' }])
   })
 
+  test('what the page’s own script fails with is said to the site, the first few times, and a picture that did not load is not', async () => {
+    const p = load()
+    const port = p.answer()
+    const fails = (message: string) => p.w.dispatchEvent(new p.w.ErrorEvent('error', { message }))
+    fails('ReferenceError: yes is not defined')
+    expect(port.sent).toEqual([{ type: 'it:fault', message: 'ReferenceError: yes is not defined' }])
+    // Something that did not load raises an event with no message: no script failed
+    p.w.dispatchEvent(new p.w.Event('error'))
+    expect(port.sent.length).toBe(1)
+    // A promise nobody caught, with the error it was refused with
+    p.w.dispatchEvent(Object.assign(new p.w.Event('unhandledrejection'), { reason: new p.w.TypeError('move is not a function') }))
+    expect(port.sent[1]).toEqual({ type: 'it:fault', message: 'TypeError: move is not a function' })
+    // A script that fails over and over says so three times in all, and no message is longer than a line
+    for (let n = 0; n < 10; n++) fails('x'.repeat(1000))
+    expect(port.sent.length).toBe(3)
+    expect((port.sent[2] as { message: string }).message.length).toBe(300)
+  })
+
   test('a document the page frames inside itself has the page above it and not the site, and is given no port', async () => {
     // Its hello is for the site and reaches nobody: the page above it is a sandboxed document, with no origin for a message to be sent to
     const inner = load()

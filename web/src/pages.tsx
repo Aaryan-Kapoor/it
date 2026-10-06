@@ -182,6 +182,8 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
 export function PageView({ slug, user, owner }: { slug: string; user: string; owner: boolean }) {
   const page = useQuery(api.artifacts.get, { slug })
   const now = useNow()
+  /** What the page's own script last failed with, and which version of the page that was. */
+  const [fault, setFault] = useState<{ of: string; message: string } | null>(null)
   useEffect(() => {
     if (page) document.title = `${page.title} · It`
     return () => {
@@ -223,6 +225,12 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
             ))}
           </div>
         </div>
+        {/* The page's own script failed: said before anything else, since nothing done on it can be relied on to have been sent */}
+        {fault && fault.of === `${page.id}:${page.version}` && (
+          <span className="status" data-tone="bad" title={fault.message}>
+            This {NOUN.one} has an error in it, so it may not send what you do. Tell your agent: {fault.message}
+          </span>
+        )}
         {page.run ? (
           <Working artifactId={page.id as Id<'artifacts'>} stopping={page.run.stopping} />
         ) : (
@@ -256,7 +264,14 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
         <div className="page-frame-unavailable">This {NOUN.one} has nothing published yet.</div>
       ) : (
         // A new version is a new showing: the session a page gets is for one version only
-        <Mount key={`${page.id}:${page.version}`} artifactId={page.id as Id<'artifacts'>} title={page.title} user={user} />
+        <Mount
+          key={`${page.id}:${page.version}`}
+          artifactId={page.id as Id<'artifacts'>}
+          title={page.title}
+          user={user}
+          // Said of the version that failed, and of no other: a new version is a new page
+          onFault={(message) => setFault({ of: `${page.id}:${page.version}`, message })}
+        />
       )}
     </main>
   )

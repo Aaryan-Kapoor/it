@@ -185,6 +185,26 @@ setInterval(keep, 180_000)
 document.addEventListener('visibilitychange', keep)
 window.addEventListener('online', keep)
 
+// What the page's own script fails with is said to the site, which says it above the page. The
+// person cannot see a script fail: they see a button that does nothing, and take it for an
+// agent that does not answer. Only the first few are said: a script that fails on every
+// frame would otherwise say it sixty times a second.
+let faults = 0
+function fault(message: unknown): void {
+  if (faults >= 3) return
+  faults++
+  const text = typeof message === 'string' && message ? message : 'a script on this page failed'
+  send({ type: 'it:fault', message: text.slice(0, 300) })
+}
+window.addEventListener('error', (e) => {
+  // A picture or a stylesheet that did not load raises an event here too, with no message: that is not a script failing
+  if (e instanceof ErrorEvent && e.message) fault(e.message)
+})
+window.addEventListener('unhandledrejection', (e) => {
+  const why = (e as PromiseRejectionEvent).reason
+  fault(why instanceof Error ? `${why.name}: ${why.message}` : typeof why === 'string' ? why : undefined)
+})
+
 /** Something the person did. Resolves once It has accepted it; rejects if it was refused. */
 function action(name: string, data?: unknown): Promise<unknown> {
   if (!name) return Promise.reject(new Error('action(name): a name is required'))

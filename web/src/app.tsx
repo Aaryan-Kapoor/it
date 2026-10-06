@@ -673,8 +673,8 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
           {!owner && (path === '/machines' || path === '/displays') && (
             <p className="notice" role="status">
               <span>
-                This browser is paired as a screen, which can open every page and answer on it. {path === '/machines' ? 'Machines' : 'Displays'} is shown in a browser paired as
-                yours: run `it site` where It runs to pair one.
+                This browser is paired as a screen, which can open every page and answer on it. {path === '/machines' ? 'Machines' : 'Displays'} is shown in a
+                browser paired as yours: run `it site` where It runs to pair one.
               </span>
             </p>
           )}
