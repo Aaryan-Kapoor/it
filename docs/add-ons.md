@@ -15,8 +15,8 @@ An add-on is how what you do on a page gets back into the conversation that made
 A click is stored before anything tries to deliver it, and then tries these routes in order, stopping at the first that works:
 
 1. **The add-on, live.** The add-on inside the conversation that owns the page puts the click into it now, or at the agent's next step if it is busy.
-2. **The app's own queue**, where it has one. Codex has, and Codex's is the only queue It uses: the click arrives when the conversation is next idle or reopened.
-3. **Reopening the conversation**, where you have switched Auto-wake on for the agent app on that machine: [below](#a-conversation-that-has-been-closed) says how. A Codex conversation is reopened after route 2, so that it takes what is in its queue.
+2. **The app's own queue**, where it has one. Codex has, and Codex's is the only queue It uses. It is used for a conversation that some Codex on the machine has open, which takes a queued message by itself: at once when it is idle, and when its turn ends when it is not.
+3. **Reopening the conversation**, where you have switched Auto-wake on for the agent app on that machine: [below](#a-conversation-that-has-been-closed) says how. A Codex conversation that no Codex has open goes this way too, and nothing is put in its queue: a queued message would wait there until the conversation was opened and a turn of it had ended.
 4. **The inbox.** Everything else waits, in view: the site shows it, and the agent takes it with `it wait`.
 
 None of these routes is tried for an agent app you have not connected. A click on a page it made waits in the inbox.
@@ -55,7 +55,7 @@ With it on, a click for a conversation that is not listening is given at once to
 | Agent app | What It runs | What the conversation may do by itself |
 |---|---|---|
 | Claude Code | `claude --resume <id> --print` | What it could do the last time you had it open. It is reopened in the permission mode you last held the conversation in, where that mode asks nobody: one you held with full access, in T3 Code say, is reopened with full access. One you held in the mode that asks is reopened with `it` and whatever your own settings allow, and anything else it tries is refused |
-| Codex | `codex exec resume <id>`, after the click has gone into Codex's queue | Run in Codex's sandbox for a workspace, with the network allowed and It's own folder writable, which is what `it` needs. It can write in the conversation's folder and nowhere else |
+| Codex | `codex exec resume <id>` | Run in Codex's sandbox for a workspace, with the network allowed and It's own folder writable, which is what `it` needs. It can write in the conversation's folder and nowhere else |
 | Pi | `pi --print --session <id>` | Whatever it does in a window: Pi does not ask before it runs a command |
 | OpenCode | `opencode run --session <id>` | Whatever your OpenCode settings allow without asking |
 | Hermes Agent | `hermes chat --resume <id> --query-file -` | Whatever your Hermes settings allow without asking |
@@ -70,13 +70,13 @@ The command is started by It's background service, and so with the service's env
 
 **You can stop it.** While a conversation that It reopened is running, the bar above its page says "Working", with a small square beside it that stops the agent. The agent is ended at once, and so is any command it was in the middle of. What it had been asked stays in the conversation, as it does when you stop a turn in the app. What was waiting for it by then is not reopened for, and the next thing you do on the page reopens it as before. Any browser that can use the page can stop it. A machine cannot, so no agent stops another. Stopping It's service ends the conversations it reopened as well, and what they were reopened for is given back and reopened for again when It next starts.
 
-**Where it cannot be done, the page says so.** "Couldn’t wake" and the app's name, with the reason where you rest the pointer: the app was not found, its command ended with an error, the folder the conversation was held in is gone. It tries again a few times, further apart, and then leaves the click in the inbox. It knows which folder a conversation was held in from a note the `it` command keeps in `~/.it` each time the conversation publishes a page, and that note leaves the machine no more than anything else there does.
+**Where it cannot be done, the page says so.** "Couldn’t wake" and the app's name, with the reason where you rest the pointer: the app was not found, its command ended with an error, the folder the conversation was held in is gone. It tries again a few times, further apart, and then leaves the click in the inbox. It knows which folder a conversation was held in from a note kept in `~/.it`: the `it` command writes it each time the conversation publishes a page, and Codex's add-on says it with every turn, since Codex runs the agent's own commands where that folder cannot be written. The note leaves the machine no more than anything else there does.
 
-A conversation that is open in a window where It's add-on is not loaded looks closed to It. For Claude Code, one that wrote something in the last twenty seconds is left alone until it is quiet. For Codex, a conversation is reopened only once Codex has written nothing of it for forty-five seconds and has not taken the queued click by itself, which it does wherever the conversation is open, and for a while after its window is closed.
+A conversation that is open in a window where It's add-on is not loaded looks closed to It. For Claude Code, one that wrote something in the last twenty seconds is left alone until it is quiet. For Codex, It asks Codex's own record of which conversations are being written: one that a Codex has open anywhere on the machine (the terminal, the desktop app, an editor, T3 Code) is never reopened beside it, and Codex goes on holding a conversation for about a minute after its window is closed.
 
 ### Codex
 
-While a turn runs, the click is handed to the model at the next tool call, and the turn goes on with any click that arrived after the last one. When the conversation is idle, the click goes into Codex's own queue, which starts a turn with it.
+While a turn runs, the click is handed to the model at the next tool call, and the turn goes on with any click that arrived after the last one. When the conversation is open and idle, the click goes into Codex's own queue, which starts a turn with it. A click that arrives in the middle of a turn is said to be a separate one, so that a second press of a button is not taken for the first.
 
 Codex runs an agent's commands in a sandbox, and unless it is told otherwise that sandbox gives them no network. `it` reaches It over the network of your own machine, so in such a sandbox it cannot, and it says so: its answer has the code `blocked`, and says that It could not be asked from there. Either approve `it` to run outside the sandbox when Codex asks, or let commands in the sandbox use the network, with `sandbox_workspace_write.network_access = true` in Codex's `config.toml`.
 
@@ -86,7 +86,7 @@ The same add-on serves Codex in three places, and they differ in what happens to
 
 - **In the terminal.** A click reaches a busy conversation and an idle one.
 - **In the desktop app.** A click for an idle thread starts a turn by itself. A click for a busy thread waits in view there, with a Steer button, and runs by itself when the turn ends. Delivery in the middle of a turn is not proven in the desktop app.
-- **Inside T3 Code.** T3 Code closes a Codex session after 30 idle minutes. From then a click waits in Codex's own queue and runs the moment the thread is reopened, which means your next message there.
+- **Inside T3 Code.** T3 Code closes a Codex session after 30 idle minutes. From then the conversation is closed as far as It can tell: with Auto-wake on for Codex a click reopens it, and without it the click waits in the inbox and is handed over during the turn your next message there starts.
 
 ### T3 Code
 
@@ -133,7 +133,7 @@ A helper that the agent starts, and a run on a schedule, are given no conversati
 
 ## What It does not do
 
-- A conversation is reopened when it has been closed only on a machine where you have switched Auto-wake on for its agent app. Without that, a click for a closed conversation waits in the inbox, or in Codex's own queue.
+- A conversation is reopened when it has been closed only on a machine where you have switched Auto-wake on for its agent app. Without that, a click for a closed conversation waits in the inbox.
 - It does not use ACP, which cannot reach a conversation another program owns: the conversation It has to reach is the one you already have open.
 - It ships no MCP server, so it has no add-on for an agent app that could be reached only through one, such as Crush.
 - It builds no add-on on an agent app's undocumented API, or on an interface for add-ons that is not stable, which is why it has none for Copilot CLI.
