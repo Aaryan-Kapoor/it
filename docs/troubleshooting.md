@@ -83,3 +83,25 @@ A code pairs one browser, once, and works for ten minutes. An address from `it s
 `it status` says whether each agent app is connected. Where It is running and is not handing what is done on a page to the conversations on this machine, it says so, and `it service logs` says what it met. A click on a page whose agent app is not connected waits where the site shows it, and the agent takes it with `it wait`. [Agents](agents.md) says which agent apps a click reaches by itself, and where it waits.
 
 A display with the site open brings a page up when an agent asks it to. One whose browser is closed does not open by itself.
+
+The bar above a page says where the last thing you did has got to, and what it says tells you what to do:
+
+| The bar says | What it means | What to do |
+|---|---|---|
+| Sending… | It is on its way to It | Nothing |
+| Saved on this browser, not sent yet | This browser has no connection to It for the moment | Nothing. It is sent when the connection is back |
+| Can’t reach It | It has not answered for a few seconds: it is stopped, or this device has lost its network | Start It (`it status` on its machine says how it stands). What you did is kept and sent then |
+| Sent. Waiting for your agent | It has it, and is handing it to the agent | Nothing, for the first seconds |
+| Sent. … is busy, and gets it when it is free | The conversation is open and in the middle of something | Wait for its turn to end |
+| Sent. … is not listening: its conversation looks closed | Nothing on that machine was listening for it: the conversation is closed, or its app is not running | Open the conversation again, or press "Wake it" to have It reopen it for this and from now on |
+| Working | It reopened the conversation, and its agent is at work | Nothing. The square beside it stops the agent |
+| Couldn’t wake …, with a reason | It tried to reopen the conversation and could not: the reason follows | Put right what the reason names. It tries again by itself a few times |
+| Stopped | You stopped the agent. What was waiting for that conversation went with the stop | Do it again if you still want it |
+| Your agent has it | The agent was given it and has not changed the page since | Wait, or look at the conversation |
+| Done, or Your agent could not do that | The agent said so | |
+| This page has an error in it | The page's own script failed, with the words that follow | Tell your agent those words: it wrote the page |
+| Waiting for … to come online | The machine whose agent made the page has not been heard from | Start It on that machine |
+
+Once the agent has changed the page after what you did, the bar says nothing more: the answer is on the page.
+
+A page that a conversation made belongs to that conversation until another one makes it again or brings it up, so what you do on it goes to the agent you last asked to show it.
