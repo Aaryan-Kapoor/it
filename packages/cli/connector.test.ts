@@ -8,6 +8,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { conversationFolder } from './src/publish'
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
@@ -416,6 +417,64 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     // Its place came, and it was neither claimed nor given to Codex: the waiter takes it from It
     expect(called('delivery:claim')).not.toContain('click-3')
     expect(stand.codex.map((c) => c.args.find((a) => a.startsWith('--thread=')))).toEqual(['--thread=thread-0', '--thread=thread-1', '--thread=thread-2'])
+  })
+
+  test('one for a conversation no Codex has open is never put in Codex’s queue: it waits where the site shows it, unless the person has switched reopening on', async () => {
+    await start()
+    stand.closed.add('thread-1')
+    // Open somewhere, the other conversation's goes into the queue as before
+    offered(click(1), click(2))
+    await until(() => stand.codex.length === 1)
+    await settled()
+    expect(stand.codex.map((c) => c.args.find((a) => a.startsWith('--thread=')))).toEqual(['--thread=thread-2'])
+    // A message in the queue of a conversation nobody has open waits there until it is opened and a turn of it ends
+    expect(called('delivery:claim')).toEqual(['click-2'])
+    expect(stand.calls.filter((c) => c.name === 'machines:runBegan')).toEqual([])
+  })
+
+  test('the folder a Codex hook says its conversation is held in is noted, since Codex’s own commands cannot write it down', async () => {
+    await start()
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    try {
+      await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-7', folder } })
+      expect(conversationFolder({ harness: 'codex', id: 'thread-7' })).toBe(folder)
+      // What is no folder's whole address is not noted
+      await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-8', folder: 'some/where' } })
+      expect(conversationFolder({ harness: 'codex', id: 'thread-8' })).toBeUndefined()
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('with reopening switched on, a closed conversation is reopened with the click itself, and Codex’s queue is never used for it', async () => {
+    await start()
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    // It goes the way of every other app's: claimed, and the conversation's own command run in its
+    // folder. This machine was never told that conversation's folder, which is said in words and stops there.
+    await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'))
+    expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args).toMatchObject({
+      for: { harness: 'codex', id: 'thread-1' },
+      why: 'the folder its conversation was held in is not known on this machine, or is gone',
+    })
+    expect(stand.codex).toEqual([])
+    expect(said.some((line) => line.includes('was not taken by the reopening of its conversation'))).toBe(true)
+  })
+
+  test('a click whose reopening failed is put in Codex’s queue at once when its conversation is opened, without waiting out the pause', async () => {
+    await start()
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => stand.calls.some((c) => c.name === 'delivery:release'))
+    await settled()
+    expect(stand.codex).toEqual([])
+    // The person opens the conversation in Codex. The click is still on offer, and the pause before the next reopening has ten seconds to run.
+    stand.closed.clear()
+    offered(click(1))
+    await until(() => stand.codex.length === 1)
+    expect(stand.codex[0]!.args).toContain('--thread=thread-1')
   })
 
   test('one whose claim is answered after the waiter began is given back, and never reaches Codex', async () => {

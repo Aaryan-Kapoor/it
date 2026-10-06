@@ -16,7 +16,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson, QUEUES, WAKE_MOST, WAKES } from '@it/protocol'
 import { api, ask, call, enrolledHere, harnessEnv, home, inHome, live, Problem, readJson, VERSION, why, writePrivate } from './lib'
-import { conversationFolder } from './publish'
+import { conversationFolder, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
@@ -966,6 +966,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
         return [200, url.pathname === '/session' ? { ok: true } : { clicks: [] }]
       }
       const key = keyOf(harness, id)
+      // An add-on that can see which folder its conversation is held in says so, and it is noted
+      // here: where the app runs the agent's commands with It's folder shut to them (Codex does),
+      // the `it` that publishes a page cannot note it itself, and without it the conversation
+      // could never be reopened.
+      if (typeof body.folder === 'string' && body.folder.length <= 4096 && path.isAbsolute(body.folder)) noteConversation({ harness, id }, body.folder)
       const s = sessions.get(key) ?? { seen: 0, busy: false, busyAt: 0 }
       const isNew = Date.now() - s.seen > KNOWN_MS
       s.seen = Date.now()

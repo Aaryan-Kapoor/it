@@ -37,23 +37,31 @@ async function codex(): Promise<void> {
       writeFileSync(seen, '')
     }
   } catch {}
+  // The folder the conversation is held in is said with everything the connector is told.
+  // Codex runs the agent's own commands where It's folder cannot be written, so the `it` that
+  // publishes a page there cannot note it, and a conversation whose folder is not known is
+  // never reopened.
+  const from = { harness: 'codex', session, ...(typeof ev.cwd === 'string' && path.isAbsolute(ev.cwd) ? { folder: ev.cwd } : {}) }
   if (event === 'SessionStart') {
-    await local('/session', { method: 'POST', body: { harness: 'codex', session } })
+    await local('/session', { method: 'POST', body: from })
     return
   }
   if (event === 'UserPromptSubmit') {
-    await local('/session', { method: 'POST', body: { harness: 'codex', session, busy: true } })
+    await local('/session', { method: 'POST', body: { ...from, busy: true } })
     return
   }
   const got = await local<{ clicks: Delivered[] }>(`/clicks?harness=codex&session=${encodeURIComponent(session)}`, {
     method: 'POST',
-    body: { harness: 'codex', session, busy: true },
+    body: { ...from, busy: true },
   })
   if (!got?.clicks.length) {
-    if (event === 'Stop') await local('/session', { method: 'POST', body: { harness: 'codex', session, busy: false } })
+    if (event === 'Stop') await local('/session', { method: 'POST', body: { ...from, busy: false } })
     return
   }
-  const text = got.clicks.map((c) => c.text).join('\n')
+  // It arrives in the middle of what the agent is doing, and may well read like the very thing
+  // it is doing (a second press of the same button). Said to be another, it is answered as another.
+  const several = got.clicks.length > 1
+  const text = `[It] ${several ? 'These arrived' : 'This arrived'} while you were working. ${several ? 'Each is a separate action with an id of its own' : 'It is a separate action with an id of its own'}, to be answered as well as what you were already doing, and not instead of it:\n${got.clicks.map((c) => c.text).join('\n')}`
   // Said first, then confirmed: if this process dies in between, the click is offered again,
   // and its id in the text lets the agent see that it is the same one
   written(
