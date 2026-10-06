@@ -1504,8 +1504,8 @@ describe('clicks and their delivery', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     const first = (await click('click-new-0001')).actionId
     const second = (await click('click-new-0002')).actionId
-    // The oldest two of what may be reopened for, in the order they were made
-    expect(await offered()).toEqual([recent, first])
+    // All of what may be reopened for, in the order it was done: one reopening carries it all
+    expect(await offered()).toEqual([recent, first, second])
     await m.as.mutation(api.delivery.claim, { ids: [recent as never], for: SESSION })
     await m.as.mutation(api.delivery.handedOff, { id: recent as never, route: 'queue' })
     expect(await offered()).toEqual([first, second])
@@ -1514,6 +1514,77 @@ describe('clicks and their delivery', () => {
     // Switched off, nothing is offered for reopening again
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: false })
     expect(await offered()).toEqual([])
+  })
+
+  test('one reopening is offered all that waits for a conversation, up to a few, and Codex’s queue is offered its two whatever is switched on', async () => {
+    const { alice, m, click } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    const made: string[] = []
+    for (let i = 0; i < 11; i++) made.push((await click(`click-many-${String(i).padStart(4, '0')}`)).actionId)
+    expect((await inbox(m, [], ['claude-code'])).map((c) => c.id)).toEqual(made.slice(0, 8))
+    // Codex's clicks go to its own queue, switched on or not, the oldest two of a conversation at a time
+    const codex = await publish(m, 'sketch', { session: { harness: 'codex', id: 'thr-1' } })
+    const queued: string[] = []
+    for (let i = 0; i < 4; i++)
+      queued.push(
+        (
+          await alice.browser.mutation(api.actions.submit, {
+            artifactId: codex.artifactId,
+            displayKey: displayKey('alice'),
+            envelope: envelope(`click-codex-${String(i).padStart(4, '0')}`),
+          })
+        ).actionId,
+      )
+    expect((await inbox(m, [], ['codex'])).map((c) => c.id)).toEqual(queued.slice(0, 2))
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: true })
+    expect((await inbox(m, [], ['codex'])).map((c) => c.id)).toEqual(queued.slice(0, 2))
+  })
+
+  test('a reopened conversation is said to be running for as long as its machine says so, and anyone who can use the page can stop it: what was waiting by then is not reopened for', async () => {
+    const { t, alice, m, p, click } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    const onPage = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).run
+    const offered = async () => (await inbox(m, [], ['claude-code'])).map((c) => c.id)
+    expect(await onPage()).toBeNull()
+    // Nothing is running, so there is nothing to stop
+    expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: false })
+    const first = (await click('click-run-0001')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [first as never], for: SESSION })
+    const began = Date.now()
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    expect(await onPage()).toEqual({ since: began, stopping: false })
+    expect((await m.as.query(api.machines.me, {})).runs).toEqual([{ harness: 'claude-code', sessionId: 'sess-1', since: began }])
+    // Said twice, it is one run
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    expect((await m.as.query(api.machines.me, {})).runs.length).toBe(1)
+    await vi.advanceTimersByTimeAsync(5000)
+    const waiting = (await click('click-run-0002')).actionId
+    expect(await offered()).toEqual([waiting])
+    // A screen can stop it, as it can click
+    const screen = await paired(t, 'alice', 'screen', displayKey('screen'))
+    expect(await screen.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+    expect(await onPage()).toMatchObject({ stopping: true })
+    expect((await m.as.query(api.machines.me, {})).runs).toMatchObject([{ harness: 'claude-code', sessionId: 'sess-1', stop: true }])
+    // What was waiting when it was stopped is not reopened for, and is still there for a conversation that is open
+    expect(await offered()).toEqual([])
+    expect((await inbox(m)).map((c) => c.id)).toEqual([waiting])
+    await m.as.mutation(api.machines.runEnded, { for: SESSION })
+    expect(await onPage()).toBeNull()
+    expect(await offered()).toEqual([])
+    // What is done after it reopens the conversation as before
+    await vi.advanceTimersByTimeAsync(1000)
+    const next = (await click('click-run-0003')).actionId
+    expect(await offered()).toEqual([next])
+    // A machine with nothing named says that nothing it reopened is running
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    await m.as.mutation(api.machines.runEnded, {})
+    expect((await m.as.query(api.machines.me, {})).runs).toEqual([])
+    // Another person can stop nothing of it, and a machine cannot stop for a person
+    const bob = await person(t, 'bob')
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    expect(await code(bob.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId }))).toBe('not_found')
+    expect(await code(m.as.mutation(api.artifacts.stop, { artifactId: p.artifactId }))).toBe('forbidden')
+    expect(await onPage()).toMatchObject({ stopping: false })
   })
 
   test('clicks that were set aside, or are another machine’s, never hide one a listening machine may take', async () => {
@@ -2251,7 +2322,7 @@ describe('displays and machines', () => {
     const m = await machineOf(t, 'alice')
     const other = await machineOf(t, 'alice', 'desktop')
     await publish(m, 'plan', { session: { harness: 'claude-code', id: 'c-1' } })
-    await publish(m, 'sketch', { session: { harness: 'codex', id: 'x-1' } })
+    await publish(m, 'sketch', { session: { harness: 'openclaw', id: 'x-1' } })
     await publish(m, 'note')
     const onPage = async (slug: string) => (await alice.browser.query(api.artifacts.get, { slug })).wake
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
@@ -2285,7 +2356,7 @@ describe('displays and machines', () => {
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
     expect(await code(m.as.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true }))).toBe('forbidden')
-    for (const harness of ['codex', 'pi', 'made-up'])
+    for (const harness of ['openclaw', 'hermes', 'made-up'])
       expect(await code(alice.browser.mutation(api.machines.wake, { machineId: m.id, harness, on: true }))).toBe('invalid')
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
   })

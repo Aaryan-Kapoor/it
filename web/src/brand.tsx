@@ -70,6 +70,12 @@ export const IconX = () => (
   </svg>
 )
 
+export const IconStop = () => (
+  <svg viewBox="0 0 24 24" width="9" height="9" aria-hidden="true">
+    <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" />
+  </svg>
+)
+
 /** Puts text on the clipboard, and says whether it got there. */
 export async function copy(text: string): Promise<boolean> {
   try {

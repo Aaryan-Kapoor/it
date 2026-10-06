@@ -1,11 +1,11 @@
 // Reopening a conversation that was closed: the command Claude Code is run with, where it is
 // run, how the click is given to it, and the note of each conversation's folder that says where.
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { claudeResume, mayWake } from './src/connector'
 import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
+import { Budget, carrying, carryOn, claudeResume, codexWroteAt, mayWake, STOPPED } from './src/wake'
 
 let scratch: string
 let was: string | undefined
@@ -81,7 +81,7 @@ describe('whether a closed conversation may be reopened for a click', () => {
   })
 
   test('never for an app It has no way to reopen, whatever is written down for it', () => {
-    for (const harness of ['codex', 'openclaw', 'pi', 'made-up']) expect(mayWake(new Map([[harness, at]]), harness, at + MINUTE)).toBe(false)
+    for (const harness of ['openclaw', 'hermes', 'made-up']) expect(mayWake(new Map([[harness, at]]), harness, at + MINUTE)).toBe(false)
   })
 
   test('for what was done from about the moment it was switched on, and not for all that had been waiting before', () => {
@@ -91,6 +91,107 @@ describe('whether a closed conversation may be reopened for a click', () => {
     expect(mayWake(on, 'claude-code', at - 24 * 60 * MINUTE)).toBe(true)
     expect(mayWake(on, 'claude-code', at - 24 * 60 * MINUTE - 1)).toBe(false)
     expect(mayWake(on, 'claude-code', at - 30 * 24 * 60 * MINUTE)).toBe(false)
+  })
+})
+
+describe('the command each agent app is carried on with', () => {
+  const has = { codex: ['codex'], itHome: '/home/someone/.it' }
+  const UUID = '3f6c2f0e-1a2b-4c3d-9e8f-000000000001'
+
+  test('each is the app’s own command for a conversation named by its id, with the message on its input and never among its words', () => {
+    const said = 'the page sent: approve {"secret":"s3cret"}'
+    const all = {
+      'claude-code': carrying('claude-code', UUID, said, has),
+      codex: carrying('codex', '01a10f7c-062c-7010-8d57-8e1007169551', said, has),
+      pi: carrying('pi', UUID, said, has),
+      opencode: carrying('opencode', 'ses_6f2a9c01ffe4', said, has),
+    }
+    for (const how of Object.values(all)) {
+      if (typeof how === 'string') throw new Error(how)
+      expect(how.input).toBe(said)
+      expect(how.argv.join(' ')).not.toContain('s3cret')
+    }
+    expect((all['claude-code'] as { argv: string[] }).argv).toEqual(['claude', '--resume', UUID, '--print', '--allowedTools', 'Bash(it:*)'])
+    expect((all.pi as { argv: string[] }).argv).toEqual(['pi', '--print', '--session', UUID])
+    expect((all.opencode as { argv: string[] }).argv).toEqual(['opencode', 'run', '--session', 'ses_6f2a9c01ffe4'])
+    // Codex in its sandbox for a workspace, with the network and It's own folder, which is what `it` needs, and nothing bypassed
+    const codex = (all.codex as { argv: string[] }).argv
+    expect(codex.slice(0, 3)).toEqual(['codex', 'exec', 'resume'])
+    expect(codex).toContain('sandbox_mode="workspace-write"')
+    expect(codex).toContain('sandbox_workspace_write.network_access=true')
+    expect(codex).toContain('sandbox_workspace_write.writable_roots=["/home/someone/.it"]')
+    expect(codex.slice(-2)).toEqual(['01a10f7c-062c-7010-8d57-8e1007169551', '-'])
+    expect(codex.join(' ')).not.toMatch(/bypass|danger/)
+  })
+
+  test('an id of a shape the app does not make is never put on its command line, and an app with no such command has none', () => {
+    for (const [harness, ids] of Object.entries({
+      'claude-code': ['--dangerously-skip-permissions', 'abc', ''],
+      codex: ['--dangerously-bypass-approvals-and-sandbox', '-c', 'a b', ''],
+      pi: ['--no-session', '-p', 'x', ''],
+      opencode: ['--auto', 'ses_', 'ses_a b', 'session', ''],
+    }))
+      for (const id of ids) expect(carrying(harness, id, 'x', has), `${harness} ${id}`).toMatch(/conversation id is not one/)
+    expect(carrying('openclaw', 'main', 'x', has)).toMatch(/no way to reopen/)
+    expect(carrying('codex', 'thr-1', 'x', { codex: null, itHome: '/x' })).toBe('Codex was not found')
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('a reopened conversation that is stopped', () => {
+  test('is ended at once, says that it was stopped, and is not taken for a failure', async () => {
+    const command = path.join(scratch, 'slow')
+    writeFileSync(command, '#!/bin/sh\ncat > /dev/null\nsleep 30\n')
+    chmodSync(command, 0o755)
+    const stop = new AbortController()
+    const began = Date.now()
+    const ran = carryOn({ argv: [command], input: 'a click', app: 'Claude Code' }, scratch, { harness: 'claude-code', session: 'x' }, { signal: stop.signal })
+    setTimeout(() => stop.abort(), 300)
+    expect(await ran).toBe(STOPPED)
+    expect(Date.now() - began).toBeLessThan(5000)
+    // One that was stopped before it began is never started
+    expect(
+      await carryOn({ argv: [path.join(scratch, 'never')], input: '', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, { signal: stop.signal }),
+    ).toBe(STOPPED)
+  })
+})
+
+describe('how often a conversation is reopened', () => {
+  test('so many at once, and then one more for each while that passes, never more than it holds', () => {
+    const t = 1_800_000_000_000
+    const b = new Budget(3, 20_000, t)
+    expect([b.take(t), b.take(t), b.take(t), b.take(t)]).toEqual([true, true, true, false])
+    expect(b.has(t + 19_999)).toBe(false)
+    expect(b.take(t + 20_000)).toBe(true)
+    expect(b.take(t + 20_001)).toBe(false)
+    // A long while later it holds what it holds, and no more
+    const later = t + 24 * 60 * 60_000
+    expect([b.take(later), b.take(later), b.take(later), b.take(later)]).toEqual([true, true, true, false])
+    // What is left of a while is kept toward the next one
+    const c = new Budget(1, 10_000, t)
+    c.take(t)
+    expect(c.has(t + 9_000)).toBe(false)
+    expect(c.take(t + 10_000)).toBe(true)
+    expect(c.has(t + 19_000)).toBe(false)
+    expect(c.has(t + 20_000)).toBe(true)
+  })
+})
+
+describe('when Codex last wrote of a conversation', () => {
+  test('is read from the file Codex keeps of it, wherever among its days that is, and is not known where there is none', () => {
+    const codexHome = path.join(scratch, 'codex')
+    const day = path.join(codexHome, 'sessions', '2026', '10', '05')
+    mkdirSync(day, { recursive: true })
+    mkdirSync(path.join(codexHome, 'sessions', '2026', '10', '06'), { recursive: true })
+    const thread = '01a10f7c-062c-7010-8d57-8e1007169551'
+    const file = path.join(day, `rollout-2026-10-05T10-00-00-${thread}.jsonl`)
+    writeFileSync(file, '{}\n')
+    utimesSync(file, 1_791_000_000, 1_791_000_000)
+    expect(codexWroteAt(thread, codexHome)).toBe(1_791_000_000_000)
+    utimesSync(file, 1_791_000_500, 1_791_000_500)
+    expect(codexWroteAt(thread, codexHome)).toBe(1_791_000_500_000)
+    expect(codexWroteAt('01a10f7c-0000-7010-8d57-000000000000', codexHome)).toBeNull()
+    expect(codexWroteAt('../../etc', codexHome)).toBeNull()
+    expect(codexWroteAt(thread, path.join(scratch, 'no-such-codex'))).toBeNull()
   })
 })
 

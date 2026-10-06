@@ -237,7 +237,10 @@ describe('what is said of an agent app on a machine', () => {
     watched['machines:list'] = [machine(Date.now(), found, ['claude-code', 'codex'])]
     const { Machines } = await import('./machines')
     await show(createElement(Machines))
-    expect(switches()).toEqual([['Auto-wake Claude Code', false]])
+    expect(switches()).toEqual([
+      ['Auto-wake Claude Code', false],
+      ['Auto-wake Codex', false],
+    ])
     await act(async () => host.querySelector<HTMLInputElement>('.wake-row input')!.click())
     expect(calls).toEqual(['machines:wake'])
     expect(asked).toEqual([{ machineId: 'machine-1', harness: 'claude-code', on: true }])
@@ -246,7 +249,10 @@ describe('what is said of an agent app on a machine', () => {
     // As the backend then says it is, and turned off the same way
     watched['machines:list'] = [machine(Date.now(), found, ['claude-code', 'codex'], ['claude-code'])]
     await show(createElement(Machines))
-    expect(switches()).toEqual([['Auto-wake Claude Code', true]])
+    expect(switches()).toEqual([
+      ['Auto-wake Claude Code', true],
+      ['Auto-wake Codex', false],
+    ])
     await act(async () => host.querySelector<HTMLInputElement>('.wake-row input')!.click())
     expect(asked.at(-1)).toEqual({ machineId: 'machine-1', harness: 'claude-code', on: false })
     await act(async () => root.unmount())

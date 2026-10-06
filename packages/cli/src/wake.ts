@@ -1,0 +1,256 @@
+// Reopening a conversation that has been closed: each agent app's own command for carrying a
+// conversation on without a window, how that command is run and stopped, and how often a
+// conversation may be reopened. None of it is done for an app the person has not switched
+// Auto-wake on for, which is the connector's to see to.
+import { spawn } from 'node:child_process'
+import { readdirSync, statSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { WAKE_BACK_MS, WAKES } from '@it/protocol'
+import { harnessEnv } from './lib'
+
+/** Why a reopened conversation ended, where a person stopped it. It is not a failure, and nothing is tried again for it. */
+export const STOPPED = 'it was stopped'
+
+/**
+ * Whether a closed conversation of an agent app may be reopened for a click made at a moment,
+ * given what the person has switched on for this machine and since when. Only an app It has a
+ * way to reopen, only where the person has switched that on for it, and only for what they did
+ * from about then on: what had been waiting longer is not all run at once the moment the
+ * switch is turned.
+ */
+export function mayWake(switched: ReadonlyMap<string, number>, harness: string, at: number): boolean {
+  const since = switched.get(harness)
+  return (WAKES as readonly string[]).includes(harness) && since !== undefined && at >= since - WAKE_BACK_MS
+}
+
+/** What each app is called where something is said of it. */
+const APP: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi', opencode: 'OpenCode', hermes: 'Hermes' }
+
+/** What a conversation is told when it is reopened only so that it takes what is waiting in its app's own queue. */
+export const NUDGE =
+  '[It] It reopened this conversation because someone used a page of yours while it was closed. What they did is in the message before this one. Nobody is watching: do what it asks and nothing more, and show on the page that you have.'
+
+/** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
+export interface Carrying {
+  argv: string[]
+  input: string
+  app: string
+}
+
+/**
+ * The command that carries one conversation of an agent app on with a message, or, as a string,
+ * why there is none for this conversation. The conversation's id came with the page, which is
+ * to say from whatever published it, and it is put on a command line: one of any other shape
+ * than the app itself makes is not put there, since the command would read a word that begins
+ * with dashes as an option of its own. The message is never put there: other users of the
+ * machine can read a command line, so it goes on the command's input.
+ *
+ * What the conversation may do by itself is, for each app, what the person's own settings for
+ * that app allow without asking, and running `it`:
+ *
+ * - Claude Code is told that `it` may run. Anything else is as its own settings have it.
+ * - Codex is run in its sandbox for a workspace, with the network allowed and It's own folder
+ *   writable, which is what `it` needs. It can write in the conversation's folder and nowhere
+ *   else, and nothing can ask the person for more, since they are not there.
+ * - Pi and OpenCode have no sandbox of their own, and run as they do in a window.
+ */
+export function carrying(
+  harness: string,
+  session: string,
+  text: string,
+  has: { codex?: string[] | null; itHome: string; command?: string },
+): Carrying | string {
+  const app = APP[harness] ?? harness
+  const odd = `its conversation id is not one ${app} would have made`
+  if (harness === 'claude-code') {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(session)) return odd
+    return { argv: [has.command ?? 'claude', '--resume', session, '--print', '--allowedTools', 'Bash(it:*)'], input: text, app }
+  }
+  if (harness === 'codex') {
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(session)) return odd
+    const codex = has.command ? [has.command] : has.codex
+    if (!codex) return 'Codex was not found'
+    return {
+      argv: [
+        ...codex,
+        'exec',
+        'resume',
+        '--skip-git-repo-check',
+        '-c',
+        'sandbox_mode="workspace-write"',
+        '-c',
+        'sandbox_workspace_write.network_access=true',
+        '-c',
+        `sandbox_workspace_write.writable_roots=[${JSON.stringify(has.itHome)}]`,
+        session,
+        '-',
+      ],
+      input: text,
+      app,
+    }
+  }
+  if (harness === 'pi') {
+    // Pi names a conversation with a UUID, and takes the whole of one or its beginning
+    if (!/^[0-9a-f][0-9a-f-]{7,63}$/i.test(session)) return odd
+    return { argv: [has.command ?? 'pi', '--print', '--session', session], input: text, app }
+  }
+  if (harness === 'opencode') {
+    if (!/^ses_[A-Za-z0-9]{1,120}$/.test(session)) return odd
+    return { argv: [has.command ?? 'opencode', 'run', '--session', session], input: text, app }
+  }
+  return `It has no way to reopen a conversation of ${app}`
+}
+
+/**
+ * Runs a command that carries a conversation on, in the folder the conversation was held in,
+ * with its message on the command's input. Null when the command ran the turn. Otherwise why
+ * it did not, for the log, in this program's own words: never what the command printed, which
+ * may repeat the message. Stopped by the signal, it is ended and says so.
+ */
+export function carryOn(
+  how: Carrying,
+  cwd: string,
+  marks: { harness: string; session: string },
+  opts: { patience?: number; signal?: AbortSignal } = {},
+): Promise<string | null> {
+  const patience = opts.patience ?? 15 * 60_000
+  if (opts.signal?.aborted) return Promise.resolve(STOPPED)
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(how.argv[0]!, how.argv.slice(1), {
+        cwd,
+        env: { ...harnessEnv(), IT_HARNESS: marks.harness, IT_SESSION: marks.session },
+        stdio: ['pipe', 'ignore', 'ignore'],
+        windowsHide: true,
+      })
+    } catch {
+      return resolve(`${how.app} could not be started`)
+    }
+    let over = false
+    const end = (why: string | null) => {
+      if (over) return
+      over = true
+      clearTimeout(timer)
+      clearTimeout(harder)
+      opts.signal?.removeEventListener('abort', stop)
+      resolve(why)
+    }
+    let harder: ReturnType<typeof setTimeout> | undefined
+    let stopped = false
+    // Asked to end, and ended for it a few seconds later if it has not: a turn that is stopped stops
+    const quit = () => {
+      child.kill('SIGTERM')
+      harder = setTimeout(() => child.kill('SIGKILL'), 5000)
+      harder.unref?.()
+    }
+    const stop = () => {
+      stopped = true
+      quit()
+    }
+    opts.signal?.addEventListener('abort', stop, { once: true })
+    const timer = setTimeout(() => {
+      quit()
+      end(`${how.app} had not finished in fifteen minutes`)
+    }, patience)
+    child.once('error', (err) => end((err as NodeJS.ErrnoException).code === 'ENOENT' ? `${how.app} was not found` : `${how.app} could not be started`))
+    child.once('exit', (code, signal) => end(stopped ? STOPPED : code === 0 ? null : `${how.app} exited with ${signal ?? code ?? 'an error'}`))
+    child.stdin?.on('error', () => {})
+    child.stdin?.end(how.input)
+  })
+}
+
+/**
+ * Reopens a Claude Code conversation that has been closed, with a click as what it is asked:
+ * Claude Code's own command for carrying a conversation on without a window, run in the folder
+ * the conversation was held in. Null when Claude Code ran the turn, and otherwise why it did not.
+ */
+export function claudeResume(session: string, cwd: string, text: string, command = 'claude', patience = 15 * 60_000): Promise<string | null> {
+  const how = carrying('claude-code', session, text, { itHome: '', command })
+  return typeof how === 'string' ? Promise.resolve(how) : carryOn(how, cwd, { harness: 'claude-code', session }, { patience })
+}
+
+/**
+ * How often something may be done: so many at once, and one more for each while that passes.
+ * A conversation that is used steadily is never held up by it, and one that is sent a great
+ * deal at once, by a person or by a page that sends by itself, is reopened a few times and then
+ * only as fast as this allows. Nothing is lost for it: what waits goes with the next reopening.
+ */
+export class Budget {
+  private left: number
+  private at: number
+  constructor(
+    private readonly most: number,
+    private readonly everyMs: number,
+    now = Date.now(),
+  ) {
+    this.left = most
+    this.at = now
+  }
+  private fill(now: number): void {
+    const more = Math.floor((now - this.at) / this.everyMs)
+    if (more <= 0) return
+    this.left = Math.min(this.most, this.left + more)
+    this.at = this.left === this.most ? now : this.at + more * this.everyMs
+  }
+  /** Whether there is room for one more now. */
+  has(now = Date.now()): boolean {
+    this.fill(now)
+    return this.left > 0
+  }
+  /** Uses one up. False, and nothing is used, when there is no room. */
+  take(now = Date.now()): boolean {
+    if (!this.has(now)) return false
+    this.left--
+    return true
+  }
+}
+
+/**
+ * When Codex last wrote anything of a conversation, by the file it keeps of each one, or null
+ * when no such file is found. Codex has no command that says whether a conversation is open
+ * somewhere, and one that is open takes a queued message by itself: so whether Codex wrote of
+ * it since the message was queued is how It tells that someone took it.
+ */
+export function codexWroteAt(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')): number | null {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(thread)) return null
+  const kept = `${codexHome}\n${thread}`
+  const known = found.get(kept)
+  if (known) {
+    try {
+      return statSync(known).mtimeMs
+    } catch {
+      found.delete(kept)
+    }
+  }
+  const newestFirst = (dir: string): string[] => {
+    try {
+      return readdirSync(dir).sort().reverse()
+    } catch {
+      return []
+    }
+  }
+  // Kept by the day it began: sessions/<year>/<month>/<day>/rollout-<time>-<id>.jsonl. The
+  // newest days are looked in first, and no more than a year's worth of them.
+  const root = path.join(codexHome, 'sessions')
+  let looked = 0
+  for (const year of newestFirst(root))
+    for (const month of newestFirst(path.join(root, year)))
+      for (const day of newestFirst(path.join(root, year, month))) {
+        if (++looked > 400) return null
+        const dir = path.join(root, year, month, day)
+        const file = newestFirst(dir).find((name) => name.startsWith('rollout-') && name.endsWith(`-${thread}.jsonl`))
+        if (!file) continue
+        const full = path.join(dir, file)
+        if (found.size > 500) found.clear()
+        found.set(kept, full)
+        try {
+          return statSync(full).mtimeMs
+        } catch {
+          return null
+        }
+      }
+  return null
+}
+const found = new Map<string, string>()

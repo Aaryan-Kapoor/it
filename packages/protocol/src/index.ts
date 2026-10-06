@@ -134,13 +134,21 @@ export type Harness = (typeof HARNESSES)[number]
  * command of their own for carrying a conversation on without a window. Each is reopened only
  * on a machine where the person has switched that on for it.
  */
-export const WAKES: readonly Harness[] = ['claude-code']
+export const WAKES: readonly Harness[] = ['claude-code', 'codex']
+/**
+ * The agent apps with a queue of their own, which takes a click whether or not its conversation
+ * is open. A click for one of these goes to that queue first, and its conversation is reopened
+ * only so that it takes what is waiting there.
+ */
+export const QUEUES: readonly Harness[] = ['codex']
 /**
  * How far back from the moment the person switched reopening on a click may have been made and
  * still have its conversation reopened: a day, which takes in what they did before they found
  * the switch, and leaves out an answer given so long ago that acting on it unasked would surprise.
  */
 export const WAKE_BACK_MS = 24 * 60 * 60_000
+/** How many clicks one reopening carries at most: everything waiting for the conversation goes in one message, up to this many. */
+export const WAKE_MOST = 8
 
 /** The conversation that made a page and should hear about clicks on it. */
 export interface AgentSession {

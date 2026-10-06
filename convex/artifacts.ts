@@ -4,9 +4,10 @@ import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { mutation, type QueryCtx, query } from './_generated/server'
 import { removeLater } from './content'
-import { artifactBySlug, ownArtifact, requireCaller, requireMachineOrOwner, requireOwner } from './lib/authz'
+import { artifactBySlug, ownArtifact, requireBrowser, requireCaller, requireMachineOrOwner, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
+import { log } from './lib/log'
 import { bump } from './lib/tally'
 
 export const prefixOf = (userId: Id<'users'>, artifactId: Id<'artifacts'>, n?: number) => `u/${userId}/${artifactId}/${n === undefined ? '' : `${n}/`}`
@@ -77,6 +78,15 @@ export const get = query({
           : null,
       // When the machine whose agent made this page was last heard from, for the site to judge
       // whether it is there to hear a click. Null when it has no connector, or was revoked.
+      // Whether the page's conversation is running now because It reopened it, which is what can be stopped from here
+      run: running(machine, a),
+      // And when a person last stopped it, so that the page can say so of what was done before then
+      stoppedAt:
+        (machine &&
+          !machine.revoked &&
+          a.session &&
+          (machine.stops ?? []).find((s) => s.harness === a.session?.harness && s.sessionId === a.session?.id)?.at) ||
+        null,
       machineSeenAt: machine !== null && !machine.revoked && machine.connectorVersion !== undefined ? machine.lastSeenAt : null,
       stateRevision: state?.revision ?? 0,
       versions: versions.map((x) => ({ n: x.n, bytes: x.bytes, files: x.files.length, status: x.status, createdAt: x.createdAt })),
@@ -98,6 +108,40 @@ export const remove = mutation({
     // A publish of this page may be under way, with a grant that is still good
     await removeLater(ctx, prefixOf(user._id, a._id), { grantMayBeLive: true })
     return null
+  },
+})
+
+/** The reopened run of a page's conversation, where its machine says one is under way. */
+function running(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): { since: number; stopping: boolean } | null {
+  if (!machine || machine.revoked || !a.session) return null
+  const run = (machine.runs ?? []).find((r) => r.harness === a.session?.harness && r.sessionId === a.session?.id)
+  return run ? { since: run.since, stopping: run.stop === true } : null
+}
+
+/** How many stopped conversations a machine remembers: the last few, which is as many as anyone stops in a day. */
+const STOPS_KEPT = 40
+
+/**
+ * Stops the agent that It reopened for a page: the machine running it is told, and ends it.
+ * What was waiting for that conversation by now is not reopened for either, so that stopping
+ * stops, and the next thing done on the page reopens it as before. Any browser that can use the
+ * page can stop it, since stopping asks less of an agent than a click does. A machine cannot,
+ * so no agent stops another.
+ */
+export const stop = mutation({
+  args: { artifactId: v.id('artifacts') },
+  handler: async (ctx, { artifactId }) => {
+    const { user } = await requireBrowser(ctx)
+    const a = await ownArtifact(ctx, user._id, artifactId)
+    const machine = a.machineId ? await ctx.db.get(a.machineId) : null
+    if (!machine || !running(machine, a)) return { stopping: false }
+    const is = (r: { harness: string; sessionId: string }) => r.harness === a.session?.harness && r.sessionId === a.session?.id
+    await ctx.db.patch(machine._id, {
+      runs: (machine.runs ?? []).map((r) => (is(r) ? { ...r, stop: true } : r)),
+      stops: [...(machine.stops ?? []).filter((r) => !is(r)), { harness: a.session!.harness, sessionId: a.session!.id, at: Date.now() }].slice(-STOPS_KEPT),
+    })
+    log('run.stop_asked', { userId: user._id, artifactId })
+    return { stopping: true }
   },
 })
 

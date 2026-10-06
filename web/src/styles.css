@@ -2986,6 +2986,43 @@ img.portal-demo {
   background: var(--danger);
 }
 
+.working {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.working-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: dot-breathe 1.6s ease-in-out infinite;
+}
+.working-dot[data-ending] {
+  background: var(--fg-ghost);
+  animation: none;
+}
+.working-stop {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.working-stop:hover {
+  background: var(--interactive);
+  color: var(--danger);
+}
+
 .page-nav-mark {
   display: inline-flex;
   align-items: center;

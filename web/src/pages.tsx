@@ -2,7 +2,7 @@
 import { NOUN } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { type CSSProperties, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import { copy, IconBack, IconLink, IconPin, IconX, Mark } from './brand'
+import { copy, IconBack, IconLink, IconPin, IconStop, IconX, Mark } from './brand'
 import { ago, api, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
@@ -223,15 +223,20 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
             ))}
           </div>
         </div>
-        <ActionStatus
-          artifactId={page.id as Id<'artifacts'>}
-          user={user}
-          machine={page.machine}
-          machineSeenAt={page.machineSeenAt}
-          // Only the owner may switch reopening on, and only for an agent app It can reopen
-          wakes={owner ? page.wake : null}
-          agent={agentName(page.agent)}
-        />
+        {page.run ? (
+          <Working artifactId={page.id as Id<'artifacts'>} stopping={page.run.stopping} />
+        ) : (
+          <ActionStatus
+            artifactId={page.id as Id<'artifacts'>}
+            user={user}
+            machine={page.machine}
+            machineSeenAt={page.machineSeenAt}
+            // Only the owner may switch reopening on, and only for an agent app It can reopen
+            wakes={owner ? page.wake : null}
+            agent={agentName(page.agent)}
+            stoppedAt={page.stoppedAt}
+          />
+        )}
         <div className="page-nav-actions">
           <Bell compact />
           <button
@@ -255,6 +260,39 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
   )
 }
 
+/**
+ * The page's agent is at work because It reopened its conversation, with nobody at the machine
+ * to watch it: said in a word, with the one thing to do about it, which is to stop it.
+ */
+function Working({ artifactId, stopping }: { artifactId: Id<'artifacts'>; stopping: boolean }) {
+  const stop = useMutation(api.artifacts.stop)
+  const [asked, setAsked] = useState(false)
+  const ending = stopping || asked
+  return (
+    <span className="working" role="status">
+      <span className="working-dot" data-ending={ending || undefined} />
+      {ending ? 'Stopping' : 'Working'}
+      {!ending && (
+        <button
+          type="button"
+          className="working-stop"
+          title="Stop the agent"
+          aria-label="Stop the agent"
+          onClick={() => {
+            setAsked(true)
+            stop({ artifactId }).catch((err) => {
+              setAsked(false)
+              say(refusal(err).message, 'error')
+            })
+          }}
+        >
+          <IconStop />
+        </button>
+      )}
+    </span>
+  )
+}
+
 /** A machine that has not been heard from for this long is taken to be off. */
 const ONLINE_MS = 6 * 60_000
 
@@ -266,6 +304,7 @@ function ActionStatus({
   machineSeenAt,
   wakes,
   agent,
+  stoppedAt,
 }: {
   artifactId: Id<'artifacts'>
   user: string
@@ -274,6 +313,8 @@ function ActionStatus({
   /** Where the page's agent app can have a closed conversation reopened: the machine that would, and whether that is switched on there. */
   wakes: { machineId: string; harness: string; on: boolean } | null
   agent: string | null
+  /** When a person last stopped the page's agent, if they have. */
+  stoppedAt: number | null
 }) {
   const convex = useConvex()
   const setWake = useMutation(api.machines.wake)
@@ -317,6 +358,9 @@ function ActionStatus({
       <span className="status">Saved on this browser, not sent yet</span>
     )
   if (!last || now - last.at > 10 * 60_000) return null
+  // The agent was stopped after the last thing done here: said as that, whatever became of it.
+  // What was waiting then is still waiting, and the next thing done reopens the conversation.
+  if (stoppedAt !== null && last.at <= stoppedAt) return <span className="status">Stopped</span>
   if (last.delivery === 'handed_off') {
     // When what became of it cannot be told, the person is told exactly that, so they can decide whether to do it again
     const said =

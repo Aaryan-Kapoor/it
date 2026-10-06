@@ -6,7 +6,7 @@
 // Two things about a click never change while it is delivered: which machine it is for, and
 // which conversation. Who holds the lease is recorded separately, so a machine that borrows a
 // click and dies does not take it away from its owner.
-import { LEASE_MS, LISTENING_MOST, WAKE_BACK_MS, WAKES } from '@it/protocol'
+import { LEASE_MS, LISTENING_MOST, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKES } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -109,18 +109,23 @@ export const inbox = query({
     // no number of them that take nothing can hide one that would: by which have waited
     // longest, by which were pressed most recently, and in the order of their names.
     //
-    // A harness whose closed conversations are reopened is read the same way, with two things
-    // more. It is read only where the person has switched that on for it on this machine,
-    // whatever the connector asks. And only what was done from about then on is read: what had
-    // waited longer is not reopened for, and read with the rest, the oldest few of a
-    // conversation, it would stand in front of every later click for good.
-    for (const harness of (queues ?? []).slice(0, 5)) {
+    // A harness whose closed conversations are reopened is read the same way, with three
+    // things more. It is read only where the person has switched that on for it on this
+    // machine, whatever the connector asks. Only what was done from about then on is read:
+    // what had waited longer is not reopened for, and read with the rest, the oldest few of a
+    // conversation, it would stand in front of every later click for good. The same holds for
+    // what was waiting when the person stopped a conversation. And more of each conversation
+    // is read, since one reopening carries all that is waiting for it.
+    for (const harness of (queues ?? []).slice(0, 8)) {
       let from = 0
-      if ((WAKES as readonly string[]).includes(harness)) {
+      const reopened = (WAKES as readonly string[]).includes(harness) && !(QUEUES as readonly string[]).includes(harness)
+      if (reopened) {
         const on = (machine.wakes ?? []).find((w) => w.harness === harness)
         if (!on) continue
         from = on.since - WAKE_BACK_MS
       }
+      const each = reopened ? WAKE_MOST : 2
+      const stoppedAt = (sessionId: string) => (reopened ? ((machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)?.at ?? 0) : 0)
       const found: string[] = []
       const oldest = await ctx.db
         .query('actions')
@@ -150,9 +155,14 @@ export const inbox = query({
           ...(await ctx.db
             .query('actions')
             .withIndex('by_route', (q) =>
-              q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gte('createdAt', from),
+              q
+                .eq('machineId', machine._id)
+                .eq('delivery', 'pending')
+                .eq('harness', harness)
+                .eq('sessionId', sessionId)
+                .gt('createdAt', Math.max(from - 1, stoppedAt(sessionId))),
             )
-            .take(Math.min(2, BUDGET - rows.length))),
+            .take(Math.min(each, BUDGET - rows.length))),
         )
       }
     }

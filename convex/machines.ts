@@ -5,6 +5,7 @@ import type { Doc } from './_generated/dataModel'
 import { internalMutation, mutation, query } from './_generated/server'
 import { ownMachine, requireMachine, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
+import { session } from './schema'
 import { lineOf, pairedOf, revokeMachine } from './sessions'
 
 const view = (m: Doc<'machines'>) => ({
@@ -15,6 +16,7 @@ const view = (m: Doc<'machines'>) => ({
   harnesses: m.harnesses ?? [],
   wanted: m.wanted ?? [],
   wakes: m.wakes ?? [],
+  runs: m.runs ?? [],
 })
 
 /**
@@ -101,6 +103,34 @@ export const wake = mutation({
     // Switched on again while it is on, it stays on since when it was: nothing older is let in by asking twice
     if (on && !is) await ctx.db.patch(m._id, { wakes: [...now, { harness, since: Date.now() }] })
     if (!on && is) await ctx.db.patch(m._id, { wakes: now.filter((w) => w.harness !== harness) })
+    return null
+  },
+})
+
+/** How many conversations a machine may say it is running at once. Its connector runs only a few commands at a time. */
+const RUNS_MOST = 20
+
+/** The machine says that it has reopened a conversation, which is running from now until it says otherwise. */
+export const runBegan = mutation({
+  args: { for: session },
+  handler: async (ctx, { for: s }) => {
+    const { machine } = await requireMachine(ctx)
+    const others = (machine.runs ?? []).filter((r) => r.harness !== s.harness || r.sessionId !== s.id)
+    await ctx.db.patch(machine._id, {
+      runs: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), since: Date.now() }].slice(-RUNS_MOST),
+    })
+    return null
+  },
+})
+
+/** And that the conversation it reopened has ended. With none named, that nothing it reopened is running, which is so when its connector starts. */
+export const runEnded = mutation({
+  args: { for: v.optional(session) },
+  handler: async (ctx, { for: s }) => {
+    const { machine } = await requireMachine(ctx)
+    const now = machine.runs ?? []
+    const left = s ? now.filter((r) => r.harness !== s.harness || r.sessionId !== s.id) : []
+    if (left.length !== now.length) await ctx.db.patch(machine._id, { runs: left })
     return null
   },
 })
