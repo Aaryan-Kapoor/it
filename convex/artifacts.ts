@@ -186,10 +186,16 @@ export const stop = mutation({
     // agent, and did not mean it to take up, an hour later, what they had done before that.
     // Left waiting, each such thing was counted on the page for a month with no way to clear
     // it, and was handed over all the same the next time its conversation was opened.
-    const waiting = await ctx.db
-      .query('actions')
-      .withIndex('by_user_session', (q) => q.eq('userId', user._id).eq('delivery', 'pending').eq('harness', a.session!.harness).eq('sessionId', a.session!.id))
-      .take(100)
+    // Whether nobody has them yet or the machine has them in hand: while a conversation runs
+    // because It reopened it, everything of its that a machine holds is held for that very
+    // run, as what it was started with or as what its add-on is about to be given. Both are
+    // what the person is stopping. Left out, what the add-on held came back with the next click.
+    const of = (delivery: 'pending' | 'leased') =>
+      ctx.db
+        .query('actions')
+        .withIndex('by_user_session', (q) => q.eq('userId', user._id).eq('delivery', delivery).eq('harness', a.session!.harness).eq('sessionId', a.session!.id))
+        .take(100)
+    const waiting = [...(await of('pending')), ...(await of('leased'))]
     for (const x of waiting) {
       await ctx.db.patch(x._id, {
         delivery: 'handed_off',

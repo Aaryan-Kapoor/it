@@ -3454,3 +3454,11 @@ form.row-main {
     transform: none;
   }
 }
+
+/* What a notification says once one of its buttons was pressed */
+.note-answered {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}

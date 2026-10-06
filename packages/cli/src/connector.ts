@@ -526,6 +526,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (ended === STOPPED && !closing) {
         if (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)
         stoppedByPerson.add(key)
+        // What this machine was keeping for the run's own add-on went with the stop, in It as
+        // here: kept on, it would be handed to the add-on of the next reopening
+        for (const [id, h] of held) {
+          if (h.key !== key) continue
+          held.delete(id)
+          journal('stopped', id)
+        }
       }
       return ended
     } finally {

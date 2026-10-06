@@ -1661,8 +1661,15 @@ describe('clicks and their delivery', () => {
       route: 'stopped',
       outcome: 'failed',
     })
-    // The one the stopped turn was given is still in its machine's hands, until the machine says what became of it
-    expect((await alice.browser.query(api.artifacts.list, {})).find((x) => x.slug === 'plan')!.pending).toBe(1)
+    // And so does the one the stopped turn was given, and anything its machine held for the run's own add-on:
+    // nothing of that conversation's is left waiting, and nothing of it comes back with the next click
+    expect((await alice.browser.query(api.actions.forArtifact, { slug: 'plan' })).find((x) => x.id === first)).toMatchObject({
+      delivery: 'handed_off',
+      route: 'stopped',
+    })
+    expect((await alice.browser.query(api.artifacts.list, {})).find((x) => x.slug === 'plan')!.pending).toBe(0)
+    // The machine saying afterwards that it had handed that one over changes nothing, and is no error
+    expect(await m.as.mutation(api.delivery.handedOff, { id: first as never, route: 'queue' })).toMatchObject({ already: true })
     await m.as.mutation(api.machines.runEnded, { for: SESSION })
     expect(await onPage()).toBeNull()
     expect(await offered()).toEqual([])

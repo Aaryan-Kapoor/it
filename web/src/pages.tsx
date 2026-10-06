@@ -285,15 +285,18 @@ function Working({ artifactId, stopping }: { artifactId: Id<'artifacts'>; stoppi
   const stop = useMutation(api.artifacts.stop)
   const [asked, setAsked] = useState(false)
   const ending = stopping || asked
+  // What else was done on the page while it works: said, so that the person knows it is held and what a stop takes with it
+  const recent = useQuery(api.actions.forArtifact, { artifactId })
+  const more = Math.max(0, (recent?.filter((a) => a.delivery !== 'handed_off').length ?? 0) - 1)
   return (
     <span className="working" role="status">
       <span className="working-dot" data-ending={ending || undefined} />
-      {ending ? 'Stopping' : 'Working'}
+      {ending ? 'Stopping' : more ? `Working, ${more} more waiting` : 'Working'}
       {!ending && (
         <button
           type="button"
           className="working-stop"
-          title="Stop the agent"
+          title={more ? 'Stop the agent. What is waiting goes with it.' : 'Stop the agent'}
           aria-label="Stop the agent"
           onClick={() => {
             setAsked(true)
