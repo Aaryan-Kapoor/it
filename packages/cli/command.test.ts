@@ -1494,8 +1494,17 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     const b = await backend(m, () => ({ code: 'Ab3dEf6hIj9kLm2nOp5q' }))
     const url = `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`
     try {
-      expect((await atTerminal(m, ['site'], b.env)).shown.split('\n')).toEqual(['It’s site is opening in your browser, already paired:', `  ${url}`, ''])
+      // A screen is there to open a browser on (the test names one, whatever the machine it runs on has)
+      const screen = { ...b.env, DISPLAY: ':0' }
+      expect((await atTerminal(m, ['site'], screen)).shown.split('\n')).toEqual(['It’s site is opening in your browser, already paired:', `  ${url}`, ''])
       const ASKED = ['Open this in a browser on this machine:', `  ${url}`, 'It pairs one browser, once, within ten minutes.']
+      // With no screen to open one on, it is not said to be opening: the person is given the address to open
+      if (process.platform === 'linux') {
+        rmSync(opened, { force: true })
+        const none = await atTerminal(m, ['site'], { ...b.env, DISPLAY: '', WAYLAND_DISPLAY: '' })
+        expect(none.shown.split('\n').slice(0, 2)).toEqual(ASKED.slice(0, 2))
+        expect(existsSync(opened)).toBe(false)
+      }
       expect((await atTerminal(m, ['site', '--no-open'], b.env)).shown.split('\n')).toEqual([...ASKED, ''])
       // Run from another computer, with the network off: nothing there can open the address, and the person is told what lets a device in
       expect((await atTerminal(m, ['site'], { ...b.env, SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22' })).shown.split('\n')).toEqual([

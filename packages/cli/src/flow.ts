@@ -7,6 +7,15 @@ import qrcode from 'qrcode-generator'
 const out = process.stderr
 /** Whether there is a person at a terminal to draw for: nothing is redrawn in place, and no key is read, where there is not. */
 export const live = (): boolean => out.isTTY === true && process.stdin.isTTY === true && process.env.TERM !== 'dumb'
+/**
+ * Whether the command was run by an agent, which each agent app says with a variable of its
+ * own on the commands its agent runs. Some of them give those commands a terminal, and
+ * everything that turns in place then lands in the agent's conversation, frame after frame.
+ */
+const byAnAgent = (): boolean =>
+  ['IT_SESSION', 'CODEX_THREAD_ID', 'CLAUDE_CODE_SESSION_ID', 'HERMES_SESSION_ID', 'OPENCLAW_SESSION_ID', 'OPENCODE_SESSION_ID', 'PI_SESSION_ID'].some(
+    (name) => !!process.env[name],
+  )
 const coloured = (): boolean => out.isTTY === true && !process.env.NO_COLOR && process.env.TERM !== 'dumb'
 const paint = (code: string) => (text: string) => (coloured() ? `\x1b[${code}m${text}\x1b[0m` : text)
 export const bold = paint('1')
@@ -51,7 +60,8 @@ export function step(name: string, said = ''): Step {
   let now = said
   let frame = 0
   let ended = false
-  const redrawn = live()
+  // Nothing turns for an agent: it is written the line once, when the step has ended
+  const redrawn = live() && !byAnAgent()
   const draw = () => write(`\r\x1b[2K  ${dim(FRAMES[frame++ % FRAMES.length]!)} ${named(name, now)}`)
   const timer = redrawn ? setInterval(draw, 80) : undefined
   if (redrawn) draw()

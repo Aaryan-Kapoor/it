@@ -539,6 +539,13 @@ async function wait(a: Args) {
 /** Asks the system to open an address in the person's browser. False where it is not asked: over SSH the browser would open on a screen nobody is at. */
 function openBrowser(url: string): boolean {
   if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return false
+  // Nor where there is no screen to open one on, or nothing to open one with: said to be
+  // opening there, the person waits for a browser that never comes
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
+    if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return false
+    const found = (process.env.PATH ?? '').split(path.delimiter).some((dir) => dir && existsSync(path.join(dir, 'xdg-open')))
+    if (!found) return false
+  }
   // Never through a shell: the address came from a server. On Windows `start` is a shell
   // command, so the system's own handler for addresses is called directly instead.
   const [cmd, args] =
