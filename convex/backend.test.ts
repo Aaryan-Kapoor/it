@@ -1486,6 +1486,36 @@ describe('clicks and their delivery', () => {
     expect((await m.as.query(api.delivery.waiting, { slug: 'dead' })).length).toBe(25)
   })
 
+  test('a closed conversation’s clicks are offered for reopening only where the owner switched it on, and what had waited longer than a day by then never hides what was done since', async () => {
+    const { alice, m, click } = await setup()
+    const DAY = 24 * 60 * 60_000
+    const offered = async () => (await inbox(m, [], ['claude-code'])).map((c) => c.id)
+    // Three clicks long ago, and one a few hours before the switch is turned
+    const stale: string[] = []
+    for (const id of ['click-old-0001', 'click-old-0002', 'click-old-0003']) stale.push((await click(id)).actionId)
+    await vi.advanceTimersByTimeAsync(3 * DAY)
+    const recent = (await click('click-recent-0001')).actionId
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000)
+    // Off, nothing of a closed conversation is offered, whatever the connector asks for
+    expect(await offered()).toEqual([])
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    // On, the one from the day before is, and the three that are older stand in front of nothing
+    expect(await offered()).toEqual([recent])
+    await vi.advanceTimersByTimeAsync(60_000)
+    const first = (await click('click-new-0001')).actionId
+    const second = (await click('click-new-0002')).actionId
+    // The oldest two of what may be reopened for, in the order they were made
+    expect(await offered()).toEqual([recent, first])
+    await m.as.mutation(api.delivery.claim, { ids: [recent as never], for: SESSION })
+    await m.as.mutation(api.delivery.handedOff, { id: recent as never, route: 'queue' })
+    expect(await offered()).toEqual([first, second])
+    // The older ones are still waiting, and a conversation that is open and listening is offered them as before
+    expect((await inbox(m)).map((c) => c.id)).toEqual(stale.slice(0, 2))
+    // Switched off, nothing is offered for reopening again
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: false })
+    expect(await offered()).toEqual([])
+  })
+
   test('clicks that were set aside, or are another machine’s, never hide one a listening machine may take', async () => {
     const { t, alice, m: old, p } = await setup()
     // Another of the person's machines, which stays enrolled and has clicks of its own for a

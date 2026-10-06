@@ -135,6 +135,12 @@ export type Harness = (typeof HARNESSES)[number]
  * on a machine where the person has switched that on for it.
  */
 export const WAKES: readonly Harness[] = ['claude-code']
+/**
+ * How far back from the moment the person switched reopening on a click may have been made and
+ * still have its conversation reopened: a day, which takes in what they did before they found
+ * the switch, and leaves out an answer given so long ago that acting on it unasked would surprise.
+ */
+export const WAKE_BACK_MS = 24 * 60 * 60_000
 
 /** The conversation that made a page and should hear about clicks on it. */
 export interface AgentSession {

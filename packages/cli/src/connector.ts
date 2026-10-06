@@ -14,7 +14,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { appendFileSync, chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson, WAKES } from '@it/protocol'
+import { briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson, WAKE_BACK_MS, WAKES } from '@it/protocol'
 import { api, ask, call, enrolledHere, harnessEnv, home, inHome, live, Problem, readJson, VERSION, why, writePrivate } from './lib'
 import { conversationFolder } from './publish'
 import { alone } from './serve/backend'
@@ -78,8 +78,6 @@ const QUEUE_AT_ONCE = 3 // how many of a harness's queue commands run at the sam
 const QUEUES = ['codex']
 /** How long a click waits for a conversation that is open to ask for it, before the conversation is taken to be closed. */
 const CLOSED_MS = 8000
-/** How far back from the moment the person switched reopening on a click may have been made and still have its conversation reopened: long enough for the click that made them switch it on. */
-const WAKE_BACK_MS = 10 * 60_000
 const SERVE_MOST = 8 // how many clicks one answer to an add-on carries
 const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads no more than a quarter of a megabyte
 const keyOf = (harness: string, id: string) => `${harness}:${id}`

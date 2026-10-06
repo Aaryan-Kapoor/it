@@ -86,11 +86,11 @@ describe('whether a closed conversation may be reopened for a click', () => {
 
   test('for what was done from about the moment it was switched on, and not for all that had been waiting before', () => {
     const on = new Map([['claude-code', at]])
-    // The click that made the person switch it on, a moment before they did
+    // The click that made the person switch it on, and what they did in the day before it
     expect(mayWake(on, 'claude-code', at - MINUTE)).toBe(true)
-    expect(mayWake(on, 'claude-code', at - 10 * MINUTE)).toBe(true)
-    expect(mayWake(on, 'claude-code', at - 11 * MINUTE)).toBe(false)
-    expect(mayWake(on, 'claude-code', at - 24 * 60 * MINUTE)).toBe(false)
+    expect(mayWake(on, 'claude-code', at - 24 * 60 * MINUTE)).toBe(true)
+    expect(mayWake(on, 'claude-code', at - 24 * 60 * MINUTE - 1)).toBe(false)
+    expect(mayWake(on, 'claude-code', at - 30 * 24 * 60 * MINUTE)).toBe(false)
   })
 })
 

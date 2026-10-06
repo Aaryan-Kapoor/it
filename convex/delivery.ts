@@ -6,7 +6,7 @@
 // Two things about a click never change while it is delivered: which machine it is for, and
 // which conversation. Who holds the lease is recorded separately, so a machine that borrows a
 // click and dies does not take it away from its owner.
-import { LEASE_MS, LISTENING_MOST } from '@it/protocol'
+import { LEASE_MS, LISTENING_MOST, WAKE_BACK_MS, WAKES } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -108,17 +108,29 @@ export const inbox = query({
     // what was pressed first is delivered first. The conversations are found three ways, so that
     // no number of them that take nothing can hide one that would: by which have waited
     // longest, by which were pressed most recently, and in the order of their names.
+    //
+    // A harness whose closed conversations are reopened is read the same way, with two things
+    // more. It is read only where the person has switched that on for it on this machine,
+    // whatever the connector asks. And only what was done from about then on is read: what had
+    // waited longer is not reopened for, and read with the rest, the oldest few of a
+    // conversation, it would stand in front of every later click for good.
     for (const harness of (queues ?? []).slice(0, 5)) {
+      let from = 0
+      if ((WAKES as readonly string[]).includes(harness)) {
+        const on = (machine.wakes ?? []).find((w) => w.harness === harness)
+        if (!on) continue
+        from = on.since - WAKE_BACK_MS
+      }
       const found: string[] = []
       const oldest = await ctx.db
         .query('actions')
-        .withIndex('by_harness', (q) => q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness))
+        .withIndex('by_harness', (q) => q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).gte('createdAt', from))
         .take(40)
       for (const x of oldest) if (x.sessionId && !found.includes(x.sessionId) && found.length < 10) found.push(x.sessionId)
       // And the ones pressed most recently: a conversation somebody is using now
       const newest = await ctx.db
         .query('actions')
-        .withIndex('by_harness', (q) => q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness))
+        .withIndex('by_harness', (q) => q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).gte('createdAt', from))
         .order('desc')
         .take(20)
       for (const x of newest) if (x.sessionId && !found.includes(x.sessionId) && found.length < 16) found.push(x.sessionId)
@@ -137,7 +149,9 @@ export const inbox = query({
         rows.push(
           ...(await ctx.db
             .query('actions')
-            .withIndex('by_route', (q) => q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId))
+            .withIndex('by_route', (q) =>
+              q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gte('createdAt', from),
+            )
             .take(Math.min(2, BUDGET - rows.length))),
         )
       }
