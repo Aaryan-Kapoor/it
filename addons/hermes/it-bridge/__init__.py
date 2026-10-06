@@ -134,6 +134,30 @@ def _continues(old, new):
         return False
 
 
+def _carried():
+    """The id Hermes marks a command with if one is run now, in the turn whose hook is running. Nothing if it cannot be told."""
+    try:
+        from gateway.session_context import get_session_env
+
+        return str(get_session_env("HERMES_SESSION_ID", "") or "")
+    except Exception:
+        return str(os.environ.get("HERMES_SESSION_ID") or "")
+
+
+def _nobodys(session):
+    """Whether Hermes keeps no conversation under an id. If its record cannot be read, the answer is no."""
+    try:
+        from hermes_state import SessionDB
+
+        record = SessionDB(read_only=True)
+        try:
+            return record.get_session(session) is None
+        finally:
+            record.close()
+    except Exception:
+        return False
+
+
 class _Talk:
     """One conversation in this Hermes process."""
 
@@ -153,6 +177,7 @@ class _Talk:
         self.wait_until = 0.0
         self.seen = 0.0
         self.looked_up = None  # the last other id the terminal showed, which Hermes's record was asked about
+        self.carried = None  # the last id its commands were seen to carry that was not its own
 
     def became(self, session):
         """The same conversation goes on under another id. Its pages follow it, once the connector has been told.
@@ -267,7 +292,43 @@ class _Bridge:
         talk = self._note(session_id)
         if talk:
             talk.running = True
+            try:
+                self._follow_mark(talk)
+            except Exception:
+                pass  # nothing here may reach Hermes
         # Nothing is returned: Hermes adds whatever this hook returns to the user's message
+
+    def _follow_mark(self, talk):
+        """Has the connector follow the id this conversation's commands carry, when it is not the conversation's own.
+
+        Hermes marks each command a conversation runs with HERMES_SESSION_ID, and the `it`
+        command files a page under that. In the terminal the mark stops being the
+        conversation's after its first turn: when a turn ends, Hermes starts a review of the
+        conversation in the background, as an agent with an id of its own, and that id is what
+        the conversation's commands carry from then on. Hermes keeps no conversation under it,
+        so a page made under it had nobody to hear its clicks.
+
+        Nothing an add-on sets reaches those commands afresh (Hermes's shell keeps the first
+        value it saw of any variable but Hermes's own), so the mark is followed: the connector
+        is told that what is made under it is this conversation's, as it is told when Hermes
+        gives a conversation a new id. It is told now, before the turn runs its first command.
+        Only an id Hermes keeps no conversation under is followed, so that one conversation
+        never takes another's pages.
+        """
+        carried = _carried()
+        if not carried or carried == talk.carried:
+            return
+        with self._lock:
+            session = talk.id
+            known = carried == session or carried in self._helpers or carried in talk.was or any(t.id == carried for t in self._talks.values())
+        if known or not _nobodys(carried):
+            return
+        talk.carried = carried
+        if self._ask("/session", {"harness": HARNESS, "session": session, "was": carried}) is None:
+            # The connector could not be asked. It is told with the conversation's other earlier ids, before it is next asked for clicks.
+            with self._lock:
+                if carried not in talk.was and carried != talk.id:
+                    talk.was.append(carried)
 
     def turn_ended(self, session_id="", **_):
         talk = self._note(session_id)

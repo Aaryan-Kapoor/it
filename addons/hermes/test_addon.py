@@ -44,8 +44,13 @@ B = "20261002_113000_ef34ab"
 TEXT = '[It] the connector\'s words for a click on "Deploy plan" (deploy-plan): approve {"env":"prod","note":"línea\\n2"} [action k57abc]'
 
 # Stands in for gateway/session_context.py in Hermes: the name of the conversation whose hook
-# is running. Hermes binds it around each turn of the TUI, the desktop app and the gateway.
+# is running, and the id its commands are marked with. Hermes binds the name around each turn of
+# the TUI, the desktop app and the gateway.
 bound = {"HERMES_SESSION_KEY": ""}
+# The ids Hermes keeps a conversation under, as its record has them
+kept_by_hermes = set()
+# The id of a review Hermes runs in the background when a turn has ended. Hermes keeps no conversation under it.
+REVIEW = "20261002_101630_5567df"
 
 # Stands in for Hermes's record of conversations (hermes_state.py, SessionDB): which id a
 # conversation went on under when Hermes compressed it. Nothing else gives a conversation a
@@ -58,6 +63,9 @@ class Record:
 
     def __init__(self, db_path=None, read_only=False):
         assert read_only, "the add-on only ever reads Hermes's record"
+
+    def get_session(self, session_id):
+        return {"id": session_id} if session_id in kept_by_hermes else None
 
     def get_compression_tip(self, session_id):
         seen = set()
@@ -345,6 +353,9 @@ class Case(unittest.TestCase):
         self.speeds = (addon.POLL_SECONDS, addon.SETTLE_SECONDS, addon.REFUSED_SECONDS)
         addon.POLL_SECONDS, addon.SETTLE_SECONDS, addon.REFUSED_SECONDS = 0.02, 0.05, 0.05
         bound["HERMES_SESSION_KEY"] = ""
+        bound.pop("HERMES_SESSION_ID", None)
+        kept_by_hermes.clear()
+        kept_by_hermes.update({A, B})
         compressed.clear()
         self.connector = Connector(self.home)
         self.connector.write_file()
@@ -465,6 +476,56 @@ class InTheTerminal(Case):
         self.assertNotIn(("clicks", "hermes", A), log[told:], "the old id is not asked for any more")
         self.connector.offer(B, click("k1"))
         self.assertTrue(until(lambda: hermes.messages))
+
+    def test_the_id_hermes_marks_commands_with_after_a_turn_is_followed_when_it_is_nobodys(self):
+        # When a turn ends Hermes starts a review in the background under an id of its own, and
+        # the conversation's commands carry that id from then on. A page made under it is this
+        # conversation's, and the connector is told so before the turn runs anything.
+        hermes = self.terminal()
+        bound["HERMES_SESSION_ID"] = A
+        hermes.turn(A, running=False)
+        self.assertTrue(until(lambda: self.connector.asked()))
+        self.assertNotIn(("session", "hermes", A, A), self.connector.log, "its own id is not told as an earlier one")
+        bound["HERMES_SESSION_ID"] = REVIEW
+        told = len(self.connector.log)
+        hermes.turn(A, running=True)
+        self.assertIn(("session", "hermes", A, REVIEW), self.connector.log[told:], "told within the hook itself, before the turn's first command")
+        again = len(self.connector.log)
+        hermes.turn(A, running=False)
+        self.a_while()
+        self.assertNotIn(("session", "hermes", A, REVIEW), self.connector.log[again:], "and told once")
+        self.assertEqual({asked for asked in self.connector.asked()}, {("hermes", A)}, "it goes on asking for the conversation, never for the review")
+
+    def test_an_id_hermes_keeps_a_conversation_under_is_never_followed(self):
+        # After /resume the commands may still carry the conversation the person left. Its pages are its own.
+        hermes = self.terminal()
+        bound["HERMES_SESSION_ID"] = B
+        hermes.turn(A, running=False)
+        self.a_while()
+        self.assertNotIn(("session", "hermes", A, B), self.connector.log)
+
+    def test_a_mark_that_could_not_be_told_at_once_is_told_before_the_conversation_is_next_asked_for(self):
+        talk = addon._Talk(A, "")
+        bridge = addon._Bridge(None)
+        bridge._catch_up = lambda talk: None
+        bridge._reachable = lambda talk: True
+        log = []
+        there = False
+
+        def ask(route, body=None):
+            if not there:
+                return None  # the connector cannot be asked
+            log.append((route.split("?")[0], body and body.get("was")))
+            return {"ok": True, "clicks": []}
+
+        bridge._ask = ask
+        bound["HERMES_SESSION_ID"] = REVIEW
+        bridge._follow_mark(talk)
+        self.assertEqual(talk.was, [REVIEW], "kept, with the conversation's other earlier ids")
+        there = True
+        bridge._check(talk)
+        self.assertEqual(log, [("/session", REVIEW), ("/clicks", None)])
+        self.assertEqual(talk.was, [])
 
     def test_a_conversation_compressed_between_turns_is_followed_without_waiting_for_its_next_turn(self):
         hermes = self.terminal()
