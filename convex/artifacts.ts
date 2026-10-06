@@ -161,7 +161,29 @@ export const stop = mutation({
       runs: (machine.runs ?? []).map((r) => (is(r) ? { ...r, stop: true } : r)),
       stops: [...(machine.stops ?? []).filter((r) => !is(r)), { harness: a.session!.harness, sessionId: a.session!.id, at: Date.now() }].slice(-STOPS_KEPT),
     })
-    log('run.stop_asked', { userId: user._id, artifactId })
+    // What was still waiting for that conversation goes with the stop: the person stopped the
+    // agent, and did not mean it to take up, an hour later, what they had done before that.
+    // Left waiting, each such thing was counted on the page for a month with no way to clear
+    // it, and was handed over all the same the next time its conversation was opened.
+    const waiting = await ctx.db
+      .query('actions')
+      .withIndex('by_user_session', (q) => q.eq('userId', user._id).eq('delivery', 'pending').eq('harness', a.session!.harness).eq('sessionId', a.session!.id))
+      .take(100)
+    for (const x of waiting) {
+      await ctx.db.patch(x._id, {
+        delivery: 'handed_off',
+        route: 'stopped',
+        handedAt: Date.now(),
+        outcome: 'failed',
+        leaseMachineId: undefined,
+        leaseExpiresAt: undefined,
+      })
+      // It stops counting as waiting, on its page and for the person, as any click does that is no longer waiting
+      const page = await ctx.db.get(x.artifactId)
+      if (page) await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+    }
+    if (waiting.length) await bump(ctx, user._id, { waiting: -waiting.length })
+    log('run.stop_asked', { userId: user._id, artifactId, dropped: waiting.length })
     return { stopping: true }
   },
 })

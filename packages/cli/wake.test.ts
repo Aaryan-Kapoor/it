@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
-import { Budget, carrying, carryOn, claudeModeOf, claudeResume, claudeWroteAt, codexHeld, codexWroteAt, mayWake, STOPPED, WOKEN } from './src/wake'
+import { Budget, carrying, carryOn, claudeModeOf, claudeResume, claudeWroteAt, codexHeld, codexWroteAt, mayWake, STOPPED, WAS_STOPPED, WOKEN } from './src/wake'
 
 let scratch: string
 let was: string | undefined
@@ -197,6 +197,13 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
       }
     }
     expect(JSON.parse(readFileSync(log, 'utf8'))).toEqual([folder, null, folder])
+  })
+})
+
+describe('what a conversation is told after the person stopped it', () => {
+  test('says that its last turn was stopped, and not to carry on with it', () => {
+    expect(WAS_STOPPED).toMatch(/^\[It\] The turn before this one in this conversation was stopped by the person/)
+    expect(WAS_STOPPED).toContain('do not carry on with it unless what follows asks for it')
   })
 })
 

@@ -1599,7 +1599,7 @@ describe('clicks and their delivery', () => {
     expect((await inbox(m, [], ['codex'])).map((c) => c.id)).toEqual(queued.slice(0, 2))
   })
 
-  test('a reopened conversation is said to be running for as long as its machine says so, and anyone who can use the page can stop it: what was waiting by then is not reopened for', async () => {
+  test('a reopened conversation is said to be running for as long as its machine says so, and anyone who can use the page can stop it: what was waiting by then goes with the stop', async () => {
     const { t, alice, m, p, click } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
     const onPage = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).run
@@ -1619,14 +1619,23 @@ describe('clicks and their delivery', () => {
     await vi.advanceTimersByTimeAsync(5000)
     const waiting = (await click('click-run-0002')).actionId
     expect(await offered()).toEqual([waiting])
+    expect((await alice.browser.query(api.artifacts.list, {})).find((x) => x.slug === 'plan')!.pending).toBe(2)
     // A screen can stop it, as it can click
     const screen = await paired(t, 'alice', 'screen', displayKey('screen'))
     expect(await screen.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
     expect(await onPage()).toMatchObject({ stopping: true })
     expect((await m.as.query(api.machines.me, {})).runs).toMatchObject([{ harness: 'claude-code', sessionId: 'sess-1', stop: true }])
-    // What was waiting when it was stopped is not reopened for, and is still there for a conversation that is open
+    // What was waiting when it was stopped goes with the stop: it is not reopened for, it is not handed to the
+    // conversation when that is next opened, and it no longer counts as waiting on the page
     expect(await offered()).toEqual([])
-    expect((await inbox(m)).map((c) => c.id)).toEqual([waiting])
+    expect((await inbox(m)).map((c) => c.id)).toEqual([])
+    expect((await alice.browser.query(api.actions.forArtifact, { slug: 'plan' })).find((x) => x.id === waiting)).toMatchObject({
+      delivery: 'handed_off',
+      route: 'stopped',
+      outcome: 'failed',
+    })
+    // The one the stopped turn was given is still in its machine's hands, until the machine says what became of it
+    expect((await alice.browser.query(api.artifacts.list, {})).find((x) => x.slug === 'plan')!.pending).toBe(1)
     await m.as.mutation(api.machines.runEnded, { for: SESSION })
     expect(await onPage()).toBeNull()
     expect(await offered()).toEqual([])

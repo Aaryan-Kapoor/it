@@ -399,7 +399,7 @@ function ActionStatus({
     )
   if (!last || now - last.at > 10 * 60_000) return null
   // The agent was stopped after the last thing done here: said as that, whatever became of it.
-  // What was waiting then is still waiting, and the next thing done reopens the conversation.
+  // What was waiting then went with the stop, and the next thing done reopens the conversation.
   if (stoppedAt !== null && last.at <= stoppedAt) return <span className="status">Stopped</span>
   if (last.delivery === 'handed_off') {
     // The agent has changed the page since: its answer is on the page, and the bar has nothing to add.

@@ -407,7 +407,13 @@ export const unpark = mutation({
     const aside = await ctx.db
       .query('actions')
       .withIndex('by_user_route', (q) =>
-        q.eq('userId', user._id).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id).eq('machineId', undefined).eq('parkedBy', machine._id),
+        q
+          .eq('userId', user._id)
+          .eq('delivery', 'pending')
+          .eq('harness', s.harness)
+          .eq('sessionId', s.id)
+          .eq('machineId', undefined)
+          .eq('parkedBy', machine._id),
       )
       .take(50)
     // This machine's again, as they were before it set them aside

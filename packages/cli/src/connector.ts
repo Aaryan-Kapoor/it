@@ -20,7 +20,7 @@ import { conversationFolder, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
-import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexHeld, mayWake, STOPPED, WOKEN } from './wake'
+import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexHeld, mayWake, STOPPED, WAS_STOPPED, WOKEN } from './wake'
 
 /** A click as the backend offers it: its data as JSON text, and the conversation it is for. */
 interface Offered {
@@ -443,7 +443,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       void call<number>('mutation', api.delivery.unpark, { for: { harness, id: one } })
         .then((given) => {
           if (given > 0)
-            say(`a ${agentOf(harness)} conversation (${short(id)}) is back: ${given} thing${given === 1 ? '' : 's'} set aside for it ${given === 1 ? 'is' : 'are'} tried again`)
+            say(
+              `a ${agentOf(harness)} conversation (${short(id)}) is back: ${given} thing${given === 1 ? '' : 's'} set aside for it ${given === 1 ? 'is' : 'are'} tried again`,
+            )
         })
         .catch(() => {})
   }
@@ -489,6 +491,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * was held in, and says so to It for as long as it runs, so that the person sees it and can
    * stop it. Null when it ran, STOPPED when they stopped it, and otherwise why it did not run.
    */
+  /**
+   * The conversations whose last reopened turn the person stopped from the page. An app that is
+   * ended in the middle of a turn writes nothing of that into the conversation, so the agent
+   * that is next reopened there would read a turn that simply breaks off, and might carry on
+   * with it. It is told once, with what it is next reopened for.
+   */
+  const stoppedByPerson = new Set<string>()
   async function carry(session: { harness: string; id: string }, text: string): Promise<string | null> {
     const key = follow(keyOf(session.harness, session.id))
     // A conversation that was cleared carries on under another id, and it is that one which is carried on
@@ -513,6 +522,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
     let ended: string | null = 'it did not end'
     try {
       ended = await carryOn(how, cwd, { harness: now.harness, session: now.id }, { signal: stop.signal })
+      // Stopped by the person, and not by this connector closing: its next turn is told so
+      if (ended === STOPPED && !closing) {
+        if (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)
+        stoppedByPerson.add(key)
+      }
       return ended
     } finally {
       reopenedNow.delete(key)
@@ -639,7 +653,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // machine could read it: the agent is told the action, and where to read what it carried
       const refused = reopening
         ? // Given on the command's input, where nobody else on the machine reads it, so in full
-          await carry(click.session!, `${WOKEN}\n\n${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}`)
+          await carry(
+            click.session!,
+            `${WOKEN}${stoppedByPerson.delete(key) ? `\n\n${WAS_STOPPED}` : ''}\n\n${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}`,
+          )
         : await codexQueue(threadOf(key), describeClick(asClick(click), 0))
       // A conversation the person stopped had what was done all the same: it is handed over,
       // and nothing is tried again for it
