@@ -11,7 +11,7 @@
 // from, and by nothing else. Nothing a page says is believed beyond "this page wants to submit
 // this action for itself", and how much it may ask of the site is bounded here, before
 // anything reaches the backend.
-import { contentPort, isStoreKey, LIMITS, type PageToSite, parseJson, SANDBOX, type SiteToPage } from '@it/protocol'
+import { contentPort, FAULT, isStoreKey, LIMITS, type PageToSite, parseJson, SANDBOX, type SiteToPage } from '@it/protocol'
 import { useConvex, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
@@ -92,7 +92,8 @@ export function Mount({
   title: string
   user: string
   /** Told what the page's own script failed with, each time it says so. */
-  onFault?: (message: string) => void
+  /** The page's own script failed, with what it failed with; and again once its agent has been told. */
+  onFault?: (message: string, agentTold: boolean) => void
 }) {
   const convex = useConvex()
   const frame = useRef<HTMLIFrameElement>(null)
@@ -107,6 +108,8 @@ export function Mount({
   /** Whoever is told of the page's faults now: kept apart from the channel, which is set up once for a showing. */
   const told = useRef(onFault)
   told.current = onFault
+  /** The version of the page whose agent this showing has told that its script failed: it is told once for a version. */
+  const faulted = useRef<number | null>(null)
   const state = useQuery(api.state.get, { artifactId })
   const latest = useRef(state)
   latest.current = state
@@ -225,8 +228,39 @@ export function Mount({
         return
       }
       if (message.type === 'it:fault') {
+        if (typeof message.message !== 'string') return
         // Only ever shown as text, and no more of it than fits a line
-        if (typeof message.message === 'string') told.current?.(message.message.replace(/\s+/g, ' ').slice(0, 200))
+        const text = message.message.replace(/\s+/g, ' ').slice(0, 200)
+        // What a browser says of a script from elsewhere that it will not describe, and of a
+        // layout it could not finish in one pass, is not the page's script failing
+        if (/^Script error\.?$/.test(text) || /ResizeObserver loop/.test(text)) return
+        told.current?.(text, false)
+        // And its agent is told, once for each version of the page however many times and
+        // places it is opened in: the person can only carry the words over by hand, and an
+        // agent that is waiting for an answer waits for one that cannot come
+        if (faulted.current === mount.version) return
+        faulted.current = mount.version
+        try {
+          const was = attended()
+          await submit(
+            convex,
+            user,
+            artifactId,
+            {
+              v: 1,
+              clientActionId: `it-fault-v${mount.version}`,
+              name: FAULT,
+              payload: JSON.stringify({ message: text }),
+              contentVersion: mount.version,
+              attended: was === true,
+            },
+            () => live && port.current === from,
+            typeof was === 'function' ? was : undefined,
+          )
+          told.current?.(text, true)
+        } catch {
+          // Refused, or too many at once: the bar has said it, which is what the person needs
+        }
         return
       }
       if (message.type !== 'it:action' && message.type !== 'it:store') return

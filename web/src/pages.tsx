@@ -183,7 +183,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
   const page = useQuery(api.artifacts.get, { slug })
   const now = useNow()
   /** What the page's own script last failed with, and which version of the page that was. */
-  const [fault, setFault] = useState<{ of: string; message: string } | null>(null)
+  const [fault, setFault] = useState<{ of: string; message: string; agentTold: boolean } | null>(null)
   useEffect(() => {
     if (page) document.title = `${page.title} · It`
     return () => {
@@ -228,7 +228,8 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
         {/* The page's own script failed: said before anything else, since nothing done on it can be relied on to have been sent */}
         {fault && fault.of === `${page.id}:${page.version}` && (
           <span className="status" data-tone="bad" title={fault.message}>
-            This {NOUN.one} has an error in it, so it may not send what you do. Tell your agent: {fault.message}
+            This {NOUN.one} has an error in it, so it may not send what you do. {fault.agentTold ? 'Your agent has been told' : 'Tell your agent'}:{' '}
+            {fault.message}
           </span>
         )}
         {page.run ? (
@@ -270,7 +271,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
           title={page.title}
           user={user}
           // Said of the version that failed, and of no other: a new version is a new page
-          onFault={(message) => setFault({ of: `${page.id}:${page.version}`, message })}
+          onFault={(message, agentTold) => setFault({ of: `${page.id}:${page.version}`, message, agentTold })}
         />
       )}
     </main>

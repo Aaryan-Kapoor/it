@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { briefClick, describeClick } from '@it/protocol'
+import { briefClick, describeClick, FAULT } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 interface Click {
@@ -188,6 +188,27 @@ describe('the Claude Code add-on', () => {
     await host.tick()
     expect(asked.at(-1)!.path).toBe('/clicks?harness=claude-code&session=session-1')
     expect([host.env.IT_HARNESS, host.env.IT_SESSION]).toEqual(['claude-code', 'session-1'])
+  })
+
+  test('a page whose own script failed is said to its agent as that, and not as something a person did', () => {
+    const fault = {
+      id: 'click-9',
+      artifact: 'board',
+      title: 'Board',
+      name: FAULT,
+      payload: { message: 'ReferenceError:  go is\nnot defined' },
+      at: 1,
+      attended: true,
+    }
+    const text = describeClick(fault)
+    expect(text).toContain('The page "Board" (board) has an error in its own script')
+    expect(text).toContain('ReferenceError: go is not defined')
+    expect(text).toContain('Nobody did this')
+    expect(text).toContain('[action click-9]')
+    expect(text).not.toContain('sent this')
+    expect(briefClick(fault)).toBe('[It] "Board" (board): its own script failed, with details [action click-9]')
+    // One that carries nothing readable still says what it is
+    expect(describeClick({ ...fault, payload: null })).toContain('an error it gave no words for')
   })
 
   test('an idle conversation is given a click as a turn, in the connector’s own words, and only then is it reported', async () => {

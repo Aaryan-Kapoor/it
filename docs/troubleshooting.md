@@ -95,11 +95,11 @@ The bar above a page says where the last thing you did has got to, and what it s
 | Sent. … is busy, and gets it when it is free | The conversation is open and in the middle of something | Wait for its turn to end |
 | Sent. … is not listening: its conversation looks closed | Nothing on that machine was listening for it: the conversation is closed, or its app is not running | Open the conversation again, or press "Wake it" to have It reopen it for this and from now on |
 | Working | It reopened the conversation, and its agent is at work | Nothing. The square beside it stops the agent |
-| Couldn’t wake …, with a reason | It tried to reopen the conversation and could not: the reason follows | Put right what the reason names. It tries again by itself a few times |
+| Couldn’t wake …, with a reason | It tried to reopen the conversation and could not: the reason follows, with the last line the agent app itself printed where it ended with an error | Put right what the reason names. It tries again by itself four times, further apart each time, and then leaves what you did waiting until the conversation next runs |
 | Stopped | You stopped the agent. What was waiting for that conversation went with the stop | Do it again if you still want it |
 | Your agent has it | The agent was given it and has not changed the page since | Wait, or look at the conversation |
 | Done, or Your agent could not do that | The agent said so | |
-| This page has an error in it | The page's own script failed, with the words that follow | Tell your agent those words: it wrote the page |
+| This page has an error in it | The page's own script failed, with the words that follow | Nothing, where it ends "Your agent has been told": the agent that wrote the page was sent the error, and mends the page. Where it ends "Tell your agent", say those words to it yourself. Until the page is mended, what you do on it may not be sent |
 | Waiting for … to come online | The machine whose agent made the page has not been heard from | Start It on that machine |
 
 Once the agent has changed the page after what you did, the bar says nothing more: the answer is on the page.

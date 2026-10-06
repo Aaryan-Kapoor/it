@@ -252,7 +252,25 @@ export function withoutFiles(value: unknown): { payload: unknown; left: number }
  * where to read it. That is for routes where the text passes somewhere other people on the
  * machine might see it, such as a command line.
  */
+/**
+ * The name under which the site tells a page's agent that the page's own script failed. It is
+ * no action of the person's: the site sends it itself, once for a showing of the page, with
+ * what the script failed with. A page may send an action of that name too, which does no harm:
+ * its agent is told that its page has an error, and looks.
+ */
+export const FAULT = 'it:fault'
+/** What a script failed with, as it was carried: a line of text, or nothing that can be read. */
+const faultOf = (payload: unknown): string => {
+  const said = (payload as { message?: unknown } | null)?.message
+  return typeof said === 'string' && said.trim() ? said.replace(/\s+/g, ' ').slice(0, 300) : 'an error it gave no words for'
+}
 export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
+  // Not something anyone did: the page's own script failed where it was being shown. Said as
+  // that, with what to do, since an agent that reads it as a press would answer a press.
+  if (c.name === FAULT) {
+    const named = c.title ? `"${c.title}" (${c.artifact})` : `(${c.artifact})`
+    return `[It] The ${NOUN.one} ${named} has an error in its own script, which failed on a display with: ${faultOf(c.payload)}. Nobody did this: it is your ${NOUN.one} that is broken, and what is done on it may not be reaching you. Mend it and publish it again. [action ${c.id}]`
+  }
   // A picture written out as text is no use to read, and a drawing is hundreds of lines of it
   const { payload, left } = withoutFiles(c.payload)
   const full = payload === undefined || payload === null ? '' : JSON.stringify(payload)
@@ -291,6 +309,8 @@ export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
 export function briefClick(c: Click): string {
   const full = c.payload === undefined || c.payload === null ? '' : JSON.stringify(c.payload)
   const named = c.title ? `"${c.title}" (${c.artifact})` : `(${c.artifact})`
+  // The page's own script failed: said as that, in the few words this line has
+  if (c.name === FAULT) return `[It] ${named}: its own script failed, with details [action ${c.id}]`
   const details = full === '' || full === '{}' ? '' : ', with details'
   const alone = c.attended === false ? ', sent by the page itself' : ''
   const since =
