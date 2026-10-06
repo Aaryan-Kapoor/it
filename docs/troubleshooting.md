@@ -94,7 +94,7 @@ The bar above a page says where the last thing you did has got to, and what it s
 | Sent. Waiting for your agent | It has it, and is handing it to the agent | Nothing, for the first seconds |
 | Sent. … is busy, and gets it when it is free | The conversation is open and in the middle of something | Wait for its turn to end |
 | Sent. … is not listening: its conversation looks closed | Nothing on that machine was listening for it: the conversation is closed, or its app is not running | Open the conversation again, or press "Wake it" to have It reopen it for this and from now on |
-| Working | It reopened the conversation, and its agent is at work | Nothing. The square beside it stops the agent |
+| Working | It reopened the conversation, and its agent is at work | Nothing. Stop, beside it, ends the agent |
 | Couldn’t wake …, with a reason | It tried to reopen the conversation and could not: the reason follows, with the last line the agent app itself printed where it ended with an error | Put right what the reason names. It tries again by itself four times, further apart each time, and then leaves what you did waiting until the conversation next runs |
 | Stopped | You stopped the agent. What was waiting for that conversation went with the stop | Do it again if you still want it |
 | Your agent has it | The agent was given it and has not changed the page since | Wait, or look at the conversation |

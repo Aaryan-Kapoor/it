@@ -449,7 +449,7 @@ quietly "Source-available under the It License, which is in ${HOME_DIR}/LICENSE.
 if ( : < /dev/tty ) 2>/dev/null; then
   if [ -n "${stage}" ]; then rm -rf -- "${stage}" || true; stage=""; fi
   printf '\n'
-  IT_INSTALL_FLOW=1 PATH="${DIR}:${PATH:-}" "${DIR}/it" setup < /dev/tty || exit $?
+  IT_INSTALL_FLOW=1 IT_INSTALL_ON_PATH="${on_path}" PATH="${DIR}:${PATH:-}" "${DIR}/it" setup < /dev/tty || exit $?
 else
   printf '\n  Next:  %s setup\n\n' "${it_quoted}"
 fi

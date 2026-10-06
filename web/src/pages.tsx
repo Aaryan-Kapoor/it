@@ -308,6 +308,7 @@ function Working({ artifactId, stopping }: { artifactId: Id<'artifacts'>; stoppi
           }}
         >
           <IconStop />
+          Stop
         </button>
       )}
     </span>

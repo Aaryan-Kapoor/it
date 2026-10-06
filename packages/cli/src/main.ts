@@ -1225,6 +1225,12 @@ async function settingUpLed(a: Args) {
       flow.line(`  ${flow.green('Give me the It tour.')}`)
     } else flow.line(`${flow.bold('It is ready.')} No agent app is connected: \`it skill\` prints what to give any agent, and \`it setup\` connects one later.`)
     flow.line()
+    // The terminal the install script ran in was open before `it` was on its PATH, and a person
+    // who types `it` there next is told that there is no such command
+    if (stays && process.env.IT_INSTALL_FLOW && process.env.IT_INSTALL_ON_PATH === '0') {
+      flow.line(flow.dim('To type `it` yourself, open a new terminal: this one was open before `it` was on your PATH.'))
+      flow.line()
+    }
     if (trouble) process.exitCode = 1
   } finally {
     await begun.done()

@@ -3006,16 +3006,18 @@ img.portal-demo {
   animation: none;
 }
 .working-stop {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  margin-left: 2px;
-  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  margin-left: 4px;
+  padding: 0 7px 0 5px;
   border: 0;
   border-radius: 5px;
-  background: transparent;
+  background: var(--interactive);
   color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
   cursor: pointer;
 }
 .working-stop:hover {
