@@ -5,8 +5,8 @@
 // on pages a conversation made into that conversation:
 //   - conversation idle  -> a turn starts with the click
 //   - turn running       -> OpenClaw's own queue decides, as it does for any message that
-//                           arrives mid-turn. Unless the user changed it, the click joins the
-//                           turn before its next step, and a command already running finishes first.
+//                           arrives mid-turn. Unless the user changed it, the click waits in
+//                           line behind the running turn, and starts a turn when that one ends.
 //
 // Both go through one call, `api.runtime.channel.inbound.dispatch`, which is how a message from
 // any channel enters a conversation. The agent's answer goes where that conversation's answers
@@ -30,7 +30,7 @@ const EVERY_MS = 1000 // the connector stops counting a conversation as listenin
 const ANSWER_MS = 1500 // how long the connector may stay silent before it is given up on
 const DEADLINE_MS = 3000 // how long one question may take from start to finish, however its answer arrives
 const MOST_BYTES = 256 * 1024 // an answer longer than this is not read to its end, and counts as no answer
-const QUIET_MS = 24 * 60 * 60 * 1000 // a conversation that has done nothing for this long is not asked about any more
+const QUIET_MS = 30 * 24 * 60 * 60 * 1000 // a conversation that has run no command for this long is not asked about any more: a month, which is as long as a click waits for anyone. A gateway is always there, and a page left up for a week is still answered
 const MOST = 40 // how many conversations are asked about at once, which is as many as the connector watches
 const AGAIN_MS = [5_000, 15_000] // how long to wait before trying a refused click again
 const REFUSALS = 3 // after this many refusals in a row a conversation is not asked about for a while
@@ -143,13 +143,11 @@ const unattended = (key) =>
     .split(':')
     .some((part) => part === 'subagent' || part === 'cron')
 
-function register(api) {
-  // OpenClaw loads a plugin more than once: in full when the gateway starts, and again, each
-  // time afresh, only to list what the plugin offers. Everything this add-on does is for a
-  // gateway that is running, so it registers nothing on any other load. Were it to, a second
-  // copy of it would ask for clicks that it could never hand over, and the copy that could
-  // would never learn which conversations to ask about.
-  if (typeof api?.registrationMode === 'string' && api.registrationMode !== 'full') return
+/**
+ * The working copy of this add-on: what it knows of the conversations, and what it does about
+ * them. There is one for a gateway, made by the load that has the running gateway behind it.
+ */
+function make(api) {
   /**
    * Conversations to ask about: key -> { agent, seen, handing, tries, notBefore }. `handing` is
    * null, or says since when a click has been on its way to the agent and how to stop waiting for it.
@@ -267,6 +265,14 @@ function register(api) {
         CommandInterpretationSuppressed: true,
         SessionKey: key,
         AgentId: s.agent,
+        // Who brought this message, and a name for it. OpenClaw needs both of any message it is
+        // to put into a turn that is already running: without them it fails there, and the
+        // click has to be tried again. The name is made from the first click's own id and from
+        // how often this hand-over has been tried, so that a second try is a second message to
+        // OpenClaw and is never taken for one it has had. Neither says where an answer goes.
+        Provider: 'it',
+        Surface: 'it',
+        MessageSid: `it-${clicks[0].id}-${s.tries}`,
         ...address,
       },
       record: { createIfMissing: false },
@@ -347,14 +353,26 @@ function register(api) {
       return
     }
     // The agent has the click once OpenClaw says its turn has started, and that is the only
-    // thing taken as proof. OpenClaw can finish with a message without the agent ever seeing
-    // it (the conversation was busy, or the turn was stopped) and still say it was dispatched.
-    // So finishing without a turn having started counts as a refusal, and the click is tried again.
-    // Whether OpenClaw also says so when it takes a message into a turn that is already running
-    // has not been checked against a real gateway. If it does not, such a click is given again
-    // after the wait, and the agent can tell the repeat by the name the connector gave the click.
+    // thing taken as proof. What OpenClaw answers to the call itself says less than it seems.
+    // Run against a real gateway: where the conversation is idle, the turn starts and the call
+    // answers when the turn is over. Where the conversation is busy, the call answers at once
+    // that the message was dispatched, and no turn has started: OpenClaw either puts the
+    // message into the running turn, and says so, or keeps it in line behind that turn and
+    // starts a turn with it when that one ends. So an answer that the message was taken, with
+    // no turn yet, is not a refusal. The click is on its
+    // way, nothing more is handed to this conversation until its turn starts, and it is given up
+    // on, and tried again, only if OpenClaw says nothing of a turn for as long as HANDING_MS.
+    // Were it tried again sooner, the agent would be sent the same click once for each try.
     Promise.resolve(turn).then(
-      (result) => refused(result?.dispatched === false ? 'not_taken' : 'no_turn_started'),
+      (result) => {
+        if (result?.dispatched === false) return refused('not_taken')
+        // Put into the turn that is running, which is what OpenClaw does with a message for a
+        // conversation busy with a turn of the same kind: the agent reads it at its next step.
+        // OpenClaw starts no turn for it, and so never says that one started. Its own word that
+        // the message was steered into the running turn is the proof here. Left waiting for a
+        // start that never comes, the conversation would be handed nothing more for ten minutes.
+        if (result?.dispatchResult?.deferredToActiveRun === 'steer') accepted()
+      },
       () => refused('dispatch_failed'),
     )
   }
@@ -396,7 +414,7 @@ function register(api) {
 
   // Every shell command the agent runs is told which conversation it belongs to. That is how a
   // page comes to belong to a conversation, and how this add-on learns which ones to ask about.
-  api.on('resolve_exec_env', (event, ctx) => {
+  const execEnv = (event, ctx) => {
     const key = event?.sessionKey ?? ctx?.sessionKey
     // The connector cuts a longer id short, and the two sides would then disagree about it
     if (typeof key !== 'string' || !key || key.length > 200) return undefined
@@ -413,9 +431,9 @@ function register(api) {
     // The commands the agent runs are told where It's folder is too, when it is not the usual place: the `it` command they run must use the same one as this add-on
     const elsewhere = homeAtSetup()
     return { IT_HARNESS: HARNESS, IT_SESSION: key, ...(elsewhere ? { IT_HOME: elsewhere } : {}) }
-  })
+  }
 
-  api.registerService({
+  const service = {
     id: 'it-clicks',
     start() {
       clearInterval(timer)
@@ -437,7 +455,34 @@ function register(api) {
       timer = undefined
       if (unsaved || moved) save()
     },
-  })
+  }
+  return { execEnv, service }
+}
+
+/** Where the one working copy is kept, for every load of this plugin in the same gateway to find. */
+const ONE = Symbol.for('it-bridge.openclaw')
+
+/**
+ * OpenClaw loads a plugin more than once in one gateway: in full when the gateway starts, and
+ * again, afresh, to list what the plugin offers. It then asks the hooks of whichever load it
+ * made last, and starts the services of the full one only. So every load registers the hook,
+ * and each answers through the one working copy, which the full load makes: were each load to
+ * keep its own, the one that is told which conversation a command belongs to would not be the
+ * one that asks for that conversation's clicks, and no click would ever arrive.
+ */
+function register(api) {
+  const full = typeof api?.registrationMode !== 'string' || api.registrationMode === 'full'
+  if (full) {
+    // A gateway that loads its plugins again, in full, has the copy made again: the one before is stopped first
+    try {
+      globalThis[ONE]?.service.stop()
+    } catch {}
+    globalThis[ONE] = make(api)
+  }
+  try {
+    api.on('resolve_exec_env', (event, ctx) => globalThis[ONE]?.execEnv(event, ctx))
+  } catch {}
+  if (full) api.registerService(globalThis[ONE].service)
 }
 
 export default {

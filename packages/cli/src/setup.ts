@@ -868,12 +868,16 @@ export const AFTER: Partial<Record<Harness, string>> = {
 }
 
 /**
- * Add-ons that are written and tested against a stand-in for their harness, and have not yet
- * been run in the real thing. They are not offered until they have, except to someone who asks
- * for them by name (IT_EXPERIMENTAL=openclaw).
+ * Add-ons that are not yet proven in every place their harness is used. They are not offered
+ * until they are, except to someone who asks for them by name (IT_EXPERIMENTAL=openclaw).
+ *
+ * OpenClaw's has been run on a real gateway, with a real model, for a conversation held in
+ * OpenClaw's own interface. It has not been run for a conversation held in a chat channel,
+ * which is where most of OpenClaw's are, and where the agent's answer to a click is sent on to
+ * the chat: until that has been seen to go where it should, it stays held back.
  */
 const HELD_BACK: Partial<Record<Harness, string>> = {
-  openclaw: 'The OpenClaw add-on is written and has not yet been run on a gateway, so it is not switched on.',
+  openclaw: 'The OpenClaw add-on works for a conversation held in OpenClaw itself, and has not yet been tried in a chat channel, so it is not switched on.',
 }
 const heldBack = (id: Harness) =>
   HELD_BACK[id] &&

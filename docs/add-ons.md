@@ -114,13 +114,21 @@ One narrow window is known and accepted: in the terminal a click is handed over 
 
 ### OpenClaw
 
-The add-on puts a click into the conversation that owns the page, where it starts a turn or joins a busy run at its next step. The agent's answer goes where that conversation's answers already go.
+The add-on runs inside the OpenClaw gateway and puts a click into the conversation that owns the page. What happens next is OpenClaw's own doing, as for any message:
 
-It is held back: `it setup` does not offer it, and installs it only for someone who asks for it by name, with `IT_EXPERIMENTAL=openclaw`. It has never been loaded by a gateway, so these things are not known of it:
+- **The conversation is idle.** A turn starts with the click.
+- **A turn that a click began is running.** OpenClaw puts the new click into that turn, and the agent reads it at its next step.
+- **A turn that something else began is running**, such as one you started from OpenClaw's own interface. The click waits in line behind it, and starts a turn when that one ends.
 
-- Whether a click delivered through the add-on is held to the restrictions OpenClaw applies to that conversation's own messages, which are the tools a direct message may use and who sent it. As OpenClaw's interface is written, it is not.
-- How the session keys of a subagent and of a scheduled run read.
-- Whether OpenClaw signals the start of a run for a click that joins a turn already under way.
+A gateway is always there, so there is no Auto-wake for OpenClaw and nothing to reopen. While the gateway is stopped a click waits, and it arrives by itself once the gateway is running again, a little after it has started. A conversation is asked about for a month after the last command its agent ran, so a page left up for a week is still answered. One gateway is asked about at most 40 conversations at a time, the ones that ran a command most recently.
+
+A helper that the agent starts, and a run on a schedule, are given no conversation: a page one of them makes belongs to nobody, and its clicks wait in the inbox. OpenClaw names their sessions `agent:<agent>:subagent:<id>` and `agent:<agent>:cron:<job>:run:<run>`, which is how the add-on knows them.
+
+**It is held back.** `it setup` does not offer it, and installs it only for someone who asks for it by name, with `IT_EXPERIMENTAL=openclaw`. It has been run on a real gateway, OpenClaw 2026.9.6 on Linux with a real model, for a conversation held in OpenClaw's own interface: a click when the conversation was idle, when it was busy in each of the two ways above, three clicks at once, a click straight after the gateway restarted, and a click made while the gateway was stopped. It has not been run for a conversation held in a chat channel, such as Telegram or WhatsApp, which is where most OpenClaw conversations are. There the agent's answer to a click is meant to go to the chat, as its other answers do, and these things are not known:
+
+- Whether that answer goes to the chat it should, and to nowhere else.
+- Whether a click leaves the conversation's record of where it was last reached as it was. In OpenClaw's own interface, where a conversation has no such address, the record afterwards named It as the last channel.
+- Whether a click is held to the restrictions OpenClaw applies to that conversation's own messages. A turn a click began was offered fewer of the agent's tools than a turn begun from OpenClaw's own interface, 44 against 57 in the run above, and which were left out was not looked at.
 - How two profiles on one machine are told apart.
 
 ## What It does not do

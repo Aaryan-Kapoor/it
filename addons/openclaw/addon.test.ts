@@ -271,6 +271,45 @@ describe('the OpenClaw add-on', () => {
     expect(Object.keys(JSON.parse(readFileSync(path.join(home, 'openclaw-sessions.json'), 'utf8')))).toEqual([MAIN])
   })
 
+  test('OpenClaw loads the plugin twice in one gateway and asks the hooks of the load it made last: the conversation a command is told of there is the one whose clicks are asked for', async () => {
+    // The full load, whose service the gateway starts
+    const host = await start()
+    // And the second, as a real gateway makes it: afresh, only to list what the plugin offers
+    vi.resetModules()
+    const again = (await import('./index.js')).default
+    const listing = fakeOpenClaw()
+    listing.api.registrationMode = 'discovery'
+    again.register(listing.api)
+    hosts.push(listing)
+    // It starts nothing of its own
+    expect(listing.services).toEqual([])
+    // The agent runs a command, and it is this load's hook that OpenClaw asks
+    expect(listing.runsCommand(MAIN)).toEqual({ IT_HARNESS: 'openclaw', IT_SESSION: MAIN })
+    offered[MAIN] = [{ id: 'click-1', text: 'one' }]
+    await tick()
+    // The one working copy asks for that conversation's clicks, and hands them to the gateway that is running
+    expect(asked.map((a) => a.path)).toEqual([clicksPath(MAIN)])
+    expect(host.turns.length).toBe(1)
+    expect(listing.turns).toEqual([])
+    host.turns[0]!.begin()
+    await settle()
+    expect(acks()).toEqual(['click-1'])
+  })
+
+  test('a load that is only for listing, with no gateway running behind it, registers a hook that answers nothing and starts nothing', async () => {
+    vi.resetModules()
+    delete (globalThis as Record<symbol, unknown>)[Symbol.for('it-bridge.openclaw')]
+    const plugin = (await import('./index.js')).default
+    const listing = fakeOpenClaw()
+    listing.api.registrationMode = 'discovery'
+    plugin.register(listing.api)
+    hosts.push(listing)
+    expect(listing.services).toEqual([])
+    expect(listing.runsCommand(MAIN)).toBeUndefined()
+    await tick(2)
+    expect(asked).toEqual([])
+  })
+
   test('asks the connector about a conversation once it has run a command, by OpenClaw’s own key for it, and about no other', async () => {
     const host = await start()
     await tick(2)
@@ -308,6 +347,10 @@ describe('the OpenClaw add-on', () => {
       CommandInterpretationSuppressed: true,
       SessionKey: GROUP,
       AgentId: 'main',
+      // Who brought the message and a name for it, which OpenClaw needs to put it into a turn that is running
+      Provider: 'it',
+      Surface: 'it',
+      MessageSid: 'it-click-1-0',
       // Where this conversation's answers already go, so the answer to the click goes there too
       OriginatingChannel: 'telegram',
       OriginatingTo: 'telegram:-1001',
@@ -333,6 +376,10 @@ describe('the OpenClaw add-on', () => {
       CommandInterpretationSuppressed: true,
       SessionKey: 'agent:main:dashboard:abc',
       AgentId: 'main',
+      // Who brought it and its name, which say nothing of where an answer goes: there is no address
+      Provider: 'it',
+      Surface: 'it',
+      MessageSid: 'it-click-1-0',
     })
   })
 
@@ -368,25 +415,58 @@ describe('the OpenClaw add-on', () => {
     expect(acks()).toEqual(['click-1', 'click-2'])
   })
 
-  test('a message OpenClaw says it dispatched is not reported as given unless the agent’s turn started, and is tried again', async () => {
+  test('a message OpenClaw took while the conversation was busy is not reported as given until its turn starts, and is not sent again meanwhile', async () => {
     const host = await start()
     host.runsCommand(MAIN)
     offered[MAIN] = [{ id: 'click-1', text: 'one' }]
     await tick()
-    // OpenClaw finishes with the message and says it was dispatched, but no turn ever started:
-    // the conversation was busy, or the turn was stopped. The agent may never have seen it.
+    // As a real gateway answers for a busy conversation: at once, that the message was
+    // dispatched, with no turn started. It is in line behind the turn that is running.
     host.turns[0]!.finish()
     await settle()
     expect(acks()).toEqual([])
-    expect(host.warnings.length).toBe(1)
-    // Five seconds later it is tried again, and not before
-    await tick(4)
+    expect(host.warnings).toEqual([])
+    // However long the running turn takes, the click is not sent a second time, and another
+    // that arrives meanwhile waits behind it
+    offered[MAIN] = [
+      { id: 'click-1', text: 'one' },
+      { id: 'click-2', text: 'two' },
+    ]
+    await tick(40)
     expect(host.turns.length).toBe(1)
-    await tick()
-    expect(host.turns.length).toBe(2)
-    host.turns[1]!.begin()
+    // The running turn ends, and OpenClaw starts the turn that carries the click
+    host.turns[0]!.begin()
     await settle()
     expect(acks()).toEqual(['click-1'])
+    // And the one that waited behind it is handed over then
+    offered[MAIN] = [{ id: 'click-2', text: 'two' }]
+    await tick()
+    expect(host.turns.length).toBe(2)
+    expect(host.turns[1]!.plan.ctxPayload.Body).toBe('two')
+  })
+
+  test('a click OpenClaw says it put into the turn that is running is the agent’s from then, though no turn starts for it', async () => {
+    const host = await start()
+    host.runsCommand(MAIN)
+    offered[MAIN] = [{ id: 'click-1', text: 'one' }]
+    await tick()
+    // As a real gateway answers where the conversation is busy with a turn a click began: the
+    // message was steered into that turn, and no turn of its own will start
+    host.turns[0]!.finish({ dispatched: true, admission: { kind: 'dispatch' }, dispatchResult: { queuedFinal: false, deferredToActiveRun: 'steer' } })
+    await settle()
+    expect(acks()).toEqual(['click-1'])
+    expect(host.warnings).toEqual([])
+    // The conversation is handed the next click at once, and is not kept waiting for a start that never comes
+    offered[MAIN] = [{ id: 'click-2', text: 'two' }]
+    await tick()
+    expect(host.turns.length).toBe(2)
+    // Kept in line behind the running turn, which OpenClaw says with another word, it is still waited for
+    host.turns[1]!.finish({ dispatched: true, admission: { kind: 'dispatch' }, dispatchResult: { queuedFinal: false, deferredToActiveRun: 'followup' } })
+    await settle()
+    expect(acks()).toEqual(['click-1'])
+    host.turns[1]!.begin()
+    await settle()
+    expect(acks()).toEqual(['click-1', 'click-2'])
   })
 
   test('a turn that starts after OpenClaw had finished with the message still counts, and the click is not given again', async () => {
@@ -514,13 +594,13 @@ describe('the OpenClaw add-on', () => {
     expect(acks()).toEqual(['click-1'])
   })
 
-  test('and after those ten minutes it does not keep a conversation that has been quiet for a day from being forgotten', async () => {
+  test('and after those ten minutes it does not keep a conversation that has been quiet for a month from being forgotten', async () => {
     const host = await start()
     host.runsCommand(MAIN)
     offered[MAIN] = [{ id: 'click-1', text: 'one' }]
     await tick()
     expect(host.turns.length).toBe(1)
-    vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000)
+    vi.setSystemTime(Date.now() + 31 * 24 * 60 * 60 * 1000)
     asked = []
     await tick(8)
     expect(asked).toEqual([])
@@ -535,20 +615,20 @@ describe('the OpenClaw add-on', () => {
     host.runsCommand(key)
     offered[key] = [{ id: 'click-1', text: 'one' }]
     await tick()
-    // Each kind of refusal in turn: OpenClaw fails, says it did not take the message, and finishes without a turn
+    // Each kind of refusal in turn: OpenClaw fails, and says, twice, that it did not take the message
     host.turns[0]!.refuse(new Error('could not read /home/PRIVATE PERSON/project: TOKEN sk-secret'))
     await settle()
     await tick(6)
     host.turns[1]!.finish({ dispatched: false, admission: { kind: 'drop', reason: 'PRIVATE REASON' } })
     await settle()
     await tick(16)
-    host.turns[2]!.finish()
+    host.turns[2]!.finish({ dispatched: false, admission: { kind: 'drop', reason: 'ANOTHER PRIVATE REASON' } })
     await settle()
     const short = createHash('sha256').update(key).digest('hex').slice(0, 8)
     expect(host.warnings).toEqual([
       `It: a click could not be given to a conversation (${short}) and will be tried again: dispatch_failed`,
       `It: a click could not be given to a conversation (${short}) and will be tried again: not_taken`,
-      `It: a click could not be given to a conversation (${short}), 3 times in a row, and waits: no_turn_started`,
+      `It: a click could not be given to a conversation (${short}), 3 times in a row, and waits: not_taken`,
     ])
     // The call itself failing at once, and OpenClaw never saying what became of a click, each have a word of their own
     const other = await start()
@@ -576,11 +656,15 @@ describe('the OpenClaw add-on', () => {
     expect(asked).toEqual([])
   })
 
-  test('a conversation that has been quiet for a day is not asked about, until it runs a command again', async () => {
+  test('a conversation that has been quiet for a week is still asked about, since a gateway is always there, and one quiet for a month is not, until it runs a command again', async () => {
     const host = await start()
     host.runsCommand(MAIN)
     await tick()
-    vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000)
+    vi.setSystemTime(Date.now() + 7 * 24 * 60 * 60 * 1000)
+    asked = []
+    await tick(2)
+    expect(asked.map((a) => a.path)).toContain(clicksPath(MAIN))
+    vi.setSystemTime(Date.now() + 31 * 24 * 60 * 60 * 1000)
     asked = []
     await tick(2)
     expect(asked).toEqual([])
