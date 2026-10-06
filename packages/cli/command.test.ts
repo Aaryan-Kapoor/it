@@ -1771,7 +1771,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
           'connecting Pi',
           'Pi is connected.',
           '',
-          'Pi: Restart Pi, or run /reload in it.',
+          'Pi: If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.',
           '',
           `It’s site is at ${b.url}. Run \`it site\` to open it in a browser on this machine, already paired.`,
           '',

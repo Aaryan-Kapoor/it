@@ -233,6 +233,22 @@ describe('the agent skill', () => {
     expect(example).toMatch(/setTimeout\(\(\) => It\.store\.set\('draft', box\.value\)/)
   })
 
+  test('its first lines are read the same by every app, the strictest of them included', () => {
+    // An app reads the lines between the dashes as YAML. Pi reads them strictly: a colon followed by a space
+    // inside the description begins a mapping there, the whole skill is refused ("Nested mappings are not
+    // allowed in compact mappings") and its agent is never told that It exists.
+    const head = /^---\n([\s\S]*?)\n---\n/.exec(skill)![1]!.split('\n')
+    expect(head.map((line) => line.slice(0, line.indexOf(':')))).toEqual(['name', 'description'])
+    for (const line of head) {
+      const value = line.slice(line.indexOf(':') + 1).trim()
+      // What makes a plain value mean something else: a colon and a space, a space and a hash, and a first character YAML reads as a mark
+      expect(value, line.slice(0, 40)).not.toMatch(/: | #|:$/)
+      expect(value).not.toMatch(/^[[\]{}&*!|>'"%@`,?-]/)
+    }
+    // And the words a person says come before the first full stop, since an app may list no more than that
+    expect(head[1]).toMatch(/^description: Use when the user says "show me", "let's play"[^.]*\./)
+  })
+
   test('says where the command is when its name is not found', () => {
     // By its name alone first. From where it is only when the name is not found, and then with the path
     // written out: a harness that cannot read a command plainly (`$HOME/.it/bin/it …`) stops and asks the person

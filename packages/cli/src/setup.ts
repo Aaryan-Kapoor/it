@@ -12,6 +12,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -914,8 +915,8 @@ export const AFTER: Partial<Record<Harness, string>> = {
   get hermes() {
     return afterHermes(found.hermes)
   },
-  opencode: 'Restart OpenCode: it reads its plugins when it starts.',
-  pi: 'Restart Pi, or run /reload in it.',
+  opencode: 'If OpenCode is open, restart it: it reads its plugins when it starts.',
+  pi: 'If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.',
   codex: 'Start Codex once and choose "Trust all and continue" when it says the hooks need review.',
 }
 
@@ -969,9 +970,25 @@ export const whyHeldBack = (id: string): string | undefined => ((HARNESSES as re
 export const supported = (id: string): id is Harness => id in ADAPTERS && id in ADDONS && !heldBack(id as Harness)
 
 async function versionOf(id: Harness): Promise<string | undefined> {
-  const r = await run(KNOWN[id].bin, ['--version'], 15_000)
-  if (!r.ok) return undefined
-  return semver(r.out)?.join('.') ?? r.out.split('\n')[0]!.slice(0, 40)
+  // Codex makes its own folder the moment it is run, even to say its version. Asked on a
+  // machine whose person does not use Codex (it is installed for everyone, say), that left a
+  // `~/.codex` in their home. Where they have none, it is asked with a folder of its own that
+  // is taken away again.
+  let scratch: string | undefined
+  let env: NodeJS.ProcessEnv | undefined
+  if (id === 'codex' && !process.env.CODEX_HOME && !existsSync(path.join(os.homedir(), '.codex'))) {
+    try {
+      scratch = mkdtempSync(path.join(os.tmpdir(), 'it-codex-'))
+      env = { ...harnessEnv(), CODEX_HOME: scratch }
+    } catch {}
+  }
+  try {
+    const r = await run(KNOWN[id].bin, ['--version'], 15_000, env)
+    if (!r.ok) return undefined
+    return semver(r.out)?.join('.') ?? r.out.split('\n')[0]!.slice(0, 40)
+  } finally {
+    if (scratch) rmSync(scratch, { recursive: true, force: true })
+  }
 }
 
 /** Where a harness keeps its settings as things stand now: where an add-on installed now would go. */
