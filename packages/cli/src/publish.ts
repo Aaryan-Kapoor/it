@@ -261,7 +261,7 @@ export async function publish(input: {
     await call('mutation', api.publish.abandon, { artifactId: begun.artifactId, version: begun.version }).catch(() => {})
     throw err
   }
-  const done = await call<{ slug: string; version: number; url: string }>('action', api.publish.finish, {
+  const done = await call<{ slug: string; version: number; url: string; elsewhere?: boolean }>('action', api.publish.finish, {
     artifactId: begun.artifactId,
     version: begun.version,
   })
@@ -276,6 +276,12 @@ export async function publish(input: {
     done.version === 1 || input.take ? `This ${NOUN.one} was given to` : `This ${NOUN.one} was published from`,
     'publish it again with --take, and with IT_HARNESS and IT_SESSION set to your own app and conversation.',
   )
+  // The page stays another conversation's, the one that made it: said, with what to do about it,
+  // or the agent tells its person to click and then never hears of it
+  const stays = done.elsewhere
+    ? `What is done on this ${NOUN.one} goes to another conversation, the one that made it, and not to this one. If the person is to be answered here, publish it again with --take.`
+    : undefined
+  const said = [stays, note].filter(Boolean).join(' ')
   // The page's address is the site's as this machine reaches it
-  return { slug: done.slug, version: done.version, url: throughDoor(done.url), ...(note ? { note } : {}) }
+  return { slug: done.slug, version: done.version, url: throughDoor(done.url), ...(said ? { note: said } : {}) }
 }

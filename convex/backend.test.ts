@@ -1119,19 +1119,25 @@ describe('publishing', () => {
     const alice = await person(t, 'alice')
     const laptop = await machineOf(t, 'alice', 'laptop')
     const server = await machineOf(t, 'alice', 'server')
-    await publish(laptop, 'plan', { session: SESSION })
-    await publish(server, 'plan', { session: { harness: 'codex', id: 'thread-9' } })
+    // The one that makes it, and the same one publishing it again, are told nothing: the page is theirs
+    expect((await publish(laptop, 'plan', { session: SESSION })).elsewhere).toBeUndefined()
+    expect((await publish(laptop, 'plan', { session: SESSION })).elsewhere).toBeUndefined()
+    // Another conversation that publishes it is told that the page stays where it was, on another machine or on the same one
+    expect((await publish(server, 'plan', { session: { harness: 'codex', id: 'thread-9' } })).elsewhere).toBe(true)
+    expect((await publish(laptop, 'plan', { session: { harness: 'claude-code', id: 'sess-2' } })).elsewhere).toBe(true)
+    // A script that is in no conversation has nothing to take the page to, and is told nothing
+    expect((await publish(laptop, 'plan')).elsewhere).toBeUndefined()
     const owner = async () => {
       const got = await alice.browser.query(api.artifacts.get, { slug: 'plan' })
       return [got.machine, got.session]
     }
     expect(await owner()).toEqual(['laptop', SESSION])
     // Said explicitly, the page changes hands
-    await publish(server, 'plan', { session: { harness: 'codex', id: 'thread-9' }, take: true })
+    expect((await publish(server, 'plan', { session: { harness: 'codex', id: 'thread-9' }, take: true })).elsewhere).toBeUndefined()
     expect(await owner()).toEqual(['server', { harness: 'codex', id: 'thread-9' }])
     // And a page whose machine is gone goes to whoever publishes it next
     await alice.browser.mutation(api.machines.revoke, { machineId: server.id })
-    await publish(laptop, 'plan', { session: { harness: 'claude-code', id: 'sess-2' } })
+    expect((await publish(laptop, 'plan', { session: { harness: 'claude-code', id: 'sess-2' } })).elsewhere).toBeUndefined()
     expect(await owner()).toEqual(['laptop', { harness: 'claude-code', id: 'sess-2' }])
   })
 

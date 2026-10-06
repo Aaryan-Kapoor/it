@@ -384,14 +384,22 @@ export const _finish = internalMutation({
     })
     // Clicks already waiting on the page go where the page went
     if (moves) await ctx.scheduler.runAfter(0, internal.actions.readdress, { artifactId: a._id })
-    return { slug: a.slug, version, superseded: false }
+    // A conversation that published a page which stays another conversation's is told so. Left
+    // unsaid, it tells its person "click and I will answer", and the clicks go to a conversation
+    // that may have been closed the day before.
+    const elsewhere =
+      !moves &&
+      ver.by?.session !== undefined &&
+      a.session !== undefined &&
+      (ver.by.machineId !== a.machineId || JSON.stringify(ver.by.session) !== JSON.stringify(a.session))
+    return { slug: a.slug, version, superseded: false, ...(elsewhere ? { elsewhere: true } : {}) }
   },
 })
 
 /** Step two, after the uploads: check them, then switch the page to the new version. */
 export const finish = action({
   args: { artifactId: v.id('artifacts'), version: v.number() },
-  handler: async (ctx, args): Promise<{ slug: string; version: number; url: string }> => {
+  handler: async (ctx, args): Promise<{ slug: string; version: number; url: string; elsewhere?: boolean }> => {
     const waiting = await overClashes(() => ctx.runMutation(internal.publish._gate, args))
     let checked: { ok: boolean; missing: string[] }
     try {
@@ -408,7 +416,7 @@ export const finish = action({
     // A newer publish of the same page finished first, and this one was put away unshown. Its
     // agent is told so: told "published", it would wait for clicks on something nobody can see.
     if (done.superseded) fail('conflict', 'A newer publish of this page finished first, so this one was not shown. Read the page before publishing again.')
-    return { slug: done.slug, version: done.version, url: `${site()}/p/${done.slug}` }
+    return { slug: done.slug, version: done.version, url: `${site()}/p/${done.slug}`, ...('elsewhere' in done && done.elsewhere ? { elsewhere: true } : {}) }
   },
 })
 
