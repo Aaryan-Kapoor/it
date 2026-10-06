@@ -345,7 +345,9 @@ function ActionStatus({
   const convex = useConvex()
   const setWake = useMutation(api.machines.wake)
   const recent = useQuery(api.actions.forArtifact, { artifactId })
-  const now = useNow(5_000)
+  // Looked at every second: what is said of a click that nobody has taken changes within a few
+  // seconds of it, and a person who is not told by then has usually pressed again
+  const now = useNow(1_000)
   // What is said of a click is said again the moment one is saved here or let go of, and the
   // moment the connection comes or goes: what the backend last said is about the click before it
   useSyncExternalStore(watchOutbox, outboxChanges)
@@ -403,7 +405,11 @@ function ActionStatus({
   if (!last || now - last.at > 10 * 60_000) return null
   // The agent was stopped after the last thing done here: said as that, whatever became of it.
   // What was waiting then went with the stop, and the next thing done reopens the conversation.
-  if (stoppedAt !== null && last.at <= stoppedAt) return <span className="status">Stopped</span>
+  if (stoppedAt !== null && last.at <= stoppedAt) {
+    // Everything of that conversation's that was waiting went with the stop, and is said to have
+    const dropped = (recent ?? []).filter((x) => x.route === 'stopped' && x.at <= stoppedAt && stoppedAt - x.at < 3_600_000).length
+    return <span className="status">{dropped > 1 ? `Stopped, with ${dropped - 1} more that ${dropped === 2 ? 'was' : 'were'} waiting` : 'Stopped'}</span>
+  }
   if (last.delivery === 'handed_off') {
     // The agent has changed the page since: its answer is on the page, and the bar has nothing to add.
     // Left up, "Your agent has it" read as an agent still at work, minutes after it had answered.
@@ -471,7 +477,7 @@ function ActionStatus({
 }
 
 /** How long a click has gone untaken before the owner is offered the reopening of its conversation. */
-const WAKE_OFFER_MS = 6_000
+const WAKE_OFFER_MS = 3_000
 /** How long It has not been reachable before the page says so: longer than a connection takes to come back by itself. */
 const DOWN_MS = 5_000
 /** What the person is asked before closed conversations of an agent app may be reopened on a machine, where they switch it on from a page. */

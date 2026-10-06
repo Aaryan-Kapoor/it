@@ -1350,9 +1350,11 @@ describe('what a person is told about an app', () => {
     // The released Hermes takes a plugin's message in the plain terminal and nowhere else: nothing is said of a setting that would change nothing
     await detectAll()
     expect(AFTER.hermes).toBe(afterHermes('0.21.5'))
-    expect(afterHermes('0.21.5')).toMatch(
-      /^Restart Hermes\. In this Hermes \(0\.21\.5\), what you do on a page arrives by itself only in the plain `hermes` terminal\./,
-    )
+    // What everyone has to do comes first and on a line of its own
+    expect(afterHermes('0.21.5').split('\n')).toEqual([
+      'If Hermes is open, restart it. What you do on a page then arrives by itself in the plain `hermes` terminal.',
+      'In this Hermes (0.21.5) that is the only place it does: in its TUI, its desktop app and its messaging gateway it waits on the page until the agent runs `it wait`.',
+    ])
     expect(afterHermes('0.21.5')).not.toContain('allow_gateway_injection')
     expect(afterHermes('0.20.1')).not.toContain('allow_gateway_injection')
     // A later one may take it in the TUI and the desktop app, once allowed: the setting is named, and so is what happens where this Hermes does not take it
@@ -1360,7 +1362,8 @@ describe('what a person is told about an app', () => {
     try {
       await detectAll()
       expect(AFTER.hermes).toBe(afterHermes('0.22.0'))
-      expect(AFTER.hermes).toContain('`hermes config set plugins.entries.it-bridge.allow_gateway_injection true`')
+      // The command stands on a line of its own, so that no terminal breaks it in the middle of a word
+      expect(AFTER.hermes!.split('\n')).toContain('    hermes config set plugins.entries.it-bridge.allow_gateway_injection true')
       expect(AFTER.hermes).toContain('If this Hermes (0.22.0) does not take that setting, what you do waits on the page until the agent runs `it wait`')
     } finally {
       VERSIONS.hermes = 'Hermes Agent v0.21.5'

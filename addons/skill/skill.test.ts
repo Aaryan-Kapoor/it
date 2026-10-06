@@ -115,7 +115,7 @@ describe('the agent skill', () => {
     // What setup tells a person who has just connected Hermes is the same
     const setup = source('../../packages/cli/src/setup.ts')
     expect(skill).toMatch(/In Hermes a message arrives by itself in the plain `hermes` terminal\./)
-    expect(setup).toContain('arrives by itself only in the plain \\`hermes\\` terminal')
+    expect(setup).toContain('then arrives by itself in the plain `hermes` terminal')
     expect(skill).toContain('later than 0.21.5')
     expect(setup).toContain("older('0.21.5', version)")
   })

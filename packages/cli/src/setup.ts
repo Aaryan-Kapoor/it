@@ -855,9 +855,13 @@ const found: Partial<Record<Harness, string>> = {}
  * every later Hermes is known to take it, so the person is told what happens where one does not.
  */
 export function afterHermes(version: string | undefined): string {
+  // The one thing everyone has to do comes first and by itself. What follows is for those who
+  // use Hermes elsewhere than its plain terminal, a line to a thought, with the command on a
+  // line of its own so that no terminal breaks it in the middle of a word.
+  const first = 'If Hermes is open, restart it. What you do on a page then arrives by itself in the plain `hermes` terminal.'
   if (!version || !older('0.21.5', version))
-    return `Restart Hermes. In this Hermes${version ? ` (${version})` : ''}, what you do on a page arrives by itself only in the plain \`hermes\` terminal. In its TUI, its desktop app and its messaging gateway it waits on the page until the agent runs \`it wait\`.`
-  return `Restart Hermes. What you do on a page arrives by itself in the plain \`hermes\` terminal. For the Hermes TUI or desktop app, also run \`hermes config set plugins.entries.it-bridge.allow_gateway_injection true\` once, which lets It put what you do into those conversations. If this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`
+    return `${first}\nIn this Hermes${version ? ` (${version})` : ''} that is the only place it does: in its TUI, its desktop app and its messaging gateway it waits on the page until the agent runs \`it wait\`.`
+  return `${first}\nFor the Hermes TUI or desktop app, also run this once, which lets It put what you do into those conversations:\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\nIf this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`
 }
 
 /** Codex's own settings file, as text. Null when there is none, and false when one is there and cannot be read. */
