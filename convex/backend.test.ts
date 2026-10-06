@@ -1256,6 +1256,26 @@ describe('state', () => {
     expect((await m.as.query(api.delivery.waiting, { slug: 'plan' }))[0]!.payload).toBe('{"名前":"值","$set":1}')
   })
 
+  test('what was sent to the bell about a page goes from the bell when the page is removed, and what was sent about another stays', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'tour-whiteboard')
+    await publish(m, 'plan')
+    const key = displayKey('alice')
+    const about = await m.as.mutation(api.notifications.send, {
+      text: 'Drew on yours. Next when you have had a look.',
+      slug: 'tour-whiteboard',
+      buttons: [{ label: 'Next', action: 'next' }],
+    })
+    const other = await m.as.mutation(api.notifications.send, { text: 'Deploy?', slug: 'plan' })
+    const none = await m.as.mutation(api.notifications.send, { text: 'Done.' })
+    const shown = async () => (await alice.browser.query(api.notifications.list, { key })).map((n) => n.id).sort()
+    expect(await shown()).toEqual([about.id, other.id, none.id].sort())
+    await m.as.mutation(api.artifacts.remove, { slug: 'tour-whiteboard' })
+    expect(await shown()).toEqual([other.id, none.id].sort())
+  })
+
   test('when the page’s agent last changed the page is said, and what the page stores for itself does not count as that', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

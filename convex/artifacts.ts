@@ -108,6 +108,15 @@ export const remove = mutation({
     await rateLimit(ctx, 'remove', user._id)
     // Its waiting clicks stop counting against the person the moment it is gone
     if (a.waiting) await bump(ctx, user._id, { waiting: -a.waiting })
+    // What was sent to the bell about the page goes from the bell with it. Left there, it
+    // offers a button for a page that is gone: the tour's last notice outlived the tour so.
+    // The newest few hundred are looked through, which is more than a tray ever holds.
+    const told = await ctx.db
+      .query('notifications')
+      .withIndex('by_user', (q) => q.eq('userId', user._id))
+      .order('desc')
+      .take(300)
+    for (const n of told) if (n.artifactId === a._id && !n.dismissedAt) await ctx.db.patch(n._id, { dismissedAt: Date.now() })
     await ctx.db.delete(a._id)
     await ctx.scheduler.runAfter(0, internal.retention.purgeArtifact, { artifactId: a._id })
     // A publish of this page may be under way, with a grant that is still good

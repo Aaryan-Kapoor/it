@@ -128,6 +128,8 @@ async function start(
 ): Promise<ConnectorInfo> {
   stand.found = apps.found ?? CONNECTED
   home = mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
+  // Every folder a test starts a connector in is taken away when the test is over, and not only the last
+  made.push(home)
   process.env.IT_HOME = home
   first(home)
   if (over === 'port') process.env.IT_CONNECTOR_PORT = '1'
@@ -147,10 +149,17 @@ async function start(
 }
 /** What It tells the connector the person has chosen on this machine. */
 const wants = (wanted: string[]) => stand.watching.get('machines:me')!({ wanted })
+/** The folders this test's connectors were started in. */
+const made: string[] = []
 afterEach(async () => {
   // Whatever Codex command is still open is ended, so that nothing waits on it
   for (const c of stand.codex) c.end()
-  await stop?.()
+  try {
+    await stop?.()
+  } finally {
+    // Whatever became of the stopping, nothing is left in the system's folder for scratch files
+    for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true })
+  }
   stop = null
   vi.useRealTimers()
   stand.watching.clear()
