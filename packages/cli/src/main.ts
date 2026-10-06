@@ -1072,15 +1072,19 @@ async function settingUpLed(a: Args) {
     // Registered is not yet running. The connector itself is asked, and given a little while to answer
     if (inBackground && !trouble && !(await answering()))
       trouble = 'It was registered as a background service, but it is not answering. Run `it service logs` to read why.'
-    if (trouble) left.push(trouble)
+    // Not registered, and running all the same: the person started `it serve` themselves, in
+    // another terminal, as a machine with no service manager has them do. It is there to be
+    // reached, and is not said to be stopped.
+    const byHand = !begun.own && !!trouble && (await answering(1500))
+    if (trouble) left.push(byHand ? `${trouble}\nIt is running now, from the \`it serve\` you started yourself, and stops when that does.` : trouble)
     if (begun.background && 'note' in begun.background && begun.background.note) left.push(begun.background.note)
     // Whether It goes on running once this setup has ended. Where it does not, the ending says
     // so and says what to run, in place of saying that It is ready.
-    const stays = !begun.own && !trouble
+    const stays = !begun.own && (!trouble || byHand)
 
     // ---------- how It is reached, and the first screen: only where It goes on running to be reached
     const config = readConfig()
-    if (config && !begun.own && !trouble) {
+    if (config && stays) {
       const tail = tailnetAddresses()
       const home = reachable(config.port)[0]
       const start = config.network ? (config.tailnet ? 2 : 1) : fromAfar() ? (tail.length ? 2 : 1) : 0
@@ -1271,7 +1275,9 @@ async function settingUp(a: Args, joined: boolean) {
       }
       if (trouble) {
         say(trouble)
-        say('Until It runs on this machine, nothing done on a page reaches an agent here. Run `it serve` yourself to keep it going.')
+        // Started by hand in another terminal, it is running: said as that, and not as stopped
+        if (await answering(1500)) say('It is running now, from an `it serve` that was started by hand, and stops when that does.')
+        else say('Until It runs on this machine, nothing done on a page reaches an agent here. Run `it serve` yourself to keep it going.')
       }
       // What the system would not do for the service is said here as well, where a person at a terminal reads it: that It stops when they log out, say
       if ('note' in background && background.note) say(background.note)

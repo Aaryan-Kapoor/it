@@ -1993,7 +1993,8 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
     const opened = opener(m)
     const b = await backend(m, (asked) => (asked.path === 'sessions:inviteOwner' ? { code: 'Ab3dEf6hIj9kLm2nOp5q' } : null))
     try {
-      const ran = await run(m, ['site'], b.env)
+      // With a screen to open a browser on, which the test names whatever the machine it runs on has
+      const ran = await run(m, ['site'], { ...b.env, DISPLAY: ':0' })
       expect([ran.code, printed(ran)]).toEqual([0, { url: `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q` }])
       expect(b.asked).toEqual([{ path: 'sessions:inviteOwner', args: {} }])
       expect(await waitFor(opened)).toBe(`${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`)
@@ -2013,12 +2014,12 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
         [['site', '--no-open'], {}, 'Ab3dEf6hIj9kLm2nOp5q'],
         [['site'], { SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22' }, 'Bc4eFg7iJk0lMn3oPq6r'],
       ] as const) {
-        const ran = await run(m, [...args], { ...b.env, ...env })
+        const ran = await run(m, [...args], { ...b.env, DISPLAY: ':0', ...env })
         expect([ran.code, printed(ran)]).toEqual([0, { url: `${SITE}/pair#${code}` }])
       }
       // A run that does start a browser comes after them. Once its address has been written
       // down, one that either of the runs before it had started would have been written down too
-      expect((await run(m, ['site'], b.env)).code).toBe(0)
+      expect((await run(m, ['site'], { ...b.env, DISPLAY: ':0' })).code).toBe(0)
       const given = () => (existsSync(opened) ? readFileSync(opened, 'utf8') : '').split('\n').filter(Boolean)
       for (let n = 0; n < 200 && !given().includes(`${SITE}/pair#Cd5fGh8jKl1mNo4pQr7s`); n++) await new Promise((r) => setTimeout(r, 50))
       expect(given()).toEqual([`${SITE}/pair#Cd5fGh8jKl1mNo4pQr7s`])
