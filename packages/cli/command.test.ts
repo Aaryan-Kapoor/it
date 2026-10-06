@@ -404,6 +404,57 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
   })
 })
 
+describe.skipIf(process.platform === 'win32' || !python)('the lists a person asks for at a terminal', () => {
+  test('`it list`, `it displays` and `it whoami` are said in lines a person can read, and are JSON for a program and for an agent', async () => {
+    const m = machine()
+    const now = Date.now()
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:list'
+        ? [
+            {
+              id: 'internal-1',
+              slug: 'counter',
+              title: 'Counter',
+              agent: 'pi',
+              machine: 'the desk',
+              pending: 2,
+              updatedAt: now - 3 * 60_000,
+              session: { harness: 'pi', id: 's1' },
+            },
+            { id: 'internal-2', slug: 'board', title: 'Tic-tac-toe', agent: 'claude-code', machine: 'the desk', pending: 0, updatedAt: now - 2 * 3_600_000 },
+          ]
+        : asked.path === 'displays:list'
+          ? [{ id: 'd1', name: 'Kitchen', paired: true, lastSeenAt: now - 10_000 }]
+          : asked.path === 'machines:me'
+            ? { id: 'machine-1', name: 'the desk', wanted: ['pi'], harnesses: [{ id: 'pi', addon: 'connected' }], wakes: [{ harness: 'pi', since: 1 }] }
+            : null,
+    )
+    try {
+      expect((await atTerminal(m, ['list'], b.env)).shown.split('\n')).toEqual([
+        '2 pages, the newest first:',
+        '  counter  Counter      Pi on the desk           3 min ago  2 waiting',
+        '  board    Tic-tac-toe  Claude Code on the desk  2 h ago',
+        '',
+      ])
+      expect((await atTerminal(m, ['displays'], b.env)).shown.split('\n')).toEqual(['1 display:', '  Kitchen  paired  seen just now', ''])
+      expect((await atTerminal(m, ['whoami'], b.env)).shown.split('\n')).toEqual([
+        'It knows this machine as “the desk”.',
+        'Connected here: Pi.',
+        'Closed conversations are reopened for: Pi.',
+        '',
+      ])
+      // Read by a program, and asked for as JSON at a terminal, they are the JSON they always were
+      expect(printed(await run(m, ['list'], b.env)).map((p: { id: string }) => p.id)).toEqual(['counter', 'board'])
+      expect(JSON.parse((await atTerminal(m, ['list', '--json'], b.env)).shown).length).toBe(2)
+      // And for an agent whose app gives its commands a terminal: the mark the app puts on them says who is reading
+      expect(JSON.parse((await atTerminal(m, ['list'], { ...b.env, PI_SESSION_ID: 'a-conversation' })).shown).length).toBe(2)
+      expect(JSON.parse((await atTerminal(m, ['displays'], { ...b.env, CODEX_THREAD_ID: 'a-thread' })).shown)[0].name).toBe('Kitchen')
+    } finally {
+      await b.close()
+    }
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
     const m = machine(true, true)
@@ -1231,7 +1282,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       /^ {2}it serve \[--log <file>\] {2,}\S/m,
       /--yes connects\s+every app it would otherwise ask about/,
       /--no-setup joins and\s+connects no agent app/,
-      /With --json, and wherever a program reads what they print,\s+they print JSON/,
+      /With --json,\s+wherever a program reads what they print, and for an agent, they print JSON/,
       /^ {2}it site \[--no-open\] {2,}\S/m,
       /^ {2}it network \[on \| off \| tailscale\]$/m,
       /^ {2}it status {2,}\S/m,

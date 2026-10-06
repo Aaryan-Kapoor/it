@@ -90,9 +90,11 @@ const out = (value: unknown): void => written(process.stdout, `${JSON.stringify(
 /**
  * Whether what a command prints is read by a person: standard output is a terminal, and JSON was
  * not asked for. A person is then told what they need in a few sentences, the most important
- * first. An agent, a script and a test read the JSON, which is what is printed everywhere else.
+ * first. An agent, a script and a test read the JSON, which is what is printed everywhere else:
+ * also an agent whose app gives its commands a terminal, which is told apart by the mark the
+ * app puts on the commands its agent runs.
  */
-const forPerson = (a: Args): boolean => process.stdout.isTTY === true && a.flags.json !== true
+const forPerson = (a: Args): boolean => process.stdout.isTTY === true && a.flags.json !== true && sessionAsked() === undefined
 /** Says something to a person, a sentence or a paragraph to the line, on standard output. */
 const tell = (lines: (string | undefined)[]): void => written(process.stdout, `${lines.filter((line) => line !== undefined).join('\n')}\n`)
 
@@ -321,6 +323,28 @@ async function update(a: Args) {
 }
 
 /** A page as an agent sees it: the id is the one it chose, not the backend's own. */
+/** How long ago something was, in a word or two. */
+function ago(at: unknown, now = Date.now()): string {
+  if (typeof at !== 'number' || !Number.isFinite(at)) return ''
+  const s = Math.max(0, Math.round((now - at) / 1000))
+  if (s < 45) return 'just now'
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min ago`
+  if (s < 86_400) return `${Math.round(s / 3600)} h ago`
+  return `${Math.round(s / 86_400)} d ago`
+}
+/** Rows set in columns, each column as wide as its widest cell, for a person to read. */
+function columns(rows: string[][]): string[] {
+  const wide = rows.reduce<number[]>((w, row) => row.map((cell, i) => Math.max(w[i] ?? 0, cell.length)), [])
+  return rows.map((row) =>
+    row
+      .map((cell, i) => (i === row.length - 1 ? cell : cell.padEnd(wide[i]!)))
+      .join('  ')
+      .trimEnd(),
+  )
+}
+/** An agent app by the name a person knows it by. */
+const appName = (id: unknown): string => (typeof id === 'string' && Object.hasOwn(KNOWN, id) ? KNOWN[id as Harness].label : typeof id === 'string' ? id : '')
+
 function page(p: Record<string, unknown>): Record<string, unknown> {
   const { id: _internal, slug, ...rest } = p
   return { id: slug, ...rest }
@@ -1757,9 +1781,9 @@ This machine
                                  It reports them until it is turned off.
   it version | it help
 
-Run at a terminal, it setup, it site, it network, it status and it service status say how
-things stand in a few sentences. With --json, and wherever a program reads what they print,
-they print JSON.
+Run at a terminal, it setup, it site, it network, it status, it service, it list,
+it displays, it whoami and it uninstall say how things stand in a few sentences. With --json,
+wherever a program reads what they print, and for an agent, they print JSON.
 `
 
 async function main(argv: string[]): Promise<void> {
@@ -1909,8 +1933,19 @@ async function main(argv: string[]): Promise<void> {
       return network(a)
     case 'serve':
       return keepRunning(a, 'It', 'it serve', serve)
-    case 'whoami':
-      return out(await call('query', api.machines.me))
+    case 'whoami': {
+      const me = await call<{ name?: string; harnesses?: { id: string; addon: string }[]; wakes?: { harness: string }[] } | null>('query', api.machines.me)
+      if (!forPerson(a) || !me) return out(me)
+      const on = (me.harnesses ?? []).filter((h) => h.addon === 'connected' || h.addon === 'needs_approval').map((h) => appName(h.id))
+      const woken = (me.wakes ?? []).map((w) => appName(w.harness))
+      return tell([
+        `It knows this machine as “${me.name ?? ''}”.`,
+        on.length ? `Connected here: ${on.join(', ')}.` : 'No agent app is connected here.',
+        woken.length
+          ? `Closed conversations are reopened for: ${woken.join(', ')}.`
+          : 'No closed conversation is reopened here: Auto-wake is off for every agent app.',
+      ])
+    }
     case 'status':
       return status(a)
     case 'setup':
@@ -1923,8 +1958,23 @@ async function main(argv: string[]): Promise<void> {
       return create(a)
     case 'update':
       return update(a)
-    case 'list':
-      return out((await call<Record<string, unknown>[]>('query', api.artifacts.list)).map(page))
+    case 'list': {
+      const pages = (await call<Record<string, unknown>[]>('query', api.artifacts.list)).map(page)
+      if (!forPerson(a)) return out(pages)
+      if (!pages.length) return tell([`No ${NOUN.many} yet. An agent makes one with \`it create\`.`])
+      return tell([
+        `${pages.length} ${pages.length === 1 ? NOUN.one : NOUN.many}, the newest first:`,
+        ...columns(
+          pages.map((p) => [
+            `  ${String(p.id)}`,
+            String(p.title ?? ''),
+            [appName(p.agent), p.machine].filter(Boolean).join(' on '),
+            ago(p.updatedAt),
+            Number(p.pending) > 0 ? `${p.pending} waiting` : '',
+          ]),
+        ),
+      ])
+    }
     case 'read': {
       const slug = need(a._[0], `which ${NOUN.one}`, 'read <id>')
       const [found, state, actions] = await Promise.all([
@@ -2020,8 +2070,17 @@ async function main(argv: string[]): Promise<void> {
         ),
       )
     }
-    case 'displays':
-      return out(await call('query', api.displays.list))
+    case 'displays': {
+      const shown = await call<{ name: string; paired?: boolean; lastSeenAt?: number }[]>('query', api.displays.list)
+      if (!forPerson(a)) return out(shown)
+      if (!shown.length) return tell(['No display is paired. `it site` opens the site in a browser on this machine, already paired.'])
+      return tell([
+        `${shown.length} display${shown.length === 1 ? '' : 's'}:`,
+        ...columns(
+          shown.map((d) => [`  ${d.name}`, d.paired === false ? 'not paired any more' : 'paired', d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'never seen']),
+        ),
+      ])
+    }
 
     case 'wait':
       return wait(a)
