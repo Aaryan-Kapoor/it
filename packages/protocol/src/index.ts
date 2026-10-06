@@ -245,11 +245,23 @@ export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
 }
 /**
  * A click in a few words: which page, what was done, and the id by which the rest is read. It
- * is what a person sees in their conversation where an agent app has somewhere else to put the
- * rest for the agent, and it carries nothing the page chose but its title and the action's name.
+ * is what stands in a person's conversation where an agent app shows a click as their own
+ * message. It carries nothing the page chose but its title and the action's name: what the
+ * action carried is never put into words that stand as the person's, and the agent reads it
+ * with `it action`, where it arrives as data. It says only that there is something to read,
+ * that nobody was at the page, or that the page has changed since, each in a word or two.
  */
 export function briefClick(c: Click): string {
-  return `[It] ${c.title ? `"${c.title}"` : `(${c.artifact})`}: ${c.name} [action ${c.id}]`
+  const full = c.payload === undefined || c.payload === null ? '' : JSON.stringify(c.payload)
+  const named = c.title ? `"${c.title}" (${c.artifact})` : `(${c.artifact})`
+  const details = full === '' || full === '{}' ? '' : ', with details'
+  const alone = c.attended === false ? ', sent by the page itself' : ''
+  const since =
+    (c.version !== undefined && c.nowVersion !== undefined && c.nowVersion !== c.version) ||
+    (c.stateRevision !== undefined && c.nowStateRevision !== undefined && c.nowStateRevision !== c.stateRevision)
+      ? ', on the page as it was before it last changed'
+      : ''
+  return `[It] ${named}: ${c.name}${details}${alone}${since} [action ${c.id}]`
 }
 export function describeClicks(clicks: readonly Click[], max = CLICK_TEXT_BYTES): string {
   return clicks.map((c) => describeClick(c, max)).join('\n')
