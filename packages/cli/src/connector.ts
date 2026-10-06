@@ -20,7 +20,7 @@ import { conversationFolder } from './publish'
 import { alone } from './serve/backend'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
-import { Budget, carrying, carryOn, claudeWroteAt, codexWroteAt, mayWake, NUDGE, STOPPED } from './wake'
+import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexWroteAt, mayWake, NUDGE, STOPPED, WOKEN } from './wake'
 
 /** A click as the backend offers it: its data as JSON text, and the conversation it is for. */
 interface Offered {
@@ -469,7 +469,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const cwd = conversationFolder(now) ?? conversationFolder(session)
     if (!cwd) return 'the folder its conversation was held in is not known on this machine, or is gone'
     const env = harnessEnv()
-    const how = carrying(now.harness, now.id, text, { codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync), itHome: home() })
+    const how = carrying(now.harness, now.id, text, {
+      codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync),
+      itHome: home(),
+      // The mode the person last had the conversation in, and where `it` is installed
+      mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd) ?? claudeModeOf(session.id, cwd)) : null,
+      itAt: [
+        ...new Set([path.join(home(), 'bin', process.platform === 'win32' ? 'it.exe' : 'it'), process.execPath].filter((p) => /[\\/]it(\.exe)?$/.test(p))),
+      ],
+    })
     if (typeof how === 'string') return how
     if (reopenedNow.has(key)) return 'it is being reopened already'
     const stop = new AbortController()
@@ -629,7 +637,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // machine could read it: the agent is told the action, and where to read what it carried
       const refused = reopening
         ? // Given on the command's input, where nobody else on the machine reads it, so in full
-          await carry(click.session!, [click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n'))
+          await carry(click.session!, `${WOKEN}\n\n${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}`)
         : await codexQueue(line, describeClick(asClick(click), 0))
       // A conversation the person stopped had what was done all the same: it is handed over,
       // and nothing is tried again for it

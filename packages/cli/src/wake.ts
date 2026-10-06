@@ -3,7 +3,7 @@
 // conversation may be reopened. None of it is done for an app the person has not switched
 // Auto-wake on for, which is the connector's to see to.
 import { execFileSync, spawn } from 'node:child_process'
-import { readdirSync, statSync } from 'node:fs'
+import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { WAKE_BACK_MS, WAKES } from '@it/protocol'
@@ -27,9 +27,20 @@ export function mayWake(switched: ReadonlyMap<string, number>, harness: string, 
 /** What each app is called where something is said of it. */
 const APP: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi', opencode: 'OpenCode', hermes: 'Hermes', openclaw: 'OpenClaw' }
 
+/**
+ * What a conversation is told when It reopens it, before what was done on its page: that nobody
+ * is there to approve anything, how `it` is to be run so that it is not refused, and what to do
+ * where the thing cannot be done, which is to say so where the person will see it. A woken
+ * conversation that is refused a command and says so only in its own reply has told nobody.
+ */
+export const WOKEN =
+  '[It] It reopened this conversation for what follows, which someone did on a page of yours while it was closed. Nobody is watching, so nothing can be approved for you: a command you are not already allowed to run is refused. Run `it` by that name alone, with no folder in front of it and no `export` before it: it is on your PATH and is allowed. Do what was asked and nothing more, and show on the page that you have. If you cannot do it, say so where they will see it, with `it notify` or the page’s state, and run `it ack <action id> --failed`.'
+
 /** What a conversation is told when it is reopened only so that it takes what is waiting in its app's own queue. */
-export const NUDGE =
-  '[It] It reopened this conversation because someone used a page of yours while it was closed. What they did is in the message before this one. Nobody is watching: do what it asks and nothing more, and show on the page that you have.'
+export const NUDGE = WOKEN.replace(
+  'for what follows, which someone did on a page of yours while it was closed',
+  'for the message before this one, which is what someone did on a page of yours while it was closed',
+)
 
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
@@ -49,7 +60,11 @@ export interface Carrying {
  * What the conversation may do by itself is, for each app, what the person's own settings for
  * that app allow without asking, and running `it`:
  *
- * - Claude Code is told that `it` may run. Anything else is as its own settings have it.
+ * - Claude Code is told that `it` may run, by its name or by where it is installed, and is run
+ *   in the permission mode the person last had this conversation in, where that is a mode that
+ *   does not ask: a conversation they held with full access is reopened with full access, and
+ *   one they held in the mode that asks is reopened with `it` and whatever their own settings
+ *   allow. It does what it could do with them there, and no more.
  * - Codex is run in its sandbox for a workspace, with the network allowed and It's own folder
  *   writable, which is what `it` needs. It can write in the conversation's folder and nowhere
  *   else, and nothing can ask the person for more, since they are not there.
@@ -60,13 +75,17 @@ export function carrying(
   harness: string,
   session: string,
   text: string,
-  has: { codex?: string[] | null; itHome: string; command?: string },
+  has: { codex?: string[] | null; itHome: string; command?: string; mode?: string | null; itAt?: string[] },
 ): Carrying | string {
   const app = APP[harness] ?? harness
   const odd = `its conversation id is not one ${app} would have made`
   if (harness === 'claude-code') {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(session)) return odd
-    return { argv: [has.command ?? 'claude', '--resume', session, '--print', '--allowedTools', 'Bash(it:*)'], input: text, app }
+    // `it` by its name, and by each place it is installed: an agent that learned to run it by
+    // its whole path, when its window had no PATH for it, is not refused for that
+    const it = ['Bash(it:*)', ...(has.itAt ?? []).filter((p) => /^[^\s()*]+$/.test(p)).map((p) => `Bash(${p}:*)`)]
+    const mode = has.mode && (CLAUDE_MODES as readonly string[]).includes(has.mode) ? ['--permission-mode', has.mode] : []
+    return { argv: [has.command ?? 'claude', '--resume', session, '--print', ...mode, '--allowedTools', ...it], input: text, app }
   }
   if (harness === 'codex') {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(session)) return odd
@@ -312,6 +331,58 @@ export function codexWroteAt(thread: string, codexHome = process.env.CODEX_HOME 
   return null
 }
 const found = new Map<string, string>()
+
+/** The permission modes of Claude Code that do not ask a person: a conversation last held in one of these is reopened in it. Any other is reopened in the mode that asks, where what would be asked is refused. */
+export const CLAUDE_MODES = ['acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'] as const
+
+/**
+ * The permission mode the person last had a Claude Code conversation in, as Claude Code wrote
+ * it down in the file it keeps of the conversation, or null where that cannot be told. A turn
+ * that It started itself, by reopening the conversation, says nothing of what the person chose:
+ * those are the turns begun with Claude Code's own command for running without a window, and
+ * they are passed over.
+ */
+export function claudeModeOf(session: string, cwd: string, configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')): string | null {
+  if (!/^[0-9a-f-]{36}$/i.test(session)) return null
+  const file = path.join(configDir, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${session}.jsonl`)
+  let fd: number
+  try {
+    fd = openSync(file, 'r')
+  } catch {
+    return null
+  }
+  try {
+    // Read from its end, a piece at a time, and no further back than a few megabytes: what the
+    // person chose last is near the end, however long the conversation is
+    const size = statSync(file).size
+    const PIECE = 256 * 1024
+    let end = size
+    let rest = ''
+    for (let read = 0; end > 0 && read < 16 * 1024 * 1024; read += PIECE) {
+      const from = Math.max(0, end - PIECE)
+      const piece = Buffer.alloc(end - from)
+      readSync(fd, piece, 0, piece.length, from)
+      const lines = (piece.toString('utf8') + rest).split('\n')
+      // The first line of a piece may be the end of a line that begins before it
+      rest = from > 0 ? lines.shift()! : ''
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i]!
+        if (!line.includes('"permissionMode"')) continue
+        try {
+          const row = JSON.parse(line) as { type?: string; permissionMode?: unknown; entrypoint?: unknown }
+          if (row.type !== 'user' || typeof row.permissionMode !== 'string' || row.entrypoint === 'sdk-cli') continue
+          return row.permissionMode
+        } catch {}
+      }
+      end = from
+    }
+    return null
+  } catch {
+    return null
+  } finally {
+    closeSync(fd)
+  }
+}
 
 /**
  * When Claude Code last wrote anything of a conversation, by the file it keeps of each one

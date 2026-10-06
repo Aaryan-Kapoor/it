@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
-import { Budget, carrying, carryOn, claudeResume, claudeWroteAt, codexWroteAt, mayWake, STOPPED } from './src/wake'
+import { Budget, carrying, carryOn, claudeModeOf, claudeResume, claudeWroteAt, codexWroteAt, mayWake, STOPPED, WOKEN } from './src/wake'
 
 let scratch: string
 let was: string | undefined
@@ -204,6 +204,77 @@ describe('when Codex last wrote of a conversation', () => {
     expect(codexWroteAt('01a10f7c-0000-7010-8d57-000000000000', codexHome)).toBeNull()
     expect(codexWroteAt('../../etc', codexHome)).toBeNull()
     expect(codexWroteAt(thread, path.join(scratch, 'no-such-codex'))).toBeNull()
+  })
+})
+
+describe('the mode a Claude Code conversation is reopened in', () => {
+  const UUID = '3f6c2f0e-1a2b-4c3d-9e8f-000000000001'
+  const has = { codex: ['codex'], itHome: '/home/someone/.it' }
+  const words = (how: unknown) => (how as { argv: string[] }).argv
+
+  test('it is reopened in the mode the person last had it in, where that mode asks nobody, and `it` is allowed by its name and by where it is installed', () => {
+    expect(words(carrying('claude-code', UUID, 'x', { ...has, mode: 'bypassPermissions', itAt: ['/home/someone/.it/bin/it'] }))).toEqual([
+      'claude',
+      '--resume',
+      UUID,
+      '--print',
+      '--permission-mode',
+      'bypassPermissions',
+      '--allowedTools',
+      'Bash(it:*)',
+      'Bash(/home/someone/.it/bin/it:*)',
+    ])
+    for (const mode of ['acceptEdits', 'auto', 'dontAsk']) expect(words(carrying('claude-code', UUID, 'x', { ...has, mode }))).toContain(mode)
+    // A mode that asks, one that only plans, one that is not known, and none: reopened as before, with `it` alone
+    for (const mode of ['default', 'plan', 'made-up', '--dangerously-skip-permissions', null, undefined])
+      expect(words(carrying('claude-code', UUID, 'x', { ...has, mode }))).toEqual(['claude', '--resume', UUID, '--print', '--allowedTools', 'Bash(it:*)'])
+    // A place whose name could be read as more than a place is not made a rule of
+    expect(words(carrying('claude-code', UUID, 'x', { ...has, itAt: ['/home/some one/.it/bin/it', '/x/it:*) Bash(rm', '/ok/it'] })).slice(-2)).toEqual([
+      'Bash(it:*)',
+      'Bash(/ok/it:*)',
+    ])
+  })
+
+  test('the mode is read from what Claude Code wrote of the conversation, and a turn It started itself says nothing of what the person chose', () => {
+    const config = path.join(scratch, 'claude')
+    const dir = path.join(config, 'projects', '-home-someone-board')
+    mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, `${UUID}.jsonl`)
+    const row = (over: Record<string, unknown>) => `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'x'.repeat(400) }, ...over })}\n`
+    // Held with full access in an app that drives Claude Code, and then reopened by It, twice, in the mode that asks
+    writeFileSync(
+      file,
+      row({ permissionMode: 'default', entrypoint: 'cli' }) +
+        row({ permissionMode: 'bypassPermissions', entrypoint: 'sdk-ts' }) +
+        `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'the word "permissionMode" in a reply is not a mode' }] } })}\n` +
+        row({ permissionMode: 'default', entrypoint: 'sdk-cli' }) +
+        row({ permissionMode: 'default', entrypoint: 'sdk-cli' }),
+    )
+    expect(claudeModeOf(UUID, '/home/someone/board', config)).toBe('bypassPermissions')
+    // The person opens it again and holds it in another mode: that is the mode from then on
+    writeFileSync(
+      file,
+      readFileSync(file, 'utf8') + row({ permissionMode: 'acceptEdits', entrypoint: 'cli' }) + row({ permissionMode: 'default', entrypoint: 'sdk-cli' }),
+    )
+    expect(claudeModeOf(UUID, '/home/someone/board', config)).toBe('acceptEdits')
+    // A long conversation is read from its end
+    writeFileSync(
+      file,
+      row({ permissionMode: 'bypassPermissions', entrypoint: 'sdk-ts' }) + `${JSON.stringify({ type: 'assistant', pad: 'y'.repeat(700_000) })}\n`.repeat(2),
+    )
+    expect(claudeModeOf(UUID, '/home/someone/board', config)).toBe('bypassPermissions')
+    // Nothing written of it, or nothing but It's own turns: not known
+    expect(claudeModeOf(UUID, '/home/someone/elsewhere', config)).toBeNull()
+    writeFileSync(file, row({ permissionMode: 'default', entrypoint: 'sdk-cli' }))
+    expect(claudeModeOf(UUID, '/home/someone/board', config)).toBeNull()
+    expect(claudeModeOf('../../etc/passwd', '/home/someone/board', config)).toBeNull()
+  })
+
+  test('a reopened conversation is told that nobody can approve anything, how to run `it`, and to say so on the page where it cannot do what was asked', () => {
+    expect(WOKEN).toMatch(/^\[It\] /)
+    expect(WOKEN).toContain('Run `it` by that name alone')
+    expect(WOKEN).toContain('`it notify`')
+    expect(WOKEN).toContain('`it ack <action id> --failed`')
   })
 })
 
