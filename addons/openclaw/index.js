@@ -34,7 +34,7 @@ const QUIET_MS = 30 * 24 * 60 * 60 * 1000 // a conversation that has run no comm
 const MOST = 40 // how many conversations are asked about at once, which is as many as the connector watches
 const AGAIN_MS = [5_000, 15_000] // how long to wait before trying a refused click again
 const REFUSALS = 3 // after this many refusals in a row a conversation is not asked about for a while
-const LEFT_ALONE_MS = 10 * 60 * 1000 // how long that while is. A command it runs in that time does not start the asking again
+const LEFT_ALONE_MS = [60 * 1000, 10 * 60 * 1000] // how long that while is: a minute the first time, which is as long as a gateway takes to restart, and ten minutes each time after. A command it runs in that time does not start the asking again, and when the time is up it is asked about again by itself
 const HANDING_MS = 10 * 60 * 1000 // how long OpenClaw is given to say that the agent has a click
 const SAVE_MS = 10 * 60 * 1000 // how often the list of conversations is written down when only times have changed
 
@@ -149,7 +149,7 @@ const unattended = (key) =>
  */
 function make(api) {
   /**
-   * Conversations to ask about: key -> { agent, seen, handing, tries, notBefore }. `handing` is
+   * Conversations to ask about: key -> { agent, seen, handing, tries, notBefore, leftUntil, lefts }. `handing` is
    * null, or says since when a click has been on its way to the agent and how to stop waiting for it.
    */
   const sessions = new Map()
@@ -159,7 +159,6 @@ function make(api) {
   let timer
   let checking = false
   let unsaved = false // a conversation was added or dropped since the list was last written down
-  const leftAlone = new Map() // conversations that refused too often, and until when they are not asked about
   let moved = false // only times have changed
   let savedAt = 0
 
@@ -207,7 +206,7 @@ function make(api) {
       }
       return
     }
-    sessions.set(key, { agent, seen, handing: null, tries: 0, notBefore: 0 })
+    sessions.set(key, { agent, seen, handing: null, tries: 0, notBefore: 0, leftUntil: 0, lefts: 0 })
     unsaved = true
     // Past the most the connector watches, the conversation that has been quiet longest gives way
     while (sessions.size > MOST) {
@@ -295,6 +294,7 @@ function make(api) {
         if (!s.handing) {
           s.tries = 0
           s.notBefore = 0
+          s.lefts = 0
         }
         gave(clicks)
         return
@@ -304,6 +304,7 @@ function make(api) {
       s.handing = null
       s.tries = 0
       s.notBefore = 0
+      s.lefts = 0
       s.seen = Date.now()
       moved = true
       gave(clicks)
@@ -316,17 +317,15 @@ function make(api) {
       s.handing = null
       s.tries++
       if (s.tries >= REFUSALS) {
-        // A conversation that takes nothing is left alone. Asking about it would keep its clicks
-        // set aside for this add-on, where nothing else can have them. Once the asking has
-        // stopped, the connector lets them wait where the person can see them.
-        if (sessions.get(key) === s) {
-          sessions.delete(key)
-          unsaved = true
-        }
-        // A turn that is running runs a command every few seconds. Were each of those to start
-        // the asking again, the same click would be sent three more times, over and over.
-        leftAlone.set(key, Date.now() + LEFT_ALONE_MS)
-        if (leftAlone.size > 200) leftAlone.delete(leftAlone.keys().next().value)
+        // A conversation that takes nothing is left alone for a while. Asking about it would
+        // keep its clicks set aside for this add-on, where nothing else can have them: once the
+        // asking has stopped, the connector lets them wait where the person can see them. It
+        // is not forgotten. What stood in the way may be over in a moment (a gateway that is
+        // restarting takes no work), so when the while is up it is asked about again by
+        // itself, and its click is tried again, with nobody having to say anything to it.
+        s.tries = 0
+        s.leftUntil = Date.now() + LEFT_ALONE_MS[Math.min(s.lefts, LEFT_ALONE_MS.length - 1)]
+        s.lefts++
         say(`a click could not be given to a conversation (${short(key)}), ${REFUSALS} times in a row, and waits: ${kind}`)
         return
       }
@@ -406,7 +405,8 @@ function make(api) {
       // Asking tells the connector that someone is listening, so nothing is asked unless a click could be handed over
       const rt = host()
       if (!rt || !sessions.size) return
-      await Promise.all([...sessions].map(([key, s]) => checkOne(rt, key, s).catch(() => {})))
+      // One that is being left alone is not asked about until its while is up
+      await Promise.all([...sessions].filter(([, s]) => now >= s.leftUntil).map(([key, s]) => checkOne(rt, key, s).catch(() => {})))
     } finally {
       checking = false
     }
@@ -422,12 +422,9 @@ function make(api) {
     if (unattended(key)) return undefined
     const agent = typeof ctx?.agentId === 'string' && ctx.agentId ? ctx.agentId : agentOf(key)
     if (!agent) return undefined
-    // Its commands are always told which conversation they are in. It is asked about again
-    // only once it has been left alone long enough after refusing.
-    if (Date.now() >= (leftAlone.get(key) ?? 0)) {
-      leftAlone.delete(key)
-      learn(key, agent, Date.now())
-    }
+    // Its commands are always told which conversation they are in. One that is being left alone
+    // after refusing is not asked about any sooner for running one.
+    learn(key, agent, Date.now())
     // The commands the agent runs are told where It's folder is too, when it is not the usual place: the `it` command they run must use the same one as this add-on
     const elsewhere = homeAtSetup()
     return { IT_HARNESS: HARNESS, IT_SESSION: key, ...(elsewhere ? { IT_HOME: elsewhere } : {}) }

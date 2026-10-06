@@ -531,7 +531,7 @@ describe('the OpenClaw add-on', () => {
     expect(acks()).toEqual(['click-1'])
   })
 
-  test('a conversation that refuses three times in a row is left alone for ten minutes, whatever commands it runs meanwhile', async () => {
+  test('a conversation that refuses three times in a row is left alone for a while, whatever commands it runs meanwhile, and is then asked about again by itself', async () => {
     const host = await start()
     host.runsCommand(MAIN)
     offered[MAIN] = [{ id: 'click-1', text: 'one' }]
@@ -547,26 +547,46 @@ describe('the OpenClaw add-on', () => {
     await settle()
     expect(host.warnings.length).toBe(3)
     expect(acks()).toEqual([])
-    // Asking would keep the click set aside for this add-on, so nothing is asked, however long it goes on
+    // Asking would keep the click set aside for this add-on, so nothing is asked while it is left alone
     asked = []
     await tick(3)
     // A turn that is still running goes on running commands. They are told which conversation
     // they are in, and the click is not sent three more times because of them.
     expect(host.runsCommand(MAIN)).toEqual({ IT_HARNESS: 'openclaw', IT_SESSION: MAIN })
     await tick(3)
-    vi.setSystemTime(Date.now() + 9 * 60 * 1000)
+    vi.setSystemTime(Date.now() + 40 * 1000)
     host.runsCommand(MAIN)
     await tick(3)
     expect(asked).toEqual([])
     expect(host.turns.length).toBe(3)
-    // It is not remembered across a restart of OpenClaw either
-    expect(JSON.parse(readFileSync(path.join(home, 'openclaw-sessions.json'), 'utf8'))).toEqual({})
-    // Ten minutes on the conversation is in use again: it is asked about, and its click is tried, as before
-    vi.setSystemTime(Date.now() + 2 * 60 * 1000)
-    host.runsCommand(MAIN)
+    // It is not forgotten: a gateway that was restarting takes work again a moment later, and the
+    // click must not wait for the agent to happen to run a command in that conversation
+    expect(Object.keys(JSON.parse(readFileSync(path.join(home, 'openclaw-sessions.json'), 'utf8')))).toEqual([MAIN])
+    // A minute on it is asked about again by itself, with no command run, and its click is tried, as before
+    vi.setSystemTime(Date.now() + 30 * 1000)
     await tick()
-    expect(asked.map((a) => a.path)).toEqual([clicksPath(MAIN)])
+    expect(asked.map((a) => a.path)).toContain(clicksPath(MAIN))
     expect(host.turns.length).toBe(4)
+    // Refusing three more times, it is left alone for ten minutes this time
+    host.turns[3]!.refuse()
+    await settle()
+    await tick(6)
+    host.turns[4]!.refuse()
+    await settle()
+    await tick(16)
+    host.turns[5]!.refuse()
+    await settle()
+    asked = []
+    vi.setSystemTime(Date.now() + 9 * 60 * 1000)
+    await tick(3)
+    expect(asked).toEqual([])
+    vi.setSystemTime(Date.now() + 2 * 60 * 1000)
+    await tick()
+    expect(host.turns.length).toBe(7)
+    // And once it takes one, the next trouble starts from a minute again
+    host.turns[6]!.begin()
+    await settle()
+    expect(acks()).toEqual(['click-1'])
   })
 
   test('a hand-over OpenClaw says nothing about counts as refused after ten minutes, and the click is tried again', async () => {
