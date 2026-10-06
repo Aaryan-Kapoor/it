@@ -1714,10 +1714,13 @@ describe('add-ons carried by the CLI', () => {
       }
     },
   )
-  test('an add-on that has not yet been run in its harness is not offered, unless asked for by name', async () => {
-    const { supported } = await import('./src/setup')
-    const before = process.env.IT_EXPERIMENTAL
+  test('an add-on that has not yet been run in its harness is not offered, unless asked for by name, and asking once is enough for that folder', async () => {
+    const { supported, whyHeldBack } = await import('./src/setup')
+    const before = { asked: process.env.IT_EXPERIMENTAL, home: process.env.IT_HOME }
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-asked-'))
+    const other = mkdtempSync(path.join(os.tmpdir(), 'it-asked-'))
     try {
+      process.env.IT_HOME = folder
       delete process.env.IT_EXPERIMENTAL
       expect([supported('openclaw'), supported('claude-code'), supported('codex'), supported('pi'), supported('opencode'), supported('hermes')]).toEqual([
         false,
@@ -1727,11 +1730,26 @@ describe('add-ons carried by the CLI', () => {
         true,
         true,
       ])
+      // Why not is said with how to ask for it
+      expect(whyHeldBack('openclaw')).toMatch(/has not yet been tried in a chat channel.*run `IT_EXPERIMENTAL=openclaw it setup` once\.$/)
+      expect(whyHeldBack('pi')).toBeUndefined()
       process.env.IT_EXPERIMENTAL = 'openclaw'
       expect(supported('openclaw')).toBe(true)
+      // Asked for once, it is written down in It's folder: the background service and the shell
+      // an agent runs `it` from do not have the variable, and must not take the add-on out again
+      delete process.env.IT_EXPERIMENTAL
+      expect([supported('openclaw'), whyHeldBack('openclaw')]).toEqual([true, undefined])
+      expect(JSON.parse(readFileSync(path.join(folder, 'addons', 'asked-for.json'), 'utf8'))).toEqual(['openclaw'])
+      // In another folder of It's nobody has asked
+      process.env.IT_HOME = other
+      expect(supported('openclaw')).toBe(false)
     } finally {
-      if (before === undefined) delete process.env.IT_EXPERIMENTAL
-      else process.env.IT_EXPERIMENTAL = before
+      for (const [name, value] of [['IT_EXPERIMENTAL', before.asked], ['IT_HOME', before.home]] as const) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+      rmSync(folder, { recursive: true, force: true })
+      rmSync(other, { recursive: true, force: true })
     }
   })
   // The shell here is the one Linux and macOS give a hook. On Windows the command is written for cmd and PowerShell, and tested as text below

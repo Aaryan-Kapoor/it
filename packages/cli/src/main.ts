@@ -61,7 +61,7 @@ import { serve } from './serve/index'
 import { reachable } from './serve/network'
 import { tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
-import { AFTER, CODEX_NO_NETWORK, codexLetsItOut, detectAll, type HarnessStatus, holdsAddons, KNOWN, reconcile, shim, supported } from './setup'
+import { AFTER, CODEX_NO_NETWORK, codexLetsItOut, detectAll, type HarnessStatus, holdsAddons, KNOWN, reconcile, shim, supported, whyHeldBack } from './setup'
 import { GUIDE, STEPS, TOUR_PREFIX, tourPage } from './tour'
 import * as usage from './usage'
 
@@ -850,6 +850,10 @@ async function settingUpLed(a: Args) {
         .filter(Boolean) as Harness[]
       const bad = wanted.filter((id) => !(HARNESSES as readonly string[]).includes(id))
       if (bad.length) throw new Problem(`Not an agent app It knows: ${bad.join(', ')}`, 'invalid', `It knows: ${HARNESSES.join(', ')}`)
+      // Asked for by name and held back: refused in words, with nothing changed. Carried on with,
+      // it would connect nothing and take out every app that was not named, the one asked for among them.
+      const held = wanted.map((id) => whyHeldBack(id)).find((why) => why !== undefined)
+      if (held) throw new Problem(held, 'invalid')
     } else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
     // Nothing is asked where there is nothing to choose: no app was found, or none that It can connect
     else if (!usable.length) wanted = []
@@ -886,6 +890,8 @@ async function settingUpLed(a: Args) {
     for (const h of after) {
       if (h.addon === 'needs_approval' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !connectedBefore.has(h.id)) left.push(`${KNOWN[h.id].label}: ${AFTER[h.id]}`)
+      // An app that was found and whose add-on is held back is named, with how to ask for it: left unsaid, its user is told that no app was found
+      else if (h.addon === 'unavailable' && h.detail && whyHeldBack(h.id)) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
     }
 
     // Registered is not yet running. The connector itself is asked, and given a little while to answer
@@ -1027,6 +1033,10 @@ async function settingUp(a: Args, joined: boolean) {
         .filter(Boolean) as Harness[]
       const bad = wanted.filter((id) => !(HARNESSES as readonly string[]).includes(id))
       if (bad.length) throw new Problem(`Not an agent app It knows: ${bad.join(', ')}`, 'invalid', `It knows: ${HARNESSES.join(', ')}`)
+      // Asked for by name and held back: refused in words, with nothing changed. Carried on with,
+      // it would connect nothing and take out every app that was not named, the one asked for among them.
+      const held = wanted.map((id) => whyHeldBack(id)).find((why) => why !== undefined)
+      if (held) throw new Problem(held, 'invalid')
     } else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
     else if (!process.stdin.isTTY) {
       // Nobody is here to be asked. What the person chose before stays chosen, and what is

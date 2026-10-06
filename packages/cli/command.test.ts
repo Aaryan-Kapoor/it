@@ -1398,6 +1398,13 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
         expect.stringMatching(/^This is It /),
         '',
       ])
+      // An app whose add-on is held back, asked for by its name alone, is refused in words, and nothing is changed for the apps that were not named
+      b.asked.length = 0
+      const held = await run(m, ['setup', '--only', 'openclaw', '--no-service'])
+      expect(held.code).toBe(2)
+      expect(held.err).toContain('has not yet been tried in a chat channel')
+      expect(held.err).toContain('run `IT_EXPERIMENTAL=openclaw it setup` once')
+      expect(b.asked.filter((x) => x.path === 'machines:choose')).toEqual([])
       // Connected, the app is said to be, and nothing is left to advise
       expect((await run(m, ['setup', '--only', 'pi', '--no-service'])).code).toBe(0)
       expect((await atTerminal(m, ['status'])).shown.split('\n').slice(2, 4)).toEqual(['Pi is connected.', NOT_REGISTERED])

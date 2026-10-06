@@ -42,7 +42,8 @@ interface Machine {
  */
 function standing(h: Harness, wanted: boolean, online: boolean): { word: string; tone?: 'ok' | 'wait' | 'bad'; detail?: string } {
   if (h.addon === 'unavailable') return { word: 'Not available yet', detail: h.detail }
-  if (h.addon === 'too_old') return { word: 'Version too old', tone: 'bad', detail: h.detail }
+  // A fault only for an app the person chose. One they do not use, found on the machine, is said plainly
+  if (h.addon === 'too_old') return { word: 'Version too old', ...(wanted ? { tone: 'bad' as const } : {}), detail: h.detail }
   if (h.addon === 'error') return { word: 'Could not connect', tone: 'bad', detail: h.detail }
   if (h.addon === 'needs_approval')
     return { word: 'Needs your approval', tone: 'wait', detail: h.detail ?? 'It is waiting for your approval inside the agent app.' }
@@ -237,11 +238,11 @@ function MachineCard({ m, now }: { m: Machine; now: number }) {
                     {h.version && <span className="mono row-version">{h.version}</span>}
                   </span>
                 </label>
-                <span className="status check-note" data-tone={is.tone} title={is.tone ? undefined : is.detail}>
+                <span className="status check-note" data-tone={is.tone}>
                   {is.word}
                 </span>
-                {/* Only what the person has to do something about is spelled out */}
-                {is.tone && is.tone !== 'ok' && is.detail && <span className="row-detail">{is.detail}</span>}
+                {/* Why, and what to do about it, in words that can be read without a pointer */}
+                {is.tone !== 'ok' && is.detail && <span className="row-detail">{is.detail}</span>}
                 {wakeable && (
                   <label
                     className="row-detail switch-row wake-row"

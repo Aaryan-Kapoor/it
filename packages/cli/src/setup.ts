@@ -930,16 +930,41 @@ export const AFTER: Partial<Record<Harness, string>> = {
  * the chat: until that has been seen to go where it should, it stays held back.
  */
 const HELD_BACK: Partial<Record<Harness, string>> = {
-  openclaw: 'The OpenClaw add-on works for a conversation held in OpenClaw itself, and has not yet been tried in a chat channel, so it is not switched on.',
+  openclaw:
+    'The OpenClaw add-on works for a conversation held in OpenClaw itself, and has not yet been tried in a chat channel, so it is not switched on. To use it all the same, run `IT_EXPERIMENTAL=openclaw it setup` once.',
 }
-const heldBack = (id: Harness) =>
-  HELD_BACK[id] &&
-  !(process.env.IT_EXPERIMENTAL ?? '')
+/** The add-ons this person has asked for by name, written down in It's folder. */
+const askedForFile = () => inHome('addons', 'asked-for.json')
+const askedFor = (): string[] => {
+  const kept = readJson<unknown>(askedForFile())
+  return Array.isArray(kept) ? kept.filter((x): x is string => typeof x === 'string') : []
+}
+/**
+ * Why an add-on is not offered, or nothing if it is. One that is held back is offered to
+ * someone who asks for it by name, with IT_EXPERIMENTAL. That is asked once and then written
+ * down in It's folder: the variable is in the terminal the person typed it in, and not in the
+ * background service, nor in the shell an agent app runs `it` from, and each of those took the
+ * add-on for one nobody had asked for and switched it off again.
+ */
+const heldBack = (id: Harness) => {
+  if (!HELD_BACK[id]) return undefined
+  const named = (process.env.IT_EXPERIMENTAL ?? '')
     .split(',')
     .map((x) => x.trim())
     .includes(id)
-    ? HELD_BACK[id]
-    : undefined
+  const asked = askedFor()
+  if (named && !asked.includes(id)) {
+    try {
+      mkdirSync(path.dirname(askedForFile()), { recursive: true })
+      writePrivate(askedForFile(), [...asked, id])
+    } catch {
+      // Where It's folder cannot be written the variable still counts, for this command
+    }
+  }
+  return named || asked.includes(id) ? undefined : HELD_BACK[id]
+}
+/** Why an agent app's add-on is not offered here, if it is one that is held back and that nobody has asked for. */
+export const whyHeldBack = (id: string): string | undefined => ((HARNESSES as readonly string[]).includes(id) ? heldBack(id as Harness) : undefined)
 
 /** Which add-ons this build carries and offers. */
 export const supported = (id: string): id is Harness => id in ADAPTERS && id in ADDONS && !heldBack(id as Harness)
