@@ -495,6 +495,27 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.codex[0]!.args).toContain('--thread=thread-1')
   })
 
+  test('what this machine gave up on for a conversation is tried again when that conversation is heard from, and It is asked to give back what was set aside', async () => {
+    await start()
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    // Its reopening comes to nothing (this machine was never told its folder), and the pause before the next try has begun
+    offered(click(1))
+    await until(() => stand.calls.some((c) => c.name === 'delivery:release'))
+    await settled()
+    const tries = () => stand.calls.filter((c) => c.name === 'machines:wakeFailed').length
+    expect(tries()).toBe(1)
+    // The person opens the conversation in Codex, and a hook of its turn says so
+    stand.calls.length = 0
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
+    await until(() => stand.calls.some((c) => c.name === 'delivery:unpark'))
+    expect(stand.calls.find((c) => c.name === 'delivery:unpark')!.args).toEqual({ for: { harness: 'codex', id: 'thread-1' } })
+    // And the click, still on offer, is tried at once: no pause is waited out
+    offered(click(1))
+    await until(() => tries() === 1 || stand.codex.length === 1)
+    expect(tries() + stand.codex.length).toBe(1)
+  })
+
   test('one whose claim is answered after the waiter began is given back, and never reaches Codex', async () => {
     await start()
     let answerClaim: (ids: string[]) => void = () => {}

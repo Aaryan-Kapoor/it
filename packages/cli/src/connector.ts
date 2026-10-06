@@ -421,6 +421,32 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** For each conversation, the click that failed and is waiting to be tried again: nothing behind it goes first. */
   const stalled = new Map<string, string>()
   const stalledAt = new Map<string, number>()
+  /**
+   * A conversation is heard from again: its app is open and its add-on is asking, or a hook of
+   * its turn has run. Whatever kept its clicks from being delivered before may well be over,
+   * so what this machine remembers of having given up on them is forgotten, and It is asked to
+   * give back what was set aside for it. They are then tried like any click that has just come.
+   */
+  function revive(harness: string, id: string): void {
+    const here = follow(keyOf(harness, id))
+    const its = (tagged: string) => follow(tagged.slice(tagged.indexOf('|') + 1)) === here
+    for (const t of [...parked]) if (its(t)) parked.delete(t)
+    for (const t of [...queueTries.keys()]) if (its(t)) queueTries.delete(t)
+    for (const [line, clickId] of [...stalled]) {
+      if (follow(keyOf(harness, line)) !== here) continue
+      stalled.delete(line)
+      stalledAt.delete(clickId)
+    }
+    // Under its own id, and under each earlier id its pages were made under
+    const ids = [id, ...[...aliases].filter(([, to]) => follow(to) === here).map(([from]) => from.slice(from.indexOf(':') + 1))]
+    for (const one of new Set(ids))
+      void call<number>('mutation', api.delivery.unpark, { for: { harness, id: one } })
+        .then((given) => {
+          if (given > 0)
+            say(`a ${agentOf(harness)} conversation (${short(id)}) is back: ${given} thing${given === 1 ? '' : 's'} set aside for it ${given === 1 ? 'is' : 'are'} tried again`)
+        })
+        .catch(() => {})
+  }
   /** The conversations this machine has reopened and that are running now, each with the way to stop it. */
   const reopenedNow = new Map<string, AbortController>()
   /** Whether this connector is stopping: what it reopened is then ended with it, and is not taken for something a person stopped. */
@@ -961,6 +987,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (isNew) say(`a ${agentOf(harness)} conversation is listening (${short(id)})`)
       if (changed && typeof body.was === 'string') say(`a ${agentOf(harness)} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
       if (isNew || changed) watch()
+      // Heard from after a while: what was set aside for it, here and in It, is its to be given again
+      if (isNew) revive(harness, id)
       if (url.pathname === '/session') return [200, { ok: true }]
       // A pass is started, and waited for only a moment: an add-on must have its answer at
       // once, whatever the backend is doing, and what was claimed meanwhile is there next time

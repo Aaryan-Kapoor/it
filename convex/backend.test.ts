@@ -1535,6 +1535,14 @@ describe('clicks and their delivery', () => {
     expect((await inbox(m, [], ['codex'])).map((c) => c.id)).toEqual([behind.actionId])
     // Set aside, not lost: still waiting, still listed
     expect((await m.as.query(api.delivery.waiting, { slug: 'dead' })).length).toBe(25)
+    // The conversation is heard from again (its app is open, its folder is back): what this machine
+    // set aside for it is its to deliver again, the oldest first, and nothing of another conversation's is touched
+    expect(await m.as.mutation(api.delivery.unpark, { for: { harness: 'codex', id: 'some-other-thread' } })).toBe(0)
+    expect((await inbox(m, [], ['codex'])).map((c) => c.id)).toEqual([behind.actionId])
+    expect(await m.as.mutation(api.delivery.unpark, { for: { harness: 'codex', id: 'deleted-thread' } })).toBe(25)
+    expect((await inbox(m, [], ['codex'])).map((c) => c.id).sort()).toEqual([...stuck.slice(0, 2), behind.actionId].sort())
+    // Asked again, there is nothing left to give back
+    expect(await m.as.mutation(api.delivery.unpark, { for: { harness: 'codex', id: 'deleted-thread' } })).toBe(0)
   })
 
   test('a closed conversation’s clicks are offered for reopening only where the owner switched it on, and what had waited longer than a day by then never hides what was done since', async () => {

@@ -392,6 +392,30 @@ export const park = mutation({
   },
 })
 
+/**
+ * Gives back to a machine what it had set aside for a conversation, when that conversation is
+ * heard from again. A click is set aside after a few tries that came to nothing (its app could
+ * not be started, the folder was gone, its account had lapsed), so that it does not stand in
+ * front of clicks that can be delivered. What stood in the way is often over an hour later, and
+ * the sign of that is the conversation itself: open again and asking for its clicks. Left
+ * aside then, they would wait until the person told the agent to go and look.
+ */
+export const unpark = mutation({
+  args: { for: session },
+  handler: async (ctx, { for: s }): Promise<number> => {
+    const { user, machine } = await requireMachine(ctx)
+    const aside = await ctx.db
+      .query('actions')
+      .withIndex('by_user_route', (q) =>
+        q.eq('userId', user._id).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id).eq('machineId', undefined).eq('parkedBy', machine._id),
+      )
+      .take(50)
+    // This machine's again, as they were before it set them aside
+    for (const x of aside) await ctx.db.patch(x._id, { machineId: machine._id, parkedBy: undefined })
+    return aside.length
+  },
+})
+
 /** Sets aside everything else waiting for a conversation that takes nothing, a batch at a time, however much there is. */
 export const parkRest = internalMutation({
   args: { machineId: v.id('machines'), harness: v.string(), sessionId: v.string() },
