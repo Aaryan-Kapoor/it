@@ -464,6 +464,15 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     }
   })
 
+  test('what the connector before it wrote down of the turns it cut off is taken up once, and not left for the connector after', async () => {
+    await start('socket', {}, (home) => writeFileSync(path.join(home, 'cut-off.json'), JSON.stringify(['pi:conversation-1'])))
+    expect(existsSync(path.join(home, 'cut-off.json'))).toBe(false)
+    // Stopped with nothing of its own running, it writes nothing down
+    await stop?.()
+    stop = null
+    expect(existsSync(path.join(home, 'cut-off.json'))).toBe(false)
+  })
+
   test('with reopening switched on, a closed conversation is reopened with the click itself, and Codex’s queue is never used for it', async () => {
     await start()
     stand.closed.add('thread-1')

@@ -5,7 +5,21 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
-import { Budget, carrying, carryOn, claudeModeOf, claudeResume, claudeWroteAt, codexHeld, codexWroteAt, mayWake, STOPPED, WAS_STOPPED, WOKEN } from './src/wake'
+import {
+  Budget,
+  carrying,
+  carryOn,
+  claudeModeOf,
+  claudeResume,
+  claudeWroteAt,
+  codexHeld,
+  codexWroteAt,
+  mayWake,
+  STOPPED,
+  WAS_CUT_OFF,
+  WAS_STOPPED,
+  WOKEN,
+} from './src/wake'
 
 let scratch: string
 let was: string | undefined
@@ -197,6 +211,13 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
       }
     }
     expect(JSON.parse(readFileSync(log, 'utf8'))).toEqual([folder, null, folder])
+  })
+})
+
+describe('what a conversation is told when it is given the same thing again after It restarted', () => {
+  test('says that its first turn at it was cut off, and to look before it does any of it again', () => {
+    expect(WAS_CUT_OFF).toMatch(/^\[It\] You were given what is above once before\. It was restarted while you were working on it/)
+    expect(WAS_CUT_OFF).toContain('do not do twice what was already done')
   })
 })
 

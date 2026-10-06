@@ -20,7 +20,7 @@ import { conversationFolder, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
-import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexHeld, mayWake, STOPPED, WAS_STOPPED, WOKEN } from './wake'
+import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexHeld, mayWake, STOPPED, WAS_CUT_OFF, WAS_STOPPED, WOKEN } from './wake'
 
 /** A click as the backend offers it: its data as JSON text, and the conversation it is for. */
 interface Offered {
@@ -104,6 +104,8 @@ export const infoFile = () => inHome('connector.json')
 const socketFile = () => inHome('connector.sock')
 const journalFile = () => inHome('journal.jsonl')
 const aliasFile = () => inHome('aliases.json')
+/** Where a connector that is stopping writes down which conversations it cut off in the middle of a turn. */
+const cutOffFile = () => inHome('cut-off.json')
 const lockFile = () => inHome('connector.lock')
 
 function journal(event: string, id: string): void {
@@ -453,6 +455,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const reopenedNow = new Map<string, AbortController>()
   /** Whether this connector is stopping: what it reopened is then ended with it, and is not taken for something a person stopped. */
   let closing = false
+  /**
+   * The conversations whose reopened turn was cut off when the connector before this one
+   * stopped, as that connector wrote them down. Each is told so when it is reopened for the
+   * same thing again, once.
+   */
+  const cutOff = new Set<string>(readJson<string[]>(cutOffFile()) ?? [])
+  try {
+    rmSync(cutOffFile(), { force: true })
+  } catch {}
   /** When each conversation this machine reopened last ended. */
   const ranUntil = new Map<string, number>()
   /** Clicks that went with an earlier click of their conversation, in the same message: each is done with when its own turn in line comes. */
@@ -665,7 +676,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // not the same note every time.
           await carry(
             click.session!,
-            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.delete(key) ? `\n\n${WAS_STOPPED}` : ''}`,
+            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.delete(key) ? `\n\n${WAS_STOPPED}` : ''}${cutOff.delete(key) ? `\n\n${WAS_CUT_OFF}` : ''}`,
           )
         : await codexQueue(threadOf(key), describeClick(asClick(click), 0))
       // A conversation the person stopped had what was done all the same: it is handed over,
@@ -1384,6 +1395,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // started: nothing It runs with nobody watching runs on once It has been stopped. What each
   // was reopened for is given back, and is reopened for again when It next starts.
   closing = true
+  // Written down for the connector that starts next: each of these is given what it was
+  // reopened for a second time, and must be told that its first turn at it was cut off
+  if (reopenedNow.size) {
+    try {
+      writePrivate(cutOffFile(), [...reopenedNow.keys()])
+    } catch {}
+  }
   for (const run of reopenedNow.values()) run.abort()
   // What is held goes back, and what was handed over is confirmed, all at once and for a few
   // seconds at most: whoever asked this program to stop will not wait long, and anything not
