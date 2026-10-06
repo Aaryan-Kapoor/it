@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline/promises'
-import { describeClick, HARNESSES, type Harness, isSlug, NOUN, PROTOCOL_VERSION, parseJson } from '@it/protocol'
+import { describeClick, firstFile, HARNESSES, type Harness, isSlug, NOUN, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
 import { SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, parse, text } from './args'
 import { local } from './connector'
@@ -200,7 +200,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   displays: [0, 'displays'],
   wait: [0, 'wait [--id <id>] [--follow] [--timeout <seconds>]'],
   actions: [0, 'actions [--id <id>]'],
-  action: [1, 'action <action-id>'],
+  action: [1, 'action <action-id> [--save <file>]'],
   ack: [1, 'ack <action-id> [--failed]'],
 }
 /**
@@ -1507,7 +1507,9 @@ Displays
 What the person did
   it wait [--id <id>] [--follow] [--timeout <seconds>]
   it actions [--id <id>]
-  it action <action-id>          Print one action in full, by the id in its message.
+  it action <action-id> [--save <file>]
+                                 Print one action in full, by the id in its message. --save
+                                 writes a picture it carried to a file, to open as a picture.
   it ack <action-id> [--failed]
 
 This machine
@@ -1811,7 +1813,22 @@ async function main(argv: string[]): Promise<void> {
         ...(c.stateRevision === undefined ? {} : { stateRevision: c.stateRevision }),
         ...(c.nowStateRevision === undefined ? {} : { nowStateRevision: c.nowStateRevision }),
       }
-      return out({ ...printed(c), delivery: c.delivery, route: c.route, outcome: c.outcome, text: describeClick(click, Number.MAX_SAFE_INTEGER) })
+      const all = { ...printed(c), delivery: c.delivery, route: c.route, outcome: c.outcome, text: describeClick(click, Number.MAX_SAFE_INTEGER) }
+      // A picture the action carried, written out as the file it is: an agent opens a file with
+      // what it reads pictures with, and need not write a program to decode one from text
+      const to = text(a, 'save')
+      if (to === undefined) return out(all)
+      const file = firstFile(click.payload)
+      if (!file) throw new Problem('This action carried no picture or other file to save.', 'invalid', 'Run it without --save to read what it carried.')
+      const bytes = Buffer.from(file.base64, 'base64')
+      const at = path.resolve(to)
+      try {
+        writeFileSync(at, bytes)
+      } catch (err) {
+        throw new Problem(`${at} could not be written (${(err as NodeJS.ErrnoException).code ?? 'an error'}).`, 'invalid', 'Give a file in a folder you may write to, such as the one you are in.')
+      }
+      // Printed without the picture's text, which is what the file is for
+      return out({ ...all, data: withoutFiles(click.payload).payload, saved: { file: at, type: file.type, bytes: bytes.length } })
     }
     case 'ack': {
       const id = need(a._[0], 'which action', 'ack <action-id> [--failed]')

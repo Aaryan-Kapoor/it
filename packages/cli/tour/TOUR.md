@@ -52,13 +52,13 @@ Do not explain it before they draw.
 it tour show whiteboard --step <n>
 ```
 
-The `snapshot` action carries `png`, a picture of the drawing as a `data:image/png;base64,…` address, and `strokes`, the same drawing as lines. The message that arrives cuts long data short, so print the action in full:
+The `snapshot` action carries `png`, a picture of the drawing, and `strokes`, the same drawing as lines. The message that arrives leaves the picture out and cuts long data short, so have the picture written to a file, in the folder you are in:
 
 ```sh
-it action <the action's id>
+it action <the action's id> --save drawing.png
 ```
 
-**Look at the picture.** Write what follows `data:image/png;base64,` to a `.png` file, decoded, and read that file with whatever you read images with. Where `png` is `null` the drawing was too large to send as a picture, and the strokes are all there is: each is `{ points: [[x, y], …], width, erase }`, with `x` and `y` from 0 to 1 and the origin at the top left.
+**Look at the picture.** Read that file with whatever you read images with. Do not decode the picture yourself and do not save it anywhere else, such as `/tmp`: your harness may stop to ask the person about either, and they are looking at the whiteboard, not at you. Where `png` is `null` the drawing was too large to send as a picture, and the strokes are all there is (`it action <the action's id>` prints them): each is `{ points: [[x, y], …], width, erase }`, with `x` and `y` from 0 to 1 and the origin at the top left.
 
 **Say:** one sentence about what they drew. Not "I received your drawing". If it is a house, say that it is a house. If you cannot tell what it is, say so cheerfully. This one sentence is the whole point of the step.
 

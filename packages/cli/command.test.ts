@@ -404,6 +404,78 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
   })
 })
 
+describe.skipIf(process.platform === 'win32')('a picture an action carried', () => {
+  test('`it action --save` writes it to the file as the picture it is, and prints the action without its text', async () => {
+    const m = machine()
+    // The smallest PNG there is: one transparent dot
+    const dot = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+    const listed = (payload: unknown) => ({
+      id: 'k57',
+      artifact: 'board',
+      title: 'Whiteboard',
+      name: 'snapshot',
+      payload: JSON.stringify(payload),
+      at: 1,
+      attended: true,
+      delivery: 'handed_off',
+      route: 'addon',
+      outcome: null,
+    })
+    let carried: unknown = { png: `data:image/png;base64,${dot}`, strokes: [] }
+    const b = await backend(m, (asked) => (asked.path === 'delivery:get' ? listed(carried) : null))
+    try {
+      const to = path.join(m.home, 'drawing.png')
+      const saved = await run(m, ['action', 'k57', '--save', to], b.env)
+      expect(saved.code).toBe(0)
+      expect(readFileSync(to).toString('base64')).toBe(dot)
+      expect(printed(saved)).toMatchObject({
+        id: 'k57',
+        action: 'snapshot',
+        data: { png: '(a picture, image/png, 1 KB, left out of this message)', strokes: [] },
+        saved: { file: to, type: 'image/png', bytes: Buffer.from(dot, 'base64').length },
+      })
+      // Without the switch it prints everything it carried, as before
+      expect(printed(await run(m, ['action', 'k57'], b.env)).data).toEqual(carried)
+      // An action that carried no picture says so, and writes nothing
+      carried = { cell: 4 }
+      const none = await run(m, ['action', 'k57', '--save', path.join(m.home, 'nothing.png')], b.env)
+      expect([none.code, existsSync(path.join(m.home, 'nothing.png'))]).toEqual([2, false])
+      expect(none.err).toContain('This action carried no picture or other file to save.')
+    } finally {
+      await b.close()
+    }
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('a page that stays another conversation’s', () => {
+  test('`it create` and `it update` say that what is done on it goes to the conversation that made it, and how to have it come here', async () => {
+    const m = machine()
+    let elsewhere = true
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:get'
+        ? { title: 'Board' }
+        : asked.path === 'publish:begin'
+          ? { artifactId: 'artifact-1', slug: 'board', version: 2, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+          : asked.path === 'publish:finish'
+            ? { slug: 'board', version: 2, url: 'https://site.example/p/board', ...(elsewhere ? { elsewhere: true } : {}) }
+            : null,
+    )
+    try {
+      const mine = { ...b.env, CODEX_THREAD_ID: 'codex-today' }
+      const NOTE =
+        'What is done on this page goes to another conversation, the one that made it, and not to this one. If the person is to be answered here, publish it again with --take.'
+      const made = await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], mine)
+      expect([made.code, printed(made)]).toEqual([0, { id: 'board', version: 2, url: `${b.url}/p/board`, note: NOTE }])
+      expect(printed(await run(m, ['update', 'board', '--html', '<p>hi</p>'], mine)).note).toBe(NOTE)
+      // Taken, it is this conversation's, and there is nothing to say
+      elsewhere = false
+      expect(printed(await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>', '--take'], mine))).toEqual({ id: 'board', version: 2, url: `${b.url}/p/board` })
+    } finally {
+      await b.close()
+    }
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('a command that two agent apps have marked', () => {
   const answers = (asked: Asked) =>
     asked.path === 'publish:begin'

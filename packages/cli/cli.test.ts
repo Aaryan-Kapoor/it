@@ -143,6 +143,19 @@ describe('the words an agent reads for an action', () => {
           /user|person|clicked|chose|acted/i,
         )
   })
+  test('leave out a picture the action carried, say that one stood there, and say how it is written to a file', () => {
+    const png = `data:image/png;base64,${'iVBORw0KGgo'.repeat(400)}`
+    const drawn = { ...action, name: 'snapshot', payload: { png, strokes: [{ points: [[0.1, 0.2]], width: 4 }], note: 'data:text/plain;base64,aGk=' } }
+    const said = describeClick({ ...drawn, attended: true })
+    expect(said).toBe(
+      '[It] The page "Deploy plan" (plan) sent this just after someone used it: snapshot {"png":"(a picture, image/png, 3 KB, left out of this message)","strokes":[{"points":[[0.1,0.2]],"width":4}],"note":"data:text/plain;base64,aGk="} (`it action k57 --save <file>` writes it to a file you can open) [action k57]',
+    )
+    expect(said).not.toContain('iVBOR')
+    // Two of them: the command writes the first, and says so
+    expect(describeClick({ ...drawn, payload: [png, { again: png }] })).toContain('writes the first of them to a file')
+    // And where none of what it carried is shown, nothing is said of pictures either
+    expect(describeClick(drawn, 0)).toBe('[It] The page "Deploy plan" (plan) sent this: snapshot (run `it action k57` to read what it carried) [action k57]')
+  })
   test('say which version and which state the page was at when the page has since come to show another', () => {
     expect(describeClick({ ...action, attended: true, version: 1, nowVersion: 2, stateRevision: 1, nowStateRevision: 3 }, 0)).toBe(
       '[It] The page "Deploy plan" (plan) sent this just after someone used it, as it was at version 1 (the page is now at version 2), when its state was at revision 1 (it is now at revision 3): approve (run `it action k57` to read what it carried) [action k57]',

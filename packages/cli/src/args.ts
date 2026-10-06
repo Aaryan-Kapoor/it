@@ -38,6 +38,7 @@ export const VALUED = new Set([
   'log',
   'step',
   'param',
+  'save',
 ])
 export interface Args {
   _: string[]

@@ -204,6 +204,40 @@ export interface Click {
 /** How much of a click's data is put in front of an agent before it is told where the rest is. */
 export const CLICK_TEXT_BYTES = 2000
 
+/** A file written out as text, as a page sends a picture: a `data:` address in base64. */
+const FILE_AS_TEXT = /^data:([a-z0-9.+-]+\/[a-z0-9.+-]+)(?:;[a-z0-9=._-]+)*;base64,/i
+/** The first file a value carries as text, however deep, with the kind of file it says it is. */
+export function firstFile(value: unknown, depth = 0): { type: string; base64: string } | undefined {
+  if (typeof value === 'string') {
+    const found = value.length > 64 ? FILE_AS_TEXT.exec(value.slice(0, 200)) : null
+    return found ? { type: found[1]!.toLowerCase(), base64: value.slice(found[0].length) } : undefined
+  }
+  if (depth > 12 || typeof value !== 'object' || value === null) return undefined
+  for (const inner of Array.isArray(value) ? value : Object.values(value)) {
+    const found = firstFile(inner, depth + 1)
+    if (found) return found
+  }
+  return undefined
+}
+/**
+ * A value with every file it carries as text replaced by a few words that say what stood there,
+ * and how many there were. Everything else is as it was.
+ */
+export function withoutFiles(value: unknown): { payload: unknown; left: number } {
+  let left = 0
+  const walk = (v: unknown, depth: number): unknown => {
+    if (typeof v === 'string') {
+      const found = firstFile(v)
+      if (!found) return v
+      left++
+      const kb = Math.max(1, Math.round((found.base64.length * 3) / 4 / 1024))
+      return `(${found.type.startsWith('image/') ? 'a picture' : 'a file'}, ${found.type}, ${kb} KB, left out of this message)`
+    }
+    if (depth > 12 || typeof v !== 'object' || v === null) return v
+    return Array.isArray(v) ? v.map((x) => walk(x, depth + 1)) : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, depth + 1)]))
+  }
+  return { payload: walk(value, 0), left }
+}
 /**
  * The text an agent reads for a click. One wording, used by every add-on. It names the action,
  * so that a click delivered twice can be told from two clicks, and it says what is known about
@@ -219,15 +253,18 @@ export const CLICK_TEXT_BYTES = 2000
  * machine might see it, such as a command line.
  */
 export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
-  const full = c.payload === undefined || c.payload === null ? '' : JSON.stringify(c.payload)
+  // A picture written out as text is no use to read, and a drawing is hundreds of lines of it
+  const { payload, left } = withoutFiles(c.payload)
+  const full = payload === undefined || payload === null ? '' : JSON.stringify(payload)
   const empty = full === '' || full === '{}'
+  const files = left === 0 ? '' : ` (\`it action ${c.id} --save <file>\` writes ${left === 1 ? 'it' : 'the first of them'} to a file you can open)`
   const data = empty
     ? ''
     : max <= 0
       ? ` (run \`it action ${c.id}\` to read what it carried)`
       : full.length > max
-        ? ` ${full.slice(0, max)}… (cut short: run \`it action ${c.id}\` to read all of it)`
-        : ` ${full}`
+        ? ` ${full.slice(0, max)}… (cut short: run \`it action ${c.id}\` to read all of it)${files}`
+        : ` ${full}${files}`
   // A title that is not known (an earlier version's, which is not kept) is left out, never guessed
   const named = c.title ? `"${c.title}" (${c.artifact})` : `(${c.artifact})`
   const who = `The ${NOUN.one} ${named} sent this${c.attended === false ? ' with no sign that anyone had just used it' : c.attended === true ? ' just after someone used it' : ''}`
