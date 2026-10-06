@@ -78,6 +78,20 @@ const connection = (up: boolean) =>
   })
 
 describe('what the page’s bar says of the last thing the person did', () => {
+  test('when It has not been reachable for a few seconds the bar says so, whatever was last done, and stops saying so when It is back', async () => {
+    vi.useFakeTimers()
+    await shown()
+    expect(said()).toBe('Done')
+    await connection(false)
+    // A moment without a connection is not said
+    await pass(3000)
+    expect(said()).toBe('Done')
+    await pass(2500)
+    expect(said()).toBe('Can’t reach It. What you do here is saved on this browser, and sent when It is back')
+    await connection(true)
+    expect(said()).toBe('Done')
+  })
+
   test('once the agent has changed the page since, the bar says nothing more of it: the answer is on the page', async () => {
     recent = [{ at: NOW - 5000, delivery: 'handed_off', outcome: null }]
     Object.assign(PAGE, { answeredAt: NOW - 9000 })
@@ -107,7 +121,14 @@ describe('what the page’s bar says of the last thing the person did', () => {
     host.remove()
     recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null }]
     await shown()
-    expect(said()).toBe('Sent. Pi has not taken it yet: its conversation may be closed, or busy')
+    // Nothing on its machine took it: nobody was listening
+    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    await act(async () => root.unmount())
+    host.remove()
+    // A machine has it in hand and cannot give it to the agent yet: the agent is at work
+    recent = [{ at: NOW - 8000, delivery: 'leased', outcome: null }]
+    await shown()
+    expect(said()).toBe('Sent. Pi is busy, and gets it when it is free')
     await act(async () => root.unmount())
     host.remove()
     Object.assign(PAGE, { wakeFailed: { at: NOW - 1000, why: 'the folder its conversation was held in is not known on this machine, or is gone' } })

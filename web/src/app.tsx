@@ -668,7 +668,18 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
       ) : path === '/settings' ? (
         <Settings user={user} owner={owner} display={display ?? null} onSignOut={signOut} />
       ) : (
-        <Grid pages={pages} owner={owner} query={query} onQuery={setQuery} />
+        <>
+          {/* A screen that was given an address of the owner's is shown its pages, and told why */}
+          {!owner && (path === '/machines' || path === '/displays') && (
+            <p className="notice" role="status">
+              <span>
+                This browser is paired as a screen, which can open every page and answer on it. {path === '/machines' ? 'Machines' : 'Displays'} is shown in a browser paired as
+                yours: run `it site` where It runs to pair one.
+              </span>
+            </p>
+          )}
+          <Grid pages={pages} owner={owner} query={query} onQuery={setQuery} />
+        </>
       )}
     </Guard>
   )

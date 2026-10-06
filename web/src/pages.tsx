@@ -348,6 +348,15 @@ function ActionStatus({
     const t = setTimeout(() => look((n) => n + 1), Math.max(0, until - Date.now()) + 50)
     return () => clearTimeout(t)
   }, [onItsWay, until])
+  // It cannot be reached: said once that has gone on for a few seconds, whatever was last done
+  // here. A page that is open when It stops otherwise looks exactly as it did, and the person
+  // goes on using a page whose agent hears nothing. A moment without a connection is not said.
+  const [down, setDown] = useState(false)
+  useEffect(() => {
+    if (connected) return setDown(false)
+    const t = setTimeout(() => setDown(true), DOWN_MS)
+    return () => clearTimeout(t)
+  }, [connected])
   const waiting = recent?.filter((a) => a.delivery !== 'handed_off').length ?? 0
   const last = recent?.[0]
   // Sent with no copy kept here, because this browser would not store one: closing the tab now would lose it
@@ -363,7 +372,15 @@ function ActionStatus({
         Sending…
       </span>
     ) : (
-      <span className="status">Saved on this browser, not sent yet</span>
+      <span className="status" data-tone={down ? 'bad' : undefined}>
+        {down ? 'Can’t reach It. Saved on this browser, and sent when It is back' : 'Saved on this browser, not sent yet'}
+      </span>
+    )
+  if (down)
+    return (
+      <span className="status" data-tone="bad">
+        Can’t reach It. What you do here is saved on this browser, and sent when It is back
+      </span>
     )
   if (!last || now - last.at > 10 * 60_000) return null
   // The agent was stopped after the last thing done here: said as that, whatever became of it.
@@ -395,7 +412,11 @@ function ActionStatus({
   // Sent, and not taken for a while: its conversation may be closed. The owner can switch on
   // the reopening of such conversations, here as under Machines, and it is so from then on
   const slow = now - last.at > WAKE_OFFER_MS
-  const offer = wakes && !wakes.on && slow
+  // A machine has it in hand and has not been able to give it to the agent: the conversation is
+  // open and at work on something else. With nobody holding it, nothing on that machine was
+  // listening for it: the conversation is closed, or its app is not running.
+  const busy = last.delivery === 'leased'
+  const offer = wakes && !wakes.on && slow && !busy
   // Tried, and it could not be reopened: said as that, with why where it is asked for
   if (wakeFailed && wakeFailed.at >= last.at)
     return (
@@ -406,10 +427,12 @@ function ActionStatus({
   return (
     <>
       <span className="status" data-tone="wait">
-        {/* Not taken after a while, and nothing set to reopen it: the conversation is closed, or busy with something long. Which, It cannot see. */}
-        {slow && !wakes?.on
-          ? `Sent. ${agent ?? 'Your agent'} has not taken it yet${waiting > 1 ? ` (${waiting})` : ''}: its conversation may be closed, or busy`
-          : `Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}
+        {/* Not taken after a while: said as what it is, busy or closed, so that the person knows whether to wait or to do something */}
+        {slow && busy
+          ? `Sent. ${agent ?? 'Your agent'} is busy, and gets it when it is free${waiting > 1 ? ` (${waiting})` : ''}`
+          : slow && !wakes?.on
+            ? `Sent. ${agent ?? 'Your agent'} is not listening${waiting > 1 ? ` (${waiting})` : ''}: its conversation looks closed`
+            : `Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}
       </span>
       {offer && (
         <button
@@ -430,6 +453,8 @@ function ActionStatus({
 
 /** How long a click has gone untaken before the owner is offered the reopening of its conversation. */
 const WAKE_OFFER_MS = 6_000
+/** How long It has not been reachable before the page says so: longer than a connection takes to come back by itself. */
+const DOWN_MS = 5_000
 /** What the person is asked before closed conversations of an agent app may be reopened on a machine, where they switch it on from a page. */
 export const wakeAsked = (agent: string, machine: string): string =>
   `Turn on Auto-wake for ${agent} on ${machine}? It then runs ${agent} there, with nobody watching, when you use a page whose conversation is closed. You can turn it off under Machines.`
