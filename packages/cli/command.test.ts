@@ -706,16 +706,17 @@ describe.skipIf(process.platform === 'win32')(
         expect(printed(ran)).toMatchObject({ service: { registered: false }, problem: expect.stringContaining('could not be registered') })
         const without = await run(m, ['setup', '--yes', '--no-service'], b.env)
         expect([without.code, printed(without).problem]).toEqual([0, undefined])
-        // On Linux the service's definition was written before systemd refused it, and is still there. It is no registration:
-        // nothing afterwards says that It starts by itself, to a program or to a person
+        // On Linux nothing is written where systemd cannot be reached for this person, so no definition is left to say
+        // that It starts by itself, to a program or to a person
         if (process.platform === 'linux') {
-          expect(existsSync(path.join(m.home, '.config/systemd/user/it.service'))).toBe(true)
+          expect(ran.err).toContain('this machine has no systemd for your account that can be reached from here')
+          expect(existsSync(path.join(m.home, '.config/systemd/user/it.service'))).toBe(false)
           expect((await run(m, ['service', 'install'], b.env)).code).toBe(1)
           expect(printed(await run(m, ['service', 'status'], b.env))).toMatchObject({ registered: false })
           expect(printed(await run(m, ['status'], b.env)).background).toMatchObject({ registered: false })
           if (python)
             expect((await atTerminal(m, ['service', 'status'], b.env)).shown).toContain(
-              'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.',
+              'Nothing starts It by itself on this machine: no systemd for your account can be reached from here. `it serve` runs it, in a terminal or under a supervisor of your own.',
             )
         }
       } finally {
@@ -1247,9 +1248,19 @@ describe.skipIf(process.platform === 'win32')('a command that waits for somethin
 describe.skipIf(process.platform === 'win32' || !python)('what a person at a terminal is told', () => {
   const NOT_RUNNING = 'It is not running on this machine. Start it with `it serve`, or run `it setup` to keep it running in the background.'
   const NOT_REGISTERED = 'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.'
+  const NO_SYSTEMD =
+    'Nothing starts It by itself on this machine: no systemd for your account can be reached from here. `it serve` runs it, in a terminal or under a supervisor of your own.'
+  /** The machine's system answers when asked, and knows of no service of It's. Whether the machine the tests run on has a systemd that can be reached is not what is being tried. */
+  const systemAnswers = (m: { bin: string }) => {
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), `#!/bin/sh\ncase " $* " in *" show-environment "*) exit 0 ;; esac\nexit 1\n`)
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+  }
   /** A machine It is set up on, as far as a command can tell from its folder: its settings, whole, and its identity. Nothing runs there. */
   const setUp = async () => {
     const m = machine(true, true)
+    systemAnswers(m)
     const key = await exportJWK((await generateKeyPair('ES256', { extractable: true })).privateKey)
     writeFileSync(path.join(m.it, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'the desk', key }))
     writeFileSync(
@@ -1291,6 +1302,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
 
   test('`it status` on a machine that joined an It says that it is running, where its site is, and which agent apps are connected', async () => {
     const m = machine(false)
+    systemAnswers(m)
     pi(m)
     let knows = true
     const b = await backend(m, (asked) =>
@@ -1373,6 +1385,12 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     expect([asked.network, asked.addresses.length]).toEqual([true, Math.max(0, on.length - 3) + (/ at http/.test(on[0]!) ? 1 : 0)])
 
     expect((await atTerminal(m, ['service', 'status'])).shown.split('\n')).toEqual([NOT_RUNNING, NOT_REGISTERED, ''])
+    // Where no systemd can be reached for this person, as in a container, that is said, and `it setup` is not offered as the way to register it
+    if (process.platform === 'linux') {
+      writeFileSync(path.join(m.bin, 'systemctl'), '#!/bin/sh\nexit 1\n')
+      expect((await atTerminal(m, ['service', 'status'])).shown.split('\n')).toEqual([NOT_RUNNING, NO_SYSTEMD, ''])
+      expect((await atTerminal(m, ['status'])).shown).toContain(NO_SYSTEMD)
+    }
     // Registered, with a stand-in for the system's own command that says the service is active
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
       writeFileSync(path.join(m.bin, name), `#!/bin/sh\ncase " $* " in ${SAYS_IT_RUNS} esac\nexit 0\n`)

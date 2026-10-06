@@ -96,7 +96,9 @@ function serviceSaid(background: { registered: boolean; state: string }, connect
   return [
     background.registered
       ? `It is registered with the system to start by itself (${background.state}).`
-      : 'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.',
+      : service.reachable()
+        ? 'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.'
+        : 'Nothing starts It by itself on this machine: no systemd for your account can be reached from here. `it serve` runs it, in a terminal or under a supervisor of your own.',
     ...(running && connector.ok !== true
       ? [
           'It is not handing what is done on a page to the conversations on this machine, so nothing done there reaches an agent here by itself. `it service logs` says what it met.',

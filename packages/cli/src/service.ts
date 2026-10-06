@@ -378,16 +378,44 @@ export function startsByItself(): boolean {
 }
 let registeredOnWindows: boolean | undefined
 
+/**
+ * Whether systemd's services for this person can be reached from here. They cannot in a
+ * container, or in a session that has no bus of its own, and there nothing registers It to
+ * start by itself. True on any system but Linux, where this is not how it is asked.
+ */
+export function reachable(): boolean {
+  if (process.platform !== 'linux') return true
+  const asked = run('systemctl', ['--user', 'show-environment'], ASKED_MS)
+  return asked.ok
+}
+
 export function install(): ServiceStatus {
   mkdirSync(path.dirname(logFile()), { recursive: true, mode: 0o700 })
   const cmd = command()
   const env = environment()
   if (process.platform === 'linux') {
+    // Where systemd keeps no services for this person (a container, some remote logins), that
+    // is said in words, before anything is written: nothing It could put on the disk would
+    // make it start by itself there, and a definition left behind would only say that it does
+    if (!reachable())
+      throw new Error(
+        'this machine has no systemd for your account that can be reached from here, as in a container or over some remote logins, so nothing can start It by itself',
+      )
+    const before = existsSync(unitPath()) ? readFileSync(unitPath(), 'utf8') : null
     mkdirSync(path.dirname(unitPath()), { recursive: true })
     writeFileSync(unitPath(), systemdUnit(cmd, env))
-    must('systemctl', ['--user', 'daemon-reload'], 'reloading systemd')
-    must('systemctl', ['--user', 'enable', `${NAME}.service`], 'enabling the service')
-    must('systemctl', ['--user', 'restart', `${NAME}.service`], 'starting the service')
+    try {
+      must('systemctl', ['--user', 'daemon-reload'], 'reloading systemd')
+      must('systemctl', ['--user', 'enable', `${NAME}.service`], 'enabling the service')
+      must('systemctl', ['--user', 'restart', `${NAME}.service`], 'starting the service')
+    } catch (err) {
+      // What was written is taken back, so that the definition's file says what is so
+      try {
+        if (before === null) rmSync(unitPath(), { force: true })
+        else writeFileSync(unitPath(), before)
+      } catch {}
+      throw err
+    }
     // Without this the service stops when the person logs out, which on a server is always
     if (!run('loginctl', ['enable-linger', os.userInfo().username]).ok)
       return {
