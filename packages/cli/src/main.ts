@@ -861,7 +861,7 @@ async function settingUpLed(a: Args) {
           value: h.id,
           label: `${KNOWN[h.id].label}${h.version ? ` ${h.version}` : ''}`,
           on: before === null || before.includes(h.id) || h.addon === 'connected' || h.addon === 'needs_approval',
-          no: !supported(h.id) ? 'not available yet' : h.addon === 'too_old' ? 'this version is too old' : undefined,
+          no: !supported(h.id) ? 'not available yet' : h.addon === 'too_old' ? `too old: It needs ${KNOWN[h.id].min} or newer` : undefined,
         })),
       )
     }
@@ -890,9 +890,11 @@ async function settingUpLed(a: Args) {
     // Registered is not yet running. The connector itself is asked, and given a little while to answer
     if (inBackground && !trouble && !(await answering()))
       trouble = 'It was registered as a background service, but it is not answering. Run `it service logs` to read why.'
-    if (trouble) left.push(trouble, 'Until It runs on this machine, nothing done on a page reaches an agent here. Run `it serve` yourself to keep it going.')
+    if (trouble) left.push(trouble)
     if (begun.background && 'note' in begun.background && begun.background.note) left.push(begun.background.note)
-    if (begun.own) left.push('It stops when this setup ends. Run `it serve`, in a terminal or under a supervisor of your own, to keep it going.')
+    // Whether It goes on running once this setup has ended. Where it does not, the ending says
+    // so and says what to run, in place of saying that It is ready.
+    const stays = !begun.own && !trouble
 
     // ---------- how It is reached, and the first screen: only where It goes on running to be reached
     const config = readConfig()
@@ -956,7 +958,21 @@ async function settingUpLed(a: Args) {
       for (const said of left) for (const [i, row] of said.split('\n').entries()) flow.line(`${i === 0 ? flow.yellow('!') : ' '} ${row}`)
       flow.line()
     }
-    if (on.length) {
+    // The terminal the install script ran in has no `it` on its PATH yet, so a command given
+    // there is given with its whole path: typed as `it`, it would not be found
+    const it = process.env.IT_INSTALL_FLOW ? `'${process.execPath.replace(/'/g, `'\\''`)}'` : 'it'
+    if (!stays) {
+      flow.line(`${flow.bold('It is set up, and it is not running.')} Nothing starts it by itself on this machine, so two things are yours to do:`)
+      flow.line()
+      flow.line(`  1. Start it, and leave it running:      ${flow.green(`${it} serve`)}`)
+      flow.line(`  2. In another terminal, open its site:  ${flow.green(`${it} site`)}`)
+      flow.line()
+      flow.line(
+        on.length
+          ? `Then say this to your agent:  ${flow.green('Give me the It tour.')}`
+          : 'No agent app is connected: `it skill` prints what to give any agent, and `it setup` connects one later.',
+      )
+    } else if (on.length) {
       flow.line(`${flow.bold('It is ready.')} Say this to your agent:`)
       flow.line()
       flow.line(`  ${flow.green('Give me the It tour.')}`)
