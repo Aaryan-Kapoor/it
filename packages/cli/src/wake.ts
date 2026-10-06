@@ -2,7 +2,7 @@
 // conversation on without a window, how that command is run and stopped, and how often a
 // conversation may be reopened. None of it is done for an app the person has not switched
 // Auto-wake on for, which is the connector's to see to.
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { readdirSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -25,7 +25,7 @@ export function mayWake(switched: ReadonlyMap<string, number>, harness: string, 
 }
 
 /** What each app is called where something is said of it. */
-const APP: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi', opencode: 'OpenCode', hermes: 'Hermes' }
+const APP: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi', opencode: 'OpenCode', hermes: 'Hermes', openclaw: 'OpenClaw' }
 
 /** What a conversation is told when it is reopened only so that it takes what is waiting in its app's own queue. */
 export const NUDGE =
@@ -53,7 +53,8 @@ export interface Carrying {
  * - Codex is run in its sandbox for a workspace, with the network allowed and It's own folder
  *   writable, which is what `it` needs. It can write in the conversation's folder and nowhere
  *   else, and nothing can ask the person for more, since they are not there.
- * - Pi and OpenCode have no sandbox of their own, and run as they do in a window.
+ * - Pi, OpenCode and Hermes are run as they are in a window, with whatever their own settings
+ *   allow there. Nothing can ask the person for more, since they are not there.
  */
 export function carrying(
   harness: string,
@@ -99,6 +100,12 @@ export function carrying(
     if (!/^ses_[A-Za-z0-9]{1,120}$/.test(session)) return odd
     return { argv: [has.command ?? 'opencode', 'run', '--session', session], input: text, app }
   }
+  if (harness === 'hermes') {
+    // Hermes names a conversation by when it began and a few hex digits. Any other word is not
+    // put there: it would be read as a title to look for, or as `latest`.
+    if (!/^[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}$/.test(session)) return odd
+    return { argv: [has.command ?? 'hermes', 'chat', '--resume', session, '--query-file', '-'], input: text, app }
+  }
   return `It has no way to reopen a conversation of ${app}`
 }
 
@@ -124,6 +131,9 @@ export function carryOn(
         env: { ...harnessEnv(), IT_HARNESS: marks.harness, IT_SESSION: marks.session },
         stdio: ['pipe', 'ignore', 'ignore'],
         windowsHide: true,
+        // In a group of its own, so that stopping it stops what it started as well: a command
+        // an agent is in the middle of does not run on after the agent is gone
+        detached: process.platform !== 'win32',
       })
     } catch {
       return resolve(`${how.app} could not be started`)
@@ -140,9 +150,27 @@ export function carryOn(
     let harder: ReturnType<typeof setTimeout> | undefined
     let stopped = false
     // Asked to end, and ended for it a few seconds later if it has not: a turn that is stopped stops
+    // Everything it started is ended with it, so that a command an agent is in the middle of
+    // does not run on after the agent is gone. Its group is signalled, and so is every process
+    // that descends from it, since an app may start a tool's command in a group of its own.
+    // Those are found before anything is ended: once a parent is gone, its children are no
+    // longer known as its own.
+    const signal = (how: 'SIGTERM' | 'SIGKILL', all: number[]) => {
+      try {
+        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, how)
+        else child.kill(how)
+      } catch {
+        child.kill(how)
+      }
+      for (const pid of all)
+        try {
+          process.kill(pid, how)
+        } catch {}
+    }
     const quit = () => {
-      child.kill('SIGTERM')
-      harder = setTimeout(() => child.kill('SIGKILL'), 5000)
+      const all = child.pid ? descendants(child.pid) : []
+      signal('SIGTERM', all)
+      harder = setTimeout(() => signal('SIGKILL', all), 5000)
       harder.unref?.()
     }
     const stop = () => {
@@ -159,6 +187,36 @@ export function carryOn(
     child.stdin?.on('error', () => {})
     child.stdin?.end(how.input)
   })
+}
+
+/**
+ * Every process that descends from one, however far down, as the system lists them now. None
+ * where the system cannot be asked, and none on Windows, where a process has no such family.
+ */
+export function descendants(of: number): number[] {
+  if (process.platform === 'win32') return []
+  let listed: string
+  try {
+    listed = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
+  } catch {
+    return []
+  }
+  const children = new Map<number, number[]>()
+  for (const line of listed.split('\n')) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number)
+    if (!pid || !Number.isInteger(ppid)) continue
+    children.set(ppid!, [...(children.get(ppid!) ?? []), pid])
+  }
+  const out: number[] = []
+  const walk = (pid: number) => {
+    for (const child of children.get(pid) ?? []) {
+      if (out.includes(child) || out.length > 2000) continue
+      out.push(child)
+      walk(child)
+    }
+  }
+  walk(of)
+  return out
 }
 
 /**
@@ -254,3 +312,19 @@ export function codexWroteAt(thread: string, codexHome = process.env.CODEX_HOME 
   return null
 }
 const found = new Map<string, string>()
+
+/**
+ * When Claude Code last wrote anything of a conversation, by the file it keeps of each one
+ * under the folder the conversation was held in, or null when there is no such file. A
+ * conversation that is open where It's add-on is not loaded (one begun before the add-on was
+ * installed, say) looks closed to It, and one that wrote a moment ago is at work: it is left
+ * alone until it has been quiet.
+ */
+export function claudeWroteAt(session: string, cwd: string, configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')): number | null {
+  if (!/^[0-9a-f-]{36}$/i.test(session)) return null
+  try {
+    return statSync(path.join(configDir, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${session}.jsonl`)).mtimeMs
+  } catch {
+    return null
+  }
+}

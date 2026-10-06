@@ -69,7 +69,7 @@ Only the Claude Code add-on and Codex's queue say that an answer started a turn.
 - `declined`: Codex's queue did not take the answer this time, and It will try again.
 - `failed`: It gave up on putting that answer in Codex's queue. The answer stays waiting where you and the agent can see it.
 
-`declined` and `failed` are reported only for Codex's queue. Neither is a hand-over. Because `agent.woken` is recorded without waiting for the backend, a `resumed` can also be counted for an answer whose `answer.delivered` never is.
+`declined` and `failed` are reported for Codex's queue and for the reopening of a closed conversation. Neither is a hand-over. Because `agent.woken` is recorded without waiting for the backend, a `resumed` can also be counted for an answer whose `answer.delivered` never is.
 
 ## What is never sent
 

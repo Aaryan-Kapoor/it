@@ -118,6 +118,8 @@ export default defineSchema({
     runs: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number(), stop: v.optional(v.boolean()) }))),
     /** The last few conversations a person stopped, and when: what was waiting for one by then is not reopened for. */
     stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number() }))),
+    /** The last few conversations that could not be reopened, when, and why in the connector's own words: never what a command printed. */
+    fails: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), why: v.string() }))),
     /** When it was last written down that this machine, revoked, asked for a token: said once an hour and not each time. */
     refusalSaidAt: v.optional(v.number()),
     /** The earlier identity of the same computer whose place this one took, if it took one's. */

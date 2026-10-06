@@ -80,6 +80,8 @@ export const get = query({
       // whether it is there to hear a click. Null when it has no connector, or was revoked.
       // Whether the page's conversation is running now because It reopened it, which is what can be stopped from here
       run: running(machine, a),
+      // Why it could not be reopened, the last time that was tried and did not work, and when
+      wakeFailed: failed(machine, a),
       // And when a person last stopped it, so that the page can say so of what was done before then
       stoppedAt:
         (machine &&
@@ -116,6 +118,13 @@ function running(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): { since:
   if (!machine || machine.revoked || !a.session) return null
   const run = (machine.runs ?? []).find((r) => r.harness === a.session?.harness && r.sessionId === a.session?.id)
   return run ? { since: run.since, stopping: run.stop === true } : null
+}
+
+/** Why a page's conversation could not be reopened, where its machine last said that it could not. */
+function failed(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): { at: number; why: string } | null {
+  if (!machine || machine.revoked || !a.session) return null
+  const f = (machine.fails ?? []).find((x) => x.harness === a.session?.harness && x.sessionId === a.session?.id)
+  return f ? { at: f.at, why: f.why } : null
 }
 
 /** How many stopped conversations a machine remembers: the last few, which is as many as anyone stops in a day. */

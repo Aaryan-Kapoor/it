@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
-import { Budget, carrying, carryOn, claudeResume, codexWroteAt, mayWake, STOPPED } from './src/wake'
+import { Budget, carrying, carryOn, claudeResume, claudeWroteAt, codexWroteAt, mayWake, STOPPED } from './src/wake'
 
 let scratch: string
 let was: string | undefined
@@ -81,7 +81,8 @@ describe('whether a closed conversation may be reopened for a click', () => {
   })
 
   test('never for an app It has no way to reopen, whatever is written down for it', () => {
-    for (const harness of ['openclaw', 'hermes', 'made-up']) expect(mayWake(new Map([[harness, at]]), harness, at + MINUTE)).toBe(false)
+    for (const harness of ['openclaw', 'made-up']) expect(mayWake(new Map([[harness, at]]), harness, at + MINUTE)).toBe(false)
+    for (const harness of ['codex', 'pi', 'opencode', 'hermes']) expect(mayWake(new Map([[harness, at]]), harness, at + MINUTE)).toBe(true)
   })
 
   test('for what was done from about the moment it was switched on, and not for all that had been waiting before', () => {
@@ -105,6 +106,7 @@ describe('the command each agent app is carried on with', () => {
       codex: carrying('codex', '01a10f7c-062c-7010-8d57-8e1007169551', said, has),
       pi: carrying('pi', UUID, said, has),
       opencode: carrying('opencode', 'ses_6f2a9c01ffe4', said, has),
+      hermes: carrying('hermes', '20261006_005959_a9a014', said, has),
     }
     for (const how of Object.values(all)) {
       if (typeof how === 'string') throw new Error(how)
@@ -114,6 +116,7 @@ describe('the command each agent app is carried on with', () => {
     expect((all['claude-code'] as { argv: string[] }).argv).toEqual(['claude', '--resume', UUID, '--print', '--allowedTools', 'Bash(it:*)'])
     expect((all.pi as { argv: string[] }).argv).toEqual(['pi', '--print', '--session', UUID])
     expect((all.opencode as { argv: string[] }).argv).toEqual(['opencode', 'run', '--session', 'ses_6f2a9c01ffe4'])
+    expect((all.hermes as { argv: string[] }).argv).toEqual(['hermes', 'chat', '--resume', '20261006_005959_a9a014', '--query-file', '-'])
     // Codex in its sandbox for a workspace, with the network and It's own folder, which is what `it` needs, and nothing bypassed
     const codex = (all.codex as { argv: string[] }).argv
     expect(codex.slice(0, 3)).toEqual(['codex', 'exec', 'resume'])
@@ -130,6 +133,8 @@ describe('the command each agent app is carried on with', () => {
       codex: ['--dangerously-bypass-approvals-and-sandbox', '-c', 'a b', ''],
       pi: ['--no-session', '-p', 'x', ''],
       opencode: ['--auto', 'ses_', 'ses_a b', 'session', ''],
+      // A title, or the word that means the newest conversation, is not an id
+      hermes: ['--yolo', 'latest', 'my plan', '20261006', ''],
     }))
       for (const id of ids) expect(carrying(harness, id, 'x', has), `${harness} ${id}`).toMatch(/conversation id is not one/)
     expect(carrying('openclaw', 'main', 'x', has)).toMatch(/no way to reopen/)
@@ -140,14 +145,21 @@ describe('the command each agent app is carried on with', () => {
 describe.skipIf(process.platform === 'win32')('a reopened conversation that is stopped', () => {
   test('is ended at once, says that it was stopped, and is not taken for a failure', async () => {
     const command = path.join(scratch, 'slow')
-    writeFileSync(command, '#!/bin/sh\ncat > /dev/null\nsleep 30\n')
+    // An agent in the middle of a command of its own: the command writes down that it is there, and waits
+    const mark = path.join(scratch, 'its-command.pid')
+    // It is started in a session of its own, as some apps start a tool's command: its group is not the agent's
+    writeFileSync(command, `#!/bin/sh\ncat > /dev/null\nsetsid sh -c 'echo $$ > ${mark}; exec sleep 30' &\nwait\n`)
     chmodSync(command, 0o755)
     const stop = new AbortController()
     const began = Date.now()
     const ran = carryOn({ argv: [command], input: 'a click', app: 'Claude Code' }, scratch, { harness: 'claude-code', session: 'x' }, { signal: stop.signal })
-    setTimeout(() => stop.abort(), 300)
+    setTimeout(() => stop.abort(), 500)
     expect(await ran).toBe(STOPPED)
     expect(Date.now() - began).toBeLessThan(5000)
+    // What it had started is stopped with it, and does not run on
+    const its = Number(readFileSync(mark, 'utf8'))
+    await new Promise((r) => setTimeout(r, 300))
+    expect(() => process.kill(its, 0)).toThrow()
     // One that was stopped before it began is never started
     expect(
       await carryOn({ argv: [path.join(scratch, 'never')], input: '', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, { signal: stop.signal }),
@@ -192,6 +204,20 @@ describe('when Codex last wrote of a conversation', () => {
     expect(codexWroteAt('01a10f7c-0000-7010-8d57-000000000000', codexHome)).toBeNull()
     expect(codexWroteAt('../../etc', codexHome)).toBeNull()
     expect(codexWroteAt(thread, path.join(scratch, 'no-such-codex'))).toBeNull()
+  })
+})
+
+describe('when Claude Code last wrote of a conversation', () => {
+  test('is read from the file it keeps of it under the folder the conversation was held in, and is not known where there is none', () => {
+    const config = path.join(scratch, 'claude')
+    const id = '3f6c2f0e-1a2b-4c3d-9e8f-000000000001'
+    const dir = path.join(config, 'projects', '-home-someone-my-site-v2')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, `${id}.jsonl`), '{}\n')
+    utimesSync(path.join(dir, `${id}.jsonl`), 1_791_000_000, 1_791_000_000)
+    expect(claudeWroteAt(id, '/home/someone/my site.v2', config)).toBe(1_791_000_000_000)
+    expect(claudeWroteAt(id, '/home/someone/elsewhere', config)).toBeNull()
+    expect(claudeWroteAt('../../../etc/passwd', '/home/someone/my site.v2', config)).toBeNull()
   })
 })
 

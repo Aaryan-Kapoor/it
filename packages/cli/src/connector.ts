@@ -20,7 +20,7 @@ import { conversationFolder } from './publish'
 import { alone } from './serve/backend'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
-import { Budget, carrying, carryOn, codexWroteAt, mayWake, NUDGE, STOPPED } from './wake'
+import { Budget, carrying, carryOn, claudeWroteAt, codexWroteAt, mayWake, NUDGE, STOPPED } from './wake'
 
 /** A click as the backend offers it: its data as JSON text, and the conversation it is for. */
 interface Offered {
@@ -83,6 +83,8 @@ const WAKE_RATE_MACHINE = { most: 30, everyMs: 10_000 }
 /** How long Codex is given to take a queued message by itself, and how long it must have written nothing of the conversation, before the conversation is taken to be closed. */
 const CODEX_GRACE_MS = 12_000
 const CODEX_QUIET_MS = 45_000
+/** How long Claude Code must have written nothing of a conversation that is not listening before it is taken to be closed and not at work in a window It cannot see into. */
+const CLAUDE_QUIET_MS = 20_000
 /** How long a click waits for a conversation that is open to ask for it, before the conversation is taken to be closed. */
 const CLOSED_MS = 8000
 const SERVE_MOST = 8 // how many clicks one answer to an add-on carries
@@ -420,6 +422,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const queued = (harness: string) => (QUEUES as readonly string[]).includes(harness)
   /** The conversations this machine has reopened and that are running now, each with the way to stop it. */
   const reopenedNow = new Map<string, AbortController>()
+  /** Whether this connector is stopping: what it reopened is then ended with it, and is not taken for something a person stopped. */
+  let closing = false
+  /** When each conversation this machine reopened last ended. */
+  const ranUntil = new Map<string, number>()
   /** Clicks that went with an earlier click of their conversation, in the same message: each is done with when its own turn in line comes. */
   const rode = new Set<string>()
   const budgets = new Map<string, { all: Budget; unattended: Budget }>()
@@ -457,22 +463,46 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * stop it. Null when it ran, STOPPED when they stopped it, and otherwise why it did not run.
    */
   async function carry(session: { harness: string; id: string }, text: string): Promise<string | null> {
-    const cwd = conversationFolder(session)
-    if (!cwd) return 'the folder its conversation was held in is not known on this machine'
-    const env = harnessEnv()
-    const how = carrying(session.harness, session.id, text, { codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync), itHome: home() })
-    if (typeof how === 'string') return how
     const key = follow(keyOf(session.harness, session.id))
+    // A conversation that was cleared carries on under another id, and it is that one which is carried on
+    const now = { harness: session.harness, id: key.slice(key.indexOf(':') + 1) }
+    const cwd = conversationFolder(now) ?? conversationFolder(session)
+    if (!cwd) return 'the folder its conversation was held in is not known on this machine, or is gone'
+    const env = harnessEnv()
+    const how = carrying(now.harness, now.id, text, { codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync), itHome: home() })
+    if (typeof how === 'string') return how
     if (reopenedNow.has(key)) return 'it is being reopened already'
     const stop = new AbortController()
     reopenedNow.set(key, stop)
     await call('mutation', api.machines.runBegan, { for: session }).catch(() => {})
+    let ended: string | null = 'it did not end'
     try {
-      return await carryOn(how, cwd, { harness: session.harness, session: session.id }, { signal: stop.signal })
+      ended = await carryOn(how, cwd, { harness: now.harness, session: now.id }, { signal: stop.signal })
+      return ended
     } finally {
       reopenedNow.delete(key)
-      await call('mutation', api.machines.runEnded, { for: session }).catch(() => {})
+      if (ranUntil.size > 500) ranUntil.delete(ranUntil.keys().next().value!)
+      ranUntil.set(key, Date.now())
+      // That it ran, or was stopped, takes back anything said earlier of why it could not be reopened
+      await call('mutation', api.machines.runEnded, { for: session, ...(ended === null || ended === STOPPED ? { ok: true } : {}) }).catch(() => {})
     }
+  }
+  /** Says to It why a conversation could not be reopened, in this program's own words, so that the page can say so to the person. */
+  const notReopened = (session: { harness: string; id: string }, why: string) =>
+    void call('mutation', api.machines.wakeFailed, { for: session, why }).catch(() => {})
+  /** Whether anybody was at the page for any click that is waiting for a click's conversation. One such, and the conversation is reopened as for a person, whatever else waits in front of it. */
+  const someoneThere = (click: Offered) =>
+    click.attended !== false ||
+    inbox.some((c) => c.id !== click.id && c.attended !== false && c.session?.harness === click.session?.harness && c.session?.id === click.session?.id)
+  /** Whether a conversation that is not listening is at work all the same, in a window It cannot see into: Claude Code wrote of it a moment ago. */
+  const atWork = (session: { harness: string; id: string }, now: number) => {
+    if (session.harness !== 'claude-code') return false
+    const cwd = conversationFolder(session)
+    const wrote = cwd ? claudeWroteAt(session.id, cwd) : null
+    if (wrote === null || now - wrote >= CLAUDE_QUIET_MS) return false
+    // What this machine's own reopening of it wrote is not somebody at work in it
+    const ours = ranUntil.get(follow(keyOf(session.harness, session.id)))
+    return ours === undefined || wrote > ours + 3000
   }
   const nudges = new Map<string, ReturnType<typeof setTimeout>>()
   /**
@@ -510,7 +540,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     await withRunSlot(async () => {
       const refused = await carry(session, NUDGE)
       if (refused === STOPPED) say(`a Codex conversation (${short(session.id)}) was stopped by the person`)
-      else if (refused !== null) say(`a Codex conversation (${short(session.id)}) was not reopened (${refused}); what was done waits in Codex’s queue`)
+      else if (refused !== null) {
+        say(`a Codex conversation (${short(session.id)}) was not reopened (${refused}); what was done waits in Codex’s queue`)
+        notReopened(session, refused)
+      }
     })
   }
   async function queueNow(click: Offered): Promise<void> {
@@ -545,7 +578,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // disconnected it while the click stood in line
       if (!connected(harness)) return
       // Nor is a conversation reopened once the person has switched that off, or more often than it may be
-      if (reopening && (!wakes(harness, click.at) || !room(key, click.attended !== false))) return
+      if (reopening && (!wakes(harness, click.at) || !room(key, someoneThere(click)))) return
       // Only if it is still for this conversation on this machine: the page may have changed
       // hands while the click stood in line here
       const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session! })
@@ -600,6 +633,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
         : await codexQueue(line, describeClick(asClick(click), 0))
       // A conversation the person stopped had what was done all the same: it is handed over,
       // and nothing is tried again for it
+      // Ended because this connector is stopping, it is given back, to be reopened for by the
+      // connector that starts next: nobody stopped it, and nothing is counted against it
+      if (refused === STOPPED && closing) {
+        await giveBack()
+        journal('released', click.id)
+        await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+        return
+      }
       const handed = refused === null || refused === STOPPED
       if (!handed) await giveBack()
       // Refused by the command, and given meanwhile to an agent that is waiting for it: the
@@ -633,6 +674,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         stalled.set(line, click.id)
         stalledAt.set(click.id, Date.now())
         record('agent.woken', { result: n >= QUEUE_WAITS.length ? 'failed' : 'declined', agent: agentOf(harness) })
+        if (reopening) notReopened(click.session!, refused)
         if (n >= QUEUE_WAITS.length) {
           stalled.delete(line)
           // Given up on from here. It is set aside so that it does not hide clicks that can be
@@ -812,7 +854,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // every second, so one not heard from for this long is not open in a Claude Code It is
           // connected to. It is run in line like a queue, one click of a conversation at a time.
           // And only so often: past that the click waits, and goes with the next reopening.
-          if (!room(key, click.attended !== false) || !queue(click)) waitingBehind.add(key)
+          // Nor while it is at work in a window It cannot see into: it is looked at again once it is quiet.
+          if (atWork(click.session, now) || !room(key, someoneThere(click)) || !queue(click)) waitingBehind.add(key)
         }
         // Route 4: nothing to do. The click stays waiting and the site shows it.
       }
@@ -1272,11 +1315,21 @@ async function connecting(say: (line: string) => void): Promise<void> {
   clearInterval(tick)
   clearInterval(beat)
   usage.stop()
+  // The conversations this connector reopened are ended with it, and everything they had
+  // started: nothing It runs with nobody watching runs on once It has been stopped. What each
+  // was reopened for is given back, and is reopened for again when It next starts.
+  closing = true
+  for (const t of nudges.values()) clearTimeout(t)
+  for (const run of reopenedNow.values()) run.abort()
   // What is held goes back, and what was handed over is confirmed, all at once and for a few
   // seconds at most: whoever asked this program to stop will not wait long, and anything not
   // given back in that time goes back by itself when its lease runs out
   await Promise.race([
-    Promise.allSettled([...[...held].filter(([, h]) => !h.served).map(([id]) => call('mutation', api.delivery.release, { id })), confirmAll()]),
+    Promise.allSettled([
+      ...[...held].filter(([, h]) => !h.served).map(([id]) => call('mutation', api.delivery.release, { id })),
+      confirmAll(),
+      ...queues.values(),
+    ]),
     new Promise((r) => setTimeout(r, 5000)),
   ])
   server.close()

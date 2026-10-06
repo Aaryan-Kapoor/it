@@ -16,7 +16,7 @@ A click is stored before anything tries to deliver it, and then tries these rout
 
 1. **The add-on, live.** The add-on inside the conversation that owns the page puts the click into it now, or at the agent's next step if it is busy.
 2. **The app's own queue**, where it has one. Codex has, and Codex's is the only queue It uses: the click arrives when the conversation is next idle or reopened.
-3. **Reopening the conversation**, where you have switched Auto-wake on for the agent app on that machine. Only Claude Code's is reopened: [below](#a-conversation-that-has-been-closed) says how.
+3. **Reopening the conversation**, where you have switched Auto-wake on for the agent app on that machine: [below](#a-conversation-that-has-been-closed) says how. A Codex conversation is reopened after route 2, so that it takes what is in its queue.
 4. **The inbox.** Everything else waits, in view: the site shows it, and the agent takes it with `it wait`.
 
 None of these routes is tried for an agent app you have not connected. A click on a page it made waits in the inbox.
@@ -48,11 +48,31 @@ The add-on needs Claude Code 2.1.287 or later, with mods turned on. There is no 
 
 ### A conversation that has been closed
 
-You can let It reopen a Claude Code conversation that has been closed, so that what you do on a page it made is acted on while you are away from the machine. It is off until you turn it on, for each agent app on each machine by itself: on the site's Machines page, with the Auto-wake switch under the app, or with "Wake it" on a page whose click nobody has taken. Only a browser paired as yours can turn it on. A machine cannot, so an agent cannot switch it on for itself. Turning it on also reopens conversations for what you did in the day before, oldest first, so a click that went unanswered an hour ago is acted on. A click that had been waiting longer than a day by then stays in the inbox, so that turning it on does not run your agent on answers you gave long ago.
+You can let It reopen a conversation that has been closed, so that what you do on a page it made is acted on while you are away from the machine. This is Auto-wake. It is off until you turn it on, for each agent app on each machine by itself: on the site's Machines page, with the Auto-wake switch under the app, or with "Wake it" on a page whose click nobody has taken. Only a browser paired as yours can turn it on. A machine cannot, so an agent cannot switch it on for itself. Turning it on also reopens conversations for what you did in the day before, oldest first, so a click that went unanswered an hour ago is acted on. A click that had been waiting longer than a day by then stays in the inbox, so that turning it on does not run your agent on answers you gave long ago.
 
-With it on, a click that no open conversation asks for within a few seconds is given to Claude Code's own command for carrying a conversation on without a window, `claude --resume`, run in the folder the conversation was held in. The click is its prompt, given on the command's input. The conversation then runs as it would with you there, except that nobody is watching: it may run `it`, and whatever else your own Claude Code settings allow without asking, and it uses your Claude Code account as any turn does. When you open the conversation again, the turn is in it.
+With it on, a click that no open conversation asks for within a few seconds is given to the agent app's own command for carrying a conversation on without a window, run in the folder the conversation was held in. The click is its message, given on the command's input and never on its command line. The conversation then runs as it would with you there, except that nobody is watching, and it uses your account with that app as any turn does. When you open the conversation again, the turn is in it.
 
-Each conversation is reopened for one click at a time, in the order they were made. If the command fails, It tries again a few times, further apart, and then leaves the click in the inbox. It knows which folder a conversation was held in from a note the `it` command keeps in `~/.it` each time the conversation publishes a page, and that note leaves the machine no more than anything else there does.
+| Agent app | What It runs | What the conversation may do by itself |
+|---|---|---|
+| Claude Code | `claude --resume <id> --print` | Run `it`, and whatever else your own Claude Code settings allow without asking |
+| Codex | `codex exec resume <id>`, after the click has gone into Codex's queue | Run in Codex's sandbox for a workspace, with the network allowed and It's own folder writable, which is what `it` needs. It can write in the conversation's folder and nowhere else |
+| Pi | `pi --print --session <id>` | Whatever it does in a window: Pi does not ask before it runs a command |
+| OpenCode | `opencode run --session <id>` | Whatever your OpenCode settings allow without asking |
+| Hermes Agent | `hermes chat --resume <id> --query-file -` | Whatever your Hermes settings allow without asking |
+
+All five have been run this way against the real programs on Linux: Claude Code and Codex with their own models, and Pi, OpenCode and Hermes with a model reached through OpenRouter. None has been run this way on Windows or macOS. OpenClaw has no such switch: its conversations live in its gateway, which is not closed.
+
+The command is started by It's background service, and so with the service's environment and not your shell's. An agent app that finds its account in a variable of your shell, and has no login of its own stored, cannot start a turn there. The page then says that it could not be woken.
+
+**Everything waiting goes in one message.** A conversation reopened for five clicks is reopened once, and reads all five, up to eight at a time.
+
+**A conversation is reopened only so often.** Ten times at once, and then once more for every twenty seconds that pass, which a person using a page steadily never reaches. What a page sends by itself, with nobody at it, reopens a conversation three times and then once for every five minutes, so that a page that sends on a timer cannot keep an agent running. All the conversations of one machine together are reopened thirty times at once and then once for every ten seconds. Nothing is lost past these: the clicks wait, and go together with the next reopening. A person's click is never held up behind what a page sent by itself.
+
+**You can stop it.** While a conversation that It reopened is running, the bar above its page says "Working", with a small square beside it that stops the agent. The agent is ended at once, and so is any command it was in the middle of. What it had been asked stays in the conversation, as it does when you stop a turn in the app. What was waiting for it by then is not reopened for, and the next thing you do on the page reopens it as before. Any browser that can use the page can stop it. A machine cannot, so no agent stops another. Stopping It's service ends the conversations it reopened as well, and what they were reopened for is given back and reopened for again when It next starts.
+
+**Where it cannot be done, the page says so.** "Couldn’t wake" and the app's name, with the reason where you rest the pointer: the app was not found, its command ended with an error, the folder the conversation was held in is gone. It tries again a few times, further apart, and then leaves the click in the inbox. It knows which folder a conversation was held in from a note the `it` command keeps in `~/.it` each time the conversation publishes a page, and that note leaves the machine no more than anything else there does.
+
+A conversation that is open in a window where It's add-on is not loaded looks closed to It. For Claude Code, one that wrote something in the last twenty seconds is left alone until it is quiet. For Codex, a conversation is reopened only once Codex has written nothing of it for forty-five seconds and has not taken the queued click by itself, which it does wherever the conversation is open, and for a while after its window is closed.
 
 ### Codex
 
@@ -105,7 +125,7 @@ It is held back: `it setup` does not offer it, and installs it only for someone 
 
 ## What It does not do
 
-- Only a Claude Code conversation is reopened when it has been closed, and only on a machine where you have switched Auto-wake on for it. A click for a closed conversation of any other app with no queue of its own waits in the inbox.
+- A conversation is reopened when it has been closed only on a machine where you have switched Auto-wake on for its agent app. Without that, a click for a closed conversation waits in the inbox, or in Codex's own queue.
 - It does not use ACP, which cannot reach a conversation another program owns: the conversation It has to reach is the one you already have open.
 - It ships no MCP server, so it has no add-on for an agent app that could be reached only through one, such as Crush.
 - It builds no add-on on an agent app's undocumented API, or on an interface for add-ons that is not stable, which is why it has none for Copilot CLI.

@@ -1579,6 +1579,20 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.machines.runBegan, { for: SESSION })
     await m.as.mutation(api.machines.runEnded, {})
     expect((await m.as.query(api.machines.me, {})).runs).toEqual([])
+    // Why a conversation could not be reopened is said on its page, and taken back once it has run
+    const failedOn = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).wakeFailed
+    expect(await failedOn()).toBeNull()
+    const at = Date.now()
+    await m.as.mutation(api.machines.wakeFailed, { for: SESSION, why: 'Claude Code was not found' })
+    expect(await failedOn()).toEqual({ at, why: 'Claude Code was not found' })
+    await m.as.mutation(api.machines.wakeFailed, { for: SESSION, why: 'x'.repeat(500) })
+    expect((await failedOn())?.why.length).toBe(160)
+    // Ended without having run, it is still so
+    await m.as.mutation(api.machines.runEnded, { for: SESSION })
+    expect(await failedOn()).not.toBeNull()
+    await m.as.mutation(api.machines.runEnded, { for: SESSION, ok: true })
+    expect(await failedOn()).toBeNull()
+    expect(await code(alice.browser.mutation(api.machines.wakeFailed, { for: SESSION, why: 'x' }))).toBe('forbidden')
     // Another person can stop nothing of it, and a machine cannot stop for a person
     const bob = await person(t, 'bob')
     await m.as.mutation(api.machines.runBegan, { for: SESSION })
@@ -2356,7 +2370,7 @@ describe('displays and machines', () => {
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
     expect(await code(m.as.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true }))).toBe('forbidden')
-    for (const harness of ['openclaw', 'hermes', 'made-up'])
+    for (const harness of ['openclaw', 'made-up'])
       expect(await code(alice.browser.mutation(api.machines.wake, { machineId: m.id, harness, on: true }))).toBe('invalid')
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
   })

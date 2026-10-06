@@ -28,6 +28,7 @@ const PACKAGE: [string, Harness][] = [
   ['@anthropic-ai/claude-code', 'claude-code'],
   ['@openai/codex', 'codex'],
   ['@mariozechner/pi-coding-agent', 'pi'],
+  ['@earendil-works/pi-coding-agent', 'pi'],
   ['opencode-ai', 'opencode'],
   ['openclaw', 'openclaw'],
 ]

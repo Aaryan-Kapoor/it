@@ -235,6 +235,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
             wakes={owner ? page.wake : null}
             agent={agentName(page.agent)}
             stoppedAt={page.stoppedAt}
+            wakeFailed={page.wakeFailed}
           />
         )}
         <div className="page-nav-actions">
@@ -305,6 +306,7 @@ function ActionStatus({
   wakes,
   agent,
   stoppedAt,
+  wakeFailed,
 }: {
   artifactId: Id<'artifacts'>
   user: string
@@ -315,6 +317,8 @@ function ActionStatus({
   agent: string | null
   /** When a person last stopped the page's agent, if they have. */
   stoppedAt: number | null
+  /** Why the page's conversation could not be reopened, the last time that was tried and did not work. */
+  wakeFailed: { at: number; why: string } | null
 }) {
   const convex = useConvex()
   const setWake = useMutation(api.machines.wake)
@@ -384,6 +388,13 @@ function ActionStatus({
   // Sent, and not taken for a while: its conversation may be closed. The owner can switch on
   // the reopening of such conversations, here as under Machines, and it is so from then on
   const offer = wakes && !wakes.on && now - last.at > WAKE_OFFER_MS
+  // Tried, and it could not be reopened: said as that, with why where it is asked for
+  if (wakeFailed && wakeFailed.at >= last.at)
+    return (
+      <span className="status" data-tone="bad" title={`${wakeFailed.why.charAt(0).toUpperCase()}${wakeFailed.why.slice(1)}.`}>
+        {`Couldn’t wake ${agent ?? 'your agent'}${waiting > 1 ? ` (${waiting})` : ''}`}
+      </span>
+    )
   return (
     <>
       <span className="status" data-tone="wait">{`Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}</span>

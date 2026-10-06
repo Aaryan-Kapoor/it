@@ -123,14 +123,33 @@ export const runBegan = mutation({
   },
 })
 
-/** And that the conversation it reopened has ended. With none named, that nothing it reopened is running, which is so when its connector starts. */
+/**
+ * And that the conversation it reopened has ended. With none named, that nothing it reopened is
+ * running, which is so when its connector starts. Where it ran, anything said earlier of why it
+ * could not be reopened is taken back.
+ */
 export const runEnded = mutation({
-  args: { for: v.optional(session) },
-  handler: async (ctx, { for: s }) => {
+  args: { for: v.optional(session), ok: v.optional(v.boolean()) },
+  handler: async (ctx, { for: s, ok }) => {
     const { machine } = await requireMachine(ctx)
     const now = machine.runs ?? []
     const left = s ? now.filter((r) => r.harness !== s.harness || r.sessionId !== s.id) : []
-    if (left.length !== now.length) await ctx.db.patch(machine._id, { runs: left })
+    const fails = machine.fails ?? []
+    const stillFailed = s && ok ? fails.filter((f) => f.harness !== s.harness || f.sessionId !== s.id) : fails
+    if (left.length !== now.length || stillFailed.length !== fails.length) await ctx.db.patch(machine._id, { runs: left, fails: stillFailed })
+    return null
+  },
+})
+
+/** The machine says that a conversation could not be reopened, and why, in its connector's own words: the page then says so to the person. */
+export const wakeFailed = mutation({
+  args: { for: session, why: v.string() },
+  handler: async (ctx, { for: s, why }) => {
+    const { machine } = await requireMachine(ctx)
+    const others = (machine.fails ?? []).filter((f) => f.harness !== s.harness || f.sessionId !== s.id)
+    await ctx.db.patch(machine._id, {
+      fails: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), at: Date.now(), why: why.slice(0, 160) }].slice(-RUNS_MOST),
+    })
     return null
   },
 })

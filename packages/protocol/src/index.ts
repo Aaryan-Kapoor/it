@@ -134,7 +134,7 @@ export type Harness = (typeof HARNESSES)[number]
  * command of their own for carrying a conversation on without a window. Each is reopened only
  * on a machine where the person has switched that on for it.
  */
-export const WAKES: readonly Harness[] = ['claude-code', 'codex']
+export const WAKES: readonly Harness[] = ['claude-code', 'codex', 'pi', 'opencode', 'hermes']
 /**
  * The agent apps with a queue of their own, which takes a click whether or not its conversation
  * is open. A click for one of these goes to that queue first, and its conversation is reopened

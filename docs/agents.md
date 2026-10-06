@@ -1,6 +1,6 @@
 # Agents
 
-It connects the agents you already run, and brings none of its own. It reaches each one as a plugin to the unmodified program. The one thing it starts by itself is a conversation of yours that was closed, when you use a page it made, and only for a project you have allowed that for: [add-ons](add-ons.md#a-conversation-that-has-been-closed) says how.
+It connects the agents you already run, and brings none of its own. It reaches each one as a plugin to the unmodified program. The one thing it starts by itself is a conversation of yours that was closed, when you use a page it made, and only for an agent app you have switched Auto-wake on for: [add-ons](add-ons.md#a-conversation-that-has-been-closed) says how.
 
 An agent drives It with one command, `it`, and learns how from the agent skill, which every add-on carries and `it skill` prints. It writes a page, publishes it with `it create`, and asks your displays to show it. What you do on the page goes back to the conversation that made it.
 
@@ -15,9 +15,9 @@ It has add-ons for six agent apps, and they are not all proven alike.
 | Claude Code | Yes | Tested end to end against the real program: setup installs the add-on, Claude publishes a page, and a click starts a turn or rides the next tool result |
 | Codex | Yes | Tested end to end against the real program, through its hooks and its own queue. The desktop app's queue was checked by hand on Windows |
 | T3 Code | Yes, for an idle thread | It has no add-on of its own, because the Claude Code and Codex add-ons load inside its sessions. In real T3 Code threads, a click on an idle thread started a turn by itself in Claude Code, and reached Codex through Codex's own queue and started a turn there. A click that arrives while a tool is running has been seen in Claude Code and in Codex themselves, and not inside a T3 Code thread |
-| Pi | Partly | Took a click in the real program, with a stand-in model |
-| OpenCode | Partly | Took a click in the real program, with a stand-in model |
-| Hermes Agent | No | Loaded by Hermes's real plugin manager and ran a real turn there, but has not been through a whole round trip with a real click. On the released Hermes only the plain terminal can be given a click |
+| Pi | Yes, on Linux | Tested end to end against the real program with a real model: Pi published a page, and a click started a turn when Pi was idle, was read once its running command had finished when it was busy, and reopened the conversation when Pi was closed |
+| OpenCode | Yes, on Linux | Tested end to end against the real program with a real model: OpenCode published a page, and a click started a turn when it was idle, joined the running turn when it was busy, and reopened the conversation when OpenCode was closed |
+| Hermes Agent | Yes, in the plain terminal, on Linux | Tested end to end against the real program, as built from its repository on 2026-09-24, with a real model: Hermes published a page, and a click started a turn when it was idle, waited for the running turn to end when it was busy, and reopened the conversation when Hermes was closed. Its TUI, its desktop app and its messaging gateway have not been tried |
 | OpenClaw | No, and held back | Written and tested against a stand-in for OpenClaw. It has never been loaded by a gateway, so `it setup` does not offer it. `IT_EXPERIMENTAL=openclaw` installs it for someone who asks for it by name |
 
 [Add-ons](add-ons.md) says what to expect of each: where a click arrives by itself, where it waits, and what It does not do.
