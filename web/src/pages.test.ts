@@ -10,7 +10,7 @@ import type { Sent } from './outbox'
 const NOW = Date.now()
 const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, agent: 'claude-code', machine: 'the laptop', machineSeenAt: NOW }
 /** What the backend last said of the page's clicks, newest first. */
-let recent: { at: number; delivery: string; outcome?: string }[]
+let recent: { at: number; delivery: string; outcome?: string | null }[]
 /** Whether there is a connection to the backend, and what was asked to be told when that changes. */
 let connected: boolean
 const told = new Set<() => void>()
@@ -78,6 +78,44 @@ const connection = (up: boolean) =>
   })
 
 describe('what the page’s bar says of the last thing the person did', () => {
+  test('once the agent has changed the page since, the bar says nothing more of it: the answer is on the page', async () => {
+    recent = [{ at: NOW - 5000, delivery: 'handed_off', outcome: null }]
+    Object.assign(PAGE, { answeredAt: NOW - 9000 })
+    await shown()
+    expect(said()).toBe('Your agent has it')
+    await act(async () => root.unmount())
+    host.remove()
+    // The agent wrote the page's state three seconds after the click
+    Object.assign(PAGE, { answeredAt: NOW - 2000 })
+    await shown()
+    expect(said()).toBeNull()
+    // What the agent said became of it is still said
+    await act(async () => root.unmount())
+    host.remove()
+    recent = [{ at: NOW - 5000, delivery: 'handed_off', outcome: 'failed' }]
+    await shown()
+    expect(said()).toBe('Your agent could not do that')
+    Object.assign(PAGE, { answeredAt: 0 })
+  })
+
+  test('a click nobody has taken after a few seconds is said to be that, with what it may mean; and why a conversation could not be reopened is said in words', async () => {
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi' })
+    recent = [{ at: NOW - 2000, delivery: 'pending', outcome: null }]
+    await shown()
+    expect(said()).toBe('Sent. Waiting for your agent')
+    await act(async () => root.unmount())
+    host.remove()
+    recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null }]
+    await shown()
+    expect(said()).toBe('Sent. Pi has not taken it yet: its conversation may be closed, or busy')
+    await act(async () => root.unmount())
+    host.remove()
+    Object.assign(PAGE, { wakeFailed: { at: NOW - 1000, why: 'the folder its conversation was held in is not known on this machine, or is gone' } })
+    await shown()
+    expect(said()).toBe('Couldn’t wake Pi: the folder its conversation was held in is not known on this machine, or is gone')
+    Object.assign(PAGE, { wakeFailed: null })
+  })
+
   test('a click made with no connection is said at once to be saved in this browser, and what became of the click before it is said no more', async () => {
     const outbox = await shown()
     expect(said()).toBe('Done')

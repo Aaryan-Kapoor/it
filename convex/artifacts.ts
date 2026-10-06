@@ -78,6 +78,9 @@ export const get = query({
           : null,
       // When the machine whose agent made this page was last heard from, for the site to judge
       // whether it is there to hear a click. Null when it has no connector, or was revoked.
+      // When the page's agent last changed it: published it, or wrote its state. What was done on
+      // the page before then has, as far as can be seen from here, been answered there.
+      answeredAt: Math.max(a.updatedAt, state?.agentAt ?? 0),
       // Whether the page's conversation is running now because It reopened it, which is what can be stopped from here
       run: running(machine, a),
       // Why it could not be reopened, the last time that was tried and did not work, and when

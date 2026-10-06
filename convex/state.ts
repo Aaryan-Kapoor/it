@@ -51,8 +51,10 @@ async function write(
   await rateLimit(ctx, by === 'page' ? 'storeKilobytesPage' : 'stateKilobytesPage', artifactId, kilobytes)
   await rateLimit(ctx, by === 'page' ? 'storeKilobytes' : 'stateKilobytes', userId, kilobytes)
   const revision = (s?.revision ?? 0) + 1
-  if (s) await ctx.db.patch(s._id, { json, revision })
-  else await ctx.db.insert('states', { artifactId, userId, json, revision })
+  // When the agent wrote it is noted, and not when the page itself did
+  const when = by === 'agent' ? { agentAt: Date.now() } : {}
+  if (s) await ctx.db.patch(s._id, { json, revision, ...when })
+  else await ctx.db.insert('states', { artifactId, userId, json, revision, ...when })
   await noteRevision(ctx, artifactId, revision)
   return { revision }
 }

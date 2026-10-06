@@ -236,6 +236,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
             agent={agentName(page.agent)}
             stoppedAt={page.stoppedAt}
             wakeFailed={page.wakeFailed}
+            answeredAt={page.answeredAt ?? null}
           />
         )}
         <div className="page-nav-actions">
@@ -307,6 +308,7 @@ function ActionStatus({
   agent,
   stoppedAt,
   wakeFailed,
+  answeredAt,
 }: {
   artifactId: Id<'artifacts'>
   user: string
@@ -319,6 +321,8 @@ function ActionStatus({
   stoppedAt: number | null
   /** Why the page's conversation could not be reopened, the last time that was tried and did not work. */
   wakeFailed: { at: number; why: string } | null
+  /** When the page's agent last changed the page, by publishing it or writing its state. */
+  answeredAt: number | null
 }) {
   const convex = useConvex()
   const setWake = useMutation(api.machines.wake)
@@ -366,6 +370,9 @@ function ActionStatus({
   // What was waiting then is still waiting, and the next thing done reopens the conversation.
   if (stoppedAt !== null && last.at <= stoppedAt) return <span className="status">Stopped</span>
   if (last.delivery === 'handed_off') {
+    // The agent has changed the page since: its answer is on the page, and the bar has nothing to add.
+    // Left up, "Your agent has it" read as an agent still at work, minutes after it had answered.
+    if (last.outcome === null && answeredAt !== null && answeredAt > last.at) return null
     // When what became of it cannot be told, the person is told exactly that, so they can decide whether to do it again
     const said =
       last.outcome === 'failed'
@@ -387,17 +394,23 @@ function ActionStatus({
     return <span className="status" data-tone="wait">{`Waiting for ${machine ?? 'your machine'} to come online${waiting > 1 ? ` (${waiting})` : ''}`}</span>
   // Sent, and not taken for a while: its conversation may be closed. The owner can switch on
   // the reopening of such conversations, here as under Machines, and it is so from then on
-  const offer = wakes && !wakes.on && now - last.at > WAKE_OFFER_MS
+  const slow = now - last.at > WAKE_OFFER_MS
+  const offer = wakes && !wakes.on && slow
   // Tried, and it could not be reopened: said as that, with why where it is asked for
   if (wakeFailed && wakeFailed.at >= last.at)
     return (
-      <span className="status" data-tone="bad" title={`${wakeFailed.why.charAt(0).toUpperCase()}${wakeFailed.why.slice(1)}.`}>
-        {`Couldn’t wake ${agent ?? 'your agent'}${waiting > 1 ? ` (${waiting})` : ''}`}
+      <span className="status" data-tone="bad">
+        {`Couldn’t wake ${agent ?? 'your agent'}${waiting > 1 ? ` (${waiting})` : ''}: ${wakeFailed.why}`}
       </span>
     )
   return (
     <>
-      <span className="status" data-tone="wait">{`Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}</span>
+      <span className="status" data-tone="wait">
+        {/* Not taken after a while, and nothing set to reopen it: the conversation is closed, or busy with something long. Which, It cannot see. */}
+        {slow && !wakes?.on
+          ? `Sent. ${agent ?? 'Your agent'} has not taken it yet${waiting > 1 ? ` (${waiting})` : ''}: its conversation may be closed, or busy`
+          : `Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}
+      </span>
       {offer && (
         <button
           type="button"
@@ -416,7 +429,7 @@ function ActionStatus({
 }
 
 /** How long a click has gone untaken before the owner is offered the reopening of its conversation. */
-const WAKE_OFFER_MS = 12_000
+const WAKE_OFFER_MS = 6_000
 /** What the person is asked before closed conversations of an agent app may be reopened on a machine, where they switch it on from a page. */
 export const wakeAsked = (agent: string, machine: string): string =>
   `Turn on Auto-wake for ${agent} on ${machine}? It then runs ${agent} there, with nobody watching, when you use a page whose conversation is closed. You can turn it off under Machines.`

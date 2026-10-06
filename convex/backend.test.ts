@@ -1256,6 +1256,28 @@ describe('state', () => {
     expect((await m.as.query(api.delivery.waiting, { slug: 'plan' }))[0]!.payload).toBe('{"名前":"值","$set":1}')
   })
 
+  test('when the page’s agent last changed the page is said, and what the page stores for itself does not count as that', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan', { state: '{"count":0}' })
+    const answered = async () => (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).answeredAt
+    const published = await answered()
+    expect(published).toBeGreaterThan(0)
+    // The page keeping something for itself is not its agent answering
+    vi.setSystemTime(Date.now() + 5000)
+    await alice.browser.mutation(api.state.storeSet, { artifactId: p.artifactId, key: 'draft', value: '"kept"' })
+    expect(await answered()).toBe(published)
+    // The agent writing the state is
+    vi.setSystemTime(Date.now() + 5000)
+    await m.as.mutation(api.state.patch, { slug: 'plan', patch: '{"count":1}' })
+    expect(await answered()).toBe(Date.now())
+    // And so is its publishing the page again
+    vi.setSystemTime(Date.now() + 5000)
+    await publish(m, 'plan')
+    expect(await answered()).toBe(Date.now())
+  })
+
   test('a page can only write under its own key, and what it stores under a name replaces what was there', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

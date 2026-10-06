@@ -187,7 +187,12 @@ export default defineSchema({
 
   // A page's state, as JSON text. Text, because a page may use any keys it likes and the
   // database's own objects may not.
-  states: defineTable({ artifactId: v.id('artifacts'), userId: v.id('users'), json: v.string(), revision: v.number() }).index('by_artifact', ['artifactId']),
+  // `agentAt` is when the page's agent last changed the state, as opposed to the page itself:
+  // it is how the site tells that an agent has answered what was done on the page
+  states: defineTable({ artifactId: v.id('artifacts'), userId: v.id('users'), json: v.string(), revision: v.number(), agentAt: v.optional(v.number()) }).index(
+    'by_artifact',
+    ['artifactId'],
+  ),
 
   // The state a publish asked for its page to start with, kept with that publish until it is
   // shown: a publish that is given up on, or loses to another, starts nothing.
