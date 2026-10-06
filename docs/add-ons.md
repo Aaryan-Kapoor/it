@@ -62,7 +62,7 @@ With it on, a click for a conversation that is not listening is given at once to
 
 All five have been run this way against the real programs on Linux: Claude Code and Codex with their own models, and Pi, OpenCode and Hermes with a model reached through OpenRouter. None has been run this way on Windows or macOS. OpenClaw has no such switch: its conversations live in its gateway, which is not closed.
 
-The command is started by It's background service, and so with the service's environment and not your shell's. An agent app that finds its account in a variable of your shell, and has no login of its own stored, cannot start a turn there. The page then says that it could not be woken.
+The command is started by It's background service, which the system starts with almost nothing of what your shell has. So on Linux and macOS the service asks your shell, when it starts and every few minutes while conversations are being reopened, what it would give a program: it starts your shell the way a terminal does, which runs your shell's own files, and reads what comes out. Whatever your shell exports that the service lacks is added for the agent apps it runs, and the folders of your shell's PATH after the service's own. That is how an agent app that takes its key or its proxy from a variable in `~/.profile`, `~/.bashrc` or `~/.zshrc` can be reopened. Nothing the service already has is changed, and none of it is written anywhere or leaves the machine. A shell that does not answer in eight seconds is given up on, and the apps then get what the service has; `IT_SHELL_ENV=off` in the service's environment keeps your shell from being asked at all. On Windows the service already has your account's variables.
 
 **Everything waiting goes in one message.** A conversation reopened for five clicks is reopened once, and reads all five, up to eight at a time.
 
@@ -70,7 +70,7 @@ The command is started by It's background service, and so with the service's env
 
 **You can stop it.** While a conversation that It reopened is running, the bar above its page says "Working", with a small square beside it that stops the agent. The agent is ended at once, and so is any command it was in the middle of. What it had been asked stays in the conversation, as it does when you stop a turn in the app. What was still waiting for that conversation goes with the stop: it is not reopened for, it is not handed over when you next open the conversation, and it no longer counts as waiting. The next thing you do on the page reopens the conversation as before, and the agent is told then that its last turn was stopped. Any browser that can use the page can stop it. A machine cannot, so no agent stops another. Stopping It's service ends the conversations it reopened as well, and what they were reopened for is given back and reopened for again when It next starts.
 
-**Where it cannot be done, the page says so.** "Couldn’t wake" and the app's name, with the reason beside it: the app was not found, its command ended with an error, the folder the conversation was held in is gone. It tries again a few times, further apart, and then leaves the click in the inbox. It knows which folder a conversation was held in from a note kept in `~/.it`: the `it` command writes it each time the conversation publishes a page, and Codex's add-on says it with every turn, since Codex runs the agent's own commands where that folder cannot be written. The note leaves the machine no more than anything else there does.
+**Where it cannot be done, the page says so.** "Couldn’t wake" and the app's name, with the reason beside it: the app was not found, its command ended with an error, the folder the conversation was held in is gone. Where the app's command ended with an error, the last line it printed is on the page too, since that is often the only word of why; it is shown on the page and is not written into It's log. It tries four times in all, further apart each time, and then leaves the click waiting, to be handed over the next time the conversation runs. It knows which folder a conversation was held in from a note kept in `~/.it`: the `it` command writes it each time the conversation publishes a page, and Codex's add-on says it with every turn, since Codex runs the agent's own commands where that folder cannot be written. The note leaves the machine no more than anything else there does.
 
 A conversation that is open in a window where It's add-on is not loaded looks closed to It. For Claude Code, one that wrote something in the last twenty seconds is left alone until it is quiet. For Codex, It asks Codex's own record of which conversations are being written: one that a Codex has open anywhere on the machine (the terminal, the desktop app, an editor, T3 Code) is never reopened beside it, and Codex goes on holding a conversation for about a minute after its window is closed.
 
@@ -78,7 +78,21 @@ A conversation that is open in a window where It's add-on is not loaded looks cl
 
 While a turn runs, the click is handed to the model at the next tool call, and the turn goes on with any click that arrived after the last one. When the conversation is open and idle, the click goes into Codex's own queue, which starts a turn with it. A click that arrives in the middle of a turn is said to be a separate one, so that a second press of a button is not taken for the first.
 
-Codex runs an agent's commands in a sandbox, and unless it is told otherwise that sandbox gives them no network. `it` reaches It over the network of your own machine, so in such a sandbox it cannot, and it says so: its answer has the code `blocked`, and says that It could not be asked from there. Either approve `it` to run outside the sandbox when Codex asks, or let commands in the sandbox use the network, with `sandbox_workspace_write.network_access = true` in Codex's `config.toml`. `it setup` and `it status` say so when Codex's settings plainly give no network, and the answer a sandboxed agent gets carries the two lines for it to pass on to you. It changes nothing in Codex's settings itself.
+Codex runs an agent's commands in a sandbox, and as it comes that sandbox gives them no network. `it` reaches It over the network of your own machine, so in such a sandbox it cannot, and it says so: its answer has the code `blocked`, and says that It could not be asked from there. Either approve `it` to run outside the sandbox each time Codex asks, or let commands in the sandbox use the network. In Codex 0.160 that is a permissions profile of your own with the network enabled, chosen in the first line of Codex's `config.toml`:
+
+```toml
+default_permissions = "workspace-network"
+
+# The rest of your settings stay as they are, and these go at the end:
+
+[permissions.workspace-network]
+extends = ":workspace"
+
+[permissions.workspace-network.network]
+enabled = true
+```
+
+The first line has to stand above every table, which is every line in square brackets, or Codex will not start. The older setting, `network_access = true` under `[sandbox_workspace_write]`, does this only together with `sandbox_mode = "workspace-write"`: by itself it gives a git folder the network and leaves any other folder read-only. `it setup` and `it status` say what to add to the settings you have when they plainly give no network, and the answer a sandboxed agent gets carries the same for it to pass on to you. It changes nothing in Codex's settings itself.
 
 Codex runs none of the add-on's hooks until you have approved them, and says nothing when it skips one. In the terminal, Codex asks the next time it starts, and "Trust all and continue" approves them. Until then a click still arrives, as a new message when Codex is idle. `it setup` and the site say that the hooks are waiting to be approved until one of them has run. How the desktop app and T3 Code ask, where there is no terminal to show the question, is not known.
 

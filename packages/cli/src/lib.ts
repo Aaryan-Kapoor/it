@@ -10,6 +10,8 @@ import { anyApi } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { importJWK, type JWK, SignJWT } from 'jose'
 import { agentAppsAbove } from './ancestry'
+import { codexNetwork, codexNoNetworkSaid } from './codex-settings'
+import { added, shellEnv } from './shell-env'
 
 export const VERSION = '0.1.0'
 export const api: any = anyApi
@@ -290,7 +292,7 @@ export const shutIn = (e: NodeJS.ProcessEnv = process.env) =>
     // Codex is the app that does this as it comes, and the person is the one who can change it:
     // the agent is given the line to tell them, since nothing else can get word out of here
     e.CODEX_THREAD_ID
-      ? 'Run `it` outside that sandbox if you may ask for that. If you may not, tell the user this, in these words: Codex gives the commands its agent runs no network, and `it` needs it to reach It on this machine. Adding the two lines `[sandbox_workspace_write]` and `network_access = true` to `~/.codex/config.toml`, and starting Codex again, lets it. Do not start It again.'
+      ? `Run \`it\` outside that sandbox if you may ask for that. If you may not, tell the user this, in these words: ${codexNoNetworkSaid(codexNetwork())} Do not start It again.`
       : 'Run `it` outside that sandbox, or let commands use the network there. Do not start It again.',
   )
 /** Whether an error says that the system refused the connecting itself, and not that nothing answered. */
@@ -1245,7 +1247,55 @@ export const PROFILE_VARS = [
  */
 export function harnessEnv(): NodeJS.ProcessEnv {
   const keep = new Set<string>(PROFILE_VARS)
-  return Object.fromEntries(Object.entries(process.env).filter(([k]) => keep.has(k) || !/^(CLAUDE|CODEX_|IT_SESSION$|IT_HARNESS$)/.test(k)))
+  const own = Object.fromEntries(Object.entries(process.env).filter(([k]) => keep.has(k) || !/^(CLAUDE|CODEX_|IT_SESSION$|IT_HARNESS$)/.test(k)))
+  // And what the person's shell has that this program was not started with, where it was asked
+  return { ...own, ...fromShell }
+}
+
+/** What the person's shell adds for the apps this program runs (see `shell-env`). Nothing until it has been asked. */
+let fromShell: NodeJS.ProcessEnv = {}
+let shellAskedAt = 0
+let shellAsking: Promise<void> | null = null
+let shellIsAsked = false
+/**
+ * Has the person's shell asked for what it gives a program, now and from time to time, for the
+ * apps this program runs. Only the background service does this: started by the system, it has
+ * none of what a person exports in their shell's files, and an app that takes its key from
+ * there would fail when reopened. A program started from a terminal has it all already.
+ */
+export function askShell(said?: (line: string) => void): void {
+  // Someone whose shell's files are not to be run by a service says so, and the apps then get what the service has
+  if (/^(0|off|false|no)$/i.test((process.env.IT_SHELL_ENV ?? '').trim())) return
+  shellIsAsked = true
+  void shellLearned().then(() => {
+    const n = Object.keys(fromShell).filter((k) => k !== 'PATH').length
+    said?.(
+      shellAskedAt && n
+        ? `agent apps that It reopens are given ${n} setting${n === 1 ? '' : 's'} of your shell that the background service was started without`
+        : 'agent apps that It reopens are given the environment the background service was started with',
+    )
+  })
+}
+/**
+ * Resolves once the shell has been asked, where it is asked at all. What was learned more than
+ * a few minutes ago is asked for again without being waited for, so that a key someone adds to
+ * their shell's files is there the next time, and no reopening waits for a shell twice.
+ */
+export function shellLearned(maxAgeMs = 5 * 60_000): Promise<void> {
+  if (!shellIsAsked) return Promise.resolve()
+  if (!shellAsking && (!shellAskedAt || Date.now() - shellAskedAt > maxAgeMs))
+    shellAsking = shellEnv()
+      .then((found) => {
+        if (found) fromShell = added(process.env, found)
+        shellAskedAt = Date.now()
+      })
+      .catch(() => {
+        shellAskedAt = Date.now()
+      })
+      .finally(() => {
+        shellAsking = null
+      })
+  return shellAskedAt ? Promise.resolve() : (shellAsking ?? Promise.resolve())
 }
 
 // ---------- which conversation is asking ----------

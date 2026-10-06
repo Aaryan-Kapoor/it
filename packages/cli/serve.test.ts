@@ -864,7 +864,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     const child = spawn(runtime, [it, ...args], {
       cwd: elsewhere ?? folder,
       env: elsewhere
-        ? { PATH: commands, HOME: elsewhere, IT_HOME: elsewhere, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', ...env }
+        ? { PATH: commands, HOME: elsewhere, IT_HOME: elsewhere, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', IT_SHELL_ENV: 'off', ...env }
         : {
             PATH: commands,
             HOME: folder,
@@ -873,6 +873,8 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
             IT_BACKEND_BIN: program!,
             IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage',
             IT_HARNESSES: 'none',
+            // The shell of whoever runs these tests is not asked what it would give a program
+            IT_SHELL_ENV: 'off',
             ...env,
           },
       stdio: ['ignore', 'pipe', 'pipe'],

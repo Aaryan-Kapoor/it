@@ -1,6 +1,6 @@
 // Reopening a conversation that was closed: the command Claude Code is run with, where it is
 // run, how the click is given to it, and the note of each conversation's folder that says where.
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -14,6 +14,7 @@ import {
   claudeWroteAt,
   codexHeld,
   codexWroteAt,
+  lastWords,
   mayWake,
   STOPPED,
   WAS_CUT_OFF,
@@ -178,6 +179,38 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     expect(
       await carryOn({ argv: [path.join(scratch, 'never')], input: '', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, { signal: stop.signal }),
     ).toBe(STOPPED)
+  })
+
+  test('one that ends badly by itself hands over its last line, for the person whose app it is, and leaves nothing of what it printed', async () => {
+    const kept = path.join(scratch, 'kept')
+    const failing = path.join(scratch, 'failing')
+    writeFileSync(
+      failing,
+      '#!/bin/sh\ncat > /dev/null\necho "hook: SessionStart Completed"\nprintf "\\033[31mERROR: Missing environment variable: \\140OPENROUTER_API_KEY\\140.\\033[0m\\n" >&2\nexit 1\n',
+    )
+    chmodSync(failing, 0o755)
+    const said: string[] = []
+    const opts = { keepIn: kept, said: (words: string) => said.push(words) }
+    expect(await carryOn({ argv: [failing], input: 'a click', app: 'Codex' }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
+    expect(said).toEqual(['ERROR: Missing environment variable: `OPENROUTER_API_KEY`.'])
+    expect(readdirSync(kept)).toEqual([])
+    // One that ran says nothing, whatever it printed, and one that was stopped is no failure of its own
+    said.length = 0
+    expect(
+      await carryOn({ argv: ['/bin/sh', '-c', 'echo "error: only a word it printed"'], input: '', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, opts),
+    ).toBeNull()
+    const stop = new AbortController()
+    setTimeout(() => stop.abort(), 200)
+    expect(
+      await carryOn(
+        { argv: ['/bin/sh', '-c', 'echo "error: about to wait" >&2; sleep 30'], input: '', app: 'Pi' },
+        scratch,
+        { harness: 'pi', session: 'x' },
+        { ...opts, signal: stop.signal },
+      ),
+    ).toBe(STOPPED)
+    expect(said).toEqual([])
+    expect(readdirSync(kept)).toEqual([])
   })
 
   test('the app is told the folder it is in, and not the one this program was started in', async () => {
@@ -420,5 +453,18 @@ describe('the folder a conversation was held in', () => {
     writeFileSync(conversationsFile(), '{"claude-code:session-1": {"cwd": "relative/path"}, "claude-code:session-2": "text"}')
     expect(conversationFolder(session)).toBeUndefined()
     expect(conversationFolder({ harness: 'claude-code', id: 'session-2' })).toBeUndefined()
+  })
+})
+
+describe('the last line an app printed', () => {
+  test('is the last of its closing lines that speaks of something going wrong, plain, short, and with nothing that could be a key', () => {
+    expect(lastWords('hook: SessionStart\nERROR: Missing environment variable: `KEY`.\n\n')).toBe('ERROR: Missing environment variable: `KEY`.')
+    // The line that says what went wrong, and not the trailer after it
+    expect(lastWords('Error: Invalid API key · Please run /login\nSession ended.\n')).toBe('Error: Invalid API key · Please run /login')
+    expect(lastWords('one\ntwo\n')).toBe('two')
+    expect(lastWords('\u001b[31mfailed\u001b[0m to reach the model\r\n')).toBe('failed to reach the model')
+    expect(lastWords('401 Unauthorized for key sk-or-v1-0123456789abcdef0123456789abcdef0123')).toBe('401 Unauthorized for key …')
+    expect(lastWords(`error: ${'x '.repeat(200)}`)!.length).toBe(160)
+    expect(lastWords('  \n\n')).toBeNull()
   })
 })

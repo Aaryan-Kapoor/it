@@ -11,11 +11,11 @@
 // Every click carries its own id in the text the agent reads, so a repeat can be told apart.
 import { execFile } from 'node:child_process'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { appendFileSync, chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson, QUEUES, WAKE_MOST, WAKES } from '@it/protocol'
-import { api, ask, call, enrolledHere, harnessEnv, home, inHome, live, Problem, readJson, VERSION, why, writePrivate } from './lib'
+import { api, ask, call, enrolledHere, harnessEnv, home, inHome, live, Problem, readJson, shellLearned, VERSION, why, writePrivate } from './lib'
 import { conversationFolder, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
@@ -509,12 +509,22 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * with it. It is told once, with what it is next reopened for.
    */
   const stoppedByPerson = new Set<string>()
+  /** The last line a reopened app printed where it ended badly, by conversation, until its next reopening. */
+  const saidLast = new Map<string, string>()
+  // What a reopened app printed is kept in a file only while it runs. One that was left by a
+  // connector that was ended in the middle of a run goes now.
+  try {
+    for (const name of readdirSync(inHome('logs'))) if (/^reopened-\d+-\d+\.txt$/.test(name)) rmSync(inHome('logs', name), { force: true })
+  } catch {}
   async function carry(session: { harness: string; id: string }, text: string): Promise<string | null> {
     const key = follow(keyOf(session.harness, session.id))
     // A conversation that was cleared carries on under another id, and it is that one which is carried on
     const now = { harness: session.harness, id: key.slice(key.indexOf(':') + 1) }
     const cwd = conversationFolder(now) ?? conversationFolder(session)
     if (!cwd) return 'the folder its conversation was held in is not known on this machine, or is gone'
+    // With what the person's shell gives a program, where this is the background service: an
+    // app that takes its key from there cannot be reopened without it
+    await shellLearned()
     const env = harnessEnv()
     const how = carrying(now.harness, now.id, text, {
       codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync),
@@ -532,7 +542,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
     await call('mutation', api.machines.runBegan, { for: session }).catch(() => {})
     let ended: string | null = 'it did not end'
     try {
-      ended = await carryOn(how, cwd, { harness: now.harness, session: now.id }, { signal: stop.signal })
+      saidLast.delete(key)
+      ended = await carryOn(
+        how,
+        cwd,
+        { harness: now.harness, session: now.id },
+        { signal: stop.signal, keepIn: inHome('logs'), said: (words) => saidLast.set(key, words) },
+      )
+      // It ran: what was set aside for this conversation after too many tries is its to be given again
+      if (ended === null) revive(now.harness, now.id)
       // Stopped by the person, and not by this connector closing: its next turn is told so
       if (ended === STOPPED && !closing) {
         if (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)
@@ -567,9 +585,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
       await call('mutation', api.machines.runEnded, { for: session, ...(ended === null || ended === STOPPED ? { ok: true } : {}) }).catch(() => {})
     }
   }
-  /** Says to It why a conversation could not be reopened, in this program's own words, so that the page can say so to the person. */
-  const notReopened = (session: { harness: string; id: string }, why: string) =>
-    void call('mutation', api.machines.wakeFailed, { for: session, why }).catch(() => {})
+  /**
+   * Says to It why a conversation could not be reopened, so that the page can say so to the
+   * person: in this program's own words, and with the last line the app itself printed where
+   * it ended badly, which is often the only word there is of why. That line is the person's
+   * own app speaking to them, and goes to the page alone: never into the log.
+   */
+  const notReopened = (session: { harness: string; id: string }, why: string) => {
+    const words = saidLast.get(follow(keyOf(session.harness, session.id)))
+    void call('mutation', api.machines.wakeFailed, { for: session, why: words ? `${why}, and its last words were: ${words}` : why }).catch(() => {})
+  }
   /** Whether anybody was at the page for any click that is waiting for a click's conversation. One such, and the conversation is reopened as for a person, whatever else waits in front of it. */
   const someoneThere = (click: Offered) =>
     click.attended !== false ||
@@ -1025,8 +1050,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (isNew) say(`a ${agentOf(harness)} conversation is listening (${short(id)})`)
       if (changed && typeof body.was === 'string') say(`a ${agentOf(harness)} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
       if (isNew || changed) watch()
-      // Heard from after a while: what was set aside for it, here and in It, is its to be given again
-      if (isNew) revive(harness, id)
+      // Heard from after a while: what was set aside for it, here and in It, is its to be given
+      // again. Not where it is this machine's own reopening that is heard from: that is a try
+      // like the ones before it, and forgetting them there would have it tried without end.
+      if (isNew && !reopenedNow.has(follow(key))) revive(harness, id)
       if (url.pathname === '/session') return [200, { ok: true }]
       // A pass is started, and waited for only a moment: an add-on must have its answer at
       // once, whatever the backend is doing, and what was claimed meanwhile is there next time

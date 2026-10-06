@@ -3,7 +3,7 @@
 // conversation may be reopened. None of it is done for an app the person has not switched
 // Auto-wake on for, which is the connector's to see to.
 import { execFileSync, spawn } from 'node:child_process'
-import { closeSync, existsSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, statSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, rmSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { WAKE_BACK_MS, WAKES } from '@it/protocol'
@@ -140,22 +140,76 @@ export function carrying(
   return `It has no way to reopen a conversation of ${app}`
 }
 
+let runs = 0
+/** The end of a file, as text: as much of it as a last line could be in. */
+function tail(file: string, bytes = 4096): string {
+  const fd = openSync(file, 'r')
+  try {
+    const size = fstatSync(fd).size
+    const buf = Buffer.alloc(Math.min(bytes, size))
+    readSync(fd, buf, 0, buf.length, size - buf.length)
+    return buf.toString('utf8')
+  } finally {
+    closeSync(fd)
+  }
+}
+/**
+ * The last line an app printed, as it may be shown to the person whose app it is: the last of
+ * its closing lines that speaks of something going wrong, or else the very last, without the
+ * colours of a terminal, cut to a line's length, and with anything long enough to be a key
+ * left out. Null where it printed nothing.
+ */
+export function lastWords(text: string): string | null {
+  const lines = text
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the colours and cursor moves a terminal is sent
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*\u0007/g, '')
+    .split(/\r?\n|\r/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  // A file read from its middle begins with part of a line
+  const closing = (lines.length > 1 && text.length >= 4096 ? lines.slice(1) : lines).slice(-8)
+  const last =
+    [...closing].reverse().find((l) => /error|fail|denied|invalid|not found|missing|unauthori|forbidden|expired|limit|cannot|could not|no such/i.test(l)) ??
+    closing.at(-1)
+  if (!last) return null
+  const plain = last.replace(/[A-Za-z0-9_+/=-]{24,}/g, '…')
+  return plain.length > 160 ? `${plain.slice(0, 159)}…` : plain
+}
+
 /**
  * Runs a command that carries a conversation on, in the folder the conversation was held in,
  * with its message on the command's input. Null when the command ran the turn. Otherwise why
  * it did not, for the log, in this program's own words: never what the command printed, which
- * may repeat the message. Stopped by the signal, it is ended and says so.
+ * may repeat the message. Where the command ended badly by itself, the last line it printed is
+ * handed to `said`, for the person whose app it is and for nothing that is kept. Stopped by
+ * the signal, it is ended and says so.
  */
 export function carryOn(
   how: Carrying,
   cwd: string,
   marks: { harness: string; session: string },
-  opts: { patience?: number; signal?: AbortSignal } = {},
+  opts: { patience?: number; signal?: AbortSignal; said?: (words: string) => void; keepIn?: string } = {},
 ): Promise<string | null> {
   const patience = opts.patience ?? 15 * 60_000
   if (opts.signal?.aborted) return Promise.resolve(STOPPED)
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>
+    // What the app prints goes to a file that is this run's alone, and is read only where the
+    // app ends badly, for its last line. A file and not a pipe: something the app leaves
+    // running would be ended by a pipe that nobody reads any more.
+    const printed = opts.keepIn ? path.join(opts.keepIn, `reopened-${process.pid}-${++runs}.txt`) : null
+    let into: number | null = null
+    if (printed)
+      try {
+        mkdirSync(path.dirname(printed), { recursive: true, mode: 0o700 })
+        into = openSync(printed, 'w', 0o600)
+      } catch {}
+    const forget = () => {
+      if (printed)
+        try {
+          rmSync(printed, { force: true })
+        } catch {}
+    }
     try {
       child = spawn(how.argv[0]!, how.argv.slice(1), {
         cwd,
@@ -168,22 +222,32 @@ export function carryOn(
           IT_HARNESS: marks.harness,
           IT_SESSION: marks.session,
         },
-        stdio: ['pipe', 'ignore', 'ignore'],
+        stdio: ['pipe', into ?? 'ignore', into ?? 'ignore'],
         windowsHide: true,
         // In a group of its own, so that stopping it stops what it started as well: a command
         // an agent is in the middle of does not run on after the agent is gone
         detached: process.platform !== 'win32',
       })
     } catch {
+      if (into !== null) closeSync(into)
+      forget()
       return resolve(`${how.app} could not be started`)
     }
+    if (into !== null) closeSync(into)
     let over = false
-    const end = (why: string | null) => {
+    const end = (why: string | null, itsOwn = false) => {
       if (over) return
       over = true
       clearTimeout(timer)
       clearTimeout(harder)
       opts.signal?.removeEventListener('abort', stop)
+      // Ended by itself and badly: what it printed last is the only word there is of why
+      if (itsOwn && printed && opts.said)
+        try {
+          const words = lastWords(tail(printed))
+          if (words) opts.said(words)
+        } catch {}
+      forget()
       resolve(why)
     }
     let harder: ReturnType<typeof setTimeout> | undefined
@@ -222,7 +286,9 @@ export function carryOn(
       end(`${how.app} had not finished in fifteen minutes`)
     }, patience)
     child.once('error', (err) => end((err as NodeJS.ErrnoException).code === 'ENOENT' ? `${how.app} was not found` : `${how.app} could not be started`))
-    child.once('exit', (code, signal) => end(stopped ? STOPPED : code === 0 ? null : `${how.app} exited with ${signal ?? code ?? 'an error'}`))
+    child.once('exit', (code, signal) =>
+      stopped ? end(STOPPED) : code === 0 ? end(null) : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),
+    )
     child.stdin?.on('error', () => {})
     child.stdin?.end(how.input)
   })

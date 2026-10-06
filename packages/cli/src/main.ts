@@ -12,12 +12,14 @@ import readline from 'node:readline/promises'
 import { describeClick, firstFile, HARNESSES, type Harness, isSlug, NOUN, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
 import { SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, parse, text } from './args'
+import { codexConfig as codexSettingsText } from './codex-settings'
 import { local } from './connector'
 import * as flow from './flow'
 import { hook } from './hooks'
 import {
   api,
   askConnectorWith,
+  askShell,
   backend,
   backendAt,
   basePort,
@@ -65,9 +67,9 @@ import { tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
 import {
   AFTER,
-  CODEX_NO_NETWORK,
-  CODEX_NO_NETWORK_SHORT,
-  codexLetsItOut,
+  CODEX_PROFILE,
+  codexNetwork,
+  codexNoNetwork,
   detectAll,
   disconnect,
   type HarnessStatus,
@@ -79,6 +81,7 @@ import {
   supported,
   whyHeldBack,
 } from './setup'
+import { printEnv } from './shell-env'
 import { GUIDE, STEPS, TOUR_PREFIX, tourPage } from './tour'
 import * as usage from './usage'
 
@@ -98,17 +101,24 @@ const forPerson = (a: Args): boolean => process.stdout.isTTY === true && a.flags
 /** Says something to a person, a sentence or a paragraph to the line, on standard output. */
 const tell = (lines: (string | undefined)[]): void => written(process.stdout, `${lines.filter((line) => line !== undefined).join('\n')}\n`)
 
+/** What a person is told where Codex is connected and, as it is set, would keep `it` from reaching It. Null where it would not. */
+function codexShut(found: HarnessStatus[]): string | null {
+  if (!found.some((h) => h.id === 'codex' && (h.addon === 'connected' || h.addon === 'needs_approval'))) return null
+  const said = codexNoNetwork(codexNetwork())
+  return said ? `Codex: ${said}` : null
+}
 /** What a person is told of the agent apps on this machine: each one that was found, and whether It is connected to it. */
-function appsSaid(found: HarnessStatus[], advise = true): string[] {
+function appsSaid(found: HarnessStatus[], advise = true, withCodex = true): string[] {
   if (!found.length) return ['No agent app was found on this machine.']
   const lines = found.map((h) => {
     const app = KNOWN[h.id].label
-    // Said each time it is asked for as long as it is so: the first thing a Codex user would otherwise learn of it is a page that never appears
-    const shut = h.id === 'codex' && codexLetsItOut() === false ? ` ${CODEX_NO_NETWORK_SHORT}` : ''
-    if (h.addon === 'connected') return `${app} is connected.${shut}`
-    if (h.addon === 'needs_approval') return `${app} is connected, and ${shut ? 'two things are' : 'one thing is'} left for you to do: ${h.detail}${shut}`
+    if (h.addon === 'connected') return `${app} is connected.`
+    if (h.addon === 'needs_approval') return `${app} is connected, and one thing is left for you to do: ${h.detail}`
     return `${app} is not connected${h.detail && h.addon !== 'not_connected' ? `: ${h.detail}` : '.'}`
   })
+  // Said each time it is asked for as long as it is so: the first thing a Codex user would otherwise learn of it is a page that never appears
+  const shut = withCodex ? codexShut(found) : null
+  if (shut) lines.push(shut)
   if (advise && found.some((h) => h.addon === 'not_connected' && supported(h.id))) lines.push('Run `it setup` to choose which agent apps are connected.')
   return lines
 }
@@ -795,6 +805,11 @@ async function uninstall(a: Args) {
   if (process.platform === 'win32') left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
   // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
   crumbs()
+  // What the person added to Codex's settings on It's word is theirs, and is not taken out: it is said to be there
+  if (new RegExp(`^\\[permissions\\.${CODEX_PROFILE}[.\\]]`, 'm').test(codexSettingsText() || ''))
+    say(
+      `Codex: the permissions profile \`${CODEX_PROFILE}\`, which lets its commands use the network, is still in Codex’s settings. It is yours to keep or to take out.`,
+    )
   // 5. Its folder, the program in it included. A program that is running may delete its own file on every system but Windows.
   try {
     rmSync(folder, { recursive: true, force: true })
@@ -874,6 +889,12 @@ function crumbs(): void {
   ]) {
     try {
       rmSync(kept, { recursive: true, force: true })
+    } catch {}
+  }
+  // The folders Codex made to keep It's add-on in, where nothing else is in them
+  for (const dir of [path.join(codexHome, 'plugins', 'cache'), path.join(codexHome, 'plugins')]) {
+    try {
+      rmdirSync(dir)
     } catch {}
   }
   if (process.platform === 'linux') {
@@ -1100,8 +1121,8 @@ async function settingUpLed(a: Args) {
     else apps.done(on.length ? on.map((h) => KNOWN[h.id].label).join(', ') : 'none connected')
     for (const h of failed) left.push(`${KNOWN[h.id].label} could not be connected${h.detail ? `: ${h.detail}` : '.'}`)
     // What decides whether Codex's first page appears at all is said by itself, and first
-    if (after.some((h) => h.id === 'codex' && (h.addon === 'connected' || h.addon === 'needs_approval')) && codexLetsItOut() === false)
-      left.push(`Codex: ${CODEX_NO_NETWORK}`)
+    const shut = codexShut(after)
+    if (shut) left.push(shut)
     for (const h of after) {
       if (h.addon === 'needs_approval' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !connectedBefore.has(h.id)) left.push(`${KNOWN[h.id].label}: ${AFTER[h.id]}`)
@@ -1323,11 +1344,11 @@ async function settingUp(a: Args, joined: boolean) {
       if ('note' in background && background.note) say(background.note)
     }
     // A person is told in a sentence for each app what the JSON says of them to a program, before what is left for them to do
-    if (forPerson(a)) tell(appsSaid(after, false))
+    if (forPerson(a)) tell(appsSaid(after, false, false))
     // What the person still has to do themselves, for each harness that was just connected.
     // What decides whether Codex's first page appears at all is said by itself, and first.
-    if (after.some((h) => h.id === 'codex' && (h.addon === 'connected' || h.addon === 'needs_approval')) && codexLetsItOut() === false)
-      say(`\nCodex: ${CODEX_NO_NETWORK}`)
+    const shut = codexShut(after)
+    if (shut) say(`\n${shut}`)
     for (const h of after) {
       if (h.addon === 'needs_approval') say(`\n${KNOWN[h.id].label}: ${h.detail}`)
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !before.has(h.id)) say(`\n${KNOWN[h.id].label}: ${AFTER[h.id]}`)
@@ -1611,6 +1632,8 @@ async function keepRunning(a: Args, named: string, command: string, run: (line: 
   const log = text(a, 'log')
   let last = ''
   let repeats = 0
+  // Told where to write its log, it is the background service and was started by the system
+  if (log && command === 'it serve') askShell((l) => line(l))
   const line = (l: string) => {
     // The same line over and over (the network is down, say) is written once and counted
     if (l === last && ++repeats % 300 !== 0) return
@@ -1804,6 +1827,8 @@ async function main(argv: string[]): Promise<void> {
   // background service, which has no such environment, before anything else is done
   usage.heed()
   if (cmd === 'hook') return hook(rest[0] ?? '')
+  // What the background service has the person's shell run, to learn what it gives a program
+  if (cmd === 'shell-env') return printEnv()
   const a = parse(rest)
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h' || a.flags.help) {
     written(process.stdout, HELP)

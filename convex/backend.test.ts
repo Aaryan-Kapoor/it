@@ -1688,7 +1688,7 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.machines.wakeFailed, { for: SESSION, why: 'Claude Code was not found' })
     expect(await failedOn()).toEqual({ at, why: 'Claude Code was not found' })
     await m.as.mutation(api.machines.wakeFailed, { for: SESSION, why: 'x'.repeat(500) })
-    expect((await failedOn())?.why.length).toBe(160)
+    expect((await failedOn())?.why.length).toBe(300)
     // Ended without having run, it is still so
     await m.as.mutation(api.machines.runEnded, { for: SESSION })
     expect(await failedOn()).not.toBeNull()

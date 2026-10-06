@@ -148,7 +148,7 @@ export const wakeFailed = mutation({
     const { machine } = await requireMachine(ctx)
     const others = (machine.fails ?? []).filter((f) => f.harness !== s.harness || f.sessionId !== s.id)
     await ctx.db.patch(machine._id, {
-      fails: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), at: Date.now(), why: why.slice(0, 160) }].slice(-RUNS_MOST),
+      fails: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), at: Date.now(), why: why.slice(0, 300) }].slice(-RUNS_MOST),
     })
     return null
   },
@@ -218,7 +218,7 @@ const kept = (harnesses: { id: string; version?: string; addon: string; detail?:
   harnesses
     .filter((h) => (HARNESSES as readonly string[]).includes(h.id))
     .slice(0, HARNESSES.length)
-    .map((h) => ({ id: h.id, version: h.version?.slice(0, 40), addon: h.addon.slice(0, 40), detail: h.detail?.slice(0, 200) }))
+    .map((h) => ({ id: h.id, version: h.version?.slice(0, 40), addon: h.addon.slice(0, 40), detail: h.detail?.slice(0, 600) }))
 
 /**
  * `it setup` says what it found on the machine, so that the site can show it before a connector

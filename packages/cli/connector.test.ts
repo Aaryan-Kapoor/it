@@ -10,7 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { conversationFolder } from './src/publish'
+import { conversationFolder, noteConversation } from './src/publish'
 
 const stand = vi.hoisted(() => ({
   /** What the connector watches the backend for, by the name of the function, and how to tell it something new. */
@@ -488,6 +488,49 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.codex).toEqual([])
     expect(said.some((line) => line.includes('was not taken by the reopening of its conversation'))).toBe(true)
   })
+
+  test.skipIf(process.platform === 'win32')(
+    'a reopening that fails after its own add-on was heard from counts as a try, says the app’s last line on the page alone, and is not tried without end',
+    async () => {
+      // Codex's own command, as a program of its own: it says that it began, waits to be let go, prints why it cannot go on, and fails
+      const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(bin, folder)
+      writeFileSync(
+        path.join(bin, 'codex'),
+        `#!/bin/sh\ncat > /dev/null\nn=$(ls ${bin} | grep -c began)\ntouch ${bin}/began-$n\nwhile [ ! -f ${bin}/go-$n ]; do sleep 0.05; done\necho 'ERROR: Missing environment variable: \`KEY\`.' >&2\nexit 1\n`,
+        { mode: 0o755 },
+      )
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      const failures = () => stand.calls.filter((c) => c.name === 'machines:wakeFailed')
+      const oneTry = async (n: number) => {
+        offered(click(1))
+        await until(() => existsSync(path.join(bin, `began-${n}`)))
+        // The add-on inside the reopened app says its conversation is listening, as it does when any conversation begins
+        await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
+        writeFileSync(path.join(bin, `go-${n}`), '')
+        await until(() => failures().length === n + 1)
+        await settled()
+      }
+      await oneTry(0)
+      expect(failures()[0]!.args).toEqual({
+        for: { harness: 'codex', id: 'thread-1' },
+        why: 'Codex exited with 1, and its last words were: ERROR: Missing environment variable: `KEY`.',
+      })
+      expect(said.some((line) => line.includes('(Codex exited with 1); try 1 of 4'))).toBe(true)
+      // What the app printed is for the page, and is in no line of the log
+      expect(said.join('\n')).not.toContain('Missing environment')
+      // Nothing of it was forgotten because the app's own add-on had spoken: the next try is the second, after its pause
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(Date.now() + 11_000)
+      await oneTry(1)
+      expect(said.some((line) => line.includes('try 2 of 4'))).toBe(true)
+      expect(said.filter((line) => line.includes('try 1 of 4'))).toHaveLength(1)
+    },
+  )
 
   test('a click whose reopening failed is put in Codex’s queue at once when its conversation is opened, without waiting out the pause', async () => {
     await start()
