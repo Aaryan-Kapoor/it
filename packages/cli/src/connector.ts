@@ -652,10 +652,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // What the person chose or typed is not put on a command line, where other users of the
       // machine could read it: the agent is told the action, and where to read what it carried
       const refused = reopening
-        ? // Given on the command's input, where nobody else on the machine reads it, so in full
+        ? // Given on the command's input, where nobody else on the machine reads it, so in full.
+          // What was done comes first and the note about it after: an app that lists its
+          // conversations by how each last message begins then shows what was pressed, and
+          // not the same note every time.
           await carry(
             click.session!,
-            `${WOKEN}${stoppedByPerson.delete(key) ? `\n\n${WAS_STOPPED}` : ''}\n\n${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}`,
+            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.delete(key) ? `\n\n${WAS_STOPPED}` : ''}`,
           )
         : await codexQueue(threadOf(key), describeClick(asClick(click), 0))
       // A conversation the person stopped had what was done all the same: it is handed over,

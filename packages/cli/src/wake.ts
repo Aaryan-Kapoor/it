@@ -39,11 +39,11 @@ const APP: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Code
  * woken Pi, which may run anything, decline three times to try anything else.
  */
 export const WOKEN =
-  '[It] It reopened this conversation for what follows, which someone did on a page of yours while it was closed. You can do here what you could do while they were with you: the same commands, run the same way. The one difference is that nobody is watching, so nobody can answer a question or approve anything. Run `it` by that name alone, with no folder in front of it and no `export` before it: it is on your PATH, and in that form it is never held for approval. Do what was asked and nothing more, and show on the page that you have. Try what the work needs before you conclude that you may not. Only if a command is in fact refused, say so where they will see it, with `it notify` or the page’s state, and run `it ack <action id> --failed`.'
+  '[It] It reopened this conversation for what is above, which someone did on a page of yours while it was closed. You can do here what you could do while they were with you: the same commands, run the same way. The one difference is that nobody is watching, so nobody can answer a question or approve anything. Run `it` by that name alone, with no folder in front of it and no `export` before it: it is on your PATH, and in that form it is never held for approval. Do what was asked and nothing more, and show on the page that you have. Try what the work needs before you conclude that you may not. Only if a command is in fact refused, say so where they will see it, with `it notify` or the page’s state, and run `it ack <action id> --failed`.'
 
 /** What a conversation is told, the next time it is reopened, when the person stopped its last reopened turn from the page. */
 export const WAS_STOPPED =
-  '[It] The turn before this one in this conversation was stopped by the person, from the page, before it had finished. Whatever it was in the middle of was not wanted any more: do not carry on with it unless what follows asks for it.'
+  '[It] The turn before this one in this conversation was stopped by the person, from the page, before it had finished. Whatever it was in the middle of was not wanted any more: do not carry on with it unless what is above asks for it.'
 
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
