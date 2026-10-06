@@ -8,7 +8,7 @@ An add-on is how what you do on a page gets back into the conversation that made
 - It is installed with the app's own command for add-ons where the app has one (Claude Code, Codex, Pi, OpenClaw). OpenCode has none, so its plugin and the skill are copied into the folder OpenCode loads from, and Hermes's are copied and then switched on with Hermes's own command.
 - Each installation is written down with every file it wrote, so that only those files are ever replaced or removed. A file that was already there and is not It's is kept beside the new one, with `.set-aside-by-it` added to its name.
 - `it setup` installs an add-on only into a version of the app that It knows the add-on to work with. It says which version it needs where the one it finds is older, and installs nothing there.
-- The conversation that made a page keeps it. Ownership moves only when the machine that made the page has left or was revoked, or when an agent takes the page over explicitly by publishing it again with `--take`, as in `it update <id> --file page.html --take`.
+- A page belongs to the conversation that last made it. `it create` under an id another conversation used gives the page to the one that runs it, since whoever says "show me the board again" the next day is talking to the conversation in front of them; the command's answer says that the page changed hands. `it update` from another conversation changes what the page shows and leaves it where it is, and says so, unless it is given `--take`. A page also moves when the machine that made it has left or was revoked: it goes to whoever publishes it next.
 
 ## The order a click tries
 

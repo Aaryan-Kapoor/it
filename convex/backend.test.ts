@@ -1132,9 +1132,12 @@ describe('publishing', () => {
       return [got.machine, got.session]
     }
     expect(await owner()).toEqual(['laptop', SESSION])
-    // Said explicitly, the page changes hands
-    expect((await publish(server, 'plan', { session: { harness: 'codex', id: 'thread-9' }, take: true })).elsewhere).toBeUndefined()
+    // Said explicitly, the page changes hands, and the one that took it is told that it has
+    const taken = await publish(server, 'plan', { session: { harness: 'codex', id: 'thread-9' }, take: true })
+    expect([taken.elsewhere, taken.took]).toEqual([undefined, true])
     expect(await owner()).toEqual(['server', { harness: 'codex', id: 'thread-9' }])
+    // Asked for again by the one that has it, nothing changes hands and nothing is said
+    expect((await publish(server, 'plan', { session: { harness: 'codex', id: 'thread-9' }, take: true })).took).toBeUndefined()
     // And a page whose machine is gone goes to whoever publishes it next
     await alice.browser.mutation(api.machines.revoke, { machineId: server.id })
     expect((await publish(laptop, 'plan', { session: { harness: 'claude-code', id: 'sess-2' } })).elsewhere).toBeUndefined()

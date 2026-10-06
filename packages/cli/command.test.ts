@@ -507,33 +507,49 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
   })
 })
 
-describe.skipIf(process.platform === 'win32')('a page that stays another conversation’s', () => {
-  test('`it create` and `it update` say that what is done on it goes to the conversation that made it, and how to have it come here', async () => {
+describe.skipIf(process.platform === 'win32')('a page another conversation made', () => {
+  test('`it create` gives it to the conversation that makes it again and says so, and `it update` leaves it where it is and says how to have it', async () => {
     const m = machine()
-    let elsewhere = true
     const b = await backend(m, (asked) =>
       asked.path === 'artifacts:get'
         ? { title: 'Board' }
         : asked.path === 'publish:begin'
           ? { artifactId: 'artifact-1', slug: 'board', version: 2, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
           : asked.path === 'publish:finish'
-            ? { slug: 'board', version: 2, url: 'https://site.example/p/board', ...(elsewhere ? { elsewhere: true } : {}) }
+            ? // The backend's word on what became of the page: taken by a publish that asked for it, left where it was by one that did not
+              {
+                slug: 'board',
+                version: 2,
+                url: 'https://site.example/p/board',
+                ...(b.asked.findLast((x) => x.path === 'publish:begin')!.args.take ? { took: true } : { elsewhere: true }),
+              }
             : null,
     )
     try {
       const mine = { ...b.env, CODEX_THREAD_ID: 'codex-today' }
-      const NOTE =
-        'What is done on this page goes to another conversation, the one that made it, and not to this one. If the person is to be answered here, publish it again with --take.'
+      const begun = () => b.asked.findLast((x) => x.path === 'publish:begin')!.args
+      // Made again by today's conversation: the person is talking to it, and what they do on the page comes to it
       const made = await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], mine)
-      expect([made.code, printed(made)]).toEqual([0, { id: 'board', version: 2, url: `${b.url}/p/board`, note: NOTE }])
-      expect(printed(await run(m, ['update', 'board', '--html', '<p>hi</p>'], mine)).note).toBe(NOTE)
-      // Taken, it is this conversation's, and there is nothing to say
-      elsewhere = false
-      expect(printed(await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>', '--take'], mine))).toEqual({
-        id: 'board',
-        version: 2,
-        url: `${b.url}/p/board`,
-      })
+      expect(begun()).toMatchObject({ take: true, session: { harness: 'codex', id: 'codex-today' } })
+      expect([made.code, printed(made)]).toEqual([
+        0,
+        {
+          id: 'board',
+          version: 2,
+          url: `${b.url}/p/board`,
+          note: 'This page was another conversation’s, and is this one’s now: what is done on it comes here.',
+        },
+      ])
+      // A new version of it from a conversation that did not make it leaves it where it is, and says how to have it
+      const updated = await run(m, ['update', 'board', '--html', '<p>hi</p>'], mine)
+      expect(begun().take).toBeUndefined()
+      expect(printed(updated).note).toBe(
+        'What is done on this page goes to another conversation, the one that made it, and not to this one. If the person is to be answered here, publish it again with --take.',
+      )
+      expect(printed(await run(m, ['update', 'board', '--html', '<p>hi</p>', '--take'], mine)).note).toMatch(/is this one’s now/)
+      // Made by a script, in no conversation, there is nobody to give it to: nothing is asked for
+      await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], b.env)
+      expect(begun().take).toBeUndefined()
     } finally {
       await b.close()
     }

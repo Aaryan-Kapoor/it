@@ -392,14 +392,16 @@ export const _finish = internalMutation({
       ver.by?.session !== undefined &&
       a.session !== undefined &&
       (ver.by.machineId !== a.machineId || JSON.stringify(ver.by.session) !== JSON.stringify(a.session))
-    return { slug: a.slug, version, superseded: false, ...(elsewhere ? { elsewhere: true } : {}) }
+    // And one that took a page which another conversation had is told that too: what is done on it comes to it now
+    const took = moves && a.currentVersion !== undefined && a.session !== undefined && ver.by?.session !== undefined
+    return { slug: a.slug, version, superseded: false, ...(elsewhere ? { elsewhere: true } : {}), ...(took ? { took: true } : {}) }
   },
 })
 
 /** Step two, after the uploads: check them, then switch the page to the new version. */
 export const finish = action({
   args: { artifactId: v.id('artifacts'), version: v.number() },
-  handler: async (ctx, args): Promise<{ slug: string; version: number; url: string; elsewhere?: boolean }> => {
+  handler: async (ctx, args): Promise<{ slug: string; version: number; url: string; elsewhere?: boolean; took?: boolean }> => {
     const waiting = await overClashes(() => ctx.runMutation(internal.publish._gate, args))
     let checked: { ok: boolean; missing: string[] }
     try {
@@ -416,7 +418,13 @@ export const finish = action({
     // A newer publish of the same page finished first, and this one was put away unshown. Its
     // agent is told so: told "published", it would wait for clicks on something nobody can see.
     if (done.superseded) fail('conflict', 'A newer publish of this page finished first, so this one was not shown. Read the page before publishing again.')
-    return { slug: done.slug, version: done.version, url: `${site()}/p/${done.slug}`, ...('elsewhere' in done && done.elsewhere ? { elsewhere: true } : {}) }
+    return {
+      slug: done.slug,
+      version: done.version,
+      url: `${site()}/p/${done.slug}`,
+      ...('elsewhere' in done && done.elsewhere ? { elsewhere: true } : {}),
+      ...('took' in done && done.took ? { took: true } : {}),
+    }
   },
 })
 

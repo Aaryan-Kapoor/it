@@ -243,7 +243,12 @@ async function create(a: Args) {
   if (slug !== undefined && !isSlug(slug)) throw new Problem('An id is lowercase letters, digits, dots, dashes and underscores, at most 64.', 'invalid')
   const state = text(a, 'state')
   if (state !== undefined) object(json(state, '--state'), '--state')
-  const done = await publish({ slug, title, files: await source(a), agent: text(a, 'agent'), state, take: a.flags.take === true })
+  // A conversation that makes a page is the one that hears what is done on it, also where
+  // another conversation made a page of that id before: someone who says "show me the board
+  // again" the next day is talking to the conversation in front of them, and the page that
+  // comes up is its page. `it update` leaves a page with whoever has it, unless told --take.
+  const mine = a.flags.take === true || sessionAsked() !== undefined
+  const done = await publish({ slug, title, files: await source(a), agent: text(a, 'agent'), state, take: mine })
   await published(done, a)
 }
 
