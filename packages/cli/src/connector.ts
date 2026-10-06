@@ -65,7 +65,7 @@ export interface ConnectorInfo {
 
 const LIVE_MS = 5_000 // an add-on that asked this recently is listening
 const KNOWN_MS = 90_000 // and one that asked this recently is still worth watching clicks for
-const HOLD_MS = 20_000 // how long a claimed click waits for an add-on that has stopped asking
+const HOLD_MS = 6_000 // how long a claimed click waits for an add-on that has stopped asking: one that is there asks every second
 const RENEW_MS = 10_000 // how often the lease on a held click is extended
 const FRESH_MS = 8_000 // a click this new, in a running Codex turn, is held for the turn's next hook
 const HOOK_HOLD_MS = 60_000 // and this is how long it is held before Codex's queue gets it instead
@@ -81,12 +81,18 @@ const WAKE_RATE = { most: 10, everyMs: 20_000 }
 const WAKE_RATE_UNATTENDED = { most: 3, everyMs: 5 * 60_000 }
 const WAKE_RATE_MACHINE = { most: 30, everyMs: 10_000 }
 /** How long Codex is given to take a queued message by itself, and how long it must have written nothing of the conversation, before the conversation is taken to be closed. */
-const CODEX_GRACE_MS = 12_000
+const CODEX_GRACE_MS = 4_000
 const CODEX_QUIET_MS = 45_000
 /** How long Claude Code must have written nothing of a conversation that is not listening before it is taken to be closed and not at work in a window It cannot see into. */
 const CLAUDE_QUIET_MS = 20_000
-/** How long a click waits for a conversation that is open to ask for it, before the conversation is taken to be closed. */
-const CLOSED_MS = 8000
+/**
+ * How long a click for a conversation that is not listening waits before the conversation is
+ * reopened: a moment, so that a few things done in quick succession go in the one message. No
+ * longer than that. A conversation that is open asks for its clicks every second, and one that
+ * has not asked for five is not listening, which is known the instant the click arrives: there
+ * is nothing more to wait for.
+ */
+const SETTLE_MS = 300
 const SERVE_MOST = 8 // how many clicks one answer to an add-on carries
 const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads no more than a quarter of a megabyte
 const keyOf = (harness: string, id: string) => `${harness}:${id}`
@@ -491,6 +497,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
       reopenedNow.delete(key)
       if (ranUntil.size > 500) ranUntil.delete(ranUntil.keys().next().value!)
       ranUntil.set(key, Date.now())
+      // The conversation is closed again from this moment. While it ran, the add-on inside it
+      // asked for its clicks, and for a few seconds after an add-on last asked its conversation
+      // counts as listening: left so, the next thing the person did would be kept for an add-on
+      // that is gone, and they would wait for nothing. What was being kept for it goes back now.
+      sessions.delete(key)
+      for (const [id, h] of held) {
+        if (h.key !== key || h.served) continue
+        held.delete(id)
+        journal('released', id)
+        void call('mutation', api.delivery.release, { id })
+          .catch(() => {})
+          .then(() => route())
+      }
       // That it ran, or was stopped, takes back anything said earlier of why it could not be reopened
       await call('mutation', api.machines.runEnded, { for: session, ...(ended === null || ended === STOPPED ? { ok: true } : {}) }).catch(() => {})
     }
@@ -542,8 +561,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
         `whether a Codex conversation (${short(session.id)}) is open cannot be told, so it is not reopened: what was done waits in Codex’s queue`,
       )
     if (wrote > since) return
-    // Written of a moment ago, it may be open and at work on something long: it is looked at again once it has been quiet
-    if (now - wrote < CODEX_QUIET_MS) return nudgeLater(session, since, CODEX_QUIET_MS - (now - wrote) + 1000)
+    // Written of a moment ago, it may be open and at work on something long: it is looked at
+    // again once it is quiet. What this machine's own reopening of it wrote is not that.
+    const ours = ranUntil.get(key)
+    if (now - wrote < CODEX_QUIET_MS && (ours === undefined || wrote > ours + 3000)) return nudgeLater(session, since, CODEX_QUIET_MS - (now - wrote) + 1000)
     if (!room(key, true, true)) return nudgeLater(session, since, WAKE_RATE.everyMs)
     await withRunSlot(async () => {
       const refused = await carry(session, NUDGE)
@@ -748,6 +769,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
     return true
   }
 
+  /** Looks at what is waiting again in a moment, and not only at the next second: what is reopened at once is not kept waiting for the clock. */
+  let sooner: ReturnType<typeof setTimeout> | undefined
+  const soon = (ms: number) => {
+    if (sooner) return
+    sooner = setTimeout(() => {
+      sooner = undefined
+      void route()
+    }, ms)
+    sooner.unref?.()
+  }
   async function route(): Promise<void> {
     if (routing) return
     routing = true
@@ -856,14 +887,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // Route 2: Codex's own queue starts a turn when idle, or runs it after the current one.
           // Not waited for here: one slow command must not hold up every other click.
           if (!queue(click)) waitingBehind.add(key)
-        } else if (wakes(click.session.harness, click.at) && connected(click.session.harness) && now - click.at >= CLOSED_MS) {
-          // Route 3: the conversation is closed, and the person has switched on reopening for
-          // its agent app on this machine. A conversation that is open asks for its clicks
-          // every second, so one not heard from for this long is not open in a Claude Code It is
-          // connected to. It is run in line like a queue, one click of a conversation at a time.
-          // And only so often: past that the click waits, and goes with the next reopening.
-          // Nor while it is at work in a window It cannot see into: it is looked at again once it is quiet.
-          if (atWork(click.session, now) || !room(key, someoneThere(click)) || !queue(click)) waitingBehind.add(key)
+        } else if (wakes(click.session.harness, click.at) && connected(click.session.harness)) {
+          // Route 3: the conversation is not listening, which is to say closed, and the person
+          // has switched on reopening for its agent app on this machine. It is reopened at once,
+          // but for the moment that lets a few things done together go together. It is run in
+          // line like a queue, one click of a conversation at a time. And only so often: past
+          // that the click waits, and goes with the next reopening. Nor while it is at work in a
+          // window It cannot see into: it is looked at again once it is quiet.
+          if (now - click.at < SETTLE_MS) {
+            waitingBehind.add(key)
+            soon(SETTLE_MS - (now - click.at) + 10)
+          } else if (atWork(click.session, now) || !room(key, someoneThere(click)) || !queue(click)) waitingBehind.add(key)
         }
         // Route 4: nothing to do. The click stays waiting and the site shows it.
       }

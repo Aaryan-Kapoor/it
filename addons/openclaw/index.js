@@ -144,6 +144,12 @@ const unattended = (key) =>
     .some((part) => part === 'subagent' || part === 'cron')
 
 function register(api) {
+  // OpenClaw loads a plugin more than once: in full when the gateway starts, and again, each
+  // time afresh, only to list what the plugin offers. Everything this add-on does is for a
+  // gateway that is running, so it registers nothing on any other load. Were it to, a second
+  // copy of it would ask for clicks that it could never hand over, and the copy that could
+  // would never learn which conversations to ask about.
+  if (typeof api?.registrationMode === 'string' && api.registrationMode !== 'full') return
   /**
    * Conversations to ask about: key -> { agent, seen, handing, tries, notBefore }. `handing` is
    * null, or says since when a click has been on its way to the agent and how to stop waiting for it.
