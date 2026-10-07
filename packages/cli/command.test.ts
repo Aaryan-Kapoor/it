@@ -2638,7 +2638,9 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
 
 describe.skipIf(process.platform === 'win32')('`it setup --none`, which connects no agent app', () => {
   /** A backend program that is not there: a first run asks for it before anything else, and ends saying so. */
-  const noProgram = (m: { home: string }) => ({ IT_BACKEND_BIN: path.join(m.home, 'no-such-program') })
+  // A first run looks first at whether It could have its ports, so these are given ports that nothing has: an It of the
+  // developer's own may be running at the usual ones
+  const noProgram = (m: { home: string }) => ({ IT_BACKEND_BIN: path.join(m.home, 'no-such-program'), IT_PORT: String(SITE_PORT + 500) })
   const begun = (m: { it: string }) => ['service.json', 'machine.json', 'backend'].filter((name) => existsSync(path.join(m.it, name)))
   /** The note a folder keeps of an add-on it put into Claude Code. No `claude` is on the PATH here, so it cannot be asked to take it out. */
   const noteAddon = (m: { it: string }) => {

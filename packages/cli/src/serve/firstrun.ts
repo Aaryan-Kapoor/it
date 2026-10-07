@@ -157,6 +157,8 @@ export async function begin(opts: {
   stage?: (stage: 'program' | 'service' | 'machine', how?: 'fetching') => void
 }): Promise<Begun> {
   const { say } = opts
+  // Before anything is fetched or written on a first run: whether It could have its ports here at all
+  if (!readConfig()) await roomAt(portAsked() ?? PORTS.base)
   // The program comes first: the settings hold a key that only it can make
   const fetching = !process.env.IT_BACKEND_BIN && !existsSync(programFile())
   opts.stage?.('program', fetching ? 'fetching' : undefined)
@@ -165,7 +167,6 @@ export async function begin(opts: {
       `Fetching the backend program that It runs on this machine, from ${process.env.IT_BACKEND_RELEASES ? 'the place IT_BACKEND_RELEASES names' : 'its release on GitHub'}. It is about 60 MB. It is fetched the first time It is set up, and again when a newer It runs a newer one.`,
     )
   await program(() => {}, undefined, opts.progress)
-  if (!readConfig()) await roomAt(portAsked() ?? PORTS.base)
   const config = readConfig() ?? makeConfig()
   opts.stage?.('service')
   const begun: Begun = { config, enrolled: false, own: false, done: async () => {} }

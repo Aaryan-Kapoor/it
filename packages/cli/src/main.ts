@@ -1070,6 +1070,15 @@ async function settingUpLed(a: Args) {
     })
   } catch (err) {
     at.fail(err instanceof Problem ? err.message : 'failed')
+    // A person is reading: what to do about it is said under the step, in its own words, and
+    // the same thing is not then printed a second time as a record for a program
+    if (err instanceof Problem && err.hint) {
+      flow.line()
+      flow.line(err.hint)
+      flow.line()
+      process.exitCode = err.code === 'invalid' ? 2 : 1
+      return
+    }
     throw err
   }
   /** What is left for the person to do, said at the end. */
