@@ -122,6 +122,8 @@ const journalFile = () => inHome('journal.jsonl')
 const aliasFile = () => inHome('aliases.json')
 /** Where a connector that is stopping writes down which conversations it cut off in the middle of a turn. */
 const cutOffFile = () => inHome('cut-off.json')
+/** Where the conversations whose last reopened turn a person stopped are kept until each has been told so. */
+const stoppedFile = () => inHome('stopped.json')
 const lockFile = () => inHome('connector.lock')
 
 function journal(event: string, id: string): void {
@@ -522,9 +524,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * The conversations whose last reopened turn the person stopped from the page. An app that is
    * ended in the middle of a turn writes nothing of that into the conversation, so the agent
    * that is next reopened there would read a turn that simply breaks off, and might carry on
-   * with it. It is told once, with what it is next reopened for.
+   * with it. It is told once, with what it is next reopened for. That may be after this
+   * connector has been started again, so the list is kept in a file: forgotten with a restart,
+   * the next reopening told the agent nothing, and it did what the person had stopped.
    */
-  const stoppedByPerson = new Set<string>()
+  const stoppedByPerson = new Set<string>(readJson<string[]>(stoppedFile()) ?? [])
+  const keepStopped = () => {
+    try {
+      if (stoppedByPerson.size) writePrivate(stoppedFile(), [...stoppedByPerson])
+      else rmSync(stoppedFile(), { force: true })
+    } catch {}
+  }
   /** The last line a reopened app printed where it ended badly, by conversation, until its next reopening. */
   const saidLast = new Map<string, string>()
   // What a reopened app printed is kept in a file only while it runs. One that was left by a
@@ -573,6 +583,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (ended === STOPPED && !closing) {
         if (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)
         stoppedByPerson.add(key)
+        keepStopped()
         // What this machine was keeping for the run's own add-on went with the stop, in It as
         // here: kept on, it would be handed to the add-on of the next reopening
         for (const [id, h] of held) {
@@ -719,8 +730,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // not the same note every time.
           await carry(
             click.session!,
-            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.delete(key) ? `\n\n${WAS_STOPPED}` : ''}${cutOff.delete(key) ? `\n\n${WAS_CUT_OFF}` : ''}`,
-          )
+            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${cutOff.has(key) ? `\n\n${WAS_CUT_OFF}` : ''}`,
+          ).then((ended) => {
+            // Told, where the conversation was in fact reopened: one that could not be is told the next time
+            if (ended === null || ended === STOPPED) {
+              cutOff.delete(key)
+              // Stopped again, it is owed the note again, which the stopping itself has written down
+              if (ended === null && stoppedByPerson.delete(key)) keepStopped()
+            }
+            return ended
+          })
         : await codexQueue(threadOf(key), describeClick(asClick(click), 0))
       // A conversation the person stopped had what was done all the same: it is handed over,
       // and nothing is tried again for it

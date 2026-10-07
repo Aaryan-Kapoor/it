@@ -532,6 +532,37 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     },
   )
 
+  test.skipIf(process.platform === 'win32')(
+    'a conversation whose last reopened turn a person stopped is told so the next time it is reopened, also by a connector started after the stop',
+    async () => {
+      // Codex's own command, as a program of its own: it keeps what it was given, and ends well
+      const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(bin, folder)
+      writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given-$(ls ${bin} | grep -c given)\nexit 0\n`, { mode: 0o755 })
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+      // The connector before this one wrote down that the person had stopped thread-1's turn, and was then stopped itself
+      await start('socket', {}, (home) => {
+        noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+        noteConversation({ harness: 'codex', id: 'thread-2' }, folder)
+        writeFileSync(path.join(home, 'stopped.json'), JSON.stringify(['codex:thread-1']))
+      })
+      stand.closed.add('thread-1')
+      stand.closed.add('thread-2')
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(click(1))
+      await until(() => existsSync(path.join(bin, 'given-0')) && readFileSync(path.join(bin, 'given-0'), 'utf8').length > 0)
+      const first = readFileSync(path.join(bin, 'given-0'), 'utf8')
+      expect(first).toContain('[action click-1]')
+      expect(first).toContain('was stopped by the person, from the page')
+      // Told once: the note is gone from the file, and a conversation nobody stopped is told nothing of the kind
+      await until(() => !existsSync(path.join(home, 'stopped.json')))
+      offered(click(2))
+      await until(() => existsSync(path.join(bin, 'given-1')) && readFileSync(path.join(bin, 'given-1'), 'utf8').length > 0)
+      expect(readFileSync(path.join(bin, 'given-1'), 'utf8')).not.toContain('was stopped by the person')
+    },
+  )
+
   test('a click whose reopening failed is put in Codex’s queue at once when its conversation is opened, without waiting out the pause', async () => {
     await start()
     stand.closed.add('thread-1')
