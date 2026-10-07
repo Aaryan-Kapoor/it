@@ -2079,6 +2079,57 @@ describe.skipIf(!program || windows)('enrolling this machine', () => {
     }
   }, 180_000)
 
+  test('a first setup begins nothing where the ports It would use are taken: it says by what, names a first port that is free, writes no settings, and goes through once they are free', async () => {
+    const port = Number(process.env.IT_PORT)
+    const listening = async (at: number, answer: string) => {
+      const server = http.createServer((_asked, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(answer))
+      await new Promise<void>((resolve) => server.listen(at, '127.0.0.1', resolve))
+      return () =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve())
+          server.closeAllConnections()
+        })
+    }
+    const refused = async () => (await begin({ background: false, say: () => {}, name: 'the desk' }).catch((err) => err)) as Problem
+    const HINT =
+      /^Nothing was set up\. Give this It ports of its own by naming another first port: `IT_PORT=(\d+) it setup`\. The port is written into its settings, so it is named this once\.$/
+    // Another program has one of the backend program's two
+    let close = await listening(port + PORTS.backendApi, '{}')
+    try {
+      const said = await refused()
+      expect([said.code, said.message]).toEqual([
+        'port_taken',
+        `Port ${port + PORTS.backendApi} is in use on this machine, and It would use it: it counts its ports from ${port}.`,
+      ])
+      // The first port it names is one It could count from, and none of the four from it is taken
+      const offered = Number(HINT.exec(said.hint ?? '')?.[1])
+      expect(offered).toBeGreaterThan(port)
+      expect(offered % 100).toBe(port % 100)
+    } finally {
+      await close()
+    }
+    // Another It has them: its site says that it is It, and its backend answers as this one's would
+    const closeBackend = await listening(port + PORTS.backendSite, '{"ok":true}')
+    close = await listening(port, '{"ok":true,"it":true}')
+    try {
+      const said = await refused()
+      expect([said.code, said.message]).toEqual([
+        'port_taken',
+        `Another It is already running on this machine at port ${port}, which this one would use too: another person’s here, or one set up in another folder.`,
+      ])
+      expect(said.hint).toMatch(HINT)
+    } finally {
+      await close()
+      await closeBackend()
+    }
+    // Neither time was anything written that would hold this It to those ports, or any key made
+    expect(readdirSync(folder).filter((name) => name !== 'backend')).toEqual([])
+    // With the ports free, the same setup goes through
+    const begun = await begin({ background: false, say: () => {}, name: 'the desk' })
+    expect([begun.enrolled, begun.own]).toEqual([true, true])
+    await begun.done()
+  }, 180_000)
+
   test('two setups that both find nothing running start one backend between them, and enrol one machine', async () => {
     const both = await Promise.all([begin({ background: false, say: () => {}, name: 'one' }), begin({ background: false, say: () => {}, name: 'two' })])
     expect(both.map((begun) => begun.own).sort()).toEqual([false, true])

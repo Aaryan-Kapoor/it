@@ -3,9 +3,11 @@
 // and this machine is enrolled as the first of the person's machines. On a later run each of
 // those is found done, and is put right where it is not.
 import { existsSync, rmSync } from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
+import { PORTS } from '@it/protocol'
 import { exportJWK, generateKeyPair } from 'jose'
-import { backendAt, direct, inHome, keepMachine, type Machine, machineFile, Problem, readJson } from '../lib'
+import { backendAt, browsersRefuse, direct, inHome, keepMachine, type Machine, machineFile, Problem, portAsked, readJson } from '../lib'
 import { keepPending, pendingFor, settleKept, settlePending } from '../login'
 import * as service from '../service'
 import { alone, asAdmin, program, startBackend } from './backend'
@@ -38,6 +40,59 @@ async function backendAnswers(config: ServiceConfig, forMs: number): Promise<boo
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
 }
+
+/** Whether anything on this machine takes a connection at a port. */
+const taken = (port: number): Promise<boolean> =>
+  new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port })
+    const done = (is: boolean) => {
+      socket.destroy()
+      resolve(is)
+    }
+    socket.setTimeout(1000, () => done(false))
+    socket.once('connect', () => done(true))
+    socket.once('error', () => done(false))
+  })
+/** The four ports It uses when it counts from one: the site's, the pages', and the backend program's two. */
+const portsFrom = (port: number) => [port, port + PORTS.content, port + PORTS.backendApi, port + PORTS.backendSite]
+
+/**
+ * Before a first run writes anything, whether the ports It would use are free. Another It may
+ * have them: another person's on the same machine, or one set up in another folder. Its
+ * backend answers as any does, so a setup that went on would take it for its own, ask it with
+ * a key it does not know, and leave settings behind that name ports this It can never have.
+ * So nothing is begun, and what is said gives a first port that is free.
+ */
+async function roomAt(port: number): Promise<void> {
+  let inTheWay: number | undefined
+  for (const p of portsFrom(port)) if (inTheWay === undefined && (await taken(p))) inTheWay = p
+  // Settings that are there now are another setup's of this same folder, begun in the same moment: what listens is its
+  if (inTheWay === undefined || readConfig()) return
+  const another = await direct(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) }).then(
+    async (answer) => ((await answer.json().catch(() => null)) as { it?: unknown } | null)?.it === true,
+    () => false,
+  )
+  let free: number | undefined
+  for (let n = 1; n <= 20 && free === undefined; n++) {
+    const first = port + n * 100
+    if (first + PORTS.backendSite > 65535) break
+    if (browsersRefuse(first) === undefined && !(await Promise.all(portsFrom(first).map(taken))).some(Boolean)) free = first
+  }
+  throw new Problem(
+    another
+      ? `Another It is already running on this machine at port ${port}, which this one would use too: another person’s here, or one set up in another folder.`
+      : `Port ${inTheWay} is in use on this machine, and It would use it: it counts its ports from ${port}.`,
+    'port_taken',
+    `Nothing was set up. Give this It ports of its own by naming another first port: ${free ? `\`IT_PORT=${free} it setup\`` : '`IT_PORT=<port> it setup`'}. The port is written into its settings, so it is named this once.`,
+  )
+}
+
+/** Whether the backend that answers at It's port is another It's: it does not take the key in this folder's settings. */
+const anothers = (config: ServiceConfig): Promise<boolean> =>
+  asAdmin({ api: backendAt(config.port).api, adminKey: config.adminKey }, 'bridge:machine', { id: 'none' }).then(
+    () => false,
+    (err) => /BadAdminKey/.test(String((err as Error)?.message ?? err)),
+  )
 
 /**
  * Enrols this machine. The key is made here and its private half never leaves this machine.
@@ -110,6 +165,7 @@ export async function begin(opts: {
       `Fetching the backend program that It runs on this machine, from ${process.env.IT_BACKEND_RELEASES ? 'the place IT_BACKEND_RELEASES names' : 'its release on GitHub'}. It is about 60 MB. It is fetched the first time It is set up, and again when a newer It runs a newer one.`,
     )
   await program(() => {}, undefined, opts.progress)
+  if (!readConfig()) await roomAt(portAsked() ?? PORTS.base)
   const config = readConfig() ?? makeConfig()
   opts.stage?.('service')
   const begun: Begun = { config, enrolled: false, own: false, done: async () => {} }
@@ -133,6 +189,14 @@ export async function begin(opts: {
       if (!(err instanceof Problem && err.code === 'already_running') || !(await backendAnswers(config, 90_000))) throw err
     }
   }
+  // A backend answers at the port in this folder's settings, and it is another It's: one that
+  // was started there since. Asked to enrol this machine it would only say that the key is wrong.
+  if (!begun.own && (await anothers(config)))
+    throw new Problem(
+      `Another It is running on this machine at the ports this one’s settings name (${config.port} and those above it), so this one cannot run there.`,
+      'port_taken',
+      'Stop that It. Or run this one on ports of its own, by setting IT_PORT to another first port wherever `it` runs for this folder, and then `it setup`.',
+    )
   try {
     opts.stage?.('machine')
     // One enrolment at a time for a folder. Whether this machine is enrolled is looked at only
