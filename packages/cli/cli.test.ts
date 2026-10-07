@@ -1099,9 +1099,13 @@ describe('background service definitions', () => {
     expect(unit).toContain('Environment="IT_HOME=/tmp/100%%/it"')
     expect(unit).toContain('Restart=on-failure')
   })
-  test('systemd: asked to stop, only the service is told, so that it can stop the backend program last and by asking', () => {
+  test('systemd: asked to stop, only the service is told, so that it can stop the backend program last and by asking, and what a service that died left running does not keep the next from starting', () => {
     // Told along with the service, the backend program would be ended at once by a signal it does not stop cleanly on
-    expect(systemdUnit(cmd, { PATH: '/bin' })).toContain('\nKillMode=mixed\n')
+    const unit = systemdUnit(cmd, { PATH: '/bin' })
+    expect(unit).toContain('\nKillMode=process\n')
+    // With either of these and no kill at the end, systemd starts no service while a process of its last run is left: a service that
+    // died would leave the backend program, and could never be started again
+    expect(unit).not.toMatch(/^KillMode=(mixed|control-group)$/m)
   })
   test('systemd: the service is given as long to stop as it gives the backend program, and nothing of It is killed for being slow', () => {
     const unit = systemdUnit(cmd, { PATH: '/bin' })

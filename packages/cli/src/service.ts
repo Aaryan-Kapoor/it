@@ -138,8 +138,11 @@ After=network-online.target
 Type=simple
 ExecStart=${cmd.map((w) => systemdQuote(w, true)).join(' ')}
 # Asked to stop, the service alone is told. It stops the backend program itself, last and by
-# asking, which is the only way that program stops cleanly.
-KillMode=mixed
+# asking, which is the only way that program stops cleanly. And nothing the service leaves
+# behind keeps it from being started again: where the service dies, the backend program is
+# left running, and the service that starts next asks it to stop. (With KillMode=mixed and
+# SendSIGKILL=no, systemd starts no service while anything of its last run is left.)
+KillMode=process
 # It is given as long as that takes, which is what the service itself gives the backend
 # program, and nothing of It is killed for being slow to stop.
 TimeoutStopSec=infinity
@@ -412,11 +415,13 @@ export function install(): ServiceStatus {
       must('systemctl', ['--user', 'enable', `${NAME}.service`], 'enabling the service')
       must('systemctl', ['--user', 'restart', `${NAME}.service`], 'starting the service')
     } catch (err) {
-      // What was written is taken back, so that the definition's file says what is so
+      // What was written is taken back, so that the definition's file says what is so, and
+      // systemd is told, so that what it holds is what the file says
       try {
         if (before === null) rmSync(unitPath(), { force: true })
         else writeFileSync(unitPath(), before)
       } catch {}
+      run('systemctl', ['--user', 'daemon-reload'])
       throw err
     }
     // Without this the service stops when the person logs out, which on a server is always.
