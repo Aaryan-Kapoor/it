@@ -595,6 +595,24 @@ try {
       read(path.join(mentioned.home, '.profile')).includes('\nexport PATH='),
       read(path.join(mentioned.home, '.profile')),
     )
+    // The terminal `it uninstall` was run in keeps the PATH it had, with the folder on it, after the line was taken out of the shell's files
+    const stale = path.join(tmp, 'stale', '.it', 'bin')
+    const left = await install('stale', { PATH: `${stale}${path.delimiter}${plainEnv().PATH}` })
+    check(
+      'where the folder is on this terminal’s PATH and in none of the files the shell reads, as after It was taken off the machine, the line is added, so that a new terminal finds It too',
+      left.code === 0 && read(path.join(left.home, '.profile'))?.includes(`\nexport PATH='${stale}':"$PATH"\n`) && /Added .* to your PATH, in ~\/\.profile/.test(left.said),
+      `${left.said}\n${read(path.join(left.home, '.profile'))}`,
+    )
+    // A person who put the folder on their PATH themselves has it in a file of their own writing
+    mkdirSync(path.join(tmp, 'own'), { recursive: true })
+    const theirs = `export PATH="${path.join(tmp, 'own', '.it', 'bin')}:$PATH" # mine\n`
+    writeFileSync(path.join(tmp, 'own', '.profile'), theirs)
+    const own = await install('own', { PATH: `${path.join(tmp, 'own', '.it', 'bin')}${path.delimiter}${plainEnv().PATH}` })
+    check(
+      'where the folder is on the PATH because the person’s own file puts it there, that file is left as they wrote it',
+      own.code === 0 && read(path.join(own.home, '.profile')) === theirs && !/Added |could not/.test(own.said),
+      `${own.said}\n${read(path.join(own.home, '.profile'))}`,
+    )
     const quiet = await install('quiet', { IT_INSTALL_NO_PATH: '1' })
     check(
       'asked to leave the PATH alone, it makes and changes no profile',

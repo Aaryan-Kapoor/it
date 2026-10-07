@@ -389,34 +389,48 @@ add_line() {
   # said once, below, and not also in the shell's own words
   if printf '\n# It\n%s\n' "${line}" 2>/dev/null >> "$1"; then changed="${changed} $2"; else refused="${refused} $2"; fi
 }
+# Calls $1 with each file this person's shell reads when it starts, and with what the file is
+# called when saying what was done
+each_profile() {
+  case "$(basename -- "${SHELL:-sh}")" in
+    # zsh keeps its files in the folder ZDOTDIR names, and in the home folder when it names none
+    zsh)
+      if [ -n "${ZDOTDIR:-}" ]; then "$1" "${ZDOTDIR}/.zshrc" "${ZDOTDIR}/.zshrc"
+      else "$1" "${HOME}/.zshrc" "~/.zshrc"
+      fi
+      ;;
+    # bash reads .bashrc, except when it is started as a login shell: then it reads the first
+    # of these three that is there, and no other
+    bash)
+      if [ -f "${HOME}/.bash_profile" ]; then login=".bash_profile"
+      elif [ -f "${HOME}/.bash_login" ]; then login=".bash_login"
+      else login=".profile"
+      fi
+      "$1" "${HOME}/.bashrc" "~/.bashrc"
+      "$1" "${HOME}/${login}" "~/${login}"
+      ;;
+    *) "$1" "${HOME}/.profile" "~/.profile" ;;
+  esac
+}
 on_path=0
 case ":${PATH:-}:" in *":${DIR}:"*) on_path=1 ;; esac
-if [ -z "${IT_INSTALL_NO_PATH:-}" ] && [ "${on_path}" = 0 ]; then
+# A terminal that has the folder on its PATH may be the only one that will: the terminal
+# `it uninstall` was run in keeps the PATH it had, after the line that gave it was taken out of
+# the shell's files. Installing again there, It would be found in that terminal and in no new
+# one, nor by any agent. So where none of those files names the folder, the line is added as
+# it is when the folder is on no PATH. Where one names it, the person put it on their PATH
+# themselves, and their files are left as they are.
+named=0
+names_it() { if [ -f "$1" ] && grep -qF -e "${DIR}" -- "$1" 2>/dev/null; then named=1; fi; }
+if [ "${on_path}" = 1 ] && [ -n "${HOME:-}" ]; then each_profile names_it; else named=1; fi
+if [ -z "${IT_INSTALL_NO_PATH:-}" ] && { [ "${on_path}" = 0 ] || [ "${named}" = 0 ]; }; then
   if [ -z "${HOME:-}" ]; then
     if [ "${led}" = 1 ]; then mind "HOME is not set, so your PATH was left alone. Add ${DIR} to it yourself."
     else say "HOME is not set, so your PATH was left alone. Add ${DIR} to it yourself."
     fi
   else
     line="export PATH=$(quoted "${DIR}"):\"\$PATH\""
-    case "$(basename -- "${SHELL:-sh}")" in
-      # zsh keeps its files in the folder ZDOTDIR names, and in the home folder when it names none
-      zsh)
-        if [ -n "${ZDOTDIR:-}" ]; then add_line "${ZDOTDIR}/.zshrc" "${ZDOTDIR}/.zshrc"
-        else add_line "${HOME}/.zshrc" "~/.zshrc"
-        fi
-        ;;
-      # bash reads .bashrc, except when it is started as a login shell: then it reads the first
-      # of these three that is there, and no other
-      bash)
-        if [ -f "${HOME}/.bash_profile" ]; then login=".bash_profile"
-        elif [ -f "${HOME}/.bash_login" ]; then login=".bash_login"
-        else login=".profile"
-        fi
-        add_line "${HOME}/.bashrc" "~/.bashrc"
-        add_line "${HOME}/${login}" "~/${login}"
-        ;;
-      *) add_line "${HOME}/.profile" "~/.profile" ;;
-    esac
+    each_profile add_line
     # Where one file was changed and another could not be, a new terminal has the folder on
     # its PATH only if it reads the one that was changed, and so none is promised
     if [ "${led}" = 1 ]; then
