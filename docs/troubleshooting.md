@@ -59,6 +59,8 @@ It counts every port from one, which is 4700 unless `IT_PORT` names another: the
 
 The other way about, a program that is not It may answer at the port where It's site would be. `it status` then says that It is not running on this machine and that another program answers at that port, and on a machine that joined, that what answers at the address is not the It it joined.
 
+A first setup looks at the four ports before it fetches or writes anything. Where one of them is taken, by a program or by another It (another person's on the same machine, or one set up in another folder), it sets nothing up, says which, and names a first port that is free: `IT_PORT=4800 it setup`, say. The port is written into the settings of that It, so it is named that once.
+
 Either stop the other program, or give It another port to count from. The first run writes the port into `~/.it/service.json`, and wherever `IT_PORT` is set afterwards it is used in place of the one written there, so set it where It is started. For the background service that means setting it and running `it service install` again, which registers the service with it.
 
 Another port is another address for the site. A browser that was paired stays paired, and is taken for a new display. A machine that joined from another computer keeps the address it joined by, and has to be told the new one, as [Agents on another computer](agents.md#agents-on-another-computer) says.
