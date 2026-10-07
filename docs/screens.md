@@ -10,7 +10,7 @@ The site is where your pages are shown. It is at `http://localhost:4700`, and a 
 
 Where you are on the machine over SSH, or it has no screen, no browser is opened there. With the network on, `it site` prints the address for another device to open, at each address the machine is reached by, and at a terminal draws the first of them as a QR code for a phone's camera. With the network off it prints the address for the machine itself, and says which command lets another device in.
 
-A browser paired this way is yours: everything on the site can be done from it. It becomes a display at once, so pages can be shown on it, and the site's Displays page lets you name it. The site also has a page for your pages, one for your machines and their agent apps, and settings, where you can download the records It holds or erase everything.
+A browser paired this way is yours: everything on the site can be done from it. It becomes a display at once, so pages can be shown on it, and the site's Displays page lets you name it. Until you do it goes by the kind of browser it is, such as "Chrome on Linux", and a second browser of the same kind is "Chrome on Linux 2", so that you and an agent can tell the two apart. The site also has a page for your pages, one for your machines and their agent apps, and settings, where you can download the records It holds or erase everything.
 
 A display stays on the Displays page when the pairing of its browser is ended, and is said there to be not paired. It shows nothing until that browser is paired again, which makes it the same display, and forgetting it takes it off the page.
 

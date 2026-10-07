@@ -544,7 +544,8 @@ describe('the paired browsers the person sees and ends', () => {
         pairedAt: paired - 60_000,
         lastSeenAt: paired - 60_000,
         mine: false,
-        displays: screens.map((d) => ({ id: d!._id, name: 'Chrome on Linux' })),
+        // The second of two browsers of one kind has a name of its own, so that the two can be told apart
+        displays: screens.map((d, n) => ({ id: d!._id, name: n ? 'Chrome on Linux 2' : 'Chrome on Linux' })),
         invitedBy: { kind: 'browser', paired: true, name: 'Laptop' },
         along: { browsers: [], machines: [] },
       },

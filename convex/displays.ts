@@ -94,6 +94,7 @@ export const register = mutation({
       .withIndex('by_user', (q) => q.eq('userId', user._id))
       .take(QUOTA.displays + 1)
     const now = Date.now()
+    let letGo: Id<'displays'> | null = null
     if (mine.length >= QUOTA.displays) {
       // A browser whose site data was cleared, or a private window, comes back as a new display
       // each time, so that a person could have as many displays as there may be, none of which
@@ -109,13 +110,21 @@ export const register = mutation({
       else {
         await signOutDisplay(ctx, going)
         await ctx.db.delete(going._id)
+        letGo = going._id
         log('display.let_go', { userId: user._id, displayId: going._id, idleMs: now - going.lastSeenAt })
       }
     }
+    // Two browsers of one kind would go by one name until the person named them, and neither
+    // they nor an agent could say which of the two a page was to be shown on: the second is
+    // "Chrome on Linux 2"
+    const named = new Set(mine.filter((d) => d._id !== letGo).map((d) => (d.name ?? d.generatedName).toLowerCase()))
+    const kind = generatedName(userAgent.slice(0, 400))
+    let unlike = kind
+    for (let n = 2; named.has(unlike.toLowerCase()) && n <= QUOTA.displays + 1; n++) unlike = `${kind} ${n}`
     const id = await ctx.db.insert('displays', {
       userId: user._id,
       key,
-      generatedName: generatedName(userAgent.slice(0, 400)),
+      generatedName: unlike,
       createdAt: now,
       lastSeenAt: now,
       epoch: 0,

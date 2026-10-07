@@ -2182,6 +2182,25 @@ describe('displays and machines', () => {
     expect(await code(alice.browser.mutation(api.displays.rename, { displayId: alice.display.id, name: 'x'.repeat(LIMITS.displayName + 1) }))).toBe('invalid')
   })
 
+  test('a second browser of the same kind is given a name of its own, so that a person and an agent can tell the two apart before either is named', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+    const names = async () => (await alice.browser.query(api.displays.list, {})).map((d) => d.name).sort()
+    const second = await alice.browser.mutation(api.displays.register, { key: 'a-second-display-key-01', userAgent: ua })
+    expect(second).toMatchObject({ name: 'Chrome on Linux 2', named: false })
+    await alice.browser.mutation(api.displays.register, { key: 'a-third-display-key-0001', userAgent: ua })
+    expect(await names()).toEqual(['Chrome on Linux', 'Chrome on Linux 2', 'Chrome on Linux 3'])
+    // A name the person gave one of them is not given to the next, in whatever capitals
+    await alice.browser.mutation(api.displays.rename, { displayId: second.id, name: 'chrome on linux 4' })
+    await alice.browser.mutation(api.displays.register, { key: 'a-fourth-display-key-001', userAgent: ua })
+    expect(await names()).toEqual(['Chrome on Linux', 'Chrome on Linux 2', 'Chrome on Linux 3', 'chrome on linux 4'])
+    // So an agent that names one shows a page on that one and no other
+    await publish(m, 'plan')
+    expect((await m.as.mutation(api.displays.show, { slug: 'plan', display: 'Chrome on Linux 3' })).displays).toEqual(['Chrome on Linux 3'])
+  })
+
   test('presence is written at most once a minute, and answers with the backend’s clock', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
