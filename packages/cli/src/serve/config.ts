@@ -104,9 +104,28 @@ function adminKey(instanceSecret: string): string {
     timeout: 60_000,
   })
   const key = ran.status === 0 ? ran.stdout.trim() : ''
-  if (!key.startsWith(`${instanceName(instanceSecret)}|`))
+  if (!key.startsWith(`${instanceName(instanceSecret)}|`)) {
+    const system = cannotRunHere(ran.stderr ?? '', (ran.error as NodeJS.ErrnoException | undefined)?.code, existsSync(programFile()))
+    if (system) throw new Problem(`It cannot run on this system: ${system}`, 'backend_program', '`it login` can still join an It that runs on another machine.')
     throw new Problem('The backend program could not make the key It runs it with.', 'backend_program', `It is the program at ${programFile()}.`)
+  }
   return key
+}
+
+/**
+ * Why the backend program cannot be run on this system at all, where that is what its failing
+ * says: the system's C library is older than the one the program was built against, or is
+ * another library altogether. Null where it failed for any other reason.
+ */
+export function cannotRunHere(stderr: string, code: string | undefined, there: boolean): string | null {
+  const needs = [...stderr.matchAll(/GLIBC_(\d+)\.(\d+)['’`]? not found/g)].map((m) => [Number(m[1]), Number(m[2])] as const)
+  if (needs.length) {
+    const [major, minor] = needs.reduce((most, v) => (v[0] > most[0] || (v[0] === most[0] && v[1] > most[1]) ? v : most))
+    return `the backend program it runs needs version ${major}.${minor} of the system’s C library (glibc), which Ubuntu 22.04, Debian 12 and Fedora 36 have, and this system’s is older.`
+  }
+  // The file is there and the system says there is no such file: it is the program's loader that is missing
+  if (code === 'ENOENT' && there) return 'the backend program it runs is built for the GNU C library, and this system has another, as Alpine does.'
+  return null
 }
 
 /**

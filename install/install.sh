@@ -89,6 +89,30 @@ esac
 if [ "${os}" = darwin ] && [ "${arch}" = x64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || true)" = 1 ]; then arch=arm64; fi
 name="it-${os}-${arch}"
 
+# On Linux the programs are built for the GNU C library, and the backend program It runs needs
+# version 2.35 of it or newer. A system with another C library has no program at all, and is
+# told so before anything is downloaded. One whose library is older can still hold the `it`
+# command, which joins an It that runs on another machine, so it is installed and told.
+old_libc=""
+if [ "${os}" = linux ]; then
+  libc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+  case "${libc}" in
+    glibc\ [0-9]*.[0-9]*)
+      libc="${libc#glibc }"
+      libc_major="${libc%%.*}"
+      libc_minor="${libc#*.}"; libc_minor="${libc_minor%%.*}"
+      case "${libc_major}${libc_minor}" in
+        *[!0-9]*) ;;
+        *) if [ "${libc_major}" -lt 2 ] || { [ "${libc_major}" -eq 2 ] && [ "${libc_minor}" -lt 35 ]; }; then old_libc="${libc}"; fi ;;
+      esac ;;
+    *)
+      if { ldd --version 2>&1 || true; } | grep -qi musl; then
+        say "It has no program for this system: its programs are built for the GNU C library, and this system has musl, as Alpine does." >&2
+        exit 1
+      fi ;;
+  esac
+fi
+
 # Only over https, and a redirect may only lead to https. The one exception is a base on this
 # machine itself, which is how the install is tested before anything is published: it must be
 # exactly this machine and a port, with nothing a browser would read as a name and password
@@ -434,14 +458,24 @@ if [ "${reporting}" = 1 ]; then
     ( umask 077; set -C; printf '{"told": %s000}\n' "$(date +%s)" > "${note}" ) 2>/dev/null || true
   fi
 fi
+OLD_LIBC="It cannot run on this system: the backend program it runs needs version 2.35 of the system's C library (glibc), which Ubuntu 22.04, Debian 12 and Fedora 36 have, and this system has ${old_libc}. The \`it\` command itself works here, and \`it login\` joins an It that runs on another machine."
 if [ "${led}" = 0 ]; then
   say "It is source-available software under the It License, which is in ${HOME_DIR}/LICENSE.md."
+  if [ -n "${old_libc}" ]; then
+    say "It is installed. ${OLD_LIBC}"
+    exit 0
+  fi
   say "It is installed. Start it, and connect your agents, with:"
   say ""
   say "  ${it_quoted} setup"
   exit 0
 fi
 quietly "Source-available under the It License, which is in ${HOME_DIR}/LICENSE.md."
+# Where It cannot run, no setup follows: it would only come to the same end, a few steps on
+if [ -n "${old_libc}" ]; then
+  mind "${OLD_LIBC}"
+  exit 0
+fi
 # The setup follows at once, led by the program. This script was read from a pipe, so what the
 # person types is read from the terminal itself. The folder is on the PATH of the setup, as it
 # will be in every terminal opened from now on, and what was downloaded into is cleared first:

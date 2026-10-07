@@ -1020,6 +1020,48 @@ try {
       `${forTranslated}\n${forIntel}`,
     )
 
+    // ---------- a Linux whose C library is too old, or is another one ----------
+    // Stand-ins for the two commands that are asked say what they say on such a system
+    const libc = (name, getconf, ldd) => {
+      const dir = path.join(tmp, name)
+      mkdirSync(dir)
+      writeFileSync(path.join(dir, 'uname'), '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; -n) echo there ;; esac\n', { mode: 0o755 })
+      writeFileSync(path.join(dir, 'getconf'), `#!/bin/sh\n${getconf}\n`, { mode: 0o755 })
+      writeFileSync(path.join(dir, 'ldd'), `#!/bin/sh\n${ldd}\n`, { mode: 0o755 })
+      return { PATH: `${dir}${path.delimiter}${process.env.PATH}` }
+    }
+    const oldLibc = await install('old-libc', libc('an-older-linux', 'echo "glibc 2.34"', 'echo "ldd (GNU libc) 2.34"'))
+    check(
+      'on a Linux whose C library is older than the backend program needs, the command is installed and it says that It cannot run there, in place of telling them to set it up',
+      oldLibc.code === 0 &&
+        existsSync(oldLibc.it) &&
+        /It cannot run on this system/.test(oldLibc.said) &&
+        /this system has 2\.34/.test(oldLibc.said) &&
+        /it login/.test(oldLibc.said) &&
+        !/connect your agents, with/.test(oldLibc.said),
+      oldLibc.said,
+    )
+    const newLibc = await install('new-libc', libc('a-newer-linux', 'echo "glibc 2.35"', 'echo "ldd (GNU libc) 2.35"'))
+    check(
+      'and with the library the backend program needs, nothing of that is said',
+      newLibc.code === 0 && existsSync(newLibc.it) && !/cannot run/.test(newLibc.said) && /connect your agents, with/.test(newLibc.said),
+      newLibc.said,
+    )
+    const musl = await install(
+      'musl',
+      libc(
+        'a-linux-with-musl',
+        'echo "getconf: GNU_LIBC_VERSION: unknown variable" >&2; exit 1',
+        'echo "musl libc (x86_64)" >&2; echo "Version 1.2.5" >&2; exit 1',
+      ),
+      { home: path.join(tmp, 'with-musl') },
+    )
+    check(
+      'on a Linux with another C library it says that there is no program for it, and makes nothing',
+      musl.code !== 0 && /has musl, as Alpine does/.test(musl.said) && !existsSync(musl.folder),
+      musl.said,
+    )
+
     // ---------- a script that did not all arrive ----------
     // `curl ... | sh` hands the shell the script as it comes. Cut short after the downloads and
     // before the files are put in place, it must do nothing at all

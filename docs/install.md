@@ -6,7 +6,9 @@ You need a computer that runs Linux, macOS or Windows, and a browser. There is n
 
 The program carries its own runtime, so nothing else has to be installed first. It does need the internet once, on its first run, to fetch the backend program it runs beside itself. [Network and privacy](network-and-privacy.md) lists that and everything else it ever asks for.
 
-It has been used on Linux, and nowhere else so far. On macOS and on Windows the program starts, the install script installs it, and a first run of `it setup` passes, all on test machines. Nobody has used It on either by hand, and the background service has not been registered on either. The pages are tested in Chromium and in Firefox, and showing one has not been checked in Safari.
+On Linux, It needs version 2.35 or newer of the system's C library (glibc), on an Intel or ARM chip. Ubuntu 22.04, Debian 12 and Fedora 36 have it, and so does everything newer than those. That is what the backend program asks for, and It cannot run without it: Rocky Linux 9 and the systems it is modelled on have 2.34, and Debian 11 and Ubuntu 20.04 have 2.31. On such a system the install script says so and does not go on into the setup. The `it` command itself still works there, so `it login` can join an It that runs on another machine. A Linux with another C library, as Alpine has, has no program at all, and the install script says that before it downloads anything.
+
+It has been used on Linux, and nowhere else so far. Installing, running, publishing a page and removing It were run in fresh containers of Debian 12 and Ubuntu 22.04, and the refusals above were seen on Rocky Linux 9. On macOS and on Windows the program starts, the install script installs it, and a first run of `it setup` passes, all on test machines. Nobody has used It on either by hand, and the background service has not been registered on either. The pages are tested in Chromium and in Firefox, and showing one has not been checked in Safari.
 
 ## Installing
 

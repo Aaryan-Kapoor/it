@@ -18,7 +18,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import { FUNCTIONS, FUNCTIONS_HASH } from './src/functions.generated'
 import { ask, backendAt, Problem, VERSION } from './src/lib'
 import { asAdmin, endOf, fetchProgram, type Running, startBackend } from './src/serve/backend'
-import { doorKey, instanceName, makeConfig, noteLoaded, programFile, RELEASE, readConfig, type ServiceConfig } from './src/serve/config'
+import { cannotRunHere, doorKey, instanceName, makeConfig, noteLoaded, programFile, RELEASE, readConfig, type ServiceConfig } from './src/serve/config'
 import { startDoor } from './src/serve/door'
 import { erasing, standsAs, teller } from './src/serve/index'
 import { environment, launchdPlist, logFile, systemdUnit } from './src/service'
@@ -1577,4 +1577,20 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
       await backend.stop()
     }
   }, 120_000)
+})
+
+describe('a backend program that cannot be run on this system at all', () => {
+  test('is said as that, with the version of the C library it needs, and nothing is guessed where it failed another way', () => {
+    // What the system's loader says of a program built against a newer library, as Rocky Linux 9 says it of this one
+    const older = [
+      "/home/u/.it/backend/bin/x/convex-local-backend: /lib64/libm.so.6: version `GLIBC_2.35' not found (required by /home/u/.it/backend/bin/x/convex-local-backend)",
+      "/home/u/.it/backend/bin/x/convex-local-backend: /lib64/libc.so.6: version `GLIBC_2.33' not found (required by /home/u/.it/backend/bin/x/convex-local-backend)",
+    ].join('\n')
+    expect(cannotRunHere(older, undefined, true)).toMatch(/needs version 2\.35 of the system’s C library \(glibc\)/)
+    // The program is there and the system says no such file: its loader is what is missing, as with musl
+    expect(cannotRunHere('', 'ENOENT', true)).toMatch(/built for the GNU C library/)
+    // Not there at all, or failed with words of its own: not this
+    expect(cannotRunHere('', 'ENOENT', false)).toBeNull()
+    expect(cannotRunHere('error: unexpected argument', undefined, true)).toBeNull()
+  })
 })
