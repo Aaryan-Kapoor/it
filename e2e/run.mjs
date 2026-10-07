@@ -3910,8 +3910,10 @@ try {
   check('and the address the page was shown at is closed from then on', after.told && after.gives === '401,401', JSON.stringify(after))
   // The tab that was asked names the session to It twice: to end it, and once more on finding
   // the browser not paired, so that its cookie is cleared again should an answer that was on
-  // its way have put it back. The other tab names it once, on finding the same. This browser
-  // has signed out of no session before, so these three are every naming there is.
+  // its way have put it back. The other tab names it on finding the same, and once more for
+  // each asking of its own that word from the first tab overtook, for the same reason: how
+  // many that is depends on how the two tabs' requests fall, and each is told there is nothing
+  // to end. This browser has signed out of no session before, so one session is all that is named.
   const namedIn = (tab) => one.exchanges.filter((x) => x.path === '/session/end' && x.tab === tab && x.sent >= signedOutFrom)
   await until(() => namedIn(second).filter((x) => x.answered !== null).length >= 2 && namedIn(page).some((x) => x.answered !== null), 15_000, 50)
   const namedOnSigningOut = {
@@ -3924,8 +3926,8 @@ try {
     sessionsNamed: new Set([...namedIn(second), ...namedIn(page)].map((x) => x.named)).size,
   }
   check(
-    'signing out names the session to It twice from the tab it was asked in, which is told that it is ended and then that there is nothing to end, and once from the other tab, which is told the same',
-    JSON.stringify(namedOnSigningOut) === JSON.stringify({ whereItWasAsked: '200,401', inTheOtherTab: '401', sessionsNamed: 1 }),
+    'signing out names the session to It twice from the tab it was asked in, which is told that it is ended and then that there is nothing to end, and from the other tab, which is only ever told the same',
+    namedOnSigningOut.whereItWasAsked === '200,401' && /^401(,401){0,3}$/.test(namedOnSigningOut.inTheOtherTab) && namedOnSigningOut.sessionsNamed === 1,
     JSON.stringify(namedOnSigningOut),
   )
   await second.close()
