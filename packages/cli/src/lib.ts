@@ -228,12 +228,31 @@ export const settingsFile = () => inHome('service.json')
 /** A port everything else can be counted from: a whole number with room above it for the backend's two. */
 export const asPort = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isInteger(value) && value > 0 && value + PORTS.backendSite <= 65535 ? value : undefined
+/**
+ * The ports no browser opens a page on, whatever answers there: the list in the Fetch standard,
+ * which every browser keeps. It would start on one of them and run, and its site could never
+ * be opened.
+ */
+const BROWSERS_REFUSE = new Set([
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137,
+  139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049,
+  3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+])
+/** The port a browser would refuse, of the two it has to open when It counts from `port`: the site's, or the pages' above it. */
+export const browsersRefuse = (port: number): number | undefined => [port, port + PORTS.content].find((p) => BROWSERS_REFUSE.has(p))
 /** The port IT_PORT names, when it is set. One that is no usable port is refused, and never passed over in silence. */
 export function portAsked(): number | undefined {
   if (!process.env.IT_PORT) return undefined
   const port = asPort(Number(process.env.IT_PORT))
   if (port === undefined)
     throw new Problem(`IT_PORT is a port with room above it for ${PORTS.backendSite} more, and "${process.env.IT_PORT}" is not one.`, 'invalid')
+  const shut = browsersRefuse(port)
+  if (shut !== undefined)
+    throw new Problem(
+      `IT_PORT=${port} would put ${shut === port ? 'It’s site' : 'the pages agents make'} on port ${shut}, which browsers refuse to open.`,
+      'invalid',
+      'Choose another first port for It.',
+    )
   return port
 }
 /** The port everything on this machine is counted from: what IT_PORT says, or else what It's settings say. Undefined where It has not been set up. */

@@ -350,6 +350,15 @@ describe.skipIf(!program)('It’s settings file', () => {
       process.env.IT_PORT = bad
       expect(() => readConfig(), bad).toThrow(/IT_PORT/)
     }
+    // Nor is one that no browser opens a page on, for the site or for the pages one port up: It would run there and could never be opened
+    process.env.IT_PORT = '6000'
+    expect(() => readConfig()).toThrow('IT_PORT=6000 would put It’s site on port 6000, which browsers refuse to open.')
+    process.env.IT_PORT = '5999'
+    expect(() => readConfig()).toThrow('IT_PORT=5999 would put the pages agents make on port 6000, which browsers refuse to open.')
+    for (const fine of ['5998', '6001', '6100', '8080']) {
+      process.env.IT_PORT = fine
+      expect(readConfig()!.port, fine).toBe(Number(fine))
+    }
   })
 
   test('that is not as It wrote it is refused, and its secrets are not replaced with new ones', () => {
