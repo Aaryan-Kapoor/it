@@ -244,6 +244,7 @@ export const claim = mutation({
     const { user, machine } = await requireMachine(ctx)
     const now = Date.now()
     const held = []
+    const adopted = new Set<string>()
     for (const id of ids.slice(0, 50)) {
       const x = await ctx.db.get(id)
       if (!x || x.userId !== user._id) continue
@@ -259,6 +260,20 @@ export const claim = mutation({
       if (!free) continue
       await ctx.db.patch(id, { delivery: 'leased', leaseMachineId: machine._id, leaseExpiresAt: now + LEASE_MS })
       held.push(id)
+      // A page whose machine is gone, taken for the conversation it belongs to, is this
+      // machine's from now on: its conversation is here. Left with the machine that is gone, it
+      // would be heard only while that conversation happened to be open, and could never be
+      // reopened for.
+      if (expected && !adopted.has(x.artifactId)) {
+        const page = await ctx.db.get(x.artifactId)
+        const owner = page?.machineId ? await ctx.db.get(page.machineId) : null
+        if (page && (!owner || owner.revoked)) {
+          adopted.add(x.artifactId)
+          await ctx.db.patch(page._id, { machineId: machine._id })
+          await ctx.scheduler.runAfter(0, internal.actions.readdress, { artifactId: page._id })
+          log('page.adopted', { userId: user._id, artifactId: page._id, machineId: machine._id })
+        }
+      }
     }
     return held
   },

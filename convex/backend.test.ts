@@ -1746,6 +1746,42 @@ describe('clicks and their delivery', () => {
     expect(await fresh.as.mutation(api.delivery.claim, { ids: [pressed.actionId], for: SESSION })).toEqual([pressed.actionId])
   })
 
+  test('a page whose machine is gone belongs, from the first click of it that another machine takes for its conversation, to that machine: clicks go there with nobody listening, and it can be reopened there', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const old = await machineOf(t, 'alice', 'laptop')
+    const p = await publish(old, 'plan', { session: SESSION })
+    const press = async (id: string) =>
+      (await alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })).actionId
+    const page = () => alice.browser.query(api.artifacts.get, { slug: 'plan' })
+    const sentTo = async (id: string) => ((await t.run((ctx) => ctx.db.get(id as never))) as { machineId?: string } | null)?.machineId
+    await alice.browser.mutation(api.machines.revoke, { machineId: old.id as never })
+    await settle(t)
+    // Its machine was removed: the site is told so, and there is nowhere to reopen its conversation
+    expect(await page()).toMatchObject({ machine: 'laptop', machineGone: true, machineSeenAt: null, wake: null })
+    // The computer joins again as a new machine that names no earlier identity, and another of the person's machines is there too
+    const again = await machineOf(t, 'alice', 'laptop again')
+    const other = await machineOf(t, 'alice', 'server')
+    await again.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [{ id: 'claude-code', addon: 'connected' }] })
+    const first = await press('click-first')
+    expect(await sentTo(first)).toBeUndefined()
+    // A machine that takes it for no conversation takes the click and not the page
+    expect(await other.as.mutation(api.delivery.claim, { ids: [first as never] })).toEqual([first])
+    await settle(t)
+    expect(await page()).toMatchObject({ machine: 'laptop', machineGone: true })
+    await other.as.mutation(api.delivery.release, { id: first as never })
+    // Its conversation is open on the machine that joined again, which takes the click for it: the page is that machine's now
+    expect(await again.as.mutation(api.delivery.claim, { ids: [first as never], for: SESSION })).toEqual([first])
+    await settle(t)
+    expect(await page()).toMatchObject({ machine: 'laptop again', machineGone: false, wake: { machineId: again.id, harness: 'claude-code', on: false } })
+    expect((await page()).machineSeenAt).toBeGreaterThan(0)
+    // The next click is that machine's with nobody listening, and no other machine is offered it
+    const second = await press('click-second')
+    expect(await sentTo(second)).toBe(again.id)
+    expect((await inbox(other)).map((c) => c.id)).toEqual([])
+    expect(await other.as.mutation(api.delivery.claim, { ids: [second as never], for: SESSION })).toEqual([])
+  })
+
   test('nor do another person’s clicks for a conversation of the same name, however many, or clicks set aside on both sides of it', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
