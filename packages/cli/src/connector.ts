@@ -124,6 +124,8 @@ const aliasFile = () => inHome('aliases.json')
 const cutOffFile = () => inHome('cut-off.json')
 /** Where the conversations whose last reopened turn a person stopped are kept until each has been told so. */
 const stoppedFile = () => inHome('stopped.json')
+/** A word with the article it takes: "an opencode conversation", "a codex conversation". */
+const a = (word: string) => `${/^[aeiou]/i.test(word) ? 'an' : 'a'} ${word}`
 const lockFile = () => inHome('connector.lock')
 
 function journal(event: string, id: string): void {
@@ -473,7 +475,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         .then((given) => {
           if (given > 0)
             say(
-              `a ${agentOf(harness)} conversation (${short(id)}) is back: ${given} thing${given === 1 ? '' : 's'} set aside for it ${given === 1 ? 'is' : 'are'} tried again`,
+              `${a(agentOf(harness))} conversation (${short(id)}) is back: ${given} thing${given === 1 ? '' : 's'} set aside for it ${given === 1 ? 'is' : 'are'} tried again`,
             )
         })
         .catch(() => {})
@@ -513,7 +515,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (!machineBudget.has(now) || !b.all.has(now) || (!attended && !b.unattended.has(now))) {
       seldom(
         `rate:${key}`,
-        `a ${key.slice(0, key.indexOf(':'))} conversation (${short(key)}) has been reopened as often as it may be for now; what was done waits and goes with the next reopening`,
+        `${a(key.slice(0, key.indexOf(':')))} conversation (${short(key)}) has been reopened as often as it may be for now; what was done waits and goes with the next reopening`,
       )
       return false
     }
@@ -766,7 +768,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // waiter has it and says so to It itself, so there is nothing to try again or set aside
       if (!handed && sent.toWaiter) return
       if (handed) {
-        if (refused === STOPPED) say(`a ${harness} conversation (${short(line)}) was stopped by the person`)
+        if (refused === STOPPED) say(`${a(harness)} conversation (${short(line)}) was stopped by the person`)
         for (const c of [click, ...withIt]) {
           journal('queued', c.id)
           toConfirm.set(c.id, 'queue')
@@ -1059,7 +1061,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (wantedNow !== null)
           seldom(
             `unconnected:${agentOf(harness)}`,
-            `a ${agentOf(harness)} conversation asked for its clicks, and that app is not connected here; it is given none`,
+            `${a(agentOf(harness))} conversation asked for its clicks, and that app is not connected here; it is given none`,
           )
         return [200, url.pathname === '/session' ? { ok: true } : { clicks: [] }]
       }
@@ -1075,6 +1077,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (typeof body.busy === 'boolean') {
         s.busy = body.busy
         s.busyAt = Date.now()
+        // A turn has begun in a conversation that It is not reopening: the person is in it
+        // themselves, and what they stopped is no longer its last turn. The note of the stop
+        // is let go, where it would otherwise be told to the agent at some later reopening,
+        // of a turn that by then was long over.
+        if (body.busy && !reopenedNow.has(follow(key)) && [key, follow(key)].map((k) => stoppedByPerson.delete(k)).some(Boolean)) keepStopped()
         // A turn has ended or a new one has begun: what Codex's queue held behind the turn is
         // now handed over by Codex itself, and is not a waiter's to be given
         if (url.pathname === '/session') for (const [clickId, b] of behindTurn) if (b.key === follow(key)) behindTurn.delete(clickId)
@@ -1093,8 +1100,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       }
       if (changed) writePrivate(aliasFile(), Object.fromEntries(aliases))
       // The harness as It knows it, and never as whoever asked spelled it
-      if (isNew) say(`a ${agentOf(harness)} conversation is listening (${short(id)})`)
-      if (changed && typeof body.was === 'string') say(`a ${agentOf(harness)} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
+      if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
+      if (changed && typeof body.was === 'string') say(`${a(agentOf(harness))} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
       if (isNew || changed) watch()
       // Heard from after a while: what was set aside for it, here and in It, is its to be given
       // again. Not where it is this machine's own reopening that is heard from: that is a try

@@ -563,6 +563,20 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     },
   )
 
+  test('the note of a stop is let go once a turn begins in that conversation which It did not start: the person is in it themselves, and what they stopped is no longer its last turn', async () => {
+    await start('socket', {}, (home) => writeFileSync(path.join(home, 'stopped.json'), JSON.stringify(['codex:thread-1', 'codex:thread-2'])))
+    const noted = () => JSON.parse(readFileSync(path.join(home, 'stopped.json'), 'utf8'))
+    // An add-on that says only that its conversation is there, or that a turn has ended, lets go of nothing
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: false } })
+    expect(noted()).toEqual(['codex:thread-1', 'codex:thread-2'])
+    // A turn begins there, in a conversation the person opened: its note goes, and the other's stays
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: true } })
+    expect(noted()).toEqual(['codex:thread-2'])
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-2', busy: true } })
+    expect(existsSync(path.join(home, 'stopped.json'))).toBe(false)
+  })
+
   test('a click whose reopening failed is put in Codex’s queue at once when its conversation is opened, without waiting out the pause', async () => {
     await start()
     stand.closed.add('thread-1')
