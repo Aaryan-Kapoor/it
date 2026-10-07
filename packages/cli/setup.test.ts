@@ -29,16 +29,18 @@ import type { Harness } from '@it/protocol'
 import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
-import { codexNoNetworkSaid } from './src/codex-settings'
+import { CODEX_SHUT_SAID } from './src/codex-settings'
 import { shutIn } from './src/lib'
 import { startOf } from './src/serve/backend'
 import {
   AFTER,
   afterHermes,
   alone,
+  CODEX_RULE,
+  CODEX_SHUT,
+  codexGivesNetwork,
   codexLetsItOut,
-  codexNetwork,
-  codexNoNetwork,
+  codexRuleLetsItOut,
   connect,
   detectAll,
   disconnect,
@@ -1425,84 +1427,89 @@ describe('on Windows', () => {
 })
 
 describe('whether Codex, as it is set, lets `it` reach It', () => {
-  const PROFILE = ['[permissions.workspace-network]', 'extends = ":workspace"', '', '[permissions.workspace-network.network]', 'enabled = true']
   // Each of these is as Codex 0.160 was seen to take it, in its own window
-  test('as it comes it does not, and a person is told to add a profile and to choose it in the first line', () => {
-    for (const config of [null, '', 'model = "gpt-6"\n[tui]\nnotifications = true\n']) {
-      expect(codexLetsItOut(config)).toBe(false)
-      expect(codexNetwork(config)).toEqual({ lets: false, advice: { first: 'default_permissions = "workspace-network"', end: PROFILE } })
-    }
-    const said = codexNoNetwork(codexNetwork(null))!
-    expect(said).toContain('very first line')
-    expect(said).toContain('    default_permissions = "workspace-network"')
-    expect(said).toContain('    [permissions.workspace-network.network]\n    enabled = true')
-    expect(said).toContain('start Codex again')
-  })
-  test('the two lines of the older way, with no mode said, leave a plain folder read-only: the profile is what is advised', () => {
-    const config = 'model = "gpt-6"\n\n[sandbox_workspace_write]\nnetwork_access = true\n'
-    expect(codexLetsItOut(config)).toBe(false)
-    expect(codexNetwork(config)).toEqual({ lets: false, advice: { first: 'default_permissions = "workspace-network"', end: PROFILE } })
-    expect(codexLetsItOut('sandbox_workspace_write.network_access = true\n')).toBe(false)
+  test('as it comes its sandbox has no network, and the two lines of the older way alone do not give a plain folder one', () => {
+    for (const config of [null, '', 'model = "gpt-6"\n[tui]\nnotifications = true\n']) expect(codexGivesNetwork(config)).toBe(false)
+    expect(codexGivesNetwork('model = "gpt-6"\n\n[sandbox_workspace_write]\nnetwork_access = true\n')).toBe(false)
+    expect(codexGivesNetwork('sandbox_workspace_write.network_access = true\n')).toBe(false)
   })
   test('the older way with its mode said', () => {
-    expect(codexLetsItOut('sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n')).toBe(true)
-    expect(codexLetsItOut('sandbox_mode = "workspace-write"\nsandbox_workspace_write.network_access = true\n')).toBe(true)
-    expect(codexLetsItOut('sandbox_mode = "danger-full-access"\n')).toBe(true)
-    // The table is added where there is none, and added to where there is one: a second of the name and Codex will not start
-    expect(codexNetwork('sandbox_mode = "workspace-write"\n')).toEqual({ lets: false, advice: { end: ['[sandbox_workspace_write]', 'network_access = true'] } })
-    for (const table of [
-      '[sandbox_workspace_write]\nwritable_roots = []\n',
-      '[sandbox_workspace_write]\n',
-      '[sandbox_workspace_write]\nnetwork_access = false # not yet\n',
-      '[sandbox_workspace_write]\n# network_access = true\n',
-    ])
-      expect(codexNetwork(`sandbox_mode = "workspace-write"\n${table}`)).toEqual({
-        lets: false,
-        advice: { under: { table: '[sandbox_workspace_write]', line: 'network_access = true' } },
-      })
-    // Read-only by the person's own choice: nothing of theirs is to be changed
-    expect(codexNetwork('sandbox_mode = "read-only"\n[sandbox_workspace_write]\nnetwork_access = true\n')).toEqual({ lets: false })
-    expect(codexNoNetwork(codexNetwork('sandbox_mode = "read-only"\n'))).toContain('set to only read')
+    expect(codexGivesNetwork('sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n')).toBe(true)
+    expect(codexGivesNetwork('sandbox_mode = "workspace-write"\nsandbox_workspace_write.network_access = true\n')).toBe(true)
+    expect(codexGivesNetwork('sandbox_mode = "danger-full-access"\n')).toBe(true)
+    expect(codexGivesNetwork('sandbox_mode = "workspace-write"\n')).toBe(false)
+    expect(codexGivesNetwork('sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = false # not yet\n')).toBe(false)
+    expect(codexGivesNetwork('sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\n# network_access = true\n')).toBe(false)
+    expect(codexGivesNetwork('sandbox_mode = "read-only"\n[sandbox_workspace_write]\nnetwork_access = true\n')).toBe(false)
   })
   test('a profile that is chosen', () => {
     const chosen = 'default_permissions = "mine"\n'
-    expect(codexLetsItOut(`${chosen}[permissions.mine]\nextends = ":workspace"\n[permissions.mine.network]\nenabled = true\n`)).toBe(true)
-    expect(codexLetsItOut(`${chosen}[permissions.mine]\nextends = ":workspace"\nnetwork.enabled = true\n`)).toBe(true)
-    expect(codexLetsItOut(`${chosen}[permissions.mine]\nextends = ":workspace"\nnetwork = { enabled = true }\n`)).toBe(true)
-    expect(codexLetsItOut(`${chosen}[permissions."mine"]\nextends = "base"\n[permissions.base.network]\nenabled = true\n`)).toBe(true)
-    expect(codexLetsItOut('default_permissions = ":danger-full-access"\n')).toBe(true)
+    expect(codexGivesNetwork(`${chosen}[permissions.mine]\nextends = ":workspace"\n[permissions.mine.network]\nenabled = true\n`)).toBe(true)
+    expect(codexGivesNetwork(`${chosen}[permissions.mine]\nextends = ":workspace"\nnetwork.enabled = true\n`)).toBe(true)
+    expect(codexGivesNetwork(`${chosen}[permissions.mine]\nextends = ":workspace"\nnetwork = { enabled = true }\n`)).toBe(true)
+    expect(codexGivesNetwork(`${chosen}[permissions."mine"]\nextends = "base"\n[permissions.base.network]\nenabled = true\n`)).toBe(true)
+    expect(codexGivesNetwork('default_permissions = ":danger-full-access"\n')).toBe(true)
     // It wins over everything of the older way
-    expect(codexLetsItOut(`sandbox_mode = "read-only"\n${chosen}[permissions.mine.network]\nenabled = true\n`)).toBe(true)
-    // With no network: its table is added, or added to
-    expect(codexNetwork(`${chosen}[permissions.mine]\nextends = ":workspace"\n`)).toEqual({
-      lets: false,
-      advice: { end: ['[permissions.mine.network]', 'enabled = true'] },
-    })
-    expect(codexNetwork(`${chosen}[permissions.mine]\nextends = ":workspace"\n[permissions.mine.network]\nenabled = false\n`)).toEqual({
-      lets: false,
-      advice: { under: { table: '[permissions.mine.network]', line: 'enabled = true' } },
-    })
-    // One of Codex's own, chosen by name: the line is theirs to change
-    expect(codexNetwork('default_permissions = ":workspace"\n')).toEqual({
-      lets: false,
-      advice: { change: { from: 'default_permissions = ":workspace"', to: 'default_permissions = "workspace-network"' }, end: PROFILE },
-    })
-    expect(codexNetwork('default_permissions = ":read-only"\n')).toEqual({ lets: false })
+    expect(codexGivesNetwork(`sandbox_mode = "read-only"\n${chosen}[permissions.mine.network]\nenabled = true\n`)).toBe(true)
+    expect(codexGivesNetwork(`${chosen}[permissions.mine]\nextends = ":workspace"\n`)).toBe(false)
+    expect(codexGivesNetwork(`${chosen}[permissions.mine]\nextends = ":workspace"\n[permissions.mine.network]\nenabled = false\n`)).toBe(false)
+    expect(codexGivesNetwork('default_permissions = ":workspace"\n')).toBe(false)
+    expect(codexGivesNetwork('default_permissions = ":read-only"\n')).toBe(false)
   })
   test('is not guessed where the settings are not followed', () => {
     // A profile that is not in the file, profiles with none chosen, the way of choosing that Codex no longer reads, a file that cannot be read
-    expect(codexLetsItOut('default_permissions = "mine"\n')).toBeUndefined()
-    expect(codexLetsItOut('[permissions.mine]\n')).toBeUndefined()
-    expect(codexLetsItOut('profile = "work"\n[profiles.work]\nsandbox_mode = "danger-full-access"\n')).toBeUndefined()
-    expect(codexLetsItOut('default_permissions = "a"\n[permissions.a]\nextends = "b"\n[permissions.b]\nextends = "a"\n')).toBeUndefined()
-    expect(codexLetsItOut(false)).toBeUndefined()
-    expect(codexNoNetwork(undefined)).toBeNull()
+    expect(codexGivesNetwork('default_permissions = "mine"\n')).toBeUndefined()
+    expect(codexGivesNetwork('[permissions.mine]\n')).toBeUndefined()
+    expect(codexGivesNetwork('profile = "work"\n[profiles.work]\nsandbox_mode = "danger-full-access"\n')).toBeUndefined()
+    expect(codexGivesNetwork('default_permissions = "a"\n[permissions.a]\nextends = "b"\n[permissions.b]\nextends = "a"\n')).toBeUndefined()
+    expect(codexGivesNetwork(false)).toBeUndefined()
   })
-  test('what an agent that is shut in passes on is one paragraph, with every line to be typed in it', () => {
-    const said = codexNoNetworkSaid(codexNetwork(null))
-    expect(said).not.toContain('\n')
-    for (const line of ['default_permissions = "workspace-network"', ...PROFILE.filter(Boolean)]) expect(said).toContain(`\`${line}\``)
-    expect(said).toContain('at the very top')
-    expect(shutIn({ CODEX_THREAD_ID: 't' }).hint).toContain('tell the user this')
+  test('a rule that lets `it` out of the sandbox is found in any file of Codex’s rules, and only one that names `it` alone counts', () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'it-codex-rules-'))
+    try {
+      expect(codexRuleLetsItOut(home)).toBe(false)
+      mkdirSync(path.join(home, 'rules'))
+      // What Codex writes itself when a person answers "don't ask again": the command and its first words, which cover nothing else
+      writeFileSync(
+        path.join(home, 'rules', 'default.rules'),
+        'prefix_rule(pattern=["it", "status"], decision="allow")\nprefix_rule(pattern=["git"], decision="allow")\n',
+      )
+      expect(codexRuleLetsItOut(home)).toBe(false)
+      expect(codexLetsItOut(null, codexRuleLetsItOut(home))).toBe(false)
+      // A rule that forbids, and one that is a remark
+      writeFileSync(
+        path.join(home, 'rules', 'more.rules'),
+        '# prefix_rule(pattern=["it"], decision="allow")\nprefix_rule(pattern=["it"], decision="forbidden")\n',
+      )
+      expect(codexRuleLetsItOut(home)).toBe(false)
+      writeFileSync(path.join(home, 'rules', 'notes.txt'), `${CODEX_RULE}\n`)
+      expect(codexRuleLetsItOut(home)).toBe(false)
+      // The line a person is told to write, in the file they are told to write it in
+      writeFileSync(path.join(home, 'rules', 'it.rules'), `${CODEX_RULE}\n`)
+      expect(codexRuleLetsItOut(home)).toBe(true)
+      // With it, nothing of the settings matters: `it` is let out whatever the sandbox is
+      expect(codexLetsItOut(null, true)).toBe(true)
+      expect(codexLetsItOut('sandbox_mode = "read-only"\n', true)).toBe(true)
+      expect(codexLetsItOut(false, false)).toBeUndefined()
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+  test('what a person is told, and what an agent that is stopped there passes on, both carry the rule and the file to keep it in', () => {
+    expect(CODEX_RULE).toBe('prefix_rule(pattern=["it"], decision="allow")')
+    for (const said of [CODEX_SHUT, CODEX_SHUT_SAID]) {
+      expect(said).toContain(CODEX_RULE)
+      expect(said).toContain('~/.codex/rules/it.rules')
+      expect(said).toContain('leave')
+    }
+    expect(CODEX_SHUT).toContain(`\n    ${CODEX_RULE}\n`)
+    expect(CODEX_SHUT).toContain('approve each `it` command')
+    expect(CODEX_SHUT_SAID).not.toContain('\n')
+    // The agent is first to ask to run the command outside the sandbox, and passes the rule on only where that is refused
+    const hint = shutIn({ CODEX_THREAD_ID: 't' }).hint!
+    expect(hint.indexOf('Ask to run this same command outside the sandbox')).toBeGreaterThan(-1)
+    expect(hint.indexOf('tell the user this')).toBeGreaterThan(hint.indexOf('Ask to run'))
+    expect(hint).toContain(CODEX_SHUT_SAID)
+    expect(shutIn({}).hint).not.toContain('rules')
   })
 })

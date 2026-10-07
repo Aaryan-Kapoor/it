@@ -78,7 +78,19 @@ A conversation that is open in a window where It's add-on is not loaded looks cl
 
 While a turn runs, the click is handed to the model at the next tool call, and the turn goes on with any click that arrived after the last one. When the conversation is open and idle, the click goes into Codex's own queue, which starts a turn with it. A click that arrives in the middle of a turn is said to be a separate one, so that a second press of a button is not taken for the first.
 
-Codex runs an agent's commands in a sandbox, and as it comes that sandbox gives them no network. `it` reaches It over the network of your own machine, so in such a sandbox it cannot, and it says so: its answer has the code `blocked`, and says that It could not be asked from there. Either approve `it` to run outside the sandbox each time Codex asks, or let commands in the sandbox use the network. In Codex 0.160 that is a permissions profile of your own with the network enabled, chosen in the first line of Codex's `config.toml`:
+Codex runs an agent's commands in a sandbox, and as it comes that sandbox reaches nothing on your machine: not a port, and not a socket in a folder. `it` has to reach It, so in the sandbox it is stopped, and it says so: its answer has the code `blocked`, and says that It could not be asked from there. There are three ways to live with that. It changes nothing in Codex's settings itself, whichever you choose.
+
+**Let `it`, and only `it`, out of the sandbox.** Codex reads rules from every file ending in `.rules` in `~/.codex/rules`. Make one there, `it.rules`, with this one line in it, and start Codex again:
+
+```
+prefix_rule(pattern=["it"], decision="allow")
+```
+
+Every `it` command then runs without Codex asking, and the sandbox is as it was for everything else: another command is still kept from the network and from writing outside its folder. `it setup` and `it status` tell you of this rule when neither it nor a sandbox with the network is there, and the answer a sandboxed agent gets carries it for the agent to pass on. What the rule means is that `it` runs unconfined, so an agent can do through `it` what `it` can do: publish a file it names as a page, and save a picture that a page sent into a file it names.
+
+**Approve `it` each time.** In a git folder Codex asks before it runs each `it` command outside the sandbox. Its "don't ask again" covers the command with the words that follow it, an action's id among them, so it asks again for the next. In a folder that is not a git repository, Codex as it comes refuses the asking itself: nothing can be approved until you choose "Ask for approval" under `/permissions` in that conversation.
+
+**Give the sandbox the network.** `it` then reaches It from inside the sandbox, and so does every other command the agent runs. In Codex 0.160 that is a permissions profile of your own with the network enabled, chosen in the first line of Codex's `config.toml`:
 
 ```toml
 default_permissions = "workspace-network"
@@ -92,7 +104,9 @@ extends = ":workspace"
 enabled = true
 ```
 
-The first line has to stand above every table, which is every line in square brackets, or Codex will not start. The older setting, `network_access = true` under `[sandbox_workspace_write]`, does this only together with `sandbox_mode = "workspace-write"`: by itself it gives a git folder the network and leaves any other folder read-only. `it setup` and `it status` say what to add to the settings you have when they plainly give no network, and the answer a sandboxed agent gets carries the same for it to pass on to you. It changes nothing in Codex's settings itself.
+The first line has to stand above every table, which is every line in square brackets, or Codex will not start. The older setting, `network_access = true` under `[sandbox_workspace_write]`, does this only together with `sandbox_mode = "workspace-write"`: by itself it gives a git folder the network and leaves any other folder read-only.
+
+None of the three is needed where Codex runs with full access. An app that runs Codex for you chooses the sandbox itself, whatever these files say: T3 Code gives Codex a sandbox of its own for each of its modes, and its default is full access.
 
 Codex runs none of the add-on's hooks until you have approved them, and says nothing when it skips one. In the terminal, Codex asks the next time it starts, and "Trust all and continue" approves them. Until then a click still arrives, as a new message when Codex is idle. `it setup` and the site say that the hooks are waiting to be approved until one of them has run. How the desktop app and T3 Code ask, where there is no terminal to show the question, is not known.
 

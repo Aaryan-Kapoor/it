@@ -12,18 +12,31 @@
  * and take from a plain folder the writing it had. A profile that is chosen wins over
  * everything of the older way. A file that defines a profile and chooses none, or has the
  * choosing line below a table, is one Codex will not start with, and so is a table that is in
- * it twice: what a person is told to add is said with that in mind. All of this is as Codex
- * 0.160 was seen to behave in its own window.
+ * it twice. All of this is as Codex 0.160 was seen to behave in its own window.
+ *
+ * There is a third way, which leaves the sandbox alone: a rule in Codex's `rules` folder that
+ * lets one command run outside it. Seen with Codex as it comes, in a plain folder and in a git
+ * one: with the one rule for `it`, every `it` command runs unasked, and any other command is
+ * still kept from the network and from writing outside its folder. Without it, a git folder
+ * asks for approval of each `it` command, and a plain folder refuses the asking itself
+ * ("sandbox_approval: false") until the person chooses "Ask for approval" under /permissions.
+ * And nothing gets out of the sandbox as it comes: a port of this machine is refused, and so
+ * is a socket in a folder. So the rule is what a person is told of, and the network is only
+ * looked for, as something that also lets `it` through.
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-/** The profile a person is told to add. Codex shows the name in its own status line. */
-export const CODEX_PROFILE = 'workspace-network'
+/** The rule that lets `it`, and nothing else, run outside Codex's sandbox: one line of a file in Codex's `rules` folder. */
+export const CODEX_RULE = 'prefix_rule(pattern=["it"], decision="allow")'
+/** The file a person is told to keep it in: one of their own making, beside the one Codex keeps its own rules in. */
+export const CODEX_RULE_FILE = '~/.codex/rules/it.rules'
+
+const codexHome = () => process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
 
 /** Codex's settings file as text, null when there is none, false when it could not be read. */
-export function codexConfig(home = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')): string | null | false {
+export function codexConfig(home = codexHome()): string | null | false {
   try {
     return readFileSync(path.join(home, 'config.toml'), 'utf8')
   } catch (err) {
@@ -31,22 +44,26 @@ export function codexConfig(home = process.env.CODEX_HOME || path.join(os.homedi
   }
 }
 
-/** What a person is to change in Codex's settings file so that `it` is let out. */
-export interface CodexAdvice {
-  /** A line that has to be the file's very first, above every table */
-  first?: string
-  /** A line of the person's own that is to be changed, and what to */
-  change?: { from: string; to: string }
-  /** A setting to put under a table that is already in the file */
-  under?: { table: string; line: string }
-  /** Lines to add at the end of the file */
-  end?: string[]
-}
 /**
- * Whether Codex lets `it` out, as far as its settings say. Where it does not, what to change;
- * with nothing to change where the person has chosen that Codex only reads, which is theirs.
+ * Whether a rule of the person's lets every `it` command out of Codex's sandbox. Codex reads
+ * every file ending in `.rules` in its `rules` folder, and writes such rules itself when a
+ * person answers "don't ask again": those name a command and its first words, as in
+ * `["it", "status"]`, and only one that names `it` alone covers every `it` command.
  */
-export type CodexNetwork = { lets: true } | { lets: false; advice?: CodexAdvice }
+export function codexRuleLetsItOut(home = codexHome()): boolean {
+  try {
+    const dir = path.join(home, 'rules')
+    return readdirSync(dir)
+      .filter((name) => name.endsWith('.rules'))
+      .some((name) =>
+        readFileSync(path.join(dir, name), 'utf8')
+          .split('\n')
+          .some((line) => /^\s*prefix_rule\(\s*pattern\s*=\s*\[\s*["']it["']\s*\]\s*,\s*decision\s*=\s*["']allow["']/.test(line)),
+      )
+  } catch {
+    return false
+  }
+}
 
 const bare = (s: string) => s.replace(/^["']|["']$/g, '')
 /** Every setting of the file by its full dotted name, with its value as written. Tables that repeat (`[[…]]`) are left out. */
@@ -90,115 +107,66 @@ function settings(config: string): Map<string, string> {
 }
 
 /**
- * Whether Codex, as its settings stand, gives the commands its agent runs the network that
- * `it` needs, and what to change where it does not. Undefined where the settings are arranged
- * in a way this does not follow, or could not be read, which is not guessed at. Someone who
- * runs Codex with full access by a switch on its command line, or who chose otherwise inside a
- * conversation, is not seen here either, so what is said of this is said as advice.
+ * Whether Codex's own settings give the commands its agent runs the network, with which `it`
+ * reaches It from inside the sandbox. Undefined where the settings are arranged in a way this
+ * does not follow, or could not be read, which is not guessed at. Someone who runs Codex with
+ * full access by a switch on its command line, or who chose otherwise inside a conversation, or
+ * whose Codex is run by another app with settings of that app's own, is not seen here.
  */
-export function codexNetwork(config: string | null | false = codexConfig()): CodexNetwork | undefined {
+export function codexGivesNetwork(config: string | null | false = codexConfig()): boolean | undefined {
   if (config === false) return undefined
   const all = settings(config ?? '')
   const has = (prefix: string) => [...all.keys()].some((k) => k === prefix || k.startsWith(`${prefix}.`))
   const word = (key: string) => (all.has(key) ? bare(all.get(key)!) : undefined)
-  const profile = [`[permissions.${CODEX_PROFILE}]`, 'extends = ":workspace"', '', `[permissions.${CODEX_PROFILE}.network]`, 'enabled = true']
-  const chosen = word('default_permissions')
-  const mode = word('sandbox_mode')
-
   // A way of choosing settings that Codex no longer reads, and says so itself
   if (all.has('profile')) return undefined
+  const chosen = word('default_permissions')
   // The newer way: a profile is chosen, and it wins over everything of the older way
   if (chosen !== undefined) {
-    if (chosen === ':danger-full-access') return { lets: true }
-    // Read-only by the person's own choice
-    if (chosen === ':read-only') return { lets: false }
-    const line = `default_permissions = ${all.get('default_permissions')}`
-    if (chosen.startsWith(':')) {
-      if (chosen !== ':workspace') return undefined
-      return {
-        lets: false,
-        advice: { change: { from: line, to: `default_permissions = "${CODEX_PROFILE}"` }, ...(has(`permissions.${CODEX_PROFILE}`) ? {} : { end: profile }) },
-      }
-    }
-    // A profile of the person's own, which may build on another of theirs
     const seen = new Set<string>()
     for (let at = chosen; ; ) {
-      if (at === ':danger-full-access') return { lets: true }
-      if (at.startsWith(':')) break
-      // A profile that is not in the file, or that builds on itself: Codex's to say
-      if (seen.has(at) || !has(`permissions.${at}`)) return undefined
+      if (at === ':danger-full-access') return true
+      if (at === ':workspace' || at === ':read-only') return false
+      // Another of Codex's own, a profile that is not in the file, or one that builds on itself: Codex's to say
+      if (at.startsWith(':') || seen.has(at) || !has(`permissions.${at}`)) return undefined
       seen.add(at)
       const enabled = word(`permissions.${at}.network.enabled`)
-      if (enabled === 'true') return { lets: true }
-      if (enabled !== undefined) break
+      if (enabled !== undefined) return enabled === 'true'
       const on = word(`permissions.${at}.extends`)
-      if (on === undefined) break
+      if (on === undefined) return false
       at = on
     }
-    const table = `permissions.${chosen}.network`
-    // Its table for the network is there already: a second one of that name and Codex will not start
-    if (has(table)) return { lets: false, advice: { under: { table: `[${table}]`, line: 'enabled = true' } } }
-    return { lets: false, advice: { end: [`[${table}]`, 'enabled = true'] } }
   }
   // A profile that is defined and not chosen: Codex does not start with that, and says so itself
   if (has('permissions')) return undefined
-
-  // The older way
-  if (mode === 'danger-full-access') return { lets: true }
-  if (mode === 'read-only') return { lets: false }
-  if (mode === 'workspace-write') {
-    if (word('sandbox_workspace_write.network_access') === 'true') return { lets: true }
-    if (has('sandbox_workspace_write')) return { lets: false, advice: { under: { table: '[sandbox_workspace_write]', line: 'network_access = true' } } }
-    return { lets: false, advice: { end: ['[sandbox_workspace_write]', 'network_access = true'] } }
-  }
-  if (mode !== undefined) return undefined
-  // Codex as it comes, or with something of the older way and no mode said, which leaves a
-  // plain folder read-only: the profile, which wins over what is there
-  return { lets: false, advice: { first: `default_permissions = "${CODEX_PROFILE}"`, end: profile } }
+  // The older way. With no mode said, a folder that is not a git repository is read-only, whatever the table says
+  const mode = word('sandbox_mode')
+  if (mode === 'danger-full-access') return true
+  if (mode === 'workspace-write') return word('sandbox_workspace_write.network_access') === 'true'
+  if (mode === undefined || mode === 'read-only') return false
+  return undefined
 }
-
-/** Whether Codex lets `it` out, where its settings say so plainly. */
-export const codexLetsItOut = (config: string | null | false = codexConfig()): boolean | undefined => codexNetwork(config)?.lets
-
-const WHY = 'Codex gives the commands its agent runs no network, and `it` needs it to reach It on this machine'
-const FILE = '`~/.codex/config.toml`'
-const UNLESS = 'You need not if you run Codex with full access, or would sooner approve `it` each time Codex asks.'
-const indented = (lines: string[]) => lines.map((l) => (l ? `    ${l}` : '')).join('\n')
 
 /**
- * What a person is told where Codex, as it is set, would keep `it` from reaching It: in lines,
- * with what to add set out as it is to be typed. Null where Codex lets `it` out, or where its
- * settings are not followed.
+ * Whether Codex lets `it` reach It, as far as what is on this machine says: by a rule that lets
+ * `it` out of the sandbox, or by a sandbox that has the network. False where plainly neither.
  */
-export function codexNoNetwork(net: CodexNetwork | undefined): string | null {
-  if (!net || net.lets) return null
-  const a = net.advice
-  if (!a)
-    return `Codex is set to only read, which ${WHY.replace(/^Codex gives/, 'gives')}. Approve \`it\` each time Codex asks, or choose another setting in ${FILE}.`
-  const steps: string[] = []
-  if (a.first)
-    steps.push(`Put this as its very first line, above every line in square brackets (lower than that, and Codex will not start):\n${indented([a.first])}`)
-  if (a.change) steps.push(`Change its line \`${a.change.from}\` to:\n${indented([a.change.to])}`)
-  if (a.under) steps.push(`Under the \`${a.under.table}\` that is in it, add:\n${indented([a.under.line])}`)
-  if (a.end) steps.push(`Add ${a.first || a.change ? 'these' : 'this'} at its end:\n${indented(a.end)}`)
-  return `As it is set, ${WHY}: each \`it\` command would fail, or stop to ask you.\nTo let it, open ${FILE}.\n${steps.join('\n')}\nThen start Codex again. ${UNLESS}`
+export function codexLetsItOut(config: string | null | false = codexConfig(), rule = codexRuleLetsItOut()): boolean | undefined {
+  if (rule) return true
+  return codexGivesNetwork(config)
 }
 
-/** The same in one sentence or two, for an agent to pass on to the person in its own reply. */
-export function codexNoNetworkSaid(net: CodexNetwork | undefined): string {
-  const a = net && !net.lets ? net.advice : undefined
-  const ticks = (lines: string[]) =>
-    lines
-      .filter(Boolean)
-      .map((l) => `\`${l}\``)
-      .join(', ')
-  if (!net || net.lets) return `${WHY}. Letting the commands Codex runs use the network, in Codex's settings, lets it.`
-  if (!a)
-    return `Codex is set to only read, which ${WHY.replace(/^Codex gives/, 'gives')}. Approving \`it\` each time Codex asks, or choosing another setting in ${FILE}, lets it.`
-  const steps: string[] = []
-  if (a.first) steps.push(`put the line \`${a.first}\` at the very top, above every line in square brackets (Codex will not start if it is lower)`)
-  if (a.change) steps.push(`change the line \`${a.change.from}\` to \`${a.change.to}\``)
-  if (a.under) steps.push(`add the line \`${a.under.line}\` under the \`${a.under.table}\` that is there`)
-  if (a.end) steps.push(`add at its end, each on a line of its own, ${ticks(a.end)}`)
-  return `${WHY}. To let it, in ${FILE}: ${steps.join('; and ')}. Then start Codex again.`
-}
+const WHY = 'Codex runs the commands its agent gives it in a sandbox that cannot reach It on this machine, so `it` is stopped there'
+
+/**
+ * What a person is told where Codex, as it is set, keeps `it` from reaching It: in lines, with
+ * the rule set out as it is to be typed. The rule leaves Codex's sandbox as it is for
+ * everything else, which giving the sandbox the network would not.
+ */
+export const CODEX_SHUT = `${WHY}.
+To let \`it\` through, and leave the sandbox as it is for everything else, make the file \`${CODEX_RULE_FILE}\` with this one line in it, and start Codex again:
+    ${CODEX_RULE}
+Without it, Codex asks you to approve each \`it\` command. In a folder that is not a git repository it does not ask at all, until you choose "Ask for approval" under \`/permissions\` there. None of this is needed if you run Codex with full access.`
+
+/** The same for an agent that was stopped there to pass on, in a sentence or two of its own reply. */
+export const CODEX_SHUT_SAID = `${WHY}. A file \`${CODEX_RULE_FILE}\` holding the one line \`${CODEX_RULE}\` lets \`it\` through and leaves the sandbox as it is for everything else. Codex reads it when it next starts.`

@@ -865,7 +865,7 @@ export function afterHermes(version: string | undefined): string {
   return `${first}\nFor the Hermes TUI or desktop app, also run this once, which lets It put what you do into those conversations:\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\nIf this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`
 }
 
-export { CODEX_PROFILE, codexLetsItOut, codexNetwork, codexNoNetwork } from './codex-settings'
+export { CODEX_RULE, CODEX_RULE_FILE, CODEX_SHUT, codexGivesNetwork, codexLetsItOut, codexRuleLetsItOut } from './codex-settings'
 
 /** What the person still has to do themselves once an add-on is in, if anything. Shown once, by `it setup`. */
 export const AFTER: Partial<Record<Harness, string>> = {

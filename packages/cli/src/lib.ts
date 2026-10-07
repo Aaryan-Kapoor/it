@@ -10,7 +10,7 @@ import { anyApi } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { importJWK, type JWK, SignJWT } from 'jose'
 import { agentAppsAbove } from './ancestry'
-import { codexNetwork, codexNoNetworkSaid } from './codex-settings'
+import { CODEX_SHUT_SAID } from './codex-settings'
 import { added, shellEnv } from './shell-env'
 
 export const VERSION = '0.1.0'
@@ -292,7 +292,7 @@ export const shutIn = (e: NodeJS.ProcessEnv = process.env) =>
     // Codex is the app that does this as it comes, and the person is the one who can change it:
     // the agent is given the line to tell them, since nothing else can get word out of here
     e.CODEX_THREAD_ID
-      ? `Run \`it\` outside that sandbox if you may ask for that. If you may not, tell the user this, in these words: ${codexNoNetworkSaid(codexNetwork())} Do not start It again.`
+      ? `It may well be running: this says nothing of that. Ask to run this same command outside the sandbox, the way you ask for any command that needs it. If the asking is refused, or you may not ask, tell the user this, in these words: ${CODEX_SHUT_SAID} Do not start It again, and do not change Codex’s settings yourself.`
       : 'Run `it` outside that sandbox, or let commands use the network there. Do not start It again.',
   )
 /** Whether an error says that the system refused the connecting itself, and not that nothing answered. */

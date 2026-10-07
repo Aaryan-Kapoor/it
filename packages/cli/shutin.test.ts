@@ -84,13 +84,17 @@ describe('a command that the system keeps from the network', () => {
         execFile(process.execPath, [bundle, ...args], { env }, (error, out, err) => resolve({ code: (error as { code?: number } | null)?.code ?? 0, out, err }))
       })
     const kept = await run(['status', '--json'], true)
-    const stands = JSON.parse(kept.out) as { running: boolean; hint: string }
-    expect(stands.running).toBe(false)
+    const stands = JSON.parse(kept.out) as { blocked?: boolean; running: boolean | null; hint: string; connector: { running: boolean | null } }
+    // Whether It is running cannot be seen from there: said first, and as not known, so that no agent reads it as stopped
+    expect(Object.keys(stands).slice(0, 2)).toEqual(['blocked', 'hint'])
+    expect([stands.blocked, stands.running, stands.connector.running]).toEqual([true, null, null])
     expect(stands.hint).toContain('It could not be asked from here')
     expect(stands.hint).toContain('It may well be running')
     expect(stands.hint).not.toContain('it serve')
     // The same folder, with nothing refused: nothing answers, and that is what is said
     const free = await run(['status', '--json'], false)
-    expect((JSON.parse(free.out) as { hint: string }).hint).toContain('It is not running on this machine.')
+    const freely = JSON.parse(free.out) as { blocked?: boolean; running: boolean; hint: string }
+    expect(freely.hint).toContain('It is not running on this machine.')
+    expect([freely.blocked, freely.running]).toEqual([undefined, false])
   })
 })

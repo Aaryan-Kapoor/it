@@ -12,7 +12,6 @@ import readline from 'node:readline/promises'
 import { describeClick, firstFile, HARNESSES, type Harness, isSlug, NOUN, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
 import { SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, parse, text } from './args'
-import { codexConfig as codexSettingsText } from './codex-settings'
 import { local } from './connector'
 import * as flow from './flow'
 import { hook } from './hooks'
@@ -67,9 +66,10 @@ import { tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
 import {
   AFTER,
-  CODEX_PROFILE,
-  codexNetwork,
-  codexNoNetwork,
+  CODEX_RULE_FILE,
+  CODEX_SHUT,
+  codexLetsItOut,
+  codexRuleLetsItOut,
   detectAll,
   disconnect,
   type HarnessStatus,
@@ -104,8 +104,7 @@ const tell = (lines: (string | undefined)[]): void => written(process.stdout, `$
 /** What a person is told where Codex is connected and, as it is set, would keep `it` from reaching It. Null where it would not. */
 function codexShut(found: HarnessStatus[]): string | null {
   if (!found.some((h) => h.id === 'codex' && (h.addon === 'connected' || h.addon === 'needs_approval'))) return null
-  const said = codexNoNetwork(codexNetwork())
-  return said ? `Codex: ${said}` : null
+  return codexLetsItOut() === false ? `Codex: ${CODEX_SHUT}` : null
 }
 /** What a person is told of the agent apps on this machine: each one that was found, and whether It is connected to it. */
 function appsSaid(found: HarnessStatus[], advise = true, withCodex = true): string[] {
@@ -815,10 +814,11 @@ async function uninstall(a: Args) {
   if (process.platform === 'win32') left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
   // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
   crumbs()
-  // What the person added to Codex's settings on It's word is theirs, and is not taken out: it is said to be there
-  if (new RegExp(`^\\[permissions\\.${CODEX_PROFILE}[.\\]]`, 'm').test(codexSettingsText() || ''))
+  // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
+  // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
+  if (codexRuleLetsItOut())
     say(
-      `Codex: the permissions profile \`${CODEX_PROFILE}\`, which lets its commands use the network, is still in Codex’s settings. It is yours to keep or to take out.`,
+      `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
     )
   // 5. Its folder, the program in it included. A program that is running may delete its own file on every system but Windows.
   try {
@@ -1594,19 +1594,24 @@ async function status(a: Args) {
       database.behind.why === 'refused'
         ? 'The data here does not fit the backend functions of this version of It, so the ones from the version before go on serving, with the rest of It as this version. Nothing was lost.'
         : 'A copy of the data could not be made, so the backend functions of this version of It were not put onto it, and the ones from the version before go on serving. Make room on the disk and start It again.'
+  // Run where it may not open a connection, this command cannot see whether It is running at
+  // all. That is said first and as not known: answered "not running", an agent takes It for
+  // stopped, and says so to its person or tries to start it.
+  const blocked = found === 'not let ask'
   const stands = {
-    running,
+    ...(blocked ? { blocked: true, hint } : {}),
+    running: blocked ? null : running,
     enrolled,
     machine,
     site: siteAddress() ?? null,
     network: networkNow(),
     ...(database ? { database } : {}),
-    connector: (await connectorHealth()) ?? { running: false },
+    connector: blocked ? { running: null } : ((await connectorHealth()) ?? { running: false }),
     background: service.status(),
     harnesses: await detectAll(),
     version: VERSION,
     protocol: PROTOCOL_VERSION,
-    ...(hint ? { hint } : {}),
+    ...(hint && !blocked ? { hint } : {}),
   }
   if (!forPerson(a)) return out(stands)
   // To a person: what is wrong and what to do about it first, then whether It is running and

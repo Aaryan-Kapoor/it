@@ -67,7 +67,7 @@ Another port is another address for the site. A browser that was paired stays pa
 
 ## An agent that says It is not there
 
-An agent app that runs commands in a sandbox may give them no network. `it` then cannot reach It, though It is running, and answers with the code `blocked`: "It could not be asked from here". Let the agent run `it` outside the sandbox, or let commands in the sandbox use the network. [Add-ons](add-ons.md#codex) says how for Codex. Nothing needs starting again.
+An agent app that runs commands in a sandbox may give them no network. `it` then cannot reach It, though It is running, and answers with the code `blocked`: "It could not be asked from here". `it status`, asked from there, says `"blocked": true` and gives `running` as not known, since it cannot see. Let the agent run `it` outside the sandbox, or let commands in the sandbox use the network. [Add-ons](add-ons.md#codex) says how for Codex, where one rule lets `it` out and leaves the sandbox as it is for everything else. Nothing needs starting again.
 
 ## A pairing address that does not work
 
