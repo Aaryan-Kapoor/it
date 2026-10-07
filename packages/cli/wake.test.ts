@@ -256,8 +256,10 @@ describe('what a conversation is told when it is given the same thing again afte
 
 describe('what a conversation is told after the person stopped it', () => {
   test('says that its last turn was stopped, and not to carry on with it', () => {
-    expect(WAS_STOPPED).toMatch(/^\[It\] The turn before this one in this conversation was stopped by the person/)
-    expect(WAS_STOPPED).toContain('do not carry on with it unless what is above asks for it')
+    expect(WAS_STOPPED).toMatch(/^\[It\] The person stopped this conversation’s last turn, from the page/)
+    // What had reached the conversation and was never answered is said to be cancelled, and not left for the agent to judge
+    expect(WAS_STOPPED).toContain('even where you see it earlier in this conversation with no answer after it')
+    expect(WAS_STOPPED).toContain('Do only what is said above this note.')
   })
 })
 

@@ -50,9 +50,16 @@ export const WOKEN =
 export const WAS_CUT_OFF =
   '[It] You were given what is above once before. It was restarted while you were working on it, and that turn was cut off before it ended, so you may have done part of it or all of it. Look at the page’s state, and at what you last did in this conversation, before you do any of it again, and do not do twice what was already done.'
 
-/** What a conversation is told, the next time it is reopened, when the person stopped its last reopened turn from the page. */
+/**
+ * What a conversation is told, the next time it is reopened, when the person stopped its last
+ * reopened turn from the page. Said so that nothing of that turn is taken up again: an app that
+ * is ended in the middle of a turn leaves, in the conversation, what the turn was asked and
+ * whatever reached it while it worked, each with no answer after it. Told only that its turn
+ * was stopped, an agent read those as still owed and did them all, a slow job and two presses
+ * among them, on top of the one thing it had been reopened for.
+ */
 export const WAS_STOPPED =
-  '[It] The turn before this one in this conversation was stopped by the person, from the page, before it had finished. Whatever it was in the middle of was not wanted any more: do not carry on with it unless what is above asks for it.'
+  '[It] The person stopped this conversation’s last turn, from the page, before it had finished. Stopping it cancelled everything they had done on a page up to then that you had not finished: what that turn was working on, and anything else that reached this conversation while it worked, even where you see it earlier in this conversation with no answer after it. Do none of that now. Do only what is said above this note.'
 
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {

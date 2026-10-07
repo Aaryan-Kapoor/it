@@ -554,12 +554,12 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       await until(() => existsSync(path.join(bin, 'given-0')) && readFileSync(path.join(bin, 'given-0'), 'utf8').length > 0)
       const first = readFileSync(path.join(bin, 'given-0'), 'utf8')
       expect(first).toContain('[action click-1]')
-      expect(first).toContain('was stopped by the person, from the page')
+      expect(first).toContain('The person stopped this conversation’s last turn')
       // Told once: the note is gone from the file, and a conversation nobody stopped is told nothing of the kind
       await until(() => !existsSync(path.join(home, 'stopped.json')))
       offered(click(2))
       await until(() => existsSync(path.join(bin, 'given-1')) && readFileSync(path.join(bin, 'given-1'), 'utf8').length > 0)
-      expect(readFileSync(path.join(bin, 'given-1'), 'utf8')).not.toContain('was stopped by the person')
+      expect(readFileSync(path.join(bin, 'given-1'), 'utf8')).not.toContain('The person stopped this conversation’s last turn')
     },
   )
 
