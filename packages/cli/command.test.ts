@@ -633,6 +633,10 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
         'What is done on this page goes to another conversation, the one that made it, and not to this one. If the person is to be answered here, publish it again with --take.',
       )
       expect(printed(await run(m, ['update', 'board', '--html', '<p>hi</p>', '--take'], mine)).note).toMatch(/is this one’s now/)
+      // Asked for in the shape of `it create`, with the id in --id and a title in front of it, it is taken as that
+      expect((await run(m, ['update', 'Board again', '--id', 'board', '--html', '<p>hi</p>'], mine)).code).toBe(0)
+      expect(begun()).toMatchObject({ slug: 'board', title: 'Board again' })
+      expect(b.asked.findLast((x) => x.path === 'artifacts:get')!.args).toEqual({ slug: 'board' })
       // Made by a script, in no conversation, there is nobody to give it to: nothing is asked for
       await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], b.env)
       expect(begun().take).toBeUndefined()

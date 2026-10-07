@@ -326,9 +326,19 @@ async function tour(a: Args) {
 }
 
 async function update(a: Args) {
-  const slug = need(a._[0], `which ${NOUN.one}`, 'update <id> (--file f | --dir d | --html "<…>" | pipe)')
+  // Written as `it create` is, with the id in `--id` and a title in front of it, it is taken as that:
+  // an agent that has just made a page with the one often asks for the other in the same shape
+  const named = text(a, 'id')
+  const slug = named ?? need(a._[0], `which ${NOUN.one}`, 'update <id> (--file f | --dir d | --html "<…>" | pipe)')
+  const retitled = named !== undefined && a._[0] !== undefined && a._[0] !== named ? a._[0] : undefined
   const existing = await call<{ title: string }>('query', api.artifacts.get, { slug })
-  const done = await publish({ slug, title: text(a, 'title') ?? existing.title, files: await source(a), agent: text(a, 'agent'), take: a.flags.take === true })
+  const done = await publish({
+    slug,
+    title: text(a, 'title') ?? retitled ?? existing.title,
+    files: await source(a),
+    agent: text(a, 'agent'),
+    take: a.flags.take === true,
+  })
   await published(done, a)
 }
 
