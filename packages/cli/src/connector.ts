@@ -363,7 +363,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const behindTurn = new Map<string, { click: Offered; key: string }>()
   const turnRunning = (key: string, now: number) => {
     const s = sessions.get(key)
-    return s?.busy === true && now - s.busyAt < TURN_QUIET_MS
+    if (!(s?.busy === true && now - s.busyAt < TURN_QUIET_MS)) return false
+    // A Codex turn that was interrupted, or whose Codex was closed in the middle of it, ends
+    // with no hook to say so. No Codex holds its conversation from then on, so no turn is
+    // running there. Taken for running, each click of the next half hour was kept a minute
+    // for a hook that could not come, while the page said the agent was busy.
+    if (key.startsWith('codex:') && !codexHeld(threadOf(key))) {
+      s.busy = false
+      return false
+    }
+    return true
   }
   const queueTries = new Map<string, { n: number; at: number; reopening: boolean }>()
   /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
@@ -890,7 +899,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (await disconnected(id, h)) continue
         const s = sessions.get(h.key)
         const listening = !h.forHook && s !== undefined && now - s.seen < LIVE_MS
-        const hookComing = h.forHook && s?.busy === true && now - s.busyAt < TURN_QUIET_MS && now - h.claimedAt < HOOK_HOLD_MS
+        const hookComing = h.forHook && turnRunning(h.key, now) && now - h.claimedAt < HOOK_HOLD_MS
         if (listening || hookComing) {
           if (now < h.leaseUntil - LEASE_MS + RENEW_MS) continue
           // Only a renewal the backend confirmed extends the lease. Past it the click may be

@@ -637,6 +637,19 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     offered()
   }
 
+  test('a Codex turn that ended with no hook to say so, its Codex closed in the middle of it, is not taken for running', async () => {
+    await start()
+    // A hook says a turn has begun, and none ever says that it ended: the person interrupted it and quit Codex
+    await turn(1, true)
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    // The click goes the way of a closed conversation at once, which here ends at its folder not
+    // being known. Kept for the hook of a turn that is not running, that came a minute later.
+    await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'), 5000)
+    expect(stand.codex).toEqual([])
+  })
+
   test('one that Codex’s queue took while the conversation’s turn was running is given to a waiter that begins in that turn, and only once', async () => {
     await start()
     expect(await turn(6, true)).toEqual({ ok: true })
