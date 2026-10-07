@@ -5,9 +5,9 @@ This is for you, the agent. The person on the other end has just installed somet
 ## Rules
 
 1. **Never block.** What the person does on a page arrives in this conversation by itself, as a message that begins `[It]`, where It's add-on for your harness is connected. `it status` says whether it is: your harness has `"addon": "connected"`, and `connector` has `"ok": true`. If it is not, start `it wait --follow` once, in the background, before the first step, and leave it running for the whole tour. Do not run `it wait` in the foreground at any point: it holds your terminal, so the person cannot talk to you.
-2. **Say the quoted lines as they are written.** Each step has a line under **Say**. Send it as it is. The lines are written to be read out, and improvising here is how a tour turns into the narration of a test plan.
+2. **Say the quoted lines as they are written.** Each step has a line under **Say** or **Then say**. Send it as it is. The lines are written to be read out, and improvising here is how a tour turns into the narration of a test plan.
 3. **Never ask a question in the chat.** You are showing a product whose whole point is that the question goes on the screen. Use the page in front of them, or a notification with buttons. The last step is the one exception, since it is a conversation.
-4. **Showing a page is one move.** `it tour show` publishes a page and brings it up. Never end a turn having made a page that is not on a screen.
+4. **Showing a page is one move.** `it tour show` publishes a page and brings it up. Never end a turn having made a page that is not on a screen. And show before you speak: each step gives the command that brings its page up and then the line to say, in that order. In most agent apps your turn ends when you have spoken, so a line said before its page leaves the person reading a sentence and looking at nothing. If you have said a step's line and its page is not on the screen, you are not done.
 5. **Every step ends by handing over.** When you have reacted and are waiting for them, send `it notify … --button "Next=next"`. They can then go on from the notification or from the **Next** button on the page. Either reaches you as the same `next` action.
 6. **Never go on by yourself.** You move on when `next` arrives, and not before. If they linger, let them.
 7. **Never say "step 3 of 5", "this works", or what you are about to do.** No tables of results and no progress reports. The screen is the report.
@@ -26,11 +26,11 @@ Each page of the tour has a fixed id, `tour-` and its name, so every command bel
 
 ## The menu
 
-**Say:** "Here's what I could put on your screen. Pick whichever you want to see first, and we'll go through the rest after."
-
 ```sh
 it tour show menu
 ```
+
+**Then say:** "Here's what I could put on your screen. Pick whichever you want to see first, and we'll go through the rest after."
 
 The `pick` action's `choice` is one of `whiteboard`, `tictactoe`, `triage`, `mockup`, `gauge`, or `other`. When it arrives, mark the menu as answered, so that it stops looking live:
 
@@ -46,11 +46,11 @@ Every step below is: show the page, say the line, react to what they do, send th
 
 Do not explain it before they draw.
 
-**Say:** "Draw something. Anything: a box, a face, an arrow. I'll look at it properly, and then draw on the same canvas."
-
 ```sh
 it tour show whiteboard --step <n>
 ```
+
+**Then say:** "Draw something. Anything: a box, a face, an arrow. I'll look at it properly, and then draw on the same canvas."
 
 The `snapshot` action carries `png`, a picture of the drawing, and `strokes`, the same drawing as lines. The message that arrives leaves the picture out and cuts long data short, so have the picture written to a file, in the folder you are in:
 
@@ -71,11 +71,11 @@ it notify "Drew on yours. Next when you've had a look." --id tour-whiteboard --b
 
 ## Tic-tac-toe
 
-**Say:** "Your move. I'm playing along as you go: no refresh, no 'let me check'. I just see it."
-
 ```sh
 it tour show tictactoe --step <n>
 ```
+
+**Then say:** "Your move. I'm playing along as you go: no refresh, no 'let me check'. I just see it."
 
 Each `move` action carries `index`, 0 to 8, reading left to right and top to bottom. They are X and you are O. `board` is nine characters, with `.` for an empty square. Set `turn` to `agent` first, which shows the board thinking, then the board, then hand the turn back:
 
@@ -93,11 +93,11 @@ it notify "Good game. Next when you're ready." --id tour-tictactoe --button "Nex
 
 ## The queue of pull requests
 
-**Say:** "Drag these where you think they belong. I'm not reading the order you drop them in. I'm reading where on the plane they land."
-
 ```sh
 it tour show triage --step <n>
 ```
+
+**Then say:** "Drag these where you think they belong. I'm not reading the order you drop them in. I'm reading where on the plane they land."
 
 The `ranked` action comes when they press **Send ranking**. Its `items` are every chip with its `x`, its `y` and the `quadrant` it landed in. They may send more than once, so read each one afresh.
 
@@ -110,11 +110,11 @@ it notify "Done reading your triage. Next when you want the design review." --id
 
 ## Pick a design
 
-**Say:** "Same button, four ways. Pick the one you'd actually ship and tell me why. This is what a design review looks like when I can just show you."
-
 ```sh
 it tour show mockup --step <n>
 ```
+
+**Then say:** "Same button, four ways. Pick the one you'd actually ship and tell me why. This is what a design review looks like when I can just show you."
 
 The `vote` action's `choice` is the label, and `text` is why, if they said.
 
@@ -127,11 +127,11 @@ it notify "Noted. Next when you're ready: a number that moves." --id tour-mockup
 
 ## A number that moves
 
-**Say:** "Watch the number. I'm not rebuilding the page. The page is already there, and I'm only changing what it says."
-
 ```sh
 it tour show gauge --step <n>
 ```
+
+**Then say:** "Watch the number. I'm not rebuilding the page. The page is already there, and I'm only changing what it says."
 
 Then move it, with real pauses between, since this only lands if they watch it change:
 
