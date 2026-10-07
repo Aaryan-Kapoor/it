@@ -32,10 +32,12 @@ Three things are worth knowing about connected apps.
 
 ## Agents on another computer
 
-Agents on a second computer can make pages in the same It. That computer needs It installed, and the network has to be on, since it reaches It across the network.
+Agents on a second computer can make pages in the same It. That computer joins the It you have: it runs no It of its own, and one that has set up its own cannot join. The network has to be on, since it reaches It across the network.
 
-1. In your paired browser, open Machines and choose "Add a machine". It shows one command, with the address of the machine It runs on and a code in it.
-2. On the other computer, run that command: `it login --url <address> --code <code>`. `--name` gives the machine a name other than its host name. The address is a plain `http` one, and any other is refused.
+1. In your paired browser, open Machines and choose "Add a machine". It shows two commands, each with the address of the machine It runs on and a code in it.
+2. On the other computer, run the first: `curl -fsSL https://itcan.do/install.sh | sh -s -- login --url <address> --code <code>`. It installs It there and joins, and sets no It up on that computer. On Windows, install It with `irm https://itcan.do/install.ps1 | iex`, which sets nothing up either, open a new terminal, and run the second: `it login --url <address> --code <code>`. The second is also all that a computer needs that has It already. `--name` gives the machine a name other than its host name. The address is a plain `http` one, and any other is refused.
+
+Installing It on the other computer by itself, at a terminal on macOS or Linux, leads on to setting an It up there, which is what the first computer needs and the second does not. `it login` on a computer with an It of its own says so. The way from there to joined is `it uninstall` on that computer, which deletes the pages its It held, and then the first command again. The code is not used up by being refused.
 
 The code joins one machine, once, and works for ten minutes. If the answer is lost on its way back, running `it login` again at the same address is given the machine that was made the first time. `it login` then goes on as `it setup` does: it finds the agent apps on that computer, connects the ones you choose, and registers a background service there. One setup or joining at a time works in a folder. A setup that was waiting while the machine joined an It says so, and sets no It up there: run `it setup` again to connect that computer's agent apps to the It it joined.
 

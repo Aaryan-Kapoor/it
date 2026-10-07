@@ -2430,7 +2430,15 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
       ])
       expect((await run(m, ['logout', '--force'], b.env)).code).toBe(2)
       const join = await run(m, ['login', '--url', b.url, '--code', 'Ab3dEf6hIj9kLm2nOp5q'], b.env)
-      expect([join.code, error(join).message]).toEqual([2, 'This machine is the one It runs on, so it has nothing to join.'])
+      // It says how to get from an It of its own to joined, which someone who installed It here at a terminal needs, and that the invite is still good
+      expect([join.code, error(join)]).toEqual([
+        2,
+        {
+          code: 'invalid',
+          message: 'This machine runs an It of its own, so it cannot join another one.',
+          hint: 'To use the It that is here, run `it setup`. To join the other one instead, take this one off the machine first with `it uninstall`, which deletes its pages, and then do again what the other It’s site says under Machines, Add a machine. The invite was not used.',
+        },
+      ])
       expect(b.asked).toEqual([])
       expect(b.joined).toEqual([])
       expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)

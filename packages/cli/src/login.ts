@@ -88,6 +88,19 @@ export const settlePending = (at?: string, replaces?: string): void => settle((k
 export const settleKept = (key: JWK): void => settle((kept) => kept.key.d === key.d)
 
 /**
+ * What is said to a machine that is asked to join an It and runs one of its own: a machine does
+ * one or the other. Someone who installed It on a second computer at a terminal was led through
+ * setting one up there, and meets this when they then run the command that joins. So it says
+ * how to get from there to joined, and that the invite is still good.
+ */
+export const runsItsOwn = (): Problem =>
+  new Problem(
+    'This machine runs an It of its own, so it cannot join another one.',
+    'invalid',
+    'To use the It that is here, run `it setup`. To join the other one instead, take this one off the machine first with `it uninstall`, which deletes its pages, and then do again what the other It’s site says under Machines, Add a machine. The invite was not used.',
+  )
+
+/**
  * Joins the It at an address, with an invite made on its site.
  *
  * One machine joins at a time for a folder, and whether this one has joined already is looked
@@ -111,8 +124,7 @@ export async function login(opts: { url: string; code: string; name?: string }):
   if (!at.startsWith('http://'))
     throw new Problem(`It answers over plain http, so the address to join begins with http://, such as http://192.168.1.20:${PORTS.base}.`, 'invalid')
   return alone('enrol', async () => {
-    if (existsSync(settingsFile()))
-      throw new Problem('This machine is the one It runs on, so it has nothing to join.', 'invalid', 'Run `it setup` to connect its agent harnesses.')
+    if (existsSync(settingsFile())) throw runsItsOwn()
     if (enrolledHere()) throw new Problem('This machine has already joined an It.', 'invalid', 'Run `it logout` to leave it first.')
     // Every request here has a time limit: none may leave the command waiting for ever
     const soon = () => AbortSignal.timeout(20_000)

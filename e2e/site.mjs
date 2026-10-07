@@ -545,10 +545,11 @@ export async function machineCommand(owner) {
   try {
     await tab.goto(`${APP}/machines`)
     // The dialog has answered once it shows something to copy: the command, or the one that turns the network on
-    await pressedForACode(tab, 'Add a machine', tab.locator('.pairing .copyable'))
-    await tab.locator('.pairing .copyable').waitFor({ timeout: 15_000 })
+    // The dialog shows two commands: the line that installs It and joins, and the joining alone, which is the one read here
+    await pressedForACode(tab, 'Add a machine', tab.locator('.pair-command.join .copyable'))
+    await tab.locator('.pair-command.join .copyable').waitFor({ timeout: 15_000 })
     const command = await tab
-      .locator('.pair-command code')
+      .locator('.pair-command.join code')
       .innerText({ timeout: 2000 })
       .then(
         (text) => text.trim(),

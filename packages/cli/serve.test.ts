@@ -1171,7 +1171,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
           expect([await login.ended, login.out()]).toEqual([2, ''])
           expect(JSON.parse(login.err().trim().split('\n').pop()!).error).toMatchObject({
             code: 'invalid',
-            message: 'This machine is the one It runs on, so it has nothing to join.',
+            message: 'This machine runs an It of its own, so it cannot join another one.',
           })
           expect(far.asked).toEqual([])
           expect((kept('machine.json') as { at?: string }).at).toBeUndefined()

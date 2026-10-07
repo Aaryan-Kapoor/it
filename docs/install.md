@@ -25,6 +25,8 @@ No release is published yet, so these two commands have nothing to download, and
 
 The programs are built for five systems: Linux and macOS on Intel and ARM chips, and Windows on Intel. Three variables change what the scripts do. `IT_HOME` names another folder than `~/.it` for everything It keeps. `IT_VERSION` names a release other than the latest, by its tag. `IT_INSTALL_NO_PATH`, set to anything, leaves your PATH alone.
 
+To have a computer join an It that runs on another one, give the install script the joining as its arguments: `curl -fsSL https://itcan.do/install.sh | sh -s -- login --url <address> --code <code>`, which is the line that It's site shows under Machines, "Add a machine". The program is installed and then joins, and no It is set up on that computer. [Agents on another computer](agents.md#agents-on-another-computer) has the rest.
+
 ## The first run
 
 ```sh

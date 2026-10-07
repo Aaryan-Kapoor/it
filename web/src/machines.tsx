@@ -1,7 +1,7 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import { ALIVE, HARNESSES, WAKES } from '@it/protocol'
+import { ALIVE, HARNESSES, INSTALL, WAKES } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -89,9 +89,13 @@ const CODE_MS = 10 * 60_000
 
 /**
  * Adding a machine: another computer where the person's agents run joins this It with a code
- * that works once. What is shown is the one command to run there. It names this machine's
- * address on the person's network, which another computer can reach only once the network is
- * on: until then the dialog shows the command that turns it on, and the other appears by itself.
+ * that works once. What is shown first is one line to run there, which installs It and joins
+ * and sets no It up on that computer: installed by itself at a terminal, It is set up there,
+ * and a computer that runs an It of its own cannot join another. Under it is the joining alone,
+ * for Windows, whose install sets nothing up, and for a computer that has It already. Both
+ * name this machine's address on the person's network, which another computer can reach only
+ * once the network is on: until then the dialog shows the command that turns it on, and the
+ * others appear by themselves.
  */
 function AddMachine({ onClose }: { onClose: () => void }) {
   const convex = useConvex()
@@ -131,8 +135,15 @@ function AddMachine({ onClose }: { onClose: () => void }) {
         !error && <p className="modal-lede">Making a code…</p>
       ) : where.address ? (
         <>
-          <p className="modal-lede">Install It on the other computer, then run this there.</p>
-          <div className="pair-command">
+          <p className="modal-lede">Run this on the other computer. It installs It there and joins it to this one.</p>
+          <div className="pair-command install">
+            <Copyable prompt text={`${INSTALL.sh} -s -- login --url ${quoted(where.address)} --code ${made.code}`} />
+          </div>
+          <p className="modal-sub">
+            On Windows, install It with <code>{INSTALL.ps}</code>, open a new terminal, and run the line below. It is also all that a computer needs that has It
+            already.
+          </p>
+          <div className="pair-command join">
             <Copyable prompt text={`it login --url ${quoted(where.address)} --code ${made.code}`} />
           </div>
           <OtherAddresses where={where} />

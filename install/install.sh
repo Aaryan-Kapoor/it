@@ -16,6 +16,14 @@
 # .profile. Each of those is given a blank line, a comment and one line, once, and is made if
 # it is not there.
 #
+# To join an It that runs on another computer, give it the command that It's site shows under
+# Machines, Add a machine:
+#
+#   curl -fsSL https://itcan.do/install.sh | sh -s -- login --url <address> --code <code>
+#
+# The program is installed as above and then joins that It, and no It is set up here: a
+# computer runs It or joins one, and one that has set up its own cannot join.
+#
 # IT_INSTALL_BASE names another place to download from, laid out as GitHub lays out a
 # repository's releases. IT_VERSION names a release other than the latest, by its tag.
 # IT_INSTALL_NO_PATH, set to anything, leaves your PATH and your shell's profile alone.
@@ -49,6 +57,17 @@ if [ -t 1 ] && [ -z "${agent}" ] && [ -z "${IT_INSTALL_PLAIN:-}" ]; then led=1; 
 did() { printf '  \033[32m\342\234\223\033[0m %s\n' "$1"; }
 mind() { printf '  \033[33m!\033[0m %s\n' "$1"; }
 quietly() { printf '  \033[2m%s\033[0m\n' "$1"; }
+
+# What is given after the script: nothing, or `login` and what `it login` takes, which joins
+# an It on another computer once the program is in. Looked at before anything is downloaded.
+join=0
+if [ "$#" -gt 0 ]; then
+  if [ "$1" != login ]; then
+    say "This script takes nothing after it, or what joins an It that runs on another computer: login --url <address> --code <code>. It does not know what to do with \"$1\". Nothing was installed." >&2
+    exit 2
+  fi
+  join=1
+fi
 
 BASE="${IT_INSTALL_BASE:-https://github.com/Aaryan-Kapoor/it/releases}"
 BASE="${BASE%/}"
@@ -471,6 +490,25 @@ if [ "${reporting}" = 1 ]; then
   if [ -t 1 ] && [ -z "${agent}" ] && [ ! -e "${note}" ] && [ ! -L "${note}" ]; then
     ( umask 077; set -C; printf '{"told": %s000}\n' "$(date +%s)" > "${note}" ) 2>/dev/null || true
   fi
+fi
+# Asked to join an It on another computer, the program does that now, and nothing is set up
+# here. What the person types is read from the terminal itself where there is one, since this
+# script was read from a pipe, and from nowhere where there is none: left the pipe, the program
+# would read what is left of this script as an answer. The folder is on the PATH of the
+# joining, as it will be in every terminal opened from now on, and what was downloaded into is
+# cleared first: the joining may be at work for as long as the person takes.
+if [ "${join}" = 1 ]; then
+  if [ "${led}" = 1 ]; then quietly "Source-available under the It License, which is in ${HOME_DIR}/LICENSE.md."
+  else say "It is source-available software under the It License, which is in ${HOME_DIR}/LICENSE.md."
+  fi
+  if [ -n "${stage}" ]; then rm -rf -- "${stage}" || true; stage=""; fi
+  if [ "${led}" = 1 ] && ( : < /dev/tty ) 2>/dev/null; then
+    printf '\n'
+    IT_INSTALL_ON_PATH="${on_path}" PATH="${DIR}:${PATH:-}" "${DIR}/it" "$@" < /dev/tty || exit $?
+  else
+    IT_INSTALL_ON_PATH="${on_path}" PATH="${DIR}:${PATH:-}" "${DIR}/it" "$@" < /dev/null || exit $?
+  fi
+  exit 0
 fi
 OLD_LIBC="It cannot run on this system: the backend program it runs needs version 2.35 of the system's C library (glibc), which Ubuntu 22.04, Debian 12 and Fedora 36 have, and this system has ${old_libc}. The \`it\` command itself works here, and \`it login\` joins an It that runs on another machine."
 if [ "${led}" = 0 ]; then

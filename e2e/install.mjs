@@ -204,7 +204,17 @@ const plainEnv = () =>
 async function install(
   name,
   extraEnv = {},
-  { shell = '/bin/sh', home = path.join(tmp, name), first = '', started, terminal = false, piped = false, script = path.join(root, 'install/install.sh') } = {},
+  {
+    shell = '/bin/sh',
+    home = path.join(tmp, name),
+    first = '',
+    started,
+    terminal = false,
+    piped = false,
+    script = path.join(root, 'install/install.sh'),
+    // What is given after the script, as `sh -s -- login ...` gives it to one read from a pipe
+    args = [],
+  } = {},
 ) {
   mkdirSync(home, { recursive: true })
   const env = {
@@ -232,7 +242,7 @@ async function install(
       // that it can do something under the number that process is known by
       await run(
         terminal ? 'python3' : 'sh',
-        [...(terminal ? ['-c', AT_A_TERMINAL, 'sh'] : []), ...(first ? ['-c', `${first}; exec sh "$1"`, 'sh', script] : [script])],
+        [...(terminal ? ['-c', AT_A_TERMINAL, 'sh'] : []), ...(first ? ['-c', `${first}; exec sh "$1"`, 'sh', script] : [script, ...args])],
         env,
         home,
         started,
@@ -600,7 +610,9 @@ try {
     const left = await install('stale', { PATH: `${stale}${path.delimiter}${plainEnv().PATH}` })
     check(
       'where the folder is on this terminal’s PATH and in none of the files the shell reads, as after It was taken off the machine, the line is added, so that a new terminal finds It too',
-      left.code === 0 && read(path.join(left.home, '.profile'))?.includes(`\nexport PATH='${stale}':"$PATH"\n`) && /Added .* to your PATH, in ~\/\.profile/.test(left.said),
+      left.code === 0 &&
+        read(path.join(left.home, '.profile'))?.includes(`\nexport PATH='${stale}':"$PATH"\n`) &&
+        /Added .* to your PATH, in ~\/\.profile/.test(left.said),
       `${left.said}\n${read(path.join(left.home, '.profile'))}`,
     )
     // A person who put the folder on their PATH themselves has it in a file of their own writing
@@ -613,6 +625,59 @@ try {
       own.code === 0 && read(path.join(own.home, '.profile')) === theirs && !/Added |could not/.test(own.said),
       `${own.said}\n${read(path.join(own.home, '.profile'))}`,
     )
+    // ---------- a computer that is to join an It that runs on another ----------
+    // An It to join: it says under what address its backend signs, and makes a machine for a key and an invite
+    const joinedWith = []
+    const it = await serve((req, res) => {
+      const chunks = []
+      req
+        .on('data', (c) => chunks.push(c))
+        .on('end', () => {
+          const answer = (value) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+          if (req.method === 'GET' && req.url === '/cli/config') return answer({ protocol: 1, issuer: 'http://127.0.0.1:1' })
+          if (req.method === 'POST' && req.url === '/bridge/enroll') {
+            joinedWith.push(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+            return answer({ machine: 'machine-2' })
+          }
+          res.writeHead(404).end()
+        })
+    })
+    const there = `http://127.0.0.1:${it.address().port}`
+    const JOIN = ['login', '--url', there, '--code', 'Ab3dEf6hIj9kLm2nOp5q', '--name', 'the laptop', '--no-setup']
+    const begun = (r) => ['service.json', 'backend'].filter((name) => existsSync(path.join(r.folder, name)))
+    const joining = await install('joining', {}, { args: JOIN })
+    check(
+      'given the command that joins an It on another computer, the script installs the program and joins with it, and sets no It up here',
+      joining.code === 0 &&
+        runs(joining.it, joining.home) !== undefined &&
+        joinedWith.length === 1 &&
+        joinedWith[0].code === 'Ab3dEf6hIj9kLm2nOp5q' &&
+        joinedWith[0].name === 'the laptop' &&
+        JSON.parse(read(path.join(joining.folder, 'machine.json')) ?? '{}').at === there &&
+        begun(joining).length === 0 &&
+        /"machine": "machine-2"/.test(joining.said) &&
+        !/ setup$/m.test(joining.said),
+      `${joining.said}\n${JSON.stringify(joinedWith)}\nbegun: ${begun(joining)}`,
+    )
+    const joiningLed = await install('joining-led', {}, { args: JOIN, terminal: true })
+    check(
+      'and at a terminal too, where an install by itself goes on to set It up: the person is not led through a setup, and the machine has joined',
+      joiningLed.code === 0 &&
+        joinedWith.length === 2 &&
+        JSON.parse(read(path.join(joiningLed.folder, 'machine.json')) ?? '{}').at === there &&
+        begun(joiningLed).length === 0 &&
+        /Installed in /.test(joiningLed.said) &&
+        /"machine": "machine-2"/.test(joiningLed.said) &&
+        !/Backend program|Background service/.test(joiningLed.said),
+      `${joiningLed.said}\nbegun: ${begun(joiningLed)}`,
+    )
+    const notJoining = await install('not-joining', {}, { args: ['setup', '--none'] })
+    check(
+      'given anything else after it, the script says what it takes and installs nothing',
+      notJoining.code === 2 && /It does not know what to do with "setup"\. Nothing was installed\./.test(notJoining.said) && !existsSync(notJoining.folder),
+      `${notJoining.code}\n${notJoining.said}`,
+    )
+    await new Promise((resolve) => it.close(resolve))
     const quiet = await install('quiet', { IT_INSTALL_NO_PATH: '1' })
     check(
       'asked to leave the PATH alone, it makes and changes no profile',

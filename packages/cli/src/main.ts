@@ -54,7 +54,7 @@ import {
   windowsPathCommand,
   written,
 } from './lib'
-import { login } from './login'
+import { login, runsItsOwn } from './login'
 import { nodeTooOld, quietAboutItsDatabase } from './node'
 import { gather, noteConversation, publish } from './publish'
 import { alone, asAdmin, standing, startBackend } from './serve/backend'
@@ -1936,8 +1936,7 @@ async function main(argv: string[]): Promise<void> {
     case 'login': {
       /** What a folder is that has nothing to join, or has joined already. */
       const refused = () => {
-        if (existsSync(settingsFile()))
-          throw new Problem('This machine is the one It runs on, so it has nothing to join.', 'invalid', 'Run `it setup` to connect its agent apps.')
+        if (existsSync(settingsFile())) throw runsItsOwn()
         if (enrolledHere()) throw new Problem('This machine has already joined an It.', 'invalid', 'Run `it logout` to leave it first.')
       }
       refused()

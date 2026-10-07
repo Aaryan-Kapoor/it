@@ -319,18 +319,27 @@ describe('adding a machine', () => {
     await show(createElement(Machines))
   }
 
-  test('with the network on, the owner is given the one command to run on the other computer, with the machine’s address on the network and a code that works once', async () => {
+  test('with the network on, the owner is given one line to run on the other computer that installs It there and joins, and under it the joining alone, each with the machine’s address on the network and a code that works once', async () => {
     watched['network:get'] = { on: true, addresses: [LAN, SIX] }
     await machines()
     expect(calls).toEqual([])
     await press('Add a machine')
     expect(calls).toEqual(['sessions:inviteMachine'])
-    expect(text('.pair-command code')).toBe(`it login --url ${LAN} --code ${CODE}`)
+    // First the line that installs and joins: It installed by itself at a terminal is set up there, and a computer with an It of its own cannot join
+    expect(host.querySelector('.pairing .modal-lede')!.textContent).toBe('Run this on the other computer. It installs It there and joins it to this one.')
+    expect(text('.pair-command.install code')).toBe(`curl -fsSL https://itcan.do/install.sh | sh -s -- login --url ${LAN} --code ${CODE}`)
+    // Then the joining alone, for Windows and for a computer that has It already
+    expect(host.querySelector('.pairing p.modal-sub')!.textContent).toBe(
+      'On Windows, install It with irm https://itcan.do/install.ps1 | iex, open a new terminal, and run the line below. It is also all that a computer needs that has It already.',
+    )
+    expect(text('.pair-command.join code')).toBe(`it login --url ${LAN} --code ${CODE}`)
+    expect([...host.querySelectorAll('.pair-command')]).toHaveLength(2)
     expect(host.textContent).toContain('One machine, once, for ten minutes.')
     expect(host.querySelector('.pairing')!.textContent).not.toContain('localhost')
-    // Another of the machine's addresses can be chosen, and one under IPv6 is written so that a shell reads it as one word
+    // Another of the machine's addresses can be chosen, and one under IPv6 is written so that a shell reads it as one word, in both
     await choose(SIX)
-    expect(text('.pair-command code')).toBe(`it login --url "${SIX}" --code ${CODE}`)
+    expect(text('.pair-command.install code')).toBe(`curl -fsSL https://itcan.do/install.sh | sh -s -- login --url "${SIX}" --code ${CODE}`)
+    expect(text('.pair-command.join code')).toBe(`it login --url "${SIX}" --code ${CODE}`)
   })
 
   test('with the network off, it says to run `it network on` first, since another computer cannot reach It, and the command appears once it is on', async () => {
@@ -339,7 +348,7 @@ describe('adding a machine', () => {
     expect(host.querySelector('.pair-command')).toBeNull()
     expect(text('.pairing .copyable-text')).toBe('it network on')
     await networkIs({ on: true, addresses: [LAN] })
-    expect(text('.pair-command code')).toBe(`it login --url ${LAN} --code ${CODE}`)
+    expect(text('.pair-command.join code')).toBe(`it login --url ${LAN} --code ${CODE}`)
     expect(calls).toEqual(['sessions:inviteMachine'])
   })
 
