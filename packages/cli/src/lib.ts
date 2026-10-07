@@ -292,7 +292,8 @@ export const shutIn = (e: NodeJS.ProcessEnv = process.env) =>
     // Codex is the app that does this as it comes, and the person is the one who can change it:
     // the agent is given the line to tell them, since nothing else can get word out of here
     e.CODEX_THREAD_ID
-      ? `It may well be running: this says nothing of that. Ask to run this same command outside the sandbox, the way you ask for any command that needs it. If the asking is refused, or you may not ask, tell the user this, in these words: ${CODEX_SHUT_SAID} Do not start It again, and do not change Codex’s settings yourself.`
+      ? // What is for the agent comes first and what it is to pass on comes last: an agent that is told "say this, in these words" says everything after it
+        `It may well be running: this says nothing of that, so do not start It again, and do not change Codex’s settings yourself. Ask to run this same command outside the sandbox, the way you ask for any command that needs it. If the asking is refused, or you may not ask, tell the user what follows, in these words and no others: ${CODEX_SHUT_SAID}`
       : 'Run `it` outside that sandbox, or let commands use the network there. Do not start It again.',
   )
 /** Whether an error says that the system refused the connecting itself, and not that nothing answered. */

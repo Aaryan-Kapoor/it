@@ -1508,8 +1508,9 @@ describe('whether Codex, as it is set, lets `it` reach It', () => {
     // The agent is first to ask to run the command outside the sandbox, and passes the rule on only where that is refused
     const hint = shutIn({ CODEX_THREAD_ID: 't' }).hint!
     expect(hint.indexOf('Ask to run this same command outside the sandbox')).toBeGreaterThan(-1)
-    expect(hint.indexOf('tell the user this')).toBeGreaterThan(hint.indexOf('Ask to run'))
-    expect(hint).toContain(CODEX_SHUT_SAID)
+    expect(hint.indexOf('tell the user what follows')).toBeGreaterThan(hint.indexOf('Ask to run'))
+    // What it is to pass on is the last thing it is told, so that nothing meant for the agent alone is passed on with it
+    expect(hint.endsWith(CODEX_SHUT_SAID)).toBe(true)
     expect(shutIn({}).hint).not.toContain('rules')
   })
 })
