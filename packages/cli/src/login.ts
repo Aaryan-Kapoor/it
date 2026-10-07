@@ -6,7 +6,7 @@ import { existsSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import { PORTS } from '@it/protocol'
 import { exportJWK, generateKeyPair, type JWK } from 'jose'
-import { direct, doorRefusal, enrolledHere, inHome, keepMachine, Problem, readJson, settingsFile, unreachable } from './lib'
+import { direct, doorRefusal, enrolledHere, inHome, keepMachine, Problem, readJson, settingsFile, unreachable, wasAt } from './lib'
 import { alone } from './serve/backend'
 import { unread, writeWhole } from './serve/config'
 
@@ -127,17 +127,20 @@ export async function login(opts: { url: string; code: string; name?: string }):
     if (typeof config?.issuer !== 'string') throw doorRefusal(said, at) ?? unreachable(at)
     // The key is made here and its private half never leaves this machine. One that was kept
     // for this same It, and never heard its answer, is the key to ask with again.
-    let pending = pendingFor(at)
+    // A machine that had joined this It before and left names the identity it had then, so
+    // that the pages its conversations made come along to the new one
+    const replaces = wasAt(at)
+    let pending = pendingFor(at, replaces) ?? pendingFor(at)
     if (!pending) {
       const { privateKey } = await generateKeyPair('ES256', { extractable: true })
-      pending = { name: opts.name ?? os.hostname(), key: await exportJWK(privateKey), at }
+      pending = { name: opts.name ?? os.hostname(), key: await exportJWK(privateKey), at, ...(replaces ? { replaces } : {}) }
       keepPending(pending)
     }
     const { kty, crv, x, y } = pending.key
     const r = await direct(`${at}/bridge/enroll`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code: opts.code, publicKey: { kty, crv, x, y }, name: pending.name }),
+      body: JSON.stringify({ code: opts.code, publicKey: { kty, crv, x, y }, name: pending.name, ...(replaces ? { replaces } : {}) }),
       signal: soon(),
     }).catch(() => {
       throw unreachable(at)
@@ -153,7 +156,7 @@ export async function login(opts: { url: string; code: string; name?: string }):
     if (!r.ok || typeof body.machine !== 'string')
       throw doorRefusal(answered, at) ?? new Problem(`This machine could not join (${r.status}).`, r.status === 429 ? 'limit' : 'error')
     keepMachine({ id: body.machine, name: pending.name, key: pending.key, at, issuer: config.issuer })
-    settlePending(at)
+    settlePending(at, pending.replaces)
     return { machine: body.machine, name: pending.name }
   })
 }

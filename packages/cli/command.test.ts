@@ -2199,6 +2199,44 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
     }
   })
 
+  test('a machine that left an It and joins it again names the identity it had there, so that the pages its conversations made come along, and names none to another It', async () => {
+    const m = machine(false)
+    let n = 1
+    const b = await backend(
+      m,
+      () => null,
+      () => [200, { machine: `machine-${++n}` }],
+    )
+    const elsewhere = await backend({ it: mkdtempSync(path.join(scratch, 'other-')) })
+    try {
+      const join = (at: string, code: string) => run(m, ['login', '--url', at, '--code', code, '--no-setup'])
+      expect(printed(await join(b.url, 'Ab3dEf6hIj9kLm2nOp5q'))).toEqual({ machine: 'machine-2', name: expect.any(String) })
+      // The first time it had no identity there to name
+      expect(b.joined[0]).not.toHaveProperty('replaces')
+      expect((await run(m, ['logout'])).code).toBe(0)
+      expect(b.asked.map((x) => x.path)).toEqual(['machines:leave'])
+      // What it keeps of the identity it gave up is its id there and where that was, in a file of the person's alone: no key
+      const was = path.join(m.it, 'was.json')
+      expect(JSON.parse(readFileSync(was, 'utf8'))).toEqual([{ at: b.url, id: 'machine-2' }])
+      expect(statSync(was).mode & 0o777).toBe(0o600)
+      expect(existsSync(path.join(m.it, 'machine.json'))).toBe(false)
+      // Joining the same It again, it says which machine it was
+      expect(printed(await join(b.url, 'Zy8xWv5uTs2rQp9oNm6l'))).toMatchObject({ machine: 'machine-3' })
+      expect(b.joined[1]).toMatchObject({ code: 'Zy8xWv5uTs2rQp9oNm6l', replaces: 'machine-2' })
+      expect(existsSync(path.join(m.it, 'machine.pending.json'))).toBe(false)
+      // And the next time, the identity it has just given up, and not the one before
+      expect((await run(m, ['logout'])).code).toBe(0)
+      expect(JSON.parse(readFileSync(was, 'utf8'))).toEqual([{ at: b.url, id: 'machine-3' }])
+      // An It at another address is told of no earlier identity: the one it had is nothing to that It
+      expect((await join(elsewhere.url, 'Qw4eRt7yUi0oPa3sDf6g')).code).toBe(0)
+      expect(elsewhere.joined).toHaveLength(1)
+      expect(elsewhere.joined[0]).not.toHaveProperty('replaces')
+    } finally {
+      await b.close()
+      await elsewhere.close()
+    }
+  })
+
   test('`it login` goes on as a first setup does on a machine that has just joined, with `--none` too: the service is registered unless it is told not to, and where the site is and what is left to do are said', async () => {
     const SERVE =
       'It is not running in the background on this machine. Run `it serve` here, in a terminal or under a supervisor of your own, so that what is done on a page reaches the agents on this machine.'

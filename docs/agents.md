@@ -41,7 +41,7 @@ The code joins one machine, once, and works for ten minutes. If the answer is lo
 
 A joined machine runs no backend and keeps no pages. Everything it does goes through the site's port on the machine It runs on, so it works only while that machine is running It with the network on, and `it create` there prints the page's address at the address it joined by. It keeps that address. If the machine It runs on comes to have another, the joined machine is told the new one with `IT_URL`: set it to the new address where `it` runs there, and run `it service install` there again so that its background service has it too. Or it leaves with `it logout --force`, and joins again with a new code.
 
-`it logout` on the joined computer leaves again: it takes the machine off your machines, removes its background service and takes its add-ons out. `it logout --force` leaves even when It cannot be told, and the machine then stays among your machines until you revoke it on the site.
+`it logout` on the joined computer leaves again: it takes the machine off your machines, removes its background service and takes its add-ons out. A computer that left and joins the same It again, at the same address, is a new machine there, and the pages its conversations had made come along to it: it keeps the id it had, and nothing else of that identity, in `was.json` in its It folder, and names it when it joins. `it logout --force` leaves even when It cannot be told, and the machine then stays among your machines until you revoke it on the site.
 
 Join only computers that you would trust with everything It holds: [every machine can pair a browser as yours](what-it-protects.md#every-machine-can-pair-a-browser-as-yours).
 

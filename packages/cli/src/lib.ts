@@ -976,7 +976,25 @@ export function machine(): Machine {
 export const enrolledHere = () => existsSync(machineFile())
 /** Whether the backend is one this machine does not run itself: the one IT_URL names, or the one on the machine it joined. */
 export const elsewhere = () => Boolean(process.env.IT_URL) || Boolean(readJson<Machine>(machineFile())?.at)
+/**
+ * The identity this machine had at each It it has left: the id it had there, and nothing else
+ * of it. Joining the same It again names that identity, so that the pages its conversations
+ * made, and what is waiting on them, come along to the new one. That It takes the word for it
+ * only of an identity that is the same person's and was given up.
+ */
+const wasFile = () => inHome('was.json')
+const wasAll = (): { at: string; id: string }[] => {
+  const kept = readJson<unknown>(wasFile())
+  return Array.isArray(kept) ? kept.filter((w): w is { at: string; id: string } => typeof w?.at === 'string' && typeof w?.id === 'string') : []
+}
+export const wasAt = (at: string): string | undefined => wasAll().find((w) => w.at === at)?.id
 export function forgetMachine(): void {
+  const m = readJson<Machine>(machineFile())
+  if (typeof m?.at === 'string' && typeof m.id === 'string') {
+    try {
+      writePrivate(wasFile(), [...wasAll().filter((w) => w.at !== m.at), { at: m.at, id: m.id }].slice(-20))
+    } catch {}
+  }
   for (const f of ['machine.json', 'token.json']) rmSync(inHome(f), { force: true })
 }
 /**
