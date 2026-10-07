@@ -56,10 +56,12 @@ export const WAS_CUT_OFF =
  * is ended in the middle of a turn leaves, in the conversation, what the turn was asked and
  * whatever reached it while it worked, each with no answer after it. Told only that its turn
  * was stopped, an agent read those as still owed and did them all, a slow job and two presses
- * among them, on top of the one thing it had been reopened for.
+ * among them, on top of the one thing it had been reopened for. Told to do none of it and
+ * "only what is above", another did nothing at all, the new thing included: so what is new is
+ * said last, as new, as wanted, and as the one thing to do.
  */
 export const WAS_STOPPED =
-  '[It] The person stopped this conversation’s last turn, from the page, before it had finished. Stopping it cancelled everything they had done on a page up to then that you had not finished: what that turn was working on, and anything else that reached this conversation while it worked, even where you see it earlier in this conversation with no answer after it. Do none of that now. Do only what is said above this note.'
+  '[It] One thing more. The person stopped this conversation’s last turn, from the page, before it had finished. That cancelled what they had done up to then and you had not finished: what that turn was working on, and anything else that reached this conversation while it worked, even where you see it earlier in this conversation with no answer after it. Leave all of that undone. What is at the top of this message they did after stopping. It is new and it is wanted: do it, and only it.'
 
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
