@@ -256,13 +256,53 @@ async function create(a: Args) {
   if (slug !== undefined && !isSlug(slug)) throw new Problem('An id is lowercase letters, digits, dots, dashes and underscores, at most 64.', 'invalid')
   const state = text(a, 'state')
   if (state !== undefined) object(json(state, '--state'), '--state')
-  // A conversation that makes a page is the one that hears what is done on it, also where
-  // another conversation made a page of that id before: someone who says "show me the board
-  // again" the next day is talking to the conversation in front of them, and the page that
-  // comes up is its page. `it update` leaves a page with whoever has it, unless told --take.
-  const mine = a.flags.take === true || sessionAsked() !== undefined
-  const done = await publish({ slug, title, files: await source(a), agent: text(a, 'agent'), state, take: mine })
+  // A conversation that makes a page is the one that hears what is done on it. Where the id is
+  // already another conversation's page, nothing is made, and the conversation is told whose it
+  // is: two that each chose `counter` ended with one page, and the first went on telling its
+  // person to press a button whose presses it never heard of again. Someone who says "show me
+  // the board again" the next day means that very page, and the conversation in front of them
+  // says so, with `it open` or with --take. `it update` leaves a page with whoever has it,
+  // unless told --take.
+  const take = a.flags.take === true
+  const page = { slug, title, files: await source(a), agent: text(a, 'agent'), state }
+  let done: Awaited<ReturnType<typeof publish>>
+  try {
+    done = await publish({ ...page, take, own: !take })
+  } catch (err) {
+    if (!(err instanceof Problem) || err.code !== 'anothers' || slug === undefined) throw err
+    const theirs = await call<Made>('query', api.artifacts.get, { slug }).catch(() => null)
+    // The same conversation, under the id its app gave it before it was cleared or carried on: the page is its own
+    if (theirs?.session && carriedOn(theirs.session)) done = await publish({ ...page, take: true })
+    else throw anothers(slug, theirs)
+  }
   await published(done, a)
+}
+
+/** What is known of a page that a conversation meant to make and that is another's. */
+type Made = { title?: string; agent?: string | null; machine?: string | null; updatedAt?: number; session?: { harness: string; id: string } | null }
+/**
+ * Whether a conversation is the one this command runs in, under an id it had before: an agent
+ * app that clears a conversation, or carries it on, gives it a new id, and the connector on
+ * this machine keeps which id became which.
+ */
+function carriedOn(was: { harness: string; id: string }): boolean {
+  const now = sessionAsked()?.session
+  if (!now || now.harness !== was.harness) return false
+  const became = readJson<Record<string, string>>(inHome('aliases.json')) ?? {}
+  let key = `${was.harness}:${was.id}`
+  for (let hops = 0; hops < 10 && typeof became[key] === 'string'; hops++) key = became[key]!
+  return key === `${now.harness}:${now.id}`
+}
+/** What a conversation is told when the id it chose for a page is another conversation's page: whose it is, and the three things it can do. */
+function anothers(slug: string, theirs: Made | null): Problem {
+  const app = appName(theirs?.agent ?? theirs?.session?.harness)
+  const whose = [app ? `${app}’s` : '', theirs?.machine ? `on ${theirs.machine}` : ''].filter(Boolean).join(', ')
+  const changed = ago(theirs?.updatedAt)
+  return new Problem(
+    `There is already a ${NOUN.one} with the id ${slug}${theirs?.title ? `, "${theirs.title}"` : ''}, and it belongs to another conversation${whose ? ` (${whose}${changed ? `, last changed ${changed}` : ''})` : ''}. Nothing was published.`,
+    'conflict',
+    `If you are making something new, publish it under another id. If the person asked for that very ${NOUN.one}, \`it open ${slug}\` brings it up as it is and makes it this conversation’s, and this command with --take replaces it with yours. Taken either way, what is done on it comes here, and the other conversation hears no more of it.`,
+  )
 }
 
 /**
@@ -1785,6 +1825,8 @@ Pages
   it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open] [--on "<display>"]
                                  Both take [--agent <name>], a label for who made it, and
                                  [--take], which gives the ${NOUN.one} to this conversation.
+                                 Without it, create makes nothing under an id that is
+                                 another conversation's ${NOUN.one}, and says whose it is.
   it list | it read <id> | it delete <id> | it rollback <id> <version>
 
 State

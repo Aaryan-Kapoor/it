@@ -590,13 +590,18 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
 })
 
 describe.skipIf(process.platform === 'win32')('a page another conversation made', () => {
-  test('`it create` gives it to the conversation that makes it again and says so, and `it update` leaves it where it is and says how to have it', async () => {
+  test('`it create` makes nothing under an id that is another conversation’s page and says whose it is and what can be done, takes it when told to, and `it update` leaves it where it is and says how to have it', async () => {
     const m = machine()
+    /** The conversation that has the page, as the backend says it. */
+    let has = { harness: 'claude-code', id: 'yesterday' }
     const b = await backend(m, (asked) =>
       asked.path === 'artifacts:get'
-        ? { title: 'Board' }
+        ? { title: 'Board', agent: has.harness, machine: 'the laptop', updatedAt: Date.now() - 3 * 60_000, session: has }
         : asked.path === 'publish:begin'
-          ? { artifactId: 'artifact-1', slug: 'board', version: 2, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+          ? // Made as a conversation's own under an id that is another's page, it is refused before anything is begun
+            asked.args.own && !asked.args.take
+            ? new Refusal({ code: 'conflict', message: 'A page with that id belongs to another conversation.', anothers: true } as never)
+            : { artifactId: 'artifact-1', slug: 'board', version: 2, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
           : asked.path === 'artifacts:take'
             ? { took: true }
             : asked.path === 'displays:show'
@@ -614,10 +619,27 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
     try {
       const mine = { ...b.env, CODEX_THREAD_ID: 'codex-today' }
       const begun = () => b.asked.findLast((x) => x.path === 'publish:begin')!.args
-      // Made again by today's conversation: the person is talking to it, and what they do on the page comes to it
+      // Today's conversation chose an id that is another conversation's page: nothing is published, and it is told whose
+      // page it is and the three things it can do
       const made = await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], mine)
+      expect(begun()).toMatchObject({ own: true, session: { harness: 'codex', id: 'codex-today' } })
+      expect(begun().take).toBeUndefined()
+      expect([made.code, error(made)]).toEqual([
+        1,
+        {
+          code: 'conflict',
+          message:
+            'There is already a page with the id board, "Board", and it belongs to another conversation (Claude Code’s, on the laptop, last changed 3 min ago). Nothing was published.',
+          hint: 'If you are making something new, publish it under another id. If the person asked for that very page, `it open board` brings it up as it is and makes it this conversation’s, and this command with --take replaces it with yours. Taken either way, what is done on it comes here, and the other conversation hears no more of it.',
+        },
+      ])
+      expect(b.asked.some((x) => x.path === 'publish:finish')).toBe(false)
+      expect(b.uploads).toEqual([])
+      // Told to take it, the conversation has it: the person asked for that very page, and what they do on it comes here
+      const taken = await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>', '--take'], mine)
       expect(begun()).toMatchObject({ take: true, session: { harness: 'codex', id: 'codex-today' } })
-      expect([made.code, printed(made)]).toEqual([
+      expect(begun().own).toBeUndefined()
+      expect([taken.code, printed(taken)]).toEqual([
         0,
         {
           id: 'board',
@@ -626,6 +648,22 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
           note: 'This page was another conversation’s, and is this one’s now: what is done on it comes here.',
         },
       ])
+      // The page is this same conversation's, under the id it had before its app gave it a new one, which the connector here
+      // keeps: it is its own page, and is made again with nothing asked of the agent
+      has = { harness: 'codex', id: 'codex-yesterday' }
+      writeFileSync(
+        path.join(m.it, 'aliases.json'),
+        JSON.stringify({ 'codex:codex-before': 'codex:codex-yesterday', 'codex:codex-yesterday': 'codex:codex-today' }),
+      )
+      const again = await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], mine)
+      expect([again.code, printed(again).id, begun().take]).toEqual([0, 'board', true])
+      // An id that led somewhere else is another conversation's all the same
+      writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ 'codex:codex-yesterday': 'codex:someone-else' }))
+      expect(error(await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], mine)).message).toContain(
+        '(Codex’s, on the laptop, last changed 3 min ago)',
+      )
+      rmSync(path.join(m.it, 'aliases.json'))
+      has = { harness: 'claude-code', id: 'yesterday' }
       // A new version of it from a conversation that did not make it leaves it where it is, and says how to have it
       const updated = await run(m, ['update', 'board', '--html', '<p>hi</p>'], mine)
       expect(begun().take).toBeUndefined()
@@ -637,9 +675,9 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
       expect((await run(m, ['update', 'Board again', '--id', 'board', '--html', '<p>hi</p>'], mine)).code).toBe(0)
       expect(begun()).toMatchObject({ slug: 'board', title: 'Board again' })
       expect(b.asked.findLast((x) => x.path === 'artifacts:get')!.args).toEqual({ slug: 'board' })
-      // Made by a script, in no conversation, there is nobody to give it to: nothing is asked for
-      await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], b.env)
-      expect(begun().take).toBeUndefined()
+      // Made by a script, in no conversation, there is nobody to give it to or to keep it for: nothing is asked for
+      expect((await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], b.env)).code).toBe(0)
+      expect([begun().take, begun().own]).toEqual([undefined, undefined])
       // A conversation that only brings the page up for its person takes it as well: it is the one they are talking to
       b.asked.length = 0
       const opened = await run(m, ['open', 'board'], mine)

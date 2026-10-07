@@ -181,7 +181,16 @@ export default defineSchema({
     /** The title this version was published with. It becomes the page's title when the version goes live. */
     title: v.optional(v.string()),
     /** Who published it, and whether they said they were taking the page over. Acted on when the version goes live. */
-    by: v.optional(v.object({ machineId: v.id('machines'), session: v.optional(session), agent: v.optional(v.string()), take: v.boolean() })),
+    by: v.optional(
+      v.object({
+        machineId: v.id('machines'),
+        session: v.optional(session),
+        agent: v.optional(v.string()),
+        take: v.boolean(),
+        /** Published as a page of that conversation's own making: not shown where the id is by then another conversation's page. */
+        own: v.optional(v.boolean()),
+      }),
+    ),
   })
     .index('by_artifact_n', ['artifactId', 'n'])
     .index('by_artifact_status', ['artifactId', 'status', 'n'])

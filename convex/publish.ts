@@ -30,10 +30,31 @@ const beginArgs = {
   state: v.optional(v.string()),
   /** The conversation publishing this takes the page over: clicks on it come to this conversation from now on. */
   take: v.optional(v.boolean()),
+  /**
+   * The conversation publishing this is making a page of its own. Where the id is already
+   * another conversation's page, nothing is published: two conversations that each choose the
+   * same id would otherwise end with one page, and the first would never hear of it again.
+   */
+  own: v.optional(v.boolean()),
 }
 const UPLOAD_SECONDS = 900
 /** How long after a grant was given something might still be written with it. */
 export const GRANT_TAIL_MS = (UPLOAD_SECONDS + 300) * 1000
+
+/**
+ * Whether a page is another conversation's than the one publishing: it has been shown, a
+ * conversation has it, the machine that conversation is on is still one of the person's, and
+ * either the machine or the conversation is not the publisher's. A page nobody has, or whose
+ * machine is gone, or that was begun and never shown, is nobody's to keep.
+ */
+async function anothers(ctx: MutationCtx, a: Doc<'artifacts'>, by: { machineId: Id<'machines'>; session?: { harness: string; id: string } }): Promise<boolean> {
+  if (a.currentVersion === undefined || a.session === undefined || !a.machineId) return false
+  const owner = await ctx.db.get(a.machineId)
+  if (!owner || owner.revoked) return false
+  return a.machineId !== by.machineId || a.session.harness !== by.session?.harness || a.session.id !== by.session?.id
+}
+/** What is said where a page that a conversation meant to make is another's. The command that asked says whose, and what can be done. */
+const ANOTHERS = 'A page with that id belongs to another conversation.'
 
 function slugify(title: string): string {
   const base = title
@@ -148,8 +169,15 @@ export const _begin = internalMutation({
       .take(QUOTA.artifacts + 1)
 
     const now = Date.now()
-    const who = { machineId: machine._id, session: args.session, agent: args.agent?.slice(0, 60), take: args.take === true }
+    // Making a page of one's own is a conversation's to do: from a plain terminal there is none to keep a page for
+    const own = args.own === true && args.take !== true && args.session !== undefined
+    const who = { machineId: machine._id, session: args.session, agent: args.agent?.slice(0, 60), take: args.take === true, ...(own ? { own: true } : {}) }
     let artifact = args.slug ? await artifactBySlug(ctx, user._id, args.slug) : null
+    // Refused before anything is begun, and again when it is shown, in case two began it together
+    if (artifact && own && (await anothers(ctx, artifact, who))) {
+      log('publish.refused', { reason: 'anothers', userId: user._id, artifactId: artifact._id }, 'warn')
+      fail('conflict', ANOTHERS, { anothers: true })
+    }
     if (!artifact) {
       quota(mine.length, QUOTA.artifacts, 'pages', user._id)
       let slug = args.slug ?? slugify(title)
@@ -305,6 +333,17 @@ export const _finish = internalMutation({
     const { a, ver } = await staged(ctx, user._id, artifactId, version)
     // Either way this publish is over
     await bump(ctx, user._id, { stagingCount: -1, stagingBytes: -ver.bytes })
+    // Two conversations began a page of the same id at the same moment, and the other finished
+    // first: the page is its own, and this publish is put away unshown. Looked at before
+    // whether a newer publish finished first, which the other's may also be: what this
+    // conversation has to be told is whose page it is, and not to read it and publish again.
+    if (ver.by?.own && (await anothers(ctx, a, ver.by))) {
+      await takeStart(ctx, ver._id)
+      await ctx.db.delete(ver._id)
+      await removeLater(ctx, prefixOf(user._id, a._id, version), { grantMayBeLive: true })
+      log('publish.refused', { reason: 'anothers', userId: user._id, artifactId: a._id, at: 'finish' }, 'warn')
+      return { slug: a.slug, version: a.currentVersion ?? version, superseded: false, anothers: true }
+    }
     // A slower publish must not replace a newer one that finished first, even if the page has
     // since been rolled back to something older
     if ((a.highestLive ?? 0) > version) {
@@ -369,10 +408,12 @@ export const _finish = internalMutation({
     // A page that has never been shown belongs to whoever first publishes it to the end: one
     // who began it and gave up has made nothing, and another conversation that began the same
     // id meanwhile and finished is the one that made the page.
+    // A conversation that made the page as its own has it too, where nobody did: by here the
+    // page was not another conversation's, so it was made from a plain terminal.
     const owner = a.machineId ? await ctx.db.get(a.machineId) : null
     const moves =
       ver.by !== undefined &&
-      (!owner || owner.revoked || ver.by.take || a.currentVersion === undefined) &&
+      (!owner || owner.revoked || ver.by.take || ver.by.own || a.currentVersion === undefined) &&
       (ver.by.machineId !== a.machineId || JSON.stringify(ver.by.session) !== JSON.stringify(a.session))
     await ctx.db.patch(a._id, {
       currentVersion: version,
@@ -418,6 +459,7 @@ export const finish = action({
     // A newer publish of the same page finished first, and this one was put away unshown. Its
     // agent is told so: told "published", it would wait for clicks on something nobody can see.
     if (done.superseded) fail('conflict', 'A newer publish of this page finished first, so this one was not shown. Read the page before publishing again.')
+    if ('anothers' in done && done.anothers) fail('conflict', ANOTHERS, { anothers: true })
     return {
       slug: done.slug,
       version: done.version,

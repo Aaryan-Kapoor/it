@@ -1145,8 +1145,13 @@ export async function token(
 async function translate(err: unknown): Promise<never> {
   if (err instanceof Problem) throw err
   if (err instanceof ConvexError) {
-    const data = (typeof err.data === 'string' ? JSON.parse(err.data) : err.data) as { code?: string; message?: string; noSuchDisplay?: boolean }
-    throw new Problem(data.message ?? 'Refused.', data.noSuchDisplay ? 'no_such_display' : (data.code ?? 'error'))
+    const data = (typeof err.data === 'string' ? JSON.parse(err.data) : err.data) as {
+      code?: string
+      message?: string
+      noSuchDisplay?: boolean
+      anothers?: boolean
+    }
+    throw new Problem(data.message ?? 'Refused.', data.noSuchDisplay ? 'no_such_display' : data.anothers ? 'anothers' : (data.code ?? 'error'))
   }
   const text = String((err as Error)?.message ?? err)
   if (clashed(err)) throw new Problem('It is busy just now. Try again in a moment.', 'unavailable')

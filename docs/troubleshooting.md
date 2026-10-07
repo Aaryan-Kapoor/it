@@ -107,4 +107,4 @@ The bar above a page says where the last thing you did has got to, and what it s
 
 Once the agent has changed the page after what you did, the bar says nothing more: the answer is on the page.
 
-A page that a conversation made belongs to that conversation until another one makes it again or brings it up, so what you do on it goes to the agent you last asked to show it.
+A page that a conversation made belongs to that conversation until another one brings it up or takes it, so what you do on it goes to the agent you last asked to show it.

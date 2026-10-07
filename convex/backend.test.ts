@@ -1144,6 +1144,60 @@ describe('publishing', () => {
     expect(await owner()).toEqual(['laptop', { harness: 'claude-code', id: 'sess-2' }])
   })
 
+  test('a conversation that makes a page under an id that is another conversation’s page publishes nothing and is told so, also where the two began it at the same moment; its own page, one nobody has, and one whose machine is gone are made', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice', 'laptop')
+    const server = await machineOf(t, 'alice', 'server')
+    const other = { harness: 'pi', id: 'conversation-2' }
+    /** What a refusal says of itself: its code, and that the page is another conversation's. */
+    const refused = (p: Promise<unknown>) =>
+      p.then(
+        () => 'published',
+        (err) => [refusalCode(err), /anothers\\*":true/.test(JSON.stringify((err as { data?: unknown }).data ?? String(err)))],
+      )
+    const own = (m: typeof laptop, session: { harness: string; id: string } | undefined, slug = 'counter') => publish(m, slug, { session, own: true })
+    const has = async (slug = 'counter') => {
+      const got = await alice.browser.query(api.artifacts.get, { slug })
+      return [got.machine, got.session, got.version]
+    }
+    // The one that makes it, and makes it again, has it
+    await own(laptop, SESSION)
+    expect((await own(laptop, SESSION)).version).toBe(2)
+    // Another conversation that chose the same id, on another machine or on the same one, publishes nothing
+    expect(await refused(own(server, other))).toEqual(['conflict', true])
+    expect(await refused(own(laptop, other))).toEqual(['conflict', true])
+    expect(await has()).toEqual(['laptop', SESSION, 2])
+    // Nothing of what it began is left to be counted or cleaned: it was refused before anything was begun
+    expect(await t.run((ctx) => ctx.db.query('versions').collect())).toHaveLength(2)
+    // Said in so many words, it takes the page, as before
+    expect((await publish(server, 'counter', { session: other, own: true, take: true })).took).toBe(true)
+    expect(await has()).toEqual(['server', other, 3])
+    // And the conversation that had it is now the one that is refused
+    expect(await refused(own(laptop, SESSION))).toEqual(['conflict', true])
+    // A page made from a plain terminal is nobody's, and the conversation that makes it under that id has it
+    await publish(laptop, 'notes')
+    await own(server, other, 'notes')
+    expect(await has('notes')).toEqual(['server', other, 2])
+    // From a plain terminal there is no conversation to keep a page for: what is shown changes, and the page stays where it was
+    expect((await publish(laptop, 'notes', { own: true })).version).toBe(3)
+    expect(await has('notes')).toEqual(['server', other, 3])
+    // Two conversations begin a page of an id nobody has at the same moment: both are let begin, the first to finish has made it,
+    // and the other is told that it is that one's, with nothing of its own shown or left behind
+    const first = await laptop.as.action(api.publish.begin, { slug: 'board', title: 'Board', files: page, session: SESSION, own: true })
+    const second = await server.as.action(api.publish.begin, { slug: 'board', title: 'Board too', files: page, session: other, own: true })
+    await server.as.action(api.publish.finish, { artifactId: second.artifactId, version: second.version })
+    expect(await refused(laptop.as.action(api.publish.finish, { artifactId: first.artifactId, version: first.version }))).toEqual(['conflict', true])
+    expect(await has('board')).toEqual(['server', other, 2])
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'board' })).title).toBe('Board too')
+    expect((await t.run((ctx) => ctx.db.query('versions').collect())).filter((x) => x.status === 'staging')).toEqual([])
+    // A page whose machine is gone is nobody's to keep: the next conversation to make it has it
+    await alice.browser.mutation(api.machines.revoke, { machineId: server.id })
+    await settle(t)
+    await own(laptop, SESSION)
+    expect((await has())[0]).toBe('laptop')
+  })
+
   test('a conversation that shows a page takes it, with what was waiting on it, and the one that has it already takes nothing', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

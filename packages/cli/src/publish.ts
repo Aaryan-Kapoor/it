@@ -230,6 +230,8 @@ export async function publish(input: {
   state?: string
   /** This conversation takes the page over: clicks on it come here from now on. */
   take?: boolean
+  /** This conversation is making a page of its own: where the id is another conversation's page, nothing is published. */
+  own?: boolean
 }): Promise<{ slug: string; version: number; url: string; note?: string }> {
   const bytes = input.files.reduce((n, f) => n + f.entry.size, 0)
   if (bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
@@ -245,6 +247,8 @@ export async function publish(input: {
     agent: input.agent ?? session?.harness,
     ...(input.state === undefined ? {} : { state: input.state }),
     ...(input.take ? { take: true } : {}),
+    // Only a conversation makes a page its own: from a plain terminal there is none to keep one for
+    ...(input.own && !input.take && session ? { own: true } : {}),
   })
   // A few at a time. Each file is checked against its declared size and checksum as it arrives.
   // They go to the door, at the address this machine reaches it by.
