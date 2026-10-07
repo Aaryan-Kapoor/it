@@ -109,6 +109,8 @@ export default defineSchema({
     createdAt: v.number(),
     lastSeenAt: v.number(),
     connectorVersion: v.optional(v.string()),
+    /** When its connector said it was stopping, if it has and has not been heard from since: the machine is off from then, and not only once it has been quiet for a while. */
+    offAt: v.optional(v.number()),
     /** What the connector found installed, and what the person asked to be connected. */
     harnesses: v.optional(v.array(v.object({ id: v.string(), version: v.optional(v.string()), addon: v.string(), detail: v.optional(v.string()) }))),
     wanted: v.optional(v.array(v.string())),

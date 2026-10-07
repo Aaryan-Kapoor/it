@@ -77,8 +77,6 @@ export const get = query({
         machine !== null && !machine.revoked && a.session && (WAKES as readonly string[]).includes(a.session.harness)
           ? { machineId: machine._id, harness: a.session.harness, on: (machine.wakes ?? []).some((w) => w.harness === a.session?.harness) }
           : null,
-      // When the machine whose agent made this page was last heard from, for the site to judge
-      // whether it is there to hear a click. Null when it has no connector, or was revoked.
       // When the page's agent last changed it: published it, or wrote its state. What was done on
       // the page before then has, as far as can be seen from here, been answered there.
       answeredAt: Math.max(a.updatedAt, state?.agentAt ?? 0),
@@ -93,7 +91,13 @@ export const get = query({
           a.session &&
           (machine.stops ?? []).find((s) => s.harness === a.session?.harness && s.sessionId === a.session?.id)?.at) ||
         null,
-      machineSeenAt: machine !== null && !machine.revoked && machine.connectorVersion !== undefined ? machine.lastSeenAt : null,
+      // When the machine whose agent made this page was last heard from, for the site to judge
+      // whether it is there to hear a click. Null when it has no connector, its connector said
+      // it was stopping, or it was revoked.
+      machineSeenAt: machine !== null && !machine.revoked && machine.connectorVersion !== undefined && machine.offAt === undefined ? machine.lastSeenAt : null,
+      // The machine it was made on is no longer one of the person's. What is done on it reaches
+      // its conversation only where that is open on one of their machines.
+      machineGone: a.machineId !== undefined && (machine === null || machine.revoked),
       stateRevision: state?.revision ?? 0,
       versions: versions.map((x) => ({ n: x.n, bytes: x.bytes, files: x.files.length, status: x.status, createdAt: x.createdAt })),
     }

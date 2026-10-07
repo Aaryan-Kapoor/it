@@ -100,7 +100,8 @@ The bar above a page says where the last thing you did has got to, and what it s
 | Your agent has it | The agent was given it and has not changed the page since | Wait, or look at the conversation |
 | Done, or Your agent could not do that | The agent said so | |
 | This page has an error in it | The page's own script failed, with the words that follow | Nothing, where it ends "Your agent has been told": the agent that wrote the page was sent the error, and mends the page. Where it ends "Tell your agent", say those words to it yourself. Until the page is mended, what you do on it may not be sent |
-| Waiting for … to come online | The machine whose agent made the page has not been heard from | Start It on that machine |
+| Waiting for … to come online | The machine whose agent made the page is off: It was stopped there, which is known at once, or the machine has not been heard from for a minute and a half, as when a laptop is closed | Start It on that machine, or wake the computer. What you did is delivered when it is back |
+| … was removed from It | The machine the page was made on was revoked, or left with `it logout`. What you do on the page reaches its conversation only while that is open on one of your machines, and the page belongs to that machine from then on | Open the conversation again on a machine that has joined, or ask any agent to bring the page up, which makes it that agent's |
 
 Once the agent has changed the page after what you did, the bar says nothing more: the answer is on the page.
 

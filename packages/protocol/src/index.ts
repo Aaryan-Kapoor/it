@@ -120,6 +120,15 @@ export const LEASE_MS = 30_000
  */
 export const LISTENING_MOST = 40
 
+/**
+ * How a machine is known to be there. Its connector says that it is alive this often, and a
+ * machine not heard from for `onlineMs` is taken to be off: long enough that three of those in
+ * a row can be lost on the way, and short enough that a laptop whose lid was closed is not
+ * called online, and its pages not said to be listened to, for minutes afterwards. A connector
+ * that is asked to stop says so, and its machine is off from that moment.
+ */
+export const ALIVE = { everyMs: 30_000, onlineMs: 100_000 } as const
+
 /** How It is installed: the two commands a person runs, and where the programs they download are published. */
 export const INSTALL = {
   sh: 'curl -fsSL https://itcan.do/install.sh | sh',

@@ -1,7 +1,7 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import { HARNESSES, WAKES } from '@it/protocol'
+import { ALIVE, HARNESSES, WAKES } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -17,7 +17,6 @@ const LABEL: Record<string, string> = {
   opencode: 'OpenCode',
   pi: 'Pi',
 }
-const ONLINE_MS = 6 * 60_000
 
 interface Harness {
   id: string
@@ -30,6 +29,10 @@ interface Machine {
   name: string
   lastSeenAt: number
   connectorVersion: string | null
+  /** Its connector said it was stopping, and has not been heard from since. */
+  off?: boolean
+  /** It runs on this machine, where every other joined it. */
+  runsIt?: boolean
   harnesses: Harness[]
   wanted: string[]
   wakes: { harness: string; since: number }[]
@@ -158,7 +161,7 @@ function MachineCard({ m, now }: { m: Machine; now: number }) {
   const rename = useMutation(api.machines.rename)
   const [error, setError] = useState('')
   const [name, setName] = useState<string | null>(null)
-  const online = now - m.lastSeenAt < ONLINE_MS && m.connectorVersion !== null
+  const online = !m.off && now - m.lastSeenAt < ALIVE.onlineMs && m.connectorVersion !== null
   const act = (p: Promise<unknown>) =>
     p.then(
       () => setError(''),
@@ -200,6 +203,8 @@ function MachineCard({ m, now }: { m: Machine; now: number }) {
         <span className="status" data-tone={online ? 'ok' : 'wait'}>
           {online ? 'Online' : m.connectorVersion === null ? 'Connector not running' : `Last seen ${ago(m.lastSeenAt, now)}`}
         </span>
+        {/* Which of several machines It is on: revoking that one ends every paired browser, and two machines may go by one name */}
+        {m.runsIt && <span className="status">It runs on this machine</span>}
         <span className="grow" />
         {name === null && (
           <button type="button" className="link" onClick={() => setName(m.name)}>

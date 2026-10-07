@@ -2,7 +2,7 @@
 // The backend's own tests: who may do what, and that what is stored is what was meant.
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
-import { describeClick, LEASE_MS, LIMITS, QUOTA, STORE_KEY } from '@it/protocol'
+import { ALIVE, describeClick, LEASE_MS, LIMITS, QUOTA, STORE_KEY } from '@it/protocol'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
@@ -2526,6 +2526,42 @@ describe('displays and machines', () => {
     expect(await onSite()).toMatchObject({ harnesses: [{ id: 'codex', version: '0.160.0' }], connectorVersion: '0.1.0', lastSeenAt: heardAt })
     // It is the machine's own to say, and nobody else's
     expect(await code(alice.browser.mutation(api.machines.inventory, { harnesses: [] }))).toBe('forbidden')
+  })
+
+  test('a machine is heard from each half minute its connector says so, and is off from the moment its connector says it is stopping, until the next one reports', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan', { session: SESSION })
+    const onSite = async () => (await alice.browser.query(api.machines.list, {}))[0]!
+    const page = () => alice.browser.query(api.artifacts.get, { slug: 'plan' })
+    const report = () => m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [] })
+    await vi.advanceTimersByTimeAsync(1000)
+    await report()
+    const heardAt = (await onSite()).lastSeenAt
+    expect(await onSite()).toMatchObject({ off: false, connectorVersion: '0.1.0' })
+    expect((await page()).machineSeenAt).toBe(heardAt)
+    // Said again too soon to be the next of them, it is not written a second time
+    await vi.advanceTimersByTimeAsync(10_000)
+    await report()
+    expect((await onSite()).lastSeenAt).toBe(heardAt)
+    // The next of them, half a minute after the first and a moment early, is
+    await vi.advanceTimersByTimeAsync(ALIVE.everyMs - 10_000 - 500)
+    await report()
+    expect((await onSite()).lastSeenAt).toBe(heardAt + ALIVE.everyMs - 500)
+    // So a machine that goes on saying so is never quiet for as long as the site takes to call it off
+    expect(ALIVE.onlineMs).toBeGreaterThanOrEqual(3 * ALIVE.everyMs)
+    // Asked to stop, its connector says so: the machine is off from then, and its pages wait for it
+    await m.as.mutation(api.machines.stopping, {})
+    expect(await onSite()).toMatchObject({ off: true, lastSeenAt: heardAt + ALIVE.everyMs - 500 })
+    expect((await page()).machineSeenAt).toBeNull()
+    // The connector that starts next reports at once, however soon after the last, and the machine is there again
+    await vi.advanceTimersByTimeAsync(2000)
+    await report()
+    expect(await onSite()).toMatchObject({ off: false })
+    expect((await page()).machineSeenAt).toBe(heardAt + ALIVE.everyMs + 1500)
+    // It is the machine's own to say: a browser cannot say it of one
+    expect(await code(alice.browser.mutation(api.machines.stopping, {}))).toBe('forbidden')
   })
 
   test('a machine can make the same choice for itself, and for no other machine', async () => {

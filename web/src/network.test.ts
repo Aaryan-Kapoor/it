@@ -227,6 +227,34 @@ describe('what is said of an agent app on a machine', () => {
     expect(notes()).toEqual(['Connected, offline'])
   })
 
+  test('a machine is online while it goes on saying so, off once it has been quiet for a minute and a half or its connector has said it was stopping, and the one It runs on is marked', async () => {
+    const connected = [{ id: 'claude-code', version: '2.1.0', addon: 'connected' }]
+    const said = () => [...host.querySelectorAll('header .status')].map((x) => x.textContent)
+    const { Machines } = await import('./machines')
+    // Heard from a minute ago, and one that joined, of the same name
+    watched['machines:list'] = [
+      { ...machine(Date.now() - 60_000, connected, ['claude-code']), runsIt: true },
+      { ...machine(Date.now() - 60_000, connected, ['claude-code']), id: 'machine-2', runsIt: false },
+    ]
+    await show(createElement(Machines))
+    expect(said()).toEqual(['Online', 'It runs on this machine', 'Online'])
+    expect(notes()).toEqual(['Connected', 'Connected'])
+    await act(async () => root.unmount())
+    host.remove()
+    // Quiet for longer than three of the times it says it is alive
+    watched['machines:list'] = [machine(Date.now() - 101_000, connected, ['claude-code'])]
+    await show(createElement(Machines))
+    expect(said()).toEqual(['Last seen 2 min ago'])
+    expect(notes()).toEqual(['Connected, offline'])
+    await act(async () => root.unmount())
+    host.remove()
+    // Heard from a moment ago, and then its connector said it was stopping
+    watched['machines:list'] = [{ ...machine(Date.now() - 5000, connected, ['claude-code']), off: true }]
+    await show(createElement(Machines))
+    expect(said()).toEqual(['Last seen just now'])
+    expect(notes()).toEqual(['Connected, offline'])
+  })
+
   test('each connected app It can reopen a closed conversation of has a switch for that, off until the owner turns it on, and no other app has one', async () => {
     const found = [
       { id: 'claude-code', version: '2.1.0', addon: 'connected' },

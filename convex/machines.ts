@@ -1,4 +1,4 @@
-import { HARNESSES, LIMITS, QUOTA, WAKES } from '@it/protocol'
+import { ALIVE, HARNESSES, LIMITS, QUOTA, WAKES } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
@@ -13,6 +13,7 @@ const view = (m: Doc<'machines'>) => ({
   name: m.name,
   lastSeenAt: m.lastSeenAt,
   connectorVersion: m.connectorVersion ?? null,
+  off: m.offAt !== undefined,
   harnesses: m.harnesses ?? [],
   wanted: m.wanted ?? [],
   wakes: m.wakes ?? [],
@@ -243,9 +244,26 @@ export const report = mutation({
     const { machine } = await requireMachine(ctx)
     const clean = kept(harnesses)
     const same = JSON.stringify(machine.harnesses ?? []) === JSON.stringify(clean) && machine.connectorVersion === connectorVersion
-    if (!same || Date.now() - machine.lastSeenAt > 120_000) {
-      await ctx.db.patch(machine._id, { harnesses: clean, connectorVersion: connectorVersion.slice(0, 40), lastSeenAt: Date.now() })
+    // Written each time it says so, less a little for a report that comes a moment early: the
+    // site calls a machine off once it has been quiet for a few of these
+    if (!same || machine.offAt !== undefined || Date.now() - machine.lastSeenAt > ALIVE.everyMs - 5_000) {
+      await ctx.db.patch(machine._id, { harnesses: clean, connectorVersion: connectorVersion.slice(0, 40), lastSeenAt: Date.now(), offAt: undefined })
     }
+    return null
+  },
+})
+
+/**
+ * The connector says that it has been asked to stop. Its machine is off from this moment, so
+ * that a click on one of its pages is said to be waiting for the machine, and not for a
+ * conversation that is taken to be closed. The next report, from the connector that starts
+ * next, undoes it.
+ */
+export const stopping = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const { machine } = await requireMachine(ctx)
+    await ctx.db.patch(machine._id, { offAt: Date.now() })
     return null
   },
 })

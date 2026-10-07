@@ -14,7 +14,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson, QUEUES, WAKE_MOST, WAKES } from '@it/protocol'
+import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson, QUEUES, WAKE_MOST, WAKES } from '@it/protocol'
 import {
   api,
   ask,
@@ -1397,7 +1397,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     await call('mutation', api.machines.report, { connectorVersion: VERSION, harnesses: found }).catch((err) => {
       // The bridge would give this machine no token, even a fresh one: it has been revoked.
-      // Found out here within a minute, where the live connection would take until its own
+      // Found out here within half a minute, where the live connection would take until its own
       // token ran out.
       if ((err as { code?: string }).code === 'unauthenticated') notOursNow()
       else say(`report: ${why(err)}`)
@@ -1437,8 +1437,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
   )
   await report()
   const tick = setInterval(() => void route(), 1000)
+  // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
+  const alive = setInterval(() => void report(), ALIVE.everyMs)
   const beat = setInterval(() => {
-    void report()
     const now = Date.now()
     for (const [k, s] of sessions) if (now - s.seen > 3_600_000) sessions.delete(k)
     for (const [k, w] of waiters) if (now - w.seen > 60_000) waiters.delete(k)
@@ -1458,6 +1459,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
   }, 60_000)
 
+  // Whether this connector was asked to stop, which leaves its machine with none. One that
+  // stops because another took over, or because its machine was revoked, leaves no such thing.
+  let asked = false
   const code = await new Promise<number>((resolve) => {
     stopping = resolve
     // It may have been found out before this point was reached
@@ -1465,11 +1469,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
     for (const sig of ['SIGINT', 'SIGTERM'] as const)
       process.once(sig, () => {
         say(`stopping (${sig})`)
+        asked = true
         resolve(0)
       })
   })
   clearInterval(tick)
   clearInterval(beat)
+  clearInterval(alive)
   usage.stop()
   // The conversations this connector reopened are ended with it, and everything they had
   // started: nothing It runs with nobody watching runs on once It has been stopped. What each
@@ -1488,6 +1494,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // given back in that time goes back by itself when its lease runs out
   await Promise.race([
     Promise.allSettled([
+      // And It is told that this machine is going, so that its pages say at once that they wait
+      // for the machine, where they would otherwise say for minutes that a conversation was closed
+      ...(asked ? [call('mutation', api.machines.stopping, {})] : []),
       ...[...held].filter(([, h]) => !h.served).map(([id]) => call('mutation', api.delivery.release, { id })),
       confirmAll(),
       ...queues.values(),

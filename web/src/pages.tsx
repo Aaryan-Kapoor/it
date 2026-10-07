@@ -1,5 +1,5 @@
 // The person's pages: the grid of all of them, and one of them shown.
-import { NOUN } from '@it/protocol'
+import { ALIVE, NOUN } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { type CSSProperties, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { copy, IconBack, IconLink, IconPin, IconStop, IconX, Mark } from './brand'
@@ -240,6 +240,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
             user={user}
             machine={page.machine}
             machineSeenAt={page.machineSeenAt}
+            machineGone={page.machineGone === true}
             // Only the owner may switch reopening on, and only for an agent app It can reopen
             wakes={owner ? page.wake : null}
             agent={agentName(page.agent)}
@@ -315,15 +316,13 @@ function Working({ artifactId, stopping }: { artifactId: Id<'artifacts'>; stoppi
   )
 }
 
-/** A machine that has not been heard from for this long is taken to be off. */
-const ONLINE_MS = 6 * 60_000
-
 /** Where the last thing the person did has got to: saved here, accepted, or with the agent. */
 function ActionStatus({
   artifactId,
   user,
   machine,
   machineSeenAt,
+  machineGone,
   wakes,
   agent,
   stoppedAt,
@@ -334,6 +333,8 @@ function ActionStatus({
   user: string
   machine: string | null
   machineSeenAt: number | null
+  /** The machine the page was made on is no longer one of the person's. */
+  machineGone: boolean
   /** Where the page's agent app can have a closed conversation reopened: the machine that would, and whether that is switched on there. */
   wakes: { machineId: string; harness: string; on: boolean } | null
   agent: string | null
@@ -432,8 +433,15 @@ function ActionStatus({
       </span>
     )
   }
-  // Judged against the backend's clock, and again every few seconds: a machine that goes quiet changes nothing in the data
-  const online = machineSeenAt !== null && now - machineSeenAt < ONLINE_MS
+  // Nothing is waited for on a machine that was removed: said as what it is, with what would get it to the agent
+  if (machineGone)
+    return (
+      <span className="status" data-tone="wait">
+        {`${machine ?? 'Its machine'} was removed from It. Your agent gets this when its conversation is open on one of your machines${waiting > 1 ? ` (${waiting})` : ''}`}
+      </span>
+    )
+  // Judged against the backend's clock, and again every second: a machine that goes quiet changes nothing in the data
+  const online = machineSeenAt !== null && now - machineSeenAt < ALIVE.onlineMs
   if (!online)
     return <span className="status" data-tone="wait">{`Waiting for ${machine ?? 'your machine'} to come online${waiting > 1 ? ` (${waiting})` : ''}`}</span>
   // Sent, and not taken for a while: its conversation may be closed. The owner can switch on

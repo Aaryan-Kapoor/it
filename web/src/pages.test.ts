@@ -138,6 +138,37 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { wakeFailed: null })
   })
 
+  test('a click for a machine that is off waits for the machine and is not laid to a closed conversation: one not heard from for a minute and a half, one whose connector said it was stopping, and one that was removed', async () => {
+    // Heard from a minute ago, which is two of the times it says it is alive: it is there
+    Object.assign(PAGE, { machineSeenAt: NOW - 60_000, agent: 'pi' })
+    recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null }]
+    await shown()
+    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    await act(async () => root.unmount())
+    host.remove()
+    // Quiet for longer than three of them: a laptop whose lid was closed
+    Object.assign(PAGE, { machineSeenAt: NOW - 101_000 })
+    await shown()
+    expect(said()).toBe('Waiting for the laptop to come online')
+    await act(async () => root.unmount())
+    host.remove()
+    // Its connector said it was stopping a moment ago, which the backend gives as no time at all
+    Object.assign(PAGE, { machineSeenAt: null })
+    recent = [
+      { at: NOW - 1000, delivery: 'pending', outcome: null },
+      { at: NOW - 2000, delivery: 'pending', outcome: null },
+    ]
+    await shown()
+    expect(said()).toBe('Waiting for the laptop to come online (2)')
+    await act(async () => root.unmount())
+    host.remove()
+    // The machine was removed from the person's machines: nothing is waited for there, and what would get it to the agent is said
+    Object.assign(PAGE, { machineGone: true })
+    await shown()
+    expect(said()).toBe('the laptop was removed from It. Your agent gets this when its conversation is open on one of your machines (2)')
+    Object.assign(PAGE, { machineSeenAt: NOW, machineGone: false, agent: 'claude-code' })
+  })
+
   test('a click made with no connection is said at once to be saved in this browser, and what became of the click before it is said no more', async () => {
     const outbox = await shown()
     expect(said()).toBe('Done')
@@ -166,6 +197,8 @@ describe('what the page’s bar says of the last thing the person did', () => {
 
   test('a click that has not been taken a few seconds after it was made is said to be saved in this browser and not sent, whatever the connection claims, until it is taken', async () => {
     vi.useFakeTimers()
+    // The page's machine goes on saying it is there for the three minutes this takes
+    Object.assign(PAGE, { machineSeenAt: NOW + 180_000 })
     const outbox = await shown()
     // The connection is open and carries nothing, as a phone's in a pocket: it says it is there throughout
     await act(async () => void outbox.submit(client as never, 'user-1', 'page-1', envelope('click-0006')))
@@ -188,6 +221,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     await act(async () => answers[0]!({ actionId: 'action-6' }))
     await pass(10)
     expect(said()).toBe('Sent. Waiting for your agent')
+    Object.assign(PAGE, { machineSeenAt: NOW })
   })
 
   test('a new click made while an older one is still waiting is not said to be on its way: the older one has not been sent', async () => {

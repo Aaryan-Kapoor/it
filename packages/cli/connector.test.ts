@@ -577,6 +577,16 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(existsSync(path.join(home, 'stopped.json'))).toBe(false)
   })
 
+  test('asked to stop, the connector tells It that its machine is going, so that its pages wait for the machine at once', async () => {
+    await start()
+    expect(stand.calls.some((c) => c.name === 'machines:report')).toBe(true)
+    expect(stand.calls.some((c) => c.name === 'machines:stopping')).toBe(false)
+    await stop?.()
+    stop = null
+    expect(stand.calls.filter((c) => c.name === 'machines:stopping')).toHaveLength(1)
+    expect(said.at(-1)).toBe('stopped')
+  })
+
   test('a click whose reopening failed is put in Codex’s queue at once when its conversation is opened, without waiting out the pause', async () => {
     await start()
     stand.closed.add('thread-1')
