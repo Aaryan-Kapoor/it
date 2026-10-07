@@ -1637,6 +1637,29 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     }
   })
 
+  test('with the network kept to the tailnet, another device is given only this machine’s addresses there, and none on the home network, which the door would not answer at', async () => {
+    const m = machine(true, true)
+    const onTailnet = /^http:\/\/(?:[a-z0-9.-]+\.ts\.net|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+|\[fd7a:115c:a1e0:[0-9a-f:]*\]):\d+$/
+    const settings = (more: object) =>
+      writeFileSync(
+        path.join(m.it, 'service.json'),
+        JSON.stringify({ port: SITE_PORT, instanceSecret: 'a'.repeat(64), adminKey: 'it-000000000000|made-up', sessionSecret: 'made-up', ...more }),
+      )
+    // What `it status` says of the network is what `it site` makes its addresses for another device from
+    const given = async () => (printed(await run(m, ['status'])) as { network: { on: boolean; addresses: string[] } }).network
+    // On for the home network, the machine's addresses there are given, where it has any
+    settings({ network: true })
+    const home = await given()
+    expect(home.on).toBe(true)
+    // Kept to the tailnet, every address given is one on it: the name the machine has there, or an address in the tailnet's own ranges
+    settings({ network: true, tailnet: true })
+    const tailnet = await given()
+    expect(tailnet.on).toBe(true)
+    for (const address of tailnet.addresses) expect(address).toMatch(onTailnet)
+    // So none of the home network's is, on a machine that has some
+    for (const address of home.addresses.filter((x) => !onTailnet.test(x))) expect(tailnet.addresses).not.toContain(address)
+  })
+
   test('`it network` says which it is in a sentence, with the machine’s other addresses under it, and `it service status` whether It runs and starts by itself', async () => {
     const m = await setUp()
     const STOPPED = 'It is not running on this machine at the moment, so this takes effect when it starts.'

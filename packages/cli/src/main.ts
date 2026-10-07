@@ -1408,7 +1408,9 @@ function networkNow(): { on: boolean; addresses: string[] } {
   try {
     const config = elsewhere() ? null : readConfig()
     const on = config?.network ?? false
-    return { on, addresses: on && config ? reachable(config.port) : [] }
+    // Kept to the tailnet, the door answers at this machine's addresses there and at no other:
+    // an address on the home network would be one that nothing opens
+    return { on, addresses: on && config ? reachable(config.port, undefined, config.tailnet === true) : [] }
   } catch {
     // Settings that cannot be read say nothing of the network, and `it status` still says the rest
     return { on: false, addresses: [] }
