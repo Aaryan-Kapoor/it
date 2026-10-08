@@ -73,9 +73,16 @@ export function readJson<T>(file: string): T | null {
  * character can arrive split across two pieces, and each piece read by itself would turn it
  * into something else.
  */
-export async function textOf(stream: AsyncIterable<Buffer | string>): Promise<string> {
+export async function textOf(stream: AsyncIterable<Buffer | string>, most?: number): Promise<string> {
   const pieces: Buffer[] = []
-  for await (const piece of stream) pieces.push(typeof piece === 'string' ? Buffer.from(piece) : piece)
+  let size = 0
+  for await (const piece of stream) {
+    const bytes = typeof piece === 'string' ? Buffer.from(piece) : piece
+    size += bytes.length
+    // Given up as soon as it is more than may be taken, with none of it kept
+    if (most !== undefined && size > most) throw Object.assign(new Error('more than may be taken'), { code: 'too_much' })
+    pieces.push(bytes)
+  }
   return Buffer.concat(pieces).toString('utf8')
 }
 /**

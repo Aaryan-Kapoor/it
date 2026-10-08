@@ -26,7 +26,7 @@ import {
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
-import { describeClick, firstFile, HARNESSES, type Harness, isSlug, NOUN, newer, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
+import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
 import { SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, parse, text } from './args'
 import { local } from './connector'
@@ -161,7 +161,13 @@ function serviceSaid(background: { registered: boolean; state: string }, connect
 
 async function piped(): Promise<string | undefined> {
   if (process.stdin.isTTY) return undefined
-  const all = await textOf(process.stdin)
+  // No more than the largest thing a command takes: a pipe that goes on and on, a log or a
+  // file that is no page, is given up there and not read into memory to its end
+  const all = await textOf(process.stdin, LIMITS.fileBytes).catch((err) => {
+    if ((err as { code?: string })?.code === 'too_much')
+      throw new Problem(`What was piped in is larger than anything this command takes (${LIMITS.fileBytes / (1024 * 1024)} MB).`, 'limit')
+    throw err
+  })
   return all.trim() ? all : undefined
 }
 
@@ -493,6 +499,11 @@ async function wait(a: Args) {
   // Whose pages are waited on was a choice among the apps that had marked this command. It is said apart from what is printed, which is the person's actions only.
   const unsure = slug ? undefined : sessionNote(asked, 'This waits for actions on the pages of', 'name the page with --id.')
   if (unsure) say(JSON.stringify({ note: unsure }))
+  // It is asked once before anything is waited for, as a wait on a named page asks for its page:
+  // where It cannot be reached at all, that is said now, and not taken for a wait in which nothing happened
+  /** Asks It what is waiting for this, as it stands now. Throws where It cannot be asked. */
+  const waitingNow = () => (slug ? call<Listed[]>('query', api.delivery.waiting, { slug }) : call<Listed[]>('query', api.delivery.waitingFor, { session: me! }))
+  if (!slug) await waitingNow()
   const who = crypto.randomUUID()
   // The connector is told what this waits for: one page, or, with none named, this
   // conversation's clicks only. Everyone else's go on being delivered as usual.
@@ -640,12 +651,38 @@ async function wait(a: Args) {
   // A click that arrived while another was being handled is picked up here
   const again = setInterval(() => void onHandedBack().then(() => onClicks(latest)), 1000)
   void onHandedBack()
-  if (seconds > 0)
-    setTimeout(async () => {
+  if (seconds > 0) {
+    const timeUp = async (): Promise<void> => {
+      // Something was printed, and this is ending with it: that was no wait in which nothing happened
+      if (ending || (printedIds.size > 0 && !follow)) return
+      // Something is being printed or reported this moment: looked at again when that is done
+      if (busy) return void setTimeout(() => void timeUp(), 250)
+      // "Nothing happened" is said only on It's own word, asked now: a wait that could not
+      // reach It all the while has heard nothing, which is not the same
+      try {
+        const there = (await waitingNow()).filter((c) => !printedIds.has(c.id) && mine(c))
+        // Something is waiting after all, and has only not been taken yet: it is taken now
+        if (there.length) {
+          await onClicks(there)
+          if (ending) return
+        }
+      } catch (err) {
+        const p = err instanceof Problem ? err : new Problem(String((err as Error)?.message ?? err))
+        say(
+          JSON.stringify({
+            error: { code: p.code, message: `The wait ran out of time without It being reached: ${p.message}`, ...(p.hint ? { hint: p.hint } : {}) },
+          }),
+        )
+        clearInterval(again)
+        return void finish(1)
+      }
+      if (ending || (printedIds.size > 0 && !follow)) return
       clearInterval(again)
       await emit({ timedOut: true })
       void finish(0)
-    }, seconds * 1000)
+    }
+    setTimeout(() => void timeUp(), seconds * 1000)
+  }
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => void finish(130))
   await new Promise(() => {})
 }
@@ -1927,7 +1964,9 @@ async function serviceCommand(a: Args) {
           ? inWords(await notRunning(found))
           : notAnswering(found),
       ...serviceSaid(stands, stands.connector, stands.running),
-      ...(stands.connector.ok === true ? ['It is ready to hand what is done on a page to the conversation that made it, on this machine.'] : []),
+      ...(stands.connector.ok === true && typeof (stands.connector as { unfit?: unknown }).unfit !== 'string'
+        ? ['It is ready to hand what is done on a page to the conversation that made it, on this machine.']
+        : []),
     ])
   }
   if (sub === 'install') {
@@ -2099,18 +2138,28 @@ async function main(argv: string[]): Promise<void> {
       let why: string | undefined
       if (service.installedHere()) {
         say('Starting It again as the new version…')
-        const ran = await new Promise<{ ok: boolean; said: string }>((resolve) =>
-          execFile(done.program, ['setup'], { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout) =>
-            resolve({ ok: !err, said: String(stdout) }),
+        const ran = await new Promise<{ ok: boolean; said: string; failed: string }>((resolve) =>
+          execFile(done.program, ['setup'], { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) =>
+            resolve({ ok: !err, said: String(stdout), failed: String(stderr) }),
           ),
         )
         started = ran.ok ? 'again' : 'failed'
         if (!ran.ok) {
+          // Why, as setup said it: in what it printed, or in the problem it ended with
           try {
             why = (JSON.parse(ran.said) as { problem?: string }).problem
           } catch {}
+          if (!why)
+            for (const line of ran.failed.split('\n').reverse())
+              try {
+                why = (JSON.parse(line) as { error?: { message?: string } }).error?.message
+                if (why) break
+              } catch {}
         }
       }
+      // The new program is in place either way, and that is said. That It is not running as it
+      // is said too, and by how this ends: whoever asked for the upgrade from a script goes by that
+      if (started === 'failed') process.exitCode = 1
       const result = { upgraded: true, from: done.from, to: done.to, started, ...(why ? { problem: why } : {}) }
       if (!forPerson(a)) return out(result)
       return tell([
@@ -2233,7 +2282,8 @@ async function main(argv: string[]): Promise<void> {
       // After the mark that begins it, nothing of an address is sent to a server or kept in its logs
       const url = `${site}/pair#${code}`
       // Where the network is on, the same code pairs a browser on another device, at each address this machine is reached by
-      const elsewhereToo = networkNow().addresses.map((address) => `${address}/pair#${code}`)
+      // As the network stands, and not only as the settings ask for it: an address the door could not listen at is no address to give
+      const elsewhereToo = (await networkAsItStands(true)).addresses.map((address) => `${address}/pair#${code}`)
       const opening = !a.flags['no-open'] && openBrowser(url)
       if (!forPerson(a)) return out({ url, ...(elsewhereToo.length ? { urls: elsewhereToo } : {}) })
       if (opening) return tell(['It’s site is opening in your browser, already paired:', `  ${url}`])
@@ -2368,7 +2418,10 @@ async function main(argv: string[]): Promise<void> {
       // page is its page from now on, also where another conversation made it. Someone who says
       // "show me the board again" the next day gets an agent that opens what is there, and what
       // they then do on it went to a conversation that was closed.
-      const mine = sessionAsked()?.session
+      const asked = sessionAsked()
+      const mine = asked?.session
+      // Which conversation this is was a choice among the apps that had marked this command: said, so that an agent that is another one knows
+      const guessed = sessionNote(asked, `This ${NOUN.one} was shown for`, `run \`it open ${slug}\` again with IT_HARNESS and IT_SESSION set to your own.`)
       let took = false
       let notTaken: Problem | undefined
       if (mine) {
@@ -2393,12 +2446,14 @@ async function main(argv: string[]): Promise<void> {
           ...shown,
           notTaken: { code: notTaken.code, message: notTaken.message },
           hint: `The ${NOUN.one} is shown, and it is still another conversation’s: what is done on it does not come here. Run \`it open ${slug}\` again before you ask the person to use it.`,
+          ...(guessed ? { session: guessed } : {}),
         })
       }
       return out({
         id: slug,
         ...shown,
         ...(took ? { note: `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.` } : {}),
+        ...(guessed ? { session: guessed } : {}),
       })
     }
     case 'notify': {

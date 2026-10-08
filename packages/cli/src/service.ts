@@ -483,7 +483,17 @@ export function install(): ServiceStatus {
  */
 export function uninstall(patience = STOP_MS): void {
   if (process.platform === 'linux') {
-    run('systemctl', ['--user', 'disable', '--now', `${NAME}.service`])
+    // Where there is a definition, the service is stopped before the definition goes. Where
+    // it could not be stopped, or could not be asked, the definition stays and that is said:
+    // taken away regardless, It would be said to be stopped while it went on running, with
+    // nothing left to stop it by.
+    if (existsSync(unitPath())) {
+      const stopped = run('systemctl', ['--user', 'disable', '--now', `${NAME}.service`])
+      if (!stopped.ok && (!reachable() || run('systemctl', ['--user', 'is-active', '--quiet', `${NAME}.service`]).ok))
+        throw new Error(
+          `the background service could not be stopped${stopped.out ? ` (${stopped.out.split('\n')[0]})` : ''}, so its definition was left where it is. Run this again from a session of your own on this machine, or stop it with \`systemctl --user stop ${NAME}\``,
+        )
+    }
     rmSync(unitPath(), { force: true })
     run('systemctl', ['--user', 'daemon-reload'])
     // The account stays after logout only because It asked for that: it stops doing so
@@ -492,7 +502,10 @@ export function uninstall(patience = STOP_MS): void {
       rmSync(lingerNote(), { force: true })
     }
   } else if (process.platform === 'darwin') {
-    run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`])
+    const out = run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`])
+    // Still loaded after being asked to go: its definition stays, and that is said
+    if (!out.ok && run('launchctl', ['print', `${launchdDomain()}/${LABEL}`]).ok)
+      throw new Error(`the background service could not be stopped${out.out ? ` (${out.out.split('\n')[0]})` : ''}, so its definition was left where it is`)
     rmSync(plistPath(), { force: true })
   } else if (process.platform === 'win32') {
     // The service is asked to stop and waited for first, as before its task is replaced

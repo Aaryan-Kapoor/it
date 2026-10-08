@@ -23,7 +23,7 @@ Run it by that name alone, `it`, every time. Only if the name is not found ("com
 
 ## Whether the message arrives by itself
 
-It can only where It's add-on for your harness is connected and the connector is running. `it status` says whether they are: in `harnesses`, your harness has `"addon": "connected"`, and `connector` has `"ok": true`. With `"needs_approval"`, the `detail` beside it says what the user still has to do.
+It can only where It's add-on for your harness is connected and the connector is running. `it status` says whether they are: in `harnesses`, your harness has `"addon": "connected"`, and `connector` has `"ok": true` and no `"unfit"`. With `"needs_approval"`, the `detail` beside it says what the user still has to do. Where `connector` has `"unfit"`, this machine joined an It of a version it does not work with, and nothing done on a page is handed to any agent here until the machine it names is updated: tell the user what it says, and do not count on a message or on `it wait` meanwhile.
 
 Both are needed, and neither is proof that a message will reach this conversation. They say that the add-on is installed and that the connector is up, not that your harness lets an add-on speak in the place you are running. In Hermes a message arrives by itself in the plain `hermes` terminal. In Hermes's TUI and its desktop app it arrives only in a Hermes later than 0.21.5, once the user has allowed it there, and in its messaging gateway it never does. So if you are in Hermes and cannot tell that you are in its plain terminal, or if you once ended a turn expecting a message and none came, do not count on one.
 
