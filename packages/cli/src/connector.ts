@@ -1592,13 +1592,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // and where none was reopened at all, for every conversation this machine had given up on
         const back = new Set(keys)
         if (unreadToo) {
+          // The note that could not be read is taken away first, and nothing is said to be let
+          // go of where it cannot be: it is by that file that every reopening is refused
+          try {
+            rmSync(unreadRuns(), { force: true })
+          } catch {
+            return [200, { cleared: 0, unkept: true }]
+          }
           for (const tagged of [...parked, ...queueTries.keys()]) back.add(tagged.slice(tagged.indexOf('|') + 1))
           for (const { for: tried } of toPark.values()) if (tried) back.add(keyOf(tried.harness, tried.id))
           unread = false
           unreadWhereItWas = false
-          try {
-            rmSync(unreadRuns(), { force: true })
-          } catch {}
         }
         for (const [id, { for: tried }] of [...toPark]) if (tried && back.has(keyOf(tried.harness, tried.id))) toPark.delete(id)
         for (const key of back) revive(key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1))
@@ -1925,9 +1929,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       }
     } catch (err) {
       say(`upgrade: ${why(err)}`)
-      await call('mutation', api.machines.upgrading, { state: 'failed', why: err instanceof Problem ? err.message : 'It could not be upgraded.' }).catch(
-        () => {},
-      )
+      // With what to do about it, where the problem says: on the site that is all the person is told
+      const said = err instanceof Problem ? `${err.message}${err.hint ? ` ${err.hint}` : ''}` : 'It could not be upgraded.'
+      await call('mutation', api.machines.upgrading, { state: 'failed', why: said }).catch(() => {})
     } finally {
       upgradingNow = false
     }

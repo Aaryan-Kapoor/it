@@ -323,17 +323,20 @@ export const report = mutation({
     const knows = latest === undefined ? machine.latest : latest.slice(0, 40)
     // What it runs on is kept as it last said: a report from a connector that does not say leaves it as it was
     const on = system === undefined ? machine.system : system.slice(0, 20)
-    // Whether it hands nothing over for now, and why: said with every report by a connector
-    // that says it at all, with an empty word where it is not so. One that does not say is not paused.
-    const held = paused ? paused.slice(0, 20) : undefined
+    // A connector of another version than the last is what an upgrade that was asked for was for, and ends it
+    const moved = machine.connectorVersion !== undefined && machine.connectorVersion !== connectorVersion
+    // Whether it hands nothing over for now, and why: said by a connector that says it at
+    // all, with an empty word where it is not so. A report that does not say leaves it as it
+    // was, as the plainer report does that a connector falls back on for a while after one of
+    // its reports was refused, which a moment without a connection is enough for. Only a
+    // connector of another version that does not say is taken not to be paused.
+    const held = paused === undefined ? (moved ? undefined : machine.paused) : paused ? paused.slice(0, 20) : undefined
     const same =
       JSON.stringify(machine.harnesses ?? []) === JSON.stringify(clean) &&
       machine.connectorVersion === connectorVersion &&
       machine.latest === knows &&
       machine.system === on &&
       machine.paused === held
-    // A connector of another version than the last is what an upgrade that was asked for was for, and ends it
-    const moved = machine.connectorVersion !== undefined && machine.connectorVersion !== connectorVersion
     // Written each time it says so, less a little for a report that comes a moment early: the
     // site calls a machine off once it has been quiet for a few of these
     if (!same || machine.offAt !== undefined || Date.now() - machine.lastSeenAt > ALIVE.everyMs - 5_000) {

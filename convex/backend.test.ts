@@ -2847,9 +2847,13 @@ describe('displays and machines', () => {
     expect(await paused()).toEqual(['unchecked', 'unchecked'])
     await m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [], paused: '' })
     expect(await paused()).toEqual([null, null])
-    // One that does not say, as an earlier connector does not, is not paused
+    // A report that does not say leaves it as it was: a connector whose fuller report was refused for a
+    // moment falls back on the plainer one for a while, and is as paused as it was before
     await m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [], paused: 'unfit' })
     await m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [] })
+    expect(await paused()).toEqual(['unfit', 'unfit'])
+    // A connector of another version that does not say, as an earlier one does not, is not paused
+    await m.as.mutation(api.machines.report, { connectorVersion: '0.0.9', harnesses: [] })
     expect(await paused()).toEqual([null, null])
   })
 
