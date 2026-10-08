@@ -14,7 +14,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, newer, parseJson, QUEUES, WAKE_MOST, WAKES } from '@it/protocol'
+import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
 import {
   api,
   ask,
@@ -351,7 +351,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // The agent apps the person has switched reopening on for on this machine, and since when, as
   // It says. Until It has said, none is.
   let wakesNow = new Map<string, number>()
-  const wakes = (harness: string, at: number) => mayWake(wakesNow, harness, at)
+  // And never on a system It does not reopen conversations on, whatever It says is switched on
+  const wakes = (harness: string, at: number) => wakesOn(process.platform) && mayWake(wakesNow, harness, at)
 
   const sessions = new Map<string, { seen: number; busy: boolean; busyAt: number }>()
   // A conversation that was cleared carries on under a new id; its pages follow it
@@ -1590,7 +1591,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // that is not turned off, with a request that says nothing of this installation. Empty where
   // it is turned off, so that the site stops speaking of a version nobody is looking for.
   let latestKnown: string | undefined
-  let sayLatest = true
+  // Until when this machine reports only what the oldest It takes: an It that refused the
+  // fuller report is given the plain one for a while, and then offered the fuller one again,
+  // so that a refusal which was something else (a moment without a connection) does not
+  // leave the machine saying less for as long as it runs
+  let plainUntil = 0
   const lookForNewer = async () => {
     if (!looksForNewer()) latestKnown = ''
     else {
@@ -1657,10 +1662,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // With the newest version this machine has learned of, where it looks for one and the It it
     // reports to takes that: one that is older than this program does not, and is told the rest
     const told = { connectorVersion: VERSION, harnesses: found }
-    await call('mutation', api.machines.report, sayLatest && latestKnown !== undefined ? { ...told, latest: latestKnown } : told)
+    // And with the system it runs on, which an It of the same age takes too
+    const fuller = Date.now() >= plainUntil
+    await call(
+      'mutation',
+      api.machines.report,
+      fuller ? { ...told, system: process.platform, ...(latestKnown !== undefined ? { latest: latestKnown } : {}) } : told,
+    )
       .catch(async (err) => {
-        if (sayLatest && latestKnown !== undefined && (err as { code?: string }).code !== 'unauthenticated') {
-          sayLatest = false
+        if (fuller && (err as { code?: string }).code !== 'unauthenticated') {
+          plainUntil = Date.now() + 10 * 60_000
           await call('mutation', api.machines.report, told)
           return
         }

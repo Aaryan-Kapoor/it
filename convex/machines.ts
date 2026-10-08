@@ -1,4 +1,4 @@
-import { ALIVE, HARNESSES, LIMITS, newer, QUOTA, WAKES } from '@it/protocol'
+import { ALIVE, HARNESSES, LIMITS, NO_WAKE_HERE, newer, QUOTA, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
@@ -14,6 +14,7 @@ const view = (m: Doc<'machines'>) => ({
   name: m.name,
   lastSeenAt: m.lastSeenAt,
   connectorVersion: m.connectorVersion ?? null,
+  system: m.system ?? null,
   off: m.offAt !== undefined,
   latest: m.latest ?? null,
   upgrade: m.upgrade ?? null,
@@ -102,6 +103,7 @@ export const wake = mutation({
     const { user } = await requireOwner(ctx)
     const m = await ownMachine(ctx, user._id, machineId)
     if (!(WAKES as readonly string[]).includes(harness)) fail('invalid', 'It cannot reopen a closed conversation of that agent app.')
+    if (on && !wakesOn(m.system)) fail('invalid', NO_WAKE_HERE)
     const now = m.wakes ?? []
     const is = now.some((w) => w.harness === harness)
     // Switched on again while it is on, it stays on since when it was: nothing older is let in by asking twice
@@ -295,13 +297,19 @@ export const inventory = mutation({
 
 /** The connector reports what it found on the machine, and that it is alive. */
 export const report = mutation({
-  args: { connectorVersion: v.string(), harnesses: found, latest: v.optional(v.string()) },
-  handler: async (ctx, { connectorVersion, harnesses, latest }) => {
+  args: { connectorVersion: v.string(), harnesses: found, latest: v.optional(v.string()), system: v.optional(v.string()) },
+  handler: async (ctx, { connectorVersion, harnesses, latest, system }) => {
     const { machine } = await requireMachine(ctx)
     const clean = kept(harnesses)
     // The newest version it has learned of is kept until it learns of another: a report made before it has looked says nothing of it
     const knows = latest === undefined ? machine.latest : latest.slice(0, 40)
-    const same = JSON.stringify(machine.harnesses ?? []) === JSON.stringify(clean) && machine.connectorVersion === connectorVersion && machine.latest === knows
+    // What it runs on is kept as it last said: a report from a connector that does not say leaves it as it was
+    const on = system === undefined ? machine.system : system.slice(0, 20)
+    const same =
+      JSON.stringify(machine.harnesses ?? []) === JSON.stringify(clean) &&
+      machine.connectorVersion === connectorVersion &&
+      machine.latest === knows &&
+      machine.system === on
     // A connector of another version than the last is what an upgrade that was asked for was for, and ends it
     const moved = machine.connectorVersion !== undefined && machine.connectorVersion !== connectorVersion
     // Written each time it says so, less a little for a report that comes a moment early: the
@@ -313,6 +321,7 @@ export const report = mutation({
         lastSeenAt: Date.now(),
         offAt: undefined,
         latest: knows,
+        system: on,
         ...(moved ? { upgrade: undefined } : {}),
       })
     }

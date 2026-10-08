@@ -163,6 +163,17 @@ export type Harness = (typeof HARNESSES)[number]
  */
 export const WAKES: readonly Harness[] = ['claude-code', 'codex', 'pi', 'opencode', 'hermes']
 /**
+ * Whether It reopens a closed conversation on a machine of this system, as the machine names
+ * its system (`process.platform`). Not on Windows yet: a conversation reopened there cannot be
+ * found again and ended after the service has died, which is what makes running an agent with
+ * nobody watching safe to offer. A machine that has not said what it runs on is one from
+ * before any said, and is taken at its word as it was.
+ */
+export const wakesOn = (system: string | null | undefined): boolean => system !== 'win32'
+/** What a person is told where they would switch reopening on for a machine It does not reopen conversations on. */
+export const NO_WAKE_HERE =
+  'It does not reopen closed conversations on a Windows machine yet. What is done on a page waits until its conversation is open again.'
+/**
  * The agent apps with a queue of their own, which takes a click whether or not its conversation
  * is open. A click for one of these goes to that queue first, and its conversation is reopened
  * only so that it takes what is waiting there.

@@ -109,6 +109,8 @@ export default defineSchema({
     createdAt: v.number(),
     lastSeenAt: v.number(),
     connectorVersion: v.optional(v.string()),
+    /** The system it runs on, as its connector names it: `linux`, `darwin`, `win32`. */
+    system: v.optional(v.string()),
     /** The newest version of It this machine has learned is out, where it looks for one. */
     latest: v.optional(v.string()),
     /**

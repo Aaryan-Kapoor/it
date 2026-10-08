@@ -1,7 +1,7 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import { ALIVE, HARNESSES, INSTALL, newer, WAKES } from '@it/protocol'
+import { ALIVE, HARNESSES, INSTALL, NO_WAKE_HERE, newer, WAKES, wakesOn } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -29,6 +29,8 @@ interface Machine {
   name: string
   lastSeenAt: number
   connectorVersion: string | null
+  /** The system it runs on, as its connector names it, where it has said. */
+  system?: string | null
   /** Its connector said it was stopping, and has not been heard from since. */
   off?: boolean
   /** It runs on this machine, where every other joined it. */
@@ -289,7 +291,9 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
             const fixed = h.addon === 'unavailable' || h.addon === 'too_old'
             const is = standing(h, wanted, online)
             // Only for an app It can reopen a closed conversation of, and only while it is connected
-            const wakeable = wanted && !fixed && (WAKES as readonly string[]).includes(h.id)
+            const couldWake = wanted && !fixed && (WAKES as readonly string[]).includes(h.id)
+            // And only on a machine of a system It reopens conversations on
+            const wakeable = couldWake && wakesOn(m.system)
             const wakes = m.wakes.some((w) => w.harness === h.id)
             return (
               <li key={h.id} className="row">
@@ -332,6 +336,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                     </span>
                   </label>
                 )}
+                {couldWake && !wakeable && <span className="row-detail row-sub">{NO_WAKE_HERE}</span>}
               </li>
             )
           })}
