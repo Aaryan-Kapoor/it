@@ -2672,6 +2672,8 @@ input[role="switch"]:disabled {
   color: var(--fg);
   font-size: 12.5px;
   line-height: 1.6;
+  /* A command is as long as its address and its code make it: it goes onto a second line, where code elsewhere is kept on one */
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: all;
 }
@@ -3356,6 +3358,10 @@ form.row-main {
 
 .modal-panel .copyable {
   margin-bottom: 4px;
+}
+/* Two commands, one under the other, with a line between them that says whom the second is for */
+.pair-command + .modal-sub {
+  margin: 12px 0 8px;
 }
 .modal-panel .inline {
   margin-bottom: 4px;
