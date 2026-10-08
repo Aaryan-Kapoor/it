@@ -320,13 +320,29 @@ function Working({
   // That it is working is the machine's own word, and is as good as the machine is there to
   // give it: one that has gone quiet, or said it was stopping, may have ended the run or may
   // not, and cannot be told to stop until it is back. Said as that, and not as work going on.
+  const askStop = () => {
+    setAsked(true)
+    stop({ artifactId }).catch((err) => {
+      setAsked(false)
+      say(refusal(err).message, 'error')
+    })
+  }
   if (machineSeenAt === null || now - machineSeenAt >= ALIVE.onlineMs)
     return (
-      <span className="status" data-tone="wait">
-        {ending
-          ? `Asked to stop. ${machine ?? 'Its machine'} is not answering, and is told when it is back`
-          : `${machine ?? 'Its machine'} is not answering. Whether ${agent ?? 'your agent'} is still at work there is not known`}
-      </span>
+      <>
+        <span className="status" data-tone="wait">
+          {ending
+            ? `Asked to stop. ${machine ?? 'Its machine'} is not answering, and is told when it is back`
+            : `${machine ?? 'Its machine'} is not answering. Whether ${agent ?? 'your agent'} is still at work there is not known`}
+        </span>
+        {/* It can still be asked to stop: It keeps the asking, and the machine acts on it the moment it is back */}
+        {!ending && (
+          <button type="button" className="working-stop" title="Stop the agent when its machine is back" aria-label="Stop the agent" onClick={askStop}>
+            <IconStop />
+            Stop
+          </button>
+        )}
+      </>
     )
   // What was done here and has not reached It is not with the agent that is working
   const notSent = unsent(user, artifactId) + unsaved(user, artifactId)
@@ -341,13 +357,7 @@ function Working({
           className="working-stop"
           title={more ? 'Stop the agent. What is waiting goes with it.' : 'Stop the agent'}
           aria-label="Stop the agent"
-          onClick={() => {
-            setAsked(true)
-            stop({ artifactId }).catch((err) => {
-              setAsked(false)
-              say(refusal(err).message, 'error')
-            })
-          }}
+          onClick={askStop}
         >
           <IconStop />
           Stop

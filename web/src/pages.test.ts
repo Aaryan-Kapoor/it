@@ -350,6 +350,12 @@ describe('what the page’s bar says of the last thing the person did', () => {
     await shown()
     expect(host.querySelector('.working')).toBeNull()
     expect(said()).toBe('the laptop is not answering. Whether Claude Code is still at work there is not known')
+    // It can still be asked to stop, which It keeps for the machine until it is back
+    const stops = () => [...host.querySelectorAll('button')].filter((b) => b.getAttribute('aria-label') === 'Stop the agent')
+    expect(stops().length).toBe(1)
+    await act(async () => stops()[0]!.click())
+    expect(said()).toBe('Asked to stop. the laptop is not answering, and is told when it is back')
+    expect(stops().length).toBe(0)
     await act(async () => root.unmount())
     host.remove()
     Object.assign(PAGE, { run: { stopping: true }, machineSeenAt: null })

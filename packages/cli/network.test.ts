@@ -49,12 +49,12 @@ describe('the addresses another device can open the site at', () => {
     const lo = [{ address: '127.0.0.1', family: 'IPv4' as const, internal: true }]
     const home = { lo, eth0: [four('192.168.1.50'), six('fe80::1'), six('fd12:3456::1')] }
     // At home with addresses of its own network only, on a machine nobody rents: no sign of it
-    expect(onTheInternet(home, undefined)).toBeUndefined()
+    expect(onTheInternet(home, '')).toBeUndefined()
     expect(publicAddress6(home)).toBeUndefined()
     // One of the internet's own addresses under IPv6, alone or beside a private one under IPv4
     for (const open of ['2001:db8:100::1', '2a01:4f8::2', '3fff::1']) {
       expect(publicAddress6({ lo, eth0: [six(open)] }), open).toBe(open)
-      expect(onTheInternet({ lo, eth0: [four('10.0.0.20'), six(open)] }, undefined)).toEqual({
+      expect(onTheInternet({ lo, eth0: [four('10.0.0.20'), six(open)] }, '')).toEqual({
         address: open,
         why: `has an address the internet can reach unless a router or a firewall in between stops it (${open})`,
       })
