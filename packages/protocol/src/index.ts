@@ -311,11 +311,18 @@ const faultOf = (payload: unknown): string => {
   const said = (payload as { message?: unknown } | null)?.message
   return typeof said === 'string' && said.trim() ? said.replace(/\s+/g, ' ').slice(0, 300) : 'an error it gave no words for'
 }
+/**
+ * A page's title as it is given to an agent: in quotation marks that nothing in the title can
+ * close. A title is whatever the page's agent wrote, or copied from somewhere, and is told as
+ * that. Left as it was, one that held a quotation mark and then "[It] …" read as a second
+ * sentence of It's own.
+ */
+const titled = (title: string): string => JSON.stringify(title)
 export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
   // Not something anyone did: the page's own script failed where it was being shown. Said as
   // that, with what to do, since an agent that reads it as a press would answer a press.
   if (c.name === FAULT) {
-    const named = c.title ? `"${c.title}" (${c.artifact})` : `(${c.artifact})`
+    const named = c.title ? `${titled(c.title)} (${c.artifact})` : `(${c.artifact})`
     // What it failed with is the page's own word, and so is given as what the page said, marked
     // as that, and left out wherever what a page carries is left out
     const said =
@@ -337,7 +344,7 @@ export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
         ? ` ${full.slice(0, max)}… (cut short: run \`it action ${c.id}\` to read all of it)${files}`
         : ` ${full}${files}`
   // A title that is not known (an earlier version's, which is not kept) is left out, never guessed
-  const named = c.title ? `"${c.title}" (${c.artifact})` : `(${c.artifact})`
+  const named = c.title ? `${titled(c.title)} (${c.artifact})` : `(${c.artifact})`
   const who = `The ${NOUN.one} ${named} sent this${c.attended === false ? ' with no sign that anyone had just used it' : c.attended === true ? ' just after someone used it' : ''}`
   // Said only when it matters: what the page showed when it sent this is not what it shows now
   const replaced =
@@ -361,7 +368,7 @@ export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
  */
 export function briefClick(c: Click): string {
   const full = c.payload === undefined || c.payload === null ? '' : JSON.stringify(c.payload)
-  const named = c.title ? `"${c.title}" (${c.artifact})` : `(${c.artifact})`
+  const named = c.title ? `${titled(c.title)} (${c.artifact})` : `(${c.artifact})`
   // The page's own script failed: said as that, in the few words this line has
   if (c.name === FAULT) return `[It] ${named}: its own script failed, with details [action ${c.id}]`
   const details = full === '' || full === '{}' ? '' : ', with details'

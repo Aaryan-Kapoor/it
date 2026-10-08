@@ -33,7 +33,9 @@ import {
   endTree,
   identity,
   lastWords,
+  listsProcesses,
   mayWake,
+  NO_PS,
   SINCE_TOLD,
   STOPPED,
   WAS_CUT_OFF,
@@ -528,6 +530,19 @@ describe('the folder a conversation was held in', () => {
     expect(conversationFolder(session)).toBeUndefined()
     expect(conversationFolder({ harness: 'claude-code', id: 'session-2' })).toBeUndefined()
   })
+})
+
+// Away from Linux the command is asked for by its place, whatever the PATH says
+test.skipIf(process.platform !== 'linux')('a machine with no ps to list processes with is told from one that has it', () => {
+  const before = process.env.PATH
+  expect(listsProcesses()).toBe(true)
+  process.env.PATH = '/nowhere'
+  try {
+    expect(listsProcesses()).toBe(false)
+    expect(NO_PS).toContain('procps')
+  } finally {
+    process.env.PATH = before
+  }
 })
 
 describe('the last line an app printed', () => {
