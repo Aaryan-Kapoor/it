@@ -317,6 +317,12 @@ function Working({
   const more = Math.max(0, (recent?.filter((a) => a.delivery !== 'handed_off').length ?? 0) - 1)
   const now = useNow(1_000)
   useSyncExternalStore(watchOutbox, outboxChanges)
+  // Something done here that this browser would not store is lost with the tab, whatever the agent is doing: said beside the rest
+  const keepOpen = unsaved(user, artifactId) > 0 && (
+    <span className="status" data-tone="wait">
+      Not sent yet. This browser could not save it, so keep this tab open
+    </span>
+  )
   // That it is working is the machine's own word, and is as good as the machine is there to
   // give it: one that has gone quiet, or said it was stopping, may have ended the run or may
   // not, and cannot be told to stop until it is back. Said as that, and not as work going on.
@@ -335,6 +341,7 @@ function Working({
             ? `Asked to stop. ${machine ?? 'Its machine'} is not answering, and is told when it is back`
             : `${machine ?? 'Its machine'} is not answering. Whether ${agent ?? 'your agent'} is still at work there is not known`}
         </span>
+        {keepOpen}
         {/* It can still be asked to stop: It keeps the asking, and the machine acts on it the moment it is back */}
         {!ending && (
           <button type="button" className="working-stop" title="Stop the agent when its machine is back" aria-label="Stop the agent" onClick={askStop}>
@@ -345,25 +352,28 @@ function Working({
       </>
     )
   // What was done here and has not reached It is not with the agent that is working
-  const notSent = unsent(user, artifactId) + unsaved(user, artifactId)
+  const notSent = unsent(user, artifactId)
   return (
-    <span className="working" role="status">
-      <span className="working-dot" data-ending={ending || undefined} />
-      {ending ? 'Stopping' : more ? `Working, ${more} more waiting` : 'Working'}
-      {notSent > 0 && `, and ${notSent} not sent yet`}
-      {!ending && (
-        <button
-          type="button"
-          className="working-stop"
-          title={more ? 'Stop the agent. What is waiting goes with it.' : 'Stop the agent'}
-          aria-label="Stop the agent"
-          onClick={askStop}
-        >
-          <IconStop />
-          Stop
-        </button>
-      )}
-    </span>
+    <>
+      <span className="working" role="status">
+        <span className="working-dot" data-ending={ending || undefined} />
+        {ending ? 'Stopping' : more ? `Working, ${more} more waiting` : 'Working'}
+        {notSent > 0 && `, and ${notSent} not sent yet`}
+        {!ending && (
+          <button
+            type="button"
+            className="working-stop"
+            title={more ? 'Stop the agent. What is waiting goes with it.' : 'Stop the agent'}
+            aria-label="Stop the agent"
+            onClick={askStop}
+          >
+            <IconStop />
+            Stop
+          </button>
+        )}
+      </span>
+      {keepOpen}
+    </>
   )
 }
 
