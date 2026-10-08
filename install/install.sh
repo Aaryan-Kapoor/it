@@ -69,7 +69,7 @@ if [ "$#" -gt 0 ]; then
   join=1
 fi
 
-BASE="${IT_INSTALL_BASE:-https://github.com/Aaryan-Kapoor/it/releases}"
+BASE="${IT_INSTALL_BASE:-https://itcan.do/releases}"
 BASE="${BASE%/}"
 VERSION="${IT_VERSION:-latest}"
 
@@ -490,7 +490,7 @@ if [ -e "${HOME_DIR}/telemetry-off" ] || [ -L "${HOME_DIR}/telemetry-off" ]; the
 if [ -n "${IT_TELEMETRY_ENABLED:-}${DO_NOT_TRACK:-}" ]; then reporting=0; fi
 if [ "${reporting}" = 1 ]; then
   if [ "${led}" = 1 ]; then quietly "It reports usage counts under a random id, and never what is on a page. \`it telemetry off\` turns that off."
-  else say "It reports usage counts under a random id for this installation, and never what is on a page. Turn it off with \`${it_quoted} telemetry off\` or IT_TELEMETRY_ENABLED=false. What is sent: https://github.com/Aaryan-Kapoor/it/blob/master/docs/usage-reporting.md"
+  else say "It reports usage counts under a random id for this installation, and never what is on a page. Turn it off with \`${it_quoted} telemetry off\` or IT_TELEMETRY_ENABLED=false. What is sent: https://itcan.do/usage-reporting"
   fi
   # The note left in It's folder is how the program knows this has been said to a person, so
   # that it does not say it again. So it is left only once the sentence is printed, and only

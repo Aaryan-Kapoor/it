@@ -20,7 +20,7 @@
 # nothing behind in the session it was run from: no variable, no function, no changed setting.
 & {
   $ErrorActionPreference = 'Stop'
-  $base = if ($env:IT_INSTALL_BASE) { $env:IT_INSTALL_BASE.TrimEnd('/') } else { 'https://github.com/Aaryan-Kapoor/it/releases' }
+  $base = if ($env:IT_INSTALL_BASE) { $env:IT_INSTALL_BASE.TrimEnd('/') } else { 'https://itcan.do/releases' }
   $version = if ($env:IT_VERSION) { $env:IT_VERSION } else { 'latest' }
   if ($version -notmatch '^[A-Za-z0-9._-]+$') { throw "IT_VERSION must be a release's tag." }
   $from = if ($version -eq 'latest') { "$base/latest/download" } else { "$base/download/$version" }
@@ -266,7 +266,7 @@
     $reporting = (Get-Kind (Join-Path $root 'telemetry-off')) -eq 'nothing'
     if ($env:IT_TELEMETRY_ENABLED -or $env:DO_NOT_TRACK) { $reporting = $false }
     if ($reporting) {
-      $sentence = 'It reports usage counts under a random id for this installation, and never what is on a page. Turn it off with `' + "& $quoted" + ' telemetry off` or IT_TELEMETRY_ENABLED=false. What is sent: https://github.com/Aaryan-Kapoor/it/blob/master/docs/usage-reporting.md'
+      $sentence = 'It reports usage counts under a random id for this installation, and never what is on a page. Turn it off with `' + "& $quoted" + ' telemetry off` or IT_TELEMETRY_ENABLED=false. What is sent: https://itcan.do/usage-reporting'
       # The note left in It's folder is how the program knows this has been said to a person,
       # so that it does not say it again. So it is left only once the sentence is printed, and
       # only where a person was there to read it: in a console window, and not inside an agent's

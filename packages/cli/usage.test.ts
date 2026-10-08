@@ -125,7 +125,7 @@ describe('telling the person', () => {
     expect(said).toEqual([usage.NOTICE])
     expect(usage.NOTICE).toMatch(/it telemetry off/)
     expect(usage.NOTICE).toMatch(/IT_TELEMETRY_ENABLED=false/)
-    expect(usage.NOTICE).toMatch(/usage-reporting\.md/)
+    expect(usage.NOTICE).toMatch(/itcan\.do\/usage-reporting$/)
     // The word that would be the easiest to hold against it is not used
     expect(usage.NOTICE).not.toMatch(/anonymous/i)
     // What is kept is when the person was told and a random id, and nothing else

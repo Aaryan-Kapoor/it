@@ -133,7 +133,7 @@ export const ALIVE = { everyMs: 30_000, onlineMs: 100_000 } as const
 export const INSTALL = {
   sh: 'curl -fsSL https://itcan.do/install.sh | sh',
   ps: 'irm https://itcan.do/install.ps1 | iex',
-  releases: 'https://github.com/Aaryan-Kapoor/it/releases',
+  releases: 'https://itcan.do/releases',
 } as const
 
 /** A version of It as its three numbers, or nothing where it is not written as one. */

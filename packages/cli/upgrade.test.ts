@@ -180,7 +180,7 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     delete process.env.IT_INSTALL_BASE
     expect(releases().base).toBe('https://example.com/releases')
     // Set up again from the usual place, it is the usual place again
-    process.env.IT_INSTALL_BASE = 'https://github.com/Aaryan-Kapoor/it/releases'
+    process.env.IT_INSTALL_BASE = 'https://itcan.do/releases'
     keepBase()
     delete process.env.IT_INSTALL_BASE
     expect(existsSync(path.join(folder, 'releases.json'))).toBe(false)

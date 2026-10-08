@@ -29,7 +29,7 @@ import { HARNESSES } from '@it/protocol'
 import { currentSession, inHome, Problem, VERSION } from './lib'
 
 export const DEFAULT_URL = 'https://itcan.do/api/usage'
-export const DOCS = 'https://github.com/Aaryan-Kapoor/it/blob/master/docs/usage-reporting.md'
+export const DOCS = 'https://itcan.do/usage-reporting'
 export const NOTICE = `It reports usage counts under a random id for this installation, and never what is on a page. Turn it off with \`it telemetry off\` or IT_TELEMETRY_ENABLED=false. What is sent: ${DOCS}`
 
 // ---------- what can be sent ----------
