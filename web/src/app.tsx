@@ -64,7 +64,7 @@ export function App() {
       clearInterval(t)
     }
   }, [])
-  if (!loaded) return <Splash />
+  if (!loaded) return <Splash waits />
   if (!paired) {
     doneLeaving()
     // However the session ended (the button, being forgotten from another display, or
@@ -104,17 +104,40 @@ function Connecting({ stuck }: { stuck: boolean }) {
       window.removeEventListener('online', reload)
     }
   }, [stuck])
-  return <Splash note="Connecting…" />
+  return <Splash note="Connecting…" waits />
 }
 
-const Splash = ({ note }: { note?: string }) => (
-  <main className="splash" role="status">
-    <span className="mark">
-      <Mark />
-    </span>
-    {note && <span className="muted">{note}</span>}
-  </main>
-)
+/** How long a wait for It is shown as the mark alone before the person is told what is waited for. */
+const QUIET_MS = 8000
+
+/**
+ * The mark, while something is waited for. Where what is waited for is It itself (`waits`), a
+ * wait that goes on is said to be one: with It stopped, or out of reach of this device,
+ * nothing else on the screen would ever change, and the person could not tell that from a
+ * site that is broken. It is asked again all the while, and the site carries on when it answers.
+ */
+function Splash({ note, waits = false }: { note?: string; waits?: boolean }) {
+  const [long, setLong] = useState(false)
+  useEffect(() => {
+    if (!waits) return
+    const t = setTimeout(() => setLong(true), QUIET_MS)
+    return () => clearTimeout(t)
+  }, [waits])
+  return (
+    <main className="splash" role="status">
+      <span className="mark">
+        <Mark />
+      </span>
+      {note && <span className="muted">{note}</span>}
+      {long && (
+        <p>
+          It is not answering yet. This goes on trying, and carries on by itself as soon as it does. If it never does, see that It is running on the machine it
+          was set up on: <code>it status</code> there says, and <code>it setup</code> starts it again.
+        </p>
+      )}
+    </main>
+  )
+}
 
 /**
  * Said where a code was not tried at all: too many wrong codes came from this browser's address
@@ -338,7 +361,7 @@ function Paired() {
         </button>
       </main>
     )
-  if (!state.ready || state.session !== session || !user) return <Splash note="Connecting…" />
+  if (!state.ready || state.session !== session || !user) return <Splash note="Connecting…" waits />
   return (
     <Root onRefused={recheck}>
       <Shell user={user} owner={role === 'owner'} />

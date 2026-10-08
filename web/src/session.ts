@@ -61,6 +61,9 @@ export const useSession = (): Session => useSyncExternalStore(subscribe, current
 
 // ---------- asking the backend ----------
 
+/** How long a request about the session is waited for. */
+const ANSWER_MS = 20_000
+
 /**
  * Every request about the session says that it comes from the site, in a header that a page on
  * another site cannot add without the browser first asking leave. The backend refuses any
@@ -73,6 +76,8 @@ const post = (path: string, body?: unknown) =>
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: 'no-store',
     credentials: 'same-origin',
+    // One that is never answered is given up, as one that failed is, and whoever asked asks again
+    signal: AbortSignal.timeout(ANSWER_MS),
   })
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
