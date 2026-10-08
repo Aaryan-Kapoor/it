@@ -231,6 +231,9 @@ async function dropWaiting(
     for (const [addressed, aside] of [
       [machineId, undefined],
       [undefined, machineId],
+      // Addressed to no machine and set aside by none, as a click is for a moment while its
+      // page changes hands: of these, only what is on a page of the machine that was stopped
+      [undefined, undefined],
     ] as const) {
       const batch = await ctx.db
         .query('actions')
@@ -248,6 +251,7 @@ async function dropWaiting(
         .take(DROP_AT_ONCE)
       if (batch.length === DROP_AT_ONCE) more = true
       for (const x of batch) {
+        if (addressed === undefined && aside === undefined && (await ctx.db.get(x.artifactId))?.machineId !== machineId) continue
         await ctx.db.patch(x._id, {
           delivery: 'handed_off',
           route: 'stopped',

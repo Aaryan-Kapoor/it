@@ -437,6 +437,12 @@ export const park = mutation({
     // Another machine may have taken it meanwhile (this one's lease ran out while its command
     // was still running). What that machine holds is left exactly as it is.
     if (x.delivery === 'leased' && x.leaseMachineId !== machine._id && (x.leaseExpiresAt ?? 0) > Date.now()) return false
+    // Stopped with its conversation while this machine was trying: it is marked so, and not
+    // set aside or sent on under another address, where the stop would not be found again
+    if (await stoppedSince(ctx, x)) {
+      await dropStopped(ctx, x)
+      return true
+    }
     // The page may have changed hands while this machine was trying. Then the click is not
     // set aside at all: it goes to whoever owns the page now, who has not tried it yet.
     const to = await destination(ctx, x.artifactId)
@@ -510,6 +516,10 @@ export const parkRest = internalMutation({
       .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId))
       .take(50)
     for (const other of rest) {
+      if (await stoppedSince(ctx, other)) {
+        await dropStopped(ctx, other)
+        continue
+      }
       // Only what is still for that conversation on that machine: a page that has changed
       // hands since has had its clicks addressed afresh, and they are gone from this list
       const to = await destination(ctx, other.artifactId)
