@@ -1271,8 +1271,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
       await giveBack()
     } finally {
       over = true
-      // What was noted for a run that never came to be started is not left for the next one
+      // What was noted for a run that never came to be started is not left for the next one.
+      // Nor is the note that this hand-over's hold was lost, however the hand-over ended: a
+      // run that had run out of its time when the hold went ended as one that ran out, and the
+      // note it left kept the conversation's next run from being ended when its own hold was lost
       lostBefore.delete(key)
+      lostHold.delete(key)
       clearInterval(keeping)
       submitting.delete(click.id)
       queueing.delete(click.id)
