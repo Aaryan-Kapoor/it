@@ -182,11 +182,18 @@ export const runBegan = mutation({
     // dropped what was waiting, this run's clicks among it. Looked at in the same step that
     // would say the run is on, so that a stop falls before it and is seen here, or after it
     // and is told to the machine as this run's own.
+    // A click that is no longer there, or whose page is not, is not there to be reopened for
+    // either: its page was deleted meanwhile, and what the stop said of it went with it.
     for (const id of ids ?? []) {
       const actionId = ctx.db.normalizeId('actions', id)
       const x = actionId ? await ctx.db.get(actionId) : null
-      if (x && x.userId === machine.userId && (x.route === 'stopped' || (await stoppedSince(ctx, x)))) return { stopped: true }
+      if (!x || x.userId !== machine.userId || !(await ctx.db.get(x.artifactId))) return { stopped: true }
+      if (x.route === 'stopped' || (await stoppedSince(ctx, x))) return { stopped: true }
     }
+    // And reopening may have been switched off for this app since the machine last heard: it
+    // is asked here, where it is kept, and not only of what the machine remembers of it. (A
+    // connector that names no clicks is one from before this was asked, and is taken at its word)
+    if (ids !== undefined && !(wakesOn(machine.system) && (machine.wakes ?? []).some((w) => w.harness === s.harness))) return { stopped: false, off: true }
     const others = (machine.runs ?? []).filter((r) => r.harness !== s.harness || r.sessionId !== s.id)
     await ctx.db.patch(machine._id, {
       runs: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), since: Date.now(), ...(run ? { run: run.slice(0, 64) } : {}) }].slice(

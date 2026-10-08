@@ -168,7 +168,12 @@ const realTimeout = setTimeout
  * mutation to fail after it has scheduled something (a limit it reached is written down that
  * way), the timers it left are cleared, and with them only what the test has no more use for.
  */
-const dropWhatAFailedCallScheduled = () => vi.clearAllTimers()
+const dropWhatAFailedCallScheduled = () => {
+  // Clearing the timers also puts the stand-in clock back to where the test began, which no test means: the time is kept
+  const now = Date.now()
+  vi.clearAllTimers()
+  vi.setSystemTime(now)
+}
 /** Lets what is due run, without moving the clock: what a limit allows comes back with time. */
 const runWhatIsDue = async (t: T) => {
   await vi.advanceTimersByTimeAsync(0)
@@ -1995,8 +2000,24 @@ describe('clicks and their delivery', () => {
     expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'next', ids: [after] })).toEqual({ stopped: false })
     expect(await listed()).toEqual([['next', false]])
     expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'another' })).toEqual({ stopped: false })
-    // An id that is no click of this person's says nothing
-    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'another', ids: ['not an id'] })).toEqual({ stopped: false })
+    // A click that is no longer there is not there to be reopened for: its page was deleted meanwhile, and what the stop said of it went with it
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'another', ids: ['not an id'] })).toEqual({ stopped: true })
+    await alice.browser.mutation(api.artifacts.remove, { artifactId: p.artifactId })
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'another', ids: [after] })).toEqual({ stopped: true })
+    expect(await listed()).toEqual([['another', false]])
+  })
+
+  test('a run is not said to begin where reopening was switched off for its app since the machine last heard', async () => {
+    const { alice, m, click } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    const waiting = (await click('click-0001')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [waiting as never], for: SESSION })
+    // The person switches it off, and the machine, which has not heard yet, says the run begins
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: false })
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'next', ids: [waiting] })).toEqual({ stopped: false, off: true })
+    expect((await m.as.query(api.machines.me, {})).runs).toEqual([])
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'next', ids: [waiting] })).toEqual({ stopped: false })
   })
 
   test('clicks that were set aside, or are another machine’s, never hide one a listening machine may take', async () => {
@@ -2239,6 +2260,14 @@ describe('clicks and their delivery', () => {
     const refused = results.filter((r) => r === 'rate_limited').length
     expect(refused).toBeGreaterThan(10)
     expect(results.slice(0, 100).every((r) => r === 'ok')).toBe(true)
+  })
+
+  test('a clock that is set back takes nothing away from what a limit allows', async () => {
+    const { click } = await setup()
+    expect(await code(click('click-0001'))).toBe('ok')
+    // The machine It runs on has its clock set back an hour: counted on from a time that is now still to come, an hour's worth would be taken off
+    vi.setSystemTime(Date.now() - 3_600_000)
+    expect(await code(click('click-0002'))).toBe('ok')
   })
 
   test('only so many clicks may wait: on one page, and for one person', async () => {

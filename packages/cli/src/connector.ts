@@ -425,6 +425,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * end the turn or begin another, which is when Codex itself hands the click over.
    */
   const behindTurn = new Map<string, { click: Offered; key: string }>()
+  /** How many of them are kept at once. */
+  const BEHIND_MOST = 200
   const turnRunning = (key: string, now: number) => {
     const s = sessions.get(key)
     if (!(s?.busy === true && now - s.busyAt < TURN_QUIET_MS)) return false
@@ -826,8 +828,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
     try {
       // It is told first, and nothing is started where it could not be told: it is by that
       // word that the page says the agent is working, and offers to stop it
-      const told = await call<{ stopped?: boolean } | null>('mutation', api.machines.runBegan, { for: session, run: runId, ids }).then(
-        (said) => (said?.stopped ? ('stopped' as const) : true),
+      const told = await call<{ stopped?: boolean; off?: boolean } | null>('mutation', api.machines.runBegan, { for: session, run: runId, ids }).then(
+        // Stopped meanwhile, or reopening switched off since this machine last heard: either way nothing is started
+        (said) => (said?.stopped || said?.off ? ('stopped' as const) : true),
         () => false,
       )
       if (!told) {
@@ -844,7 +847,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // more, at the last moment before anything runs: the connector stopping, the machine
       // ceasing to fit, the hold on what it is reopened for being lost, and the person
       // switching reopening off or disconnecting the app
-      if (closing || unfitting || lostBefore.delete(key) || !wanted()) {
+      // And the person opening the conversation themselves: its own add-on is asking by now,
+      // and is given the click in the open app, where another turn begun beside it would cross it
+      const open = sessions.get(key)
+      if (closing || unfitting || lostBefore.delete(key) || !wanted() || (open !== undefined && Date.now() - open.seen < LIVE_MS)) {
         ended = NOT_STARTED
         return ended
       }
@@ -1231,7 +1237,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // Only Codex's queue hands a click over behind a turn that is running
         if (!reopening && !sent.toWaiter && turnRunning(key, Date.now())) {
           behindTurn.set(click.id, { click, key })
-          if (behindTurn.size > 200) behindTurn.delete(behindTurn.keys().next().value!)
         }
         await confirmAll()
       } else {
@@ -1291,6 +1296,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   function queue(click: Offered, reopening: boolean): boolean {
     if (closing || unfitting) return false
+    // What Codex's queue takes behind a running turn is kept here for a waiter in that turn,
+    // and only so much is kept. Past that a click stays with It, where nothing is lost, until
+    // a turn ends and makes room: letting go of the oldest copy to make room took it from a
+    // turn that may still be waiting for it.
+    if (!reopening && !queueing.has(click.id) && behindTurn.size + submitting.size >= BEHIND_MOST) return false
     let tried = queueTries.get(tag(click))
     if (queueing.has(click.id)) return true
     // Tried one way and now to go the other: its conversation was closed and is open, or was
@@ -1616,6 +1626,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // go of where it cannot be: it is by that file that every reopening is refused
           try {
             rmSync(unreadRuns(), { force: true })
+            // And where it could not be moved aside when it was found, it is still where the note of runs is written
+            if (unreadWhereItWas) rmSync(runsFile(), { force: true })
           } catch {
             return [200, { cleared: 0, unkept: true }]
           }
@@ -2088,12 +2100,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
         journal('released', id)
         void call('mutation', api.delivery.release, { id }).catch(() => {})
       }
-      // Said to It at once, so that the site says it beside the machine and on its pages
+      // Said to It at once, so that the site says it beside the machine and on its pages: in
+      // full, whatever plainer report this machine had fallen back on for a while
+      plainUntil = 0
       void report()
     } else if (!wrong && unfitting) {
       const waited = unfitting !== NOT_ASKED
       unfitting = null
       if (waited) say('this machine and the It it joined fit again: what is done on a page is handed over again')
+      plainUntil = 0
       void report()
       void route()
     }
