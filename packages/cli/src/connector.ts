@@ -520,6 +520,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
   }
   keepRuns()
+  /**
+   * The conversations whose reopened turn is being ended because this machine's hold on what
+   * they were reopened for was lost: It was out of reach for as long as a hold lasts, and may
+   * have given the click to another machine by now. A run that went on would act on it a
+   * second time beside whoever has it.
+   */
+  const lostHold = new Set<string>()
   /** When each conversation this machine reopened last ended. */
   const ranUntil = new Map<string, number>()
   /** Clicks that went with an earlier click of their conversation, in the same message: each is done with when its own turn in line comes. */
@@ -627,8 +634,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (ended === null) revive(now.harness, now.id)
       // It ended badly by itself: a key it lacked may be in the person's shell by the next try
       else if (ended !== STOPPED) shellMayHaveChanged()
+      // Ended because its hold on what it was reopened for was lost: nobody stopped it. Its
+      // conversation is told, if it is reopened for the same thing again, that its turn was cut off.
+      if (ended === STOPPED && lostHold.has(key)) cutOff.add(key)
       // Stopped by the person, and not by this connector closing: its next turn is told so
-      if (ended === STOPPED && !closing) {
+      if (ended === STOPPED && !closing && !lostHold.has(key)) {
         if (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)
         stoppedByPerson.add(key)
         keepStopped()
@@ -766,7 +776,27 @@ async function connecting(say: (line: string) => void): Promise<void> {
         )
       }
       // The command can take as long as a lease lasts, so the lease is kept up while it runs
-      keeping = setInterval(() => void call('mutation', api.delivery.renew, { ids: [click.id, ...withIt.map((c) => c.id)] }).catch(() => {}), RENEW_MS)
+      // Only a renewal the backend confirmed keeps it. Told that the click is no longer held
+      // here, or told nothing for as long as a hold lasts, a conversation that was reopened for
+      // it is ended: the click may be another machine's by now.
+      let heldUntil = Date.now() + LEASE_MS
+      keeping = setInterval(() => {
+        const asked = Date.now()
+        void call<string[]>('mutation', api.delivery.renew, { ids: [click.id, ...withIt.map((c) => c.id)] })
+          .catch(() => null)
+          .then((kept) => {
+            if (kept?.includes(click.id)) heldUntil = asked + LEASE_MS
+            else if ((kept !== null || Date.now() > heldUntil) && reopening && !closing && !lostHold.has(key)) {
+              const run = reopenedNow.get(follow(key))
+              if (!run) return
+              lostHold.add(key)
+              say(
+                `${a(harness)} conversation (${short(line)}) is ended: this machine’s hold on what it was reopened for was lost, and that may be with another machine by now`,
+              )
+              run.abort()
+            }
+          })
+      }, RENEW_MS)
       journal('queueing', click.id)
       const sent = { click, toWaiter: false }
       submitting.set(click.id, sent)
@@ -798,6 +828,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
         await giveBack()
         journal('released', click.id)
         await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+        return
+      }
+      // Ended because the hold on it was lost: it is not this machine's to hand over or to give
+      // back, and nothing is counted against the conversation. Whatever else was held with it goes back.
+      if (refused === STOPPED && lostHold.delete(key)) {
+        await giveBack()
+        journal('lost', click.id)
         return
       }
       const handed = refused === null || refused === STOPPED
@@ -1234,7 +1271,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     if (req.method === 'POST' && url.pathname === '/ack') {
       // The agent has it. It is never offered again from here, whatever happens to the report of that.
-      const ids: string[] = Array.isArray(body.ids) ? body.ids.filter((x: unknown): x is string => typeof x === 'string' && held.has(x)) : []
+      // Only a click that was given out from here is taken as received. One that is held and
+      // not yet given to anyone was claimed afresh, for a conversation that has not asked for it
+      // yet: a receipt for it is an old one, from whoever had it before, and taking it would
+      // mark the click as handed to an agent that never saw it.
+      const ids: string[] = Array.isArray(body.ids) ? body.ids.filter((x: unknown): x is string => typeof x === 'string' && held.get(x)?.served === true) : []
       // An add-on that knows says whether the click started a turn or joined one that was
       // running. One that does not say is taken to have been heard at once.
       const woke = body.woke === true

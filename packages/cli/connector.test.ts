@@ -565,6 +565,39 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     },
   )
 
+  test('a conversation reopened for a click is ended when this machine’s hold on the click is lost, and the click is neither handed over from here nor given back', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    // Codex's own command, which takes what it is given and then works for a long while
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\necho $$ > ${bin}/pid\nexec sleep 120\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+    // The backend says, each time it is asked to keep the hold up, that the click is held here no more
+    stand.answer = (name) => (name === 'delivery:renew' ? [] : undefined)
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'pid')) && readFileSync(path.join(bin, 'pid'), 'utf8').trim() !== '')
+    const its = Number(readFileSync(path.join(bin, 'pid'), 'utf8'))
+    const gone = () => {
+      try {
+        process.kill(its, 0)
+        return false
+      } catch {
+        return true
+      }
+    }
+    // At the next renewal the run is ended, and said to have been ended for that
+    for (let n = 0; n < 400 && !gone(); n++) await new Promise((r) => setTimeout(r, 50))
+    expect(gone()).toBe(true)
+    await until(() => said.some((line) => line.includes('hold on what it was reopened for was lost')))
+    await until(() => stand.calls.some((c) => c.name === 'machines:runEnded'))
+    // It is not this machine's any more: not said to be handed over, and not given back either
+    expect(called('delivery:handedOff')).toEqual([])
+    expect(called('delivery:release')).toEqual([])
+  }, 40_000)
+
   test('a conversation that a connector which died left running is ended, with what it had started, before anything is handed out, and is told that its turn was cut off', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
@@ -1065,6 +1098,25 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     answerClaim(['click-9'])
     await until(() => asked('delivery:release').includes('click-9'))
     expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+  })
+
+  test('a receipt for a click that is held here and has been given to nobody yet is not taken: it is an old one, from whoever had the click before it was claimed afresh', async () => {
+    await start()
+    const session = { harness: 'pi', id: 'conversation-1' }
+    expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-1' } })).toEqual({ ok: true })
+    stand.watching.get('delivery:inbox')!([
+      { id: 'click-5', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
+    ])
+    const asked = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
+    for (let n = 0; n < 100 && (await local<{ held: number }>('/health'))?.held !== 1; n++) await new Promise((r) => setTimeout(r, 30))
+    // Held for the conversation, which has not asked for it yet: a receipt that names it is not this hand-over's
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-5'] } })).toEqual({ ok: true, acked: 0 })
+    expect((await local<{ held: number }>('/health'))?.held).toBe(1)
+    expect(asked('delivery:handedOff')).toEqual([])
+    // Given out to its conversation, its receipt is taken
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=pi&session=conversation-1'))?.clicks.map((c) => c.id)).toEqual(['click-5'])
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-5'] } })).toEqual({ ok: true, acked: 1 })
+    await until(() => asked('delivery:handedOff').includes('click-5'))
   })
 
   test('an add-on that went away while its asking was being answered is counted as given nothing: the click claimed for it meanwhile is not written down as handed over, and is handed to it when it asks again', async () => {
