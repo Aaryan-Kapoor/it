@@ -2,7 +2,7 @@ import { LIMITS, QUOTA, WAKES } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { mutation, type QueryCtx, query } from './_generated/server'
+import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { removeLater } from './content'
 import { artifactBySlug, ownArtifact, requireBrowser, requireCaller, requireMachine, requireMachineOrOwner, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
@@ -194,13 +194,38 @@ export const stop = mutation({
     // because It reopened it, everything of its that a machine holds is held for that very
     // run, as what it was started with or as what its add-on is about to be given. Both are
     // what the person is stopping. Left out, what the add-on held came back with the next click.
-    const of = (delivery: 'pending' | 'leased') =>
-      ctx.db
-        .query('actions')
-        .withIndex('by_user_session', (q) => q.eq('userId', user._id).eq('delivery', delivery).eq('harness', a.session!.harness).eq('sessionId', a.session!.id))
-        .take(100)
-    const waiting = [...(await of('pending')), ...(await of('leased'))]
-    for (const x of waiting) {
+    // A page may have hundreds waiting, and one step drops so many: the rest follow in steps of
+    // their own, up to the moment of the stop and no later, so that what the person does on the
+    // page after stopping is kept.
+    const at = Date.now()
+    const dropped = await dropWaiting(ctx, user._id, a.session!, at)
+    if (dropped.more) await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId: user._id, session: a.session!, at })
+    const waiting = { length: dropped.count }
+    log('run.stop_asked', { userId: user._id, artifactId, dropped: waiting.length })
+    return { stopping: true }
+  },
+})
+
+/** How many waiting clicks one step drops, of each of the two ways a click can be waiting. */
+const DROP_AT_ONCE = 100
+
+/**
+ * Drops what is waiting for a conversation that the person stopped, as far as one step goes:
+ * the clicks made up to the stop, whether nobody has them yet or a machine has them in hand.
+ * Says how many it dropped, and whether there may be more.
+ */
+async function dropWaiting(ctx: MutationCtx, userId: Id<'users'>, of: { harness: string; id: string }, at: number): Promise<{ count: number; more: boolean }> {
+  let count = 0
+  let more = false
+  for (const delivery of ['pending', 'leased'] as const) {
+    const batch = await ctx.db
+      .query('actions')
+      .withIndex('by_user_session', (q) => q.eq('userId', userId).eq('delivery', delivery).eq('harness', of.harness).eq('sessionId', of.id))
+      .take(DROP_AT_ONCE)
+    if (batch.length === DROP_AT_ONCE) more = true
+    for (const x of batch) {
+      // Made after the stop: the person did that knowing the agent was stopped, and it is kept
+      if (x.createdAt > at) continue
       await ctx.db.patch(x._id, {
         delivery: 'handed_off',
         route: 'stopped',
@@ -209,13 +234,24 @@ export const stop = mutation({
         leaseMachineId: undefined,
         leaseExpiresAt: undefined,
       })
+      count++
       // It stops counting as waiting, on its page and for the person, as any click does that is no longer waiting
       const page = await ctx.db.get(x.artifactId)
       if (page) await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
     }
-    if (waiting.length) await bump(ctx, user._id, { waiting: -waiting.length })
-    log('run.stop_asked', { userId: user._id, artifactId, dropped: waiting.length })
-    return { stopping: true }
+  }
+  if (count) await bump(ctx, userId, { waiting: -count })
+  // A whole step of clicks that were all made after the stop would be found again for ever: nothing more to drop
+  return { count, more: more && count > 0 }
+}
+
+/** The rest of what a stop drops, a step at a time, until none that was waiting at the stop is left. */
+export const dropRest = internalMutation({
+  args: { userId: v.id('users'), session, at: v.number() },
+  handler: async (ctx, { userId, session: of, at }) => {
+    const dropped = await dropWaiting(ctx, userId, of, at)
+    if (dropped.more) await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId, session: of, at })
+    return null
   },
 })
 
