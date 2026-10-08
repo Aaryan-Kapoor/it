@@ -1,7 +1,7 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import { ALIVE, HARNESSES, INSTALL, NO_WAKE_HERE, newer, WAKES, wakesOn } from '@it/protocol'
+import { ALIVE, HARNESSES, INSTALL, NO_WAKE_HERE, newer, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -181,6 +181,8 @@ function AddMachine({ onClose }: { onClose: () => void }) {
  */
 function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; online: boolean; act: (p: Promise<unknown>) => Promise<void> }) {
   const upgrade = useMutation(api.machines.upgrade)
+  // By the backend's clock, which is the one the asking was timed by
+  const now = useNow(15_000)
   const out = newer(m.latest, m.connectorVersion) ? (m.latest as string) : null
   const state = m.upgrade?.state
   if (state === 'installed')
@@ -192,16 +194,22 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
     )
   if (!out) return null
   const first = !m.runsIt && newer(out, host)
-  const working = state === 'asked' || state === 'working'
+  // At work for as long as an upgrade takes, and no longer: one that has said nothing since
+  // was cut short, and is said to have been, with the way to ask for it again
+  const asked = state === 'asked' || state === 'working'
+  const cutShort = asked && now - (m.upgrade?.at ?? 0) > UPGRADE_MS
+  const working = asked && !cutShort
   return (
-    <p className="panel-note newer" data-tone={state === 'failed' ? 'bad' : undefined}>
+    <p className="panel-note newer" data-tone={state === 'failed' || cutShort ? 'bad' : undefined}>
       {working ? (
         `Updating to It ${out}…`
       ) : (
         <>
           {state === 'failed'
             ? `It ${out} could not be put in place: ${(m.upgrade?.why ?? 'it is not known why').replace(/\.$/, '')}. `
-            : `It ${out} is out. This machine runs ${m.connectorVersion}. `}
+            : cutShort
+              ? `The update to It ${out} did not finish. This machine still runs ${m.connectorVersion}. `
+              : `It ${out} is out. This machine runs ${m.connectorVersion}. `}
           {first ? (
             'Update the machine It runs on first.'
           ) : (
@@ -212,7 +220,7 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
               title={online ? undefined : 'This machine is off'}
               onClick={() => void act(upgrade({ machineId: m.id as Id<'machines'> }))}
             >
-              {state === 'failed' ? 'Try again' : 'Update'}
+              {state === 'failed' || cutShort ? 'Try again' : 'Update'}
             </button>
           )}
         </>

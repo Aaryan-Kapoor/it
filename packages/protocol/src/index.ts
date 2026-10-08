@@ -170,6 +170,12 @@ export const WAKES: readonly Harness[] = ['claude-code', 'codex', 'pi', 'opencod
  * before any said, and is taken at its word as it was.
  */
 export const wakesOn = (system: string | null | undefined): boolean => system !== 'win32'
+/**
+ * How long an upgrade that a person asked for on the site is taken to be at work. One that has
+ * said nothing more by then was cut short (its machine went off, or the program that was to
+ * start It again failed without a word), and may be asked for again.
+ */
+export const UPGRADE_MS = 15 * 60_000
 /** What a person is told where they would switch reopening on for a machine It does not reopen conversations on. */
 export const NO_WAKE_HERE =
   'It does not reopen closed conversations on a Windows machine yet. What is done on a page waits until its conversation is open again.'

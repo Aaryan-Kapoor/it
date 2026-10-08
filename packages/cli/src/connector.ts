@@ -1620,7 +1620,22 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!done) return void (await call('mutation', api.machines.upgrading, { state: 'none' }).catch(() => {}))
       if (service.installedHere()) {
         say(`upgrade: starting again as ${done.to}`)
-        spawn(done.program, ['setup'], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }).unref()
+        // It is started again by the new program's own setup, which ends this connector on its
+        // way. Where this connector is still here to see that setup end badly, or not start at
+        // all, the person is told: left unsaid, the site went on saying it was updating.
+        const setup = spawn(done.program, ['setup'], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true })
+        const failed = (how: string) => {
+          say(`upgrade: ${done.to} is in place, and It could not be started again as it (${how})`)
+          void call('mutation', api.machines.upgrading, {
+            state: 'failed',
+            why: `It ${done.to} is in place on that machine, and It could not be started again as it. Run \`it setup\` there.`,
+          }).catch(() => {})
+        }
+        setup.once('error', () => failed('its setup could not be run'))
+        setup.once('exit', (code, signal) => {
+          if (code !== 0) failed(`its setup ended with ${signal ?? code ?? 'an error'}`)
+        })
+        setup.unref()
       } else {
         say(`upgrade: ${done.to} is in place, and runs once It is started again`)
         await call('mutation', api.machines.upgrading, { state: 'installed', version: done.to }).catch(() => {})

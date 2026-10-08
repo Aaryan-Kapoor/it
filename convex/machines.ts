@@ -1,4 +1,4 @@
-import { ALIVE, HARNESSES, LIMITS, NO_WAKE_HERE, newer, QUOTA, WAKES, wakesOn } from '@it/protocol'
+import { ALIVE, HARNESSES, LIMITS, NO_WAKE_HERE, newer, QUOTA, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
@@ -144,8 +144,6 @@ export const upgrade = mutation({
     return null
   },
 })
-/** How long an upgrade is given before it is taken to have come to nothing, and may be asked for again. */
-const UPGRADE_MS = 15 * 60_000
 
 /** The machine says how far the upgrade it was asked for has got. Only one that was asked for is spoken of. */
 export const upgrading = mutation({

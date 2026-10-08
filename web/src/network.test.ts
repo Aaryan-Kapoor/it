@@ -285,8 +285,11 @@ describe('what is said of an agent app on a machine', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('p.newer button')!.click())
     expect([calls, asked]).toEqual([['machines:upgrade'], [{ machineId: 'machine-1' }]])
     // Asked for and at work, then failed with why and offered again, then done by the machine It runs on, after which the other is offered it
-    await showing([{ ...desk, latest: '0.1.1', upgrade: { at: 1, state: 'working' } }])
+    await showing([{ ...desk, latest: '0.1.1', upgrade: { at: Date.now(), state: 'working' } }])
     expect(said()).toEqual(['Updating to It 0.1.1…'])
+    // One that has said nothing more for longer than an upgrade takes was cut short: said so, and offered again
+    await showing([{ ...desk, latest: '0.1.1', upgrade: { at: Date.now() - 16 * 60_000, state: 'working' } }])
+    expect(said()).toEqual(['The update to It 0.1.1 did not finish. This machine still runs 0.1.0. Try again'])
     await showing([{ ...desk, latest: '0.1.1', upgrade: { at: 1, state: 'failed', why: 'The newest release of It could not be fetched (it-linux-x64).' } }])
     expect(said()).toEqual(['It 0.1.1 could not be put in place: The newest release of It could not be fetched (it-linux-x64). Try again'])
     await showing([
