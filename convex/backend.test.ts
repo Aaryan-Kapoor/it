@@ -1708,6 +1708,16 @@ describe('clicks and their delivery', () => {
     })
     await vi.advanceTimersByTimeAsync(1000)
     expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+    // The stop has dropped its first step and no more yet. What the later steps have still to
+    // come to is given to nobody meanwhile, by any way: asked for, it is not given, and one
+    // that a machine had in hand and says it handed over counts as stopped all the same
+    const yetToDrop = await t.run(async (ctx) => (await ctx.db.query('actions').collect()).filter((x) => x.route !== 'stopped'))
+    expect(yetToDrop.length).toBe(60)
+    const waitingStill = yetToDrop.find((x) => x.delivery === 'pending')!
+    const inHand = yetToDrop.find((x) => x.delivery === 'leased')!
+    expect(await m.as.mutation(api.delivery.claim, { ids: [waitingStill._id], for: SESSION })).toEqual([])
+    expect(await m.as.mutation(api.delivery.handedOff, { id: inHand._id, route: 'addon' })).toMatchObject({ already: true })
+    expect((await t.run((ctx) => ctx.db.get(inHand._id)))?.route).toBe('stopped')
     // The person does something more on the page, after stopping
     await vi.advanceTimersByTimeAsync(50)
     const after = await alice.browser.mutation(api.actions.submit, {
@@ -1715,6 +1725,9 @@ describe('clicks and their delivery', () => {
       displayKey: displayKey('alice'),
       envelope: envelope('click-after-stop'),
     })
+    // That one is as good as any click: a machine may take it
+    expect(await m.as.mutation(api.delivery.claim, { ids: [after.actionId], for: SESSION })).toEqual([after.actionId])
+    await m.as.mutation(api.delivery.release, { id: after.actionId })
     await settle(t)
     const all = await t.run((ctx) => ctx.db.query('actions').collect())
     expect(all.filter((x) => x.route === 'stopped').length).toBe(260)

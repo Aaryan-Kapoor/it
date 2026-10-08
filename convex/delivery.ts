@@ -10,7 +10,7 @@ import { LEASE_MS, LISTENING_MOST, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKES } from
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { internalMutation, mutation, type QueryCtx, query } from './_generated/server'
+import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { destination, noLongerWaiting } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
@@ -234,6 +234,31 @@ export const get = query({
 })
 
 /**
+ * Whether the person stopped the conversation a click is for after the click was made. Such a
+ * click is delivered by no way at all from that moment, though the step that marks it so may
+ * not have come to it yet: a stop drops what was waiting in steps, and what a step has not
+ * reached must not be taken in between. A stop is noted with the machine its page belongs to.
+ */
+async function stoppedSince(ctx: QueryCtx, x: Doc<'actions'>): Promise<boolean> {
+  const page = await ctx.db.get(x.artifactId)
+  if (!page?.machineId || !page.session) return false
+  const machine = await ctx.db.get(page.machineId)
+  return (machine?.stops ?? []).some((s) => s.harness === page.session?.harness && s.sessionId === page.session.id && s.at >= x.createdAt)
+}
+/** Marks a click as stopped with its conversation, as the stop itself does for what it reaches: handed over to nobody, and waiting no more. */
+async function dropStopped(ctx: MutationCtx, x: Doc<'actions'>): Promise<void> {
+  await ctx.db.patch(x._id, {
+    delivery: 'handed_off',
+    route: 'stopped',
+    handedAt: Date.now(),
+    outcome: 'failed',
+    leaseMachineId: undefined,
+    leaseExpiresAt: undefined,
+  })
+  await noLongerWaiting(ctx, x)
+}
+
+/**
  * Leases clicks for delivery. Returns the ones this caller now holds. A connector that is about
  * to deliver into a conversation says which (`for`): a click that has since been addressed to
  * another conversation or another machine, because its page changed hands, is then left alone.
@@ -258,6 +283,11 @@ export const claim = mutation({
       }
       const free = x.delivery === 'pending' || (x.delivery === 'leased' && (x.leaseExpiresAt ?? 0) < now)
       if (!free) continue
+      // Stopped with its conversation, and not yet marked so: it is marked now, and not given out
+      if (await stoppedSince(ctx, x)) {
+        await dropStopped(ctx, x)
+        continue
+      }
       await ctx.db.patch(id, { delivery: 'leased', leaseMachineId: machine._id, leaseExpiresAt: now + LEASE_MS })
       held.push(id)
       // A page whose machine is gone, taken for the conversation it belongs to, is this
@@ -355,6 +385,12 @@ export const handedOff = mutation({
     if (x.delivery === 'handed_off') return said(true)
     if (x.delivery === 'leased' && x.leaseMachineId !== machine._id && (x.leaseExpiresAt ?? 0) > Date.now())
       fail('conflict', 'Another machine is delivering this.')
+    // Stopped with its conversation while it was on its way: it counts as stopped, and not as
+    // something an agent was given, whatever way it was about to be handed over
+    if (await stoppedSince(ctx, x)) {
+      await dropStopped(ctx, x)
+      return said(true)
+    }
     await ctx.db.patch(id, {
       delivery: 'handed_off',
       leaseMachineId: undefined,
