@@ -489,8 +489,13 @@ function ActionStatus({
   // The agent was stopped after the last thing done here: said as that, whatever became of it.
   // What was waiting then went with the stop, and the next thing done reopens the conversation.
   if (stoppedAt !== null && last.at <= stoppedAt) {
-    // Everything of that conversation's that was waiting went with the stop, and is said to have
-    const dropped = (recent ?? []).filter((x) => x.route === 'stopped' && x.at <= stoppedAt && stoppedAt - x.at < 3_600_000).length
+    // Everything of that conversation's that was waiting went with the stop, and is said to have.
+    // Each is counted by when it was dropped: what an earlier stop of the same conversation
+    // dropped was done before this one too, and is none of this one's. (Functions from before
+    // they said when leave only the hour before the stop to go by)
+    const dropped = (recent ?? []).filter(
+      (x) => x.route === 'stopped' && x.at <= stoppedAt && (x.handedAt == null ? stoppedAt - x.at < 3_600_000 : x.handedAt >= stoppedAt),
+    ).length
     return <span className="status">{dropped > 1 ? `Stopped, with ${dropped - 1} more that ${dropped === 2 ? 'was' : 'were'} waiting` : 'Stopped'}</span>
   }
   if (last.delivery === 'handed_off') {

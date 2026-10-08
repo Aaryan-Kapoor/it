@@ -223,6 +223,8 @@ export const forArtifact = query({
       route: x.route ?? null,
       outcome: x.outcome ?? null,
       attended: x.attended ?? null,
+      // When it was handed over, or dropped by a stop: the site tells by it which stop dropped what
+      handedAt: x.handedAt ?? null,
       // What a click carried is for the agent; the site only needs to show where it got to
       ...(c.kind === 'machine' ? { payload: x.payload } : {}),
     }))

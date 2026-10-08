@@ -10,7 +10,7 @@ import type { Sent } from './outbox'
 const NOW = Date.now()
 const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, agent: 'claude-code', machine: 'the laptop', machineSeenAt: NOW }
 /** What the backend last said of the page's clicks, newest first. */
-let recent: { at: number; delivery: string; outcome?: string | null }[]
+let recent: { at: number; delivery: string; outcome?: string | null; route?: string | null; handedAt?: number | null }[]
 /** Whether there is a connection to the backend, and what was asked to be told when that changes. */
 let connected: boolean
 const told = new Set<() => void>()
@@ -337,6 +337,28 @@ describe('what the page’s bar says of the last thing the person did', () => {
     expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
     expect(said()).toBe('Sent more than a day ago. Claude Code gets it when its conversation is next open')
     Object.assign(PAGE, { wake: null, pending: 0 })
+  })
+
+  test('a stop is said with what else it dropped, and not with what an earlier stop of the same conversation dropped', async () => {
+    const stopped = (at: number, handedAt?: number) => ({ at, delivery: 'handed_off', outcome: 'failed', route: 'stopped', ...(handedAt ? { handedAt } : {}) })
+    // Stopped forty minutes ago with one click, and now again with one
+    Object.assign(PAGE, { stoppedAt: NOW - 1000 })
+    recent = [stopped(NOW - 9000, NOW - 1000), stopped(NOW - 2_400_000, NOW - 2_390_000)]
+    await shown()
+    expect(said()).toBe('Stopped')
+    await act(async () => root.unmount())
+    host.remove()
+    // Two more were waiting when it was stopped, one of them dropped a moment after the stop, as the rest of many are
+    recent = [stopped(NOW - 3000, NOW - 400), stopped(NOW - 6000, NOW - 1000), stopped(NOW - 9000, NOW - 1000), stopped(NOW - 2_400_000, NOW - 2_390_000)]
+    await shown()
+    expect(said()).toBe('Stopped, with 2 more that were waiting')
+    await act(async () => root.unmount())
+    host.remove()
+    // Functions that do not say when each was dropped: what was done in the hour before the stop is counted, as it was
+    recent = [stopped(NOW - 9000), stopped(NOW - 2_400_000), stopped(NOW - 4_000_000)]
+    await shown()
+    expect(said()).toBe('Stopped, with 1 more that was waiting')
+    Object.assign(PAGE, { stoppedAt: null })
   })
 
   test('an agent said to be working on a machine that has gone quiet is not said to be working: whether it is, is not known, and a stop is said to wait for the machine', async () => {

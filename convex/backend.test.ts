@@ -1874,6 +1874,11 @@ describe('clicks and their delivery', () => {
       delivery: 'handed_off',
       route: 'stopped',
     })
+    // Each says when it was dropped, which is no earlier than the stop the page tells of: the site counts by that what this stop dropped
+    const stoppedAt = (await alice.browser.query(api.artifacts.get, { slug: 'plan' }))!.stoppedAt!
+    expect(
+      (await alice.browser.query(api.actions.forArtifact, { slug: 'plan' })).filter((x) => x.route === 'stopped').map((x) => x.handedAt! >= stoppedAt),
+    ).toEqual([true, true])
     expect((await alice.browser.query(api.artifacts.list, {})).find((x) => x.slug === 'plan')!.pending).toBe(0)
     // The machine saying afterwards that it had handed that one over changes nothing, and is no error
     expect(await m.as.mutation(api.delivery.handedOff, { id: first as never, route: 'queue' })).toMatchObject({ already: true })
