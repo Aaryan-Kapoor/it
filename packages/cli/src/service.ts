@@ -515,9 +515,15 @@ export function uninstall(patience = STOP_MS): void {
   } else if (process.platform === 'win32') {
     // The service is asked to stop and waited for first, as before its task is replaced
     askToStop(home(), patience)
-    powershell(
-      `Stop-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName ${ps(NAME)} -Confirm:$false -ErrorAction SilentlyContinue`,
+    // A task that is not there is none to take away, and says nothing. One that is still there
+    // after it was asked to go, which is what a refusal leaves, is said as that: and so is a
+    // Windows that could not be asked at all
+    const out = powershell(
+      `Stop-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName ${ps(NAME)} -Confirm:$false -ErrorAction SilentlyContinue; if (Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue) { 'Windows still has the task'; exit 3 }`,
     )
+    // What it starts stays where it is then: taken away, the task that is still there would start nothing at the next sign-in, with no word of why
+    if (!out.ok)
+      throw new Error(`the background task could not be taken away${out.out ? ` (${out.out.split('\n')[0]})` : ''}, so what it starts was left where it is`)
     rmSync(windowsLauncherFile(), { force: true })
   }
 }

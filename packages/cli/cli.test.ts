@@ -1496,8 +1496,20 @@ describe('background service definitions', () => {
         const runs = readFileSync(asked, 'utf8').trim().split('\n')
         expect(runs.map((line) => line.split(' ')[0])).toEqual(['stopped'])
         const script = Buffer.from(runs[0]!.split(' ')[1]!, 'base64').toString('utf16le')
-        expect(script).toMatch(/Stop-ScheduledTask -TaskName 'it' .*; Unregister-ScheduledTask -TaskName 'it' /)
+        expect(script).toMatch(
+          /Stop-ScheduledTask -TaskName 'it' .*; Unregister-ScheduledTask -TaskName 'it' .*; if \(Get-ScheduledTask -TaskName 'it' .*\) \{ .*exit 3 \}/,
+        )
         expect([existsSync(launcher), runningFor(folder)]).toEqual([false, false])
+        // Where Windows still has the task afterwards, or could not be asked, that is said and what the task starts is left where it is
+        writeFileSync(launcher, '@echo off\r\n')
+        writeFileSync(path.join(commands, 'powershell.exe'), '#!/bin/sh\necho "Windows still has the task"\nexit 3\n', { mode: 0o755 })
+        expect(() => serviceUninstall(20_000)).toThrow(
+          'the background task could not be taken away (Windows still has the task), so what it starts was left where it is',
+        )
+        expect(existsSync(launcher)).toBe(true)
+        rmSync(path.join(commands, 'powershell.exe'))
+        expect(() => serviceUninstall(20_000)).toThrow('the background task could not be taken away')
+        expect(existsSync(launcher)).toBe(true)
       } finally {
         Object.defineProperty(process, 'platform', before.platform)
         process.env.PATH = before.PATH
