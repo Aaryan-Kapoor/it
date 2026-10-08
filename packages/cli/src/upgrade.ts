@@ -25,6 +25,12 @@ const PROGRAM_MOST = 400 * 1024 * 1024
 const TEXT_MOST = 8 * 1024 * 1024
 /** How many times a request for a release's file may be sent on to another address. */
 const SENT_ON_AT_MOST = 8
+/**
+ * How long everything an update fetches may take between it, however it comes. It is less than
+ * the time after which the site offers an update to be tried again (`UPGRADE_MS`): an update
+ * that was still waiting then, on an answer that never ends, would have the next try turned away.
+ */
+export const FETCHED_WITHIN_MS = 12 * 60_000
 
 /**
  * Where releases are, and whether that is a place on this machine, which is how an upgrade is
@@ -125,7 +131,11 @@ async function file(name: string, most: number, signal?: AbortSignal, progress?:
  */
 export async function latest(signal?: AbortSignal): Promise<string | null> {
   try {
-    const said = JSON.parse((await file('latest.json', 4096, signal ?? AbortSignal.timeout(20_000))).toString('utf8')) as { version?: unknown } | null
+    // Twenty seconds for it, whoever else may also call the asking off
+    const within = AbortSignal.timeout(20_000)
+    const said = JSON.parse((await file('latest.json', 4096, signal ? AbortSignal.any([signal, within]) : within)).toString('utf8')) as {
+      version?: unknown
+    } | null
     const version = typeof said?.version === 'string' ? said.version.trim().replace(/^v/, '') : ''
     return /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(version) ? version : null
   } catch {
@@ -228,6 +238,8 @@ export async function fetchNewer(
     signal?: AbortSignal
     /** The file to replace, where it is not the program this is: for a test, which is no standalone program. */
     program?: string
+    /** How long the fetching may take, where it is not the usual: for a test, which does not wait so long. */
+    within?: number
   } = {},
 ): Promise<Upgraded | null> {
   const say = opts.say ?? (() => {})
@@ -244,15 +256,31 @@ export async function fetchNewer(
   if (!to) throw new Problem('The newest version of It could not be learned.', 'offline', 'Check that this machine is online, then try again.')
   if (!newer(to, VERSION)) return null
   say(`It ${to} is out, and this is ${VERSION}.`)
+  // Everything that is fetched from here on has so long between it, and is given up when the
+  // time is over, whether nothing comes or a little goes on coming. An update that waited on
+  // for ever could never be tried again, and this is the program that would have to fetch
+  // whatever put that right.
+  const allowed = opts.within ?? FETCHED_WITHIN_MS
+  const limit = AbortSignal.timeout(allowed)
+  const signal = opts.signal ? AbortSignal.any([opts.signal, limit]) : limit
+  const fetchedInTime = <T>(fetching: Promise<T>): Promise<T> =>
+    fetching.catch((err) => {
+      if (!limit.aborted || opts.signal?.aborted) throw err
+      throw new Problem(
+        `The newest release of It had not been fetched after ${Math.round(allowed / 60_000)} minutes, so it was given up and nothing was changed.`,
+        'offline',
+        'Try again. On a connection too slow for that, run the line It was installed with again: it waits for as long as the download takes.',
+      )
+    })
   // The checksums first: what is fetched after them is held to them
   const sums = new Map<string, string>()
-  for (const line of (await file('SHA256SUMS', TEXT_MOST, opts.signal)).toString('utf8').split(/\r?\n/)) {
+  for (const line of (await fetchedInTime(file('SHA256SUMS', TEXT_MOST, signal))).toString('utf8').split(/\r?\n/)) {
     const m = /^([0-9a-f]{64}) [ *](.+)$/.exec(line.trim())
     if (m) sums.set(m[2]!, m[1]!)
   }
   const checked = async (of: string, most: number, progress?: (got: number, total: number | undefined) => void): Promise<Buffer> => {
     const want = sums.get(of)
-    const bytes = want ? await file(of, most, opts.signal, progress) : null
+    const bytes = want ? await fetchedInTime(file(of, most, signal, progress)) : null
     if (!bytes || createHash('sha256').update(bytes).digest('hex') !== want)
       throw new Problem(
         `What was fetched as ${of} is not the file its release says it is, so nothing was changed.`,

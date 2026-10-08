@@ -38,6 +38,8 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
   let server: http.Server
   let files: Record<string, Buffer | string>
   let asked: string[]
+  /** The file that never ends: its first half is sent, and then a byte now and again for as long as anyone listens. */
+  let trickled: string | null
   const was = { ...process.env }
   const name = programName()!
   /** What stands for a program of It: it says its version, as `it --version` does, or fails to start. */
@@ -64,10 +66,19 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     mkdirSync(path.join(folder, 'bin'))
     writeFileSync(here(), says(VERSION), { mode: 0o755 })
     asked = []
+    trickled = null
     server = http.createServer((req, res) => {
       asked.push(req.url ?? '')
       const file = files[(req.url ?? '').replace('/latest/download/', '')]
       if (!(req.url ?? '').startsWith('/latest/download/') || file === undefined) return void res.writeHead(404).end()
+      if ((req.url ?? '').endsWith(`/${trickled}`)) {
+        const whole = Buffer.from(file)
+        res.writeHead(200, { 'content-length': String(whole.length + 1_000_000) })
+        res.write(whole.subarray(0, Math.ceil(whole.length / 2)))
+        const drip = setInterval(() => res.write('.'), 40)
+        res.once('close', () => clearInterval(drip))
+        return
+      }
       res.writeHead(200).end(file)
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -94,6 +105,36 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     }
     delete files['latest.json']
     expect(await latest()).toBeNull()
+  })
+
+  test('is given up when the time for fetching it is over, though a little of it goes on coming, and can then be fetched again', async () => {
+    const before = readFileSync(here(), 'utf8')
+    for (const never of ['SHA256SUMS', name, 'LICENSE.md']) {
+      trickled = never
+      const began = Date.now()
+      const slow = (await fetchNewer({ program: here(), within: 700 }).catch((err) => err)) as Problem
+      expect([never, slow.code, slow.message]).toEqual([
+        never,
+        'offline',
+        'The newest release of It had not been fetched after 0 minutes, so it was given up and nothing was changed.',
+      ])
+      expect(slow.hint).toContain('run the line It was installed with again')
+      expect(Date.now() - began).toBeLessThan(5000)
+      // Nothing was changed, and nothing is left beside the program
+      expect(readFileSync(here(), 'utf8')).toBe(before)
+      expect(existsSync(path.join(folder, 'LICENSE.md'))).toBe(false)
+    }
+    // Whoever calls it off is told that, and not that it was slow
+    trickled = name
+    const off = new AbortController()
+    setTimeout(() => off.abort(), 200)
+    expect(((await fetchNewer({ program: here(), within: 60_000, signal: off.signal }).catch((err) => err)) as Problem).message).toBe(
+      `The newest release of It could not be fetched (${name}).`,
+    )
+    // The next try is not held up by the one that was given up
+    trickled = null
+    expect(await fetchNewer({ program: here() })).toMatchObject({ to: '9.9.9' })
+    expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
   })
 
   test('is put in place of the program that is here, with its terms and notices, once it matches its checksum, starts, and says it is newer', async () => {
