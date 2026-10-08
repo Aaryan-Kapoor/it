@@ -16,10 +16,36 @@
 # repository's releases. IT_VERSION names a release other than the latest, by its tag.
 # IT_INSTALL_NO_PATH, set to anything, leaves your PATH alone.
 #
+# Run by a person in a console window, it shows a few short lines and then goes straight on to
+# the setup, which the program leads. Run any other way (by a script, by an agent, with what it
+# prints sent somewhere else) it says everything in whole sentences, sets nothing up, and ends
+# with the command that does. IT_INSTALL_PLAIN, set to anything, asks for that in a window too.
+#
 # Everything runs inside a block of its own, so that running this as `irm ... | iex` leaves
 # nothing behind in the session it was run from: no variable, no function, no changed setting.
 & {
   $ErrorActionPreference = 'Stop'
+  # A person at a console window is shown a few short lines, each with a mark, and is then led
+  # through the setup by the program itself, as the script for macOS and Linux leads them.
+  # Anywhere else everything is said in whole sentences, since whatever reads it there reads
+  # words. An agent app may give the commands it runs a window, so one that names its
+  # conversation is not taken for a person. And where what is typed does not come from the
+  # window, the setup could not ask anything, so it is not begun.
+  $agent = "$env:CLAUDE_CODE_SESSION_ID$env:CODEX_THREAD_ID$env:OPENCLAW_SESSION_ID$env:HERMES_SESSION_ID$env:OPENCODE_SESSION_ID$env:PI_SESSION_ID$env:IT_SESSION"
+  $led = $false
+  try { $led = $Host.Name -eq 'ConsoleHost' -and -not [Console]::IsOutputRedirected -and -not [Console]::IsInputRedirected -and -not $agent -and -not $env:IT_INSTALL_PLAIN } catch {}
+  # The mark of a thing done: the one the program itself draws, where the window is one that
+  # is known to have it, and elsewhere one that every font a console is set in has
+  $tick = if ($env:WT_SESSION) { [string][char]0x2713 } else { [string][char]0x221A }
+  function Write-Done($text) { Write-Host '  ' -NoNewline; Write-Host $tick -ForegroundColor Green -NoNewline; Write-Host " $text" }
+  function Write-Mind($text) { Write-Host '  ' -NoNewline; Write-Host '!' -ForegroundColor Yellow -NoNewline; Write-Host " $text" }
+  function Write-Quiet($text) { Write-Host "  $text" -ForegroundColor DarkGray }
+  # Whether the line that says it is downloading is still the last thing in the window
+  $open = $false
+  # Whether the setup follows, once everything here is done and tidied away
+  $then = $false
+  # Whether a command typed as `it` in this window is found, which the setup says where it is not
+  $onPath = '0'
   $base = if ($env:IT_INSTALL_BASE) { $env:IT_INSTALL_BASE.TrimEnd('/') } else { 'https://itcan.do/releases' }
   $version = if ($env:IT_VERSION) { $env:IT_VERSION } else { 'latest' }
   if ($version -notmatch '^[A-Za-z0-9._-]+$') { throw "IT_VERSION must be a release's tag." }
@@ -137,7 +163,14 @@
         } finally { $response.Close() }
       }
     }
-    Write-Host 'It is being downloaded for Windows.'
+    if ($led) {
+      Write-Host ''
+      Write-Host '  it' -NoNewline; Write-Host '.' -ForegroundColor Green -NoNewline; Write-Host '  install' -ForegroundColor DarkGray
+      Write-Host ''
+      # Said while it is fetched, and written over by what came of it
+      Write-Host '  Downloading for Windows ...' -ForegroundColor DarkGray -NoNewline
+      $open = $true
+    } else { Write-Host 'It is being downloaded for Windows.' }
     Get-File "$from/SHA256SUMS" (Join-Path $stage 'sums')
     # Read as text whatever the server called it, without a mark at its start, one line at a time
     $sums = ([IO.File]::ReadAllText((Join-Path $stage 'sums'))).TrimStart([char]0xFEFF) -split "`r?`n"
@@ -188,6 +221,7 @@
       } finally { $trial.Dispose() }
     } catch { $why = "Windows would not start it: $($_.Exception.GetBaseException().Message)" }
     if (-not $starts) { throw "The program for Windows does not start on this system. Nothing was installed. $why Where Windows Security or a policy of this computer stopped it, the Protection history in Windows Security says so." }
+    if ($led) { Write-Host "`r" -NoNewline; $open = $false; Write-Done 'Downloaded for Windows, and checked' }
     # One install at a time puts its files in place. The lock is a file, which only one can
     # make. It is held open for the moment the replacing takes, and Windows removes it when it
     # is closed, which it is when this ends, however this ends. One that no install holds was
@@ -234,6 +268,7 @@
       Move-Held $place.New $place.At
     }
     $replacing = $false
+    if ($led) { Write-Done "Installed in $dir" }
     # Earlier programs that were moved aside are removed once they have stopped running. One
     # that still runs is left for the next install to remove.
     Get-ChildItem -LiteralPath $dir -Filter 'it.old.*.exe' -ErrorAction SilentlyContinue | ForEach-Object {
@@ -255,7 +290,8 @@
           Move-Item -Force -LiteralPath $part -Destination $note
         }
       } catch {
-        Write-Host "Where this was downloaded from could not be noted in $root, so It will look for a newer version where it looked before, and not at $base."
+        $unnoted = "Where this was downloaded from could not be noted in $root, so It will look for a newer version where it looked before, and not at $base."
+        if ($led) { Write-Mind $unnoted } else { Write-Host $unnoted }
       }
     }
     # The folder is put first on the PATH that Windows keeps for this account. That PATH is
@@ -286,57 +322,40 @@
               # To every window, that a setting has changed, and which: not waiting on one that has hung
               $told = $user32::SendMessageTimeout([IntPtr]0xffff, 0x1a, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$answer) -ne [IntPtr]::Zero
             } catch {}
-            if ($told) { Write-Host "Added $dir to your PATH. Open a new terminal to use it." }
+            if ($led) {
+              if ($told) { Write-Done 'On your PATH from the next terminal' }
+              else { Write-Mind 'On your PATH once you have signed out of Windows and in again' }
+            }
+            elseif ($told) { Write-Host "Added $dir to your PATH. Open a new terminal to use it." }
             else { Write-Host "Added $dir to your PATH. Sign out of Windows and in again to use it in a new terminal." }
           }
         } finally { $key.Close() }
-      } catch { Write-Host "Your PATH could not be changed. Add $dir to it yourself." }
+      } catch {
+        if ($led) { Write-Mind "Your PATH could not be changed. Add $dir to it yourself." } else { Write-Host "Your PATH could not be changed. Add $dir to it yourself." }
+      }
     }
+    # Whether this window finds the command by its name already, as it does where the folder
+    # was on the PATH before this window was opened
+    try { if (@($env:Path -split ';' | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') }) -contains $dir) { $onPath = '1' } } catch {}
     # The program's path as PowerShell reads it back exactly, whatever characters are in it. A
     # command printed for a person to copy must be the command that was meant, and between single
     # quotes nothing is read as more than itself but the quote, which is written twice.
     # PowerShell reads four other characters as that quote, and they are written twice too.
     $quoted = "'" + ($target -replace "['\u2018\u2019\u201A\u201B]", '$0$0') + "'"
-    # It reports how it is used, and says so here, in the sentence the program itself says,
-    # unless that has been turned off already by the file the program keeps for it. Where one
-    # of the two variables that turn it off is set at all, reading it is left to the program,
-    # and nothing is said here. The program goes by that file and those two variables and by
-    # nothing else, so nothing else is read here either: whatever its note of what it told the
-    # person holds, the sentence is said.
-    $note = Join-Path $root 'telemetry.json'
-    $reporting = (Get-Kind (Join-Path $root 'telemetry-off')) -eq 'nothing'
-    if ($env:IT_TELEMETRY_ENABLED -or $env:DO_NOT_TRACK) { $reporting = $false }
-    if ($reporting) {
-      $sentence = 'It reports usage counts under a random id for this installation, and never what is on a page. Turn it off with `' + "& $quoted" + ' telemetry off` or IT_TELEMETRY_ENABLED=false. What is sent: https://itcan.do/usage-reporting'
-      # The note left in It's folder is how the program knows this has been said to a person,
-      # so that it does not say it again. So it is left only once the sentence is printed, and
-      # only where a person was there to read it: in a console window, and not inside an agent's
-      # conversation. There the sentence is written to the window itself, and not through
-      # PowerShell, which may have been told to send what a script prints somewhere else while
-      # the window is still there: what the note says was read is what was put in the window.
-      # Anywhere else it is printed as everything else here is, no note is left, and the
-      # program's first command at a terminal says it. The note is made only where nothing at
-      # all is, and by a move, which puts it there or fails: a link put there is never written
-      # through.
-      $window = $false
-      try { $window = $Host.Name -eq 'ConsoleHost' -and -not [Console]::IsOutputRedirected } catch {}
-      $agent = "$env:CLAUDE_CODE_SESSION_ID$env:CODEX_THREAD_ID$env:OPENCLAW_SESSION_ID$env:HERMES_SESSION_ID$env:OPENCODE_SESSION_ID$env:PI_SESSION_ID$env:IT_SESSION"
-      $seen = $false
-      if ($window -and -not $agent) {
-        try { [Console]::Out.WriteLine($sentence); [Console]::Out.Flush(); $seen = $true } catch {}
-      }
-      if (-not $seen) { Write-Host $sentence }
-      if ($seen -and (Get-Kind $note) -eq 'nothing') {
-        try {
-          [IO.File]::WriteAllText((Join-Path $stage 'note'), ('{"told": ' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + '}'))
-          [IO.File]::Move((Join-Path $stage 'note'), $note)
-        } catch {}
-      }
+    # Nothing is said here of the usage counts It reports. The program says that itself, once,
+    # at the first command a person runs at a terminal, which the setup is, and records nothing
+    # before it has. So this leaves no note that it was said.
+    if ($led) {
+      Write-Quiet "Source-available under the It License, which is in $license."
+      $then = $true
+    } else {
+      Write-Host "It is source-available software under the It License, which is in $license."
+      # Set apart from what came before it, so that how it ended and what to do next are the last things read
+      Write-Host ''
+      Write-Host 'It is installed. Start it, and connect your agents, with:'
+      Write-Host ''
+      Write-Host "  & $quoted setup"
     }
-    Write-Host "It is source-available software under the It License, which is in $license."
-    Write-Host 'It is installed. Start it, and connect your agents, with:'
-    Write-Host ''
-    Write-Host "  & $quoted setup"
   } finally {
     # Stopped before all three were in, what was there is put back: the old file where one was
     # kept, and nothing where the new file went in over nothing. What is there now is taken
@@ -363,5 +382,26 @@
     if (-not $kept) { try { [IO.Directory]::Delete($stage, $true) } catch {} }
     if ($lock) { try { $lock.Dispose() } catch {} }
     try { [Net.ServicePointManager]::SecurityProtocol = $tls } catch {}
+    # What went wrong is said on a line of its own
+    if ($open) { Write-Host '' }
+  }
+  # The setup follows at once, led by the program, in this same window: what the person types
+  # is read from it. Everything this script made for itself is gone by now, since the setup may
+  # be at work for as long as the person takes. The folder is on the PATH of the setup, as it
+  # will be in every terminal opened from now on, and the three settings made for it here are
+  # put back as they were when it ends, so that nothing of this session is left changed.
+  if ($then) {
+    $was = @{ Flow = $env:IT_INSTALL_FLOW; OnPath = $env:IT_INSTALL_ON_PATH; Path = $env:Path }
+    try {
+      $env:IT_INSTALL_FLOW = '1'
+      $env:IT_INSTALL_ON_PATH = $onPath
+      $env:Path = "$dir;$env:Path"
+      Write-Host ''
+      & $target setup
+    } finally {
+      $env:IT_INSTALL_FLOW = $was.Flow
+      $env:IT_INSTALL_ON_PATH = $was.OnPath
+      $env:Path = $was.Path
+    }
   }
 }

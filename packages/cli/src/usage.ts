@@ -1,7 +1,7 @@
 // Usage reporting: counts of what It is used for, and nothing of what was in it.
 //
 // It is on unless the person turns it off, and nothing is recorded until a person has been
-// told so once: by the install script, or by the first command a person runs at a terminal. An
+// told so once, by the first command a person runs at a terminal, which the setup is. An
 // event is a name and a few properties, each of which is one of a fixed set of words or bands:
 // `ALLOWED` below is the whole of what can be sent, and an event with anything else in it is not
 // sent at all. `docs/usage-reporting.md` says the same to the person, and a test holds the two
@@ -31,6 +31,8 @@ import { currentSession, inHome, Problem, VERSION } from './lib'
 export const DEFAULT_URL = 'https://itcan.do/api/usage'
 export const DOCS = 'https://itcan.do/usage-reporting'
 export const NOTICE = `It reports usage counts under a random id for this installation, and never what is on a page. Turn it off with \`it telemetry off\` or IT_TELEMETRY_ENABLED=false. What is sent: ${DOCS}`
+/** The same in fewer words, for one quiet line among the few a setup led at a terminal shows. `it telemetry` says the rest. */
+export const NOTICE_BRIEF = 'It reports usage counts under a random id, and never what is on a page. `it telemetry off` turns that off.'
 
 // ---------- what can be sent ----------
 
@@ -334,7 +336,7 @@ export function status(): Status {
     notes.push('IT_TELEMETRY_URL is set where this command runs. The background service sends to the address it was installed with, which may be another.')
   return { enabled: !why, because: why ?? 'the default', sendsTo: url(), whatIsSent: DOCS, ...(notes.length ? { note: notes.join(' ') } : {}) }
 }
-/** Whether a person has been told, by the install script or by a command at a terminal. */
+/** Whether a person has been told, by a command at a terminal. */
 export const wasTold = (): boolean => fresh().told !== undefined
 
 /** How this installation is named in what is sent: a hash of its random id. */
@@ -496,10 +498,11 @@ export function set(on: boolean, say?: (line: string) => void): Status {
  * it: at a terminal, and not inside an agent's conversation, since some agent apps give the
  * commands they run a terminal. Run by an agent, a script or a service, a command says nothing
  * and counts nothing, and the next command a person runs at a terminal says it. Until it has
- * been said nothing is recorded. The install script says the same line and leaves the same note,
- * and the first command after it makes the id.
+ * been said nothing is recorded. The install scripts say nothing of it and leave no note: the
+ * setup they lead into is the command that says it. `notice` is the sentence, where it is to be
+ * the shorter one.
  */
-export function tellOnce(say: (line: string) => void, atTerminal: boolean): void {
+export function tellOnce(say: (line: string) => void, atTerminal: boolean, notice: string = NOTICE): void {
   try {
     const { off, kept } = standing()
     known = { file: settingsFile(), tag: tagFrom(kept) }
@@ -509,7 +512,7 @@ export function tellOnce(say: (line: string) => void, atTerminal: boolean): void
       return
     }
     if (!atTerminal || currentSession()) return
-    say(NOTICE)
+    say(notice)
     save({ told: Date.now(), installation: randomUUID() })
   } catch {}
 }

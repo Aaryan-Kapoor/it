@@ -2,10 +2,9 @@
 
 It reports counts of how it is used, so that the person who makes it can tell how many installations are in use and by which paths answers get back to agents. It never reports what is on a page, what anyone clicked, or who you are. This page says what the program on your machine sends, and what a receiver could learn from it.
 
-Reporting is on unless you turn it off, and nothing is recorded until a person has been told so, once, in one line. The line is shown in one of three ways:
+Reporting is on unless you turn it off, and nothing is recorded until a person has been told so, once, in one line. The line is shown in one of two ways:
 
-- The install script prints it, and that counts as telling you when the script's output is a terminal.
-- The first `it` command that a person runs at a terminal prints it. A command counts as that when its output is a terminal and it is not being run inside an agent's conversation, since some agent apps give the commands they run a terminal. `it help`, `it version`, `it skill`, `it serve`, the `it service` commands, `it telemetry` and `it telemetry off` never print it, and neither do the commands that agent apps run as hooks, so it is the first command other than those.
+- The first `it` command that a person runs at a terminal prints it. After an install that is `it setup`, which the install script goes straight on to when a person runs it at a terminal, and a setup that leads you through its steps says it in fewer words, as one of its own lines. The install script itself says nothing of it. A command counts as that when its output is a terminal and it is not being run inside an agent's conversation, since some agent apps give the commands they run a terminal. `it help`, `it version`, `it skill`, `it serve`, the `it service` commands, `it telemetry` and `it telemetry off` never print it, and neither do the commands that agent apps run as hooks, so it is the first command other than those.
 - `it telemetry on` prints it to someone who has not been told, before it turns anything on or notes that you were told.
 
 Until then, a command run by an agent, a script or a service says nothing and records nothing. An installation where nobody was ever at a terminal therefore reports nothing at all.

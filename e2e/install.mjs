@@ -102,17 +102,8 @@ writeFileSync(
     .join(''),
 )
 
-// The sentence the program says once about usage reporting, read from where the program keeps
-// it: the install scripts say the same one, with the program's whole path where it says `it`
-const usageSource = readFileSync(path.join(root, 'packages/cli/src/usage.ts'), 'utf8')
-const NOTICE = (/export const NOTICE = `((?:[^`\\]|\\.)*)`/.exec(usageSource)?.[1] ?? 'the sentence was not found in usage.ts')
-  .replace(/\\`/g, '`')
-  // biome-ignore lint/suspicious/noTemplateCurlyInString: this is the placeholder as it is written in that file
-  .replace('${DOCS}', /export const DOCS = '([^']+)'/.exec(usageSource)?.[1])
-/** That sentence as an install into this folder says it. */
-const noticeFor = (r) =>
-  NOTICE.replace('`it telemetry off`', `\`${windows ? `& '${r.it.replaceAll("'", "''")}'` : `'${r.it.replaceAll("'", "'\\''")}'`} telemetry off\``)
-
+/** Whether an install said anything of the usage counts It reports. It says nothing of them: the program does, at the first command a person runs at a terminal. */
+const saysOfUsage = (r) => /reports usage|telemetry/i.test(r.said)
 /** Everything asked of this machine's stand-in servers, by the host that was asked and the path. */
 const asked = []
 const serve = (handler) =>
@@ -261,10 +252,9 @@ const runs = (it, home) => {
   }
 }
 const read = (file) => (existsSync(file) ? readFileSync(file, 'utf8') : null)
-/** The commands an install printed for the person to copy: the next step, turning usage reporting off, and the PATH for this terminal. */
+/** The commands an install printed for the person to copy: the next step, and the PATH for this terminal. */
 const printed = (r) => ({
   next: /^ {2}(.* setup)$/m.exec(r.said)?.[1] ?? '',
-  off: / Turn it off with `(.* telemetry off)` or /.exec(r.said)?.[1] ?? '',
   path: /or run: {2}(export PATH=.*)$/m.exec(r.said)?.[1] ?? '',
 })
 /**
@@ -369,13 +359,14 @@ try {
     one.said,
   )
   check(
-    'and that It reports how it is used, in the sentence the program itself says: both ways to turn it off, and where what is sent is listed',
-    /IT_TELEMETRY_ENABLED=false/.test(NOTICE) && /What is sent: https:/.test(NOTICE) && one.said.includes(`\n${noticeFor(one)}\n`),
-    `${one.said}\nthe program's sentence: ${noticeFor(one)}`,
+    'and how it ended and what to run next are the last things it says, set apart from the rest by a line with nothing on it',
+    /\n\nIt is installed\. Start it, and connect your agents, with:\n\n {2}.* setup\n?$/.test(one.said.replace(/\r\n/g, '\n')),
+    JSON.stringify(one.said.slice(-300)),
   )
   check(
-    'no note that a person has been told is left by an install whose words went to a program and not to a terminal',
-    !existsSync(path.join(one.folder, 'telemetry.json')),
+    'it says nothing of the usage counts It reports, which the program says itself at the first command a person runs, and leaves no note that anyone was told',
+    !saysOfUsage(one) && !existsSync(path.join(one.folder, 'telemetry.json')),
+    one.said,
   )
   check(
     'only the latest release was asked for, and only its checksums, the program for this system and the two files of terms',
@@ -482,10 +473,7 @@ try {
       const file = path.join(r.folder, 'telemetry.json')
       return existsSync(file) ? { ...JSON.parse(readFileSync(file, 'utf8')), mode: statSync(file).mode & 0o777 } : null
     }
-    // What a person at a terminal is told of it: the same thing in fewer words, among the few lines the install prints there
-    const TOLD = 'It reports usage counts under a random id, and never what is on a page. `it telemetry off` turns that off.'
     const watched = await install('watched', {}, { terminal: true })
-    const noted = noteOf(watched)
     check(
       'run at a terminal, where a person reads it, the install says what it did in a few marked lines and what to run next, in place of the sentences',
       watched.code === 0 &&
@@ -496,52 +484,28 @@ try {
       watched.said,
     )
     check(
-      'and it says there that It reports usage and leaves a note that it was said, which only this user can read',
-      watched.code === 0 &&
-        watched.said.includes(TOLD) &&
-        noted &&
-        Object.keys(noted).join() === 'told,mode' &&
-        Math.abs(Date.now() - noted.told) < 120_000 &&
-        noted.mode === 0o600,
-      `${watched.said} ${JSON.stringify(noted)}`,
-    )
-    await sleep(1100)
-    const watchedAgain = await install('watched', {}, { terminal: true })
-    check(
-      'installing again there says it again and leaves the note as it was',
-      watchedAgain.code === 0 && watchedAgain.said.includes(TOLD) && noteOf(watchedAgain)?.told === noted?.told,
-      `${watchedAgain.said} ${JSON.stringify(noteOf(watchedAgain))}`,
+      'and it says nothing there of usage reporting either, and leaves no note: the setup it leads into is the command that says it',
+      watched.code === 0 && !saysOfUsage(watched) && noteOf(watched) === null,
+      `${watched.said} ${JSON.stringify(noteOf(watched))}`,
     )
     const byAnAgent = await install('by-an-agent', { CODEX_THREAD_ID: 'a-conversation' }, { terminal: true })
     check(
-      'an agent that runs the install is given a terminal by some agent apps, and is still no person: the sentence is said and no note is left',
-      byAnAgent.code === 0 && byAnAgent.said.includes(noticeFor(byAnAgent)) && noteOf(byAnAgent) === null,
+      'an agent that runs the install is given a terminal by some agent apps, and is still no person: it is given the sentences, with what to run next, and no note is left',
+      byAnAgent.code === 0 &&
+        /It is installed\. Start it/.test(byAnAgent.said) &&
+        !/✓/.test(byAnAgent.said) &&
+        !saysOfUsage(byAnAgent) &&
+        noteOf(byAnAgent) === null,
       `${byAnAgent.said} ${JSON.stringify(noteOf(byAnAgent))}`,
     )
-    // Reporting that is already off: by the program's own file, or by either variable
-    const says = (r) => /reports usage|telemetry/.test(r.said)
-    mkdirSync(path.join(tmp, 'turned-off', '.it'), { recursive: true })
-    writeFileSync(path.join(tmp, 'turned-off', '.it', 'telemetry-off'), 'command\n')
-    const turnedOff = await install('turned-off', {}, { terminal: true })
-    const offHere = await install('off-here', { IT_TELEMETRY_ENABLED: 'false' }, { terminal: true })
-    const untracked = await install('untracked', { DO_NOT_TRACK: '1' }, { terminal: true })
-    check(
-      'where usage reporting is already off, the install does not say that It reports usage, and leaves no note',
-      [turnedOff, offHere, untracked].every((r) => r.code === 0 && existsSync(r.it) && !says(r) && noteOf(r) === null),
-      [turnedOff, offHere, untracked].map((r) => r.said).join('\n'),
-    )
-    // The program goes by that file and those two variables alone. A note that says in its own
-    // words that reporting is off turns nothing off, so the install does not go by it either
+    // A note the program left before, whatever it holds, is the program's own, and an install leaves it as it is
     const saysOff = `${JSON.stringify({ enabled: false, offBy: 'command', told: 1 }, null, 1)}\n`
     mkdirSync(path.join(tmp, 'note-says-off', '.it'), { recursive: true })
     writeFileSync(path.join(tmp, 'note-says-off', '.it', 'telemetry.json'), saysOff)
     const noteSaysOff = await install('note-says-off', {}, { terminal: true })
     check(
-      'a note that says reporting is off, which the program does not go by, does not keep the install from saying that It reports usage, and is left as it is',
-      noteSaysOff.code === 0 &&
-        existsSync(noteSaysOff.it) &&
-        noteSaysOff.said.includes(TOLD) &&
-        read(path.join(noteSaysOff.folder, 'telemetry.json')) === saysOff,
+      'the note the program keeps of what it told the person is left as it is by an install over it',
+      noteSaysOff.code === 0 && existsSync(noteSaysOff.it) && !saysOfUsage(noteSaysOff) && read(path.join(noteSaysOff.folder, 'telemetry.json')) === saysOff,
       noteSaysOff.said,
     )
     const zsh = await install('zsh', {}, { shell: '/bin/zsh' })
@@ -732,18 +696,11 @@ try {
     const escaped = await install('escaped', { IT_HOME: path.join(tmp, 'escaped', `x\\047;touch ${marker};#`) })
     const copied = printed(escaped)
     const started = await asPrinted(copied.next.replace(/ setup$/, ' --version'), escaped)
-    const off = await asPrinted(copied.off.replace(/ telemetry off$/, ' --version'), escaped)
     const onPath = await asPrinted(`${copied.path}; printf %s "\${PATH%%:*}"`, escaped)
     check(
       'every command it prints is the command that was meant, and running each as printed runs nothing in the name, backslashes and all',
-      escaped.code === 0 &&
-        started.status === 0 &&
-        /"version"/.test(started.said) &&
-        off.status === 0 &&
-        /"version"/.test(off.said) &&
-        onPath.said === path.join(escaped.folder, 'bin') &&
-        !existsSync(marker),
-      `${escaped.said}\n${started.said}\n${off.said}\n${onPath.said}`,
+      escaped.code === 0 && started.status === 0 && /"version"/.test(started.said) && onPath.said === path.join(escaped.folder, 'bin') && !existsSync(marker),
+      `${escaped.said}\n${started.said}\n${onPath.said}`,
     )
     const relative = await install('relative', { IT_HOME: '-kept-here' })
     check(
@@ -762,7 +719,7 @@ try {
     symlinkSync(path.join(linked, 'mine'), path.join(linked, '.it', 'bin', 'it'))
     symlinkSync(path.join(linked, 'folder'), path.join(linked, '.it', 'LICENSE.md'))
     symlinkSync(path.join(linked, 'nowhere'), path.join(linked, '.it', 'THIRD_PARTY_NOTICES.md'))
-    // And one where the note about usage reporting goes
+    // And one where the program keeps its note about usage reporting, which an install has nothing to write to
     symlinkSync(path.join(linked, 'nowhere-either'), path.join(linked, '.it', 'telemetry.json'))
     const overLinks = await install('linked', {}, { terminal: true })
     check(
@@ -776,7 +733,7 @@ try {
       `${overLinks.said}\n${readdirSync(linked).join(' ')}`,
     )
     check(
-      'and the note about usage reporting is not written through a link',
+      'and nothing is written through a link that stands where the program keeps its note about usage reporting',
       !existsSync(path.join(linked, 'nowhere-either')) && lstatSync(path.join(linked, '.it', 'telemetry.json')).isSymbolicLink(),
       readdirSync(linked).join(' '),
     )
@@ -1254,17 +1211,10 @@ try {
     const odd = await install('odd', { IT_HOME: path.join(tmp, 'odd', "it's $(Set-Content RAN 1) `here") })
     const told = printed(odd)
     const next = await asPrinted(told.next.replace(/ setup$/, ' --version'), odd)
-    const off = await asPrinted(told.off.replace(/ telemetry off$/, ' --version'), odd)
     check(
-      'every command it prints is the command that was meant, and running each as printed runs nothing in the name',
-      odd.code === 0 &&
-        existsSync(odd.it) &&
-        next.status === 0 &&
-        /"version"/.test(next.said) &&
-        off.status === 0 &&
-        /"version"/.test(off.said) &&
-        !existsSync(path.join(odd.home, 'RAN')),
-      `${odd.said}\n${next.said}\n${off.said}`,
+      'the command it prints is the command that was meant, and running it as printed runs nothing in the name',
+      odd.code === 0 && existsSync(odd.it) && next.status === 0 && /"version"/.test(next.said) && !existsSync(path.join(odd.home, 'RAN')),
+      `${odd.said}\n${next.said}`,
     )
   }
 

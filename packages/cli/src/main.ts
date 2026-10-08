@@ -1592,7 +1592,9 @@ async function settingUpLed(a: Args) {
     }
     // The terminal the install script ran in has no `it` on its PATH yet, so a command given
     // there is given with its whole path: typed as `it`, it would not be found
-    const it = process.env.IT_INSTALL_FLOW ? `'${process.execPath.replace(/'/g, `'\\''`)}'` : 'it'
+    // In PowerShell a program named by its path in quotation marks is run with `&` before it, and a quotation mark inside is written twice
+    const byPath = process.platform === 'win32' ? `& '${process.execPath.replace(/'/g, "''")}'` : `'${process.execPath.replace(/'/g, `'\\''`)}'`
+    const it = process.env.IT_INSTALL_FLOW ? byPath : 'it'
     if (!stays) {
       flow.line(`${flow.bold('It is set up, and it is not running.')} Nothing starts it by itself on this machine, so two things are yours to do:`)
       flow.line()
@@ -2288,7 +2290,10 @@ async function main(argv: string[]): Promise<void> {
   // runs says nothing and counts nothing. Never by the service or the connector, which nobody
   // is watching, nor by a command that only prints what it was asked for.
   noMore(cmd, a)
-  if (!['serve', 'service', 'version', '--version', '-v', 'skill', 'telemetry'].includes(cmd)) usage.tellOnce(say, process.stderr.isTTY === true)
+  // A setup that leads a person through it says it as one of its own quiet lines, in fewer words
+  const quietly = cmd === 'setup' && led(a)
+  if (!['serve', 'service', 'version', '--version', '-v', 'skill', 'telemetry'].includes(cmd))
+    usage.tellOnce(quietly ? (line) => flow.line(flow.dim(line)) : say, process.stderr.isTTY === true, quietly ? usage.NOTICE_BRIEF : usage.NOTICE)
   switch (cmd) {
     case 'version':
     case '--version':

@@ -198,15 +198,28 @@ describe('telling the person', () => {
     published()
     expect(lines()).toHaveLength(1)
   })
-  test('both install scripts say the same line the program says, and leave the same note', () => {
+  test('neither install script says it or leaves a note that it was said: the program does, at the first command a person runs', () => {
     const sentence = usage.NOTICE.split('. ')[0]!
     for (const script of ['install.sh', 'install.ps1']) {
       const text = readFileSync(path.join(__dirname, '../../install', script), 'utf8')
-      expect(text, script).toContain(sentence)
-      expect(text, script).toContain('telemetry off')
-      expect(text, script).toContain('telemetry.json')
-      expect(text, script).toMatch(/"told"/)
+      expect(text, script).not.toContain(sentence)
+      expect(text, script).not.toContain(usage.NOTICE_BRIEF.split('. ')[0]!)
+      expect(text, script).not.toContain('telemetry off')
+      expect(text, script).not.toContain('telemetry.json')
+      expect(text, script).not.toMatch(/"told"/)
     }
+  })
+  test('a setup that leads a person through it says the same in fewer words, once, and that counts as told', () => {
+    const said: string[] = []
+    usage.tellOnce((line) => said.push(line), true, usage.NOTICE_BRIEF)
+    usage.tellOnce((line) => said.push(line), true)
+    expect(said).toEqual([usage.NOTICE_BRIEF])
+    // The same three things: that it reports, that it never sends what is on a page, and how to turn it off
+    expect(usage.NOTICE_BRIEF.startsWith(usage.NOTICE.split(' for this installation')[0]!)).toBe(true)
+    expect(usage.NOTICE_BRIEF).toMatch(/never what is on a page/)
+    expect(usage.NOTICE_BRIEF).toMatch(/`it telemetry off`/)
+    expect(usage.NOTICE_BRIEF).not.toMatch(/anonymous/i)
+    expect(usage.wasTold()).toBe(true)
   })
   test.each([
     ['an id and no telling', (s: { told: number; installation: string }) => ({ installation: s.installation })],

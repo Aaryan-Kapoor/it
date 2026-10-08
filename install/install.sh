@@ -537,31 +537,9 @@ if [ -z "${IT_INSTALL_NO_PATH:-}" ] && { [ "${on_path}" = 0 ] || [ "${named}" = 
   fi
 fi
 
-# It reports how it is used, and says so here, in the sentence the program itself says, unless
-# that has been turned off already by the file the program keeps for it. Where one of the two
-# variables that turn it off is set at all, reading it is left to the program, and nothing is
-# said here. The program goes by that file and those two variables and by nothing else, so
-# nothing else is read here either: whatever its note of what it told the person holds, the
-# sentence is said.
-note="${HOME_DIR}/telemetry.json"
-reporting=1
-if [ -e "${HOME_DIR}/telemetry-off" ] || [ -L "${HOME_DIR}/telemetry-off" ]; then reporting=0; fi
-if [ -n "${IT_TELEMETRY_ENABLED:-}${DO_NOT_TRACK:-}" ]; then reporting=0; fi
-if [ "${reporting}" = 1 ]; then
-  if [ "${led}" = 1 ]; then quietly "It reports usage counts under a random id, and never what is on a page. \`it telemetry off\` turns that off."
-  else say "It reports usage counts under a random id for this installation, and never what is on a page. Turn it off with \`${it_quoted} telemetry off\` or IT_TELEMETRY_ENABLED=false. What is sent: https://itcan.do/usage-reporting"
-  fi
-  # The note left in It's folder is how the program knows this has been said to a person, so
-  # that it does not say it again. So it is left only once the sentence is printed, and only
-  # where a person was there to read it: at a terminal, and not inside an agent's conversation,
-  # since some agent apps give the commands they run a terminal. Anywhere else the program's
-  # first command at a terminal says it. The note is made only where nothing at all is,
-  # readable by this user alone, and by a write that makes a new file or fails: a link put
-  # there is never written through.
-  if [ -t 1 ] && [ -z "${agent}" ] && [ ! -e "${note}" ] && [ ! -L "${note}" ]; then
-    ( umask 077; set -C; printf '{"told": %s000}\n' "$(date +%s)" > "${note}" ) 2>/dev/null || true
-  fi
-fi
+# Nothing is said here of the usage counts It reports. The program says that itself, once, at
+# the first command a person runs at a terminal, which the setup is, and records nothing before
+# it has. So this leaves no note that it was said.
 # Asked to join an It on another computer, the program does that now, and nothing is set up
 # here. What the person types is read from the terminal itself where there is one, since this
 # script was read from a pipe, and from nowhere where there is none: left the pipe, the program
@@ -584,6 +562,8 @@ fi
 OLD_LIBC="It cannot run on this system: the backend program it runs needs version 2.35 of the system's C library (glibc), which Ubuntu 22.04, Debian 12 and Fedora 36 have, and this system has ${old_libc}. The \`it\` command itself works here, and \`it login\` joins an It that runs on another machine."
 if [ "${led}" = 0 ]; then
   say "It is source-available software under the It License, which is in ${HOME_DIR}/LICENSE.md."
+  # Set apart from what came before it, so that how it ended and what to do next are the last things read
+  say ""
   if [ -n "${old_libc}" ]; then
     say "It is installed. ${OLD_LIBC}"
     exit 0
