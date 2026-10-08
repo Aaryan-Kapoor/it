@@ -114,7 +114,7 @@ The bar above a page says what is still waiting, though something you did later 
 
 Once the agent has changed the page after what you did, the bar stops saying "Your agent has it": the answer is on the page. What is still waiting goes on being said, and "Done" or a failure is said for ten minutes.
 
-If the service log says that It could not read its own note of which conversations were running, it has kept that note as `runs.json.unreadable` in its folder and reopens no conversation until you have dealt with it: see that no agent It started is still running on that machine, and then delete the file. Where one conversation's earlier run could not be checked on or ended, only that conversation is held, and It looks again each time it would reopen it.
+If a page says that a turn from before may still be running, or `it status` says that some conversations are not reopened for now, run `it runs` on that machine. It lists what It has reopened and what it holds back: a conversation whose earlier run it could not check on or end, or every conversation where it could not read its own note of what was running (kept as `runs.json.unreadable` in its folder). They are reopened again once the machine has been started again. To have that sooner, see that no agent It started is still running there, and run `it runs clear`.
 
 On a machine that joined an It, `it status` may say that the two are of versions that do not work together, and which of them to update. The machine stays joined. Nothing done on a page is handed to an agent on it until the two fit, which It asks about every minute, so there is nothing to do after the update but wait a moment.
 

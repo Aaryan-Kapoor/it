@@ -151,6 +151,14 @@ function serviceSaid(background: { registered: boolean; state: string }, connect
         : 'Nothing starts It by itself on this machine: no systemd for your account can be reached from here. `it serve` runs it, in a terminal or under a supervisor of your own.',
     // A machine that joined an It of a version it does not fit hands nothing over, and says which of the two to update
     ...(typeof connector.unfit === 'string' ? [`${connector.unfit} Nothing done on a page is handed to an agent on this machine until then.`] : []),
+    ...(connector.unchecked === true
+      ? [
+          'The It this machine joined has not yet said which version it speaks, so nothing done on a page is handed to an agent here yet. It is asked again every minute: check that that It is running and can be reached from here.',
+        ]
+      : []),
+    ...(typeof connector.heldRuns === 'number' && connector.heldRuns > 0
+      ? ['Some conversations are not reopened for now, since a turn of theirs from before may still be running: `it runs` says which, and what to do.']
+      : []),
     ...(running && connector.ok !== true
       ? [
           'It is not handing what is done on a page to the conversations on this machine, so nothing done there reaches an agent here by itself. `it service logs` says what it met.',
@@ -249,6 +257,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   telemetry: [1, 'telemetry [on | off]'],
   upgrade: [0, 'upgrade [--check]'],
   updates: [1, 'updates [on | off]'],
+  runs: [1, 'runs [clear]'],
   create: [1, 'create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)'],
   update: [1, 'update <id> (--file f | --dir d | --html "<…>" | pipe)'],
   list: [0, 'list'],
@@ -595,9 +604,12 @@ async function wait(a: Args) {
       busy = false
     }
   }
-  const onClicks = async (clicks: Listed[]) => {
-    if (busy || ending) return
+  /** The wait has said its last word (that its time ran out): nothing is printed after it. */
+  let over = false
+  const onClicks = async (clicks: Listed[]): Promise<'printed' | 'nothing' | 'failed'> => {
+    if (busy || ending || over) return 'nothing'
     busy = true
+    let came: 'printed' | 'nothing' | 'failed' = 'nothing'
     try {
       await report()
       const fresh = clicks.filter((c) => !printedIds.has(c.id) && mine(c))
@@ -608,6 +620,12 @@ async function wait(a: Args) {
         // was offered for: a page that has changed hands meanwhile keeps its click for its new owner
         else for (const c of fresh) for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: [c.id], for: c.session! })) got.add(id)
         for (const c of fresh.filter((x) => got.has(x.id))) {
+          // The wait ended while this was being asked for: it is given back, and not printed after the last word
+          if (ending || over) {
+            await call('mutation', api.delivery.release, { id: c.id }).catch(() => {})
+            continue
+          }
+          came = 'printed'
           // Out of this process first, and only then reported as handed over
           await emit(printed(c))
           printedIds.add(c.id)
@@ -623,10 +641,12 @@ async function wait(a: Args) {
       if (printedIds.size > 0 && !follow) await finish(0)
     } catch (err) {
       say(`wait: ${(err as Error).message}`)
+      if (came !== 'printed') came = 'failed'
       if (printedIds.size > 0 && !follow) await finish(0)
     } finally {
       busy = false
     }
+    return came
   }
   // Read by the page, or by the conversation: never everything that is waiting, where other
   // conversations' clicks could stand in front of this one's
@@ -653,30 +673,44 @@ async function wait(a: Args) {
   void onHandedBack()
   if (seconds > 0) {
     const timeUp = async (): Promise<void> => {
+      const printedOne = () => printedIds.size > 0 && !follow
       // Something was printed, and this is ending with it: that was no wait in which nothing happened
-      if (ending || (printedIds.size > 0 && !follow)) return
+      if (ending || printedOne()) return
       // Something is being printed or reported this moment: looked at again when that is done
       if (busy) return void setTimeout(() => void timeUp(), 250)
-      // "Nothing happened" is said only on It's own word, asked now: a wait that could not
-      // reach It all the while has heard nothing, which is not the same
-      try {
-        const there = (await waitingNow()).filter((c) => !printedIds.has(c.id) && mine(c))
-        // Something is waiting after all, and has only not been taken yet: it is taken now
-        if (there.length) {
-          await onClicks(there)
-          if (ending) return
-        }
-      } catch (err) {
-        const p = err instanceof Problem ? err : new Problem(String((err as Error)?.message ?? err))
-        say(
-          JSON.stringify({
-            error: { code: p.code, message: `The wait ran out of time without It being reached: ${p.message}`, ...(p.hint ? { hint: p.hint } : {}) },
-          }),
-        )
+      const failed = (p: Problem, what: string) => {
+        say(JSON.stringify({ error: { code: p.code, message: `${what}: ${p.message}`, ...(p.hint ? { hint: p.hint } : {}) } }))
         clearInterval(again)
-        return void finish(1)
+        void finish(1)
       }
-      if (ending || (printedIds.size > 0 && !follow)) return
+      // "Nothing happened" is said only on It's own word, asked now: a wait that could not
+      // reach It all the while has heard nothing, which is not the same. Nothing else is taken
+      // or printed while that is asked, so that the last word and an action do not cross.
+      busy = true
+      let there: Listed[]
+      try {
+        there = (await waitingNow()).filter((c) => !printedIds.has(c.id) && mine(c))
+      } catch (err) {
+        busy = false
+        if (ending || printedOne()) return
+        return failed(
+          err instanceof Problem ? err : new Problem(String((err as Error)?.message ?? err)),
+          'The wait ran out of time, and It could not be asked then whether anything was waiting',
+        )
+      }
+      busy = false
+      // Something is waiting after all, and has only not been taken yet: it is taken now
+      if (there.length) {
+        const came = await onClicks(there)
+        if (ending || printedOne()) return
+        if (came === 'failed')
+          return failed(
+            new Problem('It could not be reached to take it.', 'offline'),
+            'The wait ran out of time with something waiting that could not be taken',
+          )
+      }
+      // The last word, and nothing after it
+      over = true
       clearInterval(again)
       await emit({ timedOut: true })
       void finish(0)
@@ -889,14 +923,10 @@ async function uninstall(a: Args) {
     if (!go) return forPerson(a) ? tell(['Nothing was changed.']) : out({ removed: false })
   }
   const left: string[] = []
-  // 1. The add-ons, each from where this folder put it
-  for (const id of HARNESSES) {
-    if (!existsSync(stampFile(id))) continue
-    const gone = await disconnect(id, say).catch(() => false)
-    if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
-    else left.push(`${KNOWN[id].label} still has It’s add-on, which could not be taken out. Its own command for add-ons removes it.`)
-  }
-  // 2. The background service, and an `it serve` someone started by hand in this folder
+  // First of all the background service, since it is the one thing that may refuse: where it
+  // could not be stopped, nothing else is taken away, so that It is still whole and this can
+  // be run again. With the program and its folder gone and the service left, there would be
+  // nothing left to run.
   // The one service a machine has belongs to the It folder its definition names. One that runs
   // It from another folder is another It's, and is left as it is.
   if (service.definedFor() !== 'another folder') {
@@ -905,9 +935,21 @@ async function uninstall(a: Args) {
       service.uninstall()
       if (was) say('The background service is stopped, and no longer starts by itself.')
     } catch (err) {
-      left.push(`The background service could not be taken away (${why(err)}).`)
+      throw new Problem(
+        `It was not taken off this machine: ${why(err)}.`,
+        'error',
+        'Nothing else was changed, and It is as it was. Run `it uninstall` again once the service can be stopped.',
+      )
     }
   }
+  // 1. The add-ons, each from where this folder put it
+  for (const id of HARNESSES) {
+    if (!existsSync(stampFile(id))) continue
+    const gone = await disconnect(id, say).catch(() => false)
+    if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
+    else left.push(`${KNOWN[id].label} still has It’s add-on, which could not be taken out. Its own command for add-ons removes it.`)
+  }
+  // 2. An `it serve` someone started by hand in this folder
   service.askToStop(folder, 30_000)
   if (service.runningFor(folder)) left.push('It is still running, and was asked to stop: end the `it serve` you started, in its terminal.')
   // 3. Its line in the shell's profile, with the comment above it
@@ -1974,7 +2016,9 @@ async function serviceCommand(a: Args) {
           ? inWords(await notRunning(found))
           : notAnswering(found),
       ...serviceSaid(stands, stands.connector, stands.running),
-      ...(stands.connector.ok === true && typeof (stands.connector as { unfit?: unknown }).unfit !== 'string'
+      ...(stands.connector.ok === true &&
+      typeof (stands.connector as { unfit?: unknown }).unfit !== 'string' &&
+      (stands.connector as { unchecked?: unknown }).unchecked !== true
         ? ['It is ready to hand what is done on a page to the conversation that made it, on this machine.']
         : []),
     ])
@@ -2077,6 +2121,9 @@ This machine
   it upgrade [--check]           Put the newest It in place of this one, and start it again where
                                  it is registered to start by itself. With --check, only say
                                  whether a newer one is out.
+  it runs [clear]                Say which conversations It has reopened, and which it holds back
+                                 because a turn from before may still be running. With clear, let
+                                 those be reopened again, once you have looked that none is.
   it updates [on | off]          Say whether It looks every half hour for a newer version,
                                  or turn that on or off. It looks until it is turned off.
   it version | it help
@@ -2180,6 +2227,58 @@ async function main(argv: string[]): Promise<void> {
           : started === 'failed'
             ? `It could not be started again${why ? `: ${why}` : ''}. Run \`it setup\` to see why.`
             : 'It runs as the new version once it is started again: stop `it serve` where it is running, and start it.',
+      ])
+    }
+    case 'runs': {
+      // The conversations It is not reopening, because a turn of theirs from before could not be checked on or ended
+      type Held = {
+        unread: boolean
+        held: { agent: string; conversation: string; pid: number; since: string }[]
+        running: { agent: string; conversation: string }[]
+      }
+      const sub = a._[0]
+      if (sub !== undefined && sub !== 'clear') throw new Problem('It is `it runs` or `it runs clear`.', 'invalid')
+      const now = await local<Held>('/runs')
+      if (!now)
+        throw new Problem(
+          'It is not running on this machine, so there is nothing to ask about what it reopened.',
+          'offline',
+          'Start it with `it serve` or `it setup`.',
+        )
+      if (sub === 'clear') {
+        if (!now.unread && !now.held.length) return forPerson(a) ? tell(['Nothing is held back: there is nothing to clear.']) : out({ cleared: 0 })
+        if (!a.flags.yes && !flow.live())
+          throw new Problem(
+            'This lets It reopen conversations that it is holding back because a turn of theirs from before may still be running, and is not done without being asked for twice.',
+            'invalid',
+            'Look first that no agent It started is still running on this machine. Then run `it runs clear` at a terminal, where it asks, or `it runs clear --yes`.',
+          )
+        if (!a.flags.yes) {
+          const go = await flow.pick('Have you looked that no agent It started is still running on this machine?', [
+            { value: false, label: 'No, leave them held' },
+            { value: true, label: 'Yes, let It reopen them again' },
+          ])
+          if (!go) return tell(['Nothing was changed.'])
+        }
+        const done = await local<{ cleared: number }>('/runs', { method: 'POST', body: { clear: true } })
+        if (!forPerson(a)) return out({ cleared: done?.cleared ?? 0 })
+        return tell([`It reopens them again. Each is told, the next time, that a turn of its was cut off and to look before it does anything twice.`])
+      }
+      if (!forPerson(a)) return out(now)
+      return tell([
+        now.running.length
+          ? `Reopened and running now: ${now.running.map((r) => `${appName(r.agent)} (${r.conversation})`).join(', ')}.`
+          : 'It has no conversation reopened at the moment.',
+        ...(now.unread ? ['It could not read its own note of which conversations were running when it last stopped, so it reopens none of them for now.'] : []),
+        ...now.held.map(
+          (r) =>
+            `${appName(r.agent)} conversation ${r.conversation} is held back: a turn of it from before (process ${r.pid}, started ${r.since} UTC) may still be running, and could not be checked on or ended.`,
+        ),
+        ...(now.unread || now.held.length
+          ? [
+              'They are reopened again once this machine has been started again. To let them be reopened sooner, look that no agent It started is still running here (`ps -u "$USER" -o pid,lstart,args`), and then run `it runs clear`.',
+            ]
+          : ['Nothing is held back.']),
       ])
     }
     case 'updates': {

@@ -23,16 +23,16 @@ Run it by that name alone, `it`, every time. Only if the name is not found ("com
 
 ## Whether the message arrives by itself
 
-It can only where It's add-on for your harness is connected and the connector is running. `it status` says whether they are: in `harnesses`, your harness has `"addon": "connected"`, and `connector` has `"ok": true` and no `"unfit"`. With `"needs_approval"`, the `detail` beside it says what the user still has to do. Where `connector` has `"unfit"`, this machine joined an It of a version it does not work with, and nothing done on a page is handed to any agent here until the machine it names is updated: tell the user what it says, and do not count on a message or on `it wait` meanwhile.
+It can only where It's add-on for your harness is connected and the connector is running. `it status` says whether they are: in `harnesses`, your harness has `"addon": "connected"`, and `connector` has `"ok": true` and neither `"unfit"` nor `"unchecked"`. With `"needs_approval"`, the `detail` beside it says what the user still has to do. Where `connector` has `"unfit"`, this machine joined an It of a version it does not work with, and nothing done on a page is handed to any agent here until the machine it names is updated: tell the user what it says, and do not count on a message or on `it wait` meanwhile. `"unchecked"` means that It has not yet been able to ask, which is the same for now: nothing is handed over until it has.
 
 Both are needed, and neither is proof that a message will reach this conversation. They say that the add-on is installed and that the connector is up, not that your harness lets an add-on speak in the place you are running. In Hermes a message arrives by itself in the plain `hermes` terminal. In Hermes's TUI and its desktop app it arrives only in a Hermes later than 0.21.5, once the user has allowed it there, and in its messaging gateway it never does. So if you are in Hermes and cannot tell that you are in its plain terminal, or if you once ended a turn expecting a message and none came, do not count on one.
 
 It also listens for at most 40 conversations on one machine at a time, the ones it heard from most recently. Where the user has more than that open, a message for one of the others does not arrive by itself until that conversation is among the 40 again.
 
-If it will not arrive by itself, or you cannot tell, wait for it: `it wait --id deploy-plan` blocks until the user acts on that page, prints the action and exits.
+If it will not arrive by itself, or you cannot tell, wait for it: `it wait --id deploy-plan` blocks until the user acts on that page, prints the action and exits. Where several things were waiting they are all printed, one JSON object on a line each: read every line.
 
 - **Without `--id`** it waits for an action on any page this conversation made. That needs your harness to tell `it` which conversation this is. Where it does not, the command is refused, and you must name the page with `--id`.
-- **`--timeout <seconds>`** is for a harness that stops a command after a couple of minutes: `it wait --id deploy-plan --timeout 100`. When the time is up it prints `{"timedOut": true}` and exits with status 0. Nothing was lost and nothing has happened yet: run it again.
+- **`--timeout <seconds>`** is for a harness that stops a command after a couple of minutes: `it wait --id deploy-plan --timeout 100`. When the time is up it prints `{"timedOut": true}` and exits with status 0. Nothing was lost and nothing has happened yet: run it again. Where It could not be reached to say so, the command ends with an error and a status other than 0 instead: that is not a wait in which nothing happened, so check `it status` before you wait again.
 - **`--follow`** goes on printing actions, one JSON object on a line each, and does not exit after the first.
 
 ## Writing the page
