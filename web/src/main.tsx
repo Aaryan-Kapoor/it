@@ -18,12 +18,20 @@ const convex = connect(location.origin, { authRefreshTokenLeewaySeconds: EARLY_M
  */
 const keeps = (() => {
   try {
-    localStorage.setItem('it.keeps', '1')
-    localStorage.removeItem('it.keeps')
-    return localStorage.length >= 0
+    // Reading is what a browser that refuses a site its storage does not allow at all
+    void localStorage.length
+    void localStorage.getItem('it.display')
   } catch {
     return false
   }
+  try {
+    localStorage.setItem('it.keeps', '1')
+    localStorage.removeItem('it.keeps')
+  } catch (err) {
+    // Full, and not refused: what is kept here can still be read and sent, which is what makes room again
+    return (err as { name?: string } | null)?.name === 'QuotaExceededError'
+  }
+  return true
 })()
 if (keeps) {
   // What was done on a page too long ago to be sent is not kept, whoever is paired here now
