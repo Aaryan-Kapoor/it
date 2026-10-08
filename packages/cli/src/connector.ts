@@ -289,8 +289,35 @@ export async function runConnector(say: (line: string) => void): Promise<void> {
   }
 }
 
+/**
+ * On a machine that joined an It: what is wrong where that It and this program speak different
+ * versions of the way machines talk to It, as that It says at its door. Nothing where they
+ * speak the same, where this machine runs It itself, or where the door cannot be asked: not
+ * knowing is not a reason to stop.
+ */
+async function unfit(): Promise<Problem | null> {
+  const joinedAt = readJson<{ at?: unknown }>(inHome('machine.json'))?.at
+  if (typeof joinedAt !== 'string') return null
+  return direct(`${joinedAt}/cli/config`, { signal: AbortSignal.timeout(10_000) })
+    .then(async (answer) => incompatible(((await answer.json()) as { protocol?: unknown } | null)?.protocol))
+    .catch(() => null)
+}
+/** How often a machine that does not fit the It it joined asks again whether it does, and one that fits whether it still does. */
+const FITS_EVERY_MS = 60_000
+
 /** Everything the connector does once the folder's lock is its own. */
 async function connecting(say: (line: string) => void): Promise<void> {
+  // A machine that joined an It hands nothing to an agent, and asks nothing of that It, while
+  // the two speak different versions of how machines talk to it: what one of them means by a
+  // request is not what the other takes it for. It waits here, having said which of the two is
+  // to be updated, and goes on by itself once they fit. `it status` sends the person to this log.
+  for (let said = false; ; said = true) {
+    const wrong = await unfit()
+    if (!wrong) break
+    if (!said)
+      say(`${wrong.message} ${wrong.hint ?? ''} Nothing done on a page is handed to an agent on this machine until then. It is asked again every minute.`)
+    await new Promise((r) => setTimeout(r, FITS_EVERY_MS))
+  }
   // Something that goes wrong again and again (the backend cannot be reached, say) is said once
   // every ten minutes for each thing it is about, however many other lines come in between
   const saidAt = new Map<string, number>()
@@ -1581,15 +1608,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const tick = setInterval(() => void route(), 1000)
   // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
   const alive = setInterval(() => void report(), ALIVE.everyMs)
-  // On a machine that joined an It: whether that It still speaks the version this program does.
-  // Asked as it starts, and said in the log where it does not, with which of the two to update:
-  // what follows would otherwise fail a request at a time, with no word of why.
-  const joinedAt = readJson<{ at?: unknown }>(inHome('machine.json'))?.at
-  if (typeof joinedAt === 'string')
-    void direct(`${joinedAt}/cli/config`, { signal: AbortSignal.timeout(10_000) })
-      .then(async (answer) => incompatible(((await answer.json()) as { protocol?: unknown } | null)?.protocol))
-      .then((wrong) => wrong && say(`${wrong.message} ${wrong.hint ?? ''}`))
-      .catch(() => {})
+  // And whether it still does, for as long as this runs: the It it joined may be updated under
+  // it. Found not to fit, the connector stops, which ends what it reopened and gives back what
+  // it held; started again, it waits as above until the two fit.
+  const fits = setInterval(
+    () =>
+      void unfit().then((wrong) => {
+        if (!wrong) return
+        say(`${wrong.message} ${wrong.hint ?? ''} Stopping until then.`)
+        stopping?.(0)
+      }),
+    FITS_EVERY_MS * 5,
+  )
   // Whether a newer It is out: asked a little after starting, and every half hour from then on
   const firstLook = setTimeout(() => void lookForNewer(), 20_000)
   const looks = setInterval(() => void lookForNewer(), LOOKS_EVERY_MS)
@@ -1632,6 +1662,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   clearInterval(alive)
   clearTimeout(firstLook)
   clearInterval(looks)
+  clearInterval(fits)
   usage.stop()
   // The conversations this connector reopened are ended with it, and everything they had
   // started: nothing It runs with nobody watching runs on once It has been stopped. What each
