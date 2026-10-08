@@ -34,19 +34,19 @@ describe('the addresses another device can open the site at', () => {
         { address: '127.0.0.1', family: 'IPv4', internal: true },
         { address: '::1', family: 'IPv6', internal: true },
       ],
-      enp3s0: [four('10.0.0.74'), six('2601:cb:8100:c690:62c2:2305:413b:8b57'), six('2601:cb:8100:c690::4f1a'), six('fe80::2691:f4ec:5bf2:6b81')],
-      tailscale0: [four('100.109.44.60'), six('fd7a:115c:a1e0::cc01:2c98'), six('fe80::7fc6:686a:814:995f')],
+      enp3s0: [four('10.0.0.20'), six('2001:db8:100:c690:1111:2222:3333:4444'), six('2001:db8:100:c690::4f1a'), six('fe80::1111:2222:3333:4444')],
+      tailscale0: [four('100.101.42.17'), six('fd7a:115c:a1e0::ab12:4843'), six('fe80::5555:6666:777:8888')],
       docker0: [four('172.17.0.1'), six('fe80::42:acff:fe11:1')],
       'br-0a1b2c3d4e5f': [four('172.18.0.1')],
       veth9a8b7c6: [six('fe80::1c2d:3eff:fe4f:5a6b')],
       virbr0: [four('192.168.122.1')],
     })
     expect(listed).toEqual([
-      'http://10.0.0.74:4700',
-      'http://100.109.44.60:4700',
-      'http://[2601:cb:8100:c690:62c2:2305:413b:8b57]:4700',
-      'http://[2601:cb:8100:c690::4f1a]:4700',
-      'http://[fd7a:115c:a1e0::cc01:2c98]:4700',
+      'http://10.0.0.20:4700',
+      'http://100.101.42.17:4700',
+      'http://[2001:db8:100:c690:1111:2222:3333:4444]:4700',
+      'http://[2001:db8:100:c690::4f1a]:4700',
+      'http://[fd7a:115c:a1e0::ab12:4843]:4700',
     ])
   })
 

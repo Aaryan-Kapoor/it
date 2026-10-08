@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 const CODE = 'abcdefghij0123456789'
 const LAN = 'http://192.168.1.20:4700'
 const WIRE = 'http://192.168.1.31:4700'
-const SIX = 'http://[fd7a:115c:a1e0::cc01:2c98]:4700'
+const SIX = 'http://[fd7a:115c:a1e0::ab12:4843]:4700'
 
 const calls: string[] = []
 /** What each was asked with, in the same order. */

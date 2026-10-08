@@ -12,7 +12,7 @@ process.env.CONVEX_SITE_URL = SITE
 process.env.IT_PORT = '39000'
 
 const LAN = 'http://192.168.1.20:39000'
-const SIX = 'http://[fd7a:115c:a1e0::cc01:2c98]:39000'
+const SIX = 'http://[fd7a:115c:a1e0::ab12:4843]:39000'
 
 /** A backend with the one person, and what each kind of caller calls it as: a machine, the owner's browser and a screen. */
 async function household() {
@@ -67,8 +67,8 @@ describe('what the service says of its door', () => {
     expect(await owner.query(api.network.get, {})).toEqual({ on: true, addresses: [LAN, SIX] })
     expect(await t.query(internal.network.current, {})).toEqual({ on: true, wanted: true, addresses: [LAN, SIX] })
     // The machine moves to another network
-    await t.mutation(internal.network.report, { on: true, wanted: true, addresses: ['http://10.0.0.74:39000'] })
-    expect(await owner.query(api.network.get, {})).toEqual({ on: true, addresses: ['http://10.0.0.74:39000'] })
+    await t.mutation(internal.network.report, { on: true, wanted: true, addresses: ['http://10.0.0.20:39000'] })
+    expect(await owner.query(api.network.get, {})).toEqual({ on: true, addresses: ['http://10.0.0.20:39000'] })
     // Turned off, no address is given, whatever was sent with the word
     await t.mutation(internal.network.report, { on: false, wanted: false, addresses: [LAN] })
     expect(await owner.query(api.network.get, {})).toEqual({ on: false, addresses: [] })

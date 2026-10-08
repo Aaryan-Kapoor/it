@@ -2948,7 +2948,7 @@ describe('The site', () => {
     }
     // A name that only looks like this machine's own is not one
     const { answerSite } = await import('./src/serve/site')
-    for (const host of ['localhost.evil.example:80', '127.0.0.1.evil.example', '10.0.0.74:4700', 'evil.example', ''])
+    for (const host of ['localhost.evil.example:80', '127.0.0.1.evil.example', '10.0.0.20:4700', 'evil.example', ''])
       expect([host, answerSite(siteStandIn, 'GET', '/', new Headers({ host })).headers.get('cross-origin-opener-policy')]).toEqual([host, null])
     // With or without a port in it, which a browser leaves out when it is the one plain http has
     for (const host of ['it.localhost:4700', 'localhost', '127.0.0.1', '[::1]'])
@@ -3278,18 +3278,18 @@ describe('Kept to the tailnet', () => {
   test('The door answers this machine and callers from a tailnet, and no caller from any other network the machine is on', async () => {
     const tailnet = { ...config(door.base, true), tailnet: true }
     for (const here of ['127.0.0.1', '::1']) expect(await asked(tailnet, here), here).not.toBe(421)
-    for (const there of ['100.109.44.60', '100.64.0.9', 'fd7a:115c:a1e0::cc01:2c98']) expect(await asked(tailnet, there), there).not.toBe(421)
+    for (const there of ['100.101.42.17', '100.64.0.9', 'fd7a:115c:a1e0::ab12:4843']) expect(await asked(tailnet, there), there).not.toBe(421)
     // The home network, an address of the wider internet, and a private range that is not a tailnet's
-    for (const other of ['192.168.1.50', '10.0.0.74', '203.0.113.9', '2601:cb:8100:c690::4f1a', 'fd00::51', '100.128.0.1'])
+    for (const other of ['192.168.1.50', '10.0.0.20', '203.0.113.9', '2001:db8:100:c690::4f1a', 'fd00::51', '100.128.0.1'])
       expect(await asked(tailnet, other), other).toBe(421)
     // The pages' port is held to the same
     expect(await asked(tailnet, '192.168.1.50', contentPort(door.base))).toBe(421)
-    expect(await asked(tailnet, '100.109.44.60', contentPort(door.base))).not.toBe(421)
+    expect(await asked(tailnet, '100.101.42.17', contentPort(door.base))).not.toBe(421)
   })
 
   test('Open to every network, the same callers are answered', async () => {
     const open = config(door.base, true)
-    for (const anyone of ['192.168.1.50', '100.109.44.60', '2601:cb:8100:c690::4f1a']) expect(await asked(open, anyone), anyone).not.toBe(421)
+    for (const anyone of ['192.168.1.50', '100.101.42.17', '2001:db8:100:c690::4f1a']) expect(await asked(open, anyone), anyone).not.toBe(421)
   })
 })
 

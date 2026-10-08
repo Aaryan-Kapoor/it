@@ -18,7 +18,7 @@ describe('the bar of something being fetched', () => {
 })
 
 describe('an address as a code a camera reads', () => {
-  const lines = qr('http://100.109.44.60:4700/pair#abcdefghij0123456789')
+  const lines = qr('http://100.101.42.17:4700/pair#abcdefghij0123456789')
   test('is a square of blocks, two rows of the code to a line, with a margin all round', () => {
     const width = [...lines[0]!].length
     expect(lines.every((line) => [...line].length === width)).toBe(true)
@@ -31,6 +31,6 @@ describe('an address as a code a camera reads', () => {
   })
 
   test('is another picture for another address', () => {
-    expect(qr('http://100.109.44.60:4700/pair#zyxwvutsrq9876543210').join('\n')).not.toBe(lines.join('\n'))
+    expect(qr('http://100.101.42.17:4700/pair#zyxwvutsrq9876543210').join('\n')).not.toBe(lines.join('\n'))
   })
 })
