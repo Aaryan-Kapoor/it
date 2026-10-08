@@ -350,6 +350,51 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       const set = await run(m, ['set', 'plan', 'note', 'two', 'words'], b.env)
       expect(set.code).toBe(0)
       expect(b.asked.map((x) => [x.path, x.args.patch])).toEqual([['state:patch', '{"note":"two words"}']])
+      // Held to a revision, it is held to it as `it patch` is, and not written whatever the state has become
+      b.asked.length = 0
+      expect((await run(m, ['set', 'plan', 'total', '42', '--if-revision', '7'], b.env)).code).toBe(0)
+      expect(b.asked.map((x) => x.args)).toEqual([{ slug: 'plan', patch: '{"total":42}', baseRevision: 7 }])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it tour clear` removes the tour’s own pages and no other, also one whose id only begins as theirs do', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:list'
+        ? [{ slug: 'tour-menu' }, { slug: 'tour-of-my-project' }, { slug: 'plan' }, { slug: 'tour-whiteboard' }, { slug: 'tour-' }]
+        : null,
+    )
+    try {
+      const cleared = await run(m, ['tour', 'clear'], b.env)
+      expect([cleared.code, printed(cleared)]).toEqual([0, { deleted: ['tour-menu', 'tour-whiteboard'] }])
+      expect(b.asked.filter((x) => x.path === 'artifacts:remove').map((x) => x.args.slug)).toEqual(['tour-menu', 'tour-whiteboard'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it open` says so, and does not end well, where the page was shown and could not be made this conversation’s', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:take'
+        ? new Refusal({ code: 'rate_limited', message: 'Too many of those at once. Try again shortly.' })
+        : asked.path === 'displays:show'
+          ? { displays: ['Kitchen'] }
+          : null,
+    )
+    try {
+      const opened = await run(m, ['open', 'board'], { ...b.env, CODEX_THREAD_ID: 'codex-today' })
+      expect([opened.code, printed(opened)]).toEqual([
+        1,
+        {
+          id: 'board',
+          shownOn: ['Kitchen'],
+          notTaken: { code: 'rate_limited', message: 'Too many of those at once. Try again shortly.' },
+          hint: 'The page is shown, and it is still another conversation’s: what is done on it does not come here. Run `it open board` again before you ask the person to use it.',
+        },
+      ])
     } finally {
       await b.close()
     }
@@ -579,6 +624,18 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
       })
       // Without the switch it prints everything it carried, as before
       expect(printed(await run(m, ['action', 'k57'], b.env)).data).toEqual(carried)
+      // A file of that name that is there already is the person's: it is not written over, and is as it was
+      writeFileSync(to, 'the person’s own drawing')
+      const over = await run(m, ['action', 'k57', '--save', to], b.env)
+      expect([over.code, error(over)]).toEqual([
+        2,
+        {
+          code: 'invalid',
+          message: `${to} is there already, and It does not write over a file.`,
+          hint: 'Give a name that no file has, and delete the file you made when you have read it.',
+        },
+      ])
+      expect(readFileSync(to, 'utf8')).toBe('the person’s own drawing')
       // An action that carried no picture says so, and writes nothing
       carried = { cell: 4 }
       const none = await run(m, ['action', 'k57', '--save', path.join(m.home, 'nothing.png')], b.env)

@@ -343,7 +343,9 @@ async function tour(a: Args) {
   if (what === 'clear') {
     const pages = await call<{ slug: string }[]>('query', api.artifacts.list)
     const gone: string[] = []
-    for (const { slug } of pages.filter((p) => p.slug.startsWith(TOUR_PREFIX))) {
+    // The tour's own pages, each by its whole id, and no other page whose id only begins as theirs do
+    const its = new Set(['menu', ...STEPS].map((name) => `${TOUR_PREFIX}${name}`))
+    for (const { slug } of pages.filter((p) => its.has(p.slug))) {
       await call('mutation', api.artifacts.remove, { slug })
       gone.push(slug)
     }
@@ -2195,7 +2197,16 @@ async function main(argv: string[]): Promise<void> {
       const slug = need(a._[0], `which ${NOUN.one}`, 'set <id> <key> <value>')
       const key = need(a._[1], 'which key', 'set <id> <key> <value>')
       const value = need(a._.slice(2).join(' ') || undefined, 'the value', 'set <id> <key> <value>')
-      return out(await call('mutation', api.state.patch, { slug, patch: JSON.stringify(nested(key, loose(value))) }))
+      // Held to the revision it was read at, where one is given, as `it patch` is: taken and
+      // passed over, the write would go over a change the agent had not seen, and say nothing
+      const base = text(a, 'if-revision')
+      return out(
+        await call('mutation', api.state.patch, {
+          slug,
+          patch: JSON.stringify(nested(key, loose(value))),
+          ...(base === undefined ? {} : { baseRevision: Number(base) }),
+        }),
+      )
     }
     case 'patch': {
       const slug = need(a._[0], `which ${NOUN.one}`, "patch <id> '<json>'")
@@ -2224,17 +2235,34 @@ async function main(argv: string[]): Promise<void> {
       // they then do on it went to a conversation that was closed.
       const mine = sessionAsked()?.session
       let took = false
+      let notTaken: Problem | undefined
       if (mine) {
         noteConversation(mine)
-        // A page that is not there, or anything else in the way, is said by the showing itself, below
+        // A page that is not there is said by the showing itself, below. Anything else that kept
+        // the page from being taken is said beside what was shown: the page is up, and what is
+        // done on it still goes to the conversation that had it, which the agent has to know
+        // before it asks its person to use it.
         took = await call<{ took: boolean }>('mutation', api.artifacts.take, { slug, session: mine, agent: mine.harness }).then(
           (r) => r.took === true,
-          () => false,
+          (err) => {
+            if (err instanceof Problem && err.code !== 'not_found') notTaken = err
+            return false
+          },
         )
+      }
+      const shown = shownAs(await show(slug, a))
+      if (notTaken) {
+        process.exitCode = 1
+        return out({
+          id: slug,
+          ...shown,
+          notTaken: { code: notTaken.code, message: notTaken.message },
+          hint: `The ${NOUN.one} is shown, and it is still another conversation’s: what is done on it does not come here. Run \`it open ${slug}\` again before you ask the person to use it.`,
+        })
       }
       return out({
         id: slug,
-        ...shownAs(await show(slug, a)),
+        ...shown,
         ...(took ? { note: `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.` } : {}),
       })
     }
@@ -2303,8 +2331,15 @@ async function main(argv: string[]): Promise<void> {
       const bytes = Buffer.from(file.base64, 'base64')
       const at = path.resolve(to)
       try {
-        writeFileSync(at, bytes)
+        // Made anew or not at all: a file of that name that is there is the person's, and is not written over
+        writeFileSync(at, bytes, { flag: 'wx' })
       } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'EEXIST')
+          throw new Problem(
+            `${at} is there already, and It does not write over a file.`,
+            'invalid',
+            'Give a name that no file has, and delete the file you made when you have read it.',
+          )
         throw new Problem(
           `${at} could not be written (${(err as NodeJS.ErrnoException).code ?? 'an error'}).`,
           'invalid',
