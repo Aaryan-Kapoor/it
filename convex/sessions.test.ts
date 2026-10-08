@@ -392,6 +392,12 @@ describe('a display whose browser’s pairing has ended', () => {
     // Paired again, it is asked onto as any display is
     await register(await screenOf(t, owner), KEY)
     expect(await machine.mutation(api.displays.show, { slug: 'plan', display: 'kitchen' })).toEqual({ displays: ['Kitchen'], notShown: [] })
+    // The time of a showing, by which a display tells a new asking from one it has seen, never goes back, though the clock does
+    const shownAt = async () => (await t.run((ctx) => ctx.db.query('displays').collect())).find((d) => d.name === 'Kitchen')?.showing?.at ?? 0
+    const first = await shownAt()
+    vi.setSystemTime(Date.now() - 3_600_000)
+    await machine.mutation(api.displays.show, { slug: 'plan', display: 'kitchen' })
+    expect(await shownAt()).toBeGreaterThan(first)
   })
 })
 

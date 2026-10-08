@@ -351,7 +351,10 @@ export const show = mutation({
     for (const d of targets) {
       const name = d.name ?? d.generatedName
       if (await stillPaired(ctx, d)) {
-        await ctx.db.patch(d._id, { showing: { artifactId: artifact._id, at: Date.now() } })
+        // The time of a showing is what a display goes by to tell a new asking from one it has
+        // seen, and so it never goes back: a clock that was set back would otherwise have every
+        // display ignore what it is asked to show until the clock had caught up again
+        await ctx.db.patch(d._id, { showing: { artifactId: artifact._id, at: Math.max(Date.now(), (d.showing?.at ?? 0) + 1) } })
         shown.push(name)
       } else notShown.push({ display: name, reason: 'not_paired' })
     }
