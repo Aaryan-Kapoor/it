@@ -4262,6 +4262,19 @@ try {
   // ------------------------------------------------------------------
   section('Deleting')
   await page.goto(`${APP}/`)
+  // The front page draws each page it lists as a small live picture of it, which asks for that
+  // page's files as any showing of it does. The pictures are let finish first: a page deleted
+  // while its picture is loading is refused a file, and the browser says so by itself
+  await until(async () => {
+    const listed = await page.locator('a.cover').count()
+    return listed > 0 && (await page.locator('a.cover iframe').count()) >= listed
+  }, 15_000)
+  await Promise.all(
+    page
+      .frames()
+      .filter((f) => f !== page.mainFrame())
+      .map((f) => f.waitForLoadState('load', { timeout: 15_000 }).catch(() => {})),
+  )
   await it(A, ['delete', slug])
   check('a deleted page is gone for its agent', (await refused(it(A, ['read', slug]))) === 'not_found')
   // A page whose machine was revoked is still the person's, and another of their machines can remove it

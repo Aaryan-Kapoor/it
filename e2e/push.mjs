@@ -73,8 +73,12 @@ try {
   const DEPLOY = `${APP}/p/deploy-plan`
   // One at a time: the second is sent once the first is showing, so that a push the browser
   // had not yet handed to the script when the next came is never taken for one the script lost
-  await push({ title: 'It', body: 'The deploy finished', url: DEPLOY, id: 'note-1' })
-  await shownFor(DEPLOY)
+  // The first is sent again until it shows. A push put to a script the browser has only just
+  // started may never reach it, which is the browser's doing and not the script's; and since
+  // each sending carries the same id, however many arrive make one notification
+  const firstPush = { title: 'It', body: 'The deploy finished', url: DEPLOY, id: 'note-1' }
+  await push(firstPush)
+  for (let again = 0; again < 3 && !(await shownFor(DEPLOY)); again++) await push(firstPush)
   await push({ title: 'It', body: 'A second thing', url: `${DEPLOY}?second`, id: 'note-2' })
   const first = (await shownFor(`${DEPLOY}?second`)) ?? (await showing())
   check(
