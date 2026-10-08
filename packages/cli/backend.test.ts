@@ -3626,6 +3626,19 @@ describe.skipIf(windows)('where the backend program is fetched from', () => {
 })
 
 describe('the backend programs fetched for earlier releases', () => {
+  test.skipIf(windows)('the one that is in use is left where the person named it themselves, though it was fetched here for an earlier release', () => {
+    const bin = (...parts: string[]) => inBackend('bin', ...parts)
+    const put = (file: string) => {
+      mkdirSync(path.dirname(file), { recursive: true })
+      writeFileSync(file, 'a program')
+    }
+    const chosen = bin('precompiled-2026-01-15-0000000', 'convex-local-backend')
+    put(chosen)
+    put(bin('precompiled-2025-12-01-abcdef0', 'convex-local-backend'))
+    removeOtherPrograms(chosen)
+    expect([existsSync(chosen), existsSync(bin('precompiled-2025-12-01-abcdef0'))]).toEqual([true, false])
+  })
+
   test.skipIf(windows)('are removed once this release’s is in place, and nothing else under the folder they are kept in is, whatever it is called', () => {
     const bin = (...parts: string[]) => inBackend('bin', ...parts)
     const put = (file: string, holds = 'a program') => {

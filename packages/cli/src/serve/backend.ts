@@ -19,6 +19,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   renameSync,
   rmdirSync,
   rmSync,
@@ -311,13 +312,26 @@ const PROGRAM_PART = /^convex-local-backend(?:\.exe)?\.(\d+)\.part$/
  * only what a fetch puts there: in a folder named as a release is, the program under its own
  * name and what was left of fetching it, and then the folder if that leaves it empty. Anything
  * else under `bin/` is somebody's own and is left as it is, whatever folder it is in.
+ *
+ * `running` is the program that is in use now. Where the person named one themselves, with
+ * `IT_BACKEND_BIN`, it may be one that was fetched here for an earlier release: the folder it
+ * is in is then left as it is, since it is the only backend program this It will start.
  */
-export function removeOtherPrograms(): void {
+export function removeOtherPrograms(running?: string): void {
   const bin = path.join(backendFolder(), 'bin')
   if (!existsSync(bin)) return
+  const real = (file: string) => {
+    try {
+      return realpathSync(file)
+    } catch {
+      return path.resolve(file)
+    }
+  }
+  const inUse = running === undefined ? undefined : path.dirname(real(running))
   for (const release of readdirSync(bin)) {
     const folder = path.join(bin, release)
     if (release === RELEASE || !/^precompiled-\d{4}-\d{2}-\d{2}-[0-9a-f]{7,40}$/.test(release) || !lstatSync(folder).isDirectory()) continue
+    if (inUse !== undefined && real(folder) === inUse) continue
     for (const name of readdirSync(folder)) {
       const file = path.join(folder, name)
       if ((PROGRAM_NAMED.test(name) || PROGRAM_PART.test(name)) && lstatSync(file).isFile()) rmSync(file, { force: true })
@@ -2202,7 +2216,7 @@ export async function startBackend(config: ServiceConfig, say: (line: string) =>
     // It runs on the data: a program kept for another release is of no more use now. One that
     // cannot be removed now, as one that is still running on Windows cannot, is left for the next time.
     try {
-      removeOtherPrograms()
+      removeOtherPrograms(file)
     } catch {}
     /**
      * The functions already in the database go on serving, and why is noted for whoever tells
