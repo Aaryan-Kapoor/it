@@ -959,6 +959,9 @@ button {
   text-overflow: ellipsis;
   max-width: 100%;
 }
+a.card-title {
+  text-decoration: none;
+}
 
 input.card-title {
   font-family: var(--font);

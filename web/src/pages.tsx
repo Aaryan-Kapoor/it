@@ -165,10 +165,20 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
             </div>
             <div className="caption card-body">
               <div className="card-text">
-                <span className="card-title" title={p.title}>
+                {/* The title opens the page as its picture does: it is what a person reads, and so what they press. Not a second stop for the keyboard, which has the picture's */}
+                <a
+                  href={`/p/${p.slug}`}
+                  className="card-title"
+                  title={p.title}
+                  tabIndex={-1}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    navigate(`/p/${p.slug}`)
+                  }}
+                >
                   {p.pinned && <span className="card-pin" role="img" aria-label="Pinned" />}
                   {p.title}
-                </span>
+                </a>
                 <span className="card-meta card-sub">{[agentName(p.agent), p.machine, ago(p.updatedAt, now)].filter(Boolean).join(' · ')}</span>
               </div>
             </div>
