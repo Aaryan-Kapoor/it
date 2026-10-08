@@ -56,7 +56,10 @@ export async function rateLimit(ctx: MutationCtx, rule: Rule, who: string, cost 
     .query('rateLimits')
     .withIndex('by_key', (q) => q.eq('key', key))
     .unique()
-  const tokens = row ? Math.min(burst, row.tokens + ((now - row.updatedAt) / 60_000) * perMinute) : burst
+  // A count that was last written at a time that is still to come was written before this
+  // machine's clock was set back. It is begun afresh: counted as it stands, the time that is
+  // "yet to pass" would be taken off it, and everything refused for as long as the clock went back.
+  const tokens = row && row.updatedAt <= now ? Math.min(burst, row.tokens + ((now - row.updatedAt) / 60_000) * perMinute) : burst
   if (tokens < cost) {
     // Not written down here: a caller past a limit can ask as often as it likes, and each
     // refusal would be a line. It is written down below, when the limit is reached.

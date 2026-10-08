@@ -211,7 +211,8 @@ export function Mount({
     const toPage = (to: MessagePort, message: SiteToPage) => to.postMessage(message)
     const allowed = () => {
       const now = Date.now()
-      tokens = Math.min(BURST, tokens + ((now - filled) / 1000) * PER_SECOND)
+      // Never less than nothing: a browser's clock that was set back would otherwise take an hour's worth away, and the page would be refused for an hour
+      tokens = Math.min(BURST, tokens + (Math.max(0, now - filled) / 1000) * PER_SECOND)
       filled = now
       if (tokens < 1) return false
       tokens -= 1
