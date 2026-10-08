@@ -151,7 +151,7 @@ A paired browser keeps its own share, as plainly: the cookie that is its pairing
 
 ### A page's address is all it takes to read the page while it is shown
 
-The address of a page's files cannot be guessed, and whoever is given it, or sees it pass on the network, can read those files until the showing ends, which is up to ten minutes after the last request under it and a day at most. So it can go on answering for up to ten minutes after the page's tab is closed. It is not an address to keep or to pass on: the one to keep is the page's address on the site, which `it create` prints and which shows nothing to a browser that is not paired.
+The address of a page's files cannot be guessed, and whoever is given it, or sees it pass on the network, can read those files until the showing ends, which is up to ten minutes after the last request under it and a day at most. Closing the tab does not take its address back: whoever has the address can keep it answering by asking under it, until a day after the showing began, and it stops answering by itself ten minutes after anything was last asked under it. It is not an address to keep or to pass on: the one to keep is the page's address on the site, which `it create` prints and which shows nothing to a browser that is not paired.
 
 ### Reached by a name a browser will not take, the site may frame more
 
