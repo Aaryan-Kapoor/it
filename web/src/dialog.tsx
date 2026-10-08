@@ -22,6 +22,9 @@ export function Dialog({
   // Drawn hidden and shown a moment later, so that it eases in
   const [shown, setShown] = useState(false)
   const panel = useRef<HTMLDivElement>(null)
+  // Where the keyboard was when the dialog was opened, noted as the dialog is first drawn:
+  // before anything in it has taken the keyboard for itself, as a field that asks for it does
+  const [before] = useState(() => (document.activeElement instanceof HTMLElement ? document.activeElement : null))
   const closing = useRef(onClose)
   closing.current = onClose
   useEffect(() => {
@@ -29,7 +32,6 @@ export function Dialog({
     // The keyboard is in the dialog for as long as it is open: it goes there when the dialog
     // opens, Tab goes round what is in it and not on to what lies under it, and when the
     // dialog closes the keyboard is back where it was
-    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const box = panel.current
     if (box && !box.contains(document.activeElement)) box.focus()
     const within = () =>
@@ -57,7 +59,7 @@ export function Dialog({
       document.removeEventListener('keydown', key)
       if (before?.isConnected) before.focus()
     }
-  }, [])
+  }, [before])
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: Escape closes it, wherever the keyboard is
     // biome-ignore lint/a11y/noStaticElementInteractions: the box itself is the dialog
