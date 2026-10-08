@@ -1364,6 +1364,9 @@ try {
     startable.code === 0 &&
       wontStart.code !== 0 &&
       /does not start on this system/.test(wontStart.flat) &&
+      // And why, as the system said it: what it holds names a program that is not there to run it
+      /does not have what the program needs in order to start|would not run it/.test(wontStart.flat) &&
+      /What was said as it was tried: /.test(wontStart.flat) &&
       nothingInstalled(wontStart) &&
       nothingOfItsOwn(wontStart) &&
       overStartable.code !== 0 &&

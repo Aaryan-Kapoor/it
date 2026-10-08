@@ -359,8 +359,20 @@ chmod 755 "${stage}/program"
 # A program that cannot start on this system is not installed: one built for another system's
 # libraries, or for a chip this is not. It is started with a folder of its own to keep anything
 # in, which goes when the folder made for this run does.
-if ! IT_HOME="${stage}" "${stage}/program" --version < /dev/null > /dev/null 2>&1; then
+tried=0
+IT_HOME="${stage}" "${stage}/program" --version < /dev/null > /dev/null 2> "${stage}/why" || tried=$?
+if [ "${tried}" != 0 ]; then
   say "The program for ${os} ${arch} does not start on this system. Nothing was installed." >&2
+  # And why, as far as the system or the program said: left out, a system without the loader
+  # the program asks for, a folder that programs may not be run from and a chip that is too
+  # old all read alike, and none of them says what to do.
+  case "${tried}" in
+    126) say "This system would not run it: programs may not be run from ${HOME_DIR}, as on a disk mounted noexec, or a security policy of this system refused it." >&2 ;;
+    127) say "This system does not have what the program needs in order to start. That is so where the usual C library and its loader are not where programs look for them, as on Alpine and on NixOS." >&2 ;;
+    132) say "The program used an instruction that this machine's chip does not have." >&2 ;;
+  esac
+  why="$(head -c 600 "${stage}/why" 2>/dev/null | tr -cd '\11\12\40-\176' | head -n 4)"
+  if [ -n "${why}" ]; then say "What was said as it was tried: ${why}" >&2; fi
   exit 1
 fi
 if [ "${led}" = 1 ]; then did "Downloaded for ${os} ${arch}, and checked"; fi
