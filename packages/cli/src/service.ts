@@ -108,6 +108,7 @@ export function environment(from: NodeJS.ProcessEnv = process.env): Record<strin
     'IT_PORT',
     'IT_BACKEND_BIN',
     'IT_BACKEND_RELEASES',
+    'IT_BACKEND_FETCH_MINUTES',
     'IT_URL',
     'IT_SITE_URL',
     'IT_HARNESSES',

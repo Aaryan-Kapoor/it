@@ -162,8 +162,14 @@ const ARCHIVE_MOST = 400 * 1024 * 1024
  *
  * An address that is `plain` is a place on this machine (see `releases`).
  */
-/** How long the backend program may take to be fetched, all of it. */
-const PROGRAM_WITHIN_MS = 20 * 60_000
+/**
+ * How long the backend program may take to be fetched, all of it: twenty minutes, or as many
+ * minutes as IT_BACKEND_FETCH_MINUTES says, for a connection that is working and too slow for that.
+ */
+const programWithin = (): number => {
+  const asked = Number(process.env.IT_BACKEND_FETCH_MINUTES)
+  return (Number.isFinite(asked) && asked >= 1 && asked <= 24 * 60 ? asked : 20) * 60_000
+}
 export async function fetchProgram(
   from: { url: string; sha256: string; plain?: boolean },
   file: string,
@@ -171,7 +177,7 @@ export async function fetchProgram(
   /** Told how much has arrived, and of how much where the answer said: for whoever shows a person how far it has got. */
   progress?: (got: number, of: number | undefined) => void,
   /** How long the fetching may take, where it is not the usual: for a test, which does not wait so long. */
-  within: number = PROGRAM_WITHIN_MS,
+  within: number = programWithin(),
 ): Promise<void> {
   const elsewhere = Boolean(process.env.IT_BACKEND_RELEASES)
   // The whole of it has so long, however it comes. An answer that never ended, or went on
@@ -228,7 +234,7 @@ export async function fetchProgram(
       throw new Problem(
         `The backend program had not been fetched after ${Math.round(within / 60_000)} minutes, so it was given up.`,
         'offline',
-        'It is about 60 MB. Check that this machine is online, then try again.',
+        'It is about 60 MB. Check that this machine is online, then try again. Where the connection is working and is only too slow for that, give it longer by setting IT_BACKEND_FETCH_MINUTES, as in `IT_BACKEND_FETCH_MINUTES=90 it setup`.',
       )
     throw err instanceof Problem ? err : unreachable()
   }
