@@ -223,7 +223,7 @@ export function reloadWhenThere(): void {
   if (reloading) return
   reloading = true
   const attempt = () =>
-    fetch('/', { method: 'HEAD', cache: 'no-store' }).then(
+    fetch('/', { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(15_000) }).then(
       (r) => (r.ok ? location.reload() : void setTimeout(attempt, 5000)),
       () => void setTimeout(attempt, 5000),
     )

@@ -53,6 +53,9 @@ const watchSaid = (fn: () => void) => {
 function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast' | 'notif-item' }) {
   const answer = useMutation(api.notifications.answer)
   const [error, setError] = useState('')
+  // The answer that was pressed and that It has not said it has yet: no other is taken
+  // meanwhile, and it is said to be on its way, since it is kept nowhere but in this tab
+  const [sending, setSending] = useState<string | null>(null)
   return (
     <>
       <p className={`note-text ${kind}-text`}>{n.text}</p>
@@ -64,12 +67,20 @@ function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast'
               type="button"
               className={`toast-btn${n.answer === b.action ? ' toast-btn--chosen' : ''}`}
               aria-pressed={n.answer === b.action}
-              disabled={n.answer !== null}
+              disabled={n.answer !== null || sending !== null}
               onClick={(e) => {
                 e.stopPropagation()
+                setError('')
+                setSending(b.action)
                 answer({ id: n.id as Id<'notifications'>, action: b.action, displayKey: displayKey() }).then(
-                  () => onDone?.(),
-                  (err) => setError(refusal(err).message),
+                  () => {
+                    setSending(null)
+                    onDone?.()
+                  },
+                  (err) => {
+                    setSending(null)
+                    setError(refusal(err).message)
+                  },
                 )
               }}
             >
@@ -81,6 +92,11 @@ function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast'
       {/* Answered: said in words, since a dimmed button alone does not say that the answer went */}
       {n.answer !== null && n.buttons.length > 0 && (
         <span className="note-answered">Sent to your agent: {n.buttons.find((b) => b.action === n.answer)?.label ?? n.answer}</span>
+      )}
+      {sending !== null && n.answer === null && (
+        <span className="note-answered" role="status">
+          Sending “{n.buttons.find((b) => b.action === sending)?.label ?? sending}”… Keep this tab open until it says it was sent
+        </span>
       )}
       {error && <span className="error">{error}</span>}
     </>

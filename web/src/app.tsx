@@ -91,13 +91,20 @@ export function App() {
 function Connecting({ stuck }: { stuck: boolean }) {
   useEffect(() => {
     if (!stuck) return
+    let t: ReturnType<typeof setTimeout>
+    // No oftener than once a minute, and for as long as it is stuck: started afresh a moment
+    // ago and stuck again, it waits out the rest of the minute and then starts afresh once more
     const reload = () => {
-      const last = Number(sessionStorage.getItem('it.reconnectedAt') ?? 0)
-      if (Date.now() - last < 60_000) return
+      clearTimeout(t)
+      const since = Date.now() - Number(sessionStorage.getItem('it.reconnectedAt') ?? 0)
+      if (since < 60_000) {
+        t = setTimeout(reload, 60_000 - since + 250)
+        return
+      }
       sessionStorage.setItem('it.reconnectedAt', String(Date.now()))
       reloadWhenThere()
     }
-    const t = setTimeout(reload, 20_000)
+    t = setTimeout(reload, 20_000)
     window.addEventListener('online', reload)
     return () => {
       clearTimeout(t)
