@@ -779,6 +779,38 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await until(() => JSON.stringify(readJson(path.join(home, 'cut-off.json'))) === JSON.stringify(['codex:thread-2']))
   }, 30_000)
 
+  test('two things done for one conversation, under the id it had before it was cleared and the one it has now, are handed over one after the other', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    // Codex's own command, which takes a while over each turn and notes when each began and ended
+    writeFileSync(
+      path.join(bin, 'codex'),
+      `#!/bin/sh\nn=$(ls ${bin} | grep -c began)\ncat > /dev/null\ntouch ${bin}/began-$n\nsleep 1.5\ntouch ${bin}/ended-$n\nexit 0\n`,
+      { mode: 0o755 },
+    )
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, (home) => {
+      noteConversation({ harness: 'codex', id: 'thread-new' }, folder)
+      writeFileSync(path.join(home, 'aliases.json'), JSON.stringify({ 'codex:thread-old': 'codex:thread-new' }))
+    })
+    stand.closed.add('thread-new')
+    stand.closed.add('thread-old')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    const under = (id: string, session: string) => ({ ...click(1), id, session: { harness: 'codex', id: session } })
+    offered(under('click-old', 'thread-old'), under('click-new', 'thread-new'))
+    await until(() => existsSync(path.join(bin, 'began-0')), 20_000)
+    // While the first is being handed over, the second is not so much as asked for: it stands in the same line
+    expect(called('delivery:claim').filter((id) => id === 'click-old' || id === 'click-new')).toHaveLength(1)
+    await until(() => existsSync(path.join(bin, 'ended-0')), 20_000)
+    await until(() => existsSync(path.join(bin, 'began-1')), 30_000)
+    expect(
+      called('delivery:claim')
+        .filter((id) => id === 'click-old' || id === 'click-new')
+        .sort(),
+    ).toEqual(['click-new', 'click-old'])
+  }, 90_000)
+
   test('a machine whose clock is behind It’s reopens a conversation as soon as one whose clock is right, and does not wait out the difference', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))

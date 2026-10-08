@@ -219,6 +219,8 @@ export function carryOn(
     began?: (pid: number) => void
     /** Called where the run was ended and the system would not say what of it was left: whoever noted it keeps the note. */
     unsure?: () => void
+    /** Called where the run is being ended because its time is over: it was at work, and did not finish. */
+    overtime?: () => void
   } = {},
 ): Promise<string | null> {
   const patience = opts.patience ?? 15 * 60_000
@@ -354,7 +356,11 @@ export function carryOn(
       quit(STOPPED)
     }
     opts.signal?.addEventListener('abort', stop, { once: true })
-    const timer = setTimeout(() => quit(`${how.app} had not finished in fifteen minutes`), patience)
+    const timer = setTimeout(() => {
+      // Said before it is ended, to whoever keeps the notes: only where this is what ends it, and not a stop that came first
+      if (!ending && !stopped) opts.overtime?.()
+      quit(`${how.app} had not finished in fifteen minutes`)
+    }, patience)
     child.once('error', (err) => end((err as NodeJS.ErrnoException).code === 'ENOENT' ? `${how.app} was not found` : `${how.app} could not be started`))
     child.once('exit', (code, signal) =>
       ending ? settle() : stopped ? end(STOPPED) : code === 0 ? end(null) : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),

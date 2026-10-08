@@ -882,6 +882,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
             const run = running.get(key)
             if (run) unsettled.set(key, { ...run, unsure: true })
           },
+          // Ended because its fifteen minutes were over, in the middle of whatever it was
+          // doing: what it was reopened for is tried again, and the turn that tries it is told
+          // that an earlier one was cut off and may have done part of the work
+          overtime: () => {
+            cutOff.add(key)
+            keepCutOff()
+          },
           keepIn: inHome('logs'),
           said: (words) => saidLast.set(key, words),
           // Written down before it is given anything to do, or it is not to run: see `carryOn`
@@ -1353,7 +1360,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     if (queueing.size >= 50 || (tried && Date.now() - tried.at < QUEUE_WAITS[tried.n]!)) return false
     queueing.add(click.id)
-    const key = click.session!.id
+    // In line by the conversation as it is now, whichever of its ids the click names: a
+    // conversation that was cleared carries on under another id, and its pages still name the
+    // old one. Two hand-overs of one conversation side by side read and let go of each other's
+    // notes of how a run ended, and each of four repairs to that left another way for it to
+    // happen. One at a time, there is no other hand-over's note to meet.
+    const key = follow(keyOf(click.session!.harness, click.session!.id))
     const next = (queues.get(key) ?? Promise.resolve()).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening)))
     queues.set(key, next)
     void next.then(() => {

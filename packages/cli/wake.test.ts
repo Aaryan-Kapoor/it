@@ -263,7 +263,14 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     }
     // Stopped by the person
     const stop = new AbortController()
-    const ran = carryOn({ argv: [command], input: 'a click', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, { signal: stop.signal })
+    // (It is said to whoever keeps the notes when a run is ended because its time is over, and never when it was stopped)
+    let overtime = 0
+    const ran = carryOn(
+      { argv: [command], input: 'a click', app: 'Pi' },
+      scratch,
+      { harness: 'pi', session: 'x' },
+      { signal: stop.signal, overtime: () => overtime++ },
+    )
     const first = await there()
     const began = Date.now()
     stop.abort()
@@ -273,10 +280,17 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     expect(Date.now() - began).toBeGreaterThan(4000)
     expect(Date.now() - began).toBeLessThan(10_000)
     // And at the time limit, which is short here
-    const late = carryOn({ argv: [command], input: 'a click', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, { patience: 600 })
+    expect(overtime).toBe(0)
+    const late = carryOn(
+      { argv: [command], input: 'a click', app: 'Pi' },
+      scratch,
+      { harness: 'pi', session: 'x' },
+      { patience: 600, overtime: () => overtime++ },
+    )
     const second = await there()
     expect(await late).toBe('Pi had not finished in fifteen minutes')
     expect(alive(second)).toBe(false)
+    expect(overtime).toBe(1)
   }, 40_000)
 
   test('the app is told the folder it is in, and not the one this program was started in', async () => {
