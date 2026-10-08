@@ -293,6 +293,17 @@ function aside(file: string): string {
 /** Written by `it hook codex` the first time Codex runs one of our hooks: proof they were approved. */
 export const hookSeenFile = (id: string) => inHome('addons', `${id}.hooks-seen`)
 
+/** Whether two paths are one file, however each is spelled. */
+function oneFile(a: string, b: string): boolean {
+  if (path.resolve(a) === path.resolve(b)) return true
+  try {
+    const [one, other] = [statSync(a, { bigint: true }), statSync(b, { bigint: true })]
+    return one.dev === other.dev && one.ino === other.ino
+  } catch {
+    return false
+  }
+}
+
 /**
  * A fixed address for this program, so that a hook's text never changes: a harness asks the
  * person to approve a hook again whenever its definition changes, and a desktop app often does
@@ -308,7 +319,10 @@ export function shim(): string {
   // When It's own folder is not the usual one, whatever runs this later (a hook, a service) is
   // told where it is, since it will not have the environment this was set up from
   const elsewhere = process.env.IT_HOME ? path.resolve(process.env.IT_HOME) : null
-  const installed = standalone && path.resolve(self) === path.resolve(inHome('bin', windows ? 'it.exe' : 'it'))
+  // Whether this program is the installed one is asked of the files and not of how their paths
+  // are spelled: It's folder may be named through a link, and on a Mac in other capitals, and
+  // a launcher written where the program then turned out to be would be written over it
+  const installed = standalone && oneFile(self, inHome('bin', windows ? 'it.exe' : 'it'))
   // The installed program is its own fixed address, unless it has to be told where its folder
   // is: then a launcher beside it does the telling
   if (installed && !elsewhere) return self

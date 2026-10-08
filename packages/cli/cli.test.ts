@@ -1656,6 +1656,36 @@ describe('add-ons carried by the CLI', () => {
       }
     },
   )
+  test.skipIf(process.platform === 'win32')(
+    'the installed program is never written over by its own launcher, though It’s folder is named through a link to where the program is',
+    async () => {
+      const { shim } = await import('./src/setup')
+      const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-launcher-'))
+      const before = { home: process.env.IT_HOME, script: process.argv[1], program: process.execPath }
+      try {
+        // The program where the system says it is, and It's folder as the person named it, which is the same place
+        const program = path.join(scratch, 'real', 'bin', 'it')
+        mkdirSync(path.dirname(program), { recursive: true })
+        writeFileSync(program, '#!/bin/sh\nprintf "the program, told %s" "$IT_HOME"\n', { mode: 0o755 })
+        symlinkSync(path.join(scratch, 'real'), path.join(scratch, 'named'))
+        process.env.IT_HOME = path.join(scratch, 'named')
+        process.execPath = program
+        process.argv.length = 1
+        const file = shim()
+        expect(file).toBe(path.join(scratch, 'named', 'bin', 'it-here'))
+        expect(readFileSync(program, 'utf8')).toContain('the program, told')
+        expect(execFileSync(file, [], { env: { PATH: process.env.PATH ?? '', HOME: scratch }, encoding: 'utf8' })).toBe(
+          `the program, told ${path.join(scratch, 'named')}`,
+        )
+      } finally {
+        if (before.home === undefined) delete process.env.IT_HOME
+        else process.env.IT_HOME = before.home
+        process.execPath = before.program
+        process.argv[1] = before.script!
+        rmSync(scratch, { recursive: true, force: true })
+      }
+    },
+  )
   test('an add-on that runs inside a harness is told where It’s folder is, when that is not the usual place', async () => {
     const { itHomeWritten } = await import('./src/setup')
     const js = "const HARNESS = 'pi'\nconst IT_HOME_AT_SETUP = null\nconst other = null\n"
