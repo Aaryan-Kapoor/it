@@ -572,28 +572,54 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
     }
   }, 30_000)
 
-  test('where the run itself is gone and a command it started is still in its group, that command is ended', async () => {
+  test('where the run itself is gone and a command it started is still in its group, that command is ended, by the marks it carries of which run it belongs to, and a group that carries none is left alone', async () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-endtree-'))
+    const of = { harness: 'pi', session: 'conversation-7' }
+    const left: number[] = []
     try {
-      const mark = path.join(folder, 'its-command.pid')
-      const go = path.join(folder, 'go')
       // The run starts a command, and then ends by itself while the command goes on
-      const run = spawn('sh', ['-c', `sleep 300 & echo $! > "${mark}"; while [ ! -e "${go}" ]; do sleep 0.05; done; exit 0`], {
-        detached: true,
-        stdio: 'ignore',
-      })
-      await until(() => existsSync(mark) && readFileSync(mark, 'utf8').trim() !== '')
-      const its = Number(readFileSync(mark, 'utf8'))
-      const since = identity([run.pid!]).get(run.pid!)!
-      const ended = new Promise((r) => run.once('exit', r))
-      writeFileSync(go, '')
-      await ended
-      await until(() => !identity([run.pid!]).has(run.pid!))
-      expect(alive(its)).toBe(true)
-      expect(await endTree(run.pid!, since)).toBe('ended')
-      expect(alive(its)).toBe(false)
+      const orphan = async (env: Record<string, string>) => {
+        const mark = path.join(folder, `its-command-${left.length}.pid`)
+        const go = path.join(folder, `go-${left.length}`)
+        const run = spawn('sh', ['-c', `sleep 300 & echo $! > "${mark}"; while [ ! -e "${go}" ]; do sleep 0.05; done; exit 0`], {
+          detached: true,
+          stdio: 'ignore',
+          env: { ...process.env, ...env },
+        })
+        await until(() => existsSync(mark) && readFileSync(mark, 'utf8').trim() !== '')
+        const its = Number(readFileSync(mark, 'utf8'))
+        left.push(its)
+        const since = identity([run.pid!]).get(run.pid!)!
+        const ended = new Promise((r) => run.once('exit', r))
+        writeFileSync(go, '')
+        await ended
+        await until(() => !identity([run.pid!]).has(run.pid!))
+        return { pid: run.pid!, since, its }
+      }
+      // Started as a reopened run is, with the two marks, which what it starts carries on
+      const ours = await orphan({ IT_HARNESS: of.harness, IT_SESSION: of.session })
+      expect(alive(ours.its)).toBe(true)
+      // With nothing to go by, nothing is signalled, and that is said as not known
+      expect(await endTree(ours.pid, ours.since)).toBe('unknown')
+      expect(alive(ours.its)).toBe(true)
+      expect(await endTree(ours.pid, ours.since, of)).toBe('ended')
+      expect(alive(ours.its)).toBe(false)
+      // A group of the same kind that is somebody else's: another run's marks, or none
+      const anothers = await orphan({ IT_HARNESS: of.harness, IT_SESSION: 'conversation-8' })
+      expect(await endTree(anothers.pid, anothers.since, of)).toBe('gone')
+      expect(alive(anothers.its)).toBe(true)
+      const nobodys = await orphan({ IT_HARNESS: '', IT_SESSION: '' })
+      expect(await endTree(nobodys.pid, nobodys.since, of)).toBe('gone')
+      expect(alive(nobodys.its)).toBe(true)
+      // And a run noted under another start of this machine is gone, whatever has its number
+      expect(await endTree(anothers.pid, anothers.since, { ...of, session: 'conversation-8', boot: 'another start of this machine' })).toBe('gone')
+      expect(alive(anothers.its)).toBe(true)
     } finally {
+      for (const pid of left)
+        try {
+          process.kill(pid, 'SIGKILL')
+        } catch {}
       rmSync(folder, { recursive: true, force: true })
     }
-  }, 30_000)
+  }, 60_000)
 })

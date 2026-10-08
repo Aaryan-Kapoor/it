@@ -3,7 +3,7 @@
 // conversation may be reopened. None of it is done for an app the person has not switched
 // Auto-wake on for, which is the connector's to see to.
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, rmSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { WAKE_BACK_MS, WAKES } from '@it/protocol'
@@ -346,54 +346,135 @@ export function carryOn(
  *
  * - `ended`: it, or what it left behind, was there and is not any more.
  * - `gone`: there was nothing of it. Its number is nobody's, or is another process's by now,
- *   which is left alone.
+ *   which is left alone; or the machine has been started again since it was noted.
  * - `unknown`: the system could not be asked which processes there are, or something of it is
- *   still there after being ended. Whoever asked keeps its note, and asks again.
+ *   still there after being ended, or something is there that cannot be told to be its own.
+ *   Whoever asked keeps its note, and asks again.
  *
- * The process was started in a group of its own, named by its number. Where it is gone and
- * the group is not, what is in the group is what it started: the system gives a number to no
- * other process while a group of that number lives. The group is ended then.
+ * The process was started in a group of its own, named by its number. Where it is gone and a
+ * group of that number is there, the group may be what it started, or may belong to something
+ * else that was given the number since. So each process in the group is asked which run it
+ * belongs to, by the two marks every reopened run is started with and hands on to what it
+ * starts (`of`), and only one that carries this run's marks is ended. With no marks to go by,
+ * or where a process cannot be asked, nothing is signalled and the answer is `unknown`.
  *
  * Nothing is done on Windows, where none of this can be told: the answer there is `unknown`.
  */
-export async function endTree(pid: number, since: string): Promise<'ended' | 'gone' | 'unknown'> {
+export async function endTree(pid: number, since: string, of?: { harness: string; session: string; boot?: string }): Promise<'ended' | 'gone' | 'unknown'> {
   if (process.platform === 'win32') return 'unknown'
+  // Noted before the machine was last started: nothing of it is left, whatever has its number now
+  const boot = bootId()
+  if (of?.boot && boot && of.boot !== boot) return 'gone'
   const now = processes([pid])
   if (now === null) return 'unknown'
+  const itself = now.get(pid) === since
+  // Another process has the number now: neither it nor its group is what was noted
+  if (!itself && now.has(pid)) return 'gone'
+  let all: number[]
+  let group = false
+  if (itself) {
+    const under = descendantsKnown(pid)
+    if (under === null) return 'unknown'
+    all = [pid, ...under]
+    group = true
+  } else {
+    const members = inGroup(pid)
+    if (members === null) return 'unknown'
+    if (!members.length) return 'gone'
+    if (!of) return 'unknown'
+    const whose = members.map((p) => [p, belongs(p, of)] as const)
+    all = whose.filter(([, is]) => is === true).map(([p]) => p)
+    // None of them says it is this run's: something else's group, unless one of them could not be asked
+    if (!all.length) return whose.some(([, is]) => is === null) ? 'unknown' : 'gone'
+  }
+  const were = processes(all)
+  if (were === null) return 'unknown'
+  /** What of it is still there: null where that cannot be told, which is not the same as nothing. */
+  const left = (): number[] | null => {
+    const is = processes(all)
+    return is === null ? null : [...is].filter(([p, at]) => were.get(p) === at).map(([p]) => p)
+  }
   const groupThere = () => {
+    if (!group) return false
     try {
       process.kill(-pid, 0)
       return true
     } catch {
-      // Not allowed to signal it means it is there, and is not this user's: not what was started here
       return false
     }
   }
-  const itself = now.get(pid) === since
-  // Another process has the number now: neither it nor its group is what was noted
-  if (!itself && now.has(pid)) return 'gone'
-  if (!itself && !groupThere()) return 'gone'
-  const all = itself ? [pid, ...descendants(pid)] : []
-  const were = identity(all)
-  const left = () => [...identity(all)].filter(([p, at]) => were.get(p) === at).map(([p]) => p)
-  const anything = () => left().length > 0 || groupThere()
+  const anything = (): boolean | null => {
+    const still = left()
+    return still === null ? null : still.length > 0 || groupThere()
+  }
   const signal = (how: 'SIGTERM' | 'SIGKILL', to: number[]) => {
-    // Its group too: it was started in one of its own, and what it started is in it unless it was moved out
-    try {
-      process.kill(-pid, how)
-    } catch {}
+    // Its group too, where the run itself is there to say the group is its own: what it
+    // started is in it unless it was moved out
+    if (group)
+      try {
+        process.kill(-pid, how)
+      } catch {}
     for (const p of to)
       try {
         process.kill(p, how)
       } catch {}
   }
   signal('SIGTERM', all)
-  for (let waited = 0; waited < 5000 && anything(); waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
-  if (anything()) {
-    signal('SIGKILL', left())
-    for (let waited = 0; waited < 2000 && anything(); waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
+  for (let waited = 0; waited < 5000 && anything() !== false; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
+  if (anything() !== false) {
+    signal('SIGKILL', left() ?? all)
+    for (let waited = 0; waited < 2000 && anything() !== false; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
   }
-  return anything() ? 'unknown' : 'ended'
+  return anything() === false ? 'ended' : 'unknown'
+}
+
+/**
+ * What says which start of this machine a process belongs to: one that was noted under another
+ * is gone, whatever has its number now. Nothing where the system does not say.
+ */
+export function bootId(): string | undefined {
+  try {
+    if (process.platform === 'linux') return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() || undefined
+    if (process.platform === 'darwin') {
+      const said = spawnSync('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
+      return said.status === 0 ? String(said.stdout).trim() || undefined : undefined
+    }
+  } catch {}
+  return undefined
+}
+
+/** The processes in the group of this number, and null where the system could not be asked. */
+function inGroup(group: number): number[] | null {
+  const ran = spawnSync('ps', ['-A', '-o', 'pid=,pgid='], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
+  if (ran.error || ran.signal || ran.status !== 0) return null
+  const found: number[] = []
+  for (const line of String(ran.stdout ?? '').split('\n')) {
+    const [pid, pgid] = line.trim().split(/\s+/).map(Number)
+    if (pid && pgid === group) found.push(pid)
+  }
+  return found
+}
+
+/**
+ * Whether a process carries the two marks a reopened run is started with, which say whose it
+ * is: read from what the process was started with, as the system keeps it for the user whose
+ * process it is. Null where that cannot be read.
+ */
+function belongs(pid: number, of: { harness: string; session: string }): boolean | null {
+  const marks = [`IT_HARNESS=${of.harness}`, `IT_SESSION=${of.session}`]
+  if (process.platform === 'linux')
+    try {
+      const has = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0')
+      return marks.every((mark) => has.includes(mark))
+    } catch (err) {
+      // Gone since it was listed: not there to belong to anything
+      return (err as NodeJS.ErrnoException).code === 'ENOENT' ? false : null
+    }
+  const ran = spawnSync('ps', ['eww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
+  if (ran.error || ran.signal) return null
+  if (ran.status !== 0) return false
+  const has = ` ${String(ran.stdout ?? '').replace(/\n/g, ' ')} `
+  return marks.every((mark) => has.includes(` ${mark} `))
 }
 
 /**
@@ -431,13 +512,15 @@ export function processes(pids: number[]): Map<number, string> | null {
  * where the system cannot be asked, and none on Windows, where a process has no such family.
  */
 export function descendants(of: number): number[] {
-  if (process.platform === 'win32') return []
-  let listed: string
-  try {
-    listed = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
-  } catch {
-    return []
-  }
+  return descendantsKnown(of) ?? []
+}
+
+/** The same, and null where the system could not be asked: not the same as there being none. */
+export function descendantsKnown(of: number): number[] | null {
+  if (process.platform === 'win32') return null
+  const ran = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
+  if (ran.error || ran.signal || ran.status !== 0) return null
+  const listed = String(ran.stdout ?? '')
   const children = new Map<number, number[]>()
   for (const line of listed.split('\n')) {
     const [pid, ppid] = line.trim().split(/\s+/).map(Number)
