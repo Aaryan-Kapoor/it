@@ -456,12 +456,32 @@ export function bootId(): string | undefined {
   return undefined
 }
 
+/**
+ * Asks `ps`, in a way that the one on macOS and the one on Linux both take. Each column is
+ * asked for by an option of its own: given as one list, the `ps` of macOS takes everything
+ * after the first `=` for a heading, and prints one column. And times are said the same way
+ * whatever language and time zone this program was started in, since a time that is written
+ * down by one start of the service is compared with what another reads. Null where it could
+ * not be run, or ended in a way that is none of `ok`.
+ */
+function ps(args: string[], ok: number[] = [0]): string | null {
+  const ran = spawnSync(process.platform === 'darwin' ? '/bin/ps' : 'ps', args, {
+    encoding: 'utf8',
+    timeout: 5000,
+    maxBuffer: 16 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'ignore'],
+    env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' },
+  })
+  if (ran.error || ran.signal || !ok.includes(ran.status ?? -1)) return null
+  return String(ran.stdout ?? '')
+}
+
 /** The processes in the group of this number, and null where the system could not be asked. */
 function inGroup(group: number): number[] | null {
-  const ran = spawnSync('ps', ['-A', '-o', 'pid=,pgid='], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
-  if (ran.error || ran.signal || ran.status !== 0) return null
+  const listed = ps(['-A', '-o', 'pid=', '-o', 'pgid='])
+  if (listed === null) return null
   const found: number[] = []
-  for (const line of String(ran.stdout ?? '').split('\n')) {
+  for (const line of listed.split('\n')) {
     const [pid, pgid] = line.trim().split(/\s+/).map(Number)
     if (pid && pgid === group) found.push(pid)
   }
@@ -483,10 +503,11 @@ function belongs(pid: number, of: { harness: string; session: string }): boolean
       // Gone since it was listed: not there to belong to anything
       return (err as NodeJS.ErrnoException).code === 'ENOENT' ? false : null
     }
-  const ran = spawnSync('ps', ['eww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
-  if (ran.error || ran.signal) return null
-  if (ran.status !== 0) return false
-  const has = ` ${String(ran.stdout ?? '').replace(/\n/g, ' ')} `
+  // With what it was started with after its words, which macOS shows of one's own processes. One that is gone is nobody's.
+  const said = ps(['-E', '-ww', '-o', 'command=', '-p', String(pid)], [0, 1])
+  if (said === null) return null
+  if (!said.trim()) return false
+  const has = ` ${said.replace(/\n/g, ' ')} `
   return marks.every((mark) => has.includes(` ${mark} `))
 }
 
@@ -510,9 +531,8 @@ export function processes(pids: number[]): Map<number, string> | null {
   if (pids.length === 0) return found
   // It says that none of them is there by ending with 1, with what it found before that in
   // what it printed. Anything else is a `ps` that could not be run, or was ended
-  const ran = spawnSync('ps', ['-o', 'pid=,lstart=', '-p', pids.join(',')], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
-  if (ran.error || ran.signal || (ran.status !== 0 && ran.status !== 1)) return null
-  const listed = String(ran.stdout ?? '')
+  const listed = ps(['-o', 'pid=', '-o', 'lstart=', '-p', pids.join(',')], [0, 1])
+  if (listed === null) return null
   for (const line of listed.split('\n')) {
     const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(line)
     if (m) found.set(Number(m[1]), m[2]!)
@@ -531,9 +551,8 @@ export function descendants(of: number): number[] {
 /** The same, and null where the system could not be asked: not the same as there being none. */
 export function descendantsKnown(of: number): number[] | null {
   if (process.platform === 'win32') return null
-  const ran = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
-  if (ran.error || ran.signal || ran.status !== 0) return null
-  const listed = String(ran.stdout ?? '')
+  const listed = ps(['-A', '-o', 'pid=', '-o', 'ppid='])
+  if (listed === null) return null
   const children = new Map<number, number[]>()
   for (const line of listed.split('\n')) {
     const [pid, ppid] = line.trim().split(/\s+/).map(Number)
