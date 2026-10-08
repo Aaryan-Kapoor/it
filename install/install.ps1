@@ -202,12 +202,27 @@
       @{ New = (Join-Path $stage 'license'); At = $license; Old = (Join-Path $stage 'old.license'); Begun = $false },
       @{ New = (Join-Path $stage 'notices'); At = $notices; Old = (Join-Path $stage 'old.notices'); Begun = $false }
     )
+    # A program that was run a moment ago may still be held open, by Windows itself or by
+    # whatever on this system looks at each new program, and a file that is held cannot be
+    # moved. A move refused for that reason alone is tried again for ten seconds. Any other
+    # refusal is the answer at once.
+    function Move-Held($from, $to) {
+      for ($tried = 0; ; $tried++) {
+        try { [IO.File]::Move($from, $to); return }
+        catch {
+          $why = $_.Exception.GetBaseException()
+          $held = $why -is [IO.IOException] -and (($why.HResult -band 0xFFFF) -eq 32 -or ($why.HResult -band 0xFFFF) -eq 33)
+          if (-not $held -or $tried -ge 40) { throw }
+          Start-Sleep -Milliseconds 250
+        }
+      }
+    }
     $replacing = $true
     foreach ($place in $places) {
       Assert-NoFolder $place.At
       if ((Get-Kind $place.At) -ne 'nothing') { [IO.File]::Move($place.At, $place.Old) }
       $place.Begun = $true
-      [IO.File]::Move($place.New, $place.At)
+      Move-Held $place.New $place.At
     }
     $replacing = $false
     # Earlier programs that were moved aside are removed once they have stopped running. One
