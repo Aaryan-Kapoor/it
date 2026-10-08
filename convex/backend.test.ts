@@ -1974,6 +1974,31 @@ describe('clicks and their delivery', () => {
     expect(await runs()).toEqual([])
   })
 
+  test('a run is not said to begin for something a stop has dropped meanwhile: the stop a person pressed beside the run before is not lost on the run that was being got ready', async () => {
+    const { alice, m, p, click } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    const listed = async () => (await m.as.query(api.machines.me, {})).runs.map((r) => [(r as { run?: string }).run ?? null, r.stop ?? false])
+    // The run before is over on its machine, and It still has it down as running: its ending has not been heard
+    await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'before' })
+    // The next thing done on the page is taken by the machine, which gets a new run ready for it
+    const waiting = (await click('click-0001')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [waiting as never], for: SESSION })
+    await vi.advanceTimersByTimeAsync(1000)
+    // The person presses Stop, beside the run that is still listed
+    expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+    // Told now that the new run begins for that click, It says the click was stopped, and lists no new run
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'next', ids: [waiting] })).toEqual({ stopped: true })
+    expect(await listed()).toEqual([['before', true]])
+    // What is done after the stop is reopened for as before, and a run told of with nothing named begins as it always did
+    await vi.advanceTimersByTimeAsync(1000)
+    const after = (await click('click-0002')).actionId
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'next', ids: [after] })).toEqual({ stopped: false })
+    expect(await listed()).toEqual([['next', false]])
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'another' })).toEqual({ stopped: false })
+    // An id that is no click of this person's says nothing
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'another', ids: ['not an id'] })).toEqual({ stopped: false })
+  })
+
   test('clicks that were set aside, or are another machine’s, never hide one a listening machine may take', async () => {
     const { t, alice, m: old, p } = await setup()
     // Another of the person's machines, which stays enrolled and has clicks of its own for a

@@ -759,7 +759,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
   try {
     for (const name of readdirSync(inHome('logs'))) if (/^reopened-\d+-\d+\.txt$/.test(name)) rmSync(inHome('logs', name), { force: true })
   } catch {}
-  async function carry(session: { harness: string; id: string }, text: string, wanted: () => boolean = () => true): Promise<string | null> {
+  async function carry(
+    session: { harness: string; id: string },
+    text: string,
+    wanted: () => boolean = () => true,
+    /** The clicks it is reopened for, which It looks at once more as it is told that the run begins. */
+    ids: string[] = [],
+  ): Promise<string | null> {
     const key = follow(keyOf(session.harness, session.id))
     // A conversation that was cleared carries on under another id, and it is that one which is carried on
     const now = { harness: session.harness, id: key.slice(key.indexOf(':') + 1) }
@@ -799,12 +805,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
     try {
       // It is told first, and nothing is started where it could not be told: it is by that
       // word that the page says the agent is working, and offers to stop it
-      const told = await call('mutation', api.machines.runBegan, { for: session, run: runId }).then(
-        () => true,
+      const told = await call<{ stopped?: boolean } | null>('mutation', api.machines.runBegan, { for: session, run: runId, ids }).then(
+        (said) => (said?.stopped ? ('stopped' as const) : true),
         () => false,
       )
       if (!told) {
         ended = 'It could not be told that the conversation was being reopened, so it was not'
+        return ended
+      }
+      // The person stopped the conversation while this was being got ready, and what it was
+      // to be reopened for went with the stop: nothing is started for it
+      if (told === 'stopped') {
+        ended = NOT_STARTED
         return ended
       }
       // Everything that could have changed while this was being got ready is looked at once
@@ -1119,6 +1131,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF}` : ''}`,
             // Still wanted at the moment it would start: the app connected, and reopening switched on for it
             () => connected(harness) && wakes(harness, click.at),
+            [click, ...withIt].map((c) => c.id),
           ).then((ended) => {
             // Told, where the conversation was in fact reopened: one that could not be is told the next time
             if (ended === null || ended === STOPPED) {

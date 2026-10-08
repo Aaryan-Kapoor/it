@@ -885,6 +885,27 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(existsSync(path.join(bin, 'given'))).toBe(false)
   }, 60_000)
 
+  test('a conversation is not reopened for something the person stopped while it was being got ready: It is told which clicks the run is for, and says so', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    stand.answer = (name) => (name === 'machines:runBegan' ? { stopped: true } : undefined)
+    offered(click(1))
+    await until(() => stand.calls.some((c) => c.name === 'machines:runBegan') && called('delivery:release').includes('click-1'))
+    expect(stand.calls.find((c) => c.name === 'machines:runBegan')!.args.ids).toEqual(['click-1'])
+    await new Promise((r) => setTimeout(r, 500))
+    // Nothing was started, nothing is said to have failed, and nothing is noted as a turn that was stopped or cut off
+    expect(existsSync(path.join(bin, 'given'))).toBe(false)
+    expect([called('delivery:handedOff'), stand.calls.filter((c) => c.name === 'machines:wakeFailed').length]).toEqual([[], 0])
+    expect(existsSync(path.join(home, 'stopped.json'))).toBe(false)
+    expect(existsSync(path.join(home, 'cut-off.json'))).toBe(false)
+  }, 60_000)
+
   test('a machine that joined an It of a version it does not fit hands nothing over and reopens nothing, can still be stopped, and goes on by itself once the two fit', async () => {
     // The It this machine joined, as its door says which version it speaks
     let speaks = PROTOCOL_VERSION + 1

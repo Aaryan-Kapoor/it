@@ -3,6 +3,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, mutation, query } from './_generated/server'
+import { stoppedSince } from './actions'
 import { ownMachine, requireMachine, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
 import { log } from './lib/log'
@@ -173,16 +174,26 @@ const RUNS_MOST = 20
 /** The machine says that it has reopened a conversation, which is running from now until it says otherwise. */
 export const runBegan = mutation({
   /** `run` names this run among all there have been of the conversation, so that the ending of an earlier one, told late, does not take this one's place away. */
-  args: { for: session, run: v.optional(v.string()) },
-  handler: async (ctx, { for: s, run }) => {
+  args: { for: session, run: v.optional(v.string()), ids: v.optional(v.array(v.string())) },
+  handler: async (ctx, { for: s, run, ids }) => {
     const { machine } = await requireMachine(ctx)
+    // What it is reopened for may have been stopped while the machine was getting ready: a
+    // person who pressed Stop beside a run that was only still listed stopped that, and
+    // dropped what was waiting, this run's clicks among it. Looked at in the same step that
+    // would say the run is on, so that a stop falls before it and is seen here, or after it
+    // and is told to the machine as this run's own.
+    for (const id of ids ?? []) {
+      const actionId = ctx.db.normalizeId('actions', id)
+      const x = actionId ? await ctx.db.get(actionId) : null
+      if (x && x.userId === machine.userId && (x.route === 'stopped' || (await stoppedSince(ctx, x)))) return { stopped: true }
+    }
     const others = (machine.runs ?? []).filter((r) => r.harness !== s.harness || r.sessionId !== s.id)
     await ctx.db.patch(machine._id, {
       runs: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), since: Date.now(), ...(run ? { run: run.slice(0, 64) } : {}) }].slice(
         -RUNS_MOST,
       ),
     })
-    return null
+    return { stopped: false }
   },
 })
 
