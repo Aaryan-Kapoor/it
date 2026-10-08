@@ -1216,6 +1216,30 @@ try {
       odd.code === 0 && existsSync(odd.it) && next.status === 0 && /"version"/.test(next.said) && !existsSync(path.join(odd.home, 'RAN')),
       `${odd.said}\n${next.said}`,
     )
+
+    // ---------- taken off the machine again, by the program that is in the folder ----------
+    // On Windows a program that is running cannot delete its own file. It moves itself out of
+    // the folder first, to where temporary files are kept, and is deleted from there by a
+    // program it leaves behind for that, a moment after it has ended.
+    const gone = await install('gone')
+    const asideIn = () => readdirSync(os.tmpdir()).filter((name) => /^it-removed-\d+-[0-9a-z]+\.exe$/.test(name))
+    const asideBefore = asideIn()
+    const off = await run(gone.it, ['uninstall', '--yes'], { ...plainEnv(), HOME: gone.home, USERPROFILE: gone.home, IT_HOME: gone.folder }, gone.home)
+    let said = null
+    try {
+      said = JSON.parse(off.said.slice(off.said.indexOf('{')))
+    } catch {}
+    check(
+      'the program takes It off the machine by itself: its own folder is deleted whole, the program in it included, and nothing is left for the person to do',
+      gone.code === 0 && off.status === 0 && said?.removed === true && said.left === undefined && !existsSync(gone.folder),
+      `${off.said}\nstill there: ${existsSync(gone.folder) ? readdirSync(gone.folder).join(' ') : 'nothing'}`,
+    )
+    let aside = asideIn().filter((name) => !asideBefore.includes(name))
+    for (let waited = 0; aside.length && waited < 40; waited++) {
+      await sleep(500)
+      aside = asideIn().filter((name) => !asideBefore.includes(name))
+    }
+    check('and the program it moved out of the folder to do that is gone too, a moment after it ended', aside.length === 0, aside.join(' '))
   }
 
   // ---------- over a program that is there already, and over one that is running ----------

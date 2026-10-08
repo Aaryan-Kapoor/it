@@ -61,6 +61,26 @@ export function windowsPathCommand(folder: string): string {
   ].join('; ')
 }
 
+/**
+ * What takes a folder off the PATH Windows keeps for this account, for PowerShell to run. Every
+ * entry that is that folder, as Windows would read the entry, goes, and the rest is written
+ * back as it was kept, in its order, with a name such as %USERPROFILE% left as a name and the
+ * value left the kind it was. Nothing is written where the folder is not there. It says `off`
+ * where it took the folder off and `absent` where it was not on it, and running programs are
+ * told as `windowsPathCommand` tells them.
+ */
+export function windowsPathRemoval(folder: string): string {
+  const dir = psQuote(folder.replace(/[\\/]+$/, ''))
+  return [
+    "$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)",
+    "if (-not $k) { 'absent'; exit 0 }",
+    "$all = @(([string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -split ';')",
+    `$keep = @($all | Where-Object { -not ($_ -and [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\\') -eq ${dir}) })`,
+    "if ($keep.Count -eq $all.Count) { 'absent' } else { $k.SetValue('Path', ($keep -join ';'), $k.GetValueKind('Path')); [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', [NullString]::Value, 'User'); 'off' }",
+    '$k.Close()',
+  ].join('; ')
+}
+
 export function readJson<T>(file: string): T | null {
   try {
     return JSON.parse(readFileSync(file, 'utf8')) as T

@@ -4,7 +4,7 @@
 // five that a person runs to look after It (`it setup`, `it status`, `it site`, `it network`
 // and `it service status`) print a few plain sentences where standard output is a terminal, and
 // the same JSON as ever where it is not, or when `--json` is given.
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import {
   appendFileSync,
   chmodSync,
@@ -59,6 +59,7 @@ import {
   notSetUp,
   Problem,
   plainWord,
+  psQuote,
   readJson,
   sessionAsked,
   sessionNote,
@@ -69,6 +70,7 @@ import {
   VERSION,
   why,
   windowsPathCommand,
+  windowsPathRemoval,
   withoutTables,
   writeAll,
   written,
@@ -966,6 +968,62 @@ function pathLine(): string | undefined {
  * then its line in the shell's profile, and last its folder, with everything it kept. Asked
  * first, in words that say what goes: the pages go with the folder, and nothing brings them back.
  */
+/** PowerShell, given one thing to run, exactly as it is written. What it printed, or nothing where it could not be run or ended as a failure. */
+function inPowerShell(script: string): string | undefined {
+  try {
+    const ran = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 30_000,
+    })
+    return ran.status === 0 ? ran.stdout.trim() : undefined
+  } catch {
+    return undefined
+  }
+}
+/** Takes a folder off the PATH Windows keeps for this account. Whether it was on it and is off now, was not on it, or could not be taken off. */
+function offWindowsPath(folder: string): 'off' | 'absent' | undefined {
+  const said = inPowerShell(windowsPathRemoval(folder))
+  return said === 'off' || said === 'absent' ? said : undefined
+}
+/**
+ * On Windows a program that is running cannot delete its own file, and can move it. So that
+ * It's folder can be deleted whole by the program that is in it, this program is moved out of
+ * the folder first, to where the system keeps what may be thrown away, or beside the folder
+ * where that is on another disk, and is deleted from there once it has ended, by a program
+ * started for that and left to it. Where it could not be moved the folder is found still to be
+ * there, and that is said.
+ */
+function stepOutOf(folder: string): void {
+  const me = process.execPath
+  const inside = path.relative(path.resolve(folder), path.resolve(me))
+  // Run as a script, the program is Node's and is not in the folder
+  if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) return
+  const name = `it-removed-${process.pid}-${Date.now().toString(36)}.exe`
+  for (const where of [os.tmpdir(), path.dirname(path.resolve(folder))]) {
+    const aside = path.join(where, name)
+    try {
+      renameSync(me, aside)
+    } catch {
+      continue
+    }
+    try {
+      const after = `Wait-Process -Id ${process.pid} -Timeout 60 -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 300; Remove-Item -LiteralPath ${psQuote(aside)} -Force -ErrorAction SilentlyContinue`
+      spawn(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(after, 'utf16le').toString('base64')],
+        {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+          cwd: where,
+        },
+      ).unref()
+    } catch {}
+    return
+  }
+}
+
 async function uninstall(a: Args) {
   const folder = home()
   const said: string[] = []
@@ -1040,7 +1098,12 @@ async function uninstall(a: Args) {
   for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
   for (const { file, why: reason } of profiles.failed)
     left.push(`${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`)
-  if (process.platform === 'win32') left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
+  // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
+  if (process.platform === 'win32') {
+    const taken = offWindowsPath(bin)
+    if (taken === 'off') say(`${bin} is off your PATH.`)
+    else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
+  }
   // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
   crumbs(folder)
   // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
@@ -1049,9 +1112,12 @@ async function uninstall(a: Args) {
     say(
       `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
     )
-  // 5. Its folder, the program in it included. A program that is running may delete its own file on every system but Windows.
+  // 5. Its folder, the program in it included. A program that is running may delete its own
+  // file on every system but Windows, where it steps out of the folder first. What the service
+  // held open there a moment ago may be held a moment longer, and is tried again.
+  if (process.platform === 'win32') stepOutOf(folder)
   try {
-    rmSync(folder, { recursive: true, force: true })
+    rmSync(folder, { recursive: true, force: true, ...(process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}) })
   } catch (err) {
     left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
   }
@@ -1060,7 +1126,7 @@ async function uninstall(a: Args) {
   tell([
     left.length ? 'It is off this machine, but for this:' : 'It is off this machine.',
     ...left.map((line) => `  ${line}`),
-    left.some((line) => /PATH/.test(line)) || process.platform === 'win32'
+    left.some((line) => /PATH/.test(line))
       ? 'Once the PATH is as you want it, a new terminal has it: one that is open keeps the old PATH.'
       : 'A terminal that is open still has the old PATH: a new one does not.',
   ])

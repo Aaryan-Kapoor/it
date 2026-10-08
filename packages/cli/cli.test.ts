@@ -43,6 +43,7 @@ import {
   textOf,
   throughDoor,
   windowsPathCommand,
+  windowsPathRemoval,
   withoutTables,
   writePrivate,
 } from './src/lib'
@@ -1008,6 +1009,65 @@ describe('the line a person on Windows is given to put It’s folder on their PA
     expect(line).toContain(`if (($p -split ';') -notcontains ${folder}) {`)
     expect(line).toContain(`(@(${folder}, $p) | Where-Object { $_ }) -join ';'`)
   })
+})
+
+describe('what takes It’s folder off the PATH Windows keeps, when It is taken off the machine', () => {
+  const line = windowsPathRemoval("C:\\Users\\O’Neil\\it's\\bin\\")
+  test('reads the PATH as Windows keeps it and writes back what is left as the kind of value it was, and only where the folder was on it', () => {
+    expect(line).toContain("$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')")
+    expect(line).toContain("$k.SetValue('Path', ($keep -join ';'), $k.GetValueKind('Path'))")
+    expect(line).toContain("if ($keep.Count -eq $all.Count) { 'absent' } else {")
+    expect(line).not.toContain("GetEnvironmentVariable('Path'")
+    expect(line).not.toContain("SetEnvironmentVariable('Path'")
+    expect(line).not.toContain('\n')
+  })
+  test('an entry is the folder when Windows would read it as that, whatever stands at its end, and every mark PowerShell reads as an apostrophe is written twice', () => {
+    expect(line).toContain("[Environment]::ExpandEnvironmentVariables($_).TrimEnd('\\') -eq 'C:\\Users\\O’’Neil\\it''s\\bin')")
+  })
+  // On Windows itself, against the PATH the system keeps for whoever runs the tests: a folder
+  // made up for this is put on it with the line a person is given, and taken off again
+  test.runIf(process.platform === 'win32')(
+    'run on Windows, it takes off the folder that was put on, in whatever form it was written there, and leaves every other entry, and the kind of value, as they were',
+    () => {
+      const ps = (script: string) =>
+        spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+          encoding: 'utf8',
+        })
+      const kept = () =>
+        ps(
+          "$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment'); [string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') + '|' + $(if ($k.GetValueNames() -contains 'Path') { $k.GetValueKind('Path') } else { 'none' })",
+        ).stdout.trim()
+      const before = kept()
+      const folder = path.join(os.homedir(), `it-test-${process.pid}`, 'bin')
+      try {
+        expect(ps(windowsPathRemoval(folder)).stdout.trim()).toBe('absent')
+        expect(kept()).toBe(before)
+        expect(ps(windowsPathCommand(folder)).status).toBe(0)
+        expect(kept().split('|')[0]!.split(';')).toContain(folder)
+        // And once more as a person might have written it by hand: with the name of their folder left as a name, and a mark at its end
+        const byName = `%USERPROFILE%\\it-test-${process.pid}\\bin\\`
+        ps(
+          `$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true); $k.SetValue('Path', ([string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')) + ';${byName}', $k.GetValueKind('Path'))`,
+        )
+        expect(kept().split('|')[0]).toContain(byName)
+        expect(ps(windowsPathRemoval(folder)).stdout.trim()).toBe('off')
+        const after = kept()
+        expect(after.split('|')[0]).not.toContain(`it-test-${process.pid}`)
+        // Every entry that was there before is there still, in its order, and where there was a PATH before, it is that PATH to the letter, and the kind of value it was
+        expect(after.split('|')[0]!.split(';').filter(Boolean)).toEqual(before.split('|')[0]!.split(';').filter(Boolean))
+        if (!before.endsWith('|none')) expect(after).toBe(before)
+        expect(ps(windowsPathRemoval(folder)).stdout.trim()).toBe('absent')
+      } finally {
+        // Whatever became of the test, the PATH is put back exactly as it was found
+        const [value, kind] = [before.slice(0, before.lastIndexOf('|')), before.slice(before.lastIndexOf('|') + 1)]
+        if (kind !== 'none')
+          ps(
+            `$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true); $k.SetValue('Path', ${`'${value.replace(/'/g, "''")}'`}, [Microsoft.Win32.RegistryValueKind]::${kind})`,
+          )
+      }
+    },
+    120_000,
+  )
 })
 
 describe('running a harness’s own commands', () => {
