@@ -5037,7 +5037,11 @@ try {
   // First what each browser named a session for, from everything it sent the site about its
   // session: each refusal of a naming that the site may make is one the browser may say
   await Promise.allSettled(opened.flatMap((b) => b.exchanges.map((x) => x.read)))
-  const namedWrongly = opened.flatMap((b, i) => namingsOf(b).wrong.map((what) => `browser ${i + 1}: ${what}`))
+  // Each with where the naming stood, since nothing else the run keeps says when a browser sent what
+  const namedWrongly = opened.flatMap((b, i) => {
+    const namings = namingsOf(b)
+    return namings.wrong.map((what, n) => `browser ${i + 1}: ${what} [${namings.about[n]}]`)
+  })
   const namedAtAll = opened.reduce((sum, b) => sum + b.exchanges.filter((x) => x.path === '/session/end').length, 0)
   check(
     'a browser named a session to It only to end the one it held, where its pairing was ending, or to have the cookie of one that was over cleared again, and that no oftener than once each time a tab was answered about its token; and each naming was answered as it is: ended, nothing to end, or the browser holds another',

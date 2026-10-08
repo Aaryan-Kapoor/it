@@ -328,7 +328,17 @@ describe('what a browser may name a session for', () => {
     expect(wrongOf([paired(tabOne, FIRST), token(tabOne, 200), names(tabOne, FIRST, 200, { clears: [FIRST] })])).toEqual([
       'the session the browser holds was named while nothing had ended its pairing (jd7fir…)',
     ])
-    // One that is over, named twice after one asking, and then told 401 where the browser is paired
+    // And where such a naming stood is said with it: in which tab, how long after a while, and what was seen of its cookie
+    const again = [paired(tabOne, FIRST), token(tabOne, 200), names(tabOne, FIRST, 200), token(tabTwo, 401, { clears: [FIRST] })]
+    const late = names(tabTwo, FIRST, 409)
+    // The answer that cleared the cookie is taken to have come a moment after the naming it led to, and one before it could not be read
+    Object.assign(again[3], { answered: late.sent + 3 })
+    Object.assign(again[1], { unread: true })
+    const stood = site.namingsHeld([...again, late], [{ from: again[2].sent, until: late.sent - 7 }])
+    expect(stood.wrong).toEqual(['the session the browser holds was named while nothing had ended its pairing (jd7fir…)'])
+    expect(stood.about).toEqual([
+      'tab 2 of 2, 7 ms after such a while ended, its cookie was not seen cleared before, and was seen cleared 3 ms after, 1 answers before it could not be read for their cookies',
+    ])
     const over = [paired(tabOne, FIRST), token(tabOne, 200), names(tabOne, FIRST, 200, { clears: [FIRST] }), token(tabOne, 401), names(tabOne, FIRST, 401)]
     const whilst = [{ from: over[2].sent, until: over.at(-1).answered }]
     expect(wrongOf([...over, names(tabOne, FIRST, 401)], [{ from: over[2].sent, until: Number.POSITIVE_INFINITY }])).toEqual([

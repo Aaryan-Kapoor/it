@@ -133,7 +133,10 @@ export async function launch({ kind = BROWSER, context: contextOptions = {} } = 
         for (const [, value] of (cookies ?? '').matchAll(SESSION)) noteWhenSeen('a browser’s session', value)
         if (one) for (const [, name, value] of (cookies ?? '').matchAll(SESSION_COOKIE)) one.cookies.push({ name, set: value !== '' })
       },
-      () => {},
+      () => {
+        // What the answer did to the browser's cookies is not known then, and is said to be so
+        if (one) one.unread = true
+      },
     )
     if (one) one.read = read
   })
@@ -232,9 +235,10 @@ export async function launch({ kind = BROWSER, context: contextOptions = {} } = 
  * each, each time it was answered about its token. And a session the browser never held is
  * never named.
  *
- * Gives `wrong`, a sentence for each naming that is none of that, and `refused`, how many
- * namings that were as they may be were answered with a refusal, by the site they were sent to
- * and the status: that is how often the browser may say so by itself.
+ * Gives `wrong`, a sentence for each naming that is none of that; `about`, for each of those
+ * sentences, where the naming stood when it was sent; and `refused`, how many namings that were
+ * as they may be were answered with a refusal, by the site they were sent to and the status:
+ * that is how often the browser may say so by itself.
  */
 export function namingsHeld(exchanges, notPaired = []) {
   const held = new Set()
@@ -244,6 +248,35 @@ export function namingsHeld(exchanges, notPaired = []) {
   const wrong = []
   const refused = new Map()
   const short = (session) => `${String(session).slice(0, 6)}…`
+  const tabs = [...new Set(exchanges.map((x) => x.tab))]
+  /**
+   * Where a naming stood when it was sent, for whoever has to say why it was taken as it was:
+   * in which of the browser's tabs, how long after the last while had ended and before the
+   * next began, when an answer was seen to clear the cookie of the session it named, and how
+   * many answers before it could not be read for what they did to the cookies.
+   */
+  const stood = (x) => {
+    const since = notPaired.filter((w) => w.until < x.sent).map((w) => x.sent - w.until)
+    const before = notPaired.filter((w) => w.from > x.sent).map((w) => w.from - x.sent)
+    const name = x.named === null ? null : cookieOf(x.named)
+    const clearings = exchanges.filter((e) => e.answered !== null && e.cookies.some((c) => c.name === name && !c.set)).map((e) => e.answered - x.sent)
+    const [earlier, later] = [clearings.filter((ms) => ms < 0), clearings.filter((ms) => ms >= 0)]
+    const unread = exchanges.filter((e) => e.unread && e.answered !== null && e.answered <= x.sent).length
+    return [
+      `tab ${tabs.indexOf(x.tab) + 1} of ${tabs.length}`,
+      since.length ? `${Math.min(...since)} ms after such a while ended` : 'after no such while',
+      ...(before.length ? [`${Math.min(...before)} ms before the next began`] : []),
+      earlier.length ? `its cookie was last seen cleared ${-Math.max(...earlier)} ms before` : 'its cookie was not seen cleared before',
+      ...(later.length ? [`and was seen cleared ${Math.min(...later)} ms after`] : []),
+      `${unread} answers before it could not be read for their cookies`,
+    ].join(', ')
+  }
+  /** For each sentence in `wrong`, where that naming stood. */
+  const about = []
+  const say = (what, x) => {
+    wrong.push(what)
+    about.push(stood(x))
+  }
   const events = exchanges
     .flatMap((x) => [{ at: x.sent, x, sent: true }, ...(x.answered === null ? [] : [{ at: x.answered, x, sent: false }])])
     .sort((a, b) => a.at - b.at)
@@ -253,15 +286,15 @@ export function namingsHeld(exchanges, notPaired = []) {
       if (!naming) continue
       const name = x.named === null ? null : cookieOf(x.named)
       if (name === null || !held.has(name)) {
-        wrong.push(`a session the browser never held was named (${x.named === null ? 'none at all' : short(x.named)})`)
+        say(`a session the browser never held was named (${x.named === null ? 'none at all' : short(x.named)})`, x)
       } else if (has.has(name)) {
         kinds.set(x, 'its own')
         if (!notPaired.some((w) => x.sent >= w.from && x.sent <= w.until))
-          wrong.push(`the session the browser holds was named while nothing had ended its pairing (${short(x.named)})`)
+          say(`the session the browser holds was named while nothing had ended its pairing (${short(x.named)})`, x)
       } else {
         kinds.set(x, 'over')
         const left = accountedFor.get(x.tab) ?? 0
-        if (left < 1) wrong.push(`a session that is over was named oftener than the tab’s askings account for (${short(x.named)})`)
+        if (left < 1) say(`a session that is over was named oftener than the tab’s askings account for (${short(x.named)})`, x)
         else accountedFor.set(x.tab, left - 1)
       }
       continue
@@ -270,9 +303,7 @@ export function namingsHeld(exchanges, notPaired = []) {
       const whilst = notPaired.some((w) => x.sent >= w.from && x.sent <= w.until)
       const may = kinds.get(x) === 'its own' ? [200, 401, 409] : whilst ? [401, 409] : [409]
       if (!may.includes(x.status))
-        wrong.push(
-          `naming ${kinds.get(x) === 'its own' ? 'the session the browser holds' : 'a session that is over'} was answered ${x.status} (${short(x.named)})`,
-        )
+        say(`naming ${kinds.get(x) === 'its own' ? 'the session the browser holds' : 'a session that is over'} was answered ${x.status} (${short(x.named)})`, x)
       else if (x.status !== 200) refused.set(`${x.origin} ${x.status}`, (refused.get(`${x.origin} ${x.status}`) ?? 0) + 1)
     }
     for (const cookie of x.cookies) {
@@ -284,7 +315,7 @@ export function namingsHeld(exchanges, notPaired = []) {
     // Answered about its token, a tab may name each session that is over once more
     if (x.path === '/session/token') accountedFor.set(x.tab, (accountedFor.get(x.tab) ?? 0) + [...held].filter((name) => !has.has(name)).length)
   }
-  return { wrong, refused: (origin, status) => refused.get(`${origin} ${status}`) ?? 0, held: [...held] }
+  return { wrong, about, refused: (origin, status) => refused.get(`${origin} ${status}`) ?? 0, held: [...held] }
 }
 
 // ---------- what a browser is expected to say ----------
