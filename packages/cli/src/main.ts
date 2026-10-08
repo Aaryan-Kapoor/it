@@ -1561,17 +1561,37 @@ async function settingUp(a: Args, joined: boolean) {
 const TAKEN_MS = 20_000
 
 /** Whether the network is on in this machine's settings, and where another device then reaches It. Off, with no address, on a machine that only joined an It. */
-function networkNow(): { on: boolean; addresses: string[] } {
+function networkNow(): { on: boolean; addresses: string[]; tailnet?: true; unable?: true } {
   try {
     const config = elsewhere() ? null : readConfig()
     const on = config?.network ?? false
     // Kept to the tailnet, the door answers at this machine's addresses there and at no other:
     // an address on the home network would be one that nothing opens
-    return { on, addresses: on && config ? reachable(config.port, undefined, config.tailnet === true) : [] }
+    return {
+      on,
+      addresses: on && config ? reachable(config.port, undefined, config.tailnet === true) : [],
+      ...(on && config?.tailnet === true ? { tailnet: true } : {}),
+    }
   } catch {
     // Settings that cannot be read say nothing of the network, and `it status` still says the rest
     return { on: false, addresses: [] }
   }
+}
+
+/**
+ * The network as it stands, and not only as the settings ask for it: a service that was to
+ * listen on the network and could not answers this machine only, whatever its settings say,
+ * and to say that the network is on would send the person to addresses that nothing answers at.
+ */
+async function networkAsItStands(running: boolean): Promise<ReturnType<typeof networkNow>> {
+  const asked = networkNow()
+  if (!asked.on || !running || elsewhere()) return asked
+  try {
+    const config = readConfig()
+    const stands = config ? await doorStands(config) : undefined
+    if (stands?.wanted && !stands.on) return { on: false, addresses: [], unable: true }
+  } catch {}
+  return asked
 }
 
 /**
@@ -1771,7 +1791,7 @@ async function status(a: Args) {
     enrolled,
     machine,
     site: siteAddress() ?? null,
-    network: networkNow(),
+    network: await networkAsItStands(running && !blocked),
     ...(database ? { database } : {}),
     connector: blocked ? { running: null } : ((await connectorHealth()) ?? { running: false }),
     background: service.status(),
@@ -1802,11 +1822,15 @@ async function status(a: Args) {
     refused ? undefined : enrolled ? `This machine is enrolled${name ? ` as “${name}”` : ''}.` : running ? undefined : 'This machine is not enrolled.',
     !here
       ? undefined
-      : !network.on
-        ? 'The network is off, so It answers this machine only. `it network on` lets your other devices on the same network reach it.'
-        : first === undefined
-          ? 'The network is on, and this machine has no address on a network just now.'
-          : `The network is on. Other devices on the same network open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
+      : network.unable
+        ? 'The network is turned on in It’s settings, and It could not listen on this machine’s network addresses, so it answers this machine only. Another program may have one of the ports It listens on. `it service logs` says what the service met.'
+        : !network.on
+          ? 'The network is off, so It answers this machine only. `it network on` lets your other devices on the same network reach it.'
+          : first === undefined
+            ? 'The network is on, and this machine has no address on a network just now.'
+            : network.tailnet
+              ? `The network is on, for your tailnet only. Your devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses there are ${others.join(' and ')}.` : ''}`
+              : `The network is on. Other devices on the same network open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
     ...appsSaid(stands.harnesses),
     ...serviceSaid(stands.background, stands.connector, running && enrolled),
     newerOut ? `It ${newerOut} is out, and this is ${VERSION}. \`it upgrade\` puts it in place.` : `This is It ${VERSION}.`,
@@ -2211,8 +2235,10 @@ async function main(argv: string[]): Promise<void> {
       const opening = !a.flags['no-open'] && openBrowser(url)
       if (!forPerson(a)) return out({ url, ...(elsewhereToo.length ? { urls: elsewhereToo } : {}) })
       if (opening) return tell(['It’s site is opening in your browser, already paired:', `  ${url}`])
-      // Nobody is at this machine's own screen, or it has none: the address to open is the one another device can reach
-      const there = fromAfar() || a.flags['no-open'] ? elsewhereToo : []
+      // No browser was opened here: nobody is at this machine's own screen, or it has none, or
+      // it was asked not to. The address to open is then the one another device can reach,
+      // with the one for this machine after it.
+      const there = elsewhereToo
       return tell([
         there.length ? 'Open this on the screen you want to pair:' : `Open this in a browser${existsSync(settingsFile()) ? ' on this machine' : ''}:`,
         `  ${there[0] ?? url}`,
@@ -2220,7 +2246,7 @@ async function main(argv: string[]): Promise<void> {
         ...there.slice(1).map((other) => `  or ${other}`),
         ...(there.length ? [`  or, on this machine, ${url}`] : []),
         'It pairs one browser, once, within ten minutes.',
-        !there.length && fromAfar() && existsSync(settingsFile())
+        !there.length && existsSync(settingsFile())
           ? 'No other device can open that: `it network tailscale` or `it network on` lets one, and this then prints an address for it.'
           : undefined,
       ])
