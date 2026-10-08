@@ -168,7 +168,8 @@ const ARCHIVE_MOST = 400 * 1024 * 1024
  */
 const programWithin = (): number => {
   const asked = Number(process.env.IT_BACKEND_FETCH_MINUTES)
-  return (Number.isFinite(asked) && asked >= 1 && asked <= 24 * 60 ? asked : 20) * 60_000
+  // A whole number of milliseconds, whatever was asked for: a limit that is not one is refused where it is set
+  return Math.round((Number.isFinite(asked) && asked >= 1 && asked <= 24 * 60 ? asked : 20) * 60_000)
 }
 export async function fetchProgram(
   from: { url: string; sha256: string; plain?: boolean },
