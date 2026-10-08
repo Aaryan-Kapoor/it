@@ -1008,7 +1008,11 @@ function stepOutOf(folder: string): void {
       continue
     }
     try {
-      const after = `Wait-Process -Id ${process.pid} -Timeout 60 -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 300; Remove-Item -LiteralPath ${psQuote(aside)} -Force -ErrorAction SilentlyContinue`
+      // It is tried until it is gone, for a minute: the file cannot be deleted while this program
+      // runs, nor for a moment after. Nothing here waits on this program by its number, since
+      // whatever holds a process, ended or not, keeps its file from being deleted.
+      const file = psQuote(aside)
+      const after = `for ($i = 0; $i -lt 240; $i++) { try { [IO.File]::Delete(${file}) } catch {}; if (-not [IO.File]::Exists(${file})) { break }; Start-Sleep -Milliseconds 250 }`
       spawn(
         'powershell.exe',
         ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(after, 'utf16le').toString('base64')],

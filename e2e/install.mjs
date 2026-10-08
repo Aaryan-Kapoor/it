@@ -1235,7 +1235,7 @@ try {
       `${off.said}\nstill there: ${existsSync(gone.folder) ? readdirSync(gone.folder).join(' ') : 'nothing'}`,
     )
     let aside = asideIn().filter((name) => !asideBefore.includes(name))
-    for (let waited = 0; aside.length && waited < 40; waited++) {
+    for (let waited = 0; aside.length && waited < 100; waited++) {
       await sleep(500)
       aside = asideIn().filter((name) => !asideBefore.includes(name))
     }
