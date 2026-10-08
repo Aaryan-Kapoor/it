@@ -2618,6 +2618,58 @@ describe('displays and machines', () => {
     expect(await code(alice.browser.mutation(api.machines.inventory, { harnesses: [] }))).toBe('forbidden')
   })
 
+  test('a machine says which newer version of It it has learned is out, and only the owner’s own browser can have it brought to it, the machine It runs on first', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const host = await machineOf(t, 'alice', 'the desk')
+    const report = (m: typeof host, version: string, latest?: string) =>
+      m.as.mutation(api.machines.report, { connectorVersion: version, harnesses: [], ...(latest === undefined ? {} : { latest }) })
+    const onSite = async (id: string) => (await alice.browser.query(api.machines.list, {})).find((m) => m.id === id)!
+    const ask = (id: string, as = alice.browser) => as.mutation(api.machines.upgrade, { machineId: id as never })
+    await report(host, '0.1.0')
+    // It knows of none: there is nothing to bring it to
+    expect(await onSite(host.id)).toMatchObject({ connectorVersion: '0.1.0', latest: null, upgrade: null })
+    expect(await code(ask(host.id))).toBe('conflict')
+    // It has learned of one, and a report that says nothing of it does not forget it
+    await report(host, '0.1.0', '0.1.1')
+    await report(host, '0.1.0')
+    expect((await onSite(host.id)).latest).toBe('0.1.1')
+    // A machine that joined, and has learned of it too, waits for the one It runs on
+    const laptop = await machineOf(t, 'alice', 'the laptop')
+    await t.run((ctx) => ctx.db.patch(laptop.id as never, { byMachine: host.id } as never))
+    await report(laptop, '0.1.0', '0.1.1')
+    expect(await code(ask(laptop.id))).toBe('conflict')
+    expect((await onSite(laptop.id)).upgrade).toBeNull()
+    // Asked for by the owner, it is asked of the machine, which says how far it has got
+    expect(await code(ask(host.id))).toBe('ok')
+    expect((await onSite(host.id)).upgrade).toMatchObject({ state: 'asked', version: '0.1.1' })
+    expect((await host.as.query(api.machines.me, {})).upgrade).toMatchObject({ state: 'asked' })
+    await host.as.mutation(api.machines.upgrading, { state: 'working' })
+    expect((await onSite(host.id)).upgrade).toMatchObject({ state: 'working' })
+    // It could not: why is kept for the site, cut to a length, and it can be asked for again
+    await host.as.mutation(api.machines.upgrading, { state: 'failed', why: 'x'.repeat(1000) })
+    expect((await onSite(host.id)).upgrade).toMatchObject({ state: 'failed', why: 'x'.repeat(300) })
+    expect(await code(ask(host.id))).toBe('ok')
+    // The connector that starts as the newer version reports it, and the asking is over
+    await report(host, '0.1.1', '0.1.1')
+    expect(await onSite(host.id)).toMatchObject({ connectorVersion: '0.1.1', upgrade: null })
+    expect(await code(ask(host.id))).toBe('conflict')
+    // And now that the machine It runs on is there, the one that joined can be brought to it
+    expect(await code(ask(laptop.id))).toBe('ok')
+    expect((await onSite(laptop.id)).upgrade).toMatchObject({ state: 'asked', version: '0.1.1' })
+    // Neither a machine nor a screen can ask it of a machine, and a machine cannot speak of an upgrade nobody asked for
+    await report(host, '0.1.1', '0.1.2')
+    expect(await code(host.as.mutation(api.machines.upgrade, { machineId: host.id as never }))).toBe('forbidden')
+    const screen = await browserOf(t, 'alice', 'screen')
+    expect(await code(ask(host.id, screen.browser))).toBe('forbidden')
+    await host.as.mutation(api.machines.upgrading, { state: 'working' })
+    expect((await onSite(host.id)).upgrade).toBeNull()
+    // Turned off on the machine, it says so with no version, and the site has none to speak of
+    await report(host, '0.1.1', '')
+    expect((await onSite(host.id)).latest).toBe('')
+    expect(await code(ask(host.id))).toBe('conflict')
+  })
+
   test('a machine is heard from each half minute its connector says so, and is off from the moment its connector says it is stopping, until the next one reports', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

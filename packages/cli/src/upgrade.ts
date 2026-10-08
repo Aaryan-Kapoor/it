@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs'
 import path from 'node:path'
 import { INSTALL, newer } from '@it/protocol'
-import { direct, home, inHome, Problem, VERSION, writePrivate } from './lib'
+import { ask, home, inHome, Problem, readJson, VERSION, writePrivate } from './lib'
 
 /** No program is anywhere near this large, and nothing else of a release is near the second. */
 const PROGRAM_MOST = 400 * 1024 * 1024
@@ -30,10 +30,29 @@ const TEXT_MOST = 8 * 1024 * 1024
  * scripts insist too.
  */
 export function releases(): { base: string; plain: boolean } {
-  const base = (process.env.IT_INSTALL_BASE || INSTALL.releases).replace(/\/+$/, '')
+  const base = (process.env.IT_INSTALL_BASE || keptBase() || INSTALL.releases).replace(/\/+$/, '')
   const plain = /^http:\/\/(127\.0\.0\.1|localhost):\d+(\/|$)/.test(base)
   if (!plain && !/^https:\/\/[^/]/.test(base)) throw new Problem('IT_INSTALL_BASE must be an https address.', 'invalid')
   return { base, plain }
+}
+
+// An It that was installed from another place than the usual one is updated from there too.
+// The install script is told the place by a variable, which the setup it goes on to still has
+// and nothing after it does: not the service, and not a terminal opened the next day. So setup
+// writes it down in It's folder, and takes it away again when it is set up from the usual place.
+const baseFile = () => inHome('releases.json')
+const keptBase = (): string | undefined => {
+  const kept = readJson<{ base?: unknown }>(baseFile())?.base
+  return typeof kept === 'string' && kept ? kept : undefined
+}
+/** Notes where this It's releases are, as the variable says while it is set up. Nothing is changed where the variable is not set. */
+export function keepBase(): void {
+  const named = process.env.IT_INSTALL_BASE?.replace(/\/+$/, '')
+  if (!named) return
+  try {
+    if (named === INSTALL.releases) rmSync(baseFile(), { force: true })
+    else if (/^https:\/\/[^/]/.test(named) || /^http:\/\/(127\.0\.0\.1|localhost):\d+(\/|$)/.test(named)) writePrivate(baseFile(), { base: named })
+  } catch {}
 }
 
 /** One file of the newest release, whole and in memory, or the reason it could not be had. */
@@ -44,19 +63,33 @@ async function file(name: string, most: number, signal?: AbortSignal, progress?:
     new Problem(
       `The newest release of It could not be fetched (${name}).`,
       'offline',
-      process.env.IT_INSTALL_BASE
-        ? 'It is fetched from the place IT_INSTALL_BASE names. Check that a release is there, then try again.'
+      base !== INSTALL.releases
+        ? `It is fetched from ${base}, where this It was installed from. Check that a release is there, then try again.`
         : 'Check that this machine is online, then try again.',
     )
+  const tooLarge = () => new Problem(`What was fetched as ${name} is larger than any release of It holds, so none of it was kept.`, 'checksum')
+  // A place on this machine is asked directly, whatever proxy the environment names, and its
+  // answer is read whole up to the most a release's file can be
+  if (plain) {
+    const at = new URL(url)
+    const answer = await ask(
+      { host: at.hostname, port: Number(at.port) },
+      { path: `${at.pathname}${at.search}`, headers: { host: at.host }, most, signal },
+    ).catch((err) => {
+      throw (err as NodeJS.ErrnoException)?.code === 'EMSGSIZE' ? tooLarge() : unreachable()
+    })
+    if (answer.status !== 200) throw unreachable()
+    progress?.(answer.body.length, answer.body.length)
+    return Buffer.from(answer.body)
+  }
+  // Anywhere else is asked as any https address is, and may send on to another https address only
   let answer: Response
   try {
-    // A place on this machine is asked directly, whatever proxy the environment names. Anywhere
-    // else is asked as any https address is, and may send on to another https address only.
-    answer = plain ? await direct(url, { signal }) : await fetch(url, { redirect: 'follow', signal })
+    answer = await fetch(url, { redirect: 'follow', signal })
   } catch {
     throw unreachable()
   }
-  if (!answer.ok || !answer.body || (!plain && !answer.url.startsWith('https://'))) throw unreachable()
+  if (!answer.ok || !answer.body || !answer.url.startsWith('https://')) throw unreachable()
   const length = Number(answer.headers.get('content-length'))
   const of = Number.isInteger(length) && length > 0 ? length : undefined
   const pieces: Uint8Array[] = []
@@ -64,7 +97,7 @@ async function file(name: string, most: number, signal?: AbortSignal, progress?:
   try {
     for await (const piece of answer.body as unknown as AsyncIterable<Uint8Array>) {
       size += piece.length
-      if (size > most) throw new Problem(`What was fetched as ${name} is larger than any release of It holds, so none of it was kept.`, 'checksum')
+      if (size > most) throw tooLarge()
       progress?.(size, of)
       pieces.push(piece)
     }
@@ -175,10 +208,16 @@ export interface Upgraded {
  * the installation exactly as it was.
  */
 export async function fetchNewer(
-  opts: { say?: (line: string) => void; progress?: (got: number, of: number | undefined) => void; signal?: AbortSignal } = {},
+  opts: {
+    say?: (line: string) => void
+    progress?: (got: number, of: number | undefined) => void
+    signal?: AbortSignal
+    /** The file to replace, where it is not the program this is: for a test, which is no standalone program. */
+    program?: string
+  } = {},
 ): Promise<Upgraded | null> {
   const say = opts.say ?? (() => {})
-  const program = standalone()
+  const program = opts.program ?? standalone()
   if (!program)
     throw new Problem(
       'This It does not run as the program an install puts in place, so it is not upgraded this way.',

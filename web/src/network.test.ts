@@ -255,6 +255,59 @@ describe('what is said of an agent app on a machine', () => {
     expect(notes()).toEqual(['Connected, offline'])
   })
 
+  test('a newer It that a machine has learned is out is said under its name, with the button that has the machine put it in place, the machine It runs on first', async () => {
+    const said = () => [...host.querySelectorAll('p.newer')].map((x) => x.textContent)
+    const { Machines } = await import('./machines')
+    const desk = { ...machine(Date.now(), [], []), runsIt: true }
+    const laptop = { ...machine(Date.now(), [], []), id: 'machine-2', name: 'the laptop', runsIt: false }
+    let shown = false
+    const showing = async (list: object[]) => {
+      if (shown) {
+        await act(async () => root.unmount())
+        host.remove()
+      }
+      shown = true
+      watched['machines:list'] = list
+      await show(createElement(Machines))
+    }
+    // None has learned of a newer one, or the one it knows of is the one it runs: nothing is said
+    await showing([desk, { ...laptop, latest: '0.1.0' }, { ...laptop, id: 'machine-3', latest: '' }])
+    expect(said()).toEqual([])
+    // Both have: the one It runs on is offered it, and the other is told to wait for that one
+    await showing([
+      { ...desk, latest: '0.1.1' },
+      { ...laptop, latest: '0.1.1' },
+    ])
+    expect(said()).toEqual([
+      'It 0.1.1 is out. This machine runs 0.1.0. Update',
+      'It 0.1.1 is out. This machine runs 0.1.0. Update the machine It runs on first.',
+    ])
+    await act(async () => host.querySelector<HTMLButtonElement>('p.newer button')!.click())
+    expect([calls, asked]).toEqual([['machines:upgrade'], [{ machineId: 'machine-1' }]])
+    // Asked for and at work, then failed with why and offered again, then done by the machine It runs on, after which the other is offered it
+    await showing([{ ...desk, latest: '0.1.1', upgrade: { at: 1, state: 'working' } }])
+    expect(said()).toEqual(['Updating to It 0.1.1…'])
+    await showing([{ ...desk, latest: '0.1.1', upgrade: { at: 1, state: 'failed', why: 'The newest release of It could not be fetched (it-linux-x64).' } }])
+    expect(said()).toEqual(['It 0.1.1 could not be put in place: The newest release of It could not be fetched (it-linux-x64). Try again'])
+    await showing([
+      { ...desk, connectorVersion: '0.1.1', latest: '0.1.1' },
+      { ...laptop, latest: '0.1.1' },
+    ])
+    expect(said()).toEqual(['It 0.1.1 is out. This machine runs 0.1.0. Update'])
+    // A machine that is off cannot be asked now
+    await showing([
+      { ...desk, connectorVersion: '0.1.1' },
+      { ...laptop, latest: '0.1.1', off: true },
+    ])
+    expect(host.querySelector<HTMLButtonElement>('p.newer button')!.disabled).toBe(true)
+    // Where It was started by hand, the program is in place and the person starts It again
+    await showing([
+      { ...desk, connectorVersion: '0.1.1' },
+      { ...laptop, latest: '0.1.1', upgrade: { at: 1, state: 'installed', version: '0.1.1' } },
+    ])
+    expect(said()).toEqual(['It 0.1.1 is installed on the laptop. It runs once It is started again there: stop it serve where it is running, and start it.'])
+  })
+
   test('each connected app It can reopen a closed conversation of has a switch for that, off until the owner turns it on, and no other app has one', async () => {
     const found = [
       { id: 'claude-code', version: '2.1.0', addon: 'connected' },

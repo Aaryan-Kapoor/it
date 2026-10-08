@@ -87,7 +87,18 @@ The JSON of `it status` has `running`, whether It's door answers; `enrolled`, wh
 
 ## A newer It
 
-The install command, run again, puts the newest program in the place of the one in `~/.it/bin`, with its license and notices. It leaves everything else in `~/.it` as it is. The service that is running goes on as the program it was started as until it is started again, and `it service install` registers it and starts it anew.
+It looks once a day for a newer version of itself, and says so when one is out: on the Machines page of the site, under the machine, and in `it status`. Two ways put it in place.
+
+- **`it upgrade`**, on the machine. It downloads the newest program, checks it against the checksum published beside it, starts it once to see that it runs on this system and is newer, and only then puts it in the place of the one that is there, with its license and notices. A download that does not match, or a program that does not start, changes nothing. It then starts the background service again as the new version. `it upgrade --check` only says whether a newer one is out.
+- **Update**, on the Machines page, in a browser paired as yours. It asks that machine to do the same. Nothing in the asking says which version or where from: the machine fetches what the place releases are kept says is newest. Where It was started by hand with `it serve` and nothing starts it by itself, the program is put in place and the page says to start It again there.
+
+Where several machines share one It, the machine It runs on is updated first, and the site says so on the others until it is. Each machine is updated by itself.
+
+`it updates off` stops It looking, and `it updates on` has it look again. So does setting `IT_UPDATE_CHECK=false` where It is started. Asking sends nothing about your installation: [what It fetches](network-and-privacy.md#what-it-fetches-from-the-internet) says what the request is. An It that was installed from another place than the usual one, with `IT_INSTALL_BASE`, looks there, and is updated from there.
+
+What an upgrade trusts is what an install trusts: the place it downloads from, over https, and the checksums published there. It is not a signature.
+
+The install command, run again, does the same by hand: it puts the newest program in the place of the one in `~/.it/bin`, with its license and notices. It leaves everything else in `~/.it` as it is. The service that is running goes on as the program it was started as until it is started again, and `it service install` registers it and starts it anew.
 
 A newer It may bring a newer backend program, which it fetches the first time it starts, and newer functions for it. Before either is put onto what you already have, It keeps a copy of its database. [What It keeps](data.md#a-newer-it-on-the-same-data) says what that copy is for, and what happens where the newer It and your data do not fit.
 

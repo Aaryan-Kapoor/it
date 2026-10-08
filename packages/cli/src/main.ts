@@ -83,7 +83,7 @@ import {
 } from './setup'
 import { printEnv } from './shell-env'
 import { GUIDE, STEPS, TOUR_PREFIX, tourPage } from './tour'
-import { fetchNewer, latest, watch, watched } from './upgrade'
+import { fetchNewer, keepBase, latest, watch, watched } from './upgrade'
 import * as usage from './usage'
 
 // Everything is written through `written`, which follows each write until it has left the
@@ -965,6 +965,8 @@ function crumbs(): void {
 }
 
 async function setup(a: Args, joined = false) {
+  // Where this It was installed from, if that is not the usual place, is where it looks for newer versions
+  keepBase()
   if (a.flags.none && !enrolledHere()) {
     const leftBehind = !existsSync(settingsFile()) && (hasLeft() || holdsAddons())
     if (leftBehind || elsewhere()) {
