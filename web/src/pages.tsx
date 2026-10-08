@@ -1,5 +1,5 @@
 // The person's pages: the grid of all of them, and one of them shown.
-import { ALIVE, NOUN } from '@it/protocol'
+import { ALIVE, NOUN, WAKE_BACK_MS } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { type CSSProperties, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { copy, IconBack, IconLink, IconPin, IconStop, IconX, Mark } from './brand'
@@ -235,7 +235,14 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
         {/* What became of what was done on the page is said aloud too, to whoever cannot see it change */}
         <span className="page-nav-said" role="status">
           {page.run ? (
-            <Working artifactId={page.id as Id<'artifacts'>} stopping={page.run.stopping} />
+            <Working
+              artifactId={page.id as Id<'artifacts'>}
+              stopping={page.run.stopping}
+              user={user}
+              machine={page.machine}
+              machineSeenAt={page.machineSeenAt}
+              agent={agentName(page.agent)}
+            />
           ) : (
             <ActionStatus
               artifactId={page.id as Id<'artifacts'>}
@@ -243,6 +250,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               machine={page.machine}
               machineSeenAt={page.machineSeenAt}
               machineGone={page.machineGone === true}
+              pending={page.pending}
               // Only the owner may switch reopening on, and only for an agent app It can reopen
               wakes={owner ? page.wake : null}
               agent={agentName(page.agent)}
@@ -286,17 +294,47 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
  * The page's agent is at work because It reopened its conversation, with nobody at the machine
  * to watch it: said in a word, with the one thing to do about it, which is to stop it.
  */
-function Working({ artifactId, stopping }: { artifactId: Id<'artifacts'>; stopping: boolean }) {
+function Working({
+  artifactId,
+  stopping,
+  user,
+  machine,
+  machineSeenAt,
+  agent,
+}: {
+  artifactId: Id<'artifacts'>
+  stopping: boolean
+  user: string
+  machine: string | null
+  machineSeenAt: number | null
+  agent: string | null
+}) {
   const stop = useMutation(api.artifacts.stop)
   const [asked, setAsked] = useState(false)
   const ending = stopping || asked
   // What else was done on the page while it works: said, so that the person knows it is held and what a stop takes with it
   const recent = useQuery(api.actions.forArtifact, { artifactId })
   const more = Math.max(0, (recent?.filter((a) => a.delivery !== 'handed_off').length ?? 0) - 1)
+  const now = useNow(1_000)
+  useSyncExternalStore(watchOutbox, outboxChanges)
+  // That it is working is the machine's own word, and is as good as the machine is there to
+  // give it: one that has gone quiet, or said it was stopping, may have ended the run or may
+  // not, and cannot be told to stop until it is back. Said as that, and not as work going on.
+  if (machineSeenAt === null || now - machineSeenAt >= ALIVE.onlineMs)
+    return (
+      <span className="status" data-tone="wait">
+        {ending
+          ? `Asked to stop. ${machine ?? 'Its machine'} is not answering, and is told when it is back`
+          : `${machine ?? 'Its machine'} is not answering. Whether ${agent ?? 'your agent'} is still at work there is not known`}
+      </span>
+    )
+  // What was done here and has not reached It is not with the agent that is working
+  const notSent = unsent(user, artifactId) + unsaved(user, artifactId)
   return (
     <span className="working" role="status">
       <span className="working-dot" data-ending={ending || undefined} />
       {ending ? 'Stopping' : more ? `Working, ${more} more waiting` : 'Working'}
+      {notSent > 0 && `, and ${notSent} not sent yet`}
       {!ending && (
         <button
           type="button"
@@ -326,6 +364,7 @@ function ActionStatus({
   machine,
   machineSeenAt,
   machineGone,
+  pending,
   wakes,
   agent,
   stoppedAt,
@@ -338,6 +377,8 @@ function ActionStatus({
   machineSeenAt: number | null
   /** The machine the page was made on is no longer one of the person's. */
   machineGone: boolean
+  /** How many things done on the page are waiting for its agent, as It counts them: all of them, however long ago they were done. */
+  pending: number
   /** Where the page's agent app can have a closed conversation reopened: the machine that would, and whether that is switched on there. */
   wakes: { machineId: string; harness: string; on: boolean } | null
   agent: string | null
@@ -383,8 +424,13 @@ function ActionStatus({
     const t = setTimeout(() => setDown(true), DOWN_MS)
     return () => clearTimeout(t)
   }, [connected])
-  const waiting = recent?.filter((a) => a.delivery !== 'handed_off').length ?? 0
-  const last = recent?.[0]
+  // What still waits, of the last things done here, and how many wait in all: It's own count,
+  // where more wait than the last few show
+  const stillWaiting = recent?.filter((a) => a.delivery !== 'handed_off') ?? []
+  const waiting = Math.max(stillWaiting.length, recent ? pending || 0 : 0)
+  // The bar speaks of the last thing that is still waiting, where anything is: that something
+  // done after it was dealt with does not make it so. Otherwise of the last thing done.
+  const last = stillWaiting[0] ?? recent?.[0]
   // Sent with no copy kept here, because this browser would not store one: closing the tab now would lose it
   if (unsaved(user, artifactId) > 0)
     return (
@@ -409,6 +455,13 @@ function ActionStatus({
       </span>
     )
   if (!last) return null
+  // Everything among the last things done was dealt with, and something older still waits
+  if (last.delivery === 'handed_off' && waiting > 0)
+    return (
+      <span className="status" data-tone="wait">
+        {`${waiting} earlier ${waiting === 1 ? 'thing' : 'things'} done here ${waiting === 1 ? 'is' : 'are'} still waiting for ${agent ?? 'your agent'}`}
+      </span>
+    )
   // What has been settled is said for ten minutes and then no more. What has not, something
   // still waiting for a machine or for an agent, is said for as long as it waits, with what
   // can be done about it: gone from the bar, it looked done when nothing had come of it.
@@ -458,7 +511,10 @@ function ActionStatus({
   // open and at work on something else. With nobody holding it, nothing on that machine was
   // listening for it: the conversation is closed, or its app is not running.
   const busy = last.delivery === 'leased'
-  const offer = wakes && !wakes.on && slow && !busy
+  // A conversation is reopened only for what was done in the last day. For anything older the
+  // switch would change nothing, so it is not offered, and the bar says what would bring it
+  const tooOld = now - last.at > WAKE_BACK_MS
+  const offer = wakes && !wakes.on && slow && !busy && !tooOld
   // Tried, and it could not be reopened: said as that, with why where it is asked for
   if (wakeFailed && wakeFailed.at >= last.at)
     return (
@@ -472,9 +528,11 @@ function ActionStatus({
         {/* Not taken after a while: said as what it is, busy or closed, so that the person knows whether to wait or to do something */}
         {slow && busy
           ? `Sent. ${agent ?? 'Your agent'} is busy, and gets it when it is free${waiting > 1 ? ` (${waiting})` : ''}`
-          : slow && !wakes?.on
-            ? `Sent. ${agent ?? 'Your agent'} is not listening${waiting > 1 ? ` (${waiting})` : ''}: its conversation looks closed`
-            : `Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}
+          : slow && tooOld
+            ? `Sent more than a day ago${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Your agent'} gets it when its conversation is next open`
+            : slow && !wakes?.on
+              ? `Sent. ${agent ?? 'Your agent'} is not listening${waiting > 1 ? ` (${waiting})` : ''}: its conversation looks closed`
+              : `Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}
       </span>
       {offer && (
         <button

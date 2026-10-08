@@ -306,4 +306,55 @@ describe('what the page’s bar says of the last thing the person did', () => {
     await pass(10)
     expect(said()).toBe('Done')
   })
+  test('something older that is still waiting is said, though what was done after it was dealt with, and however long ago that was', async () => {
+    // The last thing done here was handed over and done; the one before it never reached the agent
+    recent = [
+      { at: NOW - 5000, delivery: 'handed_off', outcome: 'succeeded' },
+      { at: NOW - 60_000, delivery: 'pending', outcome: null },
+    ]
+    Object.assign(PAGE, { pending: 1, wake: null })
+    await shown()
+    expect(said()).toBe('Sent. Claude Code is not listening: its conversation looks closed')
+    await act(async () => root.unmount())
+    host.remove()
+    // And where what still waits is older than the last things done that the bar is told of, It’s own count says so
+    recent = [{ at: NOW - 30 * 60_000, delivery: 'handed_off', outcome: 'succeeded' }]
+    Object.assign(PAGE, { pending: 3 })
+    await shown()
+    expect(said()).toBe('3 earlier things done here are still waiting for Claude Code')
+    Object.assign(PAGE, { pending: 0 })
+  })
+
+  test('to wake the agent is offered only for something done in the last day, which is what a conversation is reopened for', async () => {
+    Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: false }, pending: 1 })
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    await shown()
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(true)
+    await act(async () => root.unmount())
+    host.remove()
+    recent = [{ at: NOW - 2 * 24 * 60 * 60_000, delivery: 'pending', outcome: null }]
+    await shown()
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+    expect(said()).toBe('Sent more than a day ago. Claude Code gets it when its conversation is next open')
+    Object.assign(PAGE, { wake: null, pending: 0 })
+  })
+
+  test('an agent said to be working on a machine that has gone quiet is not said to be working: whether it is, is not known, and a stop is said to wait for the machine', async () => {
+    Object.assign(PAGE, { run: { stopping: false }, machineSeenAt: NOW })
+    await shown()
+    expect(host.querySelector('.working')?.textContent).toContain('Working')
+    await act(async () => root.unmount())
+    host.remove()
+    // Quiet for longer than it may be, or its connector said it was stopping
+    Object.assign(PAGE, { machineSeenAt: NOW - 200_000 })
+    await shown()
+    expect(host.querySelector('.working')).toBeNull()
+    expect(said()).toBe('the laptop is not answering. Whether Claude Code is still at work there is not known')
+    await act(async () => root.unmount())
+    host.remove()
+    Object.assign(PAGE, { run: { stopping: true }, machineSeenAt: null })
+    await shown()
+    expect(said()).toBe('Asked to stop. the laptop is not answering, and is told when it is back')
+    Object.assign(PAGE, { run: null, machineSeenAt: NOW })
+  })
 })
