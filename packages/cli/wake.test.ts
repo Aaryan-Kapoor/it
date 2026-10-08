@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
 import {
   Budget,
+  bootId,
   carrying,
   carryOn,
   claudeModeOf,
@@ -626,8 +627,15 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       process.kill(nobodys.its, 'SIGKILL')
       await until(() => !alive(nobodys.its))
       expect(await endTree(nobodys.pid, nobodys.since, of)).toBe('gone')
+      // A note that names the machine's start some other way than this system does says nothing of it, and what
+      // it noted is looked at as any other is: the time a Mac started at, which was once what was noted there,
+      // reads differently after a change of time zone
+      expect(bootId()).toMatch(/^[0-9a-f-]{36}$/)
+      for (const boot of ['{ sec = 1791400000, usec = 0 } Wed Oct  7 09:00:00 2026', 'another start of this machine', bootId()])
+        expect(await endTree(anothers.pid, anothers.since, { ...of, boot })).toBe('unknown')
+      expect(alive(anothers.its)).toBe(true)
       // And a run noted under another start of this machine is gone, whatever has its number
-      expect(await endTree(anothers.pid, anothers.since, { ...of, session: 'conversation-8', boot: 'another start of this machine' })).toBe('gone')
+      expect(await endTree(anothers.pid, anothers.since, { ...of, session: 'conversation-8', boot: '00000000-0000-4000-8000-000000000000' })).toBe('gone')
       expect(alive(anothers.its)).toBe(true)
     } finally {
       for (const pid of left)

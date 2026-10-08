@@ -401,8 +401,7 @@ export async function endTree(
 ): Promise<'ended' | 'gone' | 'unknown'> {
   if (process.platform === 'win32') return 'unknown'
   // Noted before the machine was last started: nothing of it is left, whatever has its number now
-  const boot = bootId()
-  if (of?.boot && boot && of.boot !== boot) return 'gone'
+  if (fromAnotherStart(of?.boot)) return 'gone'
   const now = processes([pid])
   if (now === null) return 'unknown'
   const itself = now.get(pid) === since
@@ -491,14 +490,32 @@ export const SINCE_TOLD = 2
  */
 export function bootId(): string | undefined {
   try {
-    if (process.platform === 'linux') return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() || undefined
-    if (process.platform === 'darwin') {
-      const said = spawnSync('sysctl', ['-n', 'kern.boottime'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
-      return said.status === 0 ? String(said.stdout).trim() || undefined : undefined
-    }
+    const said =
+      process.platform === 'linux'
+        ? readFileSync('/proc/sys/kernel/random/boot_id', 'utf8')
+        : process.platform === 'darwin'
+          ? // The name macOS gives each start of the machine. The time it started at is not asked:
+            // it is printed as a date in the time zone of the moment, and so reads differently
+            // after a change of zone, with the machine never having stopped
+            String(
+              spawnSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).stdout ??
+                '',
+            )
+          : ''
+    const id = said.trim().toLowerCase()
+    return BOOT.test(id) ? id : undefined
   } catch {}
   return undefined
 }
+/** How each system names a start of the machine. Anything else that was noted as one says nothing. */
+const BOOT = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
+/**
+ * Whether a run was noted under another start of this machine than the one it is in now. Only
+ * where both are known and are told the same way: a note that names the start some other way,
+ * as an earlier It did on macOS, says nothing, and what it noted is looked at as any other is.
+ */
+export const fromAnotherStart = (noted: string | undefined, now: string | undefined = bootId()): boolean =>
+  noted !== undefined && now !== undefined && BOOT.test(noted) && BOOT.test(now) && noted !== now
 
 /**
  * Asks `ps`, in a way that the one on macOS and the one on Linux both take. Each column is

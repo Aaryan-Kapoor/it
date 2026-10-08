@@ -49,6 +49,7 @@ import {
   claudeWroteAt,
   codexHeld,
   endTree,
+  fromAnotherStart,
   identity,
   mayWake,
   SINCE_TOLD,
@@ -616,7 +617,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // is gone now says nothing of what it had started and could not be seen. It stays held
     // until this machine has been started again, which ends everything, or a person has
     // looked and said so with `it runs clear`.
-    if (was.unsure && !(was.boot && bootId() && was.boot !== bootId())) return false
+    if (was.unsure && !fromAnotherStart(was.boot)) return false
     unsettled.delete(key)
     cutOff.add(key)
     keepCutOff()
