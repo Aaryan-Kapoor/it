@@ -19,6 +19,7 @@ import {
   api,
   ask,
   call,
+  direct,
   enrolledHere,
   harnessEnv,
   home,
@@ -32,6 +33,7 @@ import {
   why,
   writePrivate,
 } from './lib'
+import { incompatible } from './login'
 import { conversationFolder, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import * as service from './service'
@@ -1579,6 +1581,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const tick = setInterval(() => void route(), 1000)
   // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
   const alive = setInterval(() => void report(), ALIVE.everyMs)
+  // On a machine that joined an It: whether that It still speaks the version this program does.
+  // Asked as it starts, and said in the log where it does not, with which of the two to update:
+  // what follows would otherwise fail a request at a time, with no word of why.
+  const joinedAt = readJson<{ at?: unknown }>(inHome('machine.json'))?.at
+  if (typeof joinedAt === 'string')
+    void direct(`${joinedAt}/cli/config`, { signal: AbortSignal.timeout(10_000) })
+      .then(async (answer) => incompatible(((await answer.json()) as { protocol?: unknown } | null)?.protocol))
+      .then((wrong) => wrong && say(`${wrong.message} ${wrong.hint ?? ''}`))
+      .catch(() => {})
   // Whether a newer It is out: asked a little after starting, and every half hour from then on
   const firstLook = setTimeout(() => void lookForNewer(), 20_000)
   const looks = setInterval(() => void lookForNewer(), LOOKS_EVERY_MS)

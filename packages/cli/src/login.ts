@@ -4,7 +4,7 @@
 // ends everything it can do.
 import { existsSync, rmSync } from 'node:fs'
 import os from 'node:os'
-import { PORTS } from '@it/protocol'
+import { PORTS, PROTOCOL_VERSION } from '@it/protocol'
 import { exportJWK, generateKeyPair, type JWK } from 'jose'
 import { direct, doorRefusal, enrolledHere, inHome, keepMachine, Problem, readJson, settingsFile, unreachable, wasAt } from './lib'
 import { alone } from './serve/backend'
@@ -88,6 +88,22 @@ export const settlePending = (at?: string, replaces?: string): void => settle((k
 export const settleKept = (key: JWK): void => settle((kept) => kept.key.d === key.d)
 
 /**
+ * What is wrong where an It and this program speak different versions of the way machines talk
+ * to It, and which of the two is to be updated. Nothing where they speak the same, or where that
+ * It does not say.
+ */
+export function incompatible(protocol: unknown): Problem | null {
+  if (typeof protocol !== 'number' || protocol === PROTOCOL_VERSION) return null
+  return new Problem(
+    `That It and the It on this machine are of versions that do not work together (it speaks version ${protocol} of how machines talk to It, and this one version ${PROTOCOL_VERSION}).`,
+    'invalid',
+    protocol > PROTOCOL_VERSION
+      ? 'Update It on this machine, with `it upgrade` or the install command, and join again.'
+      : 'Update It on the machine it runs on first, with `it upgrade` there or the Update button on its Machines page, and join again.',
+  )
+}
+
+/**
  * What is said to a machine that is asked to join an It and runs one of its own: a machine does
  * one or the other. Someone who installed It on a second computer at a terminal was led through
  * setting one up there, and meets this when they then run the command that joins. So it says
@@ -131,12 +147,17 @@ export async function login(opts: { url: string; code: string; name?: string }):
     // The backend signs under an address of its own, which is whom this machine's proofs are made out to
     const asked = await direct(`${at}/cli/config`, { signal: soon() }).catch(() => null)
     const said = (await asked?.text().catch(() => '')) ?? ''
-    let config: { issuer?: unknown } | null = null
+    let config: { issuer?: unknown; protocol?: unknown } | null = null
     try {
-      config = asked?.ok ? (JSON.parse(said) as { issuer?: unknown } | null) : null
+      config = asked?.ok ? (JSON.parse(said) as { issuer?: unknown; protocol?: unknown } | null) : null
     } catch {}
     // An It that is there and will not answer by this address says so, which is not the same as nothing being there
     if (typeof config?.issuer !== 'string') throw doorRefusal(said, at) ?? unreachable(at)
+    // That It says which version of the way machines talk to it it speaks. One that speaks
+    // another than this program would refuse or misread what this machine asks, a request at a
+    // time and with no word of why: so nothing is joined, and which of the two to update is said.
+    const theirs = incompatible(config.protocol)
+    if (theirs) throw theirs
     // The key is made here and its private half never leaves this machine. One that was kept
     // for this same It, and never heard its answer, is the key to ask with again.
     // A machine that had joined this It before and left names the identity it had then, so

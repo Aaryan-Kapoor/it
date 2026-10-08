@@ -2357,6 +2357,40 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
     }
   })
 
+  test('`it login` joins nothing where that It and this program speak different versions of how machines talk to It, and says which of the two to update', async () => {
+    // What stands for an It of another version: it says so where a machine first asks it anything
+    const versions = async (protocol: number) => {
+      const server = http.createServer((req, res) =>
+        req.url === '/cli/config'
+          ? res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ protocol, issuer: 'http://127.0.0.1:1' }))
+          : res.writeHead(500).end(),
+      )
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const m = machine(false)
+      try {
+        const ran = await run(m, [
+          'login',
+          '--url',
+          `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+          '--code',
+          'Ab3dEf6hIj9kLm2nOp5q',
+          '--no-setup',
+        ])
+        return [ran.code, error(ran).hint, existsSync(path.join(m.it, 'machine.json')), existsSync(path.join(m.it, 'machine.pending.json'))]
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
+    }
+    // A newer It: this machine is the one to update. An older one: the machine It runs on. Neither is joined, and no key is made
+    expect(await versions(2)).toEqual([2, 'Update It on this machine, with `it upgrade` or the install command, and join again.', false, false])
+    expect(await versions(0)).toEqual([
+      2,
+      'Update It on the machine it runs on first, with `it upgrade` there or the Update button on its Machines page, and join again.',
+      false,
+      false,
+    ])
+  })
+
   test('a machine that left an It and joins it again names the identity it had there, so that the pages its conversations made come along, and names none to another It', async () => {
     const m = machine(false)
     let n = 1
