@@ -530,6 +530,45 @@ describe.skipIf(process.platform === 'win32' || process.platform !== 'linux')('a
 })
 
 describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
+  test('`it uninstall` leaves what is another It folder’s in the agent apps, and leaves a profile it cannot replace whole exactly as it was, and says so', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    // The It this person uses lives in another folder, and its add-on is what the two apps keep a copy of
+    const main = mkdtempSync(path.join(scratch, 'main-it-'))
+    const codexKept = path.join(m.home, '.codex', 'plugins', 'cache', 'it', 'it-bridge', '0.1.0')
+    const claudeKept = path.join(m.home, '.claude', 'plugins', 'cache', 'it', 'it-bridge', '0.1.0')
+    for (const kept of [codexKept, claudeKept]) {
+      mkdirSync(kept, { recursive: true })
+      writeFileSync(path.join(kept, 'it-home.json'), JSON.stringify({ about: 'It put this add-on here.', home: main }))
+    }
+    const trusted = 'model = "gpt-6"\n\n[hooks.state]\n\n[hooks.state."it-bridge@it:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:aa"\n'
+    writeFileSync(path.join(m.home, '.codex', 'config.toml'), trusted)
+    // A profile with this folder's line in it, in a folder where nothing can be written beside it
+    const line = `export PATH='${path.join(m.it, 'bin')}':"$PATH"`
+    const zdot = path.join(m.home, 'zsh')
+    mkdirSync(zdot)
+    const profile = `export EDITOR=vi\n\n# It\n${line}\n`
+    writeFileSync(path.join(zdot, '.zshrc'), profile)
+    chmodSync(zdot, 0o555)
+    try {
+      const done = await run(m, ['uninstall', '--yes'], { ZDOTDIR: zdot })
+      // Root writes where nobody else may: only where the folder really kept the write out is the rest looked at
+      if (process.getuid?.() !== 0) {
+        expect(readFileSync(path.join(zdot, '.zshrc'), 'utf8')).toBe(profile)
+        expect(JSON.stringify(printed(done))).toContain(`${path.join(zdot, '.zshrc')} still has the line that puts It on your PATH, and could not be changed`)
+      }
+      // The other It's add-on is as it was in both apps, with Codex's note that its hooks are trusted
+      expect(existsSync(path.join(codexKept, 'it-home.json'))).toBe(true)
+      expect(existsSync(path.join(claudeKept, 'it-home.json'))).toBe(true)
+      expect(readFileSync(path.join(m.home, '.codex', 'config.toml'), 'utf8')).toBe(trusted)
+    } finally {
+      chmodSync(zdot, 0o755)
+    }
+  })
+
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
     const m = machine(true, true)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {

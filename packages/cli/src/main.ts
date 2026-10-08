@@ -5,7 +5,24 @@
 // and `it service status`) print a few plain sentences where standard output is a terminal, and
 // the same JSON as ever where it is not, or when `--json` is given.
 import { execFile, spawn } from 'node:child_process'
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
@@ -854,11 +871,13 @@ async function uninstall(a: Args) {
   if (service.runningFor(folder)) left.push('It is still running, and was asked to stop: end the `it serve` you started, in its terminal.')
   // 3. Its line in the shell's profile, with the comment above it
   const bin = path.join(folder, 'bin')
-  const profiles = process.platform === 'win32' ? [] : unlisted(bin)
-  for (const file of profiles) say(`${file}: the line that put It on your PATH is out.`)
+  const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
+  for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
+  for (const { file, why: reason } of profiles.failed)
+    left.push(`${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`)
   if (process.platform === 'win32') left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
   // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
-  crumbs()
+  crumbs(folder)
   // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
   // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
   if (codexRuleLetsItOut())
@@ -885,11 +904,36 @@ async function uninstall(a: Args) {
  * and the blank line it wrote above it, and says which files it was in. A profile that held
  * nothing else was made by the installer, and goes too.
  */
-function unlisted(bin: string): string[] {
+/**
+ * Puts new text in the place of a file's, whole or not at all: written beside the file with
+ * every byte on the disk, under the file's own permissions, and only then given its name. A
+ * file that is a link is written where the link leads. These are the person's own files, with
+ * their own settings in them beside It's line, and a disk that fills or a program that is ended
+ * half way must leave them as they were.
+ */
+function replaceWhole(file: string, text: string): void {
+  const target = realpathSync(file)
+  const part = `${target}.it-${process.pid}.part`
+  try {
+    const out = openSync(part, 'w', statSync(target).mode & 0o777)
+    try {
+      writeSync(out, text)
+      fsyncSync(out)
+    } finally {
+      closeSync(out)
+    }
+    renameSync(part, target)
+  } finally {
+    rmSync(part, { force: true })
+  }
+}
+
+function unlisted(bin: string): { changed: string[]; failed: { file: string; why: string }[] } {
   const line = `export PATH='${bin.replaceAll("'", `'\\''`)}':"$PATH"`
   const dirs = [process.env.ZDOTDIR, os.homedir()].filter((d): d is string => typeof d === 'string' && d !== '')
   const files = [...new Set(dirs.flatMap((d) => ['.zshrc', '.bashrc', '.bash_profile', '.bash_login', '.profile'].map((name) => path.join(d, name))))]
   const changed: string[] = []
+  const failed: { file: string; why: string }[] = []
   for (const file of files) {
     let text: string
     try {
@@ -914,11 +958,13 @@ function unlisted(bin: string): string[] {
     const after = kept.join('\n')
     try {
       if (after.trim() === '') rmSync(file, { force: true })
-      else writeFileSync(file, after.endsWith('\n') || !text.endsWith('\n') ? after : `${after}\n`)
+      else replaceWhole(file, after.endsWith('\n') || !text.endsWith('\n') ? after : `${after}\n`)
       changed.push(file)
-    } catch {}
+    } catch (err) {
+      failed.push({ file, why: (err as NodeJS.ErrnoException).code ?? 'an error' })
+    }
   }
-  return changed
+  return { changed, failed }
 }
 
 /**
@@ -927,8 +973,46 @@ function unlisted(bin: string): string[] {
  * the add-on that Codex and Claude Code keep. Each is taken out only where it is plainly It's,
  * and nothing here is ever said to have failed: none of it does anything once the add-on is gone.
  */
-function crumbs(): void {
+function crumbs(folder: string): void {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
+  // What is in the apps' folders is shared by every It folder on the machine. A copy of the
+  // add-on says which It folder it was installed from: where one that an app keeps says another
+  // folder than the one being taken away, that It is still using what the app keeps, and it is
+  // left alone. A second It that was only tried must not take the first one's add-ons with it.
+  const mine = (() => {
+    try {
+      return realpathSync(folder)
+    } catch {
+      return path.resolve(folder)
+    }
+  })()
+  const anothers = (kept: string, depth = 0): boolean => {
+    let names: string[]
+    try {
+      names = readdirSync(kept)
+    } catch {
+      return false
+    }
+    for (const name of names) {
+      const at = path.join(kept, name)
+      if (name === 'it-home.json') {
+        const from = readJson<{ home?: unknown }>(at)?.home
+        if (typeof from !== 'string' || !from) continue
+        try {
+          if (realpathSync(from) !== mine) return true
+        } catch {
+          // The folder it names is gone: nothing is using this copy
+        }
+      } else if (depth < 4 && anothers(at, depth + 1)) return true
+    }
+    return false
+  }
+  const claudeKept = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'plugins', 'cache', 'it')
+  if (!anothers(claudeKept))
+    try {
+      rmSync(claudeKept, { recursive: true, force: true })
+    } catch {}
+  if (anothers(path.join(codexHome, 'plugins', 'cache', 'it'))) return
   try {
     const file = path.join(codexHome, 'config.toml')
     const text = readFileSync(file, 'utf8')
@@ -936,16 +1020,11 @@ function crumbs(): void {
     const without = text
       .replace(/\n?\[hooks\.state\."it-bridge@it:[^"\n]*"\]\n(?:trusted_hash = "[^"\n]*"\n?)?/g, '\n')
       .replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
-    if (without !== text) writeFileSync(file, without.replace(/\n{3,}/g, '\n\n'))
+    if (without !== text) replaceWhole(file, without.replace(/\n{3,}/g, '\n\n'))
   } catch {}
-  for (const kept of [
-    path.join(codexHome, 'plugins', 'cache', 'it'),
-    path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'plugins', 'cache', 'it'),
-  ]) {
-    try {
-      rmSync(kept, { recursive: true, force: true })
-    } catch {}
-  }
+  try {
+    rmSync(path.join(codexHome, 'plugins', 'cache', 'it'), { recursive: true, force: true })
+  } catch {}
   // The folders Codex made to keep It's add-on in, where nothing else is in them
   for (const dir of [path.join(codexHome, 'plugins', 'cache'), path.join(codexHome, 'plugins')]) {
     try {
