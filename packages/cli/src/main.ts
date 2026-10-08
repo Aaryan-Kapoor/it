@@ -79,7 +79,7 @@ import { alone, asAdmin, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
-import { publicAddress, reachable } from './serve/network'
+import { onTheInternet, reachable } from './serve/network'
 import { tailnetAddresses, tailnetName } from './serve/tailnet'
 import * as service from './service'
 import {
@@ -1303,14 +1303,14 @@ async function settingUpLed(a: Args) {
       // is offered first: over the tailnet where there is one, and else over the home network.
       // Not on a machine with a public address, such as a rented server: there "the network"
       // is the internet, over plain http, and nobody is to open It to that by pressing Enter.
-      const open = publicAddress()
+      const open = onTheInternet()
       const start = config.network ? (config.tailnet ? 2 : 1) : fromAfar() ? (tail.length ? 2 : open ? 0 : 1) : 0
       const reach = await flow.pick<'off' | 'on' | 'tailscale'>(
         'How will you reach It?',
         [
           { value: 'off', label: 'From this computer only', hint: `localhost:${config.port}` },
           open
-            ? { value: 'on', label: 'From any network, the internet included', hint: `${open} is a public address, and It answers over plain http` }
+            ? { value: 'on', label: 'From any network, the internet included', hint: `this machine ${open.why}, and It answers over plain http` }
             : { value: 'on', label: 'From my home network', hint: home ? new URL(home).host : undefined },
           { value: 'tailscale', label: 'Over Tailscale', hint: tailnetName() ?? tail[0], no: tail.length ? undefined : 'not found on this machine' },
         ],
@@ -1698,16 +1698,16 @@ async function network(a: Args) {
   // With no service running the setting is all there is: nothing listens anywhere until It starts
   const later = running ? undefined : 'It is not running on this machine at the moment, so this takes effect when it starts.'
   // Open to every network, on a machine that the internet can reach: said in so many words, each time it is asked
-  const open = on && !tailnet ? publicAddress() : undefined
+  const open = on && !tailnet ? onTheInternet() : undefined
   const toAll = open
-    ? `This machine has a public address (${open}), so It can be reached from the internet there, over plain http: anyone can open the pairing screen, and what your paired devices send can be read on the way. \`it network tailscale\` keeps It to your tailnet, and \`it network off\` to this machine.`
+    ? `This machine ${open.why}, so It can be reached from the internet, over plain http: anyone can open the pairing screen, and what your paired devices send can be read on the way. \`it network tailscale\` keeps It to your tailnet, and \`it network off\` to this machine.`
     : undefined
   // To a person the sentence is what is printed, with the addresses under it. Anywhere else it is said beside the JSON
   if (forPerson(a)) return tell([said, ...addresses.map((address) => `  ${address}`), toAll, later])
   say(addresses.length ? `${said} ${addresses.join(', ')}` : said)
   if (toAll) say(toAll)
   if (later) say(later)
-  return out({ network: on, ...(tailnet ? { tailnet: true } : {}), addresses, ...(open ? { public: open } : {}) })
+  return out({ network: on, ...(tailnet ? { tailnet: true } : {}), addresses, ...(open ? { public: open.address ?? true } : {}) })
 }
 
 /**

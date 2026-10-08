@@ -19,13 +19,18 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { backendAt } from './src/lib'
 import { asAdmin } from './src/serve/backend'
 import { RELEASE } from './src/serve/config'
-import { publicAddress, reachable } from './src/serve/network'
+import { onTheInternet, publicAddress, publicAddress6, reachable, rentedFrom } from './src/serve/network'
 import { bases } from './test-ports'
 
 // ---------- which addresses ----------
 
 const four = (address: string) => ({ address, family: 'IPv4' as const, internal: false })
 const six = (address: string) => ({ address, family: 'IPv6' as const, internal: false })
+/** What `it network` adds to its answer on a machine the internet can reach, which the machine these tests run on may be. */
+const toTheInternet = () => {
+  const open = onTheInternet()
+  return open ? { public: open.address ?? true } : {}
+}
 
 describe('the addresses another device can open the site at', () => {
   test('a machine has a public address where one of its own under IPv4 is in none of the ranges kept for private networks, which is what a rented server has and a computer at home has not', () => {
@@ -39,6 +44,53 @@ describe('the addresses another device can open the site at', () => {
     for (const open of ['203.0.113.9', '8.8.8.8', '172.15.0.1', '172.32.0.1', '100.63.255.255', '100.128.0.1', '192.169.0.1', '11.0.0.1'])
       expect(publicAddress({ lo, eth0: [four('10.0.0.20'), four(open)] }), open).toBe(open)
   })
+
+  test('a machine is taken to be on the internet where it has a public address under IPv4, where it says it is rented from a company that rents servers, or where it has one of the internet’s own addresses under IPv6, and why is said in each case', () => {
+    const lo = [{ address: '127.0.0.1', family: 'IPv4' as const, internal: true }]
+    const home = { lo, eth0: [four('192.168.1.50'), six('fe80::1'), six('fd12:3456::1')] }
+    // At home with addresses of its own network only, on a machine nobody rents: no sign of it
+    expect(onTheInternet(home, undefined)).toBeUndefined()
+    expect(publicAddress6(home)).toBeUndefined()
+    // One of the internet's own addresses under IPv6, alone or beside a private one under IPv4
+    for (const open of ['2001:db8:100::1', '2a01:4f8::2', '3fff::1']) {
+      expect(publicAddress6({ lo, eth0: [six(open)] }), open).toBe(open)
+      expect(onTheInternet({ lo, eth0: [four('10.0.0.20'), six(open)] }, undefined)).toEqual({
+        address: open,
+        why: `has an address the internet can reach unless a router or a firewall in between stops it (${open})`,
+      })
+    }
+    // A container's bridge is inside this machine under IPv6 as well
+    expect(publicAddress6({ lo, docker0: [six('2001:db8::9')] })).toBeUndefined()
+    // A rented server shows only an address of a private network, and says whose it is
+    expect(onTheInternet(home, 'Amazon')).toEqual({ why: 'is a server rented from Amazon, which the internet reaches by an address of its own' })
+    // And a public address under IPv4 is said before either
+    expect(onTheInternet({ lo, eth0: [four('203.0.113.9'), six('2a01:4f8::2')] }, 'Hetzner')).toEqual({
+      address: '203.0.113.9',
+      why: 'has a public address (203.0.113.9)',
+    })
+  })
+
+  test.skipIf(process.platform !== 'linux')(
+    'whose server a rented machine is, is read from what its firmware says of its maker, and nothing is made of a maker that rents none',
+    () => {
+      const says = (answers: Record<string, string>) => (file: string) => {
+        const said = answers[file.slice(file.lastIndexOf('/') + 1)]
+        if (said === undefined) throw new Error('no such file')
+        return `${said}\n`
+      }
+      expect(rentedFrom(says({ sys_vendor: 'Amazon EC2', product_name: 't3.micro' }))).toBe('Amazon')
+      expect(rentedFrom(says({ sys_vendor: 'Google', product_name: 'Google Compute Engine' }))).toBe('Google Cloud')
+      expect(
+        rentedFrom(says({ sys_vendor: 'Microsoft Corporation', product_name: 'Virtual Machine', chassis_asset_tag: '7783-7084-3265-9085-8269-3286-77' })),
+      ).toBe('Microsoft Azure')
+      expect(rentedFrom(says({ sys_vendor: 'Hetzner', product_name: 'vServer' }))).toBe('Hetzner')
+      expect(rentedFrom(says({ sys_vendor: 'DigitalOcean', product_name: 'Droplet' }))).toBe('DigitalOcean')
+      // A laptop, a desktop, a virtual machine of one's own
+      expect(rentedFrom(says({ sys_vendor: 'LENOVO', product_name: '21HM' }))).toBeUndefined()
+      expect(rentedFrom(says({ sys_vendor: 'QEMU', product_name: 'Standard PC (Q35 + ICH9, 2009)' }))).toBeUndefined()
+      expect(rentedFrom(says({}))).toBeUndefined()
+    },
+  )
 
   test('on a Linux machine with a wire, a tunnel and containers: the home network’s first, then the tunnel’s, then IPv6, and nothing of the containers', () => {
     const listed = reachable(4700, {
@@ -301,12 +353,12 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
     expect(off).toEqual({ answer: { network: false, addresses: [] }, words: expect.stringContaining(OFF) })
     expect(off.words).toContain(STOPPED)
     const on = await said(['network', 'on'])
-    expect(on.answer).toEqual({ network: true, addresses: reachable(port) })
+    expect(on.answer).toEqual({ network: true, addresses: reachable(port), ...toTheInternet() })
     expect(on.words).toContain(STOPPED)
     expect(settings().network).toBe(true)
     // Asked how it stands, it says what the setting is, and that nothing listens until It starts
     const asked = await said(['network'])
-    expect(asked.answer).toEqual({ network: true, addresses: reachable(port) })
+    expect(asked.answer).toEqual({ network: true, addresses: reachable(port), ...toTheInternet() })
     expect(asked.words).toContain(STOPPED)
     expect((await said(['status'])).answer).toMatchObject({ running: false, network: { on: true, addresses: reachable(port) } })
     if (lan) expect(await answers(lan, port)).toBe(false)
@@ -337,7 +389,7 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
       const backendWas = JSON.parse(readFileSync(path.join(folder, 'backend', 'lock'), 'utf8')).program as number
 
       const on = await said(['network', 'on'])
-      expect(on.answer).toEqual({ network: true, addresses: reachable(port) })
+      expect(on.answer).toEqual({ network: true, addresses: reachable(port), ...toTheInternet() })
       expect(on.words).toContain(ON)
       expect(on.words).not.toContain('not running')
       // The likeliest address is said in words, and every one of them is in what the command answers
@@ -349,7 +401,7 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
         const page = await fetch(`http://${lan}:${port}/`)
         expect([page.status, (await page.text()).includes('<div id="root">')]).toEqual([200, true])
       }
-      expect((await said(['network'])).answer).toEqual({ network: true, addresses: reachable(port) })
+      expect((await said(['network'])).answer).toEqual({ network: true, addresses: reachable(port), ...toTheInternet() })
       expect((await said(['status'])).answer).toMatchObject({ running: true, enrolled: true, network: { on: true, addresses: reachable(port) } })
       // Asked for again as it already is, it is said again and nothing is opened anew
       const opened = () => lines().filter((line) => line.startsWith('door open')).length

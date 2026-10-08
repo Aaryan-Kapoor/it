@@ -2,6 +2,7 @@
 // opened at once the network is on. They are read from the system's own list of this machine's
 // interfaces. The one most likely to work comes first, and the ones no other device could use
 // are left out.
+import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import { inTailnet, tailnetName } from './tailnet'
 
@@ -63,6 +64,71 @@ export function publicAddress(interfaces: Interfaces = os.networkInterfaces()): 
         (first === 198 && (second === 18 || second === 19))
       if (!kept) return a.address
     }
+  return undefined
+}
+
+/**
+ * An address of this machine under IPv6 that is one of the internet's own (2000::/3), and not
+ * one kept for a private network, one link or one machine. A rented server has one, and so
+ * has many a computer at home: there, whether the internet reaches it is the router's doing.
+ */
+export function publicAddress6(interfaces: Interfaces = os.networkInterfaces()): string | undefined {
+  for (const [name, addresses] of Object.entries(interfaces))
+    for (const a of addresses ?? []) {
+      if (a.internal || a.family !== 'IPv6' || BRIDGE.test(name)) continue
+      if (/^[23][0-9a-f]{3}:/i.test(a.address)) return a.address
+    }
+  return undefined
+}
+
+/**
+ * Whose machine this is, where it says of itself that it is rented from one of the companies
+ * that rent servers: such a machine is on the internet by an address that is not written on it
+ * anywhere, and all it shows is an address of a private network. Read from what the machine's
+ * firmware says of its maker, on Linux, and nothing where that says nothing.
+ */
+export function rentedFrom(read: (file: string) => string = (file) => readFileSync(file, 'utf8')): string | undefined {
+  if (process.platform !== 'linux') return undefined
+  const said = ['sys_vendor', 'product_name', 'chassis_vendor', 'bios_vendor', 'chassis_asset_tag']
+    .map((name) => {
+      try {
+        return read(`/sys/class/dmi/id/${name}`).trim()
+      } catch {
+        return ''
+      }
+    })
+    .join('\n')
+  const known: [RegExp, string][] = [
+    [/amazon ec2|^amazon/im, 'Amazon'],
+    [/google compute engine|^google$/im, 'Google Cloud'],
+    [/7783-7084-3265-9085-8269-3286-77|^microsoft corporation[\s\S]*virtual machine/im, 'Microsoft Azure'],
+    [/digitalocean/i, 'DigitalOcean'],
+    [/hetzner/i, 'Hetzner'],
+    [/vultr/i, 'Vultr'],
+    [/linode|akamai/i, 'Linode'],
+    [/ovh/i, 'OVH'],
+    [/scaleway/i, 'Scaleway'],
+    [/oraclecloud/i, 'Oracle Cloud'],
+    [/alibaba cloud/i, 'Alibaba Cloud'],
+    [/upcloud/i, 'UpCloud'],
+  ]
+  return known.find(([like]) => like.test(said))?.[1]
+}
+
+/**
+ * Why turning the network on would open It to the internet on this machine, in words that
+ * finish "This machine …", and nothing where there is no sign that it would. Whoever turns the
+ * network on is told, and nobody is led to it by pressing Enter.
+ */
+export function onTheInternet(
+  interfaces: Interfaces = os.networkInterfaces(),
+  rented: string | undefined = rentedFrom(),
+): { address?: string; why: string } | undefined {
+  const four = publicAddress(interfaces)
+  if (four) return { address: four, why: `has a public address (${four})` }
+  if (rented) return { why: `is a server rented from ${rented}, which the internet reaches by an address of its own` }
+  const six = publicAddress6(interfaces)
+  if (six) return { address: six, why: `has an address the internet can reach unless a router or a firewall in between stops it (${six})` }
   return undefined
 }
 
