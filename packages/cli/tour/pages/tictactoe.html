@@ -170,7 +170,11 @@
             if (b.disabled) return;
             pending = idx;
             render();
-            It.action("move", { index: idx });
+            // Refused: the square is given back
+            It.action("move", { index: idx }).catch(() => {
+              if (pending === idx) pending = null;
+              render();
+            });
           });
           boardEl.appendChild(b);
           cells.push(b);
@@ -179,7 +183,7 @@
 
       againEl.addEventListener("click", () => {
         pending = null;
-        It.action("restart", {});
+        It.action("restart", {}).catch(() => {});
       });
 
       function winningLine(board) {
@@ -263,8 +267,12 @@
       next.addEventListener("click", () => {
         next.disabled = true;
         next.textContent = "Coming up…";
-        var It = window.It || { action: () => {} };
-        It.action("next", { from: P.tour_id || null });
+        var It = window.It || { action: () => Promise.resolve() };
+        // Refused: the button is given back, so that the tour is not left where it stands
+        It.action("next", { from: P.tour_id || null }).catch(() => {
+          next.disabled = false;
+          next.textContent = "Try again";
+        });
       });
     }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);

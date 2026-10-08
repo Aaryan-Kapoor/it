@@ -310,7 +310,7 @@
         mine = [];
         theirs = [];
         redraw();
-        It.action("cleared", {});
+        It.action("cleared", {}).catch(() => {});
       });
 
       // A picture the agent can open, drawn on an opaque page so that a dark stroke on
@@ -352,6 +352,10 @@
               points: s.points.filter((p, i) => i % every === 0 || i === s.points.length - 1).map((p) => [Math.round(p[0] * 1000) / 1000, Math.round(p[1] * 1000) / 1000])
             };
           })
+        }).catch(() => {
+          // Refused: the button is given back, and the page says so
+          sendBtn.disabled = !mine.length;
+          noteEl.textContent = "That did not go through. Send it again.";
         });
         noteEl.textContent = "";
         var d = document.createElement("span");
@@ -426,8 +430,12 @@
       next.addEventListener("click", () => {
         next.disabled = true;
         next.textContent = "Coming up…";
-        var It = window.It || { action: () => {} };
-        It.action("next", { from: P.tour_id || null });
+        var It = window.It || { action: () => Promise.resolve() };
+        // Refused: the button is given back, so that the tour is not left where it stands
+        It.action("next", { from: P.tour_id || null }).catch(() => {
+          next.disabled = false;
+          next.textContent = "Try again";
+        });
       });
     }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);

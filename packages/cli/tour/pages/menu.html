@@ -233,7 +233,11 @@
       });
 
       function pick(id, label, text) {
-        It.action("pick", { choice: id, label: label, text: text });
+        // Refused: the choices are given back, and the page says so
+        It.action("pick", { choice: id, label: label, text: text }).catch(() => {
+          paint("", null);
+          status.textContent = "That did not go through. Pick again.";
+        });
         // Optimistic: the agent's state update confirms it a moment later, but
         // a button that does nothing for a round trip reads as broken.
         paint(id, text);

@@ -229,7 +229,12 @@
 
       sendEl.addEventListener("click", () => {
         if (locked || !selected) return;
-        It.action("vote", { choice: selected, text: whyEl.value.trim() || null });
+        // Refused: the choice is given back, and the page says so
+        It.action("vote", { choice: selected, text: whyEl.value.trim() || null }).catch(() => {
+          locked = false;
+          paint();
+          noteEl.textContent = "That did not go through. Send it again.";
+        });
         locked = true;
         paint();
         say("Got it — " + selected + ".");
@@ -286,8 +291,12 @@
       next.addEventListener("click", () => {
         next.disabled = true;
         next.textContent = "Coming up…";
-        var It = window.It || { action: () => {} };
-        It.action("next", { from: P.tour_id || null });
+        var It = window.It || { action: () => Promise.resolve() };
+        // Refused: the button is given back, so that the tour is not left where it stands
+        It.action("next", { from: P.tour_id || null }).catch(() => {
+          next.disabled = false;
+          next.textContent = "Try again";
+        });
       });
     }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
