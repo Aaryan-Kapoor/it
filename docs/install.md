@@ -116,7 +116,7 @@ To remove It altogether, run `it uninstall`. It asks first, because every page I
 1. It takes It's add-on out of every agent app, as `it setup --none` does.
 2. It stops the background service and takes its registration away, as `it service uninstall` does, and asks an `it serve` you started yourself in that folder to stop.
 3. It takes `~/.it/bin` off your PATH. The install script added it with a comment, `# It`, and one line in your shell's profile, and those lines are removed; a profile that held nothing else was made by the installer and is removed too. On Windows the folder is on the PATH that Windows keeps for your account, and it is taken off there, with every other entry left as it was kept.
-4. It deletes `~/.it`. Everything It kept goes with it, the program included. On Windows, where a program that is running cannot delete its own file, the program first moves itself out of the folder to where Windows keeps temporary files, and is deleted from there a moment after it has ended.
+4. It deletes `~/.it`. Everything It kept goes with it, the program included. On Windows, where a program that is running cannot delete its own file, the program first moves itself out of the folder to where Windows keeps temporary files, says where, and leaves Windows one line to run the next time you sign in, which deletes it there. You can delete it yourself before then.
 
 It also clears what Codex and Claude Code keep of an add-on after it is removed: their copy of it, and Codex's note that you trusted its hooks. The conversations you held are yours and are left as they are, with the messages that begin `[It]` in them.
 

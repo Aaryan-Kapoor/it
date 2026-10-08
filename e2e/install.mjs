@@ -1219,8 +1219,8 @@ try {
 
     // ---------- taken off the machine again, by the program that is in the folder ----------
     // On Windows a program that is running cannot delete its own file. It moves itself out of
-    // the folder first, to where temporary files are kept, and is deleted from there by a
-    // program it leaves behind for that, a moment after it has ended.
+    // the folder first, to where temporary files are kept, and leaves Windows one line to run
+    // the next time the person signs in, which deletes it there.
     const gone = await install('gone')
     const asideIn = () => readdirSync(os.tmpdir()).filter((name) => /^it-removed-\d+-[0-9a-z]+\.exe$/.test(name))
     const asideBefore = asideIn()
@@ -1234,25 +1234,26 @@ try {
       gone.code === 0 && off.status === 0 && said?.removed === true && said.left === undefined && !existsSync(gone.folder),
       `${off.said}\nstill there: ${existsSync(gone.folder) ? readdirSync(gone.folder).join(' ') : 'nothing'}`,
     )
-    let aside = asideIn().filter((name) => !asideBefore.includes(name))
-    for (let waited = 0; aside.length && waited < 100; waited++) {
-      await sleep(500)
-      aside = asideIn().filter((name) => !asideBefore.includes(name))
-    }
-    // Where it is still there, what would say why: which PowerShell programs are running and what started each, and what Windows says to deleting the file now
-    const why = () => {
-      const seen = spawnSync(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-Command',
-          `Get-CimInstance Win32_Process -Filter "Name='powershell.exe' or Name='it.exe' or Name like 'it-removed-%'" | ForEach-Object { '{0} pid {1} from {2}, {3} letters' -f $_.Name, $_.ProcessId, $_.ParentProcessId, ([string]$_.CommandLine).Length }; try { [IO.File]::Delete('${path.join(os.tmpdir(), aside[0] ?? 'none').replaceAll("'", "''")}'); 'deleted from here' } catch { 'not deleted from here: ' + $_.Exception.GetBaseException().Message }`,
-        ],
-        { encoding: 'utf8' },
+    const aside = asideIn().filter((name) => !asideBefore.includes(name))
+    const RUN_ONCE = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'
+    // What Windows was left to run: each of its lines that is one of these, by its name and what it runs
+    const leftToRun = () =>
+      [...spawnSync('reg.exe', ['query', RUN_ONCE], { encoding: 'utf8' }).stdout.matchAll(/^\s+(ItRemoved\d+)\s+REG_SZ\s+(.*?)\s*$/gm)].map(
+        ([, name, line]) => ({ name, line }),
       )
-      return `${aside.join(' ')}\n${seen.stdout}${seen.stderr}`
-    }
-    check('and the program it moved out of the folder to do that is gone too, a moment after it ended', aside.length === 0, aside.length ? why() : '')
+    const mine = leftToRun().filter(({ line }) => aside.length === 1 && line.includes(aside[0]))
+    check(
+      'the program it moved out of the folder to do that is where it said, and Windows is left one line that deletes it the next time the person signs in',
+      aside.length === 1 &&
+        mine.length === 1 &&
+        mine[0].line === `cmd.exe /d /c del /f /q "${path.join(os.tmpdir(), aside[0])}"` &&
+        said?.said?.some((line) => line.includes(path.join(os.tmpdir(), aside[0])) && /next time you sign in/.test(line)),
+      `${aside.join(' ')}\n${JSON.stringify(leftToRun())}\n${off.said}`,
+    )
+    // The line, run as Windows will run it. The runner is never signed in to again, so it is run here, and taken out of what Windows is to run
+    if (mine.length === 1) spawnSync(mine[0].line, { shell: true, windowsHide: true })
+    for (const { name } of mine) spawnSync('reg.exe', ['delete', RUN_ONCE, '/v', name, '/f'])
+    check('and that line, run as it is written, deletes it', aside.length === 1 && !existsSync(path.join(os.tmpdir(), aside[0])), asideIn().join(' '))
   }
 
   // ---------- over a program that is there already, and over one that is running ----------

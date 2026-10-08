@@ -59,7 +59,6 @@ import {
   notSetUp,
   Problem,
   plainWord,
-  psQuote,
   readJson,
   sessionAsked,
   sessionNote,
@@ -986,46 +985,43 @@ function offWindowsPath(folder: string): 'off' | 'absent' | undefined {
   const said = inPowerShell(windowsPathRemoval(folder))
   return said === 'off' || said === 'absent' ? said : undefined
 }
+/** Where Windows keeps what it runs once, the next time this person signs in. */
+const RUN_ONCE = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'
 /**
  * On Windows a program that is running cannot delete its own file, and can move it. So that
  * It's folder can be deleted whole by the program that is in it, this program is moved out of
  * the folder first, to where the system keeps what may be thrown away, or beside the folder
- * where that is on another disk, and is deleted from there once it has ended, by a program
- * started for that and left to it. Where it could not be moved the folder is found still to be
- * there, and that is said.
+ * where that is on another disk. It cannot delete itself from there either, and nothing it
+ * starts can be counted on to outlive it and do so: on the Windows runner, a program started
+ * for that was gone when this one was. So Windows is left one line to run the next time this
+ * person signs in, which deletes the file. Where the program went, and whether Windows was
+ * left that line; nothing where it did not move, and the folder is then found still to be
+ * there, which is said.
  */
-function stepOutOf(folder: string): void {
+function stepOutOf(folder: string): { at: string; deletedLater: boolean } | undefined {
   const me = process.execPath
   const inside = path.relative(path.resolve(folder), path.resolve(me))
   // Run as a script, the program is Node's and is not in the folder
-  if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) return
+  if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) return undefined
   const name = `it-removed-${process.pid}-${Date.now().toString(36)}.exe`
   for (const where of [os.tmpdir(), path.dirname(path.resolve(folder))]) {
-    const aside = path.join(where, name)
+    const at = path.join(where, name)
     try {
-      renameSync(me, aside)
+      renameSync(me, at)
     } catch {
       continue
     }
+    let deletedLater = false
     try {
-      // It is tried until it is gone, for a minute: the file cannot be deleted while this program
-      // runs, nor for a moment after. Nothing here waits on this program by its number, since
-      // whatever holds a process, ended or not, keeps its file from being deleted.
-      const file = psQuote(aside)
-      const after = `for ($i = 0; $i -lt 240; $i++) { try { [IO.File]::Delete(${file}) } catch {}; if (-not [IO.File]::Exists(${file})) { break }; Start-Sleep -Milliseconds 250 }`
-      spawn(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(after, 'utf16le').toString('base64')],
-        {
-          detached: true,
-          stdio: 'ignore',
-          windowsHide: true,
-          cwd: where,
-        },
-      ).unref()
+      // A file's name on Windows has no quotation mark in it, so the name between two is the name
+      const line = `cmd.exe /d /c del /f /q "${at}"`
+      deletedLater =
+        spawnSync('reg.exe', ['add', RUN_ONCE, '/v', `ItRemoved${process.pid}`, '/t', 'REG_SZ', '/d', line, '/f'], { windowsHide: true, timeout: 15_000 })
+          .status === 0
     } catch {}
-    return
+    return { at, deletedLater }
   }
+  return undefined
 }
 
 async function uninstall(a: Args) {
@@ -1119,7 +1115,9 @@ async function uninstall(a: Args) {
   // 5. Its folder, the program in it included. A program that is running may delete its own
   // file on every system but Windows, where it steps out of the folder first. What the service
   // held open there a moment ago may be held a moment longer, and is tried again.
-  if (process.platform === 'win32') stepOutOf(folder)
+  const stepped = process.platform === 'win32' ? stepOutOf(folder) : undefined
+  if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
+  else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
   try {
     rmSync(folder, { recursive: true, force: true, ...(process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}) })
   } catch (err) {
