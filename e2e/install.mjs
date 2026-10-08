@@ -7,7 +7,7 @@
 //   node e2e/install.mjs <folder holding the built programs>
 //
 // Away from Windows it needs python3, which is how an install is given a terminal to print to.
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   chmodSync,
@@ -1239,7 +1239,20 @@ try {
       await sleep(500)
       aside = asideIn().filter((name) => !asideBefore.includes(name))
     }
-    check('and the program it moved out of the folder to do that is gone too, a moment after it ended', aside.length === 0, aside.join(' '))
+    // Where it is still there, what would say why: which PowerShell programs are running and what started each, and what Windows says to deleting the file now
+    const why = () => {
+      const seen = spawnSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-Command',
+          `Get-CimInstance Win32_Process -Filter "Name='powershell.exe' or Name='it.exe' or Name like 'it-removed-%'" | ForEach-Object { '{0} pid {1} from {2}, {3} letters' -f $_.Name, $_.ProcessId, $_.ParentProcessId, ([string]$_.CommandLine).Length }; try { [IO.File]::Delete('${path.join(os.tmpdir(), aside[0] ?? 'none').replaceAll("'", "''")}'); 'deleted from here' } catch { 'not deleted from here: ' + $_.Exception.GetBaseException().Message }`,
+        ],
+        { encoding: 'utf8' },
+      )
+      return `${aside.join(' ')}\n${seen.stdout}${seen.stderr}`
+    }
+    check('and the program it moved out of the folder to do that is gone too, a moment after it ended', aside.length === 0, aside.length ? why() : '')
   }
 
   // ---------- over a program that is there already, and over one that is running ----------
