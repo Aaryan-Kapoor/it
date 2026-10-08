@@ -188,8 +188,16 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
   if (state === 'installed')
     return (
       <p className="panel-note newer" data-tone="wait">
-        It {m.upgrade?.version ?? ''} is installed on {m.name}. It runs once It is started again there: stop <code>it serve</code> where it is running, and
-        start it.
+        It {m.upgrade?.version ?? ''} is installed on {m.name}. It runs once It is started again there:{' '}
+        {m.system === 'win32' ? (
+          <>
+            run <code>it setup</code> in a terminal on that machine.
+          </>
+        ) : (
+          <>
+            stop <code>it serve</code> where it is running, and start it.
+          </>
+        )}
       </p>
     )
   if (!out) return null

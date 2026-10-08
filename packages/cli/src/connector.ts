@@ -1692,7 +1692,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       await call('mutation', api.machines.upgrading, { state: 'working' }).catch(() => {})
       const done = await fetchNewer({ say: (line) => say(`upgrade: ${line}`) })
       if (!done) return void (await call('mutation', api.machines.upgrading, { state: 'none' }).catch(() => {}))
-      if (service.installedHere()) {
+      // Not on Windows: there this connector runs inside the very task that starting again
+      // stops, and what it starts may be ended with that task before it has started anything.
+      // The new program is in place, and the person is told what starts It as it.
+      if (service.installedHere() && process.platform !== 'win32') {
         say(`upgrade: starting again as ${done.to}`)
         // It is started again by the new program's own setup, which ends this connector on its
         // way. Where this connector is still here to see that setup end badly, or not start at
