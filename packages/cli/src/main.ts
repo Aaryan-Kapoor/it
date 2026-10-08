@@ -127,6 +127,30 @@ function codexShut(found: HarnessStatus[]): string | null {
   return codexLetsItOut() === false ? `Codex: ${CODEX_SHUT}` : null
 }
 /** What a person is told of the agent apps on this machine: each one that was found, and whether It is connected to it. */
+/**
+ * Tells It which agent apps were chosen on this machine, and what system the machine runs,
+ * which no connector has reported yet when setup is first run. Answers with the apps of them
+ * that It reopens closed conversations of here. An It from before it took the system is told
+ * the choice alone, and says nothing of that.
+ */
+async function chosen(wanted: string[]): Promise<string[]> {
+  const said = await call<{ wakes?: string[] } | null>('mutation', api.machines.choose, { harnesses: wanted, system: process.platform }).catch(() =>
+    call<{ wakes?: string[] } | null>('mutation', api.machines.choose, { harnesses: wanted }),
+  )
+  return said?.wakes ?? []
+}
+/**
+ * What setup says, once, of the apps it has just connected that It reopens closed
+ * conversations of: reopening is on from the start, and it runs an agent with nobody
+ * watching, so the person is told that it is, what it does and where to turn it off.
+ */
+function wakesSaid(woken: string[]): string | null {
+  if (!woken.length) return null
+  const names = woken.map((id) => KNOWN[id as Harness]?.label ?? id)
+  const listed = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]
+  return `Auto-wake is on for ${listed}: when you use a page whose conversation is closed, It reopens the conversation and runs the agent on this machine with nobody watching. You can turn it off for each app on the site’s Machines page.`
+}
+
 function appsSaid(found: HarnessStatus[], advise = true, withCodex = true): string[] {
   if (!found.length) return ['No agent app was found on this machine.']
   const lines = found.map((h) => {
@@ -1446,12 +1470,9 @@ async function settingUpLed(a: Args) {
     const apps = flow.step('Agent apps', found.length ? 'connecting' : '')
     const connectedBefore = new Set(found.filter((h) => h.addon === 'connected').map((h) => h.id))
     // The backend is told of the choice before anything is changed on this machine, as in `settingUp`
-    const told = await call('mutation', api.machines.choose, { harnesses: wanted }).then(
-      () => true,
-      () => false,
-    )
+    let woken = await chosen(wanted).catch(() => null)
     await reconcile(wanted, quiet)
-    if (!told) await call('mutation', api.machines.choose, { harnesses: wanted })
+    woken ??= await chosen(wanted)
     const after = await detectAll()
     await call('mutation', api.machines.inventory, { harnesses: after })
     const on = after.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval')
@@ -1468,6 +1489,9 @@ async function settingUpLed(a: Args) {
     // What decides whether Codex's first page appears at all is said by itself, and first
     const shut = codexShut(after)
     if (shut) left.push(shut)
+    // That reopening is on for what was just connected, said once: not again each time setup is run
+    const waking = wakesSaid(woken.filter((id) => !connectedBefore.has(id as Harness) && on.some((h) => h.id === id)))
+    if (waking) left.push(waking)
     for (const h of after) {
       if (h.addon === 'needs_approval' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !connectedBefore.has(h.id)) left.push(`${KNOWN[h.id].label}: ${AFTER[h.id]}`)
@@ -1671,12 +1695,9 @@ async function settingUp(a: Args, joined: boolean) {
     // would otherwise take out again, by the choice from before, what is being connected here.
     // Where the backend cannot be reached, what is on this machine is put right all the same,
     // so that an add-on the person chose to remove is removed, and the failure is said after
-    const told = await call('mutation', api.machines.choose, { harnesses: wanted }).then(
-      () => true,
-      () => false,
-    )
+    let woken = await chosen(wanted).catch(() => null)
     await reconcile(wanted, say)
-    if (!told) await call('mutation', api.machines.choose, { harnesses: wanted })
+    woken ??= await chosen(wanted)
     const after = await detectAll()
     // The site is told what was found, and no more than that. Whether this machine can hear a
     // click is the connector's to say, once one is running: said from here, the site would show
@@ -1716,6 +1737,11 @@ async function settingUp(a: Args, joined: boolean) {
     // What decides whether Codex's first page appears at all is said by itself, and first.
     const shut = codexShut(after)
     if (shut) say(`\n${shut}`)
+    // That reopening is on for what was just connected, said once: not again each time setup is run
+    const waking = wakesSaid(
+      woken.filter((id) => !before.has(id as Harness) && after.some((h) => h.id === id && (h.addon === 'connected' || h.addon === 'needs_approval'))),
+    )
+    if (waking) say(`\n${waking}`)
     for (const h of after) {
       if (h.addon === 'needs_approval') say(`\n${KNOWN[h.id].label}: ${h.detail}`)
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !before.has(h.id)) say(`\n${KNOWN[h.id].label}: ${AFTER[h.id]}`)

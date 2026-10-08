@@ -2922,7 +2922,7 @@ describe.skipIf(process.platform === 'win32')('`it setup --none`, which connects
       const still = await run(m, ['setup', '--none', '--no-service'], noProgram(m))
       expect(still.code).toBe(0)
       expect(b.asked.map((x) => [x.path, x.args])).toEqual([
-        ['machines:choose', { harnesses: [] }],
+        ['machines:choose', { harnesses: [], system: process.platform }],
         ['machines:inventory', { harnesses: [] }],
       ])
       expect(still.err).toContain(COULD_NOT_ASK)
@@ -3029,6 +3029,62 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       } finally {
         await b.close()
       }
+    }
+  })
+
+  test('setup says once, for an app it has just connected, that It reopens its closed conversations and where to turn that off, and says nothing of it where It does not', async () => {
+    const SAID =
+      'Auto-wake is on for Pi: when you use a page whose conversation is closed, It reopens the conversation and runs the agent on this machine with nobody watching.'
+    const m = machine()
+    pi(m)
+    // It answers the choice with the apps it reopens closed conversations of on this machine
+    const b = await backend(m, (asked) =>
+      asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : asked.path === 'machines:choose' ? { wakes: ['pi'] } : null,
+    )
+    try {
+      const first = await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)
+      expect(first.code).toBe(0)
+      expect(first.err).toContain(SAID)
+      expect(first.err).toContain('You can turn it off for each app on the site’s Machines page.')
+      // It was told what system this machine runs, with the choice
+      expect(b.asked.filter((x) => x.path === 'machines:choose').map((x) => x.args)).toEqual([{ harnesses: ['pi'], system: process.platform }])
+      // Run again, as every update runs it, with Pi connected already: not said a second time
+      const again = await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)
+      expect([again.code, again.err.includes('Auto-wake')]).toEqual([0, false])
+    } finally {
+      await b.close()
+    }
+    // An It that reopens nothing there (a Windows machine, an app switched off before), or one from before it said: nothing is said
+    for (const answer of [{ wakes: [] }, null]) {
+      const other = machine()
+      pi(other)
+      const quiet = await backend(other, (asked) =>
+        asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : asked.path === 'machines:choose' ? answer : null,
+      )
+      try {
+        const setup = await run(other, ['setup', '--no-service', '--only', 'pi'], quiet.env)
+        expect([setup.code, setup.err.includes('Auto-wake')]).toEqual([0, false])
+      } finally {
+        await quiet.close()
+      }
+    }
+    // An It that refuses the choice with the system in it, as one from before it took that does, is told the choice alone
+    const old = machine()
+    pi(old)
+    const refusing = await backend(old, (asked) => {
+      if (asked.path === 'machines:me') return { id: 'machine-1', name: 'test', wanted: [] }
+      if (asked.path === 'machines:choose' && 'system' in asked.args) return new Refusal({ code: 'invalid', message: 'Unexpected field system' })
+      return null
+    })
+    try {
+      const setup = await run(old, ['setup', '--no-service', '--only', 'pi'], refusing.env)
+      expect(setup.code).toBe(0)
+      expect(refusing.asked.filter((x) => x.path === 'machines:choose').map((x) => x.args)).toEqual([
+        { harnesses: ['pi'], system: process.platform },
+        { harnesses: ['pi'] },
+      ])
+    } finally {
+      await refusing.close()
     }
   })
 
