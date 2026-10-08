@@ -100,6 +100,9 @@ export const get = query({
       // whether it is there to hear a click. Null when it has no connector, its connector said
       // it was stopping, or it was revoked.
       machineSeenAt: machine !== null && !machine.revoked && machine.connectorVersion !== undefined && machine.offAt === undefined ? machine.lastSeenAt : null,
+      // Its machine is there and hands nothing to an agent for now, and why: what is done on the
+      // page waits for that to change, and neither opening the conversation nor reopening it helps
+      machinePaused: machine !== null && !machine.revoked ? (machine.paused ?? null) : null,
       // The machine it was made on is no longer one of the person's. What is done on it reaches
       // its conversation only where that is open on one of their machines.
       machineGone: a.machineId !== undefined && (machine === null || machine.revoked),

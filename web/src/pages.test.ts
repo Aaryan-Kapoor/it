@@ -382,6 +382,26 @@ describe('what the page’s bar says of the last thing the person did', () => {
     expect(said()).toBe('Stopped')
   })
 
+  test('something waiting for a machine that is there and hands nothing over for now is said as that, and nothing is offered that would not help', async () => {
+    recent = [{ at: NOW - 20_000, delivery: 'pending' }]
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi', pending: 1, wake: { machineId: 'm1', harness: 'pi', on: false }, machinePaused: 'unfit' })
+    await shown()
+    expect(said()).toBe('Sent. the laptop and It are of versions that do not work together, so Pi gets it once It is updated there')
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+    await act(async () => root.unmount())
+    host.remove()
+    Object.assign(PAGE, { machinePaused: 'unchecked', pending: 3 })
+    await shown()
+    expect(said()).toBe('Sent (3). the laptop is still asking It whether the two work together, and hands it to Pi once it knows')
+    await act(async () => root.unmount())
+    host.remove()
+    // Fitting again, it is said as anything else that waits
+    Object.assign(PAGE, { machinePaused: null, pending: 1 })
+    await shown()
+    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    Object.assign(PAGE, { wake: null, pending: 0, agent: 'claude-code' })
+  })
+
   test('an agent said to be working on a machine that has gone quiet is not said to be working: whether it is, is not known, and a stop is said to wait for the machine', async () => {
     Object.assign(PAGE, { run: { stopping: false }, machineSeenAt: NOW })
     await shown()

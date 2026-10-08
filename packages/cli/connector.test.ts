@@ -904,6 +904,9 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
         true,
       )
       expect((await local<{ ok: boolean; unfit?: string }>('/health'))?.unfit).toContain('versions that do not work together')
+      // It is told with the machine's report, so that the site says it beside the machine and on its pages
+      const reported = () => stand.calls.filter((c) => c.name === 'machines:report').map((c) => c.args.paused)
+      await until(() => reported().includes('unfit'))
       // Something is done on a page whose conversation is open and listening: it is left where it is
       await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
       offered(click(1))
@@ -914,6 +917,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       await until(() => called('delivery:claim').includes('click-1'), 75_000)
       expect(said.some((line) => line.includes('fit again'))).toBe(true)
       expect((await local<{ ok: boolean; unfit?: string }>('/health'))?.unfit).toBeUndefined()
+      await until(() => reported().at(-1) === '')
     } finally {
       delete process.env.IT_URL
       await new Promise((r) => door.close(r))

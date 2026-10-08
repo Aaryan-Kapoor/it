@@ -2809,6 +2809,23 @@ describe('displays and machines', () => {
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: false })
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
     expect(await onPage('plan')).toEqual({ machineId: m.id, harness: 'claude-code', on: false })
+    // A connector that hands nothing over for now says so with its report, and why. The site is told beside
+    // the machine and on its pages, until a report says it no more
+    const paused = async () => [
+      (await alice.browser.query(api.machines.list, {})).find((x) => x.id === m.id)?.paused,
+      (await alice.browser.query(api.artifacts.get, { slug: 'plan' }))?.machinePaused,
+    ]
+    expect(await paused()).toEqual([null, null])
+    await m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [], paused: 'unfit' })
+    expect(await paused()).toEqual(['unfit', 'unfit'])
+    await m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [], paused: 'unchecked' })
+    expect(await paused()).toEqual(['unchecked', 'unchecked'])
+    await m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [], paused: '' })
+    expect(await paused()).toEqual([null, null])
+    // One that does not say, as an earlier connector does not, is not paused
+    await m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [], paused: 'unfit' })
+    await m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [] })
+    expect(await paused()).toEqual([null, null])
   })
 
   test('a machine cannot switch reopening on, so no agent switches it on for itself, and it is only for an agent app It can reopen', async () => {

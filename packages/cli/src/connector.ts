@@ -1939,7 +1939,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
     await call(
       'mutation',
       api.machines.report,
-      fuller ? { ...told, system: process.platform, ...(latestKnown !== undefined ? { latest: latestKnown } : {}) } : told,
+      fuller
+        ? {
+            ...told,
+            system: process.platform,
+            // Whether it hands nothing over for now, so that the site says so beside the machine and on its pages
+            paused: unfitting ? (unfitting === NOT_ASKED ? 'unchecked' : 'unfit') : '',
+            ...(latestKnown !== undefined ? { latest: latestKnown } : {}),
+          }
+        : told,
     )
       .catch(async (err) => {
         if (fuller && (err as { code?: string }).code !== 'unauthenticated') {
@@ -2030,10 +2038,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
         journal('released', id)
         void call('mutation', api.delivery.release, { id }).catch(() => {})
       }
+      // Said to It at once, so that the site says it beside the machine and on its pages
+      void report()
     } else if (!wrong && unfitting) {
       const waited = unfitting !== NOT_ASKED
       unfitting = null
       if (waited) say('this machine and the It it joined fit again: what is done on a page is handed over again')
+      void report()
       void route()
     }
   }

@@ -31,6 +31,8 @@ interface Machine {
   connectorVersion: string | null
   /** The system it runs on, as its connector names it, where it has said. */
   system?: string | null
+  /** Why it hands nothing to an agent for now, though it is there. Null where it does, and from functions that do not say. */
+  paused?: string | null
   /** Its connector said it was stopping, and has not been heard from since. */
   off?: boolean
   /** It runs on this machine, where every other joined it. */
@@ -237,6 +239,15 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
   )
 }
 
+/**
+ * Why a machine that is there hands nothing done on a page to an agent for now, as its
+ * connector told It: the two do not fit, or it has not yet been able to ask whether they do.
+ */
+export const pausedFor = (why: string, machine: string): string =>
+  why === 'unchecked'
+    ? `${machine} has not yet been able to ask It whether the two are of versions that work together. Until it has, nothing done on a page is handed to an agent there. It asks again every minute.`
+    : `${machine} and It are of versions that do not work together. Until It is updated on the one that is behind, nothing done on a page is handed to an agent there, and no conversation is reopened. Run it status on ${machine} to see which to update.`
+
 function MachineCard({ m, now, host }: { m: Machine; now: number; host: string | null }) {
   const toggle = useMutation(api.machines.toggle)
   const wake = useMutation(api.machines.wake)
@@ -282,8 +293,8 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
             </button>
           </form>
         )}
-        <span className="status" data-tone={online ? 'ok' : 'wait'}>
-          {online ? 'Online' : m.connectorVersion === null ? 'Connector not running' : `Last seen ${ago(m.lastSeenAt, now)}`}
+        <span className="status" data-tone={online && !m.paused ? 'ok' : 'wait'}>
+          {online ? (m.paused ? 'Online, paused' : 'Online') : m.connectorVersion === null ? 'Connector not running' : `Last seen ${ago(m.lastSeenAt, now)}`}
         </span>
         {/* Which of several machines It is on: revoking that one ends every paired browser, and two machines may go by one name */}
         {m.runsIt && <span className="status">It runs on this machine</span>}
@@ -296,6 +307,8 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
         <RevokeMachine m={m} act={act} />
       </header>
       <NewerOut m={m} host={host} online={online} act={act} />
+      {/* There, and handing nothing to an agent for now: said with why, since everything else about it looks ready */}
+      {online && m.paused && <p className="panel-note">{pausedFor(m.paused, m.name)}</p>}
       {known.length === 0 ? (
         <p className="panel-note">
           {m.connectorVersion === null ? 'Run it setup on this machine to look for agent apps.' : 'No agent app was found on this machine.'}

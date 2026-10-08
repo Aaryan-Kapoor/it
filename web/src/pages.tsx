@@ -252,6 +252,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               machine={page.machine}
               machineSeenAt={page.machineSeenAt}
               machineGone={page.machineGone === true}
+              machinePaused={page.machinePaused ?? null}
               pending={page.pending}
               // Only the owner may switch reopening on, and only for an agent app It can reopen
               wakes={owner ? page.wake : null}
@@ -405,6 +406,7 @@ function ActionStatus({
   machine,
   machineSeenAt,
   machineGone,
+  machinePaused,
   pending,
   wakes,
   agent,
@@ -418,6 +420,8 @@ function ActionStatus({
   machineSeenAt: number | null
   /** The machine the page was made on is no longer one of the person's. */
   machineGone: boolean
+  /** Why the page's machine, though it is there, hands nothing to an agent for now. Null where it does. */
+  machinePaused: string | null
   /** How many things done on the page are waiting for its agent, as It counts them: all of them, however long ago they were done. */
   pending: number
   /** Where the page's agent app can have a closed conversation reopened: the machine that would, and whether that is switched on there. */
@@ -553,6 +557,16 @@ function ActionStatus({
   const online = machineSeenAt !== null && now - machineSeenAt < ALIVE.onlineMs
   if (!online)
     return <span className="status" data-tone="wait">{`Waiting for ${machine ?? 'your machine'} to come online${waiting > 1 ? ` (${waiting})` : ''}`}</span>
+  // Its machine is there and hands nothing over for now: said as that, before anything about
+  // the conversation. Opening the conversation changes nothing, and neither does reopening it
+  if (machinePaused)
+    return (
+      <span className="status" data-tone="wait">
+        {machinePaused === 'unchecked'
+          ? `Sent${waiting > 1 ? ` (${waiting})` : ''}. ${machine ?? 'Its machine'} is still asking It whether the two work together, and hands it to ${agent ?? 'your agent'} once it knows`
+          : `Sent${waiting > 1 ? ` (${waiting})` : ''}. ${machine ?? 'Its machine'} and It are of versions that do not work together, so ${agent ?? 'your agent'} gets it once It is updated there`}
+      </span>
+    )
   // Sent, and not taken for a while: its conversation may be closed. The owner can switch on
   // the reopening of such conversations, here as under Machines, and it is so from then on
   const slow = now - last.at > WAKE_OFFER_MS

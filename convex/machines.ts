@@ -15,6 +15,8 @@ const view = (m: Doc<'machines'>) => ({
   lastSeenAt: m.lastSeenAt,
   connectorVersion: m.connectorVersion ?? null,
   system: m.system ?? null,
+  // Why it hands nothing to an agent for now, though it is there: 'unfit' where it and this It are of versions that do not work together, 'unchecked' where it has not yet been able to ask
+  paused: m.paused ?? null,
   off: m.offAt !== undefined,
   latest: m.latest ?? null,
   upgrade: m.upgrade ?? null,
@@ -302,19 +304,23 @@ export const inventory = mutation({
 
 /** The connector reports what it found on the machine, and that it is alive. */
 export const report = mutation({
-  args: { connectorVersion: v.string(), harnesses: found, latest: v.optional(v.string()), system: v.optional(v.string()) },
-  handler: async (ctx, { connectorVersion, harnesses, latest, system }) => {
+  args: { connectorVersion: v.string(), harnesses: found, latest: v.optional(v.string()), system: v.optional(v.string()), paused: v.optional(v.string()) },
+  handler: async (ctx, { connectorVersion, harnesses, latest, system, paused }) => {
     const { machine } = await requireMachine(ctx)
     const clean = kept(harnesses)
     // The newest version it has learned of is kept until it learns of another: a report made before it has looked says nothing of it
     const knows = latest === undefined ? machine.latest : latest.slice(0, 40)
     // What it runs on is kept as it last said: a report from a connector that does not say leaves it as it was
     const on = system === undefined ? machine.system : system.slice(0, 20)
+    // Whether it hands nothing over for now, and why: said with every report by a connector
+    // that says it at all, with an empty word where it is not so. One that does not say is not paused.
+    const held = paused ? paused.slice(0, 20) : undefined
     const same =
       JSON.stringify(machine.harnesses ?? []) === JSON.stringify(clean) &&
       machine.connectorVersion === connectorVersion &&
       machine.latest === knows &&
-      machine.system === on
+      machine.system === on &&
+      machine.paused === held
     // A connector of another version than the last is what an upgrade that was asked for was for, and ends it
     const moved = machine.connectorVersion !== undefined && machine.connectorVersion !== connectorVersion
     // Written each time it says so, less a little for a report that comes a moment early: the
@@ -327,6 +333,7 @@ export const report = mutation({
         offAt: undefined,
         latest: knows,
         system: on,
+        paused: held,
         ...(moved ? { upgrade: undefined } : {}),
       })
     }
