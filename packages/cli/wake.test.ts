@@ -323,7 +323,7 @@ describe('what a conversation is told after the person stopped it', () => {
     expect(WAS_STOPPED).toContain('even where you see it earlier in this conversation with no answer after it')
     expect(WAS_STOPPED).toContain('Leave all of that undone.')
     // And what it was reopened for is said last, as new and wanted: an agent told only what not to do did nothing
-    expect(WAS_STOPPED.endsWith('It is new and it is wanted: do it, and only it.')).toBe(true)
+    expect(WAS_STOPPED.endsWith('It is new, and it is what this turn is for: do it, and only it.')).toBe(true)
   })
 })
 
@@ -466,6 +466,9 @@ describe('the mode a Claude Code conversation is reopened in', () => {
 
   test('a reopened conversation is told that nobody can approve anything, how to run `it`, and to say so on the page where it cannot do what was asked', () => {
     expect(WOKEN).toMatch(/^\[It\] /)
+    // It says what a page sent, and never that a person did it or wants it: whether anyone was there is said with each thing
+    expect(WOKEN).toContain('which a page of yours sent while the conversation was closed')
+    expect(WOKEN).not.toMatch(/someone did|they did|is wanted/)
     expect(WOKEN).toContain('Run `it` by that name alone')
     expect(WOKEN).toContain('`it notify`')
     expect(WOKEN).toContain('`it ack <action id> --failed`')

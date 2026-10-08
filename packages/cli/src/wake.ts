@@ -3,7 +3,20 @@
 // conversation may be reopened. None of it is done for an app the person has not switched
 // Auto-wake on for, which is the connector's to see to.
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, rmSync, statSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  readSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { WAKE_BACK_MS, WAKES } from '@it/protocol'
@@ -39,7 +52,7 @@ const APP: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Code
  * woken Pi, which may run anything, decline three times to try anything else.
  */
 export const WOKEN =
-  '[It] It reopened this conversation for what is above, which someone did on a page of yours while it was closed. You can do here what you could do while they were with you: the same commands, run the same way. The one difference is that nobody is watching, so nobody can answer a question or approve anything. Run `it` by that name alone, with no folder in front of it and no `export` before it: it is on your PATH, and in that form it is never held for approval. Do what was asked and nothing more, show on the page that you have, and then end your turn: do not wait for anything else to be done, since It reopens this conversation for whatever is done next. Try what the work needs before you conclude that you may not. Only if a command is in fact refused, say so where they will see it, with `it notify` or the page’s state, and run `it ack <action id> --failed`.'
+  '[It] It reopened this conversation for what is above, which a page of yours sent while the conversation was closed: each part of it says whether someone had just used the page. You can do here what you could do while they were with you: the same commands, run the same way. The one difference is that nobody is watching, so nobody can answer a question or approve anything, and what you would have asked them about first still waits for them: say on the page that it does. Run `it` by that name alone, with no folder in front of it and no `export` before it: it is on your PATH, and in that form it is never held for approval. Do what was asked and nothing more, show on the page that you have, and then end your turn: do not wait for anything else to be done, since It reopens this conversation for whatever is done next. Try what the work needs before you conclude that you may not. Only if a command is in fact refused, say so where they will see it, with `it notify` or the page’s state, and run `it ack <action id> --failed`.'
 
 /**
  * What a conversation is told when it is reopened for something a second time, because It
@@ -61,7 +74,7 @@ export const WAS_CUT_OFF =
  * said last, as new, as wanted, and as the one thing to do.
  */
 export const WAS_STOPPED =
-  '[It] One thing more. The person stopped this conversation’s last turn, from the page, before it had finished. That cancelled what they had done up to then and you had not finished: what that turn was working on, and anything else that reached this conversation while it worked, even where you see it earlier in this conversation with no answer after it. Leave all of that undone. What is at the top of this message they did after stopping. It is new and it is wanted: do it, and only it.'
+  '[It] One thing more. The person stopped this conversation’s last turn, from the page, before it had finished. That cancelled what they had done up to then and you had not finished: what that turn was working on, and anything else that reached this conversation while it worked, even where you see it earlier in this conversation with no answer after it. Leave all of that undone. What is at the top of this message was sent after they stopped it. It is new, and it is what this turn is for: do it, and only it.'
 
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
