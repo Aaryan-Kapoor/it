@@ -1497,7 +1497,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       /^ {2}it serve \[--log <file>\] {2,}\S/m,
       /--yes connects\s+every app it would otherwise ask about/,
       /--no-setup joins and\s+connects no agent app/,
-      /With --json,\s+wherever a program reads what they print, and for an agent, they print JSON/,
+      /With --json,\s+wherever a program reads what they print, and for an agent,\s+they\s+print\s+JSON/,
       /^ {2}it site \[--no-open\] {2,}\S/m,
       /^ {2}it network \[on \| off \| tailscale\]$/m,
       /^ {2}it status {2,}\S/m,
@@ -1804,13 +1804,13 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
         expect(none.shown.split('\n').slice(0, 2)).toEqual(ASKED.slice(0, 2))
         expect(existsSync(opened)).toBe(false)
       }
-      expect((await atTerminal(m, ['site', '--no-open'], b.env)).shown.split('\n')).toEqual([...ASKED, ''])
-      // Run from another computer, with the network off: nothing there can open the address, and the person is told what lets a device in
-      expect((await atTerminal(m, ['site'], { ...b.env, SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22' })).shown.split('\n')).toEqual([
-        ...ASKED,
-        'No other device can open that: `it network tailscale` or `it network on` lets one, and this then prints an address for it.',
-        '',
-      ])
+      // Wherever no browser was opened here, with the network off, nothing else can open the address, and the person is told what lets a device in:
+      // asked not to open one, on a machine with no screen, and run from another computer
+      const NO_OTHER = 'No other device can open that: `it network tailscale` or `it network on` lets one, and this then prints an address for it.'
+      expect((await atTerminal(m, ['site', '--no-open'], b.env)).shown.split('\n')).toEqual([...ASKED, NO_OTHER, ''])
+      if (process.platform === 'linux')
+        expect((await atTerminal(m, ['site'], { ...b.env, DISPLAY: '', WAYLAND_DISPLAY: '' })).shown.split('\n')).toEqual([...ASKED, NO_OTHER, ''])
+      expect((await atTerminal(m, ['site'], { ...b.env, SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22' })).shown.split('\n')).toEqual([...ASKED, NO_OTHER, ''])
       expect(JSON.parse((await atTerminal(m, ['site', '--no-open', '--json'], b.env)).shown)).toEqual({ url })
     } finally {
       await b.close()
@@ -1845,14 +1845,18 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     const STOPPED = 'It is not running on this machine at the moment, so this takes effect when it starts.'
     // Nothing is running here, and each of these says so: the setting is all there is until It starts
     expect((await atTerminal(m, ['network'])).shown).toBe(`The network is off. It answers this machine only.\n${STOPPED}\n`)
-    const on = (await atTerminal(m, ['network', 'on'])).shown.split('\n')
+    const said = (await atTerminal(m, ['network', 'on'])).shown.split('\n')
+    // On a machine the internet can reach, which the one this runs on may be, that is said as well, in a line of its own before the last
+    const INTERNET = /^This machine .*, so It can be reached from the internet, over plain http: /
+    const on = said.filter((line) => !INTERNET.test(line))
+    expect(said.length - on.length).toBeLessThanOrEqual(1)
     expect(on[0]).toMatch(/^The network is on[.,] /)
     expect(on.at(-2)).toBe(STOPPED)
     // Whatever stands between the two is an address, on a line of its own
     for (const line of on.slice(1, -2)) expect(line).toMatch(/^ {2}http:\/\/\S+:21000$/)
     expect(on.join('\n')).not.toMatch(/[{}"]/)
     // Asked afterwards how it stands, it says the same, and no more promises a site that can be reached than turning it on did
-    expect((await atTerminal(m, ['network'])).shown.split('\n')).toEqual(on)
+    expect((await atTerminal(m, ['network'])).shown.split('\n')).toEqual(said)
     const piped = await run(m, ['network'])
     expect(piped.err.trim().split('\n').at(-1)).toBe(STOPPED)
     const asked = JSON.parse((await atTerminal(m, ['network', '--json'])).shown.replace(/^[^{]*/, '')) as { network: boolean; addresses: string[] }

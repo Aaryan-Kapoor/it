@@ -182,17 +182,30 @@ describe('the agent skill', () => {
 
   test('says that an agent is given JSON by the commands that speak to a person at a terminal, and how to ask for it', () => {
     // What the program says of itself: the commands that speak, and what makes them print JSON
+    // Read with its line breaks taken out: where a line of the help ends says nothing
     const spoken =
-      /Run at a terminal, ([\s\S]*?) say how things stand in a few sentences\. With --json,\s+wherever a program reads what they print, and for an agent, they print JSON\./.exec(
-        help,
+      /Run at a terminal, (.*?) say how things stand in a few sentences\. With --json, wherever a program reads what they print, and for an agent, they print JSON\./.exec(
+        help.replace(/\s+/g, ' '),
       )![1]!
     const nine = spoken
       .replace(/\s+/g, ' ')
       .split(/, | and /)
       .map((command) => command.trim())
-    expect(nine).toEqual(['it setup', 'it site', 'it network', 'it status', 'it service status', 'it list', 'it displays', 'it whoami', 'it uninstall'])
+    expect(nine).toEqual([
+      'it setup',
+      'it site',
+      'it network',
+      'it status',
+      'it service status',
+      'it list',
+      'it displays',
+      'it whoami',
+      'it upgrade',
+      'it updates',
+      'it uninstall',
+    ])
     expect(skill).toContain(
-      `Nine of them, ${nine
+      `Some of them, ${nine
         .slice(0, -1)
         .map((command) => `\`${command}\``)
         .join(', ')} and \`${nine.at(-1)}\`, speak in sentences to a person at a terminal.`,
