@@ -79,7 +79,7 @@ vi.mock('./src/lib', async (original) => {
 import { type ConnectorInfo, infoFile, local, mac, runConnector } from './src/connector'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
-import { identity } from './src/wake'
+import { identity, SINCE_TOLD } from './src/wake'
 
 // The real clock, kept from before any test puts a stand-in in its place
 const really = setTimeout
@@ -730,8 +730,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       writeFileSync(
         path.join(home, 'runs.json'),
         JSON.stringify({
-          'codex:thread-1': { pid: left.pid, since: identity([left.pid!]).get(left.pid!) },
-          'codex:thread-2': { pid: process.pid, since: 'Thu Jan  1 00:00:00 1970' },
+          'codex:thread-1': { pid: left.pid, since: identity([left.pid!]).get(left.pid!), told: SINCE_TOLD },
+          'codex:thread-2': { pid: process.pid, since: 'Thu Jan  1 00:00:00 1970', told: SINCE_TOLD },
         }),
       )
     })
