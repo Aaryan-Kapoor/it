@@ -203,7 +203,10 @@ function put(to: string, bytes: Buffer, mode: number): void {
 /** What a program says its version is, asked as anyone would ask it. Nothing where it does not start, or does not say. */
 function saysItIs(program: string): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile(program, ['--version'], { timeout: 30_000, env: { ...process.env, IT_HOME: home() }, windowsHide: true }, (err, out) => {
+    // Ended outright when its time is over: asked to end, a program that will not would be
+    // waited for without end, and the update with it. It is a program nobody has installed
+    // yet, started only to be asked this, and nothing of anyone's is in its keeping
+    execFile(program, ['--version'], { timeout: 30_000, killSignal: 'SIGKILL', env: { ...process.env, IT_HOME: home() }, windowsHide: true }, (err, out) => {
       if (err) return resolve(null)
       try {
         const version = (JSON.parse(String(out)) as { version?: unknown } | null)?.version

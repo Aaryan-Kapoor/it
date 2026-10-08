@@ -539,6 +539,16 @@ function ps(args: string[], ok: number[] = [0]): string | null {
   return String(ran.stdout ?? '')
 }
 
+/**
+ * Whether this machine has a `ps` that lists processes as this program asks it to. Without one
+ * a reopened conversation can be started and cannot be looked after: what it left running when
+ * it was stopped or cut off cannot be found. A small container often has none.
+ */
+export const listsProcesses = (): boolean => process.platform === 'win32' || ps(['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=']) !== null
+/** What to do where it has none. */
+export const NO_PS =
+  'This machine has no `ps` command that It can list processes with, which it needs to look after the conversations it reopens. Install it (the package is called procps on most Linux systems, and procps-ng on some), then restart It.'
+
 /** The processes in the group of this number, and null where the system could not be asked. */
 function inGroup(group: number): number[] | null {
   const listed = ps(['-A', '-o', 'pid=', '-o', 'pgid='])

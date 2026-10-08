@@ -52,7 +52,9 @@ import {
   endTree,
   fromAnotherStart,
   identity,
+  listsProcesses,
   mayWake,
+  NO_PS,
   SINCE_TOLD,
   STOPPED,
   WAS_CUT_OFF,
@@ -678,6 +680,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
           unreadWhereItWas = true
         }
       }
+    // Said once as it starts, where it is so: everything else about reopening looks ready
+    if (!listsProcesses()) say(NO_PS.replace(/^This machine/, 'this machine'))
     if (existsSync(unreadRuns())) unread = true
     if (unread)
       say(`${UNREAD.replace(/^It could/, 'it could')} (the note is kept as ${unreadWhereItWas ? 'runs.json' : 'runs.json.unreadable'} in It’s folder)`)
@@ -794,7 +798,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // (Seen to once, before this turn's message was written: not again here, where settling
     // it would make a note that the message could no longer carry)
     if (unsettled.has(key))
-      return 'a turn of it from before may still be running on its machine, and could not be checked on or ended. It is reopened again once that machine has been started again, or once you have looked that nothing of it is running there and run `it runs clear`'
+      return `a turn of it from before may still be running on its machine, and could not be checked on or ended. It is reopened again once that machine has been started again, or once you have looked that nothing of it is running there and run \`it runs clear\`${listsProcesses() ? '' : `. ${NO_PS}`}`
     if (closing || unfitting) return NOT_STARTED
     const stop = new AbortController()
     reopenedNow.set(key, stop)
