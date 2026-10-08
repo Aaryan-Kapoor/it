@@ -3597,10 +3597,13 @@ describe.skipIf(windows)('where the backend program is fetched from', () => {
         await fetchProgram({ url: `${release.at}/${RELEASE}/an-archive.zip`, sha256: sum(archive), plain: true }, programFile())
         const backend = await start(makeConfig())
         await asAdmin(backend, 'bridge:enroll', { subject: 'owner', name: 'written', publicKey: KEY })
+        // The program makes and removes files of its own while it runs, so one that was listed may be gone when it is looked at
         const under = (dir: string): [string, number][] =>
           readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
             const file = path.join(dir, entry.name)
-            const mode = statSync(file).mode & 0o777
+            const found = statSync(file, { throwIfNoEntry: false })
+            if (!found) return []
+            const mode = found.mode & 0o777
             return entry.isDirectory()
               ? [[`${path.relative(inBackend(), file)}/`, mode] as [string, number], ...under(file)]
               : [[path.relative(inBackend(), file), mode]]
@@ -3888,10 +3891,13 @@ describe('the backend program, as it is started', () => {
       try {
         const backend = await start(makeConfig())
         await asAdmin(backend, 'bridge:enroll', { subject: 'owner', name: 'written', publicKey: KEY })
+        // The program makes and removes files of its own while it runs, so one that was listed may be gone when it is looked at
         const under = (dir: string): [string, number][] =>
           readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
             const file = path.join(dir, entry.name)
-            const mode = statSync(file).mode & 0o777
+            const found = statSync(file, { throwIfNoEntry: false })
+            if (!found) return []
+            const mode = found.mode & 0o777
             return entry.isDirectory()
               ? [[`${path.relative(inBackend(), file)}/`, mode] as [string, number], ...under(file)]
               : [[path.relative(inBackend(), file), mode]]

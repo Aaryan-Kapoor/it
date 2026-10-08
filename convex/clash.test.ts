@@ -79,13 +79,20 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
     expect([await until(() => /^\S+ connector \S+ started/m.test(log()), 90_000), log()]).toEqual([true, expect.any(String)])
   }, 120_000)
   afterAll(async () => {
+    /** What the service wrote down last, which says how far a stop that did not finish had come. */
+    let stuck: string | undefined
     if (service && service.exitCode === null && service.signalCode === null) {
-      const gone = new Promise((resolve) => service!.once('exit', resolve))
+      const gone = new Promise<true>((resolve) => service!.once('exit', () => resolve(true)))
       service.kill('SIGTERM')
-      await gone
+      if (!(await Promise.race([gone, new Promise<false>((resolve) => setTimeout(() => resolve(false), 45_000))]))) {
+        stuck = readFileSync(path.join(folder, 'service.log'), 'utf8').trimEnd().split('\n').slice(-12).join('\n')
+        service.kill('SIGKILL')
+        await gone
+      }
     }
     await ports.release()
     rmSync(folder, { recursive: true, force: true })
+    expect(stuck, 'the service had not stopped 45 seconds after it was asked to').toBeUndefined()
   }, 60_000)
 
   /** What the site sends with everything it asks of the session's routes. */
