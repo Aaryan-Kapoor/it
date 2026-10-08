@@ -259,6 +259,17 @@ export function createFiles(folder: string): Files {
         throw err
       }
       placed = true
+      // Its name is made to last as its bytes were: until the folder it is in has been flushed,
+      // a loss of power can leave a file that was said to have arrived with no name on the disk.
+      // A system that does not let a folder be flushed (Windows) keeps its names in its own way.
+      try {
+        const folder = await open(path.dirname(to), 'r')
+        try {
+          await folder.sync()
+        } finally {
+          await folder.close()
+        }
+      } catch {}
       return 'placed'
     } finally {
       if (!placed) await unlink(temp).catch(() => {})

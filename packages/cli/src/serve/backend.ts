@@ -296,10 +296,9 @@ export async function program(say: (line: string) => void, signal?: AbortSignal,
   say('backend: fetching the program')
   await fetchProgram({ url: `${from.base}/${RELEASE}/${archive.name}`, sha256: archive.sha256, plain: from.plain }, file, signal, progress)
   say('backend: the program is in place')
-  // A program kept for another release is of no more use. One that cannot be removed now, as one that is still running on Windows cannot, is left for the next time.
-  try {
-    removeOtherPrograms()
-  } catch {}
+  // The program that was here for another release is kept until this one has started on the
+  // data and been heard from (see where the backend is said to have started): fetched and not
+  // yet run, this one may still be refused, and the other is then the one that works.
   return file
 }
 
@@ -2200,6 +2199,11 @@ export async function startBackend(config: ServiceConfig, say: (line: string) =>
     const neverLoaded = !database || (note.made !== undefined && note.functions === undefined && note.unsettled === undefined)
     child = await up(file, config, lock, neverLoaded, say, signal)
     say(`backend: started (pid ${child.pid})`)
+    // It runs on the data: a program kept for another release is of no more use now. One that
+    // cannot be removed now, as one that is still running on Windows cannot, is left for the next time.
+    try {
+      removeOtherPrograms()
+    } catch {}
     /**
      * The functions already in the database go on serving, and why is noted for whoever tells
      * the person. They can only go on where It counts from the port it counted from when they
