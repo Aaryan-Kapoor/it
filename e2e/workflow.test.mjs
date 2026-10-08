@@ -130,7 +130,7 @@ describe('what the workflow is trusted with', () => {
 })
 
 /** What the first job checks once everything is built, each as the step that runs it says it. */
-const CHECKS = ['npm run check:ci', 'npm run check:history', 'npm run check:notices', 'npm run typecheck', 'git diff --exit-code -- .']
+const CHECKS = ['npm run check:ci', 'npm run check:history', 'npm run check:notices', 'npm run check:version', 'npm run typecheck', 'git diff --exit-code -- .']
 
 describe('what the jobs are held to running', () => {
   test('the unit tests come by the backend program before they run, on every system, so that the tests that start it are not skipped', () => {

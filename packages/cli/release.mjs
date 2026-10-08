@@ -1,5 +1,6 @@
 // Builds the standalone programs: one file for each system, with nothing else to install.
-//   node packages/cli/release.mjs
+//   node packages/cli/release.mjs [--tag=v0.2.0]
+// With a tag, the release is refused unless the tag is the version the source says it is.
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -31,7 +32,27 @@ if (have !== described) {
   )
   process.exit(1)
 }
-// What each program carries inside it is written first: the add-ons, the tour, the site, and the backend functions
+// One version, said the same in every place: the program's own word for itself, the site's,
+// and `latest.json`, which an installed It compares its own with
+const { version } = await import('../../scripts/version.mjs')
+let VERSION
+try {
+  VERSION = version()
+} catch (e) {
+  console.error(e.message)
+  process.exit(1)
+}
+const tag = process.argv.find((word) => word.startsWith('--tag='))?.slice(6)
+if (tag !== undefined && tag !== `v${VERSION}`) {
+  console.error(`the tag of a release is "v" and its version, and the source says it is ${VERSION}, which the tag ${tag} is not`)
+  process.exit(1)
+}
+// What each program carries inside it is written first: the add-ons, the tour, the site, and
+// the backend functions. The site and the script every page is given are built here, from the
+// source as it is now: a site built before the last change to it would be packed as it was.
+const top = path.join(here, '../..')
+execFileSync(process.execPath, [path.join(top, 'packages/runtime/build.mjs')], { cwd: top, stdio: ['ignore', 'ignore', 'inherit'] })
+execFileSync('npm', ['run', '-s', 'build', '-w', 'web'], { cwd: top, stdio: ['ignore', 'ignore', 'inherit'], shell: process.platform === 'win32' })
 await import('./addons.mjs')
 await import('./tour.mjs')
 await import('./site.mjs')
@@ -75,8 +96,7 @@ for (const [name, from] of [
 }
 // Which version these are, for an installed It that asks whether a newer one is out. In the
 // checksums like everything else, so that an upgrade knows the file it read is the release's.
-const { version } = JSON.parse(readFileSync(path.join(here, 'package.json'), 'utf8'))
-writeFileSync(path.join(out, 'latest.json'), `${JSON.stringify({ version })}\n`)
+writeFileSync(path.join(out, 'latest.json'), `${JSON.stringify({ version: VERSION })}\n`)
 sums.push(
   `${createHash('sha256')
     .update(readFileSync(path.join(out, 'latest.json')))

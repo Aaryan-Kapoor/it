@@ -65,6 +65,9 @@ jobs:
       - name: The third-party notices are what the bundles say
         if: ${{ !cancelled() }}
         run: npm run check:notices
+      - name: The version is the same everywhere it is written
+        if: ${{ !cancelled() }}
+        run: npm run check:version
       - if: ${{ !cancelled() }}
         run: npm run typecheck
       - name: Nothing that git tracks was changed by the build

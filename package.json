@@ -16,6 +16,7 @@
     "check:ci": "biome ci --error-on-warnings .",
     "check:secrets": "node scripts/secrets.mjs",
     "check:history": "node scripts/secrets.mjs --history",
+    "check:version": "node scripts/version.mjs",
     "notices": "node scripts/notices.mjs",
     "check:notices": "node scripts/notices.mjs --check",
     "format": "biome check --write ."
