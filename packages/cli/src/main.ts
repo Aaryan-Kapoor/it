@@ -74,7 +74,7 @@ import {
   written,
 } from './lib'
 import { login, runsItsOwn } from './login'
-import { nodeTooOld, quietAboutItsDatabase } from './node'
+import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { gather, noteConversation, publish } from './publish'
 import { alone, asAdmin, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
@@ -2271,6 +2271,7 @@ async function main(argv: string[]): Promise<void> {
     const old = nodeTooOld(process.versions.node)
     if (old) throw old
     quietAboutItsDatabase()
+    lenientAboutServiceMarks()
   }
   // Usage reporting turned off in this command's environment is written down for the
   // background service, which has no such environment, before anything else is done

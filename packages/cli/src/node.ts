@@ -1,5 +1,6 @@
 // What this program needs of Node when it is run as a script under it. The standalone program
 // carries its own runtime and needs none of this.
+import net from 'node:net'
 import { Problem } from './lib'
 
 /** The oldest Node this program runs under: the first that has a database of its own with no flag to be given. */
@@ -36,4 +37,28 @@ export function quietAboutItsDatabase(): void {
     if (type === 'ExperimentalWarning' && typeof warning === 'string' && warning.startsWith('SQLite ')) return
     return (emit as (...args: unknown[]) => void).call(process, warning, ...rest)
   }) as typeof process.emitWarning
+}
+
+/**
+ * Node's own `fetch` marks each connection with a type of service as it writes the first
+ * request to it, and does not expect the system to refuse. macOS refuses (EINVAL) for a
+ * connection the other end has reset in the moment since it was made, which is what a backend
+ * that was killed, or a service being restarted, does to whoever was just then connecting.
+ * Node throws that from a timer of its own, where nothing that called `fetch` can catch it,
+ * and the program ends. The mark is nothing It asks for, so the system's refusal of it is
+ * let pass, and the request goes on to fail or to be answered as a request. A value that is
+ * no type of service at all is the caller's mistake and is thrown as before.
+ */
+export function lenientAboutServiceMarks(): void {
+  const sockets = net.Socket.prototype as unknown as { setTypeOfService?: (this: net.Socket, tos: number) => unknown }
+  const set = sockets.setTypeOfService
+  if (typeof set !== 'function') return
+  sockets.setTypeOfService = function (this: net.Socket, tos: number) {
+    try {
+      return set.call(this, tos)
+    } catch (err) {
+      if ((err as { syscall?: unknown } | null)?.syscall !== 'setTypeOfService') throw err
+      return this
+    }
+  }
 }
