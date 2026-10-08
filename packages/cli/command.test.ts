@@ -5,7 +5,7 @@
 // It folder that hold only what the test put there.
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createHmac } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -673,6 +673,15 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     const wrong = await run(m, ['uninstall', '--yes'], { IT_HOME: stray })
     expect([wrong.code, existsSync(path.join(stray, 'thesis.txt'))]).toEqual([2, true])
     expect(wrong.err).toContain('does not hold It')
+    // Nor the person's own folder, though a variable names it by a path that goes through a link, and though something of It's is in it
+    const ana = path.join(scratch, 'people', 'ana')
+    mkdirSync(path.join(ana, 'bin'), { recursive: true })
+    writeFileSync(path.join(ana, 'bin', 'it'), '')
+    writeFileSync(path.join(ana, 'personal.txt'), 'mine')
+    symlinkSync(path.join(scratch, 'people'), path.join(scratch, 'mnt'))
+    const own = await run(m, ['uninstall', '--yes'], { HOME: ana, IT_HOME: path.join(scratch, 'mnt', 'ana') })
+    expect([own.code, existsSync(path.join(ana, 'personal.txt')), existsSync(path.join(ana, 'bin', 'it'))]).toEqual([2, true, true])
+    expect(own.err).toContain('is not a folder It may remove')
   })
 })
 

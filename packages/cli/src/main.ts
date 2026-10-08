@@ -954,7 +954,18 @@ async function uninstall(a: Args) {
     existsSync(path.join(folder, name)),
   )
   if (!its) throw new Problem(`${folder} does not hold It, so there is nothing here to take off this machine.`, 'invalid')
-  if (path.resolve(folder) === path.resolve(os.homedir()) || path.resolve(folder) === path.parse(folder).root)
+  // Never the person's own folder, and never the whole disk, however the path to either is
+  // spelled: asked of the folders themselves, since a link somewhere along the way makes the
+  // same folder read as another. Where that cannot be asked, nothing is removed.
+  let real: string
+  let own: string
+  try {
+    real = realpathSync(folder)
+    own = realpathSync(os.homedir())
+  } catch {
+    throw new Problem(`${folder} could not be looked at closely enough to be sure that It may remove it, so nothing was removed.`, 'invalid')
+  }
+  if (real === own || real === path.parse(real).root || path.resolve(folder) === path.resolve(os.homedir()) || path.resolve(folder) === path.parse(folder).root)
     throw new Problem(`${folder} is not a folder It may remove.`, 'invalid')
   if (!a.flags.yes) {
     if (!flow.live())
