@@ -9,10 +9,10 @@
 // that program cannot be counted on to hear, by ending it once it has been asked. What stops
 // the service is held to asking, on every system.
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { home, inHome, PROFILE_VARS, psQuote, readJson } from './lib'
+import { home, inHome, PROFILE_VARS, psQuote, readJson, writeFlushed } from './lib'
 
 const NAME = 'it'
 const LABEL = 'dev.it'
@@ -395,6 +395,23 @@ export function reachable(): boolean {
   return asked.ok
 }
 
+/**
+ * Writes what the system is to start It by, whole or not at all: under another name first,
+ * with every byte on the disk, and then given its name in one step. A disk that fills while
+ * the definition is being written leaves the one that was there, and never a part of a new
+ * one, which the system would read at the next start.
+ */
+function writeDefinition(file: string, text: string): void {
+  const part = `${file}.${process.pid}.part`
+  try {
+    writeFlushed(part, text)
+    if (process.platform !== 'win32') chmodSync(part, 0o644)
+    renameSync(part, file)
+  } finally {
+    rmSync(part, { force: true })
+  }
+}
+
 export function install(): ServiceStatus {
   mkdirSync(path.dirname(logFile()), { recursive: true, mode: 0o700 })
   const cmd = command()
@@ -409,7 +426,7 @@ export function install(): ServiceStatus {
       )
     const before = existsSync(unitPath()) ? readFileSync(unitPath(), 'utf8') : null
     mkdirSync(path.dirname(unitPath()), { recursive: true })
-    writeFileSync(unitPath(), systemdUnit(cmd, env))
+    writeDefinition(unitPath(), systemdUnit(cmd, env))
     try {
       must('systemctl', ['--user', 'daemon-reload'], 'reloading systemd')
       must('systemctl', ['--user', 'enable', `${NAME}.service`], 'enabling the service')
@@ -419,7 +436,7 @@ export function install(): ServiceStatus {
       // systemd is told, so that what it holds is what the file says
       try {
         if (before === null) rmSync(unitPath(), { force: true })
-        else writeFileSync(unitPath(), before)
+        else writeDefinition(unitPath(), before)
       } catch {}
       run('systemctl', ['--user', 'daemon-reload'])
       throw err
@@ -440,7 +457,7 @@ export function install(): ServiceStatus {
   } else if (process.platform === 'darwin') {
     mkdirSync(path.dirname(plistPath()), { recursive: true })
     run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`])
-    writeFileSync(plistPath(), launchdPlist(cmd, env))
+    writeDefinition(plistPath(), launchdPlist(cmd, env))
     must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'loading the agent')
   } else if (process.platform === 'win32') {
     // Windows ends a task's programs outright, with no word to the service that it is to
@@ -450,7 +467,7 @@ export function install(): ServiceStatus {
     const registered = windowsRegisteredFor()
     for (const folder of registered && !sameWindowsFolder(registered, home()) ? [registered, home()] : [home()]) askToStop(folder)
     mkdirSync(path.dirname(windowsLauncherFile()), { recursive: true })
-    writeFileSync(windowsLauncherFile(), windowsLauncher(cmd, env))
+    writeDefinition(windowsLauncherFile(), windowsLauncher(cmd, env))
     const r = powershell(windowsScript(path.dirname(windowsLauncherFile()), path.basename(windowsLauncherFile())))
     if (!r.ok) throw new Error(`registering the task failed: ${r.out}`)
   } else {

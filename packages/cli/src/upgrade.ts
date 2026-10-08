@@ -283,7 +283,11 @@ export async function fetchNewer(
     // Windows does not let a program that is running be written over, and does let it be given
     // another name: the one that is running goes on under that name until it ends
     if (process.platform === 'win32') {
-      for (const old of readdirSync(dir).filter((f) => /^it\.old\.\d+\.exe$/.test(f))) rmSync(path.join(dir, old), { force: true })
+      // One that is still running cannot be removed, and is left for the next time
+      for (const old of readdirSync(dir).filter((f) => /^it\.old\.\d+\.exe$/.test(f)))
+        try {
+          rmSync(path.join(dir, old), { force: true })
+        } catch {}
       const aside = path.join(dir, `it.old.${Date.now()}.exe`)
       renameSync(program, aside)
       try {
@@ -301,7 +305,10 @@ export async function fetchNewer(
     ] as const) {
       try {
         put(inHome(as), bytes, 0o644)
-      } catch {}
+      } catch {
+        // The program is in place, and is what matters: this is said, and is no reason to call the upgrade failed
+        say(`${as} could not be written beside it, and is still the one of the version before.`)
+      }
     }
     say(`Installed in ${dir}.`)
     return { from: VERSION, to: is, program }
