@@ -543,6 +543,23 @@ async function connecting(say: (line: string) => void): Promise<void> {
         .catch(() => {})
   }
   /** The conversations this machine has reopened and that are running now, each with the way to stop it. */
+  /**
+   * The time by which this machine's holds on clicks are counted: its own clock, forward by
+   * however far that clock has been set back since this program started. A hold lasts half a
+   * minute by It's clock, and a machine whose own was set back a minute would go on believing
+   * in a hold that It gave to another long since. Set forward, as it is when the machine wakes
+   * from sleep, the clock counts as it is: that time did pass. It is looked at every second
+   * at least, by the turn that routes what is waiting, so that a setting back is seen within one.
+   */
+  let setBack = 0
+  let clockSeen = Date.now()
+  const steady = (): number => {
+    const now = Date.now()
+    // Earlier than when it was last looked at, by more than a moment: the clock was set back by that much
+    if (now < clockSeen - 1000) setBack += clockSeen - now
+    clockSeen = now
+    return now + setBack
+  }
   const reopenedNow = new Map<string, AbortController>()
   /** The name each of them has with It, by which It says which run a person stopped. */
   const runNames = new Map<string, string>()
@@ -986,7 +1003,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // hands while the click stood in line here
       // The hold is counted from before it was asked for: It starts counting when it gives it,
       // which may be long before its answer is here
-      const claimedAt = Date.now()
+      const claimedAt = steady()
       const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session! })
       if (!got) return
       // And looked at once more, now that the claim is answered: a waiter that began while it
@@ -1040,8 +1057,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // twice over). Then it is made good again before anything is started on the strength of
       // it, and where it cannot be, nothing is started: the click may be another machine's.
       let heldFrom = claimedAt
-      if (Date.now() - claimedAt > LEASE_MS / 3) {
-        const again = Date.now()
+      if (steady() - claimedAt > LEASE_MS / 3) {
+        const again = steady()
         const ids = [click.id, ...withIt.map((c) => c.id)]
         const kept = await call<string[]>('mutation', api.delivery.renew, { ids }).catch(() => [] as string[])
         if (!ids.every((id) => kept.includes(id))) {
@@ -1085,7 +1102,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Asked again a while after it was last asked for, however long the answer to that took
       let renewedAt = heldFrom
       keeping = setInterval(() => {
-        const asked = Date.now()
+        const asked = steady()
         const ids = [...keptUp]
         if (!ids.length) return
         // By the clock too, every second, and not only when an answer comes: an asking that hangs is no hold
@@ -1113,7 +1130,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
               for (const id of said.not) keptUp.delete(id)
               return
             }
-            if (!said && Date.now() <= heldUntil) return
+            if (!said && steady() <= heldUntil) return
             lose()
           })
       }, 1000)
@@ -1331,17 +1348,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
         await call('mutation', api.delivery.release, { id }).catch(() => {})
         return true
       }
+      // How long each has been held is counted by the clock that is never set back
+      const at = steady()
       for (const [id, h] of held) {
         if (await disconnected(id, h)) continue
         const s = sessions.get(h.key)
         const listening = !h.forHook && s !== undefined && now - s.seen < LIVE_MS
-        const hookComing = h.forHook && turnRunning(h.key, now) && now - h.claimedAt < HOOK_HOLD_MS
+        const hookComing = h.forHook && turnRunning(h.key, now) && at - h.claimedAt < HOOK_HOLD_MS
         if (listening || hookComing) {
-          if (now < h.leaseUntil - LEASE_MS + RENEW_MS) continue
+          if (at < h.leaseUntil - LEASE_MS + RENEW_MS) continue
           // Only a renewal the backend confirmed extends the lease. Past it the click may be
           // someone else's, so serving it from here stops.
           // Counted from before the request went out: the backend's clock started no later than that
-          const asked = Date.now()
+          const asked = steady()
           const kept = await call<string[]>('mutation', api.delivery.renew, { ids: [id] }).catch(() => null)
           // While that was being asked, the click may have been handed over or given to a waiting
           // agent: it is not held here then, and nothing about it is lost
@@ -1349,19 +1368,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // Or the person may have disconnected its app, and then it is not kept a moment longer
           if (await disconnected(id, h)) continue
           if (kept?.includes(id)) h.leaseUntil = asked + LEASE_MS
-          else if (kept !== null || now > h.leaseUntil - 2000) {
+          else if (kept !== null || at > h.leaseUntil - 2000) {
             held.delete(id)
             journal('lost', id)
             say(
               `click ${id} is not this machine's to deliver any more (${kept === null ? 'It could not be reached to keep it' : 'It gave it to another'}); it goes back to waiting`,
             )
           }
-        } else if (now - h.claimedAt > HOLD_MS && !h.served) {
+        } else if (at - h.claimedAt > HOLD_MS && !h.served) {
           held.delete(id)
           journal('released', id)
           say(`click ${id} was kept for ${h.forHook ? 'a Codex turn that ended without taking it' : 'an add-on that stopped asking'}; it goes back to waiting`)
           await call('mutation', api.delivery.release, { id }).catch(() => {})
-        } else if (now > h.leaseUntil - 2000) {
+        } else if (at > h.leaseUntil - 2000) {
           held.delete(id)
           journal('lost', id)
         }
@@ -1402,7 +1421,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const inTurn = codex && turnRunning(key, now)
         if (listening || (inTurn && now - click.at < FRESH_MS)) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
-          const asked = Date.now()
+          const asked = steady()
           const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session })
           // An agent may have begun to wait for it while the claim was being asked for. A waiter
           // cannot take what this machine holds, so the click is given back for it to take. It
@@ -1411,7 +1430,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             journal('released', click.id)
             await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
           } else if (got) {
-            held.set(click.id, { click, key, claimedAt: now, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
+            held.set(click.id, { click, key, claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
             journal('claimed', click.id)
           }
         } else if (codex && connected('codex') && !reopenedNow.has(key) && codexHeld(threadOf(key))) {
@@ -1554,13 +1573,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!chosen(harness)) return [200, { clicks: [] }]
       // Nor while this machine does not fit the It it joined, or once this connector is stopping: what it held is given back by then
       if (unfitting || closing) return [200, { clicks: [] }]
-      const now = Date.now()
+      // Whether each is still held is told by the clock that is never set back
+      const at = steady()
       // A few at a time, oldest first, and never more than an add-on will read: the rest are
       // given on its next asking, a second later
       const mine: Held[] = []
       // Measured as it will be sent, in bytes: a click in another alphabet takes three bytes a letter
       let size = 20
-      for (const h of [...held.values()].filter((h) => h.key === key && now < h.leaseUntil - 1000).sort((a, b) => a.click.at - b.click.at)) {
+      for (const h of [...held.values()].filter((h) => h.key === key && at < h.leaseUntil - 1000).sort((a, b) => a.click.at - b.click.at)) {
         size += Buffer.byteLength(JSON.stringify(asDelivered(h.click))) + 1
         if (mine.length >= SERVE_MOST || (mine.length > 0 && size > SERVE_BYTES)) break
         mine.push(h)
@@ -1661,7 +1681,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // hand over with a command's result, and the command now running is the waiter. So
           // the waiter is given it too, still held for this machine. Should the add-on hand it
           // over as well, the agent can tell by its id that it is the same click.
-          if (h.served && Date.now() < h.leaseUntil - 1000) handedBack.push(h.click)
+          if (h.served && steady() < h.leaseUntil - 1000) handedBack.push(h.click)
           // Anything set aside for an add-on and not yet given to it goes back, so the waiter
           // can have it. Not waited for: the waiter must have its answer at once.
           else void call('mutation', api.delivery.release, { id: clickId }).catch(() => {})

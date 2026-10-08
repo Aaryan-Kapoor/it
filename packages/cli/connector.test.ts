@@ -1423,6 +1423,44 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     await until(() => asked('delivery:handedOff').includes('click-5'))
   })
 
+  test('a click held for a conversation is held no longer than It gives it, though this machine’s clock is set back meanwhile', async () => {
+    await start()
+    const session = { harness: 'pi', id: 'conversation-1' }
+    expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-1' } })).toEqual({ ok: true })
+    stand.watching.get('delivery:inbox')!([
+      { id: 'click-5', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
+    ])
+    for (let n = 0; n < 100 && (await local<{ held: number }>('/health'))?.held !== 1; n++) await new Promise((r) => setTimeout(r, 30))
+    expect((await local<{ held: number }>('/health'))?.held).toBe(1)
+    // From here It cannot be reached to make the hold good again, and gives the click to another machine when its half minute
+    // is over: it is no longer among what It offers this one
+    stand.answer = (name) => (name === 'delivery:renew' ? Promise.reject(new Error('no answer')) : undefined)
+    stand.watching.get('delivery:inbox')!([])
+    expect((await local<{ held: number }>('/health'))?.held).toBe(1)
+    const began = Date.now()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      // The machine's clock is set back a minute, which a pass of the connector sees, and then more than half a minute goes by
+      vi.setSystemTime(began - 60_000)
+      await new Promise((r) => setTimeout(r, 1500))
+      vi.setSystemTime(began - 60_000 + 31_000)
+      await until(
+        () =>
+          said.some(
+            (line) =>
+              line.includes('click click-5 is not this machine’s to deliver any more') ||
+              line.includes("click click-5 is not this machine's to deliver any more"),
+          ),
+        10_000,
+      )
+      // By its own clock the hold had most of a minute left. It is not believed: nothing is given to the add-on that asks
+      expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+      expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=pi&session=conversation-1'))?.clicks).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30_000)
+
   test('an add-on that went away while its asking was being answered is counted as given nothing: the click claimed for it meanwhile is not written down as handed over, and is handed to it when it asks again', async () => {
     const info = await start()
     const session = { harness: 'pi', id: 'conversation-1' }
