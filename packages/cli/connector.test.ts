@@ -1,6 +1,7 @@
 // The connector itself, started in a folder of its own, with stand-ins for the backend, for
 // Codex's own command and for usage reporting. What add-ons and `it wait` ask of it is asked for
 // real, over its socket and over its port.
+import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import fs, { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
@@ -76,6 +77,7 @@ vi.mock('./src/lib', async (original) => {
 import { type ConnectorInfo, infoFile, local, mac, runConnector } from './src/connector'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
+import { identity } from './src/wake'
 
 // The real clock, kept from before any test puts a stand-in in its place
 const really = setTimeout
@@ -562,6 +564,49 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       expect(readFileSync(path.join(bin, 'given-1'), 'utf8')).not.toContain('The person stopped this conversation’s last turn')
     },
   )
+
+  test('a conversation that a connector which died left running is ended, with what it had started, before anything is handed out, and is told that its turn was cut off', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given-$(ls ${bin} | grep -c given)\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    // What the connector before left: an agent in a group of its own, in the middle of a command of its own
+    const mark = path.join(folder, 'its-command.pid')
+    const left = spawn('sh', ['-c', `sh -c 'echo $$ > "${mark}"; exec sleep 300' & wait`], { detached: true, stdio: 'ignore' })
+    left.unref()
+    await until(() => existsSync(mark) && readFileSync(mark, 'utf8').trim() !== '')
+    const its = Number(readFileSync(mark, 'utf8'))
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    // And a note of a process that is long gone, whose number another may have by now: nothing is done about that one
+    await start('socket', {}, (home) => {
+      noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({
+          'codex:thread-1': { pid: left.pid, since: identity([left.pid!]).get(left.pid!) },
+          'codex:thread-2': { pid: process.pid, since: 'Thu Jan  1 00:00:00 1970' },
+        }),
+      )
+    })
+    // By the time it is up, both the agent and its command are gone, and this program, whose number the other note held, is not
+    expect([alive(left.pid!), alive(its), alive(process.pid)]).toEqual([false, false, true])
+    expect(existsSync(path.join(home, 'runs.json'))).toBe(false)
+    expect(said.some((line) => /^a codex conversation \([0-9a-f]{8}\) was still running from before this started/.test(line))).toBe(true)
+    // Reopened for the same thing, it is told that its turn was cut off
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'given-0')) && readFileSync(path.join(bin, 'given-0'), 'utf8').length > 0)
+    expect(readFileSync(path.join(bin, 'given-0'), 'utf8')).toContain('that turn was cut off before it ended')
+  }, 30_000)
 
   test('the note of a stop is let go once a turn begins in that conversation which It did not start: the person is in it themselves, and what they stopped is no longer its last turn', async () => {
     await start('socket', {}, (home) => writeFileSync(path.join(home, 'stopped.json'), JSON.stringify(['codex:thread-1', 'codex:thread-2'])))

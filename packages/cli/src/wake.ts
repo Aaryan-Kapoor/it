@@ -197,7 +197,7 @@ export function carryOn(
   how: Carrying,
   cwd: string,
   marks: { harness: string; session: string },
-  opts: { patience?: number; signal?: AbortSignal; said?: (words: string) => void; keepIn?: string } = {},
+  opts: { patience?: number; signal?: AbortSignal; said?: (words: string) => void; keepIn?: string; began?: (pid: number) => void } = {},
 ): Promise<string | null> {
   const patience = opts.patience ?? 15 * 60_000
   if (opts.signal?.aborted) return Promise.resolve(STOPPED)
@@ -243,6 +243,9 @@ export function carryOn(
       return resolve(`${how.app} could not be started`)
     }
     if (into !== null) closeSync(into)
+    // Whoever started it is told which process it is, to write down: a connector that dies
+    // has no other way of knowing, when it next starts, what it left running
+    if (child.pid) opts.began?.(child.pid)
     let over = false
     const end = (why: string | null, itsOwn = false) => {
       if (over) return
@@ -327,6 +330,36 @@ export function carryOn(
     child.stdin?.on('error', () => {})
     child.stdin?.end(how.input)
   })
+}
+
+/**
+ * Ends a process and everything it started, where it is still the process it was when it was
+ * noted (`since`, as `identity` gave it): asked first, and ended for it a few seconds later.
+ * Answers once nothing of it is left, with whether there was anything to end. Nothing is done
+ * on Windows, where a process cannot be told from another that was given its number since.
+ */
+export async function endTree(pid: number, since: string): Promise<boolean> {
+  if (process.platform === 'win32' || identity([pid]).get(pid) !== since) return false
+  const all = [pid, ...descendants(pid)]
+  const were = identity(all)
+  const left = () => [...identity(all)].filter(([p, at]) => were.get(p) === at).map(([p]) => p)
+  const signal = (how: 'SIGTERM' | 'SIGKILL', to: number[]) => {
+    // Its group too: it was started in one of its own, and what it started is in it unless it was moved out
+    try {
+      process.kill(-pid, how)
+    } catch {}
+    for (const p of to)
+      try {
+        process.kill(p, how)
+      } catch {}
+  }
+  signal('SIGTERM', all)
+  for (let waited = 0; waited < 5000 && left().length; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
+  if (left().length) {
+    signal('SIGKILL', left())
+    for (let waited = 0; waited < 2000 && left().length; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  return true
 }
 
 /**

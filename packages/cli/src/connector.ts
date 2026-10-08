@@ -38,7 +38,7 @@ import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
-import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexHeld, mayWake, STOPPED, WAS_CUT_OFF, WAS_STOPPED, WOKEN } from './wake'
+import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexHeld, endTree, identity, mayWake, STOPPED, WAS_CUT_OFF, WAS_STOPPED, WOKEN } from './wake'
 
 /** A click as the backend offers it: its data as JSON text, and the conversation it is for. */
 interface Offered {
@@ -124,6 +124,8 @@ const journalFile = () => inHome('journal.jsonl')
 const aliasFile = () => inHome('aliases.json')
 /** Where a connector that is stopping writes down which conversations it cut off in the middle of a turn. */
 const cutOffFile = () => inHome('cut-off.json')
+/** The conversations this connector has reopened and that are running now, each with the process that is it: read by the connector that starts next, if this one dies. */
+const runsFile = () => inHome('runs.json')
 /** Where the conversations whose last reopened turn a person stopped are kept until each has been told so. */
 const stoppedFile = () => inHome('stopped.json')
 /** A word with the article it takes: "an opencode conversation", "a codex conversation". */
@@ -495,6 +497,29 @@ async function connecting(say: (line: string) => void): Promise<void> {
   try {
     rmSync(cutOffFile(), { force: true })
   } catch {}
+  // A connector that died, where one that is stopped ends what it reopened, left its reopened
+  // conversations running with nobody to stop them, and It offering the same click again
+  // beside them. Each is ended now, with what it had started, before anything is handed out:
+  // the process it was is known by its number and by when it began, so that no other process
+  // that has since been given the number is touched. Its conversation is told, the next time
+  // it is reopened, that its turn was cut off.
+  const running = new Map<string, { pid: number; since: string }>()
+  const keepRuns = () => {
+    try {
+      if (running.size) writePrivate(runsFile(), Object.fromEntries(running))
+      else rmSync(runsFile(), { force: true })
+    } catch {}
+  }
+  for (const [key, was] of Object.entries(readJson<Record<string, { pid?: unknown; since?: unknown }>>(runsFile()) ?? {})) {
+    if (typeof was?.pid !== 'number' || typeof was.since !== 'string') continue
+    if (await endTree(was.pid, was.since).catch(() => false)) {
+      cutOff.add(key)
+      say(
+        `${a(key.slice(0, key.indexOf(':')))} conversation (${short(key)}) was still running from before this started, with nothing looking after it, and was ended`,
+      )
+    }
+  }
+  keepRuns()
   /** When each conversation this machine reopened last ended. */
   const ranUntil = new Map<string, number>()
   /** Clicks that went with an earlier click of their conversation, in the same message: each is done with when its own turn in line comes. */
@@ -586,7 +611,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
         how,
         cwd,
         { harness: now.harness, session: now.id },
-        { signal: stop.signal, keepIn: inHome('logs'), said: (words) => saidLast.set(key, words) },
+        {
+          signal: stop.signal,
+          keepIn: inHome('logs'),
+          said: (words) => saidLast.set(key, words),
+          began: (pid) => {
+            const since = identity([pid]).get(pid)
+            if (since === undefined) return
+            running.set(key, { pid, since })
+            keepRuns()
+          },
+        },
       )
       // It ran: what was set aside for this conversation after too many tries is its to be given again
       if (ended === null) revive(now.harness, now.id)
@@ -608,6 +643,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       return ended
     } finally {
       reopenedNow.delete(key)
+      if (running.delete(key)) keepRuns()
       if (ranUntil.size > 500) ranUntil.delete(ranUntil.keys().next().value!)
       ranUntil.set(key, Date.now())
       // The conversation is closed again from this moment. While it ran, the add-on inside it
