@@ -767,7 +767,52 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
     offered(click(1))
     await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'), 25_000)
-    expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args.why).toContain('delete runs.json.unreadable')
+    expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args.why).toContain('run `it runs clear`')
+    expect(existsSync(path.join(bin, 'given'))).toBe(false)
+    // It says so when asked, and deleting the file alone changes nothing: the hold is this connector's own
+    expect((await local<{ unread: boolean; held: unknown[] }>('/runs'))?.unread).toBe(true)
+    rmSync(path.join(home, 'runs.json.unreadable'), { force: true })
+    expect((await local<{ unread: boolean }>('/runs'))?.unread).toBe(true)
+    // Let go of at the person's word, the conversation is reopened for what was waiting
+    expect(await local<{ cleared: number }>('/runs', { method: 'POST', body: { clear: true } })).toEqual({ cleared: 1 })
+    expect((await local<{ unread: boolean }>('/runs'))?.unread).toBe(false)
+    offered()
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 40_000)
+  }, 90_000)
+
+  test('a conversation is not reopened where reopening was switched off, or It could not be told of the run, while it was being got ready: nothing is started, and nothing is said to have been stopped', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+    stand.closed.add('thread-1')
+    const on = { wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] }
+    stand.watching.get('machines:me')!(on)
+    // The person switches reopening off while It is being told that the run begins
+    let told = 0
+    stand.answer = (name) => {
+      if (name !== 'machines:runBegan') return undefined
+      told++
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [] })
+      return null
+    }
+    offered(click(1))
+    await until(() => told === 1 && called('delivery:release').includes('click-1'))
+    await new Promise((r) => setTimeout(r, 500))
+    expect(existsSync(path.join(bin, 'given'))).toBe(false)
+    expect([called('delivery:handedOff'), stand.calls.filter((c) => c.name === 'machines:wakeFailed').length]).toEqual([[], 0])
+    expect(existsSync(path.join(home, 'stopped.json'))).toBe(false)
+    expect(existsSync(path.join(home, 'cut-off.json'))).toBe(false)
+    // Switched on again, and It cannot be told that the run begins: it is not started, and the page is told why
+    stand.answer = (name) => (name === 'machines:runBegan' ? Promise.reject(new Error('no answer')) : undefined)
+    stand.watching.get('machines:me')!(on)
+    offered()
+    offered(click(1))
+    await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'), 25_000)
+    expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args.why).toContain('could not be told that the conversation was being reopened')
     expect(existsSync(path.join(bin, 'given'))).toBe(false)
   }, 60_000)
 
