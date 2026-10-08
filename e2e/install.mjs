@@ -1365,8 +1365,10 @@ try {
       wontStart.code !== 0 &&
       /does not start on this system/.test(wontStart.flat) &&
       // And why, as the system said it: what it holds names a program that is not there to run it
-      /does not have what the program needs in order to start|would not run it/.test(wontStart.flat) &&
-      /What was said as it was tried: /.test(wontStart.flat) &&
+      (windows
+        ? /Windows would not start it: |It ended at once, with the code |It had not answered after thirty seconds/.test(wontStart.flat)
+        : /does not have what the program needs in order to start|would not run it/.test(wontStart.flat) &&
+          /What was said as it was tried: /.test(wontStart.flat)) &&
       nothingInstalled(wontStart) &&
       nothingOfItsOwn(wontStart) &&
       overStartable.code !== 0 &&

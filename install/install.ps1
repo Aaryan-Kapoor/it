@@ -159,6 +159,9 @@
     # does, and that folder is named to it alone: nothing of this session is changed. It is
     # given nothing to read and half a minute to answer, and what it prints is read and dropped.
     $starts = $false
+    # And why it did not, as far as that can be told: that Windows would not start it, that it
+    # ended at once, and that it never answered are three things, with three things to do.
+    $why = ''
     try {
       $how = New-Object Diagnostics.ProcessStartInfo
       $how.FileName = Join-Path $stage 'program.exe'
@@ -174,11 +177,17 @@
       try {
         $trial.StandardInput.Close()
         $printed = $trial.StandardOutput.ReadToEndAsync(), $trial.StandardError.ReadToEndAsync()
-        if ($trial.WaitForExit(30000)) { $starts = $trial.ExitCode -eq 0 } else { try { $trial.Kill(); $trial.WaitForExit(5000) | Out-Null } catch {} }
+        if ($trial.WaitForExit(30000)) {
+          $starts = $trial.ExitCode -eq 0
+          if (-not $starts) { $why = "It ended at once, with the code $($trial.ExitCode)." }
+        } else {
+          $why = 'It had not answered after thirty seconds.'
+          try { $trial.Kill(); $trial.WaitForExit(5000) | Out-Null } catch {}
+        }
         $printed | Out-Null
       } finally { $trial.Dispose() }
-    } catch {}
-    if (-not $starts) { throw 'The program for Windows does not start on this system. Nothing was installed.' }
+    } catch { $why = "Windows would not start it: $($_.Exception.GetBaseException().Message)" }
+    if (-not $starts) { throw "The program for Windows does not start on this system. Nothing was installed. $why Where Windows Security or a policy of this computer stopped it, the Protection history in Windows Security says so." }
     # One install at a time puts its files in place. The lock is a file, which only one can
     # make. It is held open for the moment the replacing takes, and Windows removes it when it
     # is closed, which it is when this ends, however this ends. One that no install holds was
