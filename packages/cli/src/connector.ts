@@ -608,6 +608,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** And it could not be moved aside either, so it is still where the note of runs is written. */
   let unreadWhereItWas = false
   const running = new Map<string, Run>()
+  /** The conversations whose run this connector found noted from before it started. Whether a person had stopped one of them meanwhile is heard from It, a moment later. */
+  const recovered = new Set<string>()
   /**
    * The runs from before this connector started that could not be checked on, or could not be
    * ended: each is still noted, is looked at again when its conversation is next to be
@@ -707,6 +709,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       say(`${UNREAD.replace(/^It could/, 'it could')} (the note is kept as ${unreadWhereItWas ? 'runs.json' : 'runs.json.unreadable'} in It’s folder)`)
     for (const [key, run] of Object.entries(noted)) {
       unsettled.set(key, run)
+      recovered.add(key)
       if (!(await settleOld(key, run)))
         say(
           `${a(key.slice(0, key.indexOf(':')))} conversation (${short(key)}) may still be running from before this started, and could not be checked on or ended: it is reopened for nothing until it can be, or until \`it runs clear\` says nothing of it is running`,
@@ -2057,10 +2060,29 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const key = follow(keyOf(r.harness, r.sessionId))
         const run = reopenedNow.get(key)
         // The stop is of the run It names. One heard late, of the run before, is not a stop of the one that has begun since
-        if (run && r.stop && r.run === runNames.get(key)) run.abort()
+        if (run && r.stop && r.run === runNames.get(key)) {
+          // That a person stopped it is written down as it is heard, and not when the app has
+          // ended: this connector may itself be asked to stop in the seconds the app is given
+          // to end in, and the turn would then be remembered as cut off, which it was not
+          if (!stoppedByPerson.has(key)) {
+            if (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)
+            stoppedByPerson.add(key)
+            keepStopped()
+          }
+          run.abort()
+        }
         // Named as It has it, so that only that run is taken away: one that began since stays
-        if (!run)
+        if (!run) {
+          // A run this connector found left from before it started, and ended, which a person
+          // had stopped while no connector was there to hear: its conversation is told it was
+          // stopped, which says to leave the work undone, and not that it was cut off
+          if (r.stop && recovered.delete(key)) {
+            stoppedByPerson.add(key)
+            keepStopped()
+            if (cutOff.delete(key)) keepCutOff()
+          }
           void call('mutation', api.machines.runEnded, { for: { harness: r.harness, id: r.sessionId }, ...(r.run ? { run: r.run } : {}) }).catch(() => {})
+        }
       }
       // Read each time, whatever else changed or did not: it changes nothing that is installed
       const before = [...wakesNow.keys()].sort().join(',')
@@ -2186,7 +2208,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   closing = true
   // Written down for the connector that starts next: each of these is given what it was
   // reopened for a second time, and must be told that its first turn at it was cut off
-  for (const key of reopenedNow.keys()) cutOff.add(key)
+  // (Not one a person has just stopped, which is ending for that reason and is noted as stopped)
+  for (const key of reopenedNow.keys()) if (!stoppedByPerson.has(key)) cutOff.add(key)
   keepCutOff()
   for (const run of reopenedNow.values()) run.abort()
   // Held no more from this moment, before It is told so: an add-on that asks while the telling

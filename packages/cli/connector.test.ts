@@ -79,7 +79,7 @@ vi.mock('./src/lib', async (original) => {
 import { type ConnectorInfo, infoFile, local, mac, runConnector } from './src/connector'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
-import { identity, SINCE_TOLD } from './src/wake'
+import { identity, SINCE_TOLD, WAS_STOPPED } from './src/wake'
 
 // The real clock, kept from before any test puts a stand-in in its place
 const really = setTimeout
@@ -778,6 +778,37 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     // a run that was never said to be over did not end as a turn ends
     await until(() => JSON.stringify(readJson(path.join(home, 'cut-off.json'))) === JSON.stringify(['codex:thread-2']))
   }, 30_000)
+
+  test('a run that a person stopped while no connector was there to hear is told, the next time, that it was stopped, and not that it was cut off', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    // The connector before died with a run noted, which is gone by now
+    await start('socket', {}, (home) => {
+      noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+      writeFileSync(path.join(home, 'runs.json'), JSON.stringify({ 'codex:thread-1': { pid: 2 ** 22 - 3, since: 'tick 1', told: SINCE_TOLD } }))
+    })
+    expect(readJson(path.join(home, 'cut-off.json'))).toEqual(['codex:thread-1'])
+    // It still has the run down, and as one a person asked to have stopped: they pressed Stop while this machine's connector was away
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({
+      wanted: ['codex'],
+      wakes: [{ harness: 'codex', since: Date.now() - 60_000 }],
+      runs: [{ harness: 'codex', sessionId: 'thread-1', stop: true, run: 'the-run-before' }],
+    })
+    await until(() => JSON.stringify(readJson(path.join(home, 'stopped.json'))) === JSON.stringify(['codex:thread-1']))
+    expect(existsSync(path.join(home, 'cut-off.json'))).toBe(false)
+    // And It is told that the run is over, by its name
+    await until(() => stand.calls.some((c) => c.name === 'machines:runEnded' && c.args.run === 'the-run-before'))
+    // The next thing done reopens the conversation, which is told that its last turn was stopped
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 40_000)
+    const given = readFileSync(path.join(bin, 'given'), 'utf8')
+    expect(given).toContain(WAS_STOPPED)
+    expect(given).not.toContain('was cut off before it ended')
+  }, 90_000)
 
   test('a run from before stays noted, and its conversation held, for as long as the word that its turn was cut off cannot be written down', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
