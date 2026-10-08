@@ -60,6 +60,8 @@ An agent publishes a page by declaring its files, each with its size and checksu
 
 What It writes down carries ids, counts, fixed codes and reasons. It never carries a credential, a title, a file's path, a name a person typed, an address on your network, an error's own words, or anything a page or a person sent.
 
+One file beside the log is not like it. While a conversation that It reopened is running (Auto-wake), everything its agent app prints is kept in a file of yours alone in `logs/`, so that the app's last line can be shown on the page if it ends with an error. That can be anything an agent says. The file is removed when the run ends, and the next time It starts if It was ended first.
+
 ### What comes from elsewhere is checked
 
 The backend program is fetched from its own release, and kept only if it matches a SHA-256 checksum written in It's source. `IT_BACKEND_RELEASES` names another place to fetch it from, which is an https address or this machine itself over plain http, and anything else it holds is refused before anything is asked. Whatever it names, what arrives is kept only if it matches that same checksum. The install script checks the program it downloads against the checksum published beside it. That second check guards against a damaged download and is not a signature: whoever could replace the program in a release could replace the checksum too.
@@ -97,6 +99,14 @@ There is one person, so there is nothing to divide between screens. A screen tha
 ### Every machine can pair a browser as yours
 
 A machine that is enrolled may ask for a code that pairs a browser as the person's own, which is what `it site` does. So may anything that runs as you on that machine, an agent included, and a machine that joined from another computer as much as the one It runs on. Join only computers that you would trust with everything It holds. What a machine let in is ended with it when the machine is revoked.
+
+### Auto-wake runs an agent with nobody watching
+
+Auto-wake is off until you turn it on, for one agent app on one machine. With it on, whatever is done on a page whose conversation is closed starts that agent again by itself, in the folder the conversation was in, and for most apps in the permission mode you last had it in. For Claude Code that includes the mode that asks about nothing.
+
+So think of who can do something on a page. You can, from any paired browser. So can a paired screen, and whoever can pair one. On your network everything travels in the clear, so someone there who reads one request of a paired browser can send one of their own. And another account on the same computer can reach the door. What they send reaches the agent as a short text, of up to 2 KB, with the name of what was pressed: enough to ask an agent for something you did not.
+
+What It does about it: the text is marked as coming from a page, a conversation is reopened only on the machine and for the app you switched it on for, a run ends after fifteen minutes, and Stop on the page ends it and what it started. A reopened Codex conversation is kept to Codex's sandbox, with It's own folder writable too. None of that makes an agent refuse a request. Turn Auto-wake on where you would accept that agent acting on anything a page can send, and leave it off elsewhere.
 
 ### It is not made for the public internet
 
