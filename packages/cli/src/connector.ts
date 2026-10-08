@@ -40,7 +40,22 @@ import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
-import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexHeld, endTree, identity, mayWake, STOPPED, WAS_CUT_OFF, WAS_STOPPED, WOKEN } from './wake'
+import {
+  Budget,
+  bootId,
+  carrying,
+  carryOn,
+  claudeModeOf,
+  claudeWroteAt,
+  codexHeld,
+  endTree,
+  identity,
+  mayWake,
+  STOPPED,
+  WAS_CUT_OFF,
+  WAS_STOPPED,
+  WOKEN,
+} from './wake'
 
 /** A click as the backend offers it: its data as JSON text, and the conversation it is for. */
 interface Offered {
@@ -291,33 +306,22 @@ export async function runConnector(say: (line: string) => void): Promise<void> {
 
 /**
  * On a machine that joined an It: what is wrong where that It and this program speak different
- * versions of the way machines talk to It, as that It says at its door. Nothing where they
- * speak the same, where this machine runs It itself, or where the door cannot be asked: not
- * knowing is not a reason to stop.
+ * versions of the way machines talk to It, as that It says at its door. Null where they speak
+ * the same, or where this machine runs It itself. Undefined where the door could not be asked:
+ * that says nothing either way, and whoever asked goes on as they were.
  */
-async function unfit(): Promise<Problem | null> {
+async function unfit(): Promise<Problem | null | undefined> {
   const joinedAt = readJson<{ at?: unknown }>(inHome('machine.json'))?.at
   if (typeof joinedAt !== 'string') return null
   return direct(`${joinedAt}/cli/config`, { signal: AbortSignal.timeout(10_000) })
-    .then(async (answer) => incompatible(((await answer.json()) as { protocol?: unknown } | null)?.protocol))
-    .catch(() => null)
+    .then(async (answer) => (answer.ok ? incompatible(((await answer.json()) as { protocol?: unknown } | null)?.protocol) : undefined))
+    .catch(() => undefined)
 }
 /** How often a machine that does not fit the It it joined asks again whether it does, and one that fits whether it still does. */
 const FITS_EVERY_MS = 60_000
 
 /** Everything the connector does once the folder's lock is its own. */
 async function connecting(say: (line: string) => void): Promise<void> {
-  // A machine that joined an It hands nothing to an agent, and asks nothing of that It, while
-  // the two speak different versions of how machines talk to it: what one of them means by a
-  // request is not what the other takes it for. It waits here, having said which of the two is
-  // to be updated, and goes on by itself once they fit. `it status` sends the person to this log.
-  for (let said = false; ; said = true) {
-    const wrong = await unfit()
-    if (!wrong) break
-    if (!said)
-      say(`${wrong.message} ${wrong.hint ?? ''} Nothing done on a page is handed to an agent on this machine until then. It is asked again every minute.`)
-    await new Promise((r) => setTimeout(r, FITS_EVERY_MS))
-  }
   // Something that goes wrong again and again (the backend cannot be reached, say) is said once
   // every ten minutes for each thing it is about, however many other lines come in between
   const saidAt = new Map<string, number>()
@@ -519,6 +523,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** Whether this connector is stopping: what it reopened is then ended with it, and is not taken for something a person stopped. */
   let closing = false
   /**
+   * Why this machine and the It it joined do not fit, while they do not: the two speak
+   * different versions of how machines talk to It, and what one of them means by a request is
+   * not what the other takes it for. Nothing is handed to an agent meanwhile, and nothing is
+   * reopened. Everything else goes on: what was left running from before is still ended, this
+   * connector can still be stopped, and it goes on by itself once the two fit.
+   */
+  let unfitting: Problem | null = null
+  /**
    * The conversations whose reopened turn was cut off when the connector before this one
    * stopped, as that connector wrote them down. Each is told so when it is reopened for the
    * same thing again, once.
@@ -539,13 +551,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // the process it was is known by its number and by when it began, so that no other process
   // that has since been given the number is touched. Its conversation is told, the next time
   // it is reopened, that its turn was cut off.
-  const running = new Map<string, { pid: number; since: string }>()
+  type Run = { pid: number; since: string; boot?: string }
+  const running = new Map<string, Run>()
   /**
    * The runs from before this connector started that could not be checked on, or could not be
    * ended: each is still noted, is looked at again when its conversation is next to be
    * reopened, and until it is known to be gone that conversation is reopened for nothing.
    */
-  const unsettled = new Map<string, { pid: number; since: string }>()
+  const unsettled = new Map<string, Run>()
   /** Writes down which runs there are. `must` is for a run that is about to be given something to do: not written down, it is not to run. */
   const keepRuns = (must = false) => {
     try {
@@ -556,39 +569,53 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (must) throw err
     }
   }
-  /** Ends a run that was noted before this connector started. True once nothing of it is left. */
-  const settleOld = async (key: string, was: { pid: number; since: string }): Promise<boolean> => {
-    const became = await endTree(was.pid, was.since).catch(() => 'unknown' as const)
+  /**
+   * Ends a run that was noted before this connector started. True once nothing of it is left.
+   * Its conversation is owed the word that its turn was cut off either way: a run that was
+   * noted and never said to be over did not end as a turn ends, whether it was still there to
+   * be ended now or went with the machine being started again.
+   */
+  const settleOld = async (key: string, was: Run): Promise<boolean> => {
+    const colon = key.indexOf(':')
+    const became = await endTree(was.pid, was.since, { harness: key.slice(0, colon), session: key.slice(colon + 1), boot: was.boot }).catch(
+      () => 'unknown' as const,
+    )
     if (became === 'unknown') return false
     unsettled.delete(key)
-    if (became === 'ended') {
-      cutOff.add(key)
-      keepCutOff()
-      say(
-        `${a(key.slice(0, key.indexOf(':')))} conversation (${short(key)}) was still running from before this started, with nothing looking after it, and was ended`,
-      )
-    }
+    cutOff.add(key)
+    keepCutOff()
+    if (became === 'ended')
+      say(`${a(key.slice(0, colon))} conversation (${short(key)}) was still running from before this started, with nothing looking after it, and was ended`)
     return true
   }
+  /**
+   * The note of runs from before could not be read, and was kept aside as it was. Which
+   * conversations were running is then not known, so none is reopened until a person has seen
+   * to it and taken the file away: reopened for the same thing, an agent might work beside
+   * one that is still at it.
+   */
+  const unreadRuns = () => `${runsFile()}.unreadable`
+  const UNREAD =
+    'It could not read its own note of which conversations were running when it last stopped, so it reopens none until that is seen to: check that no agent It started is still running on this machine, and then delete runs.json.unreadable in It’s folder'
   {
-    let noted: unknown = {}
+    let noted: Record<string, Run> = {}
     if (existsSync(runsFile()))
       try {
-        noted = JSON.parse(readFileSync(runsFile(), 'utf8'))
+        const read: unknown = JSON.parse(readFileSync(runsFile(), 'utf8'))
+        // All of it, or none: a note with one line that cannot be read says nothing sure about the others
+        if (!read || typeof read !== 'object' || Array.isArray(read)) throw new Error('not a note of runs')
+        for (const [key, was] of Object.entries(read as Record<string, { pid?: unknown; since?: unknown; boot?: unknown }>)) {
+          if (!key.includes(':') || typeof was?.pid !== 'number' || typeof was.since !== 'string') throw new Error('not a note of runs')
+          noted[key] = { pid: was.pid, since: was.since, ...(typeof was.boot === 'string' ? { boot: was.boot } : {}) }
+        }
       } catch {
-        // Not readable as what this program writes there. It is kept under another name, for
-        // whoever looks into it, and said: what it named can be neither found nor ended from here
-        const aside = `${runsFile()}.unreadable`
+        noted = {}
         try {
-          renameSync(runsFile(), aside)
+          renameSync(runsFile(), unreadRuns())
         } catch {}
-        say(
-          'the note of which conversations were running before this started could not be read, and is kept as runs.json.unreadable in It’s folder: anything it named is not looked after',
-        )
       }
-    for (const [key, was] of Object.entries(noted && typeof noted === 'object' ? (noted as Record<string, { pid?: unknown; since?: unknown }>) : {})) {
-      if (typeof was?.pid !== 'number' || typeof was.since !== 'string') continue
-      const run = { pid: was.pid, since: was.since }
+    if (existsSync(unreadRuns())) say(`${UNREAD.replace(/^It could/, 'it could')}`)
+    for (const [key, run] of Object.entries(noted)) {
       unsettled.set(key, run)
       if (!(await settleOld(key, run)))
         say(
@@ -685,13 +712,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
     })
     if (typeof how === 'string') return how
     if (reopenedNow.has(key)) return 'it is being reopened already'
-    // This connector is stopping: nothing is started that it would not be there to end
-    if (closing) return STOPPED
+    // This connector is stopping, or does not fit the It it joined: nothing is started
+    if (closing || unfitting) return STOPPED
+    // Which conversations were running when It last stopped is not known: none is reopened
+    if (existsSync(unreadRuns())) return UNREAD
     // A run of it from before this connector started may still be there
     const before = unsettled.get(key)
     if (before && !(await settleOld(key, before).finally(() => keepRuns())))
       return 'a turn of it from before It was last started may still be running, and could not be checked on or ended'
-    if (closing) return STOPPED
+    if (closing || unfitting) return STOPPED
     const stop = new AbortController()
     reopenedNow.set(key, stop)
     await call('mutation', api.machines.runBegan, { for: session }).catch(() => {})
@@ -710,7 +739,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
           began: (pid) => {
             const since = identity([pid]).get(pid)
             if (since === undefined) throw new Error('which process it is could not be told')
-            running.set(key, { pid, since })
+            const boot = bootId()
+            running.set(key, { pid, since, ...(boot ? { boot } : {}) })
             try {
               keepRuns(true)
             } catch (err) {
@@ -812,7 +842,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     try {
       // This connector is stopping: what stood in line behind a run it has just ended is left for the connector that starts next
-      if (closing) return
+      if (closing || unfitting) return
       // It went with an earlier click of its conversation, in the same message
       if (rode.delete(click.id)) return
       // An earlier click for this conversation failed while this one was already in line
@@ -838,7 +868,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // And looked at once more, now that the claim is answered: a waiter that began while it
       // was being asked for cannot take what this machine holds, so it is given back to it. It
       // is given back as well when Codex was disconnected in that time.
-      if (closing || awaited(click, Date.now()) || !connected(harness) || (reopening && !wakes(harness, click.at))) {
+      if (closing || unfitting || awaited(click, Date.now()) || !connected(harness) || (reopening && !wakes(harness, click.at))) {
         journal('released', click.id)
         await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
         return
@@ -923,6 +953,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
           })
       }, RENEW_MS)
       journal('queueing', click.id)
+      // A run of this conversation from before this connector started is seen to first: ending
+      // it now is what makes the note that this turn is owed
+      if (reopening) {
+        const before = unsettled.get(key)
+        if (before) {
+          await settleOld(key, before).catch(() => false)
+          keepRuns()
+        }
+      }
       /** Whether this turn is told that the one before it was cut off: decided before it begins, since its own ending may make such a note anew. */
       const toldCutOff = cutOff.has(key)
       const sent = { click, toWaiter: false }
@@ -956,7 +995,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // and nothing is tried again for it
       // Ended because this connector is stopping, it is given back, to be reopened for by the
       // connector that starts next: nobody stopped it, and nothing is counted against it
-      if (refused === STOPPED && closing) {
+      if (refused === STOPPED && (closing || (unfitting && !lostHold.has(key)))) {
         await giveBack()
         journal('released', click.id)
         await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
@@ -1052,7 +1091,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * conversation then wait too, so that what was pressed first still arrives first.
    */
   function queue(click: Offered, reopening: boolean): boolean {
-    if (closing) return false
+    if (closing || unfitting) return false
     let tried = queueTries.get(tag(click))
     if (queueing.has(click.id)) return true
     // Tried one way and now to go the other: its conversation was closed and is open, or was
@@ -1090,7 +1129,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     sooner.unref?.()
   }
   async function route(): Promise<void> {
-    if (routing || closing) return
+    if (routing || closing || unfitting) return
     routing = true
     try {
       const now = Date.now()
@@ -1250,6 +1289,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         200,
         {
           ok: true,
+          ...(unfitting ? { unfit: `${unfitting.message} ${unfitting.hint ?? ''}`.trim() } : {}),
           version: VERSION,
           pid: process.pid,
           waiting: inbox.length,
@@ -1738,22 +1778,38 @@ async function connecting(say: (line: string) => void): Promise<void> {
     },
     (err) => say(`settings: ${why(err)}`),
   )
+  /**
+   * Asks whether this machine and the It it joined fit, and acts on a change. Found not to
+   * fit: said, with which of the two to update, and whatever this machine reopened is ended and
+   * what it held given back. Found to fit again: said, and delivery goes on. Where the door
+   * could not be asked, nothing changes: a machine that did not fit still does not.
+   */
+  async function fitsNow(): Promise<void> {
+    const wrong = await unfit()
+    if (wrong === undefined || closing) return
+    if (wrong && !unfitting) {
+      unfitting = wrong
+      say(`${wrong.message} ${wrong.hint ?? ''} Nothing done on a page is handed to an agent on this machine until then. It is asked again every minute.`)
+      // What is running was started for an It that this program does not fit any more
+      for (const [key, run] of reopenedNow) {
+        lostHold.add(key)
+        run.abort()
+      }
+    } else if (!wrong && unfitting) {
+      unfitting = null
+      say('this machine and the It it joined fit again: what is done on a page is handed over again')
+      void route()
+    }
+  }
+  // Asked once before anything is handed out, and then every minute
+  await fitsNow()
   await report()
   const tick = setInterval(() => void route(), 1000)
   // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
   const alive = setInterval(() => void report(), ALIVE.everyMs)
-  // And whether it still does, for as long as this runs: the It it joined may be updated under
-  // it. Found not to fit, the connector stops, which ends what it reopened and gives back what
-  // it held; started again, it waits as above until the two fit.
-  const fits = setInterval(
-    () =>
-      void unfit().then((wrong) => {
-        if (!wrong) return
-        say(`${wrong.message} ${wrong.hint ?? ''} Stopping until then.`)
-        stopping?.(0)
-      }),
-    FITS_EVERY_MS * 5,
-  )
+  // Whether this machine still fits the It it joined is asked for as long as this runs: that
+  // It may be updated under it, and so may this one. See `fitsNow`.
+  const fits = setInterval(() => void fitsNow(), FITS_EVERY_MS)
   // Whether a newer It is out: asked a little after starting, and every half hour from then on
   const firstLook = setTimeout(() => void lookForNewer(), 20_000)
   const looks = setInterval(() => void lookForNewer(), LOOKS_EVERY_MS)

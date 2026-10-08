@@ -148,6 +148,8 @@ function serviceSaid(background: { registered: boolean; state: string }, connect
       : service.reachable()
         ? 'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.'
         : 'Nothing starts It by itself on this machine: no systemd for your account can be reached from here. `it serve` runs it, in a terminal or under a supervisor of your own.',
+    // A machine that joined an It of a version it does not fit hands nothing over, and says which of the two to update
+    ...(typeof connector.unfit === 'string' ? [`${connector.unfit} Nothing done on a page is handed to an agent on this machine until then.`] : []),
     ...(running && connector.ok !== true
       ? [
           'It is not handing what is done on a page to the conversations on this machine, so nothing done there reaches an agent here by itself. `it service logs` says what it met.',

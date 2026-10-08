@@ -9,6 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { PROTOCOL_VERSION } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { conversationFolder, noteConversation } from './src/publish'
@@ -744,9 +745,62 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     offered(click(1))
     await until(() => existsSync(path.join(bin, 'given-0')) && readFileSync(path.join(bin, 'given-0'), 'utf8').length > 0)
     expect(readFileSync(path.join(bin, 'given-0'), 'utf8')).toContain('that turn was cut off before it ended')
-    // Told, it is owed the note no more
-    await until(() => !existsSync(path.join(home, 'cut-off.json')))
+    // Told, it is owed the note no more. The other conversation, whose run was noted and is gone, is still owed it:
+    // a run that was never said to be over did not end as a turn ends
+    await until(() => JSON.stringify(readJson(path.join(home, 'cut-off.json'))) === JSON.stringify(['codex:thread-2']))
   }, 30_000)
+
+  test('where the note of which conversations were running cannot be read, it is kept aside and no conversation is reopened until a person has taken it away', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    // A note with one line that is not as this program writes it: none of it is gone by
+    await start('socket', {}, (home) => {
+      noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+      writeFileSync(path.join(home, 'runs.json'), JSON.stringify({ 'codex:thread-9': { pid: 'not a number' } }))
+    })
+    expect([existsSync(path.join(home, 'runs.json')), existsSync(path.join(home, 'runs.json.unreadable'))]).toEqual([false, true])
+    expect(said.some((line) => line.includes('could not read its own note of which conversations were running'))).toBe(true)
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'), 25_000)
+    expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args.why).toContain('delete runs.json.unreadable')
+    expect(existsSync(path.join(bin, 'given'))).toBe(false)
+  }, 60_000)
+
+  test('a machine that joined an It of a version it does not fit hands nothing over and reopens nothing, can still be stopped, and goes on by itself once the two fit', async () => {
+    // The It this machine joined, as its door says which version it speaks
+    let speaks = PROTOCOL_VERSION + 1
+    const door = http.createServer((req, res) =>
+      req.url === '/cli/config'
+        ? res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ protocol: speaks }))
+        : res.writeHead(404).end(),
+    )
+    await new Promise<void>((r) => door.listen(0, '127.0.0.1', r))
+    try {
+      const at = `http://127.0.0.1:${(door.address() as { port: number }).port}`
+      await start('socket', {}, (home) => writeFileSync(path.join(home, 'machine.json'), JSON.stringify({ at })))
+      expect(said.some((line) => line.includes('versions that do not work together') && line.includes('Nothing done on a page is handed to an agent'))).toBe(
+        true,
+      )
+      expect((await local<{ ok: boolean; unfit?: string }>('/health'))?.unfit).toContain('versions that do not work together')
+      // Something is done on a page whose conversation is open and listening: it is left where it is
+      await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
+      offered(click(1))
+      await new Promise((r) => setTimeout(r, 2500))
+      expect(called('delivery:claim')).toEqual([])
+      // The It it joined is updated, or this machine is: asked again within the minute, and the click is taken
+      speaks = PROTOCOL_VERSION
+      await until(() => called('delivery:claim').includes('click-1'), 75_000)
+      expect(said.some((line) => line.includes('fit again'))).toBe(true)
+      expect((await local<{ ok: boolean; unfit?: string }>('/health'))?.unfit).toBeUndefined()
+    } finally {
+      await new Promise((r) => door.close(r))
+    }
+  }, 120_000)
 
   test('the note of a stop is let go once a turn begins in that conversation which It did not start: the person is in it themselves, and what they stopped is no longer its last turn', async () => {
     await start('socket', {}, (home) => writeFileSync(path.join(home, 'stopped.json'), JSON.stringify(['codex:thread-1', 'codex:thread-2'])))
