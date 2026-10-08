@@ -217,6 +217,22 @@
     }
     $lock.Dispose()
     $lock = $null
+    # Where this was downloaded from, when it was not the usual place, is noted for the program:
+    # it looks there for a newer It, and is updated from there. Asked later, from another
+    # terminal, it would not know, and would turn to the usual place for both.
+    if ($env:IT_INSTALL_BASE) {
+      $note = Join-Path $root 'releases.json'
+      try {
+        if ($base -eq 'https://itcan.do/releases') { if (Test-Path -LiteralPath $note) { Remove-Item -Force -LiteralPath $note } }
+        else {
+          $part = "$note.$PID"
+          [IO.File]::WriteAllText($part, (ConvertTo-Json @{ base = $base } -Compress) + "`n", (New-Object Text.UTF8Encoding $false))
+          Move-Item -Force -LiteralPath $part -Destination $note
+        }
+      } catch {
+        Write-Host "Where this was downloaded from could not be noted in $root, so It will look for a newer version at the usual place and not at $base."
+      }
+    }
     # The folder is put first on the PATH that Windows keeps for this account. That PATH is
     # read and written as it is kept, with a name such as %USERPROFILE% left as a name: read the
     # usual way, every such name comes back as what it stands for today, and writing that back

@@ -466,9 +466,15 @@ try {
     )
     check('nothing is left behind in the folder but the program', readdirSync(path.join(one.folder, 'bin')).join() === 'it')
     check(
-      'and beside it only the terms and the notices',
-      readdirSync(one.folder).sort().join() === 'LICENSE.md,THIRD_PARTY_NOTICES.md,bin',
+      'and beside it only the terms, the notices, and the note of where it was downloaded from, since that was not the usual place',
+      readdirSync(one.folder).sort().join() === 'LICENSE.md,THIRD_PARTY_NOTICES.md,bin,releases.json',
       readdirSync(one.folder).join(' '),
+    )
+    check(
+      'the note names the place this install was told to download from, and only this user can read it: the program looks there for a newer It, in whatever terminal it is next run',
+      read(path.join(one.folder, 'releases.json'))?.trim() === JSON.stringify({ base }) &&
+        (process.platform === 'win32' || (statSync(path.join(one.folder, 'releases.json')).mode & 0o077) === 0),
+      String(read(path.join(one.folder, 'releases.json'))),
     )
 
     // ---------- who has been told that It reports usage ----------
