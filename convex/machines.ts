@@ -1,10 +1,11 @@
-import { ALIVE, HARNESSES, LIMITS, QUOTA, WAKES } from '@it/protocol'
+import { ALIVE, HARNESSES, LIMITS, newer, QUOTA, WAKES } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, mutation, query } from './_generated/server'
 import { ownMachine, requireMachine, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
+import { log } from './lib/log'
 import { session } from './schema'
 import { lineOf, pairedOf, revokeMachine } from './sessions'
 
@@ -14,6 +15,8 @@ const view = (m: Doc<'machines'>) => ({
   lastSeenAt: m.lastSeenAt,
   connectorVersion: m.connectorVersion ?? null,
   off: m.offAt !== undefined,
+  latest: m.latest ?? null,
+  upgrade: m.upgrade ?? null,
   harnesses: m.harnesses ?? [],
   wanted: m.wanted ?? [],
   wakes: m.wakes ?? [],
@@ -104,6 +107,59 @@ export const wake = mutation({
     // Switched on again while it is on, it stays on since when it was: nothing older is let in by asking twice
     if (on && !is) await ctx.db.patch(m._id, { wakes: [...now, { harness, since: Date.now() }] })
     if (!on && is) await ctx.db.patch(m._id, { wakes: now.filter((w) => w.harness !== harness) })
+    return null
+  },
+})
+
+/**
+ * The person asks, from a browser of their own, for a machine to be brought to the newest
+ * version of It. Nothing in the asking says which version or where from: the machine fetches
+ * what the place releases are kept says is newest, and checks it as an install does, so the most
+ * that someone in the person's browser can do with this is have a machine update itself.
+ *
+ * The machine It runs on goes first. Another machine at a newer version than that one would ask
+ * for functions the backend there does not have yet.
+ */
+export const upgrade = mutation({
+  args: { machineId: v.id('machines') },
+  handler: async (ctx, { machineId }) => {
+    const { user } = await requireOwner(ctx)
+    const m = await ownMachine(ctx, user._id, machineId)
+    if (m.revoked) fail('not_found', 'No such machine.')
+    if (!newer(m.latest, m.connectorVersion)) fail('conflict', 'That machine knows of no newer version of It than the one it runs.')
+    if (m.byMachine || m.bySession) {
+      const all = await ctx.db
+        .query('machines')
+        .withIndex('by_user', (q) => q.eq('userId', user._id).eq('revoked', false))
+        .take(QUOTA.machines)
+      const runsIt = all.find((x) => !x.byMachine && !x.bySession)
+      if (runsIt && newer(m.latest, runsIt.connectorVersion)) fail('conflict', 'Update the machine It runs on first.', { first: true })
+    }
+    // Asked for again while it is at work, it is the same asking
+    if (m.upgrade?.state === 'working' && Date.now() - m.upgrade.at < UPGRADE_MS) return null
+    await ctx.db.patch(m._id, { upgrade: { at: Date.now(), state: 'asked', version: m.latest } })
+    log('machine.upgrade_asked', { userId: user._id, machineId: m._id })
+    return null
+  },
+})
+/** How long an upgrade is given before it is taken to have come to nothing, and may be asked for again. */
+const UPGRADE_MS = 15 * 60_000
+
+/** The machine says how far the upgrade it was asked for has got. Only one that was asked for is spoken of. */
+export const upgrading = mutation({
+  args: {
+    state: v.union(v.literal('working'), v.literal('failed'), v.literal('installed'), v.literal('none')),
+    why: v.optional(v.string()),
+    version: v.optional(v.string()),
+  },
+  handler: async (ctx, { state, why, version }) => {
+    const { machine } = await requireMachine(ctx)
+    if (!machine.upgrade) return null
+    if (state === 'none') await ctx.db.patch(machine._id, { upgrade: undefined })
+    else
+      await ctx.db.patch(machine._id, {
+        upgrade: { at: machine.upgrade.at, state, ...(why ? { why: why.slice(0, 300) } : {}), version: (version ?? machine.upgrade.version)?.slice(0, 40) },
+      })
     return null
   },
 })
@@ -239,15 +295,26 @@ export const inventory = mutation({
 
 /** The connector reports what it found on the machine, and that it is alive. */
 export const report = mutation({
-  args: { connectorVersion: v.string(), harnesses: found },
-  handler: async (ctx, { connectorVersion, harnesses }) => {
+  args: { connectorVersion: v.string(), harnesses: found, latest: v.optional(v.string()) },
+  handler: async (ctx, { connectorVersion, harnesses, latest }) => {
     const { machine } = await requireMachine(ctx)
     const clean = kept(harnesses)
-    const same = JSON.stringify(machine.harnesses ?? []) === JSON.stringify(clean) && machine.connectorVersion === connectorVersion
+    // The newest version it has learned of is kept until it learns of another: a report made before it has looked says nothing of it
+    const knows = latest === undefined ? machine.latest : latest.slice(0, 40)
+    const same = JSON.stringify(machine.harnesses ?? []) === JSON.stringify(clean) && machine.connectorVersion === connectorVersion && machine.latest === knows
+    // A connector of another version than the last is what an upgrade that was asked for was for, and ends it
+    const moved = machine.connectorVersion !== undefined && machine.connectorVersion !== connectorVersion
     // Written each time it says so, less a little for a report that comes a moment early: the
     // site calls a machine off once it has been quiet for a few of these
     if (!same || machine.offAt !== undefined || Date.now() - machine.lastSeenAt > ALIVE.everyMs - 5_000) {
-      await ctx.db.patch(machine._id, { harnesses: clean, connectorVersion: connectorVersion.slice(0, 40), lastSeenAt: Date.now(), offAt: undefined })
+      await ctx.db.patch(machine._id, {
+        harnesses: clean,
+        connectorVersion: connectorVersion.slice(0, 40),
+        lastSeenAt: Date.now(),
+        offAt: undefined,
+        latest: knows,
+        ...(moved ? { upgrade: undefined } : {}),
+      })
     }
     return null
   },

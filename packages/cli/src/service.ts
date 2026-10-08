@@ -108,6 +108,8 @@ export function environment(from: NodeJS.ProcessEnv = process.env): Record<strin
     'IT_PORT',
     'IT_BACKEND_BIN',
     'IT_BACKEND_RELEASES',
+    // Where releases of It are, where that is another place than the usual: the service asks there whether a newer one is out
+    'IT_INSTALL_BASE',
     'IT_URL',
     'IT_SITE_URL',
     'IT_HARNESSES',

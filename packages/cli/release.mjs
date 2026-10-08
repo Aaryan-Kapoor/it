@@ -73,4 +73,13 @@ for (const [name, from] of [
       .digest('hex')}  ${name}`,
   )
 }
+// Which version these are, for an installed It that asks whether a newer one is out. In the
+// checksums like everything else, so that an upgrade knows the file it read is the release's.
+const { version } = JSON.parse(readFileSync(path.join(here, 'package.json'), 'utf8'))
+writeFileSync(path.join(out, 'latest.json'), `${JSON.stringify({ version })}\n`)
+sums.push(
+  `${createHash('sha256')
+    .update(readFileSync(path.join(out, 'latest.json')))
+    .digest('hex')}  latest.json`,
+)
 writeFileSync(path.join(out, 'SHA256SUMS'), `${sums.join('\n')}\n`)

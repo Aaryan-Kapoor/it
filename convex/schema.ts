@@ -109,6 +109,21 @@ export default defineSchema({
     createdAt: v.number(),
     lastSeenAt: v.number(),
     connectorVersion: v.optional(v.string()),
+    /** The newest version of It this machine has learned is out, where it looks for one. */
+    latest: v.optional(v.string()),
+    /**
+     * An upgrade of this machine that the person asked for on the site, and how far it has got:
+     * asked for, at work, failed with why, or installed and waiting for It to be started again
+     * by hand where nothing starts it by itself. Gone once the machine reports a newer version.
+     */
+    upgrade: v.optional(
+      v.object({
+        at: v.number(),
+        state: v.union(v.literal('asked'), v.literal('working'), v.literal('failed'), v.literal('installed')),
+        why: v.optional(v.string()),
+        version: v.optional(v.string()),
+      }),
+    ),
     /** When its connector said it was stopping, if it has and has not been heard from since: the machine is off from then, and not only once it has been quiet for a while. */
     offAt: v.optional(v.number()),
     /** What the connector found installed, and what the person asked to be connected. */

@@ -9,12 +9,12 @@
 // A click is leased before anything is done with it, so a connector that dies mid-delivery
 // loses nothing: the lease runs out and the click is offered again. Delivery is at least once.
 // Every click carries its own id in the text the agent reads, so a repeat can be told apart.
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, parseJson, QUEUES, WAKE_MOST, WAKES } from '@it/protocol'
+import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, newer, parseJson, QUEUES, WAKE_MOST, WAKES } from '@it/protocol'
 import {
   api,
   ask,
@@ -34,7 +34,9 @@ import {
 } from './lib'
 import { conversationFolder, noteConversation } from './publish'
 import { alone } from './serve/backend'
+import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
+import { fetchNewer, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
 import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexHeld, mayWake, STOPPED, WAS_CUT_OFF, WAS_STOPPED, WOKEN } from './wake'
 
@@ -1370,6 +1372,49 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // Nothing has been heard yet. The first answer is acted on whatever it says: an add-on
   // unticked while the connector was off is removed even if nothing is wanted any more.
   let wanted: string | null = null
+  // The newest version of It there is, as this machine last learned it: asked once a day while
+  // that is not turned off, with a request that says nothing of this installation. Empty where
+  // it is turned off, so that the site stops speaking of a version nobody is looking for.
+  let latestKnown: string | undefined
+  let sayLatest = true
+  const lookForNewer = async () => {
+    if (!looksForNewer()) latestKnown = ''
+    else {
+      const is = await latest().catch(() => null)
+      if (is === null) return
+      if (is !== latestKnown && newer(is, VERSION)) say(`It ${is} is out, and this is ${VERSION}; \`it upgrade\` puts it in place`)
+      latestKnown = is
+    }
+    await report().catch(() => {})
+  }
+  // An upgrade the person asked for on the site: the newest program is fetched, checked and put
+  // in place of this one, as `it upgrade` does it. Where the system starts It by itself, the new
+  // program then writes the service's definition as its version has it and starts the service
+  // again, which ends this one. Where a person started It by hand, they are told to do so again.
+  let upgradingNow = false
+  const upgradeAsked = async () => {
+    if (upgradingNow) return
+    upgradingNow = true
+    try {
+      await call('mutation', api.machines.upgrading, { state: 'working' }).catch(() => {})
+      const done = await fetchNewer({ say: (line) => say(`upgrade: ${line}`) })
+      if (!done) return void (await call('mutation', api.machines.upgrading, { state: 'none' }).catch(() => {}))
+      if (service.installedHere()) {
+        say(`upgrade: starting again as ${done.to}`)
+        spawn(done.program, ['setup'], { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }).unref()
+      } else {
+        say(`upgrade: ${done.to} is in place, and runs once It is started again`)
+        await call('mutation', api.machines.upgrading, { state: 'installed', version: done.to }).catch(() => {})
+      }
+    } catch (err) {
+      say(`upgrade: ${why(err)}`)
+      await call('mutation', api.machines.upgrading, { state: 'failed', why: err instanceof Problem ? err.message : 'It could not be upgraded.' }).catch(
+        () => {},
+      )
+    } finally {
+      upgradingNow = false
+    }
+  }
   // What is installed on the machine is looked at when the connector starts, when what is
   // wanted changes, and every half hour: each look runs every harness's own command. The
   // report in between says the connector is alive, with what was found last time.
@@ -1395,18 +1440,36 @@ async function connecting(say: (line: string) => void): Promise<void> {
         looking = false
       }
     }
-    await call('mutation', api.machines.report, { connectorVersion: VERSION, harnesses: found }).catch((err) => {
-      // The bridge would give this machine no token, even a fresh one: it has been revoked.
-      // Found out here within half a minute, where the live connection would take until its own
-      // token ran out.
-      if ((err as { code?: string }).code === 'unauthenticated') notOursNow()
-      else say(`report: ${why(err)}`)
-    })
+    // With the newest version this machine has learned of, where it looks for one and the It it
+    // reports to takes that: one that is older than this program does not, and is told the rest
+    const told = { connectorVersion: VERSION, harnesses: found }
+    await call('mutation', api.machines.report, sayLatest && latestKnown !== undefined ? { ...told, latest: latestKnown } : told)
+      .catch(async (err) => {
+        if (sayLatest && latestKnown !== undefined && (err as { code?: string }).code !== 'unauthenticated') {
+          sayLatest = false
+          await call('mutation', api.machines.report, told)
+          return
+        }
+        throw err
+      })
+      .catch((err) => {
+        // The bridge would give this machine no token, even a fresh one: it has been revoked.
+        // Found out here within half a minute, where the live connection would take until its own
+        // token ran out.
+        if ((err as { code?: string }).code === 'unauthenticated') notOursNow()
+        else say(`report: ${why(err)}`)
+      })
   }
   client.onUpdate(
     api.machines.me,
     {},
-    (me: { wanted: string[]; wakes?: { harness: string; since: number }[]; runs?: { harness: string; sessionId: string; stop?: boolean }[] }) => {
+    (me: {
+      wanted: string[]
+      wakes?: { harness: string; since: number }[]
+      runs?: { harness: string; sessionId: string; stop?: boolean }[]
+      upgrade?: { state: string } | null
+    }) => {
+      if (me.upgrade?.state === 'asked') void upgradeAsked()
       // A conversation the person asked to have stopped is stopped. One that It has down as
       // running and that is not, which a connector that died leaves behind, is said to be over.
       for (const r of me.runs ?? []) {
@@ -1439,6 +1502,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const tick = setInterval(() => void route(), 1000)
   // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
   const alive = setInterval(() => void report(), ALIVE.everyMs)
+  // Whether a newer It is out: asked a little after starting, and once a day from then on
+  const firstLook = setTimeout(() => void lookForNewer(), 20_000)
+  const looks = setInterval(() => void lookForNewer(), 24 * 3_600_000)
   const beat = setInterval(() => {
     const now = Date.now()
     for (const [k, s] of sessions) if (now - s.seen > 3_600_000) sessions.delete(k)
@@ -1476,6 +1542,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   clearInterval(tick)
   clearInterval(beat)
   clearInterval(alive)
+  clearTimeout(firstLook)
+  clearInterval(looks)
   usage.stop()
   // The conversations this connector reopened are ended with it, and everything they had
   // started: nothing It runs with nobody watching runs on once It has been stopped. What each

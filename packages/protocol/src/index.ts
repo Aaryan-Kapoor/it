@@ -136,6 +136,24 @@ export const INSTALL = {
   releases: 'https://github.com/Aaryan-Kapoor/it/releases',
 } as const
 
+/** A version of It as its three numbers, or nothing where it is not written as one. */
+const numbers = (version: string | null | undefined): [number, number, number] | null => {
+  const m = /^v?(\d{1,6})\.(\d{1,6})\.(\d{1,6})$/.exec((version ?? '').trim())
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
+}
+/**
+ * Whether one version of It is newer than another. Neither is, where either is not written as
+ * three numbers: a version that cannot be read is no reason to tell anyone to update, or to
+ * replace a program.
+ */
+export function newer(version: string | null | undefined, than: string | null | undefined): boolean {
+  const a = numbers(version)
+  const b = numbers(than)
+  if (!a || !b) return false
+  for (let n = 0; n < 3; n++) if (a[n] !== b[n]) return a[n]! > b[n]!
+  return false
+}
+
 export const HARNESSES = ['claude-code', 'codex', 'openclaw', 'hermes', 'opencode', 'pi'] as const
 export type Harness = (typeof HARNESSES)[number]
 /**

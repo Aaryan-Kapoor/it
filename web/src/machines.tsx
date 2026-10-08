@@ -1,7 +1,7 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import { ALIVE, HARNESSES, INSTALL, WAKES } from '@it/protocol'
+import { ALIVE, HARNESSES, INSTALL, newer, WAKES } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -33,6 +33,10 @@ interface Machine {
   off?: boolean
   /** It runs on this machine, where every other joined it. */
   runsIt?: boolean
+  /** The newest version of It this machine has learned is out, where it looks for one. */
+  latest?: string | null
+  /** An upgrade of this machine that was asked for here, and how far it has got. */
+  upgrade?: { at: number; state: 'asked' | 'working' | 'failed' | 'installed'; why?: string; version?: string } | null
   harnesses: Harness[]
   wanted: string[]
   wakes: { harness: string; since: number }[]
@@ -77,7 +81,7 @@ export function Machines() {
         </div>
       )}
       {machines.map((m) => (
-        <MachineCard key={m.id} m={m} now={now} />
+        <MachineCard key={m.id} m={m} now={now} host={machines.find((x) => x.runsIt)?.connectorVersion ?? null} />
       ))}
       {adding && <AddMachine onClose={done} />}
     </main>
@@ -166,7 +170,56 @@ function AddMachine({ onClose }: { onClose: () => void }) {
   )
 }
 
-function MachineCard({ m, now }: { m: Machine; now: number }) {
+/**
+ * A newer It is out, as this machine has learned: said under its name, with the button that has
+ * the machine put it in place. The machine fetches what the place releases are kept says is
+ * newest and checks it as an install does. Nothing here says which version or where from. The
+ * machine It runs on goes first: another at a newer version than that one would ask for
+ * what the backend there does not have yet.
+ */
+function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; online: boolean; act: (p: Promise<unknown>) => Promise<void> }) {
+  const upgrade = useMutation(api.machines.upgrade)
+  const out = newer(m.latest, m.connectorVersion) ? (m.latest as string) : null
+  const state = m.upgrade?.state
+  if (state === 'installed')
+    return (
+      <p className="panel-note newer" data-tone="wait">
+        It {m.upgrade?.version ?? ''} is installed on {m.name}. It runs once It is started again there: stop <code>it serve</code> where it is running, and
+        start it.
+      </p>
+    )
+  if (!out) return null
+  const first = !m.runsIt && newer(out, host)
+  const working = state === 'asked' || state === 'working'
+  return (
+    <p className="panel-note newer" data-tone={state === 'failed' ? 'bad' : undefined}>
+      {working ? (
+        `Updating to It ${out}…`
+      ) : (
+        <>
+          {state === 'failed'
+            ? `It ${out} could not be put in place: ${m.upgrade?.why ?? 'it is not known why'}. `
+            : `It ${out} is out. This machine runs ${m.connectorVersion}. `}
+          {first ? (
+            'Update the machine It runs on first.'
+          ) : (
+            <button
+              type="button"
+              className="link"
+              disabled={!online}
+              title={online ? undefined : 'This machine is off'}
+              onClick={() => void act(upgrade({ machineId: m.id as Id<'machines'> }))}
+            >
+              {state === 'failed' ? 'Try again' : 'Update'}
+            </button>
+          )}
+        </>
+      )}
+    </p>
+  )
+}
+
+function MachineCard({ m, now, host }: { m: Machine; now: number; host: string | null }) {
   const toggle = useMutation(api.machines.toggle)
   const wake = useMutation(api.machines.wake)
   const rename = useMutation(api.machines.rename)
@@ -224,6 +277,7 @@ function MachineCard({ m, now }: { m: Machine; now: number }) {
         )}
         <RevokeMachine m={m} act={act} />
       </header>
+      <NewerOut m={m} host={host} online={online} act={act} />
       {known.length === 0 ? (
         <p className="panel-note">
           {m.connectorVersion === null ? 'Run it setup on this machine to look for agent apps.' : 'No agent app was found on this machine.'}

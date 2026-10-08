@@ -4,12 +4,12 @@
 // five that a person runs to look after It (`it setup`, `it status`, `it site`, `it network`
 // and `it service status`) print a few plain sentences where standard output is a terminal, and
 // the same JSON as ever where it is not, or when `--json` is given.
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
-import { describeClick, firstFile, HARNESSES, type Harness, isSlug, NOUN, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
+import { describeClick, firstFile, HARNESSES, type Harness, isSlug, NOUN, newer, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
 import { SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, parse, text } from './args'
 import { local } from './connector'
@@ -83,6 +83,7 @@ import {
 } from './setup'
 import { printEnv } from './shell-env'
 import { GUIDE, STEPS, TOUR_PREFIX, tourPage } from './tour'
+import { fetchNewer, latest, watch, watched } from './upgrade'
 import * as usage from './usage'
 
 // Everything is written through `written`, which follows each write until it has left the
@@ -219,6 +220,8 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   skill: [0, 'skill'],
   tour: [2, 'tour [show <name> [--step <n>] | clear]'],
   telemetry: [1, 'telemetry [on | off]'],
+  upgrade: [0, 'upgrade [--check]'],
+  updates: [1, 'updates [on | off]'],
   create: [1, 'create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)'],
   update: [1, 'update <id> (--file f | --dir d | --html "<…>" | pipe)'],
   list: [0, 'list'],
@@ -1649,6 +1652,8 @@ async function status(a: Args) {
   // all. That is said first and as not known: answered "not running", an agent takes It for
   // stopped, and says so to its person or tries to start it.
   const blocked = found === 'not let ask'
+  const learned = (machine as { latest?: unknown } | null | undefined)?.latest
+  const newerOut = typeof learned === 'string' && newer(learned, VERSION) ? learned : null
   const stands = {
     ...(blocked ? { blocked: true, hint } : {}),
     running: blocked ? null : running,
@@ -1662,6 +1667,8 @@ async function status(a: Args) {
     harnesses: await detectAll(),
     version: VERSION,
     protocol: PROTOCOL_VERSION,
+    // A newer version that this machine has learned is out, where it looks for one
+    ...(newerOut ? { update: { latest: newerOut, how: 'Run `it upgrade`.' } } : {}),
     ...(hint && !blocked ? { hint } : {}),
   }
   if (!forPerson(a)) return out(stands)
@@ -1691,7 +1698,7 @@ async function status(a: Args) {
           : `The network is on. Other devices on the same network open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
     ...appsSaid(stands.harnesses),
     ...serviceSaid(stands.background, stands.connector, running && enrolled),
-    `This is It ${VERSION}.`,
+    newerOut ? `It ${newerOut} is out, and this is ${VERSION}. \`it upgrade\` puts it in place.` : `This is It ${VERSION}.`,
   ])
 }
 
@@ -1882,6 +1889,10 @@ This machine
                                  its pages, and with clear, remove them all.
   it telemetry [on | off]        Say whether It reports usage counts, or turn that on or off.
                                  It reports them until it is turned off.
+  it upgrade [--check]           Put the newest It in place of this one and start it again.
+                                 With --check, only say whether a newer one is out.
+  it updates [on | off]          Say whether It looks once a day for a newer version, or turn
+                                 that on or off. It looks until it is turned off.
   it version | it help
 
 Run at a terminal, it setup, it site, it network, it status, it service status, it list,
@@ -1927,6 +1938,63 @@ async function main(argv: string[]): Promise<void> {
       // is said before anything is written down, and nothing is where it cannot be said or
       // where a variable keeps reporting off
       return out(usage.set(to === 'on', say))
+    }
+    case 'upgrade': {
+      // Asked only whether a newer one is out
+      if (a.flags.check) {
+        const is = await latest()
+        if (!forPerson(a)) return out({ version: VERSION, latest: is, newer: newer(is, VERSION) })
+        return tell([
+          is === null
+            ? 'The newest version of It could not be learned just now. Check that this machine is online.'
+            : newer(is, VERSION)
+              ? `It ${is} is out, and this is ${VERSION}. \`it upgrade\` puts it in place.`
+              : `This is the newest It there is (${VERSION}).`,
+        ])
+      }
+      const done = await fetchNewer({ say })
+      if (!done) return forPerson(a) ? tell([`This is the newest It there is (${VERSION}).`]) : out({ version: VERSION, upgraded: false })
+      // The program is in place. What runs is still the one that was started: the service is
+      // started again by the new program, which also writes the service's definition as its
+      // version has it and brings the add-ons in the agent apps up to it. Where nothing starts
+      // It by itself, whoever started it does so again.
+      let started: 'again' | 'by hand' | 'failed' = 'by hand'
+      let why: string | undefined
+      if (service.installedHere()) {
+        say('Starting It again as the new version…')
+        const ran = await new Promise<{ ok: boolean; said: string }>((resolve) =>
+          execFile(done.program, ['setup'], { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout) =>
+            resolve({ ok: !err, said: String(stdout) }),
+          ),
+        )
+        started = ran.ok ? 'again' : 'failed'
+        if (!ran.ok) {
+          try {
+            why = (JSON.parse(ran.said) as { problem?: string }).problem
+          } catch {}
+        }
+      }
+      const result = { upgraded: true, from: done.from, to: done.to, started, ...(why ? { problem: why } : {}) }
+      if (!forPerson(a)) return out(result)
+      return tell([
+        `It ${done.to} is installed in place of ${done.from}.`,
+        started === 'again'
+          ? 'It was started again, and is running as the new version.'
+          : started === 'failed'
+            ? `It could not be started again${why ? `: ${why}` : ''}. Run \`it setup\` to see why.`
+            : 'It runs as the new version once it is started again: stop `it serve` where it is running, and start it.',
+      ])
+    }
+    case 'updates': {
+      const to = a._[0]
+      if (to !== undefined && to !== 'on' && to !== 'off') throw new Problem('It is `it updates`, `it updates on` or `it updates off`.', 'invalid')
+      const now = to === undefined ? watched() : watch(to === 'on')
+      if (!forPerson(a)) return out(now)
+      return tell([
+        now.on
+          ? 'It looks once a day for a newer version of itself, and says so on its site and in `it status` when one is out. Nothing about this installation is sent to ask. `it updates off` stops it looking.'
+          : `It does not look for a newer version of itself${now.because === 'IT_UPDATE_CHECK' ? ', since IT_UPDATE_CHECK says not to' : ''}. \`it upgrade --check\` asks once, and \`it updates on\` has it look once a day.`,
+      ])
     }
     case 'skill':
       written(process.stdout, SKILL)
