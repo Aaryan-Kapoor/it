@@ -1250,10 +1250,50 @@ const fromAfar = (): boolean => Boolean(process.env.SSH_CONNECTION || process.en
 const led = (a: Args): boolean => forPerson(a) && flow.live() && !elsewhere() && !a.flags.none
 
 /** Waits until a display is there that was not before, and gives its name. Nothing when the time runs out first. */
-async function newDisplay(before: Set<string>, forMs: number): Promise<string | undefined> {
+/**
+ * Asks one question at a plain terminal. Where the person ends it without an answer (Ctrl-C,
+ * Ctrl-D, the terminal closed), that is said as what it is and the command ends: under the
+ * runtime the program is built with, the asking would otherwise never be answered, and the
+ * command would stay as it was with nobody at it.
+ */
+function answerTo(rl: readline.Interface, question: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let done = false
+    const closed = () => {
+      if (done) return
+      done = true
+      reject(new Problem('Setup was ended before it was finished. Nothing more was changed: run `it setup` to go on.', 'invalid'))
+    }
+    rl.once('close', closed)
+    rl.once('SIGINT', () => {
+      rl.close()
+      closed()
+    })
+    rl.question(question).then(
+      (answer) => {
+        done = true
+        rl.off('close', closed)
+        resolve(answer)
+      },
+      () => closed(),
+    )
+  })
+}
+
+async function newDisplay(before: Set<string>, forMs: number, given?: AbortSignal): Promise<string | undefined> {
   const until = Date.now() + forMs
-  while (Date.now() < until) {
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+  while (Date.now() < until && !given?.aborted) {
+    // Given up the moment the person says to: left to run out its time, it would hold the command open for that long
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(done, 1000)
+      function done() {
+        clearTimeout(t)
+        given?.removeEventListener('abort', done)
+        resolve()
+      }
+      given?.addEventListener('abort', done, { once: true })
+    })
+    if (given?.aborted) break
     const now = await call<{ id: string; name: string }[]>('query', api.displays.list).catch(() => [])
     const made = now.find((d) => !before.has(d.id))
     if (made) return made.name
@@ -1361,7 +1401,12 @@ async function settingUpLed(a: Args) {
     if (!usable.length) apps.warn(found.length ? 'none found that It can connect yet' : 'none found on this machine')
     else if (failed.length) apps.warn(`${on.map((h) => KNOWN[h.id].label).join(', ') || 'none'} connected`)
     else apps.done(on.length ? on.map((h) => KNOWN[h.id].label).join(', ') : 'none connected')
-    for (const h of failed) left.push(`${KNOWN[h.id].label} could not be connected${h.detail ? `: ${h.detail}` : '.'}`)
+    for (const h of failed) {
+      // Why, as the connecting itself said it: looked at afresh, an app that could not be connected only says that it is not
+      const said = kept.findLast((line) => line.startsWith(`${KNOWN[h.id].label}: `))?.slice(KNOWN[h.id].label.length + 2)
+      const why = h.detail ?? said
+      left.push(`${KNOWN[h.id].label} could not be connected${why ? `: ${why.replace(/\.$/, '')}.` : '.'}`)
+    }
     // What decides whether Codex's first page appears at all is said by itself, and first
     const shut = codexShut(after)
     if (shut) left.push(shut)
@@ -1447,7 +1492,8 @@ async function settingUpLed(a: Args) {
         }
         flow.line()
         const screen = flow.step('First screen', 'waiting for a browser to pair · enter to skip')
-        const paired = await flow.unlessEnter(newDisplay(new Set(displays.map((d) => d.id)), 10 * 60_000))
+        const skipped = new AbortController()
+        const paired = await flow.unlessEnter(newDisplay(new Set(displays.map((d) => d.id)), 10 * 60_000, skipped.signal)).finally(() => skipped.abort())
         if (paired) screen.done(paired)
         else screen.warn('not paired yet')
         if (!paired) left.push('No screen is paired yet. `it site` prints a new address to open.')
@@ -1556,7 +1602,7 @@ async function settingUp(a: Args, joined: boolean) {
       wanted = []
       const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
       for (const h of usable) {
-        const answer = (await rl.question(`Connect ${KNOWN[h.id].label}? [Y/n] `)).trim().toLowerCase()
+        const answer = (await answerTo(rl, `Connect ${KNOWN[h.id].label}? [Y/n] `)).trim().toLowerCase()
         if (answer === '' || answer.startsWith('y')) wanted.push(h.id)
       }
       rl.close()

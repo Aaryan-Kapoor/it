@@ -287,7 +287,12 @@ export const sameWindowsFolder = (a: string, b: string): boolean => {
   return plain(a) === plain(b)
 }
 
-const unitPath = () => path.join(os.homedir(), '.config', 'systemd', 'user', `${NAME}.service`)
+// Where systemd looks for a person's own units: under the folder XDG_CONFIG_HOME names, where it
+// names one in full, and under ~/.config otherwise. Written anywhere else, a unit is not found.
+const unitPath = () => {
+  const named = process.env.XDG_CONFIG_HOME
+  return path.join(named && path.isAbsolute(named) ? named : path.join(os.homedir(), '.config'), 'systemd', 'user', `${NAME}.service`)
+}
 const plistPath = () => path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`)
 const launchdDomain = () => `gui/${process.getuid?.() ?? 501}`
 
