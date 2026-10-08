@@ -132,6 +132,7 @@ const CLAUDE_QUIET_MS = 20_000
 const SETTLE_MS = 300
 const SERVE_MOST = 8 // how many clicks one answer to an add-on carries
 const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads no more than a quarter of a megabyte
+const WAITER_BYTES = 700_000 // and how large the clicks in one answer to a waiter may be together: `it wait` reads no more than a megabyte
 const keyOf = (harness: string, id: string) => `${harness}:${id}`
 /** Everything an add-on or a command asks the connector for. */
 const ROUTES = ['/health', '/session', '/clicks', '/waiting', '/ack', '/runs']
@@ -1686,14 +1687,27 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // A machine that does not fit the It it joined hands nothing over, to a waiter either, and nor does a connector that is stopping
         if (unfitting || closing) return [200, { ok: true, clicks: [] }]
         const handedBack: Offered[] = []
+        // Only so much in one answer. Whoever asked reads no more than a megabyte, and an
+        // answer larger than that was taken from here and read by nobody: thirty clicks that
+        // each carry as much as a click may are enough. What does not fit stays as it is, and
+        // is given at the waiter's next asking, two seconds on.
+        let size = 0
+        const fits = (c: Offered): boolean => {
+          const bytes = Buffer.byteLength(JSON.stringify(c)) + 1
+          if (handedBack.length > 0 && size + bytes > WAITER_BYTES) return false
+          size += bytes
+          return true
+        }
         for (const [clickId, h] of held) {
           if (!waitedFor(waiter, h.click)) continue
-          held.delete(clickId)
           // What an add-on has been given and has not reported may be something it can only
           // hand over with a command's result, and the command now running is the waiter. So
           // the waiter is given it too, still held for this machine. Should the add-on hand it
           // over as well, the agent can tell by its id that it is the same click.
-          if (h.served && steady() < h.leaseUntil - 1000) handedBack.push(h.click)
+          const given = h.served && steady() < h.leaseUntil - 1000
+          if (given && !fits(h.click)) continue
+          held.delete(clickId)
+          if (given) handedBack.push(h.click)
           // Anything set aside for an add-on and not yet given to it goes back, so the waiter
           // can have it. Not waited for: the waiter must have its answer at once.
           else void call('mutation', api.delivery.release, { id: clickId }).catch(() => {})
@@ -1704,7 +1718,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // this machine. Should Codex hand it over as well, its id shows it is the same click.
         for (const sent of submitting.values()) {
           // Once: an agent that took it, dealt with it and waits again is not given it a second time
-          if (sent.toWaiter || !waitedFor(waiter, sent.click)) continue
+          if (sent.toWaiter || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
           sent.toWaiter = true
           handedBack.push(sent.click)
         }
@@ -1712,7 +1726,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // done: the waiter is that turn, so it is given the click too, and given it once
         for (const [clickId, b] of behindTurn) {
           if (!turnRunning(b.key, Date.now())) behindTurn.delete(clickId)
-          else if (waitedFor(waiter, b.click)) {
+          else if (waitedFor(waiter, b.click) && fits(b.click)) {
             behindTurn.delete(clickId)
             handedBack.push(b.click)
           }

@@ -1056,6 +1056,36 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.codex).toEqual([])
   })
 
+  test('more than one answer can carry is given to a waiter over several askings, each click once and none lost', async () => {
+    await start()
+    expect(await turn(6, true)).toEqual({ ok: true })
+    // Thirty-four clicks that each carry as much as a click may, taken by Codex’s queue behind the turn that is running
+    const carried = JSON.stringify('x'.repeat(31_000))
+    const ids: string[] = []
+    for (let i = 0; i < 34; i++) {
+      const commands = stand.codex.length
+      ids.push(`click-big-${i}`)
+      offered({ ...click(6), id: ids[i]!, payload: carried })
+      await until(() => stand.codex.length === commands + 1)
+      stand.codex[commands]!.end()
+      await until(() => called('delivery:handedOff').includes(ids[i]!))
+      offered()
+    }
+    // Together they are over a megabyte, which is more than a waiter reads of one answer
+    expect(ids.length * carried.length).toBeGreaterThan(1_000_000)
+    const given: string[] = []
+    for (let asked = 0; asked < 5 && given.length < ids.length; asked++) {
+      const answer = await waitingFor(6)
+      // Each answer is one the waiter can read: none is refused for its size
+      expect(answer?.ok).toBe(true)
+      given.push(...(answer?.clicks ?? []).map((c) => c.id))
+    }
+    expect(given.length).toBe(ids.length)
+    expect([...given].sort()).toEqual([...ids].sort())
+    // More than one asking was needed, and a further one is given nothing a second time
+    expect((await waitingFor(6))?.clicks).toBeUndefined()
+  }, 60_000)
+
   test('one that Codex’s queue took while the conversation’s turn was running is given to a waiter that begins in that turn, and only once', async () => {
     await start()
     expect(await turn(6, true)).toEqual({ ok: true })
