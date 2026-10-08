@@ -575,6 +575,14 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       // This program's own number, noted with another beginning, is another process: nothing is done to it
       expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970')).toBe('gone')
       expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970', { harness: 'pi', session: 's', told: SINCE_TOLD })).toBe('gone')
+      // On Linux a process is told by the tick it started at, as the system keeps it, and not by a calendar
+      // time that is worked out from the machine's clock and changes when that is set right
+      if (process.platform === 'linux') {
+        const stat = readFileSync(`/proc/${process.pid}/stat`, 'utf8')
+        expect(identity([process.pid]).get(process.pid)).toBe(`tick ${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`)
+        // A note that tells this very process by the calendar time, as an earlier It wrote it, is neither ended nor forgotten
+        expect(await endTree(process.pid, 'Thu Oct  8 09:00:00 2026', { harness: 'pi', session: 's', told: 2 })).toBe('unknown')
+      }
       // Noted by a program that told a start another way: whether it is that process cannot be said, and it is neither ended nor forgotten
       expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970', { harness: 'pi', session: 's' })).toBe('unknown')
       expect(alive(process.pid)).toBe(true)

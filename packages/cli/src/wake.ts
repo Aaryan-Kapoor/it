@@ -479,10 +479,12 @@ export async function endTree(
 
 /**
  * How this program tells when a process was started, as a number that goes into each note of
- * a run: `ps`'s own words for it, in English and by the clock at Greenwich. A note without
- * the number, or with another, was written by a program that told it another way.
+ * a run. On Linux it is the tick at which the system itself says the process started, which no
+ * setting of the clock alters. On macOS it is `ps`'s own words for the time, in English and by
+ * the clock at Greenwich. A note without the number, or with another, was written by a program
+ * that told it another way.
  */
-export const SINCE_TOLD = 2
+export const SINCE_TOLD = 3
 
 /**
  * What says which start of this machine a process belongs to: one that was noted under another
@@ -590,6 +592,27 @@ export function processes(pids: number[]): Map<number, string> | null {
   const found = new Map<number, string>()
   if (process.platform === 'win32') return null
   if (pids.length === 0) return found
+  // On Linux a process is told by the tick of the machine's own count at which it started, as
+  // the system keeps it. The calendar time `ps` prints for it is worked out from when the
+  // machine started, and reads differently once the machine's clock has been set right, as a
+  // board with no clock battery sets its own when the network comes up: the same process
+  // would then be taken for another, and a run that is still going for one that is gone.
+  if (process.platform === 'linux') {
+    for (const pid of pids) {
+      try {
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+        // After the name, which stands in brackets and may hold anything, the twentieth word is the start
+        const ticks = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+        if (!ticks || !/^\d+$/.test(ticks)) return null
+        found.set(pid, `tick ${ticks}`)
+      } catch (err) {
+        // No such process any more. Anything else is a system that would not say
+        const code = (err as NodeJS.ErrnoException).code
+        if (code !== 'ENOENT' && code !== 'ESRCH') return null
+      }
+    }
+    return found
+  }
   // It says that none of them is there by ending with 1, with what it found before that in
   // what it printed. Anything else is a `ps` that could not be run, or was ended
   const listed = ps(['-o', 'pid=', '-o', 'lstart=', '-p', pids.join(',')], [0, 1])

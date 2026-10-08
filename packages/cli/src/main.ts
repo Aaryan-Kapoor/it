@@ -2362,7 +2362,7 @@ async function main(argv: string[]): Promise<void> {
         ...(now.unread ? ['It could not read its own note of which conversations were running when it last stopped, so it reopens none of them for now.'] : []),
         ...now.held.map(
           (r) =>
-            `${appName(r.agent)} conversation ${r.conversation} is held back: a turn of it from before (process ${r.pid}, started ${r.since} UTC) may still be running, and could not be checked on or ended.`,
+            `${appName(r.agent)} conversation ${r.conversation} is held back: a turn of it from before (process ${r.pid}${/^[A-Z][a-z]{2} /.test(r.since) ? `, started ${r.since} UTC` : ''}) may still be running, and could not be checked on or ended.`,
         ),
         ...(now.unread || now.held.length
           ? [
