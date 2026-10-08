@@ -61,7 +61,11 @@ export const useSession = (): Session => useSyncExternalStore(subscribe, current
 
 // ---------- asking the backend ----------
 
-/** How long a request about the session is waited for. */
+/**
+ * How long the backend is given to say whether this browser is paired. An asking that is never
+ * answered is given up and made again: the site shows nothing else until it is answered, and
+ * a connection that hangs would otherwise leave it so for as long as the connection did.
+ */
 const ANSWER_MS = 20_000
 
 /**
@@ -69,15 +73,14 @@ const ANSWER_MS = 20_000
  * another site cannot add without the browser first asking leave. The backend refuses any
  * that does not.
  */
-const post = (path: string, body?: unknown) =>
+const post = (path: string, body?: unknown, within?: number) =>
   fetch(path, {
     method: 'POST',
     headers: body === undefined ? { 'x-it-site': '1' } : { 'x-it-site': '1', 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: 'no-store',
     credentials: 'same-origin',
-    // One that is never answered is given up, as one that failed is, and whoever asked asks again
-    signal: AbortSignal.timeout(ANSWER_MS),
+    ...(within === undefined ? {} : { signal: AbortSignal.timeout(within) }),
   })
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -237,7 +240,7 @@ function askOnce(): Promise<Said> {
   const held = state.session ?? heldBefore()
   const mine = (async (): Promise<Said> => {
     try {
-      const r = await post('/session/token')
+      const r = await post('/session/token', undefined, ANSWER_MS)
       if (began !== era) {
         // An answer about the session that was here before may have given its cookie again, after it was cleared
         void clearCookies()
