@@ -233,6 +233,44 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     expect(readdirSync(kept)).toEqual([])
   })
 
+  test('a command that does not end when it is asked to is ended for it, on Stop and at the time limit, and the run is not said to be over while it is still there', async () => {
+    const command = path.join(scratch, 'stubborn')
+    const mark = path.join(scratch, 'stubborn.pid')
+    // The agent itself ends when asked. A command it started takes no notice of being asked.
+    writeFileSync(command, `#!/bin/sh\ncat > /dev/null\nsh -c 'trap "" TERM; echo $$ > "${mark}"; while :; do sleep 1; done' &\nwait\n`)
+    chmodSync(command, 0o755)
+    const there = async () => {
+      for (let n = 0; n < 100 && !(existsSync(mark) && readFileSync(mark, 'utf8').trim()); n++) await new Promise((r) => setTimeout(r, 50))
+      const its = Number(readFileSync(mark, 'utf8'))
+      rmSync(mark)
+      return its
+    }
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    // Stopped by the person
+    const stop = new AbortController()
+    const ran = carryOn({ argv: [command], input: 'a click', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, { signal: stop.signal })
+    const first = await there()
+    const began = Date.now()
+    stop.abort()
+    expect(await ran).toBe(STOPPED)
+    // It took the harder ending, a few seconds on, and nothing of the run was left by the time it was said to be over
+    expect(alive(first)).toBe(false)
+    expect(Date.now() - began).toBeGreaterThan(4000)
+    expect(Date.now() - began).toBeLessThan(10_000)
+    // And at the time limit, which is short here
+    const late = carryOn({ argv: [command], input: 'a click', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, { patience: 600 })
+    const second = await there()
+    expect(await late).toBe('Pi had not finished in fifteen minutes')
+    expect(alive(second)).toBe(false)
+  }, 40_000)
+
   test('the app is told the folder it is in, and not the one this program was started in', async () => {
     // OpenCode believes PWD over the folder it is started in. Left with this program's own, it
     // held the conversation in one folder, waited for it in another, and never ended.

@@ -2,7 +2,7 @@
 // conversation on without a window, how that command is run and stopped, and how often a
 // conversation may be reopened. None of it is done for an app the person has not switched
 // Auto-wake on for, which is the connector's to see to.
-import { execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, rmSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -248,7 +248,8 @@ export function carryOn(
       if (over) return
       over = true
       clearTimeout(timer)
-      clearTimeout(harder)
+      // The harder ending that was set going is left to come: whatever of this run is still
+      // there in a few seconds is ended then, whether or not the run has been said to be over
       opts.signal?.removeEventListener('abort', stop)
       // Ended by itself and badly: what it printed last is the only word there is of why
       if (itsOwn && printed && opts.said)
@@ -259,7 +260,6 @@ export function carryOn(
       forget()
       resolve(why)
     }
-    let harder: ReturnType<typeof setTimeout> | undefined
     let stopped = false
     // Asked to end, and ended for it a few seconds later if it has not: a turn that is stopped stops
     // Everything it started is ended with it, so that a command an agent is in the middle of
@@ -279,28 +279,76 @@ export function carryOn(
           process.kill(pid, how)
         } catch {}
     }
-    const quit = () => {
+    // Being ended: what of it is still there, and what it is to be said to have ended as. Nothing
+    // of a run is said to be over while a process of it can still act: the click it was reopened
+    // for would be tried again beside it.
+    let ending: { left: () => number[]; why: string | null; hard: boolean } | null = null
+    const quit = (why: string | null) => {
+      if (ending) return
+      if (process.platform === 'win32') {
+        // Windows has no group to signal: its own command ends a process with everything it started
+        ending = { left: () => [], why, hard: true }
+        if (child.pid) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {})
+        child.kill()
+        return
+      }
       const all = child.pid ? descendants(child.pid) : []
+      // Each as the process it is now, so that a number the system has since given to another
+      // process is not taken for one of these
+      const were = identity(all)
+      const left = () => [...identity(all)].filter(([pid, since]) => were.get(pid) === since).map(([pid]) => pid)
+      ending = { left, why, hard: false }
       signal('SIGTERM', all)
-      harder = setTimeout(() => signal('SIGKILL', all), 5000)
+      const harder = setTimeout(() => {
+        signal('SIGKILL', left())
+        if (ending) ending.hard = true
+        // Ended that way, there is nothing left of it to wait for: said to be over, if its own ending did not say so
+        setTimeout(() => end(why), 1500).unref?.()
+      }, 5000)
       harder.unref?.()
+    }
+    /** Says the run is over once nothing of it is left, looking a few times a second until the harder ending has come. */
+    const settle = () => {
+      const state = ending
+      if (!state) return
+      if (state.hard || state.left().length === 0) return end(state.why)
+      setTimeout(settle, 250).unref?.()
     }
     const stop = () => {
       stopped = true
-      quit()
+      quit(STOPPED)
     }
     opts.signal?.addEventListener('abort', stop, { once: true })
-    const timer = setTimeout(() => {
-      quit()
-      end(`${how.app} had not finished in fifteen minutes`)
-    }, patience)
+    const timer = setTimeout(() => quit(`${how.app} had not finished in fifteen minutes`), patience)
     child.once('error', (err) => end((err as NodeJS.ErrnoException).code === 'ENOENT' ? `${how.app} was not found` : `${how.app} could not be started`))
     child.once('exit', (code, signal) =>
-      stopped ? end(STOPPED) : code === 0 ? end(null) : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),
+      ending ? settle() : stopped ? end(STOPPED) : code === 0 ? end(null) : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),
     )
     child.stdin?.on('error', () => {})
     child.stdin?.end(how.input)
   })
+}
+
+/**
+ * Which of these processes there are now, each with when it was started: the two together are
+ * one process and no other, where its number alone may come to be another's. None where the
+ * system cannot be asked.
+ */
+export function identity(pids: number[]): Map<number, string> {
+  const found = new Map<number, string>()
+  if (process.platform === 'win32' || pids.length === 0) return found
+  let listed: string
+  try {
+    listed = execFileSync('ps', ['-o', 'pid=,lstart=', '-p', pids.join(',')], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
+  } catch (err) {
+    // It says that none of them is there by failing, with what it found before that in what it printed
+    listed = String((err as { stdout?: unknown }).stdout ?? '')
+  }
+  for (const line of listed.split('\n')) {
+    const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(line)
+    if (m) found.set(Number(m[1]), m[2]!)
+  }
+  return found
 }
 
 /**
