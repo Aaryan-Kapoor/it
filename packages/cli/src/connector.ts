@@ -1048,6 +1048,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
           return
         }
         heldFrom = again
+        // A waiter may have begun while the hold was being made good, as one may while it is
+        // first asked for: what goes into Codex's queue now would stand behind the very turn
+        // that is waiting for it, so it is given back for the waiter to take
+        if (!reopening && awaited(click, Date.now())) {
+          await giveBack()
+          journal('released', click.id)
+          await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+          return
+        }
       }
       // The command can take as long as a lease lasts, so the lease is kept up while it runs.
       // Only a renewal the backend confirmed keeps it. Told that a click of this hand-over is

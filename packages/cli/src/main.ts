@@ -570,6 +570,13 @@ async function wait(a: Args) {
     if (ending) return
     ending = true
     clearInterval(beat)
+    // Whatever the connector has handed over, or is handing over this moment, is printed
+    // before this ends, however it ends: the connector gives a click to a waiter once, and a
+    // wait that ended without printing it would have lost it. Only not after the wait has
+    // said that its time ran out, which is its last word.
+    deciding = true
+    await announcing
+    if (!over) await printHandedBack().catch(() => {})
     await local('/waiting', { method: 'POST', body: { id: who, done: true } })
     await client.close().catch(() => {})
     await end(code)
@@ -596,19 +603,23 @@ async function wait(a: Args) {
       if (ok) unreported.delete(id)
     }
   }
+  /** Prints what the connector handed back and has not been printed yet, and tells It of it. */
+  const printHandedBack = async () => {
+    for (const c of handedBack.splice(0)) {
+      if (printedIds.has(c.id)) continue
+      await emit(printed(c))
+      printedIds.add(c.id)
+      if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
+      unreported.add(c.id)
+      made.set(c.id, { at: c.at, harness: c.session?.harness, wasWaiting: false })
+    }
+    await report()
+  }
   const onHandedBack = async () => {
     if (busy || ending || over || !handedBack.length) return
     busy = true
     try {
-      for (const c of handedBack.splice(0)) {
-        if (printedIds.has(c.id)) continue
-        await emit(printed(c))
-        printedIds.add(c.id)
-        if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
-        unreported.add(c.id)
-        made.set(c.id, { at: c.at, harness: c.session?.harness, wasWaiting: false })
-      }
-      await report()
+      await printHandedBack()
       if (printedIds.size > 0 && !follow) await finish(0)
     } finally {
       busy = false
@@ -686,7 +697,14 @@ async function wait(a: Args) {
       if (ending || printedOne()) return
       // Something is being printed or reported this moment: looked at again when that is done
       if (busy) return void setTimeout(() => void timeUp(), 250)
-      const failed = (p: Problem, what: string) => {
+      const failed = async (p: Problem, what: string) => {
+        // What the connector handed over meanwhile is the answer, where there is any: a wait
+        // is said to have failed only where it got nothing
+        deciding = true
+        await announcing
+        while (busy) await new Promise((resolve) => setTimeout(resolve, 50))
+        await onHandedBack()
+        if (ending || printedOne()) return
         say(JSON.stringify({ error: { code: p.code, message: `${what}: ${p.message}`, ...(p.hint ? { hint: p.hint } : {}) } }))
         clearInterval(again)
         void finish(1)
