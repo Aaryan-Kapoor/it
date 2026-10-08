@@ -604,7 +604,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // the process it was is known by its number and by when it began, so that no other process
   // that has since been given the number is touched. Its conversation is told, the next time
   // it is reopened, that its turn was cut off.
-  type Run = { pid: number; since: string; boot?: string; told?: number; unsure?: true }
+  type Run = { pid: number; since: string; boot?: string; told?: number; unsure?: true; run?: string }
   /** The note of runs from before could not be read, as this connector found when it started: it reopens nothing, whatever became of the file since. */
   let unread = false
   /** And it could not be moved aside either, so it is still where the note of runs is written. */
@@ -647,6 +647,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       session: key.slice(colon + 1),
       boot: was.boot,
       told: was.told,
+      run: was.run,
     }).catch(() => 'unknown' as const)
     if (became === 'unknown') return false
     // Ended once already without the system saying what of it was left: that its own process
@@ -691,6 +692,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             ...(typeof was.boot === 'string' ? { boot: was.boot } : {}),
             ...(typeof (was as { told?: unknown }).told === 'number' ? { told: (was as { told: number }).told } : {}),
             ...((was as { unsure?: unknown }).unsure === true ? { unsure: true as const } : {}),
+            ...(typeof (was as { run?: unknown }).run === 'string' ? { run: (was as { run: string }).run } : {}),
           }
         }
       } catch {
@@ -864,7 +866,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       ended = await carryOn(
         how,
         cwd,
-        { harness: now.harness, session: now.id },
+        { harness: now.harness, session: now.id, run: runId },
         {
           signal: stop.signal,
           // Ended without the system saying what of it was left: it stays noted, and is looked at again before its conversation is next reopened
@@ -879,7 +881,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             const since = identity([pid]).get(pid)
             if (since === undefined) throw new Error('which process it is could not be told')
             const boot = bootId()
-            running.set(key, { pid, since, told: SINCE_TOLD, ...(boot ? { boot } : {}) })
+            running.set(key, { pid, since, told: SINCE_TOLD, run: runId, ...(boot ? { boot } : {}) })
             try {
               keepRuns(true)
             } catch (err) {

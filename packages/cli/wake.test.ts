@@ -630,6 +630,37 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
         await until(() => !identity([run.pid!]).has(run.pid!))
         return { pid: run.pid!, since, its }
       }
+      // A command the run started in a group of its own is found by the run's own name, which it
+      // carries, though the run is gone and its group is empty: nothing else would say it was the run's
+      const strayed = path.join(folder, 'strayed.pid')
+      // (Started by a program that can put what it starts in a group of its own on every system, which a shell cannot)
+      const leader = spawn(
+        process.execPath,
+        [
+          '-e',
+          `const stray = require('node:child_process').spawn('sleep', ['300'], { detached: true, stdio: 'ignore' })
+           require('node:fs').writeFileSync(${JSON.stringify(strayed)}, String(stray.pid))
+           stray.unref()
+           setTimeout(() => process.exit(1), 300)`,
+        ],
+        { detached: true, stdio: 'ignore', env: { ...process.env, IT_HARNESS: of.harness, IT_SESSION: of.session, IT_RUN: 'a-run-of-its-own' } },
+      )
+      await until(() => existsSync(strayed) && readFileSync(strayed, 'utf8').trim() !== '')
+      const leaderSince = identity([leader.pid!]).get(leader.pid!)!
+      await new Promise((r) => leader.once('exit', r))
+      await until(() => !identity([leader.pid!]).has(leader.pid!))
+      const stray = Number(readFileSync(strayed, 'utf8'))
+      left.push(stray)
+      expect(alive(stray)).toBe(true)
+      // By a note that does not name the run, as an earlier It wrote them, nothing of it is found: it is taken for gone
+      expect(await endTree(leader.pid!, leaderSince, { ...of, told: SINCE_TOLD })).toBe('gone')
+      expect(alive(stray)).toBe(true)
+      // By one that names another run, the same
+      expect(await endTree(leader.pid!, leaderSince, { ...of, told: SINCE_TOLD, run: 'another-run' })).toBe('gone')
+      expect(alive(stray)).toBe(true)
+      // By its own name it is found and ended
+      expect(await endTree(leader.pid!, leaderSince, { ...of, told: SINCE_TOLD, run: 'a-run-of-its-own' })).toBe('ended')
+      await until(() => !alive(stray))
       // Started as a reopened run is, with the two marks, which what it starts carries on
       const ours = await orphan({ IT_HARNESS: of.harness, IT_SESSION: of.session })
       expect(alive(ours.its)).toBe(true)

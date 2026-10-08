@@ -209,7 +209,8 @@ export function lastWords(text: string): string | null {
 export function carryOn(
   how: Carrying,
   cwd: string,
-  marks: { harness: string; session: string },
+  /** `run` is this run's own name, which no other run of the conversation has: what the run starts carries it on, and is found by it wherever it goes. */
+  marks: { harness: string; session: string; run?: string },
   opts: {
     patience?: number
     signal?: AbortSignal
@@ -251,6 +252,7 @@ export function carryOn(
           PWD: cwd,
           IT_HARNESS: marks.harness,
           IT_SESSION: marks.session,
+          ...(marks.run ? { IT_RUN: marks.run } : {}),
         },
         stdio: ['pipe', into ?? 'ignore', into ?? 'ignore'],
         windowsHide: true,
@@ -397,7 +399,7 @@ export function carryOn(
 export async function endTree(
   pid: number,
   since: string,
-  of?: { harness: string; session: string; boot?: string; told?: number },
+  of?: { harness: string; session: string; boot?: string; told?: number; run?: string },
 ): Promise<'ended' | 'gone' | 'unknown'> {
   if (process.platform === 'win32') return 'unknown'
   // Noted before the machine was last started: nothing of it is left, whatever has its number now
@@ -414,18 +416,23 @@ export async function endTree(
   let group = false
   // What is in its group and does not say whose it is: never signalled, and the run is not known to be over while any of it is there
   let others: number[] = []
+  // Whatever carries this run's own name, wherever it is by now: a command the run started in
+  // a group of its own is in neither the run's family nor its group once the run is gone, and
+  // is the run's all the same. No other run has the name, so what carries it is ended with it.
+  const strays = of?.run ? marked(of.run) : []
+  if (strays === null) return 'unknown'
   if (itself) {
     const under = descendantsKnown(pid)
     if (under === null) return 'unknown'
-    all = [pid, ...under]
+    all = [...new Set([pid, ...under, ...strays])]
     group = true
   } else {
     const members = inGroup(pid)
     if (members === null) return 'unknown'
-    if (!members.length) return 'gone'
+    if (!members.length && !strays.length) return 'gone'
     if (!of) return 'unknown'
-    const whose = members.map((p) => [p, belongs(p, of)] as const)
-    all = whose.filter(([, is]) => is === true).map(([p]) => p)
+    const whose = members.map((p) => [p, strays.includes(p) ? true : belongs(p, of)] as const)
+    all = [...new Set([...whose.filter(([, is]) => is === true).map(([p]) => p), ...strays])]
     // Whatever in the group does not say it is this run's may still be: a command started
     // with nothing handed on to it carries no mark. It is not signalled, since it may as well
     // be something else's, and while it is there the run is not known to be over.
@@ -582,6 +589,39 @@ function belongs(pid: number, of: { harness: string; session: string }): boolean
   if (!said.trim()) return false
   const has = ` ${said.replace(/\n/g, ' ')} `
   return marks.every((mark) => has.includes(` ${mark} `))
+}
+
+/**
+ * The processes that carry a run's own name in what they were started with, wherever they are.
+ * Null where the system could not be asked. Another person's process cannot be read and is
+ * passed over: it is not this run's, which runs as this person.
+ */
+function marked(run: string): number[] | null {
+  const mark = `IT_RUN=${run}`
+  const found: number[] = []
+  if (process.platform === 'linux') {
+    let listed: string[]
+    try {
+      listed = readdirSync('/proc')
+    } catch {
+      return null
+    }
+    for (const name of listed) {
+      if (!/^\d+$/.test(name)) continue
+      try {
+        if (readFileSync(`/proc/${name}/environ`, 'utf8').split('\0').includes(mark)) found.push(Number(name))
+      } catch {}
+    }
+  } else {
+    // With what each was started with after its words, which macOS shows of one's own processes
+    const said = ps(['-A', '-E', '-ww', '-o', 'pid=', '-o', 'command='])
+    if (said === null) return null
+    for (const line of said.split('\n')) {
+      const m = /^\s*(\d+)\s(.*)$/.exec(line)
+      if (m && ` ${m[2]} `.includes(` ${mark} `)) found.push(Number(m[1]))
+    }
+  }
+  return found.filter((pid) => pid !== process.pid)
 }
 
 /**
