@@ -779,6 +779,22 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await until(() => JSON.stringify(readJson(path.join(home, 'cut-off.json'))) === JSON.stringify(['codex:thread-2']))
   }, 30_000)
 
+  test('a machine whose clock is behind It’s reopens a conversation as soon as one whose clock is right, and does not wait out the difference', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    // By It's clock the click was made a moment ago, which by this machine's is three quarters of a minute from now
+    const began = Date.now()
+    offered({ ...click(1), at: began + 45_000 })
+    await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 20_000)
+    expect(Date.now() - began).toBeLessThan(15_000)
+  }, 60_000)
+
   test('a run that a person stopped while no connector was there to hear is told, the next time, that it was stopped, and not that it was cut off', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))

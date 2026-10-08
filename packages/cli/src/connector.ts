@@ -563,6 +563,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     clockSeen = now
     return now + setBack
   }
+  /** When this machine first saw each click that waits for a closed conversation, by the clock that is never set back. */
+  const firstSeen = new Map<string, number>()
   const reopenedNow = new Map<string, AbortController>()
   /** The name each of them has with It, by which It says which run a person stopped. */
   const runNames = new Map<string, string>()
@@ -1461,9 +1463,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // line like a queue, one click of a conversation at a time. And only so often: past
           // that the click waits, and goes with the next reopening. Nor while it is at work in a
           // window It cannot see into: it is looked at again once it is quiet.
-          if (now - click.at < SETTLE_MS) {
+          // How long it has been there is told by when this machine first saw it, as well as
+          // by when It says it was made. The second is by It's clock, and a joined machine whose
+          // own is three quarters of a minute behind waited that long before every reopening.
+          const here = steady()
+          if (!firstSeen.has(click.id)) {
+            if (firstSeen.size > 5000) firstSeen.clear()
+            firstSeen.set(click.id, here)
+          }
+          const there = Math.max(now - click.at, here - firstSeen.get(click.id)!)
+          if (there < SETTLE_MS) {
             waitingBehind.add(key)
-            soon(SETTLE_MS - (now - click.at) + 10)
+            soon(SETTLE_MS - there + 10)
           } else if (atWork(click.session, now) || !room(key, someoneThere(click)) || !queue(click, true)) waitingBehind.add(key)
         }
         // Route 4: nothing to do. The click stays waiting and the site shows it.
