@@ -582,7 +582,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           renameSync(runsFile(), aside)
         } catch {}
         say(
-          `the note of which conversations were running before this started could not be read, and is kept as ${aside}: anything it named is not looked after`,
+          'the note of which conversations were running before this started could not be read, and is kept as runs.json.unreadable in It’s folder: anything it named is not looked after',
         )
       }
     for (const [key, was] of Object.entries(noted && typeof noted === 'object' ? (noted as Record<string, { pid?: unknown; since?: unknown }>) : {})) {
@@ -879,10 +879,23 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // is renewed no more, and the run goes on with the rest.
       let heldUntil = Date.now() + LEASE_MS
       const keptUp = new Set([click.id, ...withIt.map((c) => c.id)])
+      /** The hold is gone, or may be: a conversation that was reopened for this is ended, once. */
+      const lose = () => {
+        if (over || !reopening || closing || lostHold.has(key)) return
+        const run = reopenedNow.get(follow(key))
+        if (!run) return
+        lostHold.add(key)
+        say(
+          `${a(harness)} conversation (${short(line)}) is ended: this machine’s hold on what it was reopened for was lost, and that may be with another machine by now`,
+        )
+        run.abort()
+      }
       keeping = setInterval(() => {
         const asked = Date.now()
         const ids = [...keptUp]
         if (!ids.length) return
+        // By the clock too, and not only when an answer comes: an asking that hangs is no hold
+        if (asked > heldUntil) return lose()
         void call<string[]>('mutation', api.delivery.renew, { ids })
           .then(async (kept) => {
             const not = ids.filter((id) => !kept.includes(id))
@@ -905,14 +918,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
               return
             }
             if (!said && Date.now() <= heldUntil) return
-            if (!reopening || closing || lostHold.has(key)) return
-            const run = reopenedNow.get(follow(key))
-            if (!run) return
-            lostHold.add(key)
-            say(
-              `${a(harness)} conversation (${short(line)}) is ended: this machine’s hold on what it was reopened for was lost, and that may be with another machine by now`,
-            )
-            run.abort()
+            lose()
           })
       }, RENEW_MS)
       journal('queueing', click.id)
