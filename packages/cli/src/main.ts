@@ -69,6 +69,7 @@ import {
   VERSION,
   why,
   windowsPathCommand,
+  withoutTables,
   writeAll,
   written,
 } from './lib'
@@ -1034,9 +1035,7 @@ function crumbs(folder: string): void {
     const file = path.join(codexHome, 'config.toml')
     const text = readFileSync(file, 'utf8')
     // A table of its own for each hook, holding the one line that says it was trusted
-    const without = text
-      .replace(/\n?\[hooks\.state\."it-bridge@it:[^"\n]*"\]\n(?:trusted_hash = "[^"\n]*"\n?)?/g, '\n')
-      .replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
+    const without = withoutTables(text, (header) => /^\[hooks\.state\."it-bridge@it:[^"]*"\]/.test(header)).replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
     if (without !== text) replaceWhole(file, without.replace(/\n{3,}/g, '\n\n'))
   } catch {}
   try {

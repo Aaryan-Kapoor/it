@@ -1456,3 +1456,28 @@ export function sessionNote(asked: Asking | undefined, did: string, otherwise: s
   const listed = others.length > 1 ? `${others.slice(0, -1).join(', ')} and ${others.at(-1)}` : others[0]
   return `${did} the ${name(asked.session.harness)} conversation ${asked.session.id}. This command also carried the marks of ${listed}, and which of them ran it could not be told. If that is not the conversation you are in, ${otherwise}`
 }
+
+/**
+ * Takes whole tables out of a TOML file's text: each from its header to the next header, with
+ * whatever settings, comments and blank lines stand in it. Taking a header alone would leave
+ * its settings to fall into the table before it, which may then say one thing twice and be no
+ * TOML at all. Comments and blank lines that stand directly before the next table are taken to
+ * introduce that one, and stay with it where it stays.
+ */
+export function withoutTables(text: string, owned: (header: string) => boolean): string {
+  const out: string[] = []
+  let dropping = false
+  let held: string[] = []
+  for (const line of text.split('\n')) {
+    if (/^\s*\[/.test(line)) {
+      dropping = owned(line.trim())
+      if (!dropping) out.push(...held, line)
+      held = []
+    } else if (!dropping) out.push(line)
+    else if (/^\s*(#.*)?\r?$/.test(line)) held.push(line)
+    else held = []
+  }
+  // The file ended in a table that is going: it still ends with the end of a line, if it did
+  if (dropping && text.endsWith('\n') && out.at(-1) !== '') out.push('')
+  return out.join('\n')
+}

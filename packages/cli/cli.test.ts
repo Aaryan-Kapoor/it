@@ -43,6 +43,7 @@ import {
   textOf,
   throughDoor,
   windowsPathCommand,
+  withoutTables,
   writePrivate,
 } from './src/lib'
 import { doorAddress } from './src/login'
@@ -1785,4 +1786,21 @@ describe('add-ons carried by the CLI', () => {
       }
     },
   )
+})
+
+describe('what It wrote into another program’s TOML file', () => {
+  test('is taken out a whole table at a time, whatever a person has put between a table’s header and its line, and every other table is left as it was', () => {
+    const owned = (header: string) => /^\[hooks\.state\."it-bridge@it:[^"]*"\]/.test(header)
+    const theirs = '[hooks.state."other@x:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:aa"\n'
+    // A comment and a blank line between the header and its one line: taking the header alone left the line in the table before it, twice over
+    const commented = `model = "gpt-6"\n\n${theirs}\n[hooks.state."it-bridge@it:hooks/hooks.json:stop:0:0"]\n# trusted on Tuesday\n\ntrusted_hash = "sha256:bb"\n`
+    expect(withoutTables(commented, owned)).toBe(`model = "gpt-6"\n\n${theirs}`)
+    // Between two tables of other things, with a comment that introduces the next one, and with Windows line ends
+    const between = `${theirs}\n[hooks.state."it-bridge@it:a"]\ntrusted_hash = "sha256:bb"\nextra = 1\n\n# the next one is mine\n[profiles.mine]\nmodel = "x"\n`
+    const left = `${theirs}\n\n# the next one is mine\n[profiles.mine]\nmodel = "x"\n`
+    expect(withoutTables(between, owned)).toBe(left)
+    expect(withoutTables(between.replaceAll('\n', '\r\n'), owned)).toBe(left.replaceAll('\n', '\r\n'))
+    // Nothing of It's in it: not a byte is changed
+    expect(withoutTables(`${theirs}# end`, owned)).toBe(`${theirs}# end`)
+  })
 })
