@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { signature, unsign } from '../../scripts/unsign.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 export const TARGETS = ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64', 'windows-x64']
@@ -66,7 +67,46 @@ for (const target of TARGETS) {
   execFileSync('bun', ['build', path.join(here, 'src/main.ts'), '--compile', '--minify', `--target=bun-${target}`, '--outfile', path.join(out, name)], {
     stdio: ['ignore', 'ignore', 'inherit'],
   })
+  // Bun leaves on the program for an Intel Mac the signature that its own runtime for that
+  // system came with, although it has written the bundle into bytes the signature holds hashes
+  // of, and a Mac can be expected to end a program whose signature is not its own as it starts.
+  // An Intel Mac runs a program that has no signature, and no Mac is part of this build to make
+  // a new one. So the signature is taken off, before the program is read for its checksum, and
+  // the file is written only where taking it off left a whole program.
+  if (target === 'darwin-x64') {
+    try {
+      const built = readFileSync(path.join(out, name))
+      const stale = signature(built)
+      writeFileSync(path.join(out, name), unsign(built))
+      console.log(
+        `unsigned ${name}: removed the ${stale.size} bytes of the signature Bun left on it, which ${stale.wrong} of its ${stale.pages} pages no longer matched`,
+      )
+    } catch (e) {
+      console.error(`the signature Bun leaves on ${name} could not be taken off: ${e.message}`)
+      process.exit(1)
+    }
+  }
   const program = readFileSync(path.join(out, name))
+  // What is given out for a Mac is then held, as it was written, to what a Mac asks of it. The
+  // program for an Intel Mac carries no signature. The one for Apple silicon, where nothing
+  // unsigned runs, carries the signature Bun makes for it once the bundle is in it: one that
+  // holds a hash of every page before it, each the page's own.
+  if (target.startsWith('darwin')) {
+    let fault
+    try {
+      const signed = signature(program)
+      if (target === 'darwin-x64') fault = signed && 'still carries a signature'
+      else if (!signed) fault = 'carries no signature, and a Mac with Apple silicon runs nothing unsigned'
+      else if (signed.wrong || signed.uncovered)
+        fault = `carries a signature that is not its own: ${signed.wrong} of the ${signed.pages} pages it holds a hash of do not have that hash, and ${signed.uncovered} bytes before it have none`
+    } catch (e) {
+      fault = `cannot be read as a program for a Mac: ${e.message}`
+    }
+    if (fault) {
+      console.error(`${name} ${fault}`)
+      process.exit(1)
+    }
+  }
   // A program without the backend functions in it could start a backend and give it nothing
   // to run. The functions are written into it with their hash beside them, so the hash is there
   // only if they are.
