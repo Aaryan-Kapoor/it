@@ -771,7 +771,7 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
         {
           code: 'conflict',
           message:
-            'There is already a page with the id board, "Board", and it belongs to another conversation (Claude Code’s, on the laptop, last changed 3 min ago). Nothing was published.',
+            'There is already a page with the id board, "Board", and it belongs to another conversation (Claude Code’s, on "the laptop", last changed 3 min ago). Nothing was published.',
           hint: 'If you are making something new, publish it under another id. If the person asked for that very page, `it open board` brings it up as it is and makes it this conversation’s, and this command with --take replaces it with yours. Taken either way, what is done on it comes here, and the other conversation hears no more of it.',
         },
       ])
@@ -802,7 +802,7 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
       // An id that led somewhere else is another conversation's all the same
       writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ 'codex:codex-yesterday': 'codex:someone-else' }))
       expect(error(await run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], mine)).message).toContain(
-        '(Codex’s, on the laptop, last changed 3 min ago)',
+        '(Codex’s, on "the laptop", last changed 3 min ago)',
       )
       rmSync(path.join(m.it, 'aliases.json'))
       has = { harness: 'claude-code', id: 'yesterday' }
@@ -1321,7 +1321,7 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
           id: 'plan',
           shownOn: [],
           notShownOn: [{ display: 'Kitchen', reason: 'not_paired' }],
-          hint: `Kitchen is not paired any more: the pairing of its browser was ended, and it shows nothing until that browser is paired again. ${AGAIN}`,
+          hint: `"Kitchen" is not paired any more: the pairing of its browser was ended, and it shows nothing until that browser is paired again. ${AGAIN}`,
         },
       ])
       const created = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--open'], b.env)
@@ -1336,7 +1336,7 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
             { display: 'Kitchen', reason: 'not_paired' },
             { display: 'Wall', reason: 'not_paired' },
           ],
-          hint: `Kitchen and Wall are not paired any more: the pairing of their browsers was ended, and they show nothing until those browsers are paired again. ${AGAIN}`,
+          hint: `"Kitchen" and "Wall" are not paired any more: the pairing of their browsers was ended, and they show nothing until those browsers are paired again. ${AGAIN}`,
         },
       ])
     } finally {

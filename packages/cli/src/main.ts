@@ -196,10 +196,10 @@ async function onDisplay<T>(a: Args, run: () => Promise<T>): Promise<T> {
   } catch (err) {
     if (!(err instanceof Problem) || err.code !== 'no_such_display') throw err
     const names = await call<{ name: string }[]>('query', api.displays.list).then(
-      (all) => all.map((d) => d.name).join(', '),
+      (all) => all.map((d) => named(d.name)).join(', '),
       () => '',
     )
-    throw new Problem(`No display is called "${text(a, 'on')}".`, 'not_found', names ? `Displays: ${names}` : noDisplay())
+    throw new Problem(`No display is called ${named(text(a, 'on') ?? '')}.`, 'not_found', names ? `Displays: ${names}` : noDisplay())
   }
 }
 /**
@@ -227,11 +227,11 @@ async function show(slug: string, a: Args) {
  */
 function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: string; reason: string }[]; hint?: string } {
   const notShownOn = shown.notShown ?? []
-  const ended = notShownOn.filter((d) => d.reason === 'not_paired').map((d) => d.display)
+  const ended = notShownOn.filter((d) => d.reason === 'not_paired').map((d) => named(d.display))
   const one = ended.length === 1
-  const named = one ? ended[0]! : `${ended.slice(0, -1).join(', ')} and ${ended.at(-1)}`
+  const which = one ? ended[0]! : `${ended.slice(0, -1).join(', ')} and ${ended.at(-1)}`
   const hint = ended.length
-    ? `${named} ${one ? 'is' : 'are'} not paired any more: the pairing of ${one ? 'its browser' : 'their browsers'} was ended, and ${one ? 'it shows' : 'they show'} nothing until ${one ? 'that browser is' : 'those browsers are'} paired again. On the machine It runs on, \`it site\` pairs the browser there. Another screen is paired from the site, under Displays, with “Add a display”.`
+    ? `${which} ${one ? 'is' : 'are'} not paired any more: the pairing of ${one ? 'its browser' : 'their browsers'} was ended, and ${one ? 'it shows' : 'they show'} nothing until ${one ? 'that browser is' : 'those browsers are'} paired again. On the machine It runs on, \`it site\` pairs the browser there. Another screen is paired from the site, under Displays, with “Add a display”.`
     : shown.displays.length || notShownOn.length
       ? undefined
       : noDisplay()
@@ -332,13 +332,20 @@ function carriedOn(was: { harness: string; id: string }): boolean {
   for (let hops = 0; hops < 10 && typeof became[key] === 'string'; hops++) key = became[key]!
   return key === `${now.harness}:${now.id}`
 }
+/**
+ * A name that a person or an agent chose (a page's title, a display's or a machine's name), as
+ * it stands in a sentence this command says as its own: in quotation marks that nothing in
+ * the name can close, so that no name reads as more of the sentence, or as another.
+ */
+const named = (name: string): string => JSON.stringify(name)
+
 /** What a conversation is told when the id it chose for a page is another conversation's page: whose it is, and the three things it can do. */
 function anothers(slug: string, theirs: Made | null): Problem {
   const app = appName(theirs?.agent ?? theirs?.session?.harness)
-  const whose = [app ? `${app}’s` : '', theirs?.machine ? `on ${theirs.machine}` : ''].filter(Boolean).join(', ')
+  const whose = [app ? `${app}’s` : '', theirs?.machine ? `on ${named(theirs.machine)}` : ''].filter(Boolean).join(', ')
   const changed = ago(theirs?.updatedAt)
   return new Problem(
-    `There is already a ${NOUN.one} with the id ${slug}${theirs?.title ? `, "${theirs.title}"` : ''}, and it belongs to another conversation${whose ? ` (${whose}${changed ? `, last changed ${changed}` : ''})` : ''}. Nothing was published.`,
+    `There is already a ${NOUN.one} with the id ${slug}${theirs?.title ? `, ${named(theirs.title)}` : ''}, and it belongs to another conversation${whose ? ` (${whose}${changed ? `, last changed ${changed}` : ''})` : ''}. Nothing was published.`,
     'conflict',
     `If you are making something new, publish it under another id. If the person asked for that very ${NOUN.one}, \`it open ${slug}\` brings it up as it is and makes it this conversation’s, and this command with --take replaces it with yours. Taken either way, what is done on it comes here, and the other conversation hears no more of it.`,
   )
