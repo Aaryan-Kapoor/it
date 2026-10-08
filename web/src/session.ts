@@ -435,7 +435,8 @@ async function toldToWait(r: Response): Promise<Wait | null> {
  */
 async function roleOf(code: string): Promise<'owner' | 'screen' | 'refused' | 'trouble' | Wait> {
   try {
-    const r = await post('/session/code', { code })
+    // Asking what a code is for uses nothing of it, so an asking that is never answered is given up and made again
+    const r = await post('/session/code', { code }, ANSWER_MS)
     if (r.ok) return ((await r.json().catch(() => null)) as { role?: unknown } | null)?.role === 'owner' ? 'owner' : 'screen'
     return r.status === 401 || r.status === 400 ? 'refused' : ((await toldToWait(r)) ?? 'trouble')
   } catch {
