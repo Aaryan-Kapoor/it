@@ -220,7 +220,8 @@
     # Where this was downloaded from, when it was not the usual place, is noted for the program:
     # it looks there for a newer It, and is updated from there. Asked later, from another
     # terminal, it would not know, and would turn to the usual place for both.
-    if ($env:IT_INSTALL_BASE) {
+    # A note left by an earlier install from another place is taken away by one from the usual place.
+    if ($base) {
       $note = Join-Path $root 'releases.json'
       try {
         if ($base -eq 'https://itcan.do/releases') { if (Test-Path -LiteralPath $note) { Remove-Item -Force -LiteralPath $note } }
@@ -230,7 +231,7 @@
           Move-Item -Force -LiteralPath $part -Destination $note
         }
       } catch {
-        Write-Host "Where this was downloaded from could not be noted in $root, so It will look for a newer version at the usual place and not at $base."
+        Write-Host "Where this was downloaded from could not be noted in $root, so It will look for a newer version where it looked before, and not at $base."
       }
     }
     # The folder is put first on the PATH that Windows keeps for this account. That PATH is

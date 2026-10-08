@@ -421,24 +421,24 @@ trap 'exit 143' TERM
 it_quoted=$(quoted "${DIR}/it")
 if [ "${led}" = 1 ]; then did "Installed in ${DIR}"; fi
 
-# Where this was downloaded from, when it was not the usual place, is noted for the program:
-# it looks there for a newer It, and is updated from there. Asked later, from another terminal,
-# it would not know, and would turn to the usual place for both. A place whose address could
-# not be written into the note as it stands is not noted, and neither is anything said to be.
-if [ -n "${IT_INSTALL_BASE:-}" ]; then
-  noted="${BASE%/}"
-  case "${noted}" in
-    https://itcan.do/releases) rm -f -- "${HOME_DIR}/releases.json" 2>/dev/null || true ;;
-    *'"'* | *'\'* | *"
+# Where this was downloaded from is noted for the program when it was not the usual place: it
+# looks there for a newer It, and is updated from there. Asked later, from another terminal,
+# it would not know, and would turn to the usual place for both. And a note left by an earlier
+# install from another place is taken away by one from the usual place, which would otherwise
+# go on looking where it was first installed from. A place whose address could not be written
+# into the note as it stands is not noted, and neither is anything said to be.
+noted="${BASE%/}"
+case "${noted}" in
+  https://itcan.do/releases) rm -f -- "${HOME_DIR}/releases.json" 2>/dev/null || true ;;
+  *'"'* | *'\'* | *"
 "*) : ;;
-    *)
-      if ! { (umask 077; printf '{"base":"%s"}\n' "${noted}" > "${HOME_DIR}/releases.json.$$") 2>/dev/null && mv -f -- "${HOME_DIR}/releases.json.$$" "${HOME_DIR}/releases.json" 2>/dev/null; }; then
-        rm -f -- "${HOME_DIR}/releases.json.$$" 2>/dev/null || true
-        say "Where this was downloaded from could not be noted in ${HOME_DIR}, so It will look for a newer version at the usual place and not at ${noted}." >&2 || true
-      fi
-      ;;
-  esac
-fi
+  *)
+    if ! { (umask 077; printf '{"base":"%s"}\n' "${noted}" > "${HOME_DIR}/releases.json.$$") 2>/dev/null && mv -f -- "${HOME_DIR}/releases.json.$$" "${HOME_DIR}/releases.json" 2>/dev/null; }; then
+      rm -f -- "${HOME_DIR}/releases.json.$$" 2>/dev/null || true
+      say "Where this was downloaded from could not be noted in ${HOME_DIR}, so It will look for a newer version where it looked before, and not at ${noted}." >&2 || true
+    fi
+    ;;
+esac
 
 # The folder is put on the PATH by one line in the file the person's shell reads when it
 # starts. Which file that is depends on the shell, and it is made if it is not there. The line
