@@ -215,6 +215,13 @@ jobs:
   # the system it is for, and that system's own install script run there. Both
   # are part of the gate, so that an install script that stops working on
   # either system stops a merge.
+  #
+  # There are two programs for macOS, and each is started on a Mac of its own
+  # kind. A Mac with Apple silicon runs nothing unsigned, and Bun signs the
+  # program for it. An Intel Mac is expected to end a program whose signature
+  # is not its own, and the build takes off the one that Bun leaves on the
+  # program for it. Neither program is known to run until a Mac of its kind
+  # has started it.
   programs-smoke:
     name: Program starts (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -226,6 +233,8 @@ jobs:
         include:
           - os: macos-latest
             program: it-darwin-arm64
+          - os: macos-15-intel
+            program: it-darwin-x64
           - os: windows-latest
             program: it-windows-x64.exe
     steps:
@@ -239,6 +248,21 @@ jobs:
         with:
           name: it-programs
           path: ${{ runner.temp }}/it-programs
+      # What macOS itself makes of the program's signature, printed before the program is
+      # started, so that a run in which it does not start says what it carried: no signature at
+      # all on the Intel Mac, and on Apple silicon one that no one signed. The first line says
+      # what the signature is and the second whether macOS finds it sound. Neither decides
+      # anything here, since codesign ends as a failure for a program that has no signature,
+      # which is what the Intel one is meant to be. Whether each program runs is the next step's
+      # to say.
+      - name: Say what signature the program carries
+        if: runner.os == 'macOS'
+        working-directory: ${{ runner.temp }}/it-programs
+        env:
+          PROGRAM: ${{ matrix.program }}
+        run: |
+          codesign -dv "./$PROGRAM" || true
+          codesign --verify --strict --verbose=4 "./$PROGRAM" || true
       # It says its version and its commands. It is not set up here, and starts no service.
       - name: Start it, in a folder of its own
         working-directory: ${{ runner.temp }}/it-programs

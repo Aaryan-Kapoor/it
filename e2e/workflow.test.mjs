@@ -264,7 +264,7 @@ describe('what the jobs are held to running', () => {
     expect(places).toMatch(/echo "IT_E2E_INVENTORY=\$RUNNER_TEMP\/it-run-holds\.jsonl" >> "\$GITHUB_ENV"/)
   })
 
-  test('the standalone programs are checked against their checksums and against the notices, and the two other systems start theirs', () => {
+  test('the standalone programs are checked against their checksums and against the notices, and the two other systems start theirs, a Mac of each kind its own', () => {
     for (const text of [
       'node packages/cli/release.mjs',
       'sha256sum -c SHA256SUMS',
@@ -274,8 +274,15 @@ describe('what the jobs are held to running', () => {
     ])
       expect(stepWith('programs', text), text).toBeGreaterThan(-1)
     const started = [...jobs['programs-smoke'].join('\n').matchAll(/- os: (\S+)\n\s+program: (\S+)/g)].map((m) => `${m[1]} ${m[2]}`)
-    expect(started).toEqual(['macos-latest it-darwin-arm64', 'windows-latest it-windows-x64.exe'])
+    expect(started).toEqual(['macos-latest it-darwin-arm64', 'macos-15-intel it-darwin-x64', 'windows-latest it-windows-x64.exe'])
     expect(stepWith('programs-smoke', 'node e2e/install.mjs "$RUNNER_TEMP/it-programs"')).toBeGreaterThan(-1)
+    // On both Macs, what macOS makes of the program's signature is printed before the program is started. An Intel
+    // program is meant to have none, which codesign ends as a failure for, so what it ends with fails nothing.
+    const said = stepWith('programs-smoke', 'codesign -dv "./$PROGRAM"')
+    expect(said).toBeGreaterThan(-1)
+    expect(stepWith('programs-smoke', '"./$PROGRAM" --version')).toBeGreaterThan(said)
+    expect(steps('programs-smoke')[said]).toMatch(/^ {8}if: runner\.os == 'macOS'$/m)
+    for (const line of scriptOf(steps('programs-smoke')[said]).split('\n').filter(Boolean)) expect(line).toMatch(/^codesign .+ "\.\/\$PROGRAM" \|\| true$/)
   })
 
   test('the first job reads every earlier commit for credentials and holds the notices to the bundles', () => {
