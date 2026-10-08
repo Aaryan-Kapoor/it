@@ -1954,6 +1954,26 @@ describe('clicks and their delivery', () => {
     expect(await onPage()).toMatchObject({ stopping: false })
   })
 
+  test('the ending of an earlier run of a conversation, told late, does not take away the run that has begun since, and an ending that names none is never that of a named run', async () => {
+    const { m } = await setup()
+    const runs = async () => (await m.as.query(api.machines.me, {})).runs.map((r) => (r as { run?: string }).run ?? null)
+    await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'first' })
+    // The same conversation is reopened again before the first run's ending has been heard
+    await m.as.mutation(api.machines.runBegan, { for: SESSION, run: 'second' })
+    expect(await runs()).toEqual(['second'])
+    await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'first' })
+    await m.as.mutation(api.machines.runEnded, { for: SESSION })
+    expect(await runs()).toEqual(['second'])
+    await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'second', ok: true })
+    expect(await runs()).toEqual([])
+    // A run begun with no name, as an earlier It begins them, is ended by an ending with none and by no other
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    await m.as.mutation(api.machines.runEnded, { for: SESSION, run: 'second' })
+    expect(await runs()).toEqual([null])
+    await m.as.mutation(api.machines.runEnded, { for: SESSION })
+    expect(await runs()).toEqual([])
+  })
+
   test('clicks that were set aside, or are another machine’s, never hide one a listening machine may take', async () => {
     const { t, alice, m: old, p } = await setup()
     // Another of the person's machines, which stays enrolled and has clicks of its own for a

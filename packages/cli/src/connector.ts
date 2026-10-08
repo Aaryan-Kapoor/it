@@ -534,6 +534,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** The conversations this machine has reopened and that are running now, each with the way to stop it. */
   const reopenedNow = new Map<string, AbortController>()
+  /** The name each of them has with It, by which It says which run a person stopped. */
+  const runNames = new Map<string, string>()
   /** Whether this connector is stopping: what it reopened is then ended with it, and is not taken for something a person stopped. */
   let closing = false
   /**
@@ -784,6 +786,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     reopenedNow.set(key, stop)
     // This run's own name with It, so that the ending of the run before it, told late, does not take this one's place away
     const runId = randomUUID()
+    runNames.set(key, runId)
     let ended: string | null = 'it did not end'
     try {
       // It is told first, and nothing is started where it could not be told: it is by that
@@ -859,6 +862,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       return ended
     } finally {
       reopenedNow.delete(key)
+      runNames.delete(key)
       // Its turn was cut off, and the word of that could not be written down (a disk that is
       // full): the note of the run itself is kept on, which says as much to whichever
       // connector starts next, where letting go of it would leave no sign of the turn at all
@@ -1958,8 +1962,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // A conversation the person asked to have stopped is stopped. One that It has down as
       // running and that is not, which a connector that died leaves behind, is said to be over.
       for (const r of me.runs ?? []) {
-        const run = reopenedNow.get(follow(keyOf(r.harness, r.sessionId)))
-        if (run && r.stop) run.abort()
+        const key = follow(keyOf(r.harness, r.sessionId))
+        const run = reopenedNow.get(key)
+        // The stop is of the run It names. One heard late, of the run before, is not a stop of the one that has begun since
+        if (run && r.stop && r.run === runNames.get(key)) run.abort()
         // Named as It has it, so that only that run is taken away: one that began since stays
         if (!run)
           void call('mutation', api.machines.runEnded, { for: { harness: r.harness, id: r.sessionId }, ...(r.run ? { run: r.run } : {}) }).catch(() => {})

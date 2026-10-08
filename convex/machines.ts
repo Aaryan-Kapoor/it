@@ -194,8 +194,10 @@ export const runEnded = mutation({
   handler: async (ctx, { for: s, ok, run }) => {
     const { machine } = await requireMachine(ctx)
     const now = machine.runs ?? []
-    // Named, only that run is over: another of the same conversation that has begun since stays as it is
-    const left = s ? now.filter((r) => r.harness !== s.harness || r.sessionId !== s.id || (run !== undefined && r.run !== undefined && r.run !== run)) : []
+    // Only the run that is named is over: another of the same conversation that has begun since
+    // stays as it is. An ending that names none is of a run that was begun with no name, as an
+    // earlier It begins them, and never of one that has a name.
+    const left = s ? now.filter((r) => r.harness !== s.harness || r.sessionId !== s.id || r.run !== run) : []
     const fails = machine.fails ?? []
     const stillFailed = s && ok ? fails.filter((f) => f.harness !== s.harness || f.sessionId !== s.id) : fails
     if (left.length !== now.length || stillFailed.length !== fails.length) await ctx.db.patch(machine._id, { runs: left, fails: stillFailed })

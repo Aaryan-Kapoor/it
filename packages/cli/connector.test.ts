@@ -704,6 +704,35 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:handedOff')).toEqual([])
   }, 60_000)
 
+  test('a stop that It tells of is the stop of the run It names: one of the run before, heard late, does not end the run that has begun since', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexec sleep 120\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+    stand.closed.add('thread-1')
+    const me = (runs: unknown[]) => stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }], runs })
+    me([])
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 25_000)
+    // It was told of the run by a name of its own
+    const name = stand.calls.find((c) => c.name === 'machines:runBegan')!.args.run as string
+    expect(name).toMatch(/^[0-9a-f-]{36}$/)
+    const ended = () => stand.calls.filter((c) => c.name === 'machines:runEnded').map((c) => c.args.run)
+    // What It says of a stopped run of another name, or of none, is not about this one
+    me([{ harness: 'codex', sessionId: 'thread-1', stop: true, run: 'the-run-before' }])
+    me([{ harness: 'codex', sessionId: 'thread-1', stop: true }])
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    expect(ended()).toEqual([])
+    expect(said.some((line) => line.includes('was stopped by the person'))).toBe(false)
+    // The stop of this very run ends it, and It is told that the run of that name is over
+    me([{ harness: 'codex', sessionId: 'thread-1', stop: true, run: name }])
+    await until(() => ended().length > 0, 25_000)
+    expect(ended()).toEqual([name])
+    expect(said.some((line) => line.includes('was stopped by the person'))).toBe(true)
+  }, 90_000)
+
   test('a conversation that a connector which died left running is ended, with what it had started, before anything is handed out, and is told that its turn was cut off', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
