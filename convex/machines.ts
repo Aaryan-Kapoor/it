@@ -1,4 +1,4 @@
-import { ALIVE, HARNESSES, LIMITS, NO_WAKE_HERE, newer, QUOTA, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
+import { ALIVE, HARNESSES, LIMITS, newer, noWakeHere, QUOTA, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
@@ -20,7 +20,8 @@ const view = (m: Doc<'machines'>) => ({
   upgrade: m.upgrade ?? null,
   harnesses: m.harnesses ?? [],
   wanted: m.wanted ?? [],
-  wakes: m.wakes ?? [],
+  // Only where It reopens conversations at all: what was switched on for a machine of another system says nothing
+  wakes: wakesOn(m.system) ? (m.wakes ?? []) : [],
   runs: m.runs ?? [],
 })
 
@@ -103,7 +104,7 @@ export const wake = mutation({
     const { user } = await requireOwner(ctx)
     const m = await ownMachine(ctx, user._id, machineId)
     if (!(WAKES as readonly string[]).includes(harness)) fail('invalid', 'It cannot reopen a closed conversation of that agent app.')
-    if (on && !wakesOn(m.system)) fail('invalid', NO_WAKE_HERE)
+    if (on && !wakesOn(m.system)) fail('invalid', noWakeHere(m.system))
     const now = m.wakes ?? []
     const is = now.some((w) => w.harness === harness)
     // Switched on again while it is on, it stays on since when it was: nothing older is let in by asking twice

@@ -1,7 +1,7 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import { ALIVE, HARNESSES, INSTALL, NO_WAKE_HERE, newer, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
+import { ALIVE, HARNESSES, INSTALL, newer, noWakeHere, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -344,7 +344,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                     </span>
                   </label>
                 )}
-                {couldWake && !wakeable && <span className="row-detail row-sub">{NO_WAKE_HERE}</span>}
+                {couldWake && !wakeable && <span className="row-detail row-sub">{noWakeHere(m.system)}</span>}
               </li>
             )
           })}

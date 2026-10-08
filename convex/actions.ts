@@ -97,6 +97,40 @@ export async function noLongerWaiting(ctx: MutationCtx, x: Doc<'actions'>): Prom
   if (await ctx.db.get(x.userId)) await bump(ctx, x.userId, { waiting: -1 })
 }
 
+/**
+ * Whether the person stopped the conversation a click is for after the click was made. Such a
+ * click is delivered by no way at all from that moment, though the step that marks it so may
+ * not have come to it yet: a stop drops what was waiting in steps, and what a step has not
+ * reached must not be taken, or moved out of its reach, in between.
+ *
+ * A stop is noted with the machine the conversation ran on. It is looked for under the
+ * conversation the click is addressed to as it stands, and under the one its page belongs to
+ * now: a page that has changed hands since takes its waiting clicks along a step at a time,
+ * and one made before the stop is stopped whichever of the two it is found under.
+ */
+export async function stoppedSince(ctx: QueryCtx, x: Doc<'actions'>): Promise<boolean> {
+  const noted = async (machineId: Id<'machines'> | undefined, harness: string | undefined, sessionId: string | undefined) => {
+    if (!machineId || !harness || !sessionId) return false
+    const machine = await ctx.db.get(machineId)
+    return (machine?.stops ?? []).some((s) => s.harness === harness && s.sessionId === sessionId && s.at >= x.createdAt)
+  }
+  if (await noted(x.machineId ?? x.parkedBy, x.harness, x.sessionId)) return true
+  const page = await ctx.db.get(x.artifactId)
+  return noted(page?.machineId, page?.session?.harness, page?.session?.id)
+}
+/** Marks a click as stopped with its conversation, as the stop itself does for what it reaches: handed over to nobody, and waiting no more. */
+export async function dropStopped(ctx: MutationCtx, x: Doc<'actions'>): Promise<void> {
+  await ctx.db.patch(x._id, {
+    delivery: 'handed_off',
+    route: 'stopped',
+    handedAt: Date.now(),
+    outcome: 'failed',
+    leaseMachineId: undefined,
+    leaseExpiresAt: undefined,
+  })
+  await noLongerWaiting(ctx, x)
+}
+
 /** Where a click on a page should go now: the machine and conversation that own the page at this moment. */
 export async function destination(ctx: QueryCtx, artifactId: Id<'artifacts'>) {
   const artifact = await ctx.db.get(artifactId)
@@ -121,6 +155,12 @@ export const readdress = internalMutation({
       .withIndex('by_artifact_delivery', (q) => q.eq('artifactId', artifactId).eq('delivery', 'pending'))
       .paginate({ cursor: cursor ?? null, numItems: 50 })
     for (const x of batch.page) {
+      // Stopped with the conversation it was waiting for, before the page changed hands: it
+      // is marked so here, and not carried over to a conversation the stop was never about
+      if (await stoppedSince(ctx, x)) {
+        await dropStopped(ctx, x)
+        continue
+      }
       // A click its old machine had set aside is the new owner's to try afresh
       // A click set aside for the very conversation that still owns the page stays so. One set
       // aside for an earlier owner, on another machine or the same one, is the new owner's to try.

@@ -206,6 +206,7 @@ describe('what is said of an agent app on a machine', () => {
     name: 'the desk',
     lastSeenAt: seen,
     connectorVersion: '0.1.0',
+    system: 'linux',
     harnesses,
     wanted,
     wakes: wakes.map((harness) => ({ harness, since: seen })),
@@ -345,6 +346,13 @@ describe('what is said of an agent app on a machine', () => {
     watched['machines:list'] = [machine(Date.now(), [{ id: 'claude-code', version: '2.1.0', addon: 'not_connected' }], [])]
     await show(createElement(Machines))
     expect(switches()).toEqual([])
+    await act(async () => root.unmount())
+    host.remove()
+    // On a machine that runs Windows the switch is not there, and why is said in its place
+    watched['machines:list'] = [{ ...machine(Date.now(), found, ['claude-code', 'codex']), system: 'win32' }]
+    await show(createElement(Machines))
+    expect(switches()).toEqual([])
+    expect(host.textContent).toContain('It does not reopen closed conversations on a Windows machine yet.')
   })
 })
 

@@ -149,6 +149,8 @@ async function machineOf(t: T, who: string, name = 'laptop', replaces?: string) 
   const publicKey = { ...KEY, x: `x${++keys}` }
   const made = await t.mutation(internal.bridge.enroll, { subject: subjectOf(who), name, publicKey, ...(replaces ? { replaces } : {}) })
   if ('error' in made) throw new Error(made.error)
+  // It has said which system it runs, as a connector does in the first report it makes
+  await t.run((ctx) => ctx.db.patch(made.machineId, { system: 'linux' }))
   return { id: made.machineId, as: t.withIdentity({ issuer: SITE, subject: made.machineId, kind: 'machine' }) }
 }
 async function publish(machine: { as: ReturnType<T['withIdentity']> }, slug: string, extra: Record<string, unknown> = {}) {
@@ -1718,6 +1720,16 @@ describe('clicks and their delivery', () => {
     expect(await m.as.mutation(api.delivery.claim, { ids: [waitingStill._id], for: SESSION })).toEqual([])
     expect(await m.as.mutation(api.delivery.handedOff, { id: inHand._id, route: 'addon' })).toMatchObject({ already: true })
     expect((await t.run((ctx) => ctx.db.get(inHand._id)))?.route).toBe('stopped')
+    // Nor where the page has been taken over by another conversation in between: what was done before the stop was
+    // done for the conversation that was stopped, and is not the new one's to be given
+    const other = { harness: SESSION.harness, id: 'another-conversation' }
+    const carried = yetToDrop.find((x) => x.delivery === 'pending' && x._id !== waitingStill._id)!
+    await t.run((ctx) => ctx.db.patch(p.artifactId, { session: other }))
+    expect(await m.as.mutation(api.delivery.claim, { ids: [carried._id], for: other })).toEqual([])
+    expect((await t.run((ctx) => ctx.db.get(carried._id)))?.route).toBe('stopped')
+    await t.mutation(internal.actions.readdress, { artifactId: p.artifactId })
+    expect((await t.run(async (ctx) => (await ctx.db.query('actions').collect()).filter((x) => x.sessionId === other.id))).length).toBe(0)
+    await t.run((ctx) => ctx.db.patch(p.artifactId, { session: SESSION }))
     // The person does something more on the page, after stopping
     await vi.advanceTimersByTimeAsync(50)
     const after = await alice.browser.mutation(api.actions.submit, {
@@ -2626,6 +2638,24 @@ describe('displays and machines', () => {
     // What the machine chooses for itself, as `it setup` does, leaves it as the person set it
     await m.as.mutation(api.machines.choose, { harnesses: ['codex'] })
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([{ harness: 'claude-code', since: at }])
+    // On a machine that runs Windows, or that has not said what it runs, reopening is not to be had:
+    // the switch is refused with why, what was switched on before says nothing, and nothing is offered for reopening
+    for (const [system, why] of [
+      ['win32', 'It does not reopen closed conversations on a Windows machine yet.'],
+      [undefined, 'This machine has not said which system it runs'],
+    ] as const) {
+      await t.run((ctx) => ctx.db.patch(m.id as never, { system }))
+      expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+      expect(await onPage('plan')).toBeNull()
+      await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: false })
+      await expect(alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })).rejects.toThrow(why)
+      await t.run((ctx) => ctx.db.patch(m.id as never, { system: 'linux' }))
+      await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    }
+    // A connector says what it runs on when it reports, and one that does not say leaves it as it was
+    await m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [], system: 'darwin' })
+    await m.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [] })
+    expect(((await t.run((ctx) => ctx.db.get(m.id as never))) as { system?: string }).system).toBe('darwin')
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: false })
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
     expect(await onPage('plan')).toEqual({ machineId: m.id, harness: 'claude-code', on: false })

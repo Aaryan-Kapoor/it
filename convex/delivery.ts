@@ -6,12 +6,12 @@
 // Two things about a click never change while it is delivered: which machine it is for, and
 // which conversation. Who holds the lease is recorded separately, so a machine that borrows a
 // click and dies does not take it away from its owner.
-import { LEASE_MS, LISTENING_MOST, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKES } from '@it/protocol'
+import { LEASE_MS, LISTENING_MOST, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
-import { destination, noLongerWaiting } from './actions'
+import { internalMutation, mutation, type QueryCtx, query } from './_generated/server'
+import { destination, dropStopped, noLongerWaiting, stoppedSince } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
 import { log } from './lib/log'
@@ -120,7 +120,8 @@ export const inbox = query({
       let from = 0
       const reopened = (WAKES as readonly string[]).includes(harness) && !(QUEUES as readonly string[]).includes(harness)
       if (reopened) {
-        const on = (machine.wakes ?? []).find((w) => w.harness === harness)
+        // And only on a system It reopens conversations on, whatever was switched on for this machine before that was asked
+        const on = wakesOn(machine.system) ? (machine.wakes ?? []).find((w) => w.harness === harness) : undefined
         if (!on) continue
         from = on.since - WAKE_BACK_MS
       }
@@ -232,31 +233,6 @@ export const get = query({
     return { ...click, delivery: x.delivery, route: x.route ?? null, outcome: x.outcome ?? null }
   },
 })
-
-/**
- * Whether the person stopped the conversation a click is for after the click was made. Such a
- * click is delivered by no way at all from that moment, though the step that marks it so may
- * not have come to it yet: a stop drops what was waiting in steps, and what a step has not
- * reached must not be taken in between. A stop is noted with the machine its page belongs to.
- */
-async function stoppedSince(ctx: QueryCtx, x: Doc<'actions'>): Promise<boolean> {
-  const page = await ctx.db.get(x.artifactId)
-  if (!page?.machineId || !page.session) return false
-  const machine = await ctx.db.get(page.machineId)
-  return (machine?.stops ?? []).some((s) => s.harness === page.session?.harness && s.sessionId === page.session.id && s.at >= x.createdAt)
-}
-/** Marks a click as stopped with its conversation, as the stop itself does for what it reaches: handed over to nobody, and waiting no more. */
-async function dropStopped(ctx: MutationCtx, x: Doc<'actions'>): Promise<void> {
-  await ctx.db.patch(x._id, {
-    delivery: 'handed_off',
-    route: 'stopped',
-    handedAt: Date.now(),
-    outcome: 'failed',
-    leaseMachineId: undefined,
-    leaseExpiresAt: undefined,
-  })
-  await noLongerWaiting(ctx, x)
-}
 
 /**
  * Leases clicks for delivery. Returns the ones this caller now holds. A connector that is about
@@ -421,7 +397,11 @@ export const release = mutation({
   handler: async (ctx, { id }) => {
     const { x, machine } = await mine(ctx, id)
     // Back in the queue, addressed to whoever owns the page now: it may have changed hands meanwhile
-    if (x.delivery === 'leased' && x.leaseMachineId === machine._id) await ctx.db.patch(id, await backToWaiting(ctx, x))
+    if (x.delivery === 'leased' && x.leaseMachineId === machine._id) {
+      // Stopped with its conversation while this machine had it: it goes back to nobody
+      if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
+      else await ctx.db.patch(id, await backToWaiting(ctx, x))
+    }
     return null
   },
 })
@@ -545,7 +525,10 @@ export const reap = internalMutation({
       .query('actions')
       .withIndex('by_delivery_lease', (q) => q.eq('delivery', 'leased').lt('leaseExpiresAt', now))
       .take(100)
-    for (const x of stale) await ctx.db.patch(x._id, await backToWaiting(ctx, x))
+    for (const x of stale) {
+      if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
+      else await ctx.db.patch(x._id, await backToWaiting(ctx, x))
+    }
     // More than one batch of them: carry on now, not a minute from now
     if (stale.length === 100) await ctx.scheduler.runAfter(0, internal.delivery.reap, {})
     // Each one is a click some connector took and did not hand over: it died, or lost its connection

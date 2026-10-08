@@ -166,10 +166,11 @@ export const WAKES: readonly Harness[] = ['claude-code', 'codex', 'pi', 'opencod
  * Whether It reopens a closed conversation on a machine of this system, as the machine names
  * its system (`process.platform`). Not on Windows yet: a conversation reopened there cannot be
  * found again and ended after the service has died, which is what makes running an agent with
- * nobody watching safe to offer. A machine that has not said what it runs on is one from
- * before any said, and is taken at its word as it was.
+ * nobody watching safe to offer. A machine that has not said what it runs on is not taken to
+ * be one of the systems this holds on: it says so in its first report, a moment after its
+ * connector starts, and an It from before any machine said is to be updated first.
  */
-export const wakesOn = (system: string | null | undefined): boolean => system !== 'win32'
+export const wakesOn = (system: string | null | undefined): boolean => system === 'linux' || system === 'darwin'
 /**
  * How long an upgrade that a person asked for on the site is taken to be at work. One that has
  * said nothing more by then was cut short (its machine went off, or the program that was to
@@ -177,8 +178,10 @@ export const wakesOn = (system: string | null | undefined): boolean => system !=
  */
 export const UPGRADE_MS = 15 * 60_000
 /** What a person is told where they would switch reopening on for a machine It does not reopen conversations on. */
-export const NO_WAKE_HERE =
-  'It does not reopen closed conversations on a Windows machine yet. What is done on a page waits until its conversation is open again.'
+export const noWakeHere = (system: string | null | undefined): string =>
+  system === 'win32'
+    ? 'It does not reopen closed conversations on a Windows machine yet. What is done on a page waits until its conversation is open again.'
+    : 'This machine has not said which system it runs, so It reopens no closed conversation on it. It says so when its connector starts: update It on that machine if it does not.'
 /**
  * The agent apps with a queue of their own, which takes a click whether or not its conversation
  * is open. A click for one of these goes to that queue first, and its conversation is reopened
