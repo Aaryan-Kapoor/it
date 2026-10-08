@@ -551,8 +551,11 @@ try {
       zsh.said,
     )
     // fish reads none of those files, and is given one of It's own, in fish's own words
-    const fish = await install('fish', {}, { shell: '/usr/bin/fish' })
-    const fishFile = path.join(fish.home, '.config', 'fish', 'conf.d', 'it.fish')
+    // Where fish keeps its files is said by a variable where one is set, and the machine this runs on may set one: it is
+    // set here to a folder of this install's own, so that nothing is written into the home of whoever runs the suite
+    const fishKeeps = path.join(tmp, 'fish', 'kept for fish')
+    const fish = await install('fish', { XDG_CONFIG_HOME: fishKeeps }, { shell: '/usr/bin/fish' })
+    const fishFile = path.join(fishKeeps, 'fish', 'conf.d', 'it.fish')
     check(
       'a person whose shell is fish gets the line in a file of fish’s own, written as fish reads it, and no other shell’s file is made',
       fish.code === 0 &&
