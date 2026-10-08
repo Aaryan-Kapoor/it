@@ -86,7 +86,7 @@ A code pairs one browser, once, and works for ten minutes. An address from `it s
 
 A display with the site open brings a page up when an agent asks it to. One whose browser is closed does not open by itself.
 
-The bar above a page says where the last thing you did has got to, and what it says tells you what to do:
+The bar above a page says what is still waiting, though something you did later is done with, and otherwise where the last thing you did has got to. What it says tells you what to do:
 
 | The bar says | What it means | What to do |
 |---|---|---|
@@ -95,16 +95,27 @@ The bar above a page says where the last thing you did has got to, and what it s
 | Can’t reach It | It has not answered for a few seconds: it is stopped, or this device has lost its network | Start It (`it status` on its machine says how it stands). What you did is kept and sent then |
 | Sent. Waiting for your agent | It has it, and is handing it to the agent | Nothing, for the first seconds |
 | Sent. … is busy, and gets it when it is free | The conversation is open and in the middle of something | Wait for its turn to end |
-| Sent. … is not listening: its conversation looks closed | Nothing on that machine was listening for it: the conversation is closed, or its app is not running | Open the conversation again, or press "Wake it" to have It reopen it for this and from now on |
-| Working | It reopened the conversation, and its agent is at work | Nothing. Stop, beside it, ends the agent |
+| Sent. … is not listening: its conversation looks closed | Nothing on that machine was listening for it: the conversation is closed, or its app is not running | Open the conversation again, or press "Wake it", where it is offered, to have It reopen it for this and from now on. It is offered in a browser paired as yours, for what was done in the last day, on a machine that runs Linux or macOS |
+| Sent more than a day ago. … gets it when its conversation is next open | It is older than anything a conversation is reopened for | Open the conversation again |
+| … earlier things done here are still waiting for … | What you did last is done with, and something from before it never reached the agent | Open its conversation, or look at its machine |
+| Working | It reopened the conversation, and its agent is at work. "…more waiting" counts what else you did meanwhile, and "not sent yet" what has not left this browser | Nothing. Stop, beside it, ends the agent and drops what was waiting for it |
+| Stopping | You asked for the agent to be stopped, and its machine has not yet said it is | Wait a few seconds |
+| … is not answering. Whether … is still at work there is not known | The machine went quiet while its agent was working: it may have stopped, or may not | Look at that machine. Stop can still be asked, and is kept for it |
+| Asked to stop. … is not answering, and is told when it is back | Your stop is kept, and the machine has not heard it | Look at that machine if the work has to end now |
+| Not sent yet. This browser could not save it, so keep this tab open | This browser would not store what you did, so it is only in this tab | Keep the tab open until it says it was sent |
 | Couldn’t wake …, with a reason | It tried to reopen the conversation and could not: the reason follows, with the last line the agent app itself printed where it ended with an error | Put right what the reason names. It tries four times in all, further apart each time, and then leaves what you did waiting until the conversation next runs |
-| Stopped | You stopped the agent. What was waiting for that conversation went with the stop | Do it again if you still want it |
+| Stopped, sometimes "with … more that were waiting" | You stopped the agent. What was waiting for that conversation went with the stop | Do it again if you still want it |
+| Your agent got it; whether it finished is not known | It was handed over, and what became of the work cannot be told | Look at the page and the conversation before you do it again |
 | Your agent has it | The agent was given it and has not changed the page since | Wait, or look at the conversation |
 | Done, or Your agent could not do that | The agent said so | |
 | This page has an error in it | The page's own script failed, with the words that follow | Nothing, where it ends "It has been sent to your agent" and the agent's conversation is open: the agent that wrote the page gets the error and mends the page. Where its conversation is closed, the error waits for it as a click does, and the bar says so. Where it ends "Tell your agent", say those words to it yourself. Until the page is mended, what you do on it may not be sent |
-| Waiting for … to come online | The machine whose agent made the page is off: It was stopped there, which is known at once, or the machine has not been heard from for a minute and a half, as when a laptop is closed | Start It on that machine, or wake the computer. What you did is delivered when it is back |
+| Waiting for … to come online | The machine whose agent made the page is off: It was stopped there, which is known at once, or the machine has not been heard from for a hundred seconds, as when a laptop is closed | Start It on that machine, or wake the computer. What you did is delivered when it is back |
 | … was removed from It | The machine the page was made on was revoked, or left with `it logout`. What you do on the page reaches its conversation only while that is open on one of your machines, and the page belongs to that machine from then on | Open the conversation again on a machine that has joined, or ask any agent to bring the page up, which makes it that agent's |
 
-Once the agent has changed the page after what you did, the bar says nothing more: the answer is on the page.
+Once the agent has changed the page after what you did, the bar stops saying "Your agent has it": the answer is on the page. What is still waiting goes on being said, and "Done" or a failure is said for ten minutes.
+
+If the service log says that It could not read its own note of which conversations were running, it has kept that note as `runs.json.unreadable` in its folder and reopens no conversation until you have dealt with it: see that no agent It started is still running on that machine, and then delete the file. Where one conversation's earlier run could not be checked on or ended, only that conversation is held, and It looks again each time it would reopen it.
+
+On a machine that joined an It, `it status` may say that the two are of versions that do not work together, and which of them to update. The machine stays joined. Nothing done on a page is handed to an agent on it until the two fit, which It asks about every minute, so there is nothing to do after the update but wait a moment.
 
 A page that a conversation made belongs to that conversation until another one brings it up or takes it, so what you do on it goes to the agent you last asked to show it.

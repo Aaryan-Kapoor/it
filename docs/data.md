@@ -12,6 +12,9 @@ Everything It keeps is in one folder, `~/.it`, which only your user can look ins
 | `machine.json`, `token.json` | This machine's identity and its key, and the short-lived token the key last earned |
 | `push.json` | The keys It signs notifications with, made the first time one is needed |
 | `connector.json`, `journal.jsonl` and the files beside them | How the add-ons reach It on this machine, and its record of each click it handed to an agent, by ids alone |
+| `runs.json`, `cut-off.json`, `stopped.json` | Auto-wake's own notes: which conversations It has reopened and that are running now, each with its process's number, when it started and which start of the machine that was, so that a service that starts again can find and end them; and which conversations are owed the word, the next time they are reopened, that a turn of theirs was cut off or stopped. `runs.json.unreadable` is such a note that could not be read, kept as it was: while it is there It reopens nothing |
+| `releases.json`, `updates-off` | Where this It looks for a newer version, where it was installed from another place than the usual one, and whether you have told it not to look |
+| `was.json` | On a machine that joined an It and left with `it logout`: which machine it was, so that its pages come along if it joins again |
 | `addons/` | The add-ons as they are installed into the agent apps, and a note of what was put where |
 | `logs/it.log` | What the background service wrote down. `it service logs` prints the end of it |
 | `logs/reopened-*.txt` | What an agent app printed while It had reopened a conversation of its (Auto-wake): there while the run lasts, for the last line of it to be shown on the page if the app ends with an error, and removed when the run ends |

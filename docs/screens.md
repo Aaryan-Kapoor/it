@@ -36,7 +36,7 @@ A screen paired this way can open every one of your pages and answer on any of t
 
 ## The network
 
-`it network on` makes It answer other devices on the same network, `it network tailscale` makes it answer the devices of your tailnet and no others, `it network off` returns it to this machine only, and `it network` says which it is. At a terminal each says how the network stands in a sentence, with the addresses other devices open the site at under it. With `--json`, or where a program reads it, each prints `{ "network": true or false, "addresses": [...] }`, with `"tailnet": true` beside them where It is kept to the tailnet. `it status` says the same of the network. `it setup`, run at a terminal, asks which of the three you want as one of its steps.
+`it network on` makes It answer at every network address this machine has, which at home means other devices on the same network, and on a machine the internet can reach means the internet, over plain http: the command says so where it sees a public address, one of the internet's own addresses under IPv6, or a server rented from a company that rents them. `it network tailscale` makes it answer the devices of your tailnet and no others, `it network off` returns it to this machine only, and `it network` says which it is. At a terminal each says how the network stands in a sentence, with the addresses other devices open the site at under it. With `--json`, or where a program reads it, each prints `{ "network": true or false, "addresses": [...] }`, with `"tailnet": true` beside them where It is kept to the tailnet. `it status` says the same of the network. `it setup`, run at a terminal, asks which of the three you want as one of its steps.
 
 ### Over Tailscale
 
