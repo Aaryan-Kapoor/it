@@ -53,7 +53,7 @@ export function About() {
           change={itself?.usage === false ? 'it telemetry on' : itself?.usage === true ? 'it telemetry off' : undefined}
         />
         <Fact name="Ports" value={itself ? ports(itself.port) : '…'} />
-        <Fact name="Kept in" value="~/.it" />
+        <Fact name="Kept in" value="~/.it on the machine It runs on, unless it was set up in another folder" />
       </ul>
     </section>
   )

@@ -55,7 +55,7 @@ describe('how It stands on the computer it runs on', () => {
       'Starts by itself': { value: 'On', change: 'it service uninstall' },
       'Usage counts': { value: 'Sent', change: 'it telemetry off' },
       Ports: { value: `4700 · 4701 · ${4700 + PORTS.backendApi} · ${4700 + PORTS.backendSite}`, change: null },
-      'Kept in': { value: '~/.it', change: null },
+      'Kept in': { value: '~/.it on the machine It runs on, unless it was set up in another folder', change: null },
     })
     expect(watched).toContain('network:service')
   })

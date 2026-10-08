@@ -2031,8 +2031,9 @@ This machine
   it version | it help
 
 Run at a terminal, it setup, it site, it network, it status, it service status, it list,
-it displays, it whoami and it uninstall say how things stand in a few sentences. With --json,
-wherever a program reads what they print, and for an agent, they print JSON.
+it displays, it whoami, it upgrade, it updates and it uninstall say how things stand in a few
+sentences. With --json, wherever a program reads what they print, and for an agent, they print
+JSON.
 `
 
 async function main(argv: string[]): Promise<void> {

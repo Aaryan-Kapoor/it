@@ -79,7 +79,7 @@ It is registered with the system to start by itself (active).
 This is It 0.1.0.
 ```
 
-Five commands speak to a person in this way when they are run at a terminal: `it setup`, `it site`, `it network`, `it status` and `it service status`. With `--json`, and wherever a program reads what they print, as an agent does, they print JSON, as the other commands do whoever reads them. Three commands print plain text whoever reads it, since text is what was asked for: `it help`, `it skill` and `it service logs`. And `it serve` prints what the service writes down, a line at a time.
+Some commands speak to a person in this way when they are run at a terminal: `it setup`, `it site`, `it network`, `it status`, `it service status`, `it list`, `it displays`, `it whoami`, `it upgrade`, `it updates` and `it uninstall`. With `--json`, and wherever a program reads what they print, as an agent does, they print JSON, as the other commands do whoever reads them. Four commands print plain text whoever reads it, since text is what was asked for: `it help`, `it skill`, `it tour` and `it service logs`. And `it serve` prints what the service writes down, a line at a time.
 
 The JSON of `it status` has `running`, whether It's door answers; `enrolled`, whether this machine is one of yours; where the `site` is; the `network`, as `on` and its `addresses`; the `database`, with the version of It and the release of the backend program that last ran on it; the `connector` and the `background` service; each agent app under `harnesses`; and, where something is wrong, a `hint` that says what to do next.
 
@@ -98,7 +98,7 @@ Where several machines share one It, the machine It runs on is updated first, an
 
 What an upgrade trusts is what an install trusts: the place it downloads from, over https, and the checksums published there. It is not a signature.
 
-The install command, run again, does the same by hand: it puts the newest program in the place of the one in `~/.it/bin`, with its license and notices. It leaves everything else in `~/.it` as it is. The service that is running goes on as the program it was started as until it is started again, and `it service install` registers it and starts it anew.
+The install command, run again, does the same by hand: it puts the newest program in the place of the one in `~/.it/bin`, with its license and notices, and deletes none of your pages or settings. Run at a terminal on macOS or Linux it then goes on into `it setup`, as it did the first time, which starts the service again as the new program. Run where there is no terminal, or on Windows, it stops once the program is in place: the service that is running goes on as the program it was started as until `it setup` is run, or `it service install`, which registers it and starts it anew.
 
 A newer It may bring a newer backend program, which it fetches the first time it starts, and newer functions for it. Before either is put onto what you already have, It keeps a copy of its database. [What It keeps](data.md#a-newer-it-on-the-same-data) says what that copy is for, and what happens where the newer It and your data do not fit.
 
