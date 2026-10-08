@@ -1,6 +1,19 @@
 // Reopening a conversation that was closed: the command Claude Code is run with, where it is
 // run, how the click is given to it, and the note of each conversation's folder that says where.
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -25,7 +38,8 @@ import {
 let scratch: string
 let was: string | undefined
 beforeEach(() => {
-  scratch = mkdtempSync(path.join(os.tmpdir(), 'it-wake-'))
+  // As the system itself names it: on macOS the folder for scratch files is reached through a link, and a program started in it is told the folder the link leads to
+  scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-wake-')))
   was = process.env.IT_HOME
   process.env.IT_HOME = path.join(scratch, 'home')
   mkdirSync(process.env.IT_HOME, { recursive: true })
@@ -162,8 +176,14 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     const command = path.join(scratch, 'slow')
     // An agent in the middle of a command of its own: the command writes down that it is there, and waits
     const mark = path.join(scratch, 'its-command.pid')
-    // It is started in a session of its own, as some apps start a tool's command: its group is not the agent's
-    writeFileSync(command, `#!/bin/sh\ncat > /dev/null\nsetsid sh -c 'echo $$ > ${mark}; exec sleep 30' &\nwait\n`)
+    // It is started in a session of its own, as some apps start a tool's command: its group is not the agent's. Node
+    // starts it so, where the system has no command of its own for that, as macOS has none
+    const apart = path.join(scratch, 'apart.js')
+    writeFileSync(
+      apart,
+      `require('node:child_process').spawn('sh', ['-c', 'echo $$ > "$1"; exec sleep 30', 'sh', ${JSON.stringify(mark)}], { detached: true, stdio: 'ignore' }).on('exit', () => process.exit(0))\n`,
+    )
+    writeFileSync(command, `#!/bin/sh\ncat > /dev/null\n"${process.execPath}" "${apart}" &\nwait\n`)
     chmodSync(command, 0o755)
     const stop = new AbortController()
     const began = Date.now()

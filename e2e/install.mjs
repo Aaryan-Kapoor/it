@@ -1113,23 +1113,33 @@ try {
       writeFileSync(path.join(dir, 'ldd'), `#!/bin/sh\n${ldd}\n`, { mode: 0o755 })
       return { PATH: `${dir}${path.delimiter}${process.env.PATH}` }
     }
-    const oldLibc = await install('old-libc', libc('an-older-linux', 'echo "glibc 2.34"', 'echo "ldd (GNU libc) 2.34"'))
-    check(
-      'on a Linux whose C library is older than the backend program needs, the command is installed and it says that It cannot run there, in place of telling them to set it up',
-      oldLibc.code === 0 &&
-        existsSync(oldLibc.it) &&
-        /It cannot run on this system/.test(oldLibc.said) &&
-        /this system has 2\.34/.test(oldLibc.said) &&
-        /it login/.test(oldLibc.said) &&
-        !/connect your agents, with/.test(oldLibc.said),
-      oldLibc.said,
-    )
-    const newLibc = await install('new-libc', libc('a-newer-linux', 'echo "glibc 2.35"', 'echo "ldd (GNU libc) 2.35"'))
-    check(
-      'and with the library the backend program needs, nothing of that is said',
-      newLibc.code === 0 && existsSync(newLibc.it) && !/cannot run/.test(newLibc.said) && /connect your agents, with/.test(newLibc.said),
-      newLibc.said,
-    )
+    // Told that it is on a Linux with an Intel chip, the script installs the program for one, which it starts to see that it
+    // runs: so these two are for a machine that is one. On a Mac the script is still made to say what such a Linux would
+    // ask for, by the check after them, which installs nothing.
+    const onSuchALinux = process.platform === 'linux' && process.arch === 'x64'
+    const oldLibc = onSuchALinux ? await install('old-libc', libc('an-older-linux', 'echo "glibc 2.34"', 'echo "ldd (GNU libc) 2.34"')) : null
+    if (!oldLibc)
+      console.log(
+        '  --   the two checks of a Linux whose C library is old, or new enough, are left out here: they install the program for Linux on an Intel chip',
+      )
+    else
+      check(
+        'on a Linux whose C library is older than the backend program needs, the command is installed and it says that It cannot run there, in place of telling them to set it up',
+        oldLibc.code === 0 &&
+          existsSync(oldLibc.it) &&
+          /It cannot run on this system/.test(oldLibc.said) &&
+          /this system has 2\.34/.test(oldLibc.said) &&
+          /it login/.test(oldLibc.said) &&
+          !/connect your agents, with/.test(oldLibc.said),
+        oldLibc.said,
+      )
+    const newLibc = onSuchALinux ? await install('new-libc', libc('a-newer-linux', 'echo "glibc 2.35"', 'echo "ldd (GNU libc) 2.35"')) : null
+    if (newLibc)
+      check(
+        'and with the library the backend program needs, nothing of that is said',
+        newLibc.code === 0 && existsSync(newLibc.it) && !/cannot run/.test(newLibc.said) && /connect your agents, with/.test(newLibc.said),
+        newLibc.said,
+      )
     const musl = await install(
       'musl',
       libc(

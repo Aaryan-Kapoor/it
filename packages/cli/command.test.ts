@@ -503,7 +503,8 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
       path.join(m.home, '.codex', 'config.toml'),
       'model = "gpt-6"\n\n[hooks.state]\n\n[hooks.state."it-bridge@it:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:aa"\n\n[hooks.state."it-bridge@it:hooks/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:bb"\n\n[projects."/work"]\ntrust_level = "trusted"\n',
     )
-    mkdirSync(path.join(m.home, '.config', 'systemd', 'user'), { recursive: true })
+    // Where systemd keeps a person's services, which is where the service's definition is written on Linux
+    if (process.platform === 'linux') mkdirSync(path.join(m.home, '.config', 'systemd', 'user'), { recursive: true })
     // Not at a terminal and not told --yes: nothing is changed, and it says how it is asked for
     const unasked = await run(m, ['uninstall'])
     expect(unasked.code).toBe(2)
