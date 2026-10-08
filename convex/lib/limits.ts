@@ -48,6 +48,9 @@ const RULES = {
 } as const
 export type Rule = keyof typeof RULES
 
+/** How far ahead of now a count's last time must be for it to have been written before the clock was set back: more than callers at once ever are apart. */
+const SET_BACK_MS = 60_000
+
 export async function rateLimit(ctx: MutationCtx, rule: Rule, who: string, cost = 1): Promise<void> {
   const { perMinute, burst } = RULES[rule]
   const key = `${rule}:${who}`
@@ -56,10 +59,15 @@ export async function rateLimit(ctx: MutationCtx, rule: Rule, who: string, cost 
     .query('rateLimits')
     .withIndex('by_key', (q) => q.eq('key', key))
     .unique()
-  // A count that was last written at a time that is still to come was written before this
+  // A count that was last written at a time well ahead of now was written before this
   // machine's clock was set back. It is begun afresh: counted as it stands, the time that is
-  // "yet to pass" would be taken off it, and everything refused for as long as the clock went back.
-  const tokens = row && row.updatedAt <= now ? Math.min(burst, row.tokens + ((now - row.updatedAt) / 60_000) * perMinute) : burst
+  // "yet to pass" would be taken off it, and everything refused for as long as the clock went
+  // back. A few moments ahead is no clock set back: of many callers at once, one that began a
+  // little earlier may come after one that began later, and for it no time has passed, which
+  // gives it nothing and takes nothing away. (Begun afresh for that, the limit let everything
+  // through that came out of order.)
+  const ahead = row ? row.updatedAt - now : 0
+  const tokens = !row || ahead > SET_BACK_MS ? burst : Math.min(burst, row.tokens + (Math.max(0, -ahead) / 60_000) * perMinute)
   if (tokens < cost) {
     // Not written down here: a caller past a limit can ask as often as it likes, and each
     // refusal would be a line. It is written down below, when the limit is reached.
@@ -73,7 +81,9 @@ export async function rateLimit(ctx: MutationCtx, rule: Rule, who: string, cost 
   // requests never reach.
   const left = tokens - cost
   const say = left < cost && now - (row?.saidAt ?? 0) >= 60_000
-  if (row) await ctx.db.patch(row._id, { who, tokens: left, updatedAt: now, ...(say ? { saidAt: now } : {}) })
+  // Counted from the later of the two times, so that what came out of order is not given the same moments twice
+  const counted = row && ahead > 0 && ahead <= SET_BACK_MS ? row.updatedAt : now
+  if (row) await ctx.db.patch(row._id, { who, tokens: left, updatedAt: counted, ...(say ? { saidAt: now } : {}) })
   const limit = row?._id ?? (await ctx.db.insert('rateLimits', { key, who, tokens: left, updatedAt: now, ...(say ? { saidAt: now } : {}) }))
   // The line is asked for by the count's own record, which says whose it is: the backend
   // program keeps what a job was started with for days after it has run, and nobody is named there

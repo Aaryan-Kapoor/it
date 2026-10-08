@@ -2270,6 +2270,20 @@ describe('clicks and their delivery', () => {
     expect(await code(click('click-0002'))).toBe('ok')
   })
 
+  test('callers that come a moment out of order are not given the limit afresh', async () => {
+    const { click } = await setup()
+    // As many small clicks as the limit lets through at once, each a few milliseconds "before" the one that came ahead of it,
+    // as callers at once are when one that began earlier is answered later
+    const results: string[] = []
+    for (let i = 0; i < 400; i++) {
+      vi.setSystemTime(Date.now() - 3)
+      results.push(await code(click(`click-${String(i).padStart(4, '0')}`)))
+      if (results.at(-1) !== 'ok') dropWhatAFailedCallScheduled()
+    }
+    // The limit is met all the same: counted afresh for each that came out of order, none would ever be refused
+    expect(results.filter((r) => r === 'rate_limited').length).toBeGreaterThan(100)
+  })
+
   test('only so many clicks may wait: on one page, and for one person', async () => {
     const { t, p, click } = await setup()
     await t.run((ctx) => ctx.db.patch(p.artifactId, { waiting: QUOTA.pendingActionsPerPage }))
