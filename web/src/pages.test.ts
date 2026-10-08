@@ -408,7 +408,9 @@ describe('what the page’s bar says of the last thing the person did', () => {
     recent = [{ at: NOW - 20_000, delivery: 'pending' }]
     Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi', pending: 1, wake: { machineId: 'm1', harness: 'pi', on: false }, machinePaused: 'unfit' })
     await shown()
-    expect(said()).toBe('Sent. the laptop and It are of versions that do not work together, so Pi gets it once It is updated there')
+    expect(said()).toBe(
+      'Sent. the laptop and It are of versions that do not work together, so Pi gets it once the one that is behind is updated. The Machines page says more',
+    )
     expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
     await act(async () => root.unmount())
     host.remove()

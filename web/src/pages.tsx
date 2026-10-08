@@ -578,7 +578,8 @@ function ActionStatus({
       <span className="status" data-tone="wait">
         {machinePaused === 'unchecked'
           ? `Sent${waiting > 1 ? ` (${waiting})` : ''}. ${machine ?? 'Its machine'} is still asking It whether the two work together, and hands it to ${agent ?? 'your agent'} once it knows`
-          : `Sent${waiting > 1 ? ` (${waiting})` : ''}. ${machine ?? 'Its machine'} and It are of versions that do not work together, so ${agent ?? 'your agent'} gets it once It is updated there`}
+          : // Which of the two is behind is not known here: it may be this machine, or the one It runs on
+            `Sent${waiting > 1 ? ` (${waiting})` : ''}. ${machine ?? 'Its machine'} and It are of versions that do not work together, so ${agent ?? 'your agent'} gets it once the one that is behind is updated. The Machines page says more`}
       </span>
     )
   // Sent, and not taken for a while: its conversation may be closed. The owner can switch on
