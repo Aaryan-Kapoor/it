@@ -863,6 +863,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!reopening && !codexHeld(threadOf(key))) return
       // Only if it is still for this conversation on this machine: the page may have changed
       // hands while the click stood in line here
+      // The hold is counted from before it was asked for: It starts counting when it gives it,
+      // which may be long before its answer is here
+      const claimedAt = Date.now()
       const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session! })
       if (!got) return
       // And looked at once more, now that the claim is answered: a waiter that began while it
@@ -896,11 +899,38 @@ async function connecting(say: (line: string) => void): Promise<void> {
           const got = await call<string[]>('mutation', api.delivery.claim, { ids: more.map((c) => c.id), for: click.session! }).catch(() => [] as string[])
           withIt = more.filter((c) => got.includes(c.id))
         }
-        room(
-          key,
-          [click, ...withIt].some((c) => c.attended !== false),
-          true,
-        )
+        // Taken now, and only now: several conversations may have been found to have room at the
+        // same moment, while each was asking for its click, and the last place goes to one of
+        // them. The others give back what they were given, which goes with a later reopening.
+        if (
+          !room(
+            key,
+            [click, ...withIt].some((c) => c.attended !== false),
+            true,
+          )
+        ) {
+          await giveBack()
+          journal('released', click.id)
+          await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+          return
+        }
+      }
+      // Getting this far may have taken most of the time the hold is good for (a slow answer,
+      // twice over). Then it is made good again before anything is started on the strength of
+      // it, and where it cannot be, nothing is started: the click may be another machine's.
+      let heldFrom = claimedAt
+      if (Date.now() - claimedAt > LEASE_MS / 3) {
+        const again = Date.now()
+        const ids = [click.id, ...withIt.map((c) => c.id)]
+        const kept = await call<string[]>('mutation', api.delivery.renew, { ids }).catch(() => [] as string[])
+        if (!ids.every((id) => kept.includes(id))) {
+          say(`click ${click.id} was not this machine’s any more by the time it could be handed over; it is left where it is`)
+          await giveBack()
+          journal('released', click.id)
+          await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+          return
+        }
+        heldFrom = again
       }
       // The command can take as long as a lease lasts, so the lease is kept up while it runs.
       // Only a renewal the backend confirmed keeps it. Told that a click of this hand-over is
@@ -908,7 +938,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // conversation that was reopened for it is ended. A click that is no longer held because
       // it is done with (its agent said so with `it ack`, or it was dropped) is no loss: it
       // is renewed no more, and the run goes on with the rest.
-      let heldUntil = Date.now() + LEASE_MS
+      let heldUntil = heldFrom + LEASE_MS
       const keptUp = new Set([click.id, ...withIt.map((c) => c.id)])
       /** The hold is gone, or may be: a conversation that was reopened for this is ended, once. */
       const lose = () => {
@@ -921,12 +951,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
         )
         run.abort()
       }
+      let renewedAt = Date.now()
       keeping = setInterval(() => {
         const asked = Date.now()
         const ids = [...keptUp]
         if (!ids.length) return
-        // By the clock too, and not only when an answer comes: an asking that hangs is no hold
+        // By the clock too, every second, and not only when an answer comes: an asking that hangs is no hold
         if (asked > heldUntil) return lose()
+        if (asked - renewedAt < RENEW_MS) return
+        renewedAt = asked
         void call<string[]>('mutation', api.delivery.renew, { ids })
           .then(async (kept) => {
             const not = ids.filter((id) => !kept.includes(id))
@@ -951,7 +984,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             if (!said && Date.now() <= heldUntil) return
             lose()
           })
-      }, RENEW_MS)
+      }, 1000)
       journal('queueing', click.id)
       // A run of this conversation from before this connector started is seen to first: ending
       // it now is what makes the note that this turn is owed
@@ -1429,7 +1462,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // after the turn that is now waiting. So the waiter is given it too, still held for
         // this machine. Should Codex hand it over as well, its id shows it is the same click.
         for (const sent of submitting.values()) {
-          if (!waitedFor(waiter, sent.click)) continue
+          // Once: an agent that took it, dealt with it and waits again is not given it a second time
+          if (sent.toWaiter || !waitedFor(waiter, sent.click)) continue
           sent.toWaiter = true
           handedBack.push(sent.click)
         }
