@@ -354,6 +354,26 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { wake: null, pending: 0 })
   })
 
+  test('what the agent had already done is not said to have been stopped by a stop that came after it', async () => {
+    // Done a minute ago, and the conversation was stopped since, from another of its pages
+    recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'succeeded', route: 'addon', handedAt: NOW - 59_000 }]
+    Object.assign(PAGE, { stoppedAt: NOW - 1000, answeredAt: 0 })
+    await shown()
+    expect(said()).toBe('Done')
+    await act(async () => root.unmount())
+    host.remove()
+    recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'failed', route: 'addon', handedAt: NOW - 59_000 }]
+    await shown()
+    expect(said()).toBe('Your agent could not do that')
+    await act(async () => root.unmount())
+    host.remove()
+    // What its agent had and had not finished when it was stopped is said as stopped, as before
+    recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'running', route: 'addon', handedAt: NOW - 59_000 }]
+    await shown()
+    expect(said()).toBe('Stopped')
+    Object.assign(PAGE, { stoppedAt: null })
+  })
+
   test('a stop is said with what else it dropped, and not with what an earlier stop of the same conversation dropped', async () => {
     const stopped = (at: number, handedAt?: number) => ({ at, delivery: 'handed_off', outcome: 'failed', route: 'stopped', ...(handedAt ? { handedAt } : {}) })
     // Stopped forty minutes ago with one click, and now again with one

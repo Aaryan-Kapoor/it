@@ -524,7 +524,10 @@ function ActionStatus({
   if (now - last.at > 10 * 60_000 && last.delivery === 'handed_off') return null
   // The agent was stopped after the last thing done here: said as that, whatever became of it.
   // What was waiting then went with the stop, and the next thing done reopens the conversation.
-  if (stoppedAt !== null && last.at <= stoppedAt) {
+  // (Not of something its agent had already said was done, or could not be done: a stop that
+  // came after that, on this page or another of the conversation's, changed nothing about it)
+  const settled = last.delivery === 'handed_off' && last.route !== 'stopped' && (last.outcome === 'succeeded' || last.outcome === 'failed')
+  if (stoppedAt !== null && last.at <= stoppedAt && !settled) {
     // Everything of that conversation's that was waiting went with the stop, and is said to have.
     // Each is counted by when it was dropped: what an earlier stop of the same conversation
     // dropped was done before this one too, and is none of this one's. (Functions from before
