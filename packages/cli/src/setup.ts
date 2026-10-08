@@ -25,10 +25,10 @@ import {
 } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { HARNESSES, type Harness } from '@it/protocol'
+import { HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
 import { ADDONS, LICENSE } from './addons.generated'
 import { codexConfig } from './codex-settings'
-import { harnessEnv, home, inHome, Problem, readJson, writePrivate } from './lib'
+import { harnessEnv, home, inHome, Problem, readJson, VERSION, writePrivate } from './lib'
 import { alone as oneAtATime } from './serve/backend'
 
 export type AddonState = 'connected' | 'not_connected' | 'needs_approval' | 'too_old' | 'unavailable' | 'error'
@@ -126,6 +126,8 @@ interface Installation extends Partial<Place> {
    */
   version: string
   at: number
+  /** The version of It that installed it. By this, and not by a time, a newer It is told from an older one. */
+  by?: string
   /** For an add-on whose files this program copies in itself: every file it wrote and has not seen gone, and no other. */
   files?: Put[]
 }
@@ -1094,13 +1096,19 @@ export async function whatToDo(
   /** When the add-on was last installed, and when this program started. */
   installedAt = 0,
   startedAt = STARTED,
+  /** The version of It that installed it, where that was written down, and this program's own. */
+  installedBy?: string,
+  version = VERSION,
 ): Promise<'nothing' | 'leave switched off' | 'install' | 'leave to the newer program'> {
-  // Connected at a version this program does not carry, and installed since this program
-  // started: a newer copy of the program did that, while this one (a connector that has been
-  // running since before the upgrade) went on. Putting this one's older add-on back over it
-  // would undo the upgrade.
-  if (addon !== 'not_connected' && stamp !== carried && stamp !== undefined && stamp !== 'installing' && installedAt > startedAt)
-    return 'leave to the newer program'
+  // Connected at a version this program does not carry, and put there by a newer It: a newer
+  // copy of the program did that, while this one (a connector that has been running since
+  // before the upgrade) went on. Putting this one's older add-on back over it would undo the
+  // upgrade. Which of the two is the newer is told by their versions, and not by when each did
+  // what: a clock that was set right in between says nothing of that, and once made a newer It
+  // leave an older add-on in place. Only between two copies that call themselves the same
+  // version, as builds from source do, is it told by which came later.
+  const byNewer = installedBy !== undefined && installedBy !== version ? newerVersion(installedBy, version) : installedAt > startedAt
+  if (addon !== 'not_connected' && stamp !== carried && stamp !== undefined && stamp !== 'installing' && byNewer) return 'leave to the newer program'
   if (addon !== 'not_connected') return stamp === carried ? 'nothing' : 'install'
   if (stamp && stamp !== 'installing' && (await present()) === true) return 'leave switched off'
   return 'install'
@@ -1125,7 +1133,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
     return before
   }
   // An add-on that no It folder has on record is replaced whatever state it is in
-  const doing = other ? 'install' : await whatToDo(before.addon, was?.version, ADDONS[id]!.version, () => adapter.present(at, was), was?.at)
+  const doing = other ? 'install' : await whatToDo(before.addon, was?.version, ADDONS[id]!.version, () => adapter.present(at, was), was?.at, undefined, was?.by)
   if (doing === 'nothing') return before
   if (doing === 'leave to the newer program') {
     newer = true
@@ -1152,7 +1160,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   // Noted before anything is installed: if installing stops half way, what it left behind is
   // still known to be this program's, and is removed when the person disconnects
   const others = all.filter((i) => i !== was)
-  const noted = (version: string, files?: Put[]): Installation[] => [...others, { version, at: Date.now(), env: at.env, dir: at.dir, files }]
+  const noted = (version: string, files?: Put[]): Installation[] => [...others, { version, at: Date.now(), by: VERSION, env: at.env, dir: at.dir, files }]
   keep(id, noted('installing', was?.files))
   // Each file is noted once it has been written: a file that an install never got as far as
   // writing is not this program's, whatever was there under its name

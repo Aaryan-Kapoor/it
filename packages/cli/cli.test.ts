@@ -363,6 +363,15 @@ describe('an add-on that is wanted', () => {
     expect(await whatToDo('connected', 'this-version', 'this-version', never, started + 5000, started)).toBe('nothing')
     // And an install that stopped half way is finished
     expect(await whatToDo('connected', 'installing', 'this-version', never, started + 5000, started)).toBe('install')
+    // Where the It that installed it wrote its version down, the newer is told by that and by no time: an older
+    // add-on whose time is still to come, as after a clock was set right, is replaced, and a newer It's is left
+    expect(await whatToDo('connected', 'an-older-version', 'this-version', never, started + 3_600_000, started, '0.1.0', '0.1.1')).toBe('install')
+    expect(await whatToDo('connected', 'a-newer-version', 'this-version', never, started - 3_600_000, started, '0.1.2', '0.1.1')).toBe(
+      'leave to the newer program',
+    )
+    // Two copies that call themselves the same version, as builds from source do, are told apart by which came later, as before
+    expect(await whatToDo('connected', 'another-version', 'this-version', never, started + 5000, started, '0.1.1', '0.1.1')).toBe('leave to the newer program')
+    expect(await whatToDo('connected', 'another-version', 'this-version', never, started - 5000, started, '0.1.1', '0.1.1')).toBe('install')
   })
   test('is left alone when this program installed it and the person switched it off inside the harness, at any version', async () => {
     const { whatToDo } = await import('./src/setup')
