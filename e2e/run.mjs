@@ -128,6 +128,10 @@ const plain = (url, { method = 'GET', headers = {}, body, localAddress } = {}) =
   new Promise((resolve, reject) => {
     const sent = {
       method,
+      // A connection of its own for each request. One kept from an earlier request may be closed by the door, for having
+      // stood idle, in the moment the next request is written to it, and the request then fails with nothing of It's wrong:
+      // a browser asks again by itself on a new connection, and this does not
+      agent: false,
       headers: { ...headers, ...(body === undefined ? {} : { 'content-length': Buffer.byteLength(body) }) },
       ...(localAddress ? { localAddress } : {}),
     }
