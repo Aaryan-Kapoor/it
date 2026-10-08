@@ -117,7 +117,9 @@ describe("what Node's own fetch does with a connection that was reset as it was 
       // The system's answer on macOS for a connection that was reset, given here on every system
       const handle = (socket as unknown as { _handle: { setTypeOfService: (tos: number) => number } })._handle
       handle.setTypeOfService = () => -22
-      expect(() => socket.setTypeOfService(8)).toThrow(/EINVAL/)
+      // Node throws it everywhere but on Windows, where it lets a refusal pass by itself
+      if (process.platform === 'win32') expect(socket.setTypeOfService(8)).toBe(socket)
+      else expect(() => socket.setTypeOfService(8)).toThrow(/EINVAL/)
       lenientAboutServiceMarks()
       expect(socket.setTypeOfService(16)).toBe(socket)
       expect(() => socket.setTypeOfService(300)).toThrow(/tos/)
