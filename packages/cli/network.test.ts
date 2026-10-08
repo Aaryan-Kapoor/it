@@ -251,7 +251,7 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
     expect([await until(() => lines().some((line) => /^connector \S+ started/.test(line))), lines().join(' | ')]).toEqual([true, expect.any(String)])
     return service
   }
-  const ON = 'Anyone on that network can reach the pairing screen, and nothing else without a code.'
+  const ON = 'The network is on. Devices on the same network can open It at:'
   const OFF = 'The network is off. It answers this machine only.'
   /**
    * Holds the site's port on another address of this machine than the ones It answers at when
@@ -329,7 +329,7 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
       expect(on.words).toContain(ON)
       expect(on.words).not.toContain('not running')
       // The likeliest address is said in words, and every one of them is in what the command answers
-      if (reachable(port).length) expect(on.words).toContain(`can open It’s site at ${reachable(port)[0]}.`)
+      if (reachable(port).length) expect(on.words).toContain(`${ON} ${reachable(port)[0]}`)
       // By the time the command has ended, the door answers the network and the backend has been told at which addresses
       expect(await told()).toMatchObject({ on: true, addresses: reachable(port) })
       if (lan) {
