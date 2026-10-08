@@ -896,7 +896,10 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await new Promise<void>((r) => door.listen(0, '127.0.0.1', r))
     try {
       const at = `http://127.0.0.1:${(door.address() as { port: number }).port}`
-      await start('socket', {}, (home) => writeFileSync(path.join(home, 'machine.json'), JSON.stringify({ at })))
+      // That It has moved since this machine joined it: the address it joined at answers nobody, and
+      // the machine has been told the new one, which is where it asks whether the two fit
+      process.env.IT_URL = at
+      await start('socket', {}, (home) => writeFileSync(path.join(home, 'machine.json'), JSON.stringify({ at: 'http://127.0.0.1:9' })))
       expect(said.some((line) => line.includes('versions that do not work together') && line.includes('Nothing done on a page is handed to an agent'))).toBe(
         true,
       )
@@ -912,6 +915,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       expect(said.some((line) => line.includes('fit again'))).toBe(true)
       expect((await local<{ ok: boolean; unfit?: string }>('/health'))?.unfit).toBeUndefined()
     } finally {
+      delete process.env.IT_URL
       await new Promise((r) => door.close(r))
     }
   }, 120_000)

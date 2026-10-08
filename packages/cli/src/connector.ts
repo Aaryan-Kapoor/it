@@ -18,6 +18,7 @@ import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST,
 import {
   api,
   ask,
+  backend,
   call,
   direct,
   enrolledHere,
@@ -313,9 +314,16 @@ export async function runConnector(say: (line: string) => void): Promise<void> {
  * that says nothing either way, and whoever asked goes on as they were.
  */
 async function unfit(): Promise<Problem | null | undefined> {
-  const joinedAt = readJson<{ at?: unknown }>(inHome('machine.json'))?.at
-  if (typeof joinedAt !== 'string') return null
-  return direct(`${joinedAt}/cli/config`, { signal: AbortSignal.timeout(10_000) })
+  if (!joined()) return null
+  // Asked where everything else this machine says to that It goes: the address it joined at,
+  // or the one it has been told to use since (IT_URL), where that It has moved
+  let door: string
+  try {
+    door = backend().site
+  } catch {
+    return undefined
+  }
+  return direct(`${door}/cli/config`, { signal: AbortSignal.timeout(10_000) })
     .then(async (answer) => (answer.ok ? incompatible(((await answer.json()) as { protocol?: unknown } | null)?.protocol) : undefined))
     .catch(() => undefined)
 }
