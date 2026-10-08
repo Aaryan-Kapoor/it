@@ -227,28 +227,31 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
         </div>
         {/* The page's own script failed: said before anything else, since nothing done on it can be relied on to have been sent */}
         {fault && fault.of === `${page.id}:${page.version}` && (
-          <span className="status" data-tone="bad" title={fault.message}>
+          <span className="status" data-tone="bad" title={fault.message} role="alert">
             This {NOUN.one} has an error in it, so it may not send what you do. {fault.agentTold ? 'It has been sent to your agent' : 'Tell your agent'}:{' '}
             {fault.message}
           </span>
         )}
-        {page.run ? (
-          <Working artifactId={page.id as Id<'artifacts'>} stopping={page.run.stopping} />
-        ) : (
-          <ActionStatus
-            artifactId={page.id as Id<'artifacts'>}
-            user={user}
-            machine={page.machine}
-            machineSeenAt={page.machineSeenAt}
-            machineGone={page.machineGone === true}
-            // Only the owner may switch reopening on, and only for an agent app It can reopen
-            wakes={owner ? page.wake : null}
-            agent={agentName(page.agent)}
-            stoppedAt={page.stoppedAt}
-            wakeFailed={page.wakeFailed}
-            answeredAt={page.answeredAt ?? null}
-          />
-        )}
+        {/* What became of what was done on the page is said aloud too, to whoever cannot see it change */}
+        <span className="page-nav-said" role="status">
+          {page.run ? (
+            <Working artifactId={page.id as Id<'artifacts'>} stopping={page.run.stopping} />
+          ) : (
+            <ActionStatus
+              artifactId={page.id as Id<'artifacts'>}
+              user={user}
+              machine={page.machine}
+              machineSeenAt={page.machineSeenAt}
+              machineGone={page.machineGone === true}
+              // Only the owner may switch reopening on, and only for an agent app It can reopen
+              wakes={owner ? page.wake : null}
+              agent={agentName(page.agent)}
+              stoppedAt={page.stoppedAt}
+              wakeFailed={page.wakeFailed}
+              answeredAt={page.answeredAt ?? null}
+            />
+          )}
+        </span>
         <div className="page-nav-actions">
           <Bell compact />
           <button

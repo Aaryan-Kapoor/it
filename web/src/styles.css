@@ -1377,6 +1377,12 @@ body.is-grabbing-scrollbar {
   transition: opacity 0.2s var(--ease-swift);
 }
 
+/* The view a dialog was opened from is drawn over the site's bar for as long as the dialog is
+   open, so that the dialog covers the bar as it covers everything else */
+main:has(.modal-overlay) {
+  z-index: 30;
+}
+
 .modal-overlay--visible {
   opacity: 1;
   pointer-events: auto;
@@ -1393,6 +1399,10 @@ body.is-grabbing-scrollbar {
   box-shadow: var(--shadow-pop);
   transform: translateY(8px) scale(0.99);
   transition: transform 0.26s var(--ease-out);
+  /* Never taller than the screen it is on: what does not fit is scrolled to, inside it */
+  max-height: 100%;
+  overflow-y: auto;
+  outline: none;
 }
 
 .modal-overlay--visible .modal-panel {
@@ -2963,6 +2973,10 @@ img.portal-demo {
 /* ══ A page that is shown ══ */
 
 /* Where the last thing done on a page has got to, and how a machine stands */
+/* Only there to be read out: what is in it is laid out as if it were not */
+.page-nav-said {
+  display: contents;
+}
 .status {
   display: inline-flex;
   align-items: center;
