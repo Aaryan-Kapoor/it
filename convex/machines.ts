@@ -80,6 +80,26 @@ export const rename = mutation({
   },
 })
 
+/**
+ * Reopening for the agent apps that are being connected on a machine and were not connected
+ * before: it comes on with the connecting, since a page whose click does nothing because its
+ * conversation was closed is what It is for. Not for an app the person has switched it off
+ * for there, which stays off whoever connects the app again, and by whatever means: a
+ * machine can connect an app (`choose`), and so could an agent on it, and neither undoes
+ * what the person said. Nor on a system that is known not to be one It reopens on. Nothing
+ * where nothing changes, so that a machine set up before this, and one whose setup is run
+ * again, keeps its switches as they are.
+ */
+function wakingToo(m: Doc<'machines'>, wanted: string[], system: string | undefined = m.system): NonNullable<Doc<'machines'>['wakes']> | undefined {
+  if (system !== undefined && !wakesOn(system)) return undefined
+  const had = new Set(m.wanted ?? [])
+  const now = m.wakes ?? []
+  const fresh = wanted.filter(
+    (h) => !had.has(h) && (WAKES as readonly string[]).includes(h) && !(m.wakesOff ?? []).includes(h) && !now.some((w) => w.harness === h),
+  )
+  return fresh.length ? [...now, ...fresh.map((harness) => ({ harness, since: Date.now() }))] : undefined
+}
+
 /** The person ticks or unticks one of the harnesses found on a machine. Two in quick succession each change their own harness, and neither undoes the other. */
 export const toggle = mutation({
   args: { machineId: v.id('machines'), harness: v.string(), on: v.boolean() },
@@ -90,16 +110,18 @@ export const toggle = mutation({
     const wanted = new Set(m.wanted ?? [])
     if (on) wanted.add(harness)
     else wanted.delete(harness)
-    await ctx.db.patch(m._id, { wanted: [...wanted] })
+    const wakes = on ? wakingToo(m, [...wanted]) : undefined
+    await ctx.db.patch(m._id, { wanted: [...wanted], ...(wakes ? { wakes } : {}) })
     return null
   },
 })
 
 /**
  * The person says whether a closed conversation of one agent app on a machine is reopened when
- * they use a page it made. Reopening runs their agent there with nobody watching, so it is
- * theirs alone to switch on: from a browser paired as their own, and never by a machine, which
- * is to say never by an agent for itself.
+ * they use a page it made. It is on from when the app is connected (see `wakingToo`), and
+ * reopening runs their agent there with nobody watching, so the switch is theirs alone: from a
+ * browser paired as their own, and never by a machine, which is to say never by an agent for
+ * itself. What they switch off is kept as switched off, and only they switch it on again.
  */
 export const wake = mutation({
   args: { machineId: v.id('machines'), harness: v.string(), on: v.boolean() },
@@ -110,9 +132,10 @@ export const wake = mutation({
     if (on && !wakesOn(m.system)) fail('invalid', noWakeHere(m.system))
     const now = m.wakes ?? []
     const is = now.some((w) => w.harness === harness)
+    const off = (m.wakesOff ?? []).filter((h) => h !== harness)
     // Switched on again while it is on, it stays on since when it was: nothing older is let in by asking twice
-    if (on && !is) await ctx.db.patch(m._id, { wakes: [...now, { harness, since: Date.now() }] })
-    if (!on && is) await ctx.db.patch(m._id, { wakes: now.filter((w) => w.harness !== harness) })
+    if (on) await ctx.db.patch(m._id, { ...(is ? {} : { wakes: [...now, { harness, since: Date.now() }] }), wakesOff: off })
+    else await ctx.db.patch(m._id, { ...(is ? { wakes: now.filter((w) => w.harness !== harness) } : {}), wakesOff: [...off, harness] })
     return null
   },
 })
@@ -238,14 +261,22 @@ export const wakeFailed = mutation({
   },
 })
 
-/** Which harnesses are to be connected, chosen on the machine itself by `it setup`. */
+/**
+ * Which harnesses are to be connected, chosen on the machine itself by `it setup`, which also
+ * says what system the machine runs: setup is run before any connector has reported it.
+ * Answers with the apps of them that It reopens closed conversations of on this machine from
+ * here on, for setup to say so to the person.
+ */
 export const choose = mutation({
-  args: { harnesses: v.array(v.string()) },
-  handler: async (ctx, { harnesses }) => {
+  args: { harnesses: v.array(v.string()), system: v.optional(v.string()) },
+  handler: async (ctx, { harnesses, system }) => {
     const { machine } = await requireMachine(ctx)
-    const known = harnesses.filter((h) => (HARNESSES as readonly string[]).includes(h))
-    await ctx.db.patch(machine._id, { wanted: [...new Set(known)] })
-    return null
+    const known = [...new Set(harnesses.filter((h) => (HARNESSES as readonly string[]).includes(h)))]
+    const on = system === undefined ? machine.system : system.slice(0, 20)
+    const wakes = wakingToo(machine, known, on)
+    await ctx.db.patch(machine._id, { wanted: known, ...(wakes ? { wakes } : {}), ...(on !== machine.system ? { system: on } : {}) })
+    const woken = wakesOn(on) ? (wakes ?? machine.wakes ?? []).map((w) => w.harness).filter((h) => known.includes(h)) : []
+    return { wakes: woken }
   },
 })
 

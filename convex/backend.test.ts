@@ -2826,7 +2826,58 @@ describe('displays and machines', () => {
     expect((await m.as.query(api.machines.me, {})).wanted).toEqual(['pi'])
   })
 
-  test('reopening a closed conversation is off for every agent app on every machine until the owner switches it on, for that app on that machine alone', async () => {
+  test('reopening is on for an agent app from when it is connected on a machine, by the person or by setup there, and what the person switched off stays off whoever connects the app again', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const wakes = async () => (await m.as.query(api.machines.me, {})).wakes.map((w) => w.harness).sort()
+    expect(await wakes()).toEqual([])
+    // Connected by the person, on the Machines page
+    await alice.browser.mutation(api.machines.toggle, { machineId: m.id, harness: 'claude-code', on: true })
+    expect(await wakes()).toEqual(['claude-code'])
+    // Chosen on the machine by setup, an app It cannot reopen among them: on for the ones it can, and setup is told which
+    expect(await m.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex', 'openclaw'], system: 'linux' })).toEqual({
+      wakes: ['claude-code', 'codex'],
+    })
+    expect(await wakes()).toEqual(['claude-code', 'codex'])
+    // Setup run again, as every update runs it, changes nothing
+    const before = (await m.as.query(api.machines.me, {})).wakes
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(await m.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex', 'openclaw'], system: 'linux' })).toEqual({
+      wakes: ['claude-code', 'codex'],
+    })
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual(before)
+    // The person switches one off. It stays off when the app is disconnected and connected again, on the site
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: false })
+    await alice.browser.mutation(api.machines.toggle, { machineId: m.id, harness: 'codex', on: false })
+    await alice.browser.mutation(api.machines.toggle, { machineId: m.id, harness: 'codex', on: true })
+    expect(await wakes()).toEqual(['claude-code'])
+    // And by the machine, which is to say by anything that runs on it: no agent switches it on for itself by connecting its app afresh
+    await m.as.mutation(api.machines.choose, { harnesses: ['claude-code'] })
+    expect(await m.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex'] })).toEqual({ wakes: ['claude-code'] })
+    expect(await wakes()).toEqual(['claude-code'])
+    // Only the person switches it on again
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: true })
+    expect(await wakes()).toEqual(['claude-code', 'codex'])
+    // A machine that was set up before reopening came on by itself, its apps connected and nothing ever switched, is left as it is
+    const old = await machineOf(t, 'alice', 'desktop')
+    await t.run((ctx) => ctx.db.patch(old.id as never, { wanted: ['claude-code'] }))
+    expect(await old.as.mutation(api.machines.choose, { harnesses: ['claude-code'], system: 'linux' })).toEqual({ wakes: [] })
+    expect((await old.as.query(api.machines.me, {})).wakes).toEqual([])
+    // On a machine that runs Windows nothing is switched on, and setup is told that nothing is
+    const pc = await machineOf(t, 'alice', 'pc')
+    expect(await pc.as.mutation(api.machines.choose, { harnesses: ['claude-code'], system: 'win32' })).toEqual({ wakes: [] })
+    expect(((await t.run((ctx) => ctx.db.get(pc.id as never))) as { wakes?: unknown; system?: string }).wakes).toBeUndefined()
+    // One that has not said what it runs has it noted, and nothing comes of that until it is known to be a system It reopens on
+    const unknown = await machineOf(t, 'alice', 'server')
+    await t.run((ctx) => ctx.db.patch(unknown.id as never, { system: undefined }))
+    expect(await unknown.as.mutation(api.machines.choose, { harnesses: ['claude-code'] })).toEqual({ wakes: [] })
+    expect((await unknown.as.query(api.machines.me, {})).wakes).toEqual([])
+    await unknown.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: [], system: 'linux' })
+    expect((await unknown.as.query(api.machines.me, {})).wakes.map((w) => w.harness)).toEqual(['claude-code'])
+  })
+
+  test('reopening a closed conversation is switched by the owner alone, for one agent app on one machine, and what a machine is told to connect leaves their switches as they set them', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
@@ -2853,8 +2904,15 @@ describe('displays and machines', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([{ harness: 'claude-code', since: at }])
-    // What the machine chooses for itself, as `it setup` does, leaves it as the person set it
+    // What the machine chooses for itself, as `it setup` does, leaves what the person switched as they set it.
+    // The app that is newly connected by it has reopening on, which the person then switches off here
+    const chose = Date.now()
     await m.as.mutation(api.machines.choose, { harnesses: ['codex'] })
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([
+      { harness: 'claude-code', since: at },
+      { harness: 'codex', since: chose },
+    ])
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: false })
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([{ harness: 'claude-code', since: at }])
     // On a machine that runs Windows, or that has not said what it runs, reopening is not to be had:
     // the switch is refused with why, what was switched on before says nothing, and nothing is offered for reopening

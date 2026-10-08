@@ -135,6 +135,8 @@ export default defineSchema({
     wanted: v.optional(v.array(v.string())),
     /** The agent apps whose closed conversations may be reopened on this machine for a click, and since when. The person's alone to say, from a browser of their own. */
     wakes: v.optional(v.array(v.object({ harness: v.string(), since: v.number() }))),
+    // The agent apps the person has switched reopening off for on this machine: it is not switched on for them again by anything but the person
+    wakesOff: v.optional(v.array(v.string())),
     /** The conversations this machine is running now because It reopened them, each since when, and whether someone has asked for it to be stopped. */
     runs: v.optional(
       v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number(), stop: v.optional(v.boolean()), run: v.optional(v.string()) })),
