@@ -544,6 +544,18 @@ try {
       zsh.code === 0 && read(path.join(zsh.home, '.zshrc'))?.includes('export PATH=') && read(path.join(zsh.home, '.profile')) === null,
       zsh.said,
     )
+    // fish reads none of those files, and is given one of It's own, in fish's own words
+    const fish = await install('fish', {}, { shell: '/usr/bin/fish' })
+    const fishFile = path.join(fish.home, '.config', 'fish', 'conf.d', 'it.fish')
+    check(
+      'a person whose shell is fish gets the line in a file of fish’s own, written as fish reads it, and no other shell’s file is made',
+      fish.code === 0 &&
+        read(fishFile)?.includes(`contains -- '${path.dirname(fish.it)}' $PATH; or set -gx PATH '${path.dirname(fish.it)}' $PATH`) &&
+        read(path.join(fish.home, '.profile')) === null &&
+        read(path.join(fish.home, '.bashrc')) === null &&
+        fish.said.includes(fishFile),
+      `${fish.said}\n${read(fishFile)}`,
+    )
     mkdirSync(path.join(tmp, 'bash'), { recursive: true })
     writeFileSync(path.join(tmp, 'bash', '.bash_profile'), '# mine\n')
     const bash = await install('bash', {}, { shell: '/usr/bin/bash' })

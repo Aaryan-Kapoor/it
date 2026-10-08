@@ -593,6 +593,27 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     },
   )
 
+  test.skipIf(process.platform === 'win32')(
+    '`it uninstall` takes its line out of fish’s files too, where the installer gave fish a file of It’s own, and leaves fish’s other files alone',
+    async () => {
+      const m = machine(true, true)
+      for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+        writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+        chmodSync(path.join(m.bin, name), 0o755)
+      }
+      const fish = path.join(m.home, '.config', 'fish')
+      mkdirSync(path.join(fish, 'conf.d'), { recursive: true })
+      const word = `'${path.join(m.it, 'bin')}'`
+      // As the installer writes it for a person whose shell is fish
+      writeFileSync(path.join(fish, 'conf.d', 'it.fish'), `\n# It\ncontains -- ${word} $PATH; or set -gx PATH ${word} $PATH\n`)
+      writeFileSync(path.join(fish, 'config.fish'), 'set -gx EDITOR vi\n')
+      const done = await run(m, ['uninstall', '--yes'])
+      expect(done.code).toBe(0)
+      expect(existsSync(path.join(fish, 'conf.d', 'it.fish'))).toBe(false)
+      expect(readFileSync(path.join(fish, 'config.fish'), 'utf8')).toBe('set -gx EDITOR vi\n')
+    },
+  )
+
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
     const m = machine(true, true)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {

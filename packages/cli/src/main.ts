@@ -935,12 +935,21 @@ function replaceWhole(file: string, text: string): void {
 }
 
 function unlisted(bin: string): { changed: string[]; failed: { file: string; why: string }[] } {
-  const line = `export PATH='${bin.replaceAll("'", `'\\''`)}':"$PATH"`
   const dirs = [process.env.ZDOTDIR, os.homedir()].filter((d): d is string => typeof d === 'string' && d !== '')
-  const files = [...new Set(dirs.flatMap((d) => ['.zshrc', '.bashrc', '.bash_profile', '.bash_login', '.profile'].map((name) => path.join(d, name))))]
+  // The line as the installer writes it for each shell: fish has a file of It's own, and words of its own
+  const posix = `export PATH='${bin.replaceAll("'", `'\\''`)}':"$PATH"`
+  const fishWord = `'${bin.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`
+  const fish = `contains -- ${fishWord} $PATH; or set -gx PATH ${fishWord} $PATH`
+  const files = new Map<string, string>(
+    [...new Set(dirs.flatMap((d) => ['.zshrc', '.bashrc', '.bash_profile', '.bash_login', '.profile'].map((name) => path.join(d, name))))].map((file) => [
+      file,
+      posix,
+    ]),
+  )
+  files.set(path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'fish', 'conf.d', 'it.fish'), fish)
   const changed: string[] = []
   const failed: { file: string; why: string }[] = []
-  for (const file of files) {
+  for (const [file, line] of files) {
     let text: string
     try {
       text = readFileSync(file, 'utf8')

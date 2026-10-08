@@ -249,8 +249,13 @@ replace() {
   # file, or failing that as a copy. The new file is then moved over it, which the system does
   # in one step. So at no moment is there nothing at the place: a run that is ended between the
   # two, or a machine that loses power, still has a program where its service starts it from.
-  # A link is moved aside as it is, since a second name for a link is not the same on every system.
-  if [ -L "$2" ]; then mv -f -- "$2" "${stage}/old.$1"
+  # A link is kept aside as the link it is, by a copy of the link and not of what it leads to,
+  # since a second name for a link is not the same on every system; and only where it cannot
+  # be copied so is it moved aside, which leaves nothing at the place for a moment.
+  # A link that leads to a folder is always moved aside: a file moved onto such a link would
+  # be put inside the folder.
+  if [ -L "$2" ] && [ ! -d "$2" ] && cp -P -- "$2" "${stage}/old.$1" 2>/dev/null; then :
+  elif [ -L "$2" ]; then mv -f -- "$2" "${stage}/old.$1"
   elif [ -e "$2" ] && ! ln -- "$2" "${stage}/old.$1" 2>/dev/null; then
     # A copy is made under a name of its own and given the kept name only once it is whole: a
     # copy that stopped half way, as on a full disk, is never taken for what was there
@@ -450,9 +455,18 @@ each_profile() {
       "$1" "${HOME}/.bashrc" "~/.bashrc"
       "$1" "${HOME}/${login}" "~/${login}"
       ;;
+    # fish reads none of those, and keeps what it runs when it starts in a folder of files
+    # of its own: It's line goes in one that is It's alone
+    fish)
+      fish_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/fish/conf.d"
+      if [ "$1" = add_line ]; then mkdir -p -- "${fish_dir}" 2>/dev/null || true; fi
+      "$1" "${fish_dir}/it.fish" "${fish_dir}/it.fish"
+      ;;
     *) "$1" "${HOME}/.profile" "~/.profile" ;;
   esac
 }
+# A word as fish reads it between single quotes, where only the quote and the backslash are marked
+fish_quoted() { printf "'%s'" "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e "s/'/\\\\'/g")"; }
 on_path=0
 case ":${PATH:-}:" in *":${DIR}:"*) on_path=1 ;; esac
 # A terminal that has the folder on its PATH may be the only one that will: the terminal
@@ -470,7 +484,11 @@ if [ -z "${IT_INSTALL_NO_PATH:-}" ] && { [ "${on_path}" = 0 ] || [ "${named}" = 
     else say "HOME is not set, so your PATH was left alone. Add ${DIR} to it yourself."
     fi
   else
-    line="export PATH=$(quoted "${DIR}"):\"\$PATH\""
+    case "$(basename -- "${SHELL:-sh}")" in
+      # In fish's own words, which are not the other shells': put first on the PATH unless it is on it
+      fish) line="contains -- $(fish_quoted "${DIR}") \$PATH; or set -gx PATH $(fish_quoted "${DIR}") \$PATH" ;;
+      *) line="export PATH=$(quoted "${DIR}"):\"\$PATH\"" ;;
+    esac
     each_profile add_line
     # Where one file was changed and another could not be, a new terminal has the folder on
     # its PATH only if it reads the one that was changed, and so none is promised
