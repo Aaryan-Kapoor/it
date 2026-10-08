@@ -162,6 +162,34 @@ describe('the script inside a page', () => {
     expect(p.It.revision).toBe(4)
   })
 
+  test('a bound element shows a value no longer once it has been taken out of the state, and what the page wrote in one itself stays until a value comes', async () => {
+    const p = load(
+      '<b id="s" data-it-bind="status">as the page wrote it</b><input id="i" data-it-bind="answer"><input id="c" type="checkbox" data-it-bind="agreed"><img id="p" data-it-bind="picture"><progress id="g" max="10" data-it-bind="done"></progress><em id="w" data-it-bind="never">placeholder</em>',
+    )
+    p.answer()
+    const el = (id: string) => p.w.document.getElementById(id)
+    // Before any value, the page's own words stand
+    p.fromSite({ type: 'it:state', state: {}, revision: 1 })
+    expect([el('s').textContent, el('w').textContent]).toEqual(['as the page wrote it', 'placeholder'])
+    p.fromSite({
+      type: 'it:state',
+      state: { status: 'Working', answer: 'old answer', agreed: true, picture: 'https://example.com/a.png', done: 7 },
+      revision: 2,
+    })
+    expect([el('s').textContent, el('i').value, el('c').checked, el('p').getAttribute('src'), el('g').value]).toEqual([
+      'Working',
+      'old answer',
+      true,
+      'https://example.com/a.png',
+      7,
+    ])
+    // The agent takes them out, as `it patch` does with null and `it set --replace` by leaving them out
+    p.fromSite({ type: 'it:state', state: {}, revision: 3 })
+    expect([el('s').textContent, el('i').value, el('c').checked, el('p').getAttribute('src'), el('g').value]).toEqual(['', '', false, null, 0])
+    // And what was never given a value is as the page wrote it still
+    expect(el('w').textContent).toBe('placeholder')
+  })
+
   test('what the page stores for itself is read back by its exact name', async () => {
     const p = load()
     const port = p.answer()
@@ -303,7 +331,7 @@ describe('the browser’s storage, which a sandboxed page has none of', () => {
 describe('what the script writes to the console', () => {
   test('when a page’s own handler throws, only that it threw, and nothing of what it threw', async () => {
     const p = load('<b data-it-bind="status"></b>')
-    p.answer()
+    const port = p.answer()
     const said: unknown[][] = []
     p.w.console.error = (...args: unknown[]) => said.push(args)
     // Whatever the script lets past it reaches the browser's own report of errors
@@ -355,6 +383,14 @@ describe('what the script writes to the console', () => {
     expect(said).toHaveLength(5)
     expect(said.every((line) => line.length === 1 && line[0] === '[It] an onState handler threw')).toBe(true)
     expect(unhandled).toEqual([])
+    // That a handler failed is said to the site, which says it above the page and to the page's agent: in
+    // this program's own words, with nothing of what was thrown, and only the first few times
+    const faults = (port.sent as { type: string; message?: string }[]).filter((m) => m.type === 'it:fault')
+    expect(faults).toHaveLength(3)
+    expect(new Set(faults.map((m) => m.message))).toEqual(
+      new Set(['A function the page gave to It.onState failed, so the page may not show what its state says']),
+    )
+    expect(JSON.stringify(faults)).not.toMatch(/private|acme|draft/)
   })
 })
 

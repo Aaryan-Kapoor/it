@@ -78,10 +78,25 @@ function get(obj: unknown, path: string): unknown {
 
 // data-it-bind="path" puts a value from the state into an element; data-it-show="path" (or
 // "!path") shows or hides one.
+/** The elements a value from the state has been put into. What the page itself wrote in one, before any value came, is left as it is. */
+const filled = new WeakSet<Element>()
 function applyBindings(): void {
   for (const el of document.querySelectorAll<HTMLElement>('[data-it-bind]')) {
     const value = get(state, el.getAttribute('data-it-bind') ?? '')
-    if (value === undefined) continue
+    if (value === undefined) {
+      // The value it showed has been taken out of the state: it shows it no longer. Left up, a
+      // status the agent had removed went on saying what it said, and an answer it had cleared stayed
+      if (!filled.has(el)) continue
+      filled.delete(el)
+      if (el instanceof HTMLProgressElement || el instanceof HTMLMeterElement) el.value = 0
+      else if (el instanceof HTMLInputElement) {
+        if (el.type === 'checkbox') el.checked = false
+        else el.value = ''
+      } else if (el instanceof HTMLImageElement || el instanceof HTMLIFrameElement) el.removeAttribute('src')
+      else el.textContent = ''
+      continue
+    }
+    filled.add(el)
     if (el instanceof HTMLProgressElement || el instanceof HTMLMeterElement) el.value = Number(value) || 0
     else if (el instanceof HTMLInputElement) {
       if (el.type === 'checkbox') el.checked = Boolean(value)
@@ -107,7 +122,13 @@ function applyBindings(): void {
  * threw is written to the console, and nothing of what it threw is read.
  */
 function tell(l: Listener): void {
-  const threw = () => console.error('[It] an onState handler threw')
+  const threw = () => {
+    console.error('[It] an onState handler threw')
+    // And said above the page and to its agent, as any error in the page's script is: this is
+    // where a page draws itself, and one that fails here stays as it was with no word of why.
+    // Only that it failed, in words of this program's own
+    fault('A function the page gave to It.onState failed, so the page may not show what its state says')
+  }
   try {
     // A listener may be one that answers later. What it fails with then is held in the same way
     const later = l(state) as unknown
