@@ -727,7 +727,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * have given the click to another machine by now. A run that went on would act on it a
    * second time beside whoever has it.
    */
-  const lostHold = new Map<string, string | undefined>()
+  const lostHold = new Map<string, object | undefined>()
   /** The run of each conversation that a person stopped, by its name with It: by this a run that is ending is told to be ending for that reason. */
   const stoppedRun = new Map<string, string>()
   /** The conversations whose hold was lost while their run was still being got ready: it is not started. */
@@ -981,6 +981,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
     /** This hand-over is finished: what its renewals are answered from now on is about nothing that is running. */
     let over = false
+    /** This hand-over's own mark on a note that its hold was lost, by which it lets go of that note and of no other's. */
+    const mine = {}
     const line = click.session!.id
     const harness = click.session!.harness
     // What the route is called where it is written down: Codex's own queue, or the reopening of a conversation that was closed
@@ -1110,7 +1112,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const run = reopenedNow.get(follow(key))
         // Nothing is running yet: getting it ready takes a moment, and it is not to start
         if (!run) return void lostBefore.add(key)
-        lostHold.set(key, runNames.get(key))
+        lostHold.set(key, mine)
         say(
           `${a(harness)} conversation (${short(line)}) is ended: this machine’s hold on what it was reopened for was lost, and that may be with another machine by now`,
         )
@@ -1279,10 +1281,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // run that had run out of its time when the hold went ended as one that ran out, and the
       // note it left kept the conversation's next run from being ended when its own hold was lost
       lostBefore.delete(key)
-      // (Only where it is not the mark of a run of this conversation that is still going,
-      // which another hand-over started: that run is still to be ended on the strength of it)
-      const going = runNames.get(key)
-      if (lostHold.has(key) && !(going !== undefined && lostHold.get(key) === going)) lostHold.delete(key)
+      // (Only the note this hand-over made itself. Another hand-over of the same conversation
+      // may have a run going whose hold has just been lost, and that note is still to end it)
+      if (lostHold.get(key) === mine) lostHold.delete(key)
       clearInterval(keeping)
       submitting.delete(click.id)
       queueing.delete(click.id)
@@ -2159,7 +2160,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       )
       // What is running was started for an It that this program does not fit any more
       for (const [key, run] of reopenedNow) {
-        lostHold.set(key, runNames.get(key))
+        lostHold.set(key, undefined)
         run.abort()
       }
       // And what this machine holds for a conversation that is listening goes back, unless it was given already
@@ -2176,6 +2177,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     } else if (!wrong && unfitting) {
       const waited = unfitting !== NOT_ASKED
       unfitting = null
+      // The notes that holds were lost because the two did not fit are of runs that are over by now
+      for (const [key, whose] of lostHold) if (whose === undefined) lostHold.delete(key)
       if (waited) say('this machine and the It it joined fit again: what is done on a page is handed over again')
       plainUntil = 0
       void report()
