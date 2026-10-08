@@ -360,8 +360,11 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                       onChange={(e) => act(wake({ machineId, harness: h.id, on: e.target.checked }))}
                     />
                     <span className="wake-name">Auto-wake</span>
+                    {/* Said where it can be read, and not only where a pointer rests: it is on from the start, and it runs an agent with nobody there */}
                     <span className="row-sub">
-                      {wakes ? 'Closed conversations are reopened for a click' : 'A click waits until you reopen its conversation'}
+                      {wakes
+                        ? 'On. When you use a page whose conversation is closed, It reopens it and runs this agent here with nobody watching'
+                        : 'Off. A click waits until you open its conversation again'}
                     </span>
                   </label>
                 )}
