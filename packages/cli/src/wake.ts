@@ -61,7 +61,7 @@ export const WOKEN =
  * it had already done (a press counted twice, a message sent twice).
  */
 export const WAS_CUT_OFF =
-  '[It] You were given what is above once before. It was restarted while you were working on it, and that turn was cut off before it ended, so you may have done part of it or all of it. Look at the page’s state, and at what you last did in this conversation, before you do any of it again, and do not do twice what was already done.'
+  '[It] An earlier turn of this conversation that It had reopened was cut off before it ended, so some of what it was working on may already be done. What is above may be that same work given again, or something new, or both: go by the action ids. Look at the page’s state, and at what you last did in this conversation, before you do any of it, and do not do twice what was already done.'
 
 /**
  * What a conversation is told, the next time it is reopened, when the person stopped its last

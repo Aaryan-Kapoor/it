@@ -2431,10 +2431,10 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
       }
     }
     // A newer It: this machine is the one to update. An older one: the machine It runs on. Neither is joined, and no key is made
-    expect(await versions(2)).toEqual([2, 'Update It on this machine, with `it upgrade` or the install command, and join again.', false, false])
+    expect(await versions(2)).toEqual([2, 'Update It on this machine, with `it upgrade` or the install command. Then join again.', false, false])
     expect(await versions(0)).toEqual([
       2,
-      'Update It on the machine it runs on first, with `it upgrade` there or the Update button on its Machines page, and join again.',
+      'Update It on the machine it runs on, with `it upgrade` there or the Update button on its Machines page. Then join again.',
       false,
       false,
     ])

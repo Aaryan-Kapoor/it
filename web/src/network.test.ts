@@ -292,7 +292,7 @@ describe('what is said of an agent app on a machine', () => {
     await showing([{ ...desk, latest: '0.1.1', upgrade: { at: Date.now() - 16 * 60_000, state: 'working' } }])
     expect(said()).toEqual(['The update to It 0.1.1 did not finish. This machine still runs 0.1.0. Try again'])
     await showing([{ ...desk, latest: '0.1.1', upgrade: { at: 1, state: 'failed', why: 'The newest release of It could not be fetched (it-linux-x64).' } }])
-    expect(said()).toEqual(['It 0.1.1 could not be put in place: The newest release of It could not be fetched (it-linux-x64). Try again'])
+    expect(said()).toEqual(['The update to It 0.1.1 did not finish: The newest release of It could not be fetched (it-linux-x64). Try again'])
     await showing([
       { ...desk, connectorVersion: '0.1.1', latest: '0.1.1' },
       { ...laptop, latest: '0.1.1' },

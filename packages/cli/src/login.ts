@@ -98,8 +98,8 @@ export function incompatible(protocol: unknown): Problem | null {
     `That It and the It on this machine are of versions that do not work together (it speaks version ${protocol} of how machines talk to It, and this one version ${PROTOCOL_VERSION}).`,
     'invalid',
     protocol > PROTOCOL_VERSION
-      ? 'Update It on this machine, with `it upgrade` or the install command, and join again.'
-      : 'Update It on the machine it runs on first, with `it upgrade` there or the Update button on its Machines page, and join again.',
+      ? 'Update It on this machine, with `it upgrade` or the install command.'
+      : 'Update It on the machine it runs on, with `it upgrade` there or the Update button on its Machines page.',
   )
 }
 
@@ -157,7 +157,8 @@ export async function login(opts: { url: string; code: string; name?: string }):
     // another than this program would refuse or misread what this machine asks, a request at a
     // time and with no word of why: so nothing is joined, and which of the two to update is said.
     const theirs = incompatible(config.protocol)
-    if (theirs) throw theirs
+    // Nothing was joined, and the invite was not used: once the one of the two is updated, the joining is done again
+    if (theirs) throw new Problem(theirs.message, theirs.code, `${theirs.hint ?? ''} Then join again.`.trim())
     // The key is made here and its private half never leaves this machine. One that was kept
     // for this same It, and never heard its answer, is the key to ask with again.
     // A machine that had joined this It before and left names the identity it had then, so

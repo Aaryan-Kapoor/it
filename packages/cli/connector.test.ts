@@ -607,7 +607,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     offered()
     offered(click(1))
     await until(() => existsSync(path.join(bin, 'given-1')) && readFileSync(path.join(bin, 'given-1'), 'utf8').length > 0, 20_000)
-    expect(readFileSync(path.join(bin, 'given-1'), 'utf8')).toContain('that turn was cut off before it ended')
+    expect(readFileSync(path.join(bin, 'given-1'), 'utf8')).toContain('was cut off before it ended')
   }, 60_000)
 
   test('a click that its agent said was done, with `it ack`, while the conversation it was reopened for is still at work is not taken for a hold that was lost: the turn goes on', async () => {
@@ -744,7 +744,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
     offered(click(1))
     await until(() => existsSync(path.join(bin, 'given-0')) && readFileSync(path.join(bin, 'given-0'), 'utf8').length > 0)
-    expect(readFileSync(path.join(bin, 'given-0'), 'utf8')).toContain('that turn was cut off before it ended')
+    expect(readFileSync(path.join(bin, 'given-0'), 'utf8')).toContain('was cut off before it ended')
     // Told, it is owed the note no more. The other conversation, whose run was noted and is gone, is still owed it:
     // a run that was never said to be over did not end as a turn ends
     await until(() => JSON.stringify(readJson(path.join(home, 'cut-off.json'))) === JSON.stringify(['codex:thread-2']))

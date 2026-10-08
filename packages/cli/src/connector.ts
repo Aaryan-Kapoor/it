@@ -1741,7 +1741,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     upgradingNow = true
     try {
       await call('mutation', api.machines.upgrading, { state: 'working' }).catch(() => {})
-      const done = await fetchNewer({ say: (line) => say(`upgrade: ${line}`) })
+      // Its sentences are a person's, and one of them names the folder the program is in: that one is said here without the folder
+      const done = await fetchNewer({ say: (line) => say(`upgrade: ${line.startsWith('Installed in ') ? 'installed' : line}`) })
       if (!done) return void (await call('mutation', api.machines.upgrading, { state: 'none' }).catch(() => {}))
       // Not on Windows: there this connector runs inside the very task that starting again
       // stops, and what it starts may be ended with that task before it has started anything.
@@ -1877,7 +1878,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (wrong === undefined || closing) return
     if (wrong && unfitting !== wrong && (unfitting === null || unfitting === NOT_ASKED)) {
       unfitting = wrong
-      say(`${wrong.message} ${wrong.hint ?? ''} Nothing done on a page is handed to an agent on this machine until then. It is asked again every minute.`)
+      say(
+        `${wrong.message} ${wrong.hint ?? ''} This machine stays joined. Nothing done on a page is handed to an agent on it until then, and it is asked again every minute.`,
+      )
       // What is running was started for an It that this program does not fit any more
       for (const [key, run] of reopenedNow) {
         lostHold.add(key)

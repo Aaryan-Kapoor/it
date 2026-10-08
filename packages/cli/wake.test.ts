@@ -310,9 +310,12 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
   })
 })
 
-describe('what a conversation is told when it is given the same thing again after It restarted', () => {
-  test('says that its first turn at it was cut off, and to look before it does any of it again', () => {
-    expect(WAS_CUT_OFF).toMatch(/^\[It\] You were given what is above once before\. It was restarted while you were working on it/)
+describe('what a conversation is told when it is reopened after a turn of it was cut off', () => {
+  test('says that an earlier turn was cut off, that what it is given may be that work again or something new, and to look before it does any of it', () => {
+    expect(WAS_CUT_OFF).toMatch(/^\[It\] An earlier turn of this conversation that It had reopened was cut off before it ended/)
+    // Why it was cut off is not said, and neither is that all of this was given before: neither is known
+    expect(WAS_CUT_OFF).not.toMatch(/restarted|once before/)
+    expect(WAS_CUT_OFF).toContain('go by the action ids')
     expect(WAS_CUT_OFF).toContain('do not do twice what was already done')
   })
 })

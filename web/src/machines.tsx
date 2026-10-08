@@ -214,7 +214,7 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
       ) : (
         <>
           {state === 'failed'
-            ? `It ${out} could not be put in place: ${(m.upgrade?.why ?? 'it is not known why').replace(/\.$/, '')}. `
+            ? `The update to It ${out} did not finish: ${(m.upgrade?.why ?? 'it is not known why').replace(/\.$/, '')}. `
             : cutShort
               ? `The update to It ${out} did not finish. This machine still runs ${m.connectorVersion}. `
               : `It ${out} is out. This machine runs ${m.connectorVersion}. `}

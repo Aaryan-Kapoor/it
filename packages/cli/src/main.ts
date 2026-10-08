@@ -936,7 +936,9 @@ async function uninstall(a: Args) {
   tell([
     left.length ? 'It is off this machine, but for this:' : 'It is off this machine.',
     ...left.map((line) => `  ${line}`),
-    'A terminal that is open still has the old PATH: a new one does not.',
+    left.some((line) => /PATH/.test(line)) || process.platform === 'win32'
+      ? 'Once the PATH is as you want it, a new terminal has it: one that is open keeps the old PATH.'
+      : 'A terminal that is open still has the old PATH: a new one does not.',
   ])
 }
 
@@ -1366,7 +1368,15 @@ async function settingUpLed(a: Args) {
       const net = flow.step('Network', 'opening')
       try {
         await turnNetwork(config, true, reach !== 'off', reach === 'tailscale')
-        net.done(reach === 'off' ? 'this computer only' : reach === 'tailscale' ? 'your tailnet only' : 'your home network')
+        net.done(
+          reach === 'off'
+            ? 'this computer only'
+            : reach === 'tailscale'
+              ? 'your tailnet only'
+              : open
+                ? 'every network this machine is on, the internet included'
+                : 'your home network',
+        )
       } catch (err) {
         net.warn('this computer only')
         left.push(err instanceof Problem ? inWords(err) : String(err))
@@ -2064,8 +2074,9 @@ This machine
                                  its pages, and with clear, remove them all.
   it telemetry [on | off]        Say whether It reports usage counts, or turn that on or off.
                                  It reports them until it is turned off.
-  it upgrade [--check]           Put the newest It in place of this one and start it again.
-                                 With --check, only say whether a newer one is out.
+  it upgrade [--check]           Put the newest It in place of this one, and start it again where
+                                 it is registered to start by itself. With --check, only say
+                                 whether a newer one is out.
   it updates [on | off]          Say whether It looks every half hour for a newer version,
                                  or turn that on or off. It looks until it is turned off.
   it version | it help
@@ -2179,7 +2190,9 @@ async function main(argv: string[]): Promise<void> {
       return tell([
         now.on
           ? 'It looks every half hour for a newer version of itself, and says so on its site and in `it status` when one is out. Nothing about this installation is sent to ask. `it updates off` stops it looking.'
-          : `It does not look for a newer version of itself${now.because === 'IT_UPDATE_CHECK' ? ', since IT_UPDATE_CHECK says not to' : ''}. \`it upgrade --check\` asks once, and \`it updates on\` has it look every half hour.`,
+          : now.because === 'IT_UPDATE_CHECK'
+            ? 'It does not look for a newer version of itself, since IT_UPDATE_CHECK says not to where It is started. Take that variable away there and start It again to have it look. `it upgrade --check` asks once.'
+            : 'It does not look for a newer version of itself. `it upgrade --check` asks once, and `it updates on` has it look every half hour.',
       ])
     }
     case 'skill':
