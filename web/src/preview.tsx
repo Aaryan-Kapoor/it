@@ -36,6 +36,10 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
   const [mine, setMine] = useState(false)
   const [address, setAddress] = useState<string | null>(null)
   const [port, setPort] = useState<MessagePort | null>(null)
+  // The picture's showing ran out (the browser slept, or It was started again): it is shown
+  // afresh, and no oftener than now and then, so that one that cannot be shown is not asked for in a loop
+  const [again, setAgain] = useState(0)
+  const lapsedAt = useRef(0)
 
   // Only a card that is on screen, or about to be, shows its page
   useEffect(() => {
@@ -65,6 +69,7 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
     }
   }, [near])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `again` is counted up to have the picture shown afresh, and is read by nothing
   useEffect(() => {
     if (!mine) return
     let live = true
@@ -87,7 +92,7 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
       setAddress(null)
       setPort(null)
     }
-  }, [mine, convex, artifactId])
+  }, [mine, convex, artifactId, again])
 
   // The page's own script says hello, and is given a channel that carries its state to it. What
   // it sends back is refused, each time, so that a script waiting on an answer is given one
@@ -105,6 +110,13 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
       const mine = channel.port1
       mine.onmessage = (m) => {
         const asked = m.data as { type?: unknown; requestId?: unknown } | null
+        if (asked?.type === 'it:lapsed') {
+          if (Date.now() - lapsedAt.current > 60_000) {
+            lapsedAt.current = Date.now()
+            setAgain((n) => n + 1)
+          }
+          return
+        }
         if (asked?.type !== 'it:action' && asked?.type !== 'it:store') return
         const requestId = typeof asked.requestId === 'string' ? asked.requestId.slice(0, 100) : ''
         mine.postMessage({ type: 'it:result', requestId, ok: false, error: 'This is a picture of the page. Open the page to use it.' } satisfies SiteToPage)
