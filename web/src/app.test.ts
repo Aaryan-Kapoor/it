@@ -450,6 +450,102 @@ describe('what each kind of session is shown', () => {
   })
 })
 
+describe('something that failed while the site was being shown', () => {
+  /** The backend refuses the owner their machines, which their first screen asks for, until the test says the trouble is over. */
+  const troubled = async () => {
+    const { ConvexError } = await import('convex/values')
+    const trouble = { over: false }
+    watched['machines:list'] = () => {
+      if (!trouble.over) throw new ConvexError({ code: 'limit', message: 'Too much is being asked at once. Try again in a moment.' })
+      return []
+    }
+    return trouble
+  }
+
+  test('what could not be shown can be tried again, and is shown once the backend answers', async () => {
+    cookie = CODES.ownercode00000000001!
+    const trouble = await troubled()
+    await start()
+    expect(host.textContent).toContain('That did not work')
+    expect(host.textContent).toContain('Too much is being asked at once. Try again in a moment.')
+    // The trouble passes, and nothing on the screen finds that out by itself
+    trouble.over = true
+    await settle()
+    expect(host.textContent).toContain('That did not work')
+    expect(button('Try again')).toBeDefined()
+    await press('Try again')
+    expect(host.textContent).not.toContain('That did not work')
+    expect(host.textContent).toContain('What should I make?')
+  })
+
+  test('the way back to the pages shows them where it was the pages that could not be shown, and a page that is not there is offered nothing to try again', async () => {
+    cookie = CODES.ownercode00000000001!
+    const trouble = await troubled()
+    await start()
+    expect(host.textContent).toContain('That did not work')
+    trouble.over = true
+    await press('Back to your pages')
+    expect(location.pathname).toBe('/')
+    expect(host.textContent).not.toContain('That did not work')
+    expect(host.textContent).toContain('What should I make?')
+    // A page that was deleted is said to be that, and asking for it again would find it no more there
+    await act(async () => root.unmount())
+    host.remove()
+    const { ConvexError } = await import('convex/values')
+    watched['artifacts:get'] = () => {
+      throw new ConvexError({ code: 'not_found', message: 'There is no such page.' })
+    }
+    await start('/p/gone')
+    expect(host.textContent).toContain('No such page')
+    expect(host.textContent).toContain('It may have been deleted, or the address is wrong.')
+    expect(button('Try again')).toBeUndefined()
+    await press('Back to your pages')
+    expect(location.pathname).toBe('/')
+    expect(host.textContent).toContain('What should I make?')
+  })
+
+  test('the site does not load itself afresh while something done on a page is in this tab alone: the person is told it would be lost, and it is done once that has been sent', async () => {
+    cookie = CODES.ownercode00000000001!
+    let answerTheClick!: (said: { actionId: string }) => void
+    answers['actions:submit'] = () => new Promise((done) => (answerTheClick = done))
+    await start()
+    const { submit } = await import('./outbox')
+    // Something is done on a page while this browser can store nothing more, and the backend has yet to answer it
+    const full = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    const envelope = { v: 1 as const, clientActionId: 'click-0001', name: 'answer', payload: '{"n":1}', contentVersion: 1 }
+    const sent = submit(client as never, 'user-1', 'page-1', envelope)
+    full.mockRestore()
+    await settle()
+    // Then what the whole site stands on fails, as it does while the backend is being brought up to date
+    watched['artifacts:list'] = () => {
+      throw new Error('the backend is in trouble')
+    }
+    vi.useFakeTimers()
+    try {
+      await act(async () => button('More')!.click())
+      await act(async () => button('Settings')!.click())
+      expect(host.textContent).toContain('Something went wrong.')
+      // The site does not start again by itself, however long it waits: that is the person's to do, who is told what it would cost
+      await act(async () => void (await vi.advanceTimersByTimeAsync(60_000)))
+      expect(names()).not.toContain('/')
+      expect(host.textContent).toContain('Something you did here has not been sent yet. Starting again now would lose it.')
+      expect(button('Start again')).toBeDefined()
+      // The backend takes the click: there is nothing left to lose, and the site puts itself right as it does otherwise
+      await act(async () => {
+        answerTheClick({ actionId: 'action-1' })
+        await vi.advanceTimersByTimeAsync(100)
+      })
+      expect(await sent).toEqual({ actionId: 'action-1' })
+      expect(host.textContent).not.toContain('has not been sent yet')
+      expect(names()).toContain('/')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('erasing everything', () => {
   test('the browser that asked for it keeps nothing of It’s, and is told what was done and how It is used again', async () => {
     cookie = CODES.ownercode00000000001!

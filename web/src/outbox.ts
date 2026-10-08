@@ -183,6 +183,8 @@ const unkept = new Map<string, number[]>()
 const unkeptKey = (user: string, artifactId: string) => `${user}.${artifactId}`
 /** How many of this person's clicks on one page are on their way with no copy kept in this browser. */
 export const unsaved = (user: string, artifactId: string) => unkept.get(unkeptKey(user, artifactId))?.length ?? 0
+/** Whether anything done on any page is on its way with no copy kept in this browser: it is in this tab alone, and loading the site afresh would lose it. */
+export const anyUnsaved = (): boolean => [...unkept.values()].some((made) => made.length > 0)
 
 // What was kept in this browser was let go of: everything, or what was one person's where the
 // browser is kept for another by now. What this tab holds of it in memory goes too: nothing of

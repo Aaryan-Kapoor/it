@@ -32,7 +32,7 @@ import {
 } from './lib'
 import { Machines } from './machines'
 import { Bell, Toasts } from './notifications'
-import { drain, outboxBelongsTo, pairedForSomeone, stillPairedFor, thisPairing } from './outbox'
+import { anyUnsaved, drain, outboxBelongsTo, pairedForSomeone, stillPairedFor, thisPairing, watchOutbox } from './outbox'
 import { Grid, PageView } from './pages'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
 import { codeSeen, current, signOut as endSession, pair, pairAsScreen, recheck, useSession } from './session'
@@ -1002,14 +1002,34 @@ class Root extends Component<{ children: ReactNode; onRefused: () => Promise<voi
   override state = { error: null as unknown, asking: false }
   private asked = 0
   private here = false
+  /** The reload that puts the site right by itself is due, and waits only for what it would lose. */
+  private due = false
+  private unwatch: (() => void) | undefined
   static getDerivedStateFromError(error: unknown) {
     return { error }
   }
   override componentDidMount() {
     this.here = true
+    this.unwatch = watchOutbox(this.look)
   }
   override componentWillUnmount() {
     this.here = false
+    this.unwatch?.()
+  }
+  /**
+   * Something done on a page that this browser would not store is in this tab alone, and
+   * loading the site afresh loses it. While there is any, the site does not do that by itself:
+   * the screen says what starting again would cost, and leaves it to the person. Looked at
+   * again whenever what is kept here changes: once it has been sent, or refused, there is
+   * nothing left to lose, the screen says so no more, and the reload that was due is made.
+   */
+  private look = () => {
+    if (this.due && !anyUnsaved()) {
+      // Once, however often what is kept here changes afterwards
+      this.due = false
+      reloadWhenThere()
+    }
+    if (this.here && this.state.error) this.forceUpdate()
   }
   override componentDidCatch(error: unknown) {
     // Only a refusal as from nobody. Being refused something a screen may not do is not that,
@@ -1031,7 +1051,10 @@ class Root extends Component<{ children: ReactNode; onRefused: () => Promise<voi
     // ten minutes, so that something that fails every time does not reload for ever
     if (Date.now() - Number(sessionStorage.getItem('it.reloadedAt') ?? 0) > 600_000) {
       sessionStorage.setItem('it.reloadedAt', String(Date.now()))
-      setTimeout(reloadWhenThere, 5000)
+      setTimeout(() => {
+        this.due = true
+        this.look()
+      }, 5000)
     }
   }
   override render() {
@@ -1043,6 +1066,7 @@ class Root extends Component<{ children: ReactNode; onRefused: () => Promise<voi
           <Mark />
         </span>
         <p className="muted">Something went wrong.</p>
+        {anyUnsaved() && <p>Something you did here has not been sent yet. Starting again now would lose it.</p>}
         <button type="button" onClick={() => location.assign('/')}>
           Start again
         </button>
@@ -1062,11 +1086,28 @@ class Guard extends Component<{ children: ReactNode }, { error: unknown }> {
     const r = refusal(this.state.error)
     // Being refused as nobody is not this view's to explain: it goes up, where the site asks whether this browser is still paired
     if (r.code === 'unauthenticated') throw this.state.error
+    // What was caught is let go of, and the view is drawn again. Nothing does that by itself:
+    // the view that failed is no longer there to hear that the backend answers again
+    const again = () => this.setState({ error: null })
     return (
       <main className="empty" role="alert">
         <h2>{r.code === 'not_found' ? `No such ${NOUN.one}` : 'That did not work'}</h2>
         <p className="muted">{r.code === 'not_found' ? 'It may have been deleted, or the address is wrong.' : r.message}</p>
-        <button type="button" className="primary" onClick={() => navigate('/')}>
+        {/* A page that is not there is not there the next time either: only what may have passed is offered again */}
+        {r.code !== 'not_found' && (
+          <button type="button" className="primary" onClick={again}>
+            Try again
+          </button>
+        )}
+        <button
+          type="button"
+          className={r.code === 'not_found' ? 'primary' : undefined}
+          onClick={() => {
+            // Let go of here too: where it was the pages that failed, going to them changes nothing by itself
+            again()
+            navigate('/')
+          }}
+        >
           Back to your {NOUN.many}
         </button>
       </main>
