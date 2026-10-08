@@ -800,15 +800,17 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     const under = (id: string, session: string) => ({ ...click(1), id, session: { harness: 'codex', id: session } })
     offered(under('click-old', 'thread-old'), under('click-new', 'thread-new'))
     await until(() => existsSync(path.join(bin, 'began-0')), 20_000)
-    // While the first is being handed over, the second is not so much as asked for: it stands in the same line
-    expect(called('delivery:claim').filter((id) => id === 'click-old' || id === 'click-new')).toHaveLength(1)
+    // While the first is being handed over, the second is not so much as asked for: it stays with It until that hand-over is over
+    const claimed = () => called('delivery:claim').filter((id) => id === 'click-old' || id === 'click-new')
+    expect(claimed()).toHaveLength(1)
+    // It has the first down as handed over by now, and offers only the other
+    const other = claimed()[0] === 'click-old' ? under('click-new', 'thread-new') : under('click-old', 'thread-old')
+    offered(other)
+    await new Promise((r) => setTimeout(r, 800))
+    expect(claimed()).toHaveLength(1)
     await until(() => existsSync(path.join(bin, 'ended-0')), 20_000)
     await until(() => existsSync(path.join(bin, 'began-1')), 30_000)
-    expect(
-      called('delivery:claim')
-        .filter((id) => id === 'click-old' || id === 'click-new')
-        .sort(),
-    ).toEqual(['click-new', 'click-old'])
+    expect(claimed().sort()).toEqual(['click-new', 'click-old'])
   }, 90_000)
 
   test('a machine whose clock is behind It’s reopens a conversation as soon as one whose clock is right, and does not wait out the difference', async () => {

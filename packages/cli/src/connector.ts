@@ -1359,14 +1359,21 @@ async function connecting(say: (line: string) => void): Promise<void> {
       return true
     }
     if (queueing.size >= 50 || (tried && Date.now() - tried.at < QUEUE_WAITS[tried.n]!)) return false
-    queueing.add(click.id)
     // In line by the conversation as it is now, whichever of its ids the click names: a
     // conversation that was cleared carries on under another id, and its pages still name the
     // old one. Two hand-overs of one conversation side by side read and let go of each other's
     // notes of how a run ended, and each of four repairs to that left another way for it to
     // happen. One at a time, there is no other hand-over's note to meet.
     const key = follow(keyOf(click.session!.harness, click.session!.id))
-    const next = (queues.get(key) ?? Promise.resolve()).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening)))
+    // Every line that is this conversation's by now: also one that was begun under an id the
+    // conversation has since been found to have had
+    const before = [...queues].filter(([line]) => follow(line) === key).map(([, pending]) => pending)
+    // A reopening does not stand in line behind another hand-over of its conversation. It
+    // stays with It, where the add-on of the app that is being reopened can take it as soon
+    // as it asks, and is looked at again when that hand-over is over.
+    if (reopening && before.length) return false
+    queueing.add(click.id)
+    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening)))
     queues.set(key, next)
     void next.then(() => {
       if (queues.get(key) === next) queues.delete(key)
