@@ -356,12 +356,15 @@
             };
           });
         // Refused: the button is given back, and the page says so
-        It.action("ranked", { items: out, x_label: String(P.x_label || "Effort"), y_label: String(P.y_label || "Impact") }).catch(() => {
+        It.action("ranked", { items: out, x_label: String(P.x_label || "Effort"), y_label: String(P.y_label || "Impact") }).then(() => {
+          // It has it. That the agent has read it is the agent's to say, by what it writes back
+          say("Sent. Waiting for your agent.");
+        }, () => {
           refresh();
           noteEl.textContent = "That did not go through. Send it again.";
         });
         sendBtn.disabled = true;
-        say("Sent — reading your layout.");
+        say("Sending…");
       });
 
       function say(text) {

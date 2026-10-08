@@ -150,7 +150,7 @@ it patch tour-gauge '{"value":100,"label":"Live","note":"The page never changed.
 **Say:** "That's `it patch`. The same words work on any page you leave up: a build, the depth of a queue, a countdown, whatever you want to glance at."
 
 ```sh
-it notify "That was the last one. Next when you're ready." --id tour-gauge --button "Next=next"
+it notify "Next when you're ready." --id tour-gauge --button "Next=next"
 ```
 
 ## What it is for
@@ -161,7 +161,7 @@ This is the useful part, and the only step that happens in the chat. First send 
 it notify "That's the tour. Want the two-minute version of how to use this day to day?" --id tour-menu --button "Go on=explain" --button "I'm good=skip"
 ```
 
-If they press **I'm good**, say "It's all under the bell at the top if you want it later," and go to the end.
+If they press **I'm good**, say "Ask me for the It tour again whenever you want the rest," and go to the end.
 
 If they press **Go on**, say this, in your own words, and cover all four:
 
@@ -180,4 +180,4 @@ That removes the tour's pages, and nothing else. Stop the `it wait --follow` you
 
 ## If they want out
 
-If at any point they say stop, say "Fine. It's all in `it help` and under the bell when you want it," run `it tour clear`, and stop. Do not talk them back into it.
+If at any point they say stop, say "Fine. Ask me for the It tour again whenever you like, and `it help` has all of it," run `it tour clear`, and stop. Do not talk them back into it.

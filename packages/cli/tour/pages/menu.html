@@ -234,13 +234,16 @@
 
       function pick(id, label, text) {
         // Refused: the choices are given back, and the page says so
-        It.action("pick", { choice: id, label: label, text: text }).catch(() => {
+        It.action("pick", { choice: id, label: label, text: text }).then(() => {
+          // It has it: from here it is the agent's to build
+          if (locked) paint(id, text);
+        }, () => {
           paint("", null);
           status.textContent = "That did not go through. Pick again.";
         });
-        // Optimistic: the agent's state update confirms it a moment later, but
-        // a button that does nothing for a round trip reads as broken.
-        paint(id, text);
+        // The pick is shown as made at once, since a button that does nothing for a round trip
+        // reads as broken, and is said to be on its way until It has it
+        paint(id, text, true);
       }
 
       function submitOther() {
@@ -253,7 +256,7 @@
       send.addEventListener("click", submitOther);
       send.disabled = true;
 
-      function paint(picked, text) {
+      function paint(picked, text, onItsWay) {
         locked = !!picked;
         document.body.classList.toggle("picked", locked);
         for (var i = 0; i < buttons.length; i++) {
@@ -269,7 +272,7 @@
         dot.className = "dot";
         status.appendChild(dot);
         status.appendChild(document.createTextNode(
-          text ? "Building that — " + text : "Building that now…"
+          onItsWay ? "Sending…" : text ? "Building that — " + text : "Building that now…"
         ));
       }
 

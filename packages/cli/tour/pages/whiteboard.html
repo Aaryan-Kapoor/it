@@ -330,6 +330,15 @@
         try { return off.toDataURL("image/png"); } catch (err) { return null; }
       }
 
+      // A line under the canvas with the dot that says something is under way
+      function working(text) {
+        noteEl.textContent = "";
+        var d = document.createElement("span");
+        d.className = "dot";
+        noteEl.appendChild(d);
+        noteEl.appendChild(document.createTextNode(text));
+      }
+
       sendBtn.addEventListener("click", () => {
         if (!mine.length) return;
         sendBtn.disabled = true;
@@ -352,16 +361,15 @@
               points: s.points.filter((p, i) => i % every === 0 || i === s.points.length - 1).map((p) => [Math.round(p[0] * 1000) / 1000, Math.round(p[1] * 1000) / 1000])
             };
           })
-        }).catch(() => {
+        }).then(() => {
+          // It has it. Whether the agent is looking yet is the agent's to say, by what it draws back
+          working("Sent. Waiting for your agent.");
+        }, () => {
           // Refused: the button is given back, and the page says so
           sendBtn.disabled = !mine.length;
           noteEl.textContent = "That did not go through. Send it again.";
         });
-        noteEl.textContent = "";
-        var d = document.createElement("span");
-        d.className = "dot";
-        noteEl.appendChild(d);
-        noteEl.appendChild(document.createTextNode("Sent — I'm looking at it."));
+        working("Sending…");
       });
 
       function asStrokes(value) {

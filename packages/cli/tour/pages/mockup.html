@@ -230,14 +230,18 @@
       sendEl.addEventListener("click", () => {
         if (locked || !selected) return;
         // Refused: the choice is given back, and the page says so
-        It.action("vote", { choice: selected, text: whyEl.value.trim() || null }).catch(() => {
+        var chosen = selected;
+        It.action("vote", { choice: selected, text: whyEl.value.trim() || null }).then(() => {
+          // It has it. What the agent makes of it is the agent's to say
+          say("Sent — " + chosen + ". Waiting for your agent.");
+        }, () => {
           locked = false;
           paint();
           noteEl.textContent = "That did not go through. Send it again.";
         });
         locked = true;
         paint();
-        say("Got it — " + selected + ".");
+        say("Sending…");
       });
 
       function say(text) {
