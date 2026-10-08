@@ -5,7 +5,7 @@
 // It folder that hold only what the test put there.
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createHmac } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -568,6 +568,30 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
       chmodSync(zdot, 0o755)
     }
   })
+
+  test.skipIf(process.platform === 'win32')(
+    '`it uninstall` leaves a profile as it was where the system takes only a part of what is written, as a disk that is nearly full does',
+    async () => {
+      const m = machine(true, true)
+      for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+        writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+        chmodSync(path.join(m.bin, name), 0o755)
+      }
+      // A profile far longer than the system will let any one file be written to in this run
+      const line = `export PATH='${path.join(m.it, 'bin')}':"$PATH"`
+      const own = Array.from({ length: 900 }, (_, i) => `alias a${i}='echo the person’s own line ${i}'`).join('\n')
+      const profile = `${own}\n\n# It\n${line}\n${own}\n`
+      const file = path.join(m.home, '.bashrc')
+      writeFileSync(file, profile)
+      expect(profile.length).toBeGreaterThan(64 * 1024)
+      // The limit is the shell's, on the size of a file: the first bytes of a longer one are
+      // taken and the rest refused, which is what the system does when a disk fills
+      const done = await run(m, ['uninstall', '--yes'], {}, '/bin/sh', ['-c', 'ulimit -f 16; exec "$0" "$@"', process.execPath])
+      expect(readFileSync(file, 'utf8')).toBe(profile)
+      expect(readdirSync(m.home).filter((name) => name.includes('.part'))).toEqual([])
+      expect(JSON.stringify(printed(done))).toContain(`${file} still has the line that puts It on your PATH, and could not be changed`)
+    },
+  )
 
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
     const m = machine(true, true)

@@ -10,6 +10,7 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  fchmodSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -21,7 +22,6 @@ import {
   rmSync,
   statSync,
   writeFileSync,
-  writeSync,
 } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -69,6 +69,7 @@ import {
   VERSION,
   why,
   windowsPathCommand,
+  writeAll,
   written,
 } from './lib'
 import { login, runsItsOwn } from './login'
@@ -914,10 +915,15 @@ async function uninstall(a: Args) {
 function replaceWhole(file: string, text: string): void {
   const target = realpathSync(file)
   const part = `${target}.it-${process.pid}.part`
+  const mode = statSync(target).mode & 0o777
   try {
-    const out = openSync(part, 'w', statSync(target).mode & 0o777)
+    const out = openSync(part, 'w', mode)
     try {
-      writeSync(out, text)
+      // Every byte, or an error: a disk that is nearly full takes a part of what it is given
+      // and says so without failing, and a part is not what is given the file's name
+      writeAll(out, Buffer.from(text))
+      // The permissions the file had, whatever this program's own mask would have left of them
+      fchmodSync(out, mode)
       fsyncSync(out)
     } finally {
       closeSync(out)
