@@ -87,7 +87,7 @@ The JSON of `it status` has `running`, whether It's door answers; `enrolled`, wh
 
 ## A newer It
 
-It looks once a day for a newer version of itself, and says so when one is out: on the Machines page of the site, under the machine, and in `it status`. Two ways put it in place.
+It looks every half hour for a newer version of itself, and says so when one is out: on the Machines page of the site, under the machine, and in `it status`. Two ways put it in place.
 
 - **`it upgrade`**, on the machine. It downloads the newest program, checks it against the checksum published beside it, starts it once to see that it runs on this system and is newer, and only then puts it in the place of the one that is there, with its license and notices. A download that does not match, or a program that does not start, changes nothing. It then starts the background service again as the new version. `it upgrade --check` only says whether a newer one is out.
 - **Update**, on the Machines page, in a browser paired as yours. It asks that machine to do the same. Nothing in the asking says which version or where from: the machine fetches what the place releases are kept says is newest. Where It was started by hand with `it serve` and nothing starts it by itself, the program is put in place and the page says to start It again there.

@@ -1908,8 +1908,8 @@ This machine
                                  It reports them until it is turned off.
   it upgrade [--check]           Put the newest It in place of this one and start it again.
                                  With --check, only say whether a newer one is out.
-  it updates [on | off]          Say whether It looks once a day for a newer version, or turn
-                                 that on or off. It looks until it is turned off.
+  it updates [on | off]          Say whether It looks every half hour for a newer version,
+                                 or turn that on or off. It looks until it is turned off.
   it version | it help
 
 Run at a terminal, it setup, it site, it network, it status, it service status, it list,
@@ -2009,8 +2009,8 @@ async function main(argv: string[]): Promise<void> {
       if (!forPerson(a)) return out(now)
       return tell([
         now.on
-          ? 'It looks once a day for a newer version of itself, and says so on its site and in `it status` when one is out. Nothing about this installation is sent to ask. `it updates off` stops it looking.'
-          : `It does not look for a newer version of itself${now.because === 'IT_UPDATE_CHECK' ? ', since IT_UPDATE_CHECK says not to' : ''}. \`it upgrade --check\` asks once, and \`it updates on\` has it look once a day.`,
+          ? 'It looks every half hour for a newer version of itself, and says so on its site and in `it status` when one is out. Nothing about this installation is sent to ask. `it updates off` stops it looking.'
+          : `It does not look for a newer version of itself${now.because === 'IT_UPDATE_CHECK' ? ', since IT_UPDATE_CHECK says not to' : ''}. \`it upgrade --check\` asks once, and \`it updates on\` has it look every half hour.`,
       ])
     }
     case 'skill':

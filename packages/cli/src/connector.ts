@@ -36,7 +36,7 @@ import { conversationFolder, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { fetchNewer, latest, watching as looksForNewer } from './upgrade'
+import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
 import { Budget, carrying, carryOn, claudeModeOf, claudeWroteAt, codexHeld, mayWake, STOPPED, WAS_CUT_OFF, WAS_STOPPED, WOKEN } from './wake'
 
@@ -1372,7 +1372,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // Nothing has been heard yet. The first answer is acted on whatever it says: an add-on
   // unticked while the connector was off is removed even if nothing is wanted any more.
   let wanted: string | null = null
-  // The newest version of It there is, as this machine last learned it: asked once a day while
+  // The newest version of It there is, as this machine last learned it: asked every half hour while
   // that is not turned off, with a request that says nothing of this installation. Empty where
   // it is turned off, so that the site stops speaking of a version nobody is looking for.
   let latestKnown: string | undefined
@@ -1502,9 +1502,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const tick = setInterval(() => void route(), 1000)
   // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
   const alive = setInterval(() => void report(), ALIVE.everyMs)
-  // Whether a newer It is out: asked a little after starting, and once a day from then on
+  // Whether a newer It is out: asked a little after starting, and every half hour from then on
   const firstLook = setTimeout(() => void lookForNewer(), 20_000)
-  const looks = setInterval(() => void lookForNewer(), 24 * 3_600_000)
+  const looks = setInterval(() => void lookForNewer(), LOOKS_EVERY_MS)
   const beat = setInterval(() => {
     const now = Date.now()
     for (const [k, s] of sessions) if (now - s.seen > 3_600_000) sessions.delete(k)

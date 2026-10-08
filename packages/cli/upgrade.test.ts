@@ -9,7 +9,7 @@ import path from 'node:path'
 import { newer } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { type Problem, VERSION } from './src/lib'
-import { fetchNewer, keepBase, latest, programName, releases, watch, watched, watching } from './src/upgrade'
+import { fetchNewer, keepBase, LOOKS_EVERY_MS, latest, programName, releases, watch, watched, watching } from './src/upgrade'
 
 describe('which version is newer', () => {
   test('is told by the three numbers, and never by a version that is not written as three', () => {
@@ -186,7 +186,8 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     expect(existsSync(path.join(folder, 'releases.json'))).toBe(false)
   })
 
-  test('is looked for once a day until that is turned off, by the command or by a variable', () => {
+  test('is looked for every half hour until that is turned off, by the command or by a variable', () => {
+    expect(LOOKS_EVERY_MS).toBe(30 * 60_000)
     expect([watching(), watched()]).toEqual([true, { on: true }])
     expect(watch(false)).toEqual({ on: false, because: 'it updates off' })
     expect(watching()).toBe(false)

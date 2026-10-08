@@ -7,7 +7,7 @@
 // names instead.
 //
 // Learning of a newer version sends nothing about this installation: one plain request for
-// `latest.json`, with no id and nothing of what It holds. The service makes it once a day until
+// `latest.json`, with no id and nothing of what It holds. The service makes it every half hour until
 // that is turned off (`it updates off`).
 //
 // An upgrade trusts what an install trusts and no more: the place it downloads from, over
@@ -128,7 +128,9 @@ export async function latest(signal?: AbortSignal): Promise<string | null> {
 // the service started, after the person had turned it back on.
 const offFile = () => inHome('updates-off')
 const offByVariable = () => ['false', '0', 'off', 'no', 'n', 'disabled'].includes((process.env.IT_UPDATE_CHECK ?? '').trim().toLowerCase())
-/** Whether this installation looks once a day for a newer version. It does until it is told not to. */
+/** How often the service asks whether a newer version is out: often enough that one is known of within the hour it is published. */
+export const LOOKS_EVERY_MS = 30 * 60_000
+/** Whether this installation looks for a newer version by itself. It does until it is told not to. */
 export const watching = (): boolean => !offByVariable() && !existsSync(offFile())
 export function watch(on: boolean): { on: boolean; because?: string } {
   if (on) rmSync(offFile(), { force: true })
