@@ -813,18 +813,19 @@ try {
       untouched.code === 0 && lostNotices.code !== 0 && whole(lostNotices, other) && nothingOfItsOwn(lostNotices),
       `${lostNotices.said}\n${readdirSync(lostNotices.folder).join(' ')}`,
     )
-    // And where the license can be put neither in place nor back: it is kept, and the person is told where
+    // And where the license can be moved neither in nor back: what was there never left its place, since it is
+    // kept aside under a second name and not by moving it, so the earlier install is whole and nothing is left over
     const refusesAlways = mvThat('mv-refuses-always', () => 'echo "mv: a stand-in refuses this" >&2; exit 1')
     const before = await install('cannot-put-back', { IT_VERSION: 'other' })
     const stuck = await install('cannot-put-back', { PATH: refusesAlways.PATH })
     const keptIn = readdirSync(stuck.folder).filter((f) => f.startsWith('.install.'))
     check(
-      'a file that cannot be put back is not thrown away with the run’s folder: it is kept there, and the install says where',
+      'a file that can be moved neither in nor back never left its place: the earlier install is whole, and nothing of this run is left beside it',
       before.code === 0 &&
         stuck.code !== 0 &&
-        keptIn.length === 1 &&
-        read(path.join(stuck.folder, keptIn[0], 'old.license')) === otherHolds['LICENSE.md'] &&
-        stuck.said.includes(`could be put back. What could not is kept in ${path.join(stuck.folder, keptIn[0])}.`) &&
+        keptIn.length === 0 &&
+        read(path.join(stuck.folder, 'LICENSE.md')) === otherHolds['LICENSE.md'] &&
+        !stuck.said.includes('could be put back') &&
         readFileSync(stuck.it).equals(readFileSync(path.join(other, program))) &&
         !existsSync(path.join(stuck.folder, '.installing')),
       `${stuck.said}\n${readdirSync(stuck.folder).join(' ')}`,

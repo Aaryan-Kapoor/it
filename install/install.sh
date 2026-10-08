@@ -234,8 +234,8 @@ unlock() {
   fi
   locked=0
 }
-# The three files are put in place together or not at all. What was at each place is moved
-# aside, into the folder made for this run, and kept there until all three are in. Stopped
+# The three files are put in place together or not at all. What was at each place is kept
+# aside, in the folder made for this run, until all three are in. Stopped
 # before then, what was there is put back: the old file where one was kept, and nothing where
 # the new file went in over nothing.
 replacing=0
@@ -245,12 +245,24 @@ begun=""
 kept=0
 replace() {
   no_folder "$2"
-  if [ -e "$2" ] || [ -L "$2" ]; then mv -f -- "$2" "${stage}/old.$1"; fi
+  # What is there is kept aside without being taken away: under a second name for the same
+  # file, or failing that as a copy. The new file is then moved over it, which the system does
+  # in one step. So at no moment is there nothing at the place: a run that is ended between the
+  # two, or a machine that loses power, still has a program where its service starts it from.
+  # A link is moved aside as it is, since a second name for a link is not the same on every system.
+  if [ -L "$2" ]; then mv -f -- "$2" "${stage}/old.$1"
+  elif [ -e "$2" ]; then ln -- "$2" "${stage}/old.$1" 2>/dev/null || cp -p -- "$2" "${stage}/old.$1"
+  fi
   begun="${begun} $1"
   mv -f -- "${stage}/$1" "$2"
 }
 put_back() {
-  if [ -e "${stage}/old.$1" ] || [ -L "${stage}/old.$1" ]; then mv -f -- "${stage}/old.$1" "$2" || kept=1
+  if [ -e "${stage}/old.$1" ] || [ -L "${stage}/old.$1" ]; then
+    # Kept aside under a second name, it may still be what is at the place, where the new file
+    # never went in: then there is nothing to put back, and only the second name to take away
+    if [ "${stage}/old.$1" -ef "$2" ]; then rm -f -- "${stage}/old.$1" || true
+    else mv -f -- "${stage}/old.$1" "$2" || kept=1
+    fi
   else
     # Nothing was moved aside. What is there now is taken away only if this run put it there:
     # anything else was there before, and is not this run's to remove
