@@ -236,7 +236,7 @@ describe('the agent skill', () => {
 
   test('says that asking a display to show a page is not seeing it shown, and that what a page saved arrives after its scripts first run', () => {
     // The command prints the displays it asked, and waits to hear from none of them
-    expect(source('../../convex/displays.ts')).toMatch(/showing: \{ artifactId: artifact\._id, at: Date\.now\(\) \}/)
+    expect(source('../../convex/displays.ts')).toMatch(/showing: \{ artifactId: artifact\._id, at: Math\.max\(Date\.now\(\), /)
     expect(skill).toContain('`shownOn` in what is printed names the displays that were asked. Asked is all it says:')
     expect(skill).toContain('the displays in `shownOn` were asked to show it')
     expect(skill).not.toMatch(/are showing it/)
