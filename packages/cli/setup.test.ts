@@ -30,7 +30,7 @@ import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
 import { CODEX_SHUT_SAID } from './src/codex-settings'
-import { shutIn } from './src/lib'
+import { shutIn, VERSION } from './src/lib'
 import { startOf } from './src/serve/backend'
 import {
   AFTER,
@@ -44,6 +44,7 @@ import {
   connect,
   detectAll,
   disconnect,
+  newerProgramSeen,
   reconcile,
   shim,
   stampFile,
@@ -390,6 +391,22 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(await disconnect('opencode', () => {})).toBe(true)
     expect(under(folder)).toEqual([])
     expect(existsSync(stampFile('opencode'))).toBe(false)
+  })
+
+  test('an add-on that a newer It installed is left alone by a connector that was running before it, and replaced by setup when a person runs it with this program: they went back to this one on purpose', async () => {
+    await connect('opencode', () => {})
+    // As a newer It left it: another add-on, with that It's version written beside it
+    const kept = JSON.parse(read(stampFile('opencode'))) as { installs: { version: string; by?: string }[] }
+    expect(kept.installs[0]!.by).toBe(VERSION)
+    kept.installs[0] = { ...kept.installs[0]!, version: 'the-add-on-of-a-newer-it', by: '9.9.9' }
+    writeFileSync(stampFile('opencode'), JSON.stringify(kept))
+    // The connector, which goes on running for a moment after an update, does not put its own back
+    await connect('opencode', () => {}, true)
+    expect(noted('opencode').installs[0]!.version).toBe('the-add-on-of-a-newer-it')
+    expect(newerProgramSeen()).toBe(true)
+    // Setup, run by a person with this program, puts this program's add-on in, and says who did
+    expect((await connect('opencode', () => {})).addon).toBe('connected')
+    expect([noted('opencode').installs[0]!.version, (noted('opencode').installs[0] as { by?: string }).by]).toEqual([ADDONS.opencode!.version, VERSION])
   })
 
   test('a file of the add-on that the person changed, other than the one the app loads it from, is left where it is while the rest is taken out, and the add-on is not said to be gone', async () => {

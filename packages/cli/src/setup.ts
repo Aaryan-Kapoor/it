@@ -1133,7 +1133,11 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
     return before
   }
   // An add-on that no It folder has on record is replaced whatever state it is in
-  const doing = other ? 'install' : await whatToDo(before.addon, was?.version, ADDONS[id]!.version, () => adapter.present(at, was), was?.at, undefined, was?.by)
+  let doing = other ? 'install' : await whatToDo(before.addon, was?.version, ADDONS[id]!.version, () => adapter.present(at, was), was?.at, undefined, was?.by)
+  // A person who runs setup with this program has chosen this program, whichever of the two is
+  // the newer: someone who went back to an earlier It on purpose gets that It's add-on. Only a
+  // connector, which was running before the newer It came, leaves the newer add-on alone.
+  if (doing === 'leave to the newer program' && !forLog) doing = 'install'
   if (doing === 'nothing') return before
   if (doing === 'leave to the newer program') {
     newer = true
