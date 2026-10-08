@@ -531,16 +531,24 @@ async function wait(a: Args) {
   // with the result of a command, and the command now running is this one. The connector
   // passes such a click on here, already held for this machine, and it is printed like any other.
   let handedBack: Listed[] = first?.clicks ?? []
-  const beat = setInterval(
-    () =>
-      void announce().then((r) => {
+  /** The asking of the connector that is on its way now, if one is. What it brings is waited for before the wait says its last word. */
+  let announcing: Promise<void> | null = null
+  /** The wait is choosing its last word: the connector is asked for nothing more, which it would hand over once and this could then not print. */
+  let deciding = false
+  const beat = setInterval(() => {
+    if (deciding || announcing) return
+    announcing = announce()
+      .then((r) => {
         if (r?.clicks?.length) {
           handedBack = [...handedBack, ...r.clicks]
           void onHandedBack()
         }
-      }),
-    2000,
-  )
+      })
+      .catch(() => {})
+      .finally(() => {
+        announcing = null
+      })
+  }, 2000)
   const client = live()
   /** Printed already. Never printed twice, whatever happens to the report of it. */
   const printedIds = new Set<string>()
@@ -556,6 +564,8 @@ async function wait(a: Args) {
   let looked = false
   let busy = false
   let ending = false
+  /** The wait has said its last word (that its time ran out): nothing is printed after it. */
+  let over = false
   const finish = async (code: number) => {
     if (ending) return
     ending = true
@@ -587,7 +597,7 @@ async function wait(a: Args) {
     }
   }
   const onHandedBack = async () => {
-    if (busy || ending || !handedBack.length) return
+    if (busy || ending || over || !handedBack.length) return
     busy = true
     try {
       for (const c of handedBack.splice(0)) {
@@ -604,8 +614,6 @@ async function wait(a: Args) {
       busy = false
     }
   }
-  /** The wait has said its last word (that its time ran out): nothing is printed after it. */
-  let over = false
   const onClicks = async (clicks: Listed[]): Promise<'printed' | 'nothing' | 'failed'> => {
     if (busy || ending || over) return 'nothing'
     busy = true
@@ -709,6 +717,14 @@ async function wait(a: Args) {
             'The wait ran out of time with something waiting that could not be taken',
           )
       }
+      // What the connector handed back meanwhile, or is handing back this moment, is printed
+      // like anything else: the connector gives a click to a waiter once, and a wait that then
+      // said nothing had happened would have lost it. Nothing more is asked of it from here.
+      deciding = true
+      await announcing
+      while (busy) await new Promise((resolve) => setTimeout(resolve, 50))
+      await onHandedBack()
+      if (ending || printedOne()) return
       // The last word, and nothing after it
       over = true
       clearInterval(again)
