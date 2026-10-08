@@ -8,6 +8,12 @@ import { configDefaults, defineConfig } from 'vitest/config'
 // test or a group of tests that cannot run on Windows says so itself.
 const windows = process.platform === 'win32'
 
+// Where this machine keeps its settings is nothing to any test: each test that looks at such a
+// place makes a person's folder of its own and looks there. Left as the machine has it, a test
+// of the service's definition would look in the folder of whoever runs the tests, and could
+// write there. The tests are started without it, and one that is about it sets its own.
+delete process.env.XDG_CONFIG_HOME
+
 export default defineConfig({
   test: {
     projects: [
