@@ -198,8 +198,12 @@ export const stop = mutation({
     // their own, up to the moment of the stop and no later, so that what the person does on the
     // page after stopping is kept.
     const at = Date.now()
-    const dropped = await dropWaiting(ctx, user._id, machine._id, a.session!, at)
-    if (dropped.more) await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId: user._id, machineId: machine._id, session: a.session!, at })
+    // The page keeps the moment for good: what was done on it up to now is delivered to nobody,
+    // also where the page changes hands before the steps below have come to all of it
+    await ctx.db.patch(a._id, { stoppedThrough: at })
+    const dropped = await dropWaiting(ctx, user._id, machine._id, a.session!, at, a._id)
+    if (dropped.more)
+      await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId: user._id, machineId: machine._id, session: a.session!, at, artifactId: a._id })
     const waiting = { length: dropped.count }
     log('run.stop_asked', { userId: user._id, artifactId, dropped: waiting.length })
     return { stopping: true }
@@ -224,6 +228,8 @@ async function dropWaiting(
   machineId: Id<'machines'>,
   of: { harness: string; id: string },
   at: number,
+  /** The page the stop was asked from: everything that waits on it from before the stop goes, however it is addressed. */
+  artifactId?: Id<'artifacts'>,
 ): Promise<{ count: number; more: boolean }> {
   let count = 0
   let more = false
@@ -231,9 +237,6 @@ async function dropWaiting(
     for (const [addressed, aside] of [
       [machineId, undefined],
       [undefined, machineId],
-      // Addressed to no machine and set aside by none, as a click is for a moment while its
-      // page changes hands: of these, only what is on a page of the machine that was stopped
-      [undefined, undefined],
     ] as const) {
       const batch = await ctx.db
         .query('actions')
@@ -251,7 +254,6 @@ async function dropWaiting(
         .take(DROP_AT_ONCE)
       if (batch.length === DROP_AT_ONCE) more = true
       for (const x of batch) {
-        if (addressed === undefined && aside === undefined && (await ctx.db.get(x.artifactId))?.machineId !== machineId) continue
         await ctx.db.patch(x._id, {
           delivery: 'handed_off',
           route: 'stopped',
@@ -266,16 +268,41 @@ async function dropWaiting(
         if (page) await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
       }
     }
+  // And whatever else waits on the page the stop was asked from, from before the stop: a click
+  // that is addressed to nobody for the moment, as one is while its page changes hands, or
+  // that has been addressed afresh since. Read by the page, so that nothing of another page
+  // stands in front of it.
+  if (artifactId)
+    for (const delivery of ['pending', 'leased'] as const) {
+      const batch = await ctx.db
+        .query('actions')
+        .withIndex('by_artifact_delivery', (q) => q.eq('artifactId', artifactId).eq('delivery', delivery).lte('createdAt', at))
+        .take(DROP_AT_ONCE)
+      if (batch.length === DROP_AT_ONCE) more = true
+      for (const x of batch) {
+        await ctx.db.patch(x._id, {
+          delivery: 'handed_off',
+          route: 'stopped',
+          handedAt: Date.now(),
+          outcome: 'failed',
+          leaseMachineId: undefined,
+          leaseExpiresAt: undefined,
+        })
+        count++
+        const page = await ctx.db.get(x.artifactId)
+        if (page) await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+      }
+    }
   if (count) await bump(ctx, userId, { waiting: -count })
   return { count, more: more && count > 0 }
 }
 
 /** The rest of what a stop drops, a step at a time, until none that was waiting at the stop is left. */
 export const dropRest = internalMutation({
-  args: { userId: v.id('users'), machineId: v.id('machines'), session, at: v.number() },
-  handler: async (ctx, { userId, machineId, session: of, at }) => {
-    const dropped = await dropWaiting(ctx, userId, machineId, of, at)
-    if (dropped.more) await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId, machineId, session: of, at })
+  args: { userId: v.id('users'), machineId: v.id('machines'), session, at: v.number(), artifactId: v.optional(v.id('artifacts')) },
+  handler: async (ctx, { userId, machineId, session: of, at, artifactId }) => {
+    const dropped = await dropWaiting(ctx, userId, machineId, of, at, artifactId)
+    if (dropped.more) await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId, machineId, session: of, at, artifactId })
     return null
   },
 })

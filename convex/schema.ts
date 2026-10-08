@@ -134,7 +134,9 @@ export default defineSchema({
     /** The agent apps whose closed conversations may be reopened on this machine for a click, and since when. The person's alone to say, from a browser of their own. */
     wakes: v.optional(v.array(v.object({ harness: v.string(), since: v.number() }))),
     /** The conversations this machine is running now because It reopened them, each since when, and whether someone has asked for it to be stopped. */
-    runs: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number(), stop: v.optional(v.boolean()) }))),
+    runs: v.optional(
+      v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number(), stop: v.optional(v.boolean()), run: v.optional(v.string()) })),
+    ),
     /** The last few conversations a person stopped, and when: what was waiting for one by then is not reopened for. */
     stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number() }))),
     /** The last few conversations that could not be reopened, when, and why in the connector's own words: never what a command printed. */
@@ -181,6 +183,8 @@ export default defineSchema({
     order: v.optional(v.number()),
     /** Clicks on this page not yet handed to an agent. */
     waiting: v.optional(v.number()),
+    /** When a person last stopped the agent from this page: what was done on the page up to then is delivered to nobody, whoever the page belongs to by now. */
+    stoppedThrough: v.optional(v.number()),
   })
     .index('by_user_slug', ['userId', 'slug'])
     .index('by_user_updated', ['userId', 'updatedAt'])

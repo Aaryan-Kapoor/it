@@ -114,8 +114,10 @@ export async function stoppedSince(ctx: QueryCtx, x: Doc<'actions'>): Promise<bo
     const machine = await ctx.db.get(machineId)
     return (machine?.stops ?? []).some((s) => s.harness === harness && s.sessionId === sessionId && s.at >= x.createdAt)
   }
-  if (await noted(x.machineId ?? x.parkedBy, x.harness, x.sessionId)) return true
+  // The page itself keeps when it was last stopped from, which stands whoever it belongs to by now
   const page = await ctx.db.get(x.artifactId)
+  if ((page?.stoppedThrough ?? 0) >= x.createdAt) return true
+  if (await noted(x.machineId ?? x.parkedBy, x.harness, x.sessionId)) return true
   return noted(page?.machineId, page?.session?.harness, page?.session?.id)
 }
 /** Marks a click as stopped with its conversation, as the stop itself does for what it reaches: handed over to nobody, and waiting no more. */

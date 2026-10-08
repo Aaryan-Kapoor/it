@@ -1775,7 +1775,7 @@ describe('clicks and their delivery', () => {
     const made = Date.now()
     await t.run(async (ctx) => {
       const a = (await ctx.db.get(p.artifactId))!
-      for (let i = 0; i < 260; i++)
+      for (let i = 0; i < 520; i++)
         await ctx.db.insert('actions', {
           userId: a.userId,
           title: a.title,
@@ -1791,7 +1791,7 @@ describe('clicks and their delivery', () => {
           harness: SESSION.harness,
           sessionId: SESSION.id,
         })
-      await ctx.db.patch(a._id, { waiting: 260 })
+      await ctx.db.patch(a._id, { waiting: 520 })
     })
     await vi.advanceTimersByTimeAsync(1000)
     expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
@@ -1799,7 +1799,8 @@ describe('clicks and their delivery', () => {
     // come to is given to nobody meanwhile, by any way: asked for, it is not given, and one
     // that a machine had in hand and says it handed over counts as stopped all the same
     const yetToDrop = await t.run(async (ctx) => (await ctx.db.query('actions').collect()).filter((x) => x.route !== 'stopped'))
-    expect(yetToDrop.length).toBe(60)
+    // One step drops a hundred of each kind by where they are addressed, and a hundred of each kind more by the page
+    expect(yetToDrop.length).toBe(120)
     const waitingStill = yetToDrop.find((x) => x.delivery === 'pending')!
     const inHand = yetToDrop.find((x) => x.delivery === 'leased')!
     expect(await m.as.mutation(api.delivery.claim, { ids: [waitingStill._id], for: SESSION })).toEqual([])
@@ -1827,7 +1828,7 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.delivery.release, { id: after.actionId })
     await settle(t)
     const all = await t.run((ctx) => ctx.db.query('actions').collect())
-    expect(all.filter((x) => x.route === 'stopped').length).toBe(260)
+    expect(all.filter((x) => x.route === 'stopped').length).toBe(520)
     expect(all.filter((x) => x.delivery === 'pending' || x.delivery === 'leased').map((x) => x._id)).toEqual([after.actionId])
     expect((await t.run((ctx) => ctx.db.get(p.artifactId)))?.waiting).toBe(1)
   })

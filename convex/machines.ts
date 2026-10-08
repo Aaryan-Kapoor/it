@@ -170,12 +170,15 @@ const RUNS_MOST = 20
 
 /** The machine says that it has reopened a conversation, which is running from now until it says otherwise. */
 export const runBegan = mutation({
-  args: { for: session },
-  handler: async (ctx, { for: s }) => {
+  /** `run` names this run among all there have been of the conversation, so that the ending of an earlier one, told late, does not take this one's place away. */
+  args: { for: session, run: v.optional(v.string()) },
+  handler: async (ctx, { for: s, run }) => {
     const { machine } = await requireMachine(ctx)
     const others = (machine.runs ?? []).filter((r) => r.harness !== s.harness || r.sessionId !== s.id)
     await ctx.db.patch(machine._id, {
-      runs: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), since: Date.now() }].slice(-RUNS_MOST),
+      runs: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), since: Date.now(), ...(run ? { run: run.slice(0, 64) } : {}) }].slice(
+        -RUNS_MOST,
+      ),
     })
     return null
   },
@@ -187,11 +190,12 @@ export const runBegan = mutation({
  * could not be reopened is taken back.
  */
 export const runEnded = mutation({
-  args: { for: v.optional(session), ok: v.optional(v.boolean()) },
-  handler: async (ctx, { for: s, ok }) => {
+  args: { for: v.optional(session), ok: v.optional(v.boolean()), run: v.optional(v.string()) },
+  handler: async (ctx, { for: s, ok, run }) => {
     const { machine } = await requireMachine(ctx)
     const now = machine.runs ?? []
-    const left = s ? now.filter((r) => r.harness !== s.harness || r.sessionId !== s.id) : []
+    // Named, only that run is over: another of the same conversation that has begun since stays as it is
+    const left = s ? now.filter((r) => r.harness !== s.harness || r.sessionId !== s.id || (run !== undefined && r.run !== undefined && r.run !== run)) : []
     const fails = machine.fails ?? []
     const stillFailed = s && ok ? fails.filter((f) => f.harness !== s.harness || f.sessionId !== s.id) : fails
     if (left.length !== now.length || stillFailed.length !== fails.length) await ctx.db.patch(machine._id, { runs: left, fails: stillFailed })

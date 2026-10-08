@@ -545,7 +545,11 @@ export const orphan = internalMutation({
       .query('actions')
       .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending'))
       .paginate({ cursor: cursor ?? null, numItems: 50 })
-    for (const x of batch.page) await ctx.db.patch(x._id, { machineId: undefined })
+    for (const x of batch.page) {
+      // Stopped with its conversation before the machine went: marked so, and addressed to nobody else
+      if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
+      else await ctx.db.patch(x._id, { machineId: undefined })
+    }
     // Each batch moves what it read out of the list it is reading, so the next starts afresh
     if (!batch.isDone) await ctx.scheduler.runAfter(0, internal.delivery.orphan, { machineId })
     // What the machine had set aside is addressed to no machine, and is not among the above: it
