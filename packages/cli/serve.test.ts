@@ -25,6 +25,12 @@ import { environment, launchdPlist, logFile, systemdUnit } from './src/service'
 import * as usage from './src/usage'
 import { bases } from './test-ports'
 
+// Where this machine keeps its settings is nothing to these tests, which make a person's folder
+// of their own and look for the service's definition there. The tests are started without it
+// (see vitest.config.ts), and it is taken away here as well, since this file is also run by
+// Bun's own runner, which does not read that.
+delete process.env.XDG_CONFIG_HOME
+
 /** The backend program on this machine: the one IT_BACKEND_BIN names, or the one the `convex` package keeps. */
 const program = [process.env.IT_BACKEND_BIN, path.join(os.homedir(), '.cache/convex/binaries', RELEASE, 'convex-local-backend')].find(
   (file): file is string => Boolean(file) && existsSync(file!),
