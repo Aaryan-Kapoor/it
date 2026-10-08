@@ -261,7 +261,10 @@ export function createFiles(folder: string): Files {
       placed = true
       // Its name is made to last as its bytes were: until the folder it is in has been flushed,
       // a loss of power can leave a file that was said to have arrived with no name on the disk.
-      // A system that does not let a folder be flushed (Windows) keeps its names in its own way.
+      // A system that does not let a folder be opened or flushed (Windows, and some disks that
+      // are shared over a network) keeps its names in its own way, and says so in one of a few
+      // ways that mean exactly that. Anything else is the disk failing, and is not passed over:
+      // a file whose name may not last has not arrived.
       try {
         const folder = await open(path.dirname(to), 'r')
         try {
@@ -269,7 +272,9 @@ export function createFiles(folder: string): Files {
         } finally {
           await folder.close()
         }
-      } catch {}
+      } catch (err) {
+        if (!['EISDIR', 'EPERM', 'EACCES', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'EBADF'].includes((err as NodeJS.ErrnoException)?.code ?? '')) throw err
+      }
       return 'placed'
     } finally {
       if (!placed) await unlink(temp).catch(() => {})
