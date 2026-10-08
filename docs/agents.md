@@ -6,7 +6,7 @@ An agent drives It with one command, `it`, and learns how from the agent skill, 
 
 ## Connecting agents
 
-An add-on is how what you do on a page gets back into an open conversation in one agent app, by itself. `it setup` finds the apps on the machine and installs the add-on for each one you choose, with the app's own commands for installing a plugin. Run it again to change which apps are connected: `--all`, `--only claude-code,codex` and `--none` say which, as [Installing It](install.md#the-first-run) describes.
+An add-on is how what you do on a page gets back into an open conversation in one agent app, by itself. `it setup` finds the apps on the machine and installs the add-on for each one you choose: with the app's own commands for installing a plugin where it has them, and by putting its files where the app reads plugins from where it has none (OpenCode and Hermes). Run it again to change which apps are connected: `--all`, `--only claude-code,codex` and `--none` say which, as [Installing It](install.md#the-first-run) describes.
 
 It has add-ons for six agent apps, and they are not all proven alike.
 

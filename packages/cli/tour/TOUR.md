@@ -161,6 +161,8 @@ This is the useful part, and the only step that happens in the chat. First send 
 it notify "That's the tour. Want the two-minute version of how to use this day to day?" --id tour-menu --button "Go on=explain" --button "I'm good=skip"
 ```
 
+If you are waiting for what they do with `it wait --id` and a page's name, that waiter hears only its own page: before you send this, stop it and start `it wait --id tour-menu --follow` in its place, or neither button will reach you.
+
 If they press **I'm good**, say "Ask me for the It tour again whenever you want the rest," and go to the end.
 
 If they press **Go on**, say this, in your own words, and cover all four:

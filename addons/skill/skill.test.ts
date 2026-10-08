@@ -86,7 +86,11 @@ describe('the agent skill', () => {
   })
 
   test('tells an agent what to do when no display took the page, and how to wait where nothing arrives by itself', () => {
-    expect(skill).toMatch(/If `shownOn` is empty and there is no `notShown`, .* give the user the `url`, and tell them that no display is paired\./)
+    expect(skill).toMatch(
+      /If `shownOn` is empty and there is neither `notShown` nor `notShownOn`, .* give the user the `url`, and tell them that no display is paired\./,
+    )
+    // A display that was asked for by name and shows nothing is said of that display, and not of all of them
+    expect(skill).toContain('Where `notShownOn` names the display you asked for, it is that display that shows nothing')
     // The word for a display that can be shown on is the program's own: what it says when there is none
     expect(main).toContain('No display is paired yet')
     expect(skill).not.toMatch(/signed in|sign one in|signs? in\b/)
