@@ -1726,6 +1726,45 @@ describe('clicks and their delivery', () => {
     expect(await other.as.mutation(api.delivery.claim, { ids: [there], for: SESSION })).toEqual([there])
   })
 
+  test('a stop drops what waits on every page of the conversation, also a click that is addressed to nobody, and it stays dropped when its page is taken by another conversation', async () => {
+    const { t, alice, m, p, click } = await setup()
+    const second = await publish(m, 'second', { session: SESSION })
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    const here = (await click('click-0001')).actionId
+    const there = (
+      await alice.browser.mutation(api.actions.submit, { artifactId: second.artifactId, displayKey: displayKey('alice'), envelope: envelope('click-0002') })
+    ).actionId
+    // Each is addressed to nobody, as a click is while its page changes hands
+    await t.run(async (ctx) => {
+      for (const x of await ctx.db.query('actions').collect()) await ctx.db.patch(x._id, { machineId: undefined })
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+    // Stopped from the first page
+    const stopped = Date.now()
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    // Before any later step has run, the other page already keeps the moment: taken by another conversation now, its click goes to nobody
+    const other = { harness: 'claude-code', id: 'sess-2' }
+    expect(await m.as.mutation(api.artifacts.take, { slug: 'second', session: other, agent: 'claude-code' })).toEqual({ took: true })
+    expect(await m.as.mutation(api.delivery.claim, { ids: [there as never], for: other })).toEqual([])
+    await settle(t)
+    const became = async (id: string) => {
+      const x = await t.run((ctx) => ctx.db.get(id as never) as Promise<{ delivery: string; route?: string } | null>)
+      return [x?.delivery, x?.route]
+    }
+    expect(await became(here)).toEqual(['handed_off', 'stopped'])
+    expect(await became(there)).toEqual(['handed_off', 'stopped'])
+    expect((await alice.browser.query(api.artifacts.list, {})).map((x) => x.pending)).toEqual([0, 0])
+    // The page that changed conversation still says when it was stopped, so that what was dropped there is said to have been stopped
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'second' }))?.stoppedAt).toBe(stopped)
+    // What is done on it after the stop is its new conversation's
+    await vi.advanceTimersByTimeAsync(1000)
+    const next = (
+      await alice.browser.mutation(api.actions.submit, { artifactId: second.artifactId, displayKey: displayKey('alice'), envelope: envelope('click-0003') })
+    ).actionId
+    expect(await m.as.mutation(api.delivery.claim, { ids: [next as never], for: other })).toEqual([next])
+  })
+
   test('everything a machine had set aside for a conversation comes back when the conversation does, however much that is, and is let go of when the machine is revoked', async () => {
     const { t, alice, m, p } = await setup()
     const made = Date.now()

@@ -84,13 +84,18 @@ export const get = query({
       run: running(machine, a),
       // Why it could not be reopened, the last time that was tried and did not work, and when
       wakeFailed: failed(machine, a),
-      // And when a person last stopped it, so that the page can say so of what was done before then
+      // And when a person last stopped it, so that the page can say so of what was done before
+      // then. The page keeps that moment itself, and goes on saying it when it has changed
+      // conversation or machine since: what was dropped by the stop was stopped, and did not fail.
       stoppedAt:
-        (machine &&
-          !machine.revoked &&
-          a.session &&
-          (machine.stops ?? []).find((s) => s.harness === a.session?.harness && s.sessionId === a.session?.id)?.at) ||
-        null,
+        Math.max(
+          a.stoppedThrough ?? 0,
+          (machine &&
+            !machine.revoked &&
+            a.session &&
+            (machine.stops ?? []).find((s) => s.harness === a.session?.harness && s.sessionId === a.session?.id)?.at) ||
+            0,
+        ) || null,
       // When the machine whose agent made this page was last heard from, for the site to judge
       // whether it is there to hear a click. Null when it has no connector, its connector said
       // it was stopping, or it was revoked.
@@ -198,12 +203,25 @@ export const stop = mutation({
     // their own, up to the moment of the stop and no later, so that what the person does on the
     // page after stopping is kept.
     const at = Date.now()
-    // The page keeps the moment for good: what was done on it up to now is delivered to nobody,
-    // also where the page changes hands before the steps below have come to all of it
-    await ctx.db.patch(a._id, { stoppedThrough: at })
+    // A conversation may have made several pages, and it is the conversation that is stopped:
+    // what waits on any of them goes. Each page keeps the moment for good: what was done on it
+    // up to now is delivered to nobody, also where the page changes hands before the steps
+    // below have come to all of it.
+    const pages = (
+      await ctx.db
+        .query('artifacts')
+        .withIndex('by_machine', (q) => q.eq('machineId', machine._id))
+        .collect()
+    ).filter((p) => p._id !== a._id && p.session !== undefined && is({ harness: p.session.harness, sessionId: p.session.id }))
+    for (const p of [a, ...pages]) await ctx.db.patch(p._id, { stoppedThrough: at })
     const dropped = await dropWaiting(ctx, user._id, machine._id, a.session!, at, a._id)
     if (dropped.more)
       await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId: user._id, machineId: machine._id, session: a.session!, at, artifactId: a._id })
+    // And what waits on each of its other pages, read by the page in a step of its own: a click
+    // there may be addressed to nobody for the moment, and is then found no other way
+    for (const p of pages)
+      if ((p.waiting ?? 0) > 0)
+        await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId: user._id, machineId: machine._id, session: a.session!, at, artifactId: p._id })
     const waiting = { length: dropped.count }
     log('run.stop_asked', { userId: user._id, artifactId, dropped: waiting.length })
     return { stopping: true }
