@@ -138,6 +138,21 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { wakeFailed: null })
   })
 
+  test('what was settled is said for ten minutes and then no more, and what is still waiting is said for as long as it waits', async () => {
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi' })
+    // Done eleven minutes ago: nothing more to say of it
+    recent = [{ at: NOW - 11 * 60_000, delivery: 'handed_off', outcome: 'succeeded' }]
+    await shown()
+    expect(said()).toBeNull()
+    await act(async () => root.unmount())
+    host.remove()
+    // Waiting for eleven minutes, with nobody listening: still said, since nothing has come of it
+    recent = [{ at: NOW - 11 * 60_000, delivery: 'pending', outcome: null }]
+    await shown()
+    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    Object.assign(PAGE, { agent: 'claude-code' })
+  })
+
   test('a click for a machine that is off waits for the machine and is not laid to a closed conversation: one not heard from for a minute and a half, one whose connector said it was stopping, and one that was removed', async () => {
     // Heard from a minute ago, which is two of the times it says it is alive: it is there
     Object.assign(PAGE, { machineSeenAt: NOW - 60_000, agent: 'pi' })

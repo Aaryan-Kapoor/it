@@ -228,7 +228,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
         {/* The page's own script failed: said before anything else, since nothing done on it can be relied on to have been sent */}
         {fault && fault.of === `${page.id}:${page.version}` && (
           <span className="status" data-tone="bad" title={fault.message}>
-            This {NOUN.one} has an error in it, so it may not send what you do. {fault.agentTold ? 'Your agent has been told' : 'Tell your agent'}:{' '}
+            This {NOUN.one} has an error in it, so it may not send what you do. {fault.agentTold ? 'It has been sent to your agent' : 'Tell your agent'}:{' '}
             {fault.message}
           </span>
         )}
@@ -405,7 +405,11 @@ function ActionStatus({
         Can’t reach It. What you do here is saved on this browser, and sent when It is back
       </span>
     )
-  if (!last || now - last.at > 10 * 60_000) return null
+  if (!last) return null
+  // What has been settled is said for ten minutes and then no more. What has not, something
+  // still waiting for a machine or for an agent, is said for as long as it waits, with what
+  // can be done about it: gone from the bar, it looked done when nothing had come of it.
+  if (now - last.at > 10 * 60_000 && last.delivery === 'handed_off') return null
   // The agent was stopped after the last thing done here: said as that, whatever became of it.
   // What was waiting then went with the stop, and the next thing done reopens the conversation.
   if (stoppedAt !== null && last.at <= stoppedAt) {
