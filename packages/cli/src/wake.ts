@@ -388,8 +388,9 @@ export function carryOn(
  * group of that number is there, the group may be what it started, or may belong to something
  * else that was given the number since. So each process in the group is asked which run it
  * belongs to, by the two marks every reopened run is started with and hands on to what it
- * starts (`of`), and only one that carries this run's marks is ended. With no marks to go by,
- * or where a process cannot be asked, nothing is signalled and the answer is `unknown`.
+ * starts (`of`), and only one that carries this run's marks is ended. Whatever in the group
+ * carries none is left alone, and while it is there the answer is `unknown`: it may be a
+ * command of the run's that was started with nothing handed on, or something else altogether.
  *
  * Nothing is done on Windows, where none of this can be told: the answer there is `unknown`.
  */
@@ -412,8 +413,8 @@ export async function endTree(
   if (!itself && now.has(pid)) return 'gone'
   let all: number[]
   let group = false
-  // Something in its group could not be asked whose it is: whatever else is ended, that one is not known
-  let unasked = false
+  // What is in its group and does not say whose it is: never signalled, and the run is not known to be over while any of it is there
+  let others: number[] = []
   if (itself) {
     const under = descendantsKnown(pid)
     if (under === null) return 'unknown'
@@ -426,9 +427,11 @@ export async function endTree(
     if (!of) return 'unknown'
     const whose = members.map((p) => [p, belongs(p, of)] as const)
     all = whose.filter(([, is]) => is === true).map(([p]) => p)
-    unasked = whose.some(([, is]) => is === null)
-    // None of them says it is this run's: something else's group, unless one of them could not be asked
-    if (!all.length) return unasked ? 'unknown' : 'gone'
+    // Whatever in the group does not say it is this run's may still be: a command started
+    // with nothing handed on to it carries no mark. It is not signalled, since it may as well
+    // be something else's, and while it is there the run is not known to be over.
+    others = whose.filter(([, is]) => is !== true).map(([p]) => p)
+    if (!all.length) return 'unknown'
   }
   const were = processes(all)
   if (were === null) return 'unknown'
@@ -469,7 +472,10 @@ export async function endTree(
     signal('SIGKILL', left() ?? [])
     for (let waited = 0; waited < 2000 && anything() !== false; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
   }
-  return anything() === false && !unasked ? 'ended' : 'unknown'
+  if (anything() !== false) return 'unknown'
+  if (!others.length) return 'ended'
+  const still = inGroup(pid)
+  return still !== null && !still.some((p) => others.includes(p)) ? 'ended' : 'unknown'
 }
 
 /**

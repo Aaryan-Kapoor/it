@@ -557,6 +557,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // that has since been given the number is touched. Its conversation is told, the next time
   // it is reopened, that its turn was cut off.
   type Run = { pid: number; since: string; boot?: string; told?: number }
+  /** The note of runs from before could not be read, as this connector found when it started: it reopens nothing, whatever became of the file since. */
+  let unread = false
+  /** And it could not be moved aside either, so it is still where the note of runs is written. */
+  let unreadWhereItWas = false
   const running = new Map<string, Run>()
   /**
    * The runs from before this connector started that could not be checked on, or could not be
@@ -566,6 +570,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const unsettled = new Map<string, Run>()
   /** Writes down which runs there are. `must` is for a run that is about to be given something to do: not written down, it is not to run. */
   const keepRuns = (must = false) => {
+    // A note that could be neither read nor moved aside is left exactly as it is: it is the
+    // only word there is of what was running, and nothing is written over it
+    if (unreadWhereItWas) {
+      if (must) throw new Error('the note of runs cannot be written while the one from before stands unread')
+      return
+    }
     try {
       const all = { ...Object.fromEntries(unsettled), ...Object.fromEntries(running) }
       if (Object.keys(all).length) writePrivate(runsFile(), all)
@@ -623,11 +633,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
       } catch {
         noted = {}
+        unread = true
         try {
+          // Never over one that was kept aside before and has not been seen to
+          if (existsSync(unreadRuns())) throw new Error('one is kept aside already')
           renameSync(runsFile(), unreadRuns())
-        } catch {}
+        } catch {
+          unreadWhereItWas = true
+        }
       }
-    if (existsSync(unreadRuns())) say(`${UNREAD.replace(/^It could/, 'it could')}`)
+    if (existsSync(unreadRuns())) unread = true
+    if (unread) say(`${(unreadWhereItWas ? UNREAD.replace('runs.json.unreadable', 'runs.json') : UNREAD).replace(/^It could/, 'it could')}`)
     for (const [key, run] of Object.entries(noted)) {
       unsettled.set(key, run)
       if (!(await settleOld(key, run)))
@@ -730,7 +746,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // This connector is stopping, or does not fit the It it joined: nothing is started
     if (closing || unfitting) return STOPPED
     // Which conversations were running when It last stopped is not known: none is reopened
-    if (existsSync(unreadRuns())) return UNREAD
+    if (unread || existsSync(unreadRuns())) return unreadWhereItWas ? UNREAD.replace('runs.json.unreadable', 'runs.json') : UNREAD
     // A run of it from before this connector started may still be there
     // (Seen to once, before this turn's message was written: not again here, where settling
     // it would make a note that the message could no longer carry)
@@ -978,7 +994,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
         )
         run.abort()
       }
-      let renewedAt = Date.now()
+      // Asked again a while after it was last asked for, however long the answer to that took
+      let renewedAt = heldFrom
       keeping = setInterval(() => {
         const asked = Date.now()
         const ids = [...keptUp]

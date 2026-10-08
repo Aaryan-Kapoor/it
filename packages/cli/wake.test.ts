@@ -611,13 +611,18 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       expect(alive(ours.its)).toBe(true)
       expect(await endTree(ours.pid, ours.since, of)).toBe('ended')
       expect(alive(ours.its)).toBe(false)
-      // A group of the same kind that is somebody else's: another run's marks, or none
+      // A group of the same kind that carries another run's marks, or none: it may be somebody else's, or a
+      // command of this run's that was started with nothing handed on. It is left alone, and said to be not known
       const anothers = await orphan({ IT_HARNESS: of.harness, IT_SESSION: 'conversation-8' })
-      expect(await endTree(anothers.pid, anothers.since, of)).toBe('gone')
+      expect(await endTree(anothers.pid, anothers.since, of)).toBe('unknown')
       expect(alive(anothers.its)).toBe(true)
       const nobodys = await orphan({ IT_HARNESS: '', IT_SESSION: '' })
-      expect(await endTree(nobodys.pid, nobodys.since, of)).toBe('gone')
+      expect(await endTree(nobodys.pid, nobodys.since, of)).toBe('unknown')
       expect(alive(nobodys.its)).toBe(true)
+      // Once it has gone by itself, so has the run
+      process.kill(nobodys.its, 'SIGKILL')
+      await until(() => !alive(nobodys.its))
+      expect(await endTree(nobodys.pid, nobodys.since, of)).toBe('gone')
       // And a run noted under another start of this machine is gone, whatever has its number
       expect(await endTree(anothers.pid, anothers.since, { ...of, session: 'conversation-8', boot: 'another start of this machine' })).toBe('gone')
       expect(alive(anothers.its)).toBe(true)
