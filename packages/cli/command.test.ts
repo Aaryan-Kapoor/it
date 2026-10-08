@@ -2439,6 +2439,21 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
           hint: 'To use the It that is here, run `it setup`. To join the other one instead, take this one off the machine first with `it uninstall`, which deletes its pages, and then do again what the other It’s site says under Machines, Add a machine. The invite was not used.',
         },
       ])
+      // A person at a terminal, who ran the line the site gave them, is told the same in sentences and not as a record
+      if (python) {
+        const told = await atTerminal(m, ['login', '--url', b.url, '--code', 'Ab3dEf6hIj9kLm2nOp5q'], b.env)
+        expect([told.code, told.shown.split('\n')]).toEqual([
+          2,
+          [
+            '',
+            'This machine runs an It of its own, so it cannot join another one.',
+            '',
+            'To use the It that is here, run `it setup`. To join the other one instead, take this one off the machine first with `it uninstall`, which deletes its pages, and then do again what the other It’s site says under Machines, Add a machine. The invite was not used.',
+            '',
+            '',
+          ],
+        ])
+      }
       expect(b.asked).toEqual([])
       expect(b.joined).toEqual([])
       expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)

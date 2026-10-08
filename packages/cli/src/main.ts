@@ -1939,7 +1939,20 @@ async function main(argv: string[]): Promise<void> {
         if (existsSync(settingsFile())) throw runsItsOwn()
         if (enrolledHere()) throw new Problem('This machine has already joined an It.', 'invalid', 'Run `it logout` to leave it first.')
       }
-      refused()
+      // A person at a terminal ran the line that It's site gave them. Why this machine did not
+      // join, and what to do about it, is said to them in sentences: the record a program reads
+      // is printed everywhere else.
+      const said = async (err: unknown): Promise<never> => {
+        if (!(err instanceof Problem) || !forPerson(a)) throw err
+        say(`\n${err.message}`)
+        if (err.hint) say(`\n${err.hint}\n`)
+        return end(err.code === 'invalid' ? 2 : 1)
+      }
+      try {
+        refused()
+      } catch (err) {
+        return said(err)
+      }
       const asked = {
         url: need(text(a, 'url'), 'where the It to join is', LOGIN),
         code: need(text(a, 'code'), 'the invite made on its site', LOGIN),
@@ -1951,7 +1964,7 @@ async function main(argv: string[]): Promise<void> {
       const done = await oneAtATime(() => {
         refused()
         return login(asked)
-      })
+      }).catch(said)
       say(`\nThis machine has joined as "${done.name}".`)
       // The key just made is in It's folder. In a person's own profile that is theirs alone. A
       // folder they named instead is as private as they made it, on Windows, where a file has
