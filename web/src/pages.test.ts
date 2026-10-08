@@ -29,9 +29,12 @@ const client = {
     return () => void told.delete(fn)
   },
 }
+/** What the backend is to answer each stop with, in the order they were asked: nothing, until the test lets it. */
+const stopsAsked: { answer: (said: { stopping: boolean }) => void; refuse: (why: unknown) => void }[] = []
+const askedToStop = () => new Promise<{ stopping: boolean }>((answer, refuse) => void stopsAsked.push({ answer, refuse }))
 vi.mock('convex/react', () => ({
   useConvex: () => client,
-  useMutation: () => async () => null,
+  useMutation: (fn: unknown) => (getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : async () => null),
   useQuery: (fn: unknown) => ({ 'artifacts:get': PAGE, 'actions:forArtifact': recent })[getFunctionName(fn as never)],
 }))
 // The frame a page is shown in has tests of its own
@@ -41,6 +44,10 @@ vi.mock('./mount', () => ({ Mount: () => null }))
 let root: Root
 let host: HTMLElement
 const said = () => host.querySelector('.status')?.textContent ?? null
+/** Everything the bar says beside whether the agent is working, in the order it says it. */
+const allSaid = () => [...host.querySelectorAll('.status')].map((s) => s.textContent)
+/** The button that stops the page's agent, where it is offered. */
+const stops = () => [...host.querySelectorAll('button')].filter((b) => b.getAttribute('aria-label') === 'Stop the agent')
 const envelope = (id: string): Sent => ({ v: 1, clientActionId: id, name: 'approve', payload: '{"n":1}', contentVersion: 1 })
 const tick = () => act(async () => new Promise<void>((r) => setTimeout(r, 0)))
 async function shown() {
@@ -52,6 +59,11 @@ async function shown() {
   await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: true })))
   return outbox
 }
+/** Draws the page again where it is, as it is drawn when the backend has something new to say of it. */
+async function drawnAgain() {
+  const { PageView } = await import('./pages')
+  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: true })))
+}
 
 beforeEach(() => {
   vi.resetModules()
@@ -61,6 +73,7 @@ beforeEach(() => {
   connected = true
   told.clear()
   answers.length = 0
+  stopsAsked.length = 0
   client.mutation.mockClear()
 })
 afterEach(async () => {
@@ -361,6 +374,14 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { stoppedAt: null })
   })
 
+  test('what a stop dropped is said to be stopped, and never to be something the agent could not do, also once the page says no more when it was stopped', async () => {
+    // The page has changed conversation or machine since, and the stop was noted with the one it had then
+    Object.assign(PAGE, { stoppedAt: null })
+    recent = [{ at: NOW - 9000, delivery: 'handed_off', outcome: 'failed', route: 'stopped', handedAt: NOW - 1000 }]
+    await shown()
+    expect(said()).toBe('Stopped')
+  })
+
   test('an agent said to be working on a machine that has gone quiet is not said to be working: whether it is, is not known, and a stop is said to wait for the machine', async () => {
     Object.assign(PAGE, { run: { stopping: false }, machineSeenAt: NOW })
     await shown()
@@ -373,9 +394,9 @@ describe('what the page’s bar says of the last thing the person did', () => {
     expect(host.querySelector('.working')).toBeNull()
     expect(said()).toBe('the laptop is not answering. Whether Claude Code is still at work there is not known')
     // It can still be asked to stop, which It keeps for the machine until it is back
-    const stops = () => [...host.querySelectorAll('button')].filter((b) => b.getAttribute('aria-label') === 'Stop the agent')
     expect(stops().length).toBe(1)
     await act(async () => stops()[0]!.click())
+    await act(async () => stopsAsked[0]!.answer({ stopping: true }))
     expect(said()).toBe('Asked to stop. the laptop is not answering, and is told when it is back')
     expect(stops().length).toBe(0)
     await act(async () => root.unmount())
@@ -384,5 +405,71 @@ describe('what the page’s bar says of the last thing the person did', () => {
     await shown()
     expect(said()).toBe('Asked to stop. the laptop is not answering, and is told when it is back')
     Object.assign(PAGE, { run: null, machineSeenAt: NOW })
+  })
+
+  test('a stop It has not answered is said to be on its way, with the tab to keep open, and to be kept for a quiet machine only once It has answered', async () => {
+    Object.assign(PAGE, { run: { stopping: false }, machineSeenAt: NOW - 200_000 })
+    await shown()
+    await act(async () => stops()[0]!.click())
+    // Nothing is kept anywhere yet: the machine is not said to be told, and the stop is not asked a second time
+    expect(allSaid()).toEqual([
+      'the laptop is not answering. Whether Claude Code is still at work there is not known',
+      'Sending the stop. Keep this tab open until it is sent',
+    ])
+    expect(stops().length).toBe(0)
+    expect(stopsAsked.length).toBe(1)
+    await act(async () => stopsAsked[0]!.answer({ stopping: true }))
+    expect(allSaid()).toEqual(['Asked to stop. the laptop is not answering, and is told when it is back'])
+    expect(stops().length).toBe(0)
+    Object.assign(PAGE, { run: null, machineSeenAt: NOW })
+  })
+
+  test('a stop the page hears that It has, before the asking itself is answered, is said to be kept and no longer to be on its way', async () => {
+    Object.assign(PAGE, { run: { stopping: false }, machineSeenAt: NOW - 200_000 })
+    await shown()
+    await act(async () => stops()[0]!.click())
+    expect(allSaid()).toContain('Sending the stop. Keep this tab open until it is sent')
+    // What It says of the page's run reaches the page before the answer to the asking does
+    Object.assign(PAGE, { run: { stopping: true } })
+    await drawnAgain()
+    expect(allSaid()).toEqual(['Asked to stop. the laptop is not answering, and is told when it is back'])
+    Object.assign(PAGE, { run: null, machineSeenAt: NOW })
+  })
+
+  test('a stop that It answers by saying nothing was running, or refuses, is offered again, and the agent is not said to be stopping', async () => {
+    Object.assign(PAGE, { run: { stopping: false }, machineSeenAt: NOW })
+    await shown()
+    await act(async () => stops()[0]!.click())
+    // On its way: the agent is at work still, for all that is known
+    expect(host.querySelector('.working')?.textContent).toBe('Working')
+    expect(allSaid()).toEqual(['Sending the stop. Keep this tab open until it is sent'])
+    expect(stops().length).toBe(0)
+    // The run had ended by the time It had the stop, which the page has yet to hear
+    await act(async () => stopsAsked[0]!.answer({ stopping: false }))
+    expect(host.querySelector('.working')?.textContent).not.toContain('Stopping')
+    expect(allSaid()).toEqual([])
+    expect(stops().length).toBe(1)
+    // And one It refuses is no more kept than that
+    await act(async () => stops()[0]!.click())
+    expect(stops().length).toBe(0)
+    await act(async () => stopsAsked[1]!.refuse(new Error('It could not take it')))
+    expect(host.querySelector('.working')?.textContent).not.toContain('Stopping')
+    expect(allSaid()).toEqual([])
+    expect(stops().length).toBe(1)
+    Object.assign(PAGE, { run: null })
+  })
+
+  test('a stop that was asked of one run of the conversation is not said of the next, which can be stopped in its turn', async () => {
+    Object.assign(PAGE, { run: { since: NOW - 60_000, stopping: false }, machineSeenAt: NOW })
+    await shown()
+    await act(async () => stops()[0]!.click())
+    await act(async () => stopsAsked[0]!.answer({ stopping: true }))
+    expect(host.querySelector('.working')?.textContent).toBe('Stopping')
+    // The machine reopens the conversation for something done since, before the page has heard that the first run ended
+    Object.assign(PAGE, { run: { since: NOW, stopping: false } })
+    await drawnAgain()
+    expect(host.querySelector('.working')?.textContent).toContain('Working')
+    expect(stops().length).toBe(1)
+    Object.assign(PAGE, { run: null })
   })
 })

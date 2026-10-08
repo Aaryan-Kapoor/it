@@ -236,6 +236,8 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
         <span className="page-nav-said" role="status">
           {page.run ? (
             <Working
+              // Another run of the conversation is another thing to stop: what was asked of the one before is not said of it
+              key={page.run.since}
               artifactId={page.id as Id<'artifacts'>}
               stopping={page.run.stopping}
               user={user}
@@ -310,6 +312,9 @@ function Working({
   agent: string | null
 }) {
   const stop = useMutation(api.artifacts.stop)
+  // A stop is It's to keep, and It has it only once It has answered. Until then it is in this
+  // tab alone: it is said to be on its way, and not to have been asked
+  const [sending, setSending] = useState(false)
   const [asked, setAsked] = useState(false)
   const ending = stopping || asked
   // What else was done on the page while it works: said, so that the person knows it is held and what a stop takes with it
@@ -327,12 +332,26 @@ function Working({
   // give it: one that has gone quiet, or said it was stopping, may have ended the run or may
   // not, and cannot be told to stop until it is back. Said as that, and not as work going on.
   const askStop = () => {
-    setAsked(true)
-    stop({ artifactId }).catch((err) => {
-      setAsked(false)
-      say(refusal(err).message, 'error')
-    })
+    setSending(true)
+    stop({ artifactId }).then(
+      (said) => {
+        setSending(false)
+        // It may answer that nothing was running there to stop any more: the stop is offered again, until the bar goes with the run
+        setAsked(said.stopping)
+      },
+      (err) => {
+        setSending(false)
+        say(refusal(err).message, 'error')
+      },
+    )
   }
+  // A stop on its way is lost with the tab, as anything is that is nowhere but here: said beside
+  // the rest until It has answered, or the page hears from It that the run is being stopped
+  const sendingStop = sending && !ending && (
+    <span className="status" data-tone="wait">
+      Sending the stop. Keep this tab open until it is sent
+    </span>
+  )
   if (machineSeenAt === null || now - machineSeenAt >= ALIVE.onlineMs)
     return (
       <>
@@ -341,9 +360,10 @@ function Working({
             ? `Asked to stop. ${machine ?? 'Its machine'} is not answering, and is told when it is back`
             : `${machine ?? 'Its machine'} is not answering. Whether ${agent ?? 'your agent'} is still at work there is not known`}
         </span>
+        {sendingStop}
         {keepOpen}
-        {/* It can still be asked to stop: It keeps the asking, and the machine acts on it the moment it is back */}
-        {!ending && (
+        {/* It can still be asked to stop: It keeps the asking, and the machine acts on it the moment it is back. Not a second time while one is on its way */}
+        {!ending && !sending && (
           <button type="button" className="working-stop" title="Stop the agent when its machine is back" aria-label="Stop the agent" onClick={askStop}>
             <IconStop />
             Stop
@@ -359,7 +379,7 @@ function Working({
         <span className="working-dot" data-ending={ending || undefined} />
         {ending ? 'Stopping' : more ? `Working, ${more} more waiting` : 'Working'}
         {notSent > 0 && `, and ${notSent} not sent yet`}
-        {!ending && (
+        {!ending && !sending && (
           <button
             type="button"
             className="working-stop"
@@ -372,6 +392,7 @@ function Working({
           </button>
         )}
       </span>
+      {sendingStop}
       {keepOpen}
     </>
   )
@@ -498,6 +519,9 @@ function ActionStatus({
     ).length
     return <span className="status">{dropped > 1 ? `Stopped, with ${dropped - 1} more that ${dropped === 2 ? 'was' : 'were'} waiting` : 'Stopped'}</span>
   }
+  // Dropped by a stop the page no longer says the time of, having changed conversation or machine
+  // since. The person stopped it all the same, and it is never said as something the agent could not do
+  if (last.route === 'stopped') return <span className="status">Stopped</span>
   if (last.delivery === 'handed_off') {
     // The agent has changed the page since: its answer is on the page, and the bar has nothing to add.
     // Left up, "Your agent has it" read as an agent still at work, minutes after it had answered.
