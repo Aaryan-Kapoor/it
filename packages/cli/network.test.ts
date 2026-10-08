@@ -19,7 +19,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { backendAt } from './src/lib'
 import { asAdmin } from './src/serve/backend'
 import { RELEASE } from './src/serve/config'
-import { reachable } from './src/serve/network'
+import { publicAddress, reachable } from './src/serve/network'
 import { bases } from './test-ports'
 
 // ---------- which addresses ----------
@@ -28,6 +28,18 @@ const four = (address: string) => ({ address, family: 'IPv4' as const, internal:
 const six = (address: string) => ({ address, family: 'IPv6' as const, internal: false })
 
 describe('the addresses another device can open the site at', () => {
+  test('a machine has a public address where one of its own under IPv4 is in none of the ranges kept for private networks, which is what a rented server has and a computer at home has not', () => {
+    const lo = [{ address: '127.0.0.1', family: 'IPv4' as const, internal: true }]
+    // At home, behind a router, on a tailnet, with containers: none
+    for (const home of ['10.0.0.20', '192.168.1.50', '172.16.4.2', '172.31.255.1', '169.254.3.3', '100.101.42.17', '100.64.0.1', '100.127.255.254'])
+      expect(publicAddress({ lo, eth0: [four(home), six('2001:db8:100::1')] }), home).toBeUndefined()
+    // A container's bridge is inside this machine, whatever address it has
+    expect(publicAddress({ lo, docker0: [four('203.0.113.9')] })).toBeUndefined()
+    // A rented server, and the edges of the ranges
+    for (const open of ['203.0.113.9', '8.8.8.8', '172.15.0.1', '172.32.0.1', '100.63.255.255', '100.128.0.1', '192.169.0.1', '11.0.0.1'])
+      expect(publicAddress({ lo, eth0: [four('10.0.0.20'), four(open)] }), open).toBe(open)
+  })
+
   test('on a Linux machine with a wire, a tunnel and containers: the home network’s first, then the tunnel’s, then IPv6, and nothing of the containers', () => {
     const listed = reachable(4700, {
       lo: [

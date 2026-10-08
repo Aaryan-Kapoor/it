@@ -39,6 +39,33 @@ function rank(name: string, a: Listed): number | undefined {
   return /^f[cd]/.test(address) ? 4 : 5
 }
 
+/**
+ * An address of this machine that anyone on the internet can ask: one under IPv4 that is in
+ * none of the ranges kept for private networks, for one machine or one link, or for carriers.
+ * A rented server has one, and a computer behind a home router has none. With one, "the network"
+ * that It can be opened to is the internet, which whoever turns the network on has to be told.
+ */
+export function publicAddress(interfaces: Interfaces = os.networkInterfaces()): string | undefined {
+  for (const [name, addresses] of Object.entries(interfaces))
+    for (const a of addresses ?? []) {
+      if (a.internal || a.family !== 'IPv4' || BRIDGE.test(name)) continue
+      const [first = 0, second = 0, third = 0] = a.address.split('.').map(Number)
+      const kept =
+        first === 0 ||
+        first === 10 ||
+        first === 127 ||
+        first >= 224 ||
+        (first === 100 && second >= 64 && second <= 127) ||
+        (first === 169 && second === 254) ||
+        (first === 172 && second >= 16 && second <= 31) ||
+        (first === 192 && second === 168) ||
+        (first === 192 && second === 0 && third === 0) ||
+        (first === 198 && (second === 18 || second === 19))
+      if (!kept) return a.address
+    }
+  return undefined
+}
+
 /** The most addresses that are listed. A machine may have a dozen under IPv6, each as good as the next. */
 const MOST = 8
 
