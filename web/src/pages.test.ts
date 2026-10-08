@@ -50,6 +50,8 @@ const allSaid = () => [...host.querySelectorAll('.status')].map((s) => s.textCon
 const stops = () => [...host.querySelectorAll('button')].filter((b) => b.getAttribute('aria-label') === 'Stop the agent')
 const envelope = (id: string): Sent => ({ v: 1, clientActionId: id, name: 'approve', payload: '{"n":1}', contentVersion: 1 })
 const tick = () => act(async () => new Promise<void>((r) => setTimeout(r, 0)))
+/** Longer than a stop is on its way before the bar says so. */
+const aWhile = () => act(async () => new Promise<void>((r) => setTimeout(r, 800)))
 async function shown() {
   const { PageView } = await import('./pages')
   const outbox = await import('./outbox')
@@ -431,7 +433,11 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { run: { stopping: false }, machineSeenAt: NOW - 200_000 })
     await shown()
     await act(async () => stops()[0]!.click())
-    // Nothing is kept anywhere yet: the machine is not said to be told, and the stop is not asked a second time
+    // Nothing is kept anywhere yet: the machine is not said to be told, and the stop is not asked a second time.
+    // For the moment an answer usually takes, nothing more is said either, so that no sentence comes and goes with it
+    expect(allSaid()).toEqual(['the laptop is not answering. Whether Claude Code is still at work there is not known'])
+    expect(stops().length).toBe(0)
+    await aWhile()
     expect(allSaid()).toEqual([
       'the laptop is not answering. Whether Claude Code is still at work there is not known',
       'Sending the stop. Keep this tab open until it is sent',
@@ -448,6 +454,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { run: { stopping: false }, machineSeenAt: NOW - 200_000 })
     await shown()
     await act(async () => stops()[0]!.click())
+    await aWhile()
     expect(allSaid()).toContain('Sending the stop. Keep this tab open until it is sent')
     // What It says of the page's run reaches the page before the answer to the asking does
     Object.assign(PAGE, { run: { stopping: true } })
@@ -462,6 +469,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     await act(async () => stops()[0]!.click())
     // On its way: the agent is at work still, for all that is known
     expect(host.querySelector('.working')?.textContent).toBe('Working')
+    await aWhile()
     expect(allSaid()).toEqual(['Sending the stop. Keep this tab open until it is sent'])
     expect(stops().length).toBe(0)
     // The run had ended by the time It had the stop, which the page has yet to hear

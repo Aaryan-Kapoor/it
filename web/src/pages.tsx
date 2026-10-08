@@ -316,6 +316,14 @@ function Working({
   // A stop is It's to keep, and It has it only once It has answered. Until then it is in this
   // tab alone: it is said to be on its way, and not to have been asked
   const [sending, setSending] = useState(false)
+  // It answers within a moment where it can be reached, and a sentence that came and went with
+  // the answer would only flicker: the stop is said to be on its way once it has been for a while
+  const [late, setLate] = useState(false)
+  useEffect(() => {
+    if (!sending) return setLate(false)
+    const timer = setTimeout(() => setLate(true), SENDING_SAID_MS)
+    return () => clearTimeout(timer)
+  }, [sending])
   const [asked, setAsked] = useState(false)
   const ending = stopping || asked
   // What else was done on the page while it works: said, so that the person knows it is held and what a stop takes with it
@@ -348,7 +356,7 @@ function Working({
   }
   // A stop on its way is lost with the tab, as anything is that is nowhere but here: said beside
   // the rest until It has answered, or the page hears from It that the run is being stopped
-  const sendingStop = sending && !ending && (
+  const sendingStop = sending && late && !ending && (
     <span className="status" data-tone="wait">
       Sending the stop. Keep this tab open until it is sent
     </span>
@@ -398,6 +406,9 @@ function Working({
     </>
   )
 }
+
+/** How long a stop has been on its way to It before the bar says so. */
+export const SENDING_SAID_MS = 700
 
 /** Where the last thing the person did has got to: saved here, accepted, or with the agent. */
 function ActionStatus({
