@@ -830,6 +830,29 @@ try {
         !existsSync(path.join(stuck.folder, '.installing')),
       `${stuck.said}\n${readdirSync(stuck.folder).join(' ')}`,
     )
+    // Where what is there can be kept aside only as a copy (a disk that gives a file no second
+    // name), and the copy stops half way, as on a disk that fills: the half is never taken for
+    // what was there, and the program that was installed is still the whole of itself
+    const halfCopy = path.join(tmp, 'copy-stops-half-way')
+    mkdirSync(halfCopy)
+    writeFileSync(path.join(halfCopy, 'ln'), '#!/bin/sh\nfor last; do :; done\ncase "$last" in */old.*) exit 1 ;; esac\nexec /bin/ln "$@"\n', { mode: 0o755 })
+    writeFileSync(
+      path.join(halfCopy, 'cp'),
+      '#!/bin/sh\nfor last; do :; done\ncase "$last" in */old.*) printf half > "$last"; echo "cp: a stand-in stops half way" >&2; exit 1 ;; esac\nexec /bin/cp "$@"\n',
+      { mode: 0o755 },
+    )
+    const wholeBefore = await install('half-copy', { IT_VERSION: 'other' })
+    const halved = await install('half-copy', { PATH: `${halfCopy}${path.delimiter}${process.env.PATH}` })
+    check(
+      'a copy kept aside that stopped half way is never put back as what was there: the earlier install is whole, and nothing of this run is left beside it',
+      wholeBefore.code === 0 &&
+        halved.code !== 0 &&
+        readFileSync(halved.it).equals(readFileSync(path.join(other, program))) &&
+        read(path.join(halved.folder, 'LICENSE.md')) === otherHolds['LICENSE.md'] &&
+        readdirSync(halved.folder).filter((f) => f.startsWith('.install.')).length === 0 &&
+        readdirSync(path.dirname(halved.it)).join(' ') === path.basename(halved.it),
+      `${halved.said}\n${readdirSync(halved.folder).join(' ')}\n${readdirSync(path.dirname(halved.it)).join(' ')}`,
+    )
     // What it prints goes to a program that has stopped reading, as in `... | sh | head -1`
     const unread = await install('unread', {}, { first: 'sleep 0.3', started: (child) => child.stdout.destroy() })
     check(

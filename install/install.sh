@@ -251,12 +251,22 @@ replace() {
   # two, or a machine that loses power, still has a program where its service starts it from.
   # A link is moved aside as it is, since a second name for a link is not the same on every system.
   if [ -L "$2" ]; then mv -f -- "$2" "${stage}/old.$1"
-  elif [ -e "$2" ]; then ln -- "$2" "${stage}/old.$1" 2>/dev/null || cp -p -- "$2" "${stage}/old.$1"
+  elif [ -e "$2" ] && ! ln -- "$2" "${stage}/old.$1" 2>/dev/null; then
+    # A copy is made under a name of its own and given the kept name only once it is whole: a
+    # copy that stopped half way, as on a full disk, is never taken for what was there
+    cp -p -- "$2" "${stage}/old.$1.part"
+    mv -f -- "${stage}/old.$1.part" "${stage}/old.$1"
   fi
   begun="${begun} $1"
-  mv -f -- "${stage}/$1" "$2"
+  # The new file is brought beside the place under a name of its own, and renamed from there.
+  # Where the folder made for this run is on another disk than the place, the first of the two
+  # is a copy that takes time and may be cut short, and the second is still the one step
+  mv -f -- "${stage}/$1" "$2.it-new.$$"
+  mv -f -- "$2.it-new.$$" "$2"
 }
 put_back() {
+  # A new file that was on its way in and never got its name
+  rm -f -- "$2.it-new.$$" || true
   if [ -e "${stage}/old.$1" ] || [ -L "${stage}/old.$1" ]; then
     # Kept aside under a second name, it may still be what is at the place, where the new file
     # never went in: then there is nothing to put back, and only the second name to take away
