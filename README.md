@@ -1,4 +1,4 @@
-![An agent's pages on a screen: a whiteboard, a scratchpad, a quiz and a chessboard, each answered by touching it](docs/assets/it.gif)
+![An agent's pages on a screen: a whiteboard, a map, a chessboard and a checklist, each with its agent's name on it and each answered by touching it](docs/assets/it.gif)
 
 # It
 
