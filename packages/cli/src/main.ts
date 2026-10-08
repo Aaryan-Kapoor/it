@@ -2279,7 +2279,7 @@ async function main(argv: string[]): Promise<void> {
       // The conversations It is not reopening, because a turn of theirs from before could not be checked on or ended
       type Held = {
         unread: boolean
-        held: { agent: string; conversation: string; pid: number; since: string }[]
+        held: { key?: string; agent: string; conversation: string; pid: number; since: string }[]
         running: { agent: string; conversation: string }[]
       }
       const sub = a._[0]
@@ -2306,7 +2306,17 @@ async function main(argv: string[]): Promise<void> {
           ])
           if (!go) return tell(['Nothing was changed.'])
         }
-        const done = await local<{ cleared: number }>('/runs', { method: 'POST', body: { clear: true } })
+        // What is let go of is what was just shown, and nothing that came to be held since
+        const done = await local<{ cleared: number; unkept?: boolean }>('/runs', {
+          method: 'POST',
+          body: { clear: true, of: now.held.map((r) => r.key ?? `${r.agent}:${r.conversation}`), unread: now.unread },
+        })
+        if (done?.unkept)
+          throw new Problem(
+            'Nothing was let go of: It could not write down that those turns were cut off, which each conversation is to be told when it is next reopened.',
+            'unavailable',
+            'See that the disk It’s folder is on is not full, then run this again.',
+          )
         if (!forPerson(a)) return out({ cleared: done?.cleared ?? 0 })
         return tell([`It reopens them again. Each is told, the next time, that a turn of its was cut off and to look before it does anything twice.`])
       }
@@ -2322,7 +2332,9 @@ async function main(argv: string[]): Promise<void> {
         ),
         ...(now.unread || now.held.length
           ? [
-              'They are reopened again once this machine has been started again. To let them be reopened sooner, look that no agent It started is still running here (`ps -u "$USER" -o pid,lstart,args`), and then run `it runs clear`.',
+              now.unread
+                ? 'To let them be reopened again, look that no agent It started is still running here (`ps -u "$USER" -o pid,lstart,args`), and then run `it runs clear`. Starting this machine again does not do it where the note could not be read.'
+                : 'They are reopened again once this machine has been started again. To let them be reopened sooner, look that no agent It started is still running here (`ps -u "$USER" -o pid,lstart,args`), and then run `it runs clear`.',
             ]
           : ['Nothing is held back.']),
       ])

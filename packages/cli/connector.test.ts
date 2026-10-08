@@ -750,6 +750,39 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await until(() => JSON.stringify(readJson(path.join(home, 'cut-off.json'))) === JSON.stringify(['codex:thread-2']))
   }, 30_000)
 
+  test('a run from before stays noted, and its conversation held, for as long as the word that its turn was cut off cannot be written down', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    // A note of a run that is long gone, and a folder where the word of cut-off turns is kept, so that no file can be given that name
+    await start('socket', {}, (home) => {
+      noteConversation({ harness: 'codex', id: 'thread-1' }, folder)
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({ 'codex:thread-1': { pid: 2 ** 22 - 3, since: 'Thu Jan  1 00:00:00 1970', told: SINCE_TOLD } }),
+      )
+      mkdirSync(path.join(home, 'cut-off.json', 'in-the-way'), { recursive: true })
+    })
+    // The run is gone, and the note of it is all that says a turn was cut off: it is kept, and the conversation is held
+    type Held = { held: { key: string }[] }
+    expect(Object.keys(readJson<Record<string, unknown>>(path.join(home, 'runs.json')) ?? {})).toEqual(['codex:thread-1'])
+    expect((await local<Held>('/runs'))?.held.map((r) => r.key)).toEqual(['codex:thread-1'])
+    // A person cannot let it go either while that is so, and is told
+    expect(await local('/runs', { method: 'POST', body: { clear: true, of: ['codex:thread-1'] } })).toEqual({ cleared: 0, unkept: true })
+    expect((await local<Held>('/runs'))?.held.length).toBe(1)
+    expect(existsSync(path.join(home, 'runs.json'))).toBe(true)
+    // Once the word can be written, the next thing done for the conversation settles it, and its agent is told
+    rmSync(path.join(home, 'cut-off.json'), { recursive: true, force: true })
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 40_000)
+    expect(readFileSync(path.join(bin, 'given'), 'utf8')).toContain('was cut off before it ended')
+    expect((await local<Held>('/runs'))?.held).toEqual([])
+  }, 90_000)
+
   test('where the note of which conversations were running cannot be read, it is kept aside and no conversation is reopened until a person has taken it away', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
@@ -773,9 +806,16 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect((await local<{ unread: boolean; held: unknown[] }>('/runs'))?.unread).toBe(true)
     rmSync(path.join(home, 'runs.json.unreadable'), { force: true })
     expect((await local<{ unread: boolean }>('/runs'))?.unread).toBe(true)
-    // Let go of at the person's word, the conversation is reopened for what was waiting
-    expect(await local<{ cleared: number }>('/runs', { method: 'POST', body: { clear: true } })).toEqual({ cleared: 1 })
+    // A word that names nothing the person was shown lets go of nothing
+    expect(await local<{ cleared: number }>('/runs', { method: 'POST', body: { clear: true, of: [], unread: false } })).toEqual({ cleared: 0 })
+    expect((await local<{ unread: boolean }>('/runs'))?.unread).toBe(true)
+    // Let go of at the person's word, the conversation is reopened for what was waiting, and It is asked to give back what was set aside for it meanwhile
+    const unparked = () => stand.calls.filter((c) => c.name === 'delivery:unpark').map((c) => c.args)
+    const asked = unparked().length
+    expect(await local<{ cleared: number }>('/runs', { method: 'POST', body: { clear: true, of: [], unread: true } })).toEqual({ cleared: 1 })
     expect((await local<{ unread: boolean }>('/runs'))?.unread).toBe(false)
+    await until(() => unparked().length > asked)
+    expect(unparked().at(-1)).toEqual({ for: { harness: 'codex', id: 'thread-1' } })
     offered()
     offered(click(1))
     await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0, 40_000)

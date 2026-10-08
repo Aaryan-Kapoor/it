@@ -618,11 +618,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // until this machine has been started again, which ends everything, or a person has
     // looked and said so with `it runs clear`.
     if (was.unsure && !fromAnotherStart(was.boot)) return false
-    unsettled.delete(key)
-    cutOff.add(key)
-    keepCutOff()
     if (became === 'ended')
       say(`${a(key.slice(0, colon))} conversation (${short(key)}) was still running from before this started, with nothing looking after it, and was ended`)
+    // The word that its turn was cut off is written down before the note of the run is let go
+    // of. Where it cannot be (a disk that is full), the note of the run stays and the
+    // conversation stays held: let go of, nothing would be left to say that a turn was cut off
+    cutOff.add(key)
+    keepCutOff()
+    if (!cutOffKept) return false
+    unsettled.delete(key)
+    // What was set aside for it while it was held is tried again
+    revive(key.slice(0, colon), key.slice(colon + 1))
     return true
   }
   /**
@@ -856,8 +862,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Its turn was cut off, and the word of that could not be written down (a disk that is
       // full): the note of the run itself is kept on, which says as much to whichever
       // connector starts next, where letting go of it would leave no sign of the turn at all
+      // (What is already held for it says more than the note of the run does, and is left as it is)
       const noted = running.get(key)
-      if (noted && cutOff.has(key) && !cutOffKept) unsettled.set(key, noted)
+      if (noted && cutOff.has(key) && !cutOffKept && !unsettled.has(key)) unsettled.set(key, noted)
       if (running.delete(key)) keepRuns()
       if (ranUntil.size > 500) ranUntil.delete(ranUntil.keys().next().value!)
       ranUntil.set(key, Date.now())
@@ -1531,17 +1538,34 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // The runs from before that are held, for `it runs`, and letting go of them at the person's word, for `it runs clear`
     if (url.pathname === '/runs') {
       if (req.method === 'POST' && body.clear === true) {
-        const n = unsettled.size + (unread ? 1 : 0)
-        // Each is still owed the word that a turn of its was cut off
-        for (const key of unsettled.keys()) cutOff.add(key)
-        unsettled.clear()
+        // Only what the person was shown is let go of: a run that came to be held while they
+        // were being asked is one they have not looked for. (A command from before this was
+        // sent names none, and means all of them)
+        const shown = Array.isArray(body.of) ? new Set(body.of.filter((k: unknown): k is string => typeof k === 'string')) : null
+        const keys = [...unsettled.keys()].filter((key) => !shown || shown.has(key))
+        const unreadToo = unread && (shown === null || body.unread === true)
+        // Each is still owed the word that a turn of its was cut off, and that is written down
+        // first: where it cannot be, nothing is let go of, and the person is told so
+        for (const key of keys) cutOff.add(key)
         keepCutOff()
-        unread = false
-        unreadWhereItWas = false
-        try {
-          rmSync(unreadRuns(), { force: true })
-        } catch {}
+        if (keys.length && !cutOffKept) return [200, { cleared: 0, unkept: true }]
+        for (const key of keys) unsettled.delete(key)
+        // What was set aside meanwhile is tried again: for each conversation that was held,
+        // and where none was reopened at all, for every conversation this machine had given up on
+        const back = new Set(keys)
+        if (unreadToo) {
+          for (const tagged of [...parked, ...queueTries.keys()]) back.add(tagged.slice(tagged.indexOf('|') + 1))
+          for (const { for: tried } of toPark.values()) if (tried) back.add(keyOf(tried.harness, tried.id))
+          unread = false
+          unreadWhereItWas = false
+          try {
+            rmSync(unreadRuns(), { force: true })
+          } catch {}
+        }
+        for (const [id, { for: tried }] of [...toPark]) if (tried && back.has(keyOf(tried.harness, tried.id))) toPark.delete(id)
+        for (const key of back) revive(key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1))
         keepRuns()
+        const n = keys.length + (unreadToo ? 1 : 0)
         if (n) say(`${n} note${n === 1 ? '' : 's'} of a run from before ${n === 1 ? 'was' : 'were'} let go of at the person’s word`)
         void route()
         return [200, { cleared: n }]
@@ -1551,6 +1575,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         {
           unread,
           held: [...unsettled].map(([key, run]) => ({
+            key,
             agent: key.slice(0, key.indexOf(':')),
             conversation: key.slice(key.indexOf(':') + 1),
             pid: run.pid,
