@@ -583,10 +583,15 @@ async function wait(a: Args) {
     // said that its time ran out, which is its last word.
     deciding = true
     await announcing
+    // What is being printed this moment is printed whole, and It told of it, before anything
+    // more is done: a signal or an error that came in the middle of three clicks ended the
+    // wait after the first, with the other two taken from the connector and never said
+    while (busy) await new Promise((resolve) => setTimeout(resolve, 20))
     if (!over) await printHandedBack().catch(() => {})
     await local('/waiting', { method: 'POST', body: { id: who, done: true } })
     await client.close().catch(() => {})
-    await end(code)
+    // A wait that was given something has its answer, whatever went wrong beside it
+    await end(code === 1 && printedIds.size > 0 && !follow ? 0 : code)
   }
   const report = async () => {
     for (const id of unreported) {
@@ -627,10 +632,11 @@ async function wait(a: Args) {
     busy = true
     try {
       await printHandedBack()
-      if (printedIds.size > 0 && !follow) await finish(0)
     } finally {
       busy = false
     }
+    // Ended only once this is no longer in the middle of anything: the ending waits for that
+    if (printedIds.size > 0 && !follow) await finish(0)
   }
   const onClicks = async (clicks: Listed[]): Promise<'printed' | 'nothing' | 'failed'> => {
     if (busy || ending || over) return 'nothing'
@@ -662,16 +668,16 @@ async function wait(a: Args) {
         await report()
       }
       looked = true
-      // Having printed something, this ends even if It could not be told: the lease runs out
-      // and the click is offered again, which an agent can tell by its id
-      if (printedIds.size > 0 && !follow) await finish(0)
     } catch (err) {
       say(`wait: ${(err as Error).message}`)
       if (came !== 'printed') came = 'failed'
-      if (printedIds.size > 0 && !follow) await finish(0)
     } finally {
       busy = false
     }
+    // Having printed something, this ends even if It could not be told: the lease runs out
+    // and the click is offered again, which an agent can tell by its id. Ended only now that
+    // this is no longer in the middle of anything, which the ending waits for.
+    if (printedIds.size > 0 && !follow) await finish(0)
     return came
   }
   // Read by the page, or by the conversation: never everything that is waiting, where other
