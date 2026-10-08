@@ -33,6 +33,7 @@ import {
   identity,
   lastWords,
   mayWake,
+  SINCE_TOLD,
   STOPPED,
   WAS_CUT_OFF,
   WAS_STOPPED,
@@ -569,6 +570,9 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       expect(await endTree(run.pid!, since)).toBe('gone')
       // This program's own number, noted with another beginning, is another process: nothing is done to it
       expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970')).toBe('gone')
+      expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970', { harness: 'pi', session: 's', told: SINCE_TOLD })).toBe('gone')
+      // Noted by a program that told a start another way: whether it is that process cannot be said, and it is neither ended nor forgotten
+      expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970', { harness: 'pi', session: 's' })).toBe('unknown')
       expect(alive(process.pid)).toBe(true)
     } finally {
       rmSync(folder, { recursive: true, force: true })

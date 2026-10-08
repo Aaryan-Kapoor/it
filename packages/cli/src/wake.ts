@@ -210,7 +210,15 @@ export function carryOn(
   how: Carrying,
   cwd: string,
   marks: { harness: string; session: string },
-  opts: { patience?: number; signal?: AbortSignal; said?: (words: string) => void; keepIn?: string; began?: (pid: number) => void } = {},
+  opts: {
+    patience?: number
+    signal?: AbortSignal
+    said?: (words: string) => void
+    keepIn?: string
+    began?: (pid: number) => void
+    /** Called where the run was ended and the system would not say what of it was left: whoever noted it keeps the note. */
+    unsure?: () => void
+  } = {},
 ): Promise<string | null> {
   const patience = opts.patience ?? 15 * 60_000
   if (opts.signal?.aborted) return Promise.resolve(STOPPED)
@@ -305,11 +313,23 @@ export function carryOn(
         child.kill()
         return
       }
-      const all = child.pid ? descendants(child.pid) : []
+      const under = child.pid ? descendantsKnown(child.pid) : []
+      const all = under ?? []
       // Each as the process it is now, so that a number the system has since given to another
       // process is not taken for one of these
-      const were = identity(all)
-      const left = () => [...identity(all)].filter(([pid, since]) => were.get(pid) === since).map(([pid]) => pid)
+      const were = processes(all)
+      // Where the system would not say what the run had started, or which of it is still
+      // there, its group is still ended, and whoever noted the run is told that this was all
+      // that could be done: something it started in a group of its own may be left
+      if (under === null || were === null) opts.unsure?.()
+      const left = () => {
+        const is = processes(all)
+        if (is === null) {
+          opts.unsure?.()
+          return []
+        }
+        return [...is].filter(([pid, since]) => were?.get(pid) === since).map(([pid]) => pid)
+      }
       ending = { left, why, hard: false }
       signal('SIGTERM', all)
       const harder = setTimeout(() => {
@@ -373,7 +393,11 @@ export function carryOn(
  *
  * Nothing is done on Windows, where none of this can be told: the answer there is `unknown`.
  */
-export async function endTree(pid: number, since: string, of?: { harness: string; session: string; boot?: string }): Promise<'ended' | 'gone' | 'unknown'> {
+export async function endTree(
+  pid: number,
+  since: string,
+  of?: { harness: string; session: string; boot?: string; told?: number },
+): Promise<'ended' | 'gone' | 'unknown'> {
   if (process.platform === 'win32') return 'unknown'
   // Noted before the machine was last started: nothing of it is left, whatever has its number now
   const boot = bootId()
@@ -381,10 +405,15 @@ export async function endTree(pid: number, since: string, of?: { harness: string
   const now = processes([pid])
   if (now === null) return 'unknown'
   const itself = now.get(pid) === since
+  // Noted by a program that told a process's start another way than this one does: what has
+  // the number now cannot be told to be it or not to be, and is neither ended nor forgotten
+  if (!itself && now.has(pid) && of !== undefined && of.told !== SINCE_TOLD) return 'unknown'
   // Another process has the number now: neither it nor its group is what was noted
   if (!itself && now.has(pid)) return 'gone'
   let all: number[]
   let group = false
+  // Something in its group could not be asked whose it is: whatever else is ended, that one is not known
+  let unasked = false
   if (itself) {
     const under = descendantsKnown(pid)
     if (under === null) return 'unknown'
@@ -397,8 +426,9 @@ export async function endTree(pid: number, since: string, of?: { harness: string
     if (!of) return 'unknown'
     const whose = members.map((p) => [p, belongs(p, of)] as const)
     all = whose.filter(([, is]) => is === true).map(([p]) => p)
+    unasked = whose.some(([, is]) => is === null)
     // None of them says it is this run's: something else's group, unless one of them could not be asked
-    if (!all.length) return whose.some(([, is]) => is === null) ? 'unknown' : 'gone'
+    if (!all.length) return unasked ? 'unknown' : 'gone'
   }
   const were = processes(all)
   if (were === null) return 'unknown'
@@ -435,11 +465,19 @@ export async function endTree(pid: number, since: string, of?: { harness: string
   signal('SIGTERM', all)
   for (let waited = 0; waited < 5000 && anything() !== false; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
   if (anything() !== false) {
-    signal('SIGKILL', left() ?? all)
+    // Only what is still seen to be what it was: a number that cannot be looked at now may be another process's
+    signal('SIGKILL', left() ?? [])
     for (let waited = 0; waited < 2000 && anything() !== false; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
   }
-  return anything() === false ? 'ended' : 'unknown'
+  return anything() === false && !unasked ? 'ended' : 'unknown'
 }
+
+/**
+ * How this program tells when a process was started, as a number that goes into each note of
+ * a run: `ps`'s own words for it, in English and by the clock at Greenwich. A note without
+ * the number, or with another, was written by a program that told it another way.
+ */
+export const SINCE_TOLD = 2
 
 /**
  * What says which start of this machine a process belongs to: one that was noted under another
