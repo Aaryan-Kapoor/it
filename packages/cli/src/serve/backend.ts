@@ -162,14 +162,24 @@ const ARCHIVE_MOST = 400 * 1024 * 1024
  *
  * An address that is `plain` is a place on this machine (see `releases`).
  */
+/** How long the backend program may take to be fetched, all of it. */
+const PROGRAM_WITHIN_MS = 20 * 60_000
 export async function fetchProgram(
   from: { url: string; sha256: string; plain?: boolean },
   file: string,
   signal?: AbortSignal,
   /** Told how much has arrived, and of how much where the answer said: for whoever shows a person how far it has got. */
   progress?: (got: number, of: number | undefined) => void,
+  /** How long the fetching may take, where it is not the usual: for a test, which does not wait so long. */
+  within: number = PROGRAM_WITHIN_MS,
 ): Promise<void> {
   const elsewhere = Boolean(process.env.IT_BACKEND_RELEASES)
+  // The whole of it has so long, however it comes. An answer that never ended, or went on
+  // trickling, kept a first setup at this step for ever, and a service that needed a newer
+  // program from ever opening its door, with nothing said.
+  const limit = AbortSignal.timeout(within)
+  const asked = signal
+  signal = asked ? AbortSignal.any([asked, limit]) : limit
   const unreachable = () =>
     new Problem(
       'The backend program could not be fetched.',
@@ -213,7 +223,13 @@ export async function fetchProgram(
       }
     }
   } catch (err) {
-    if (signal?.aborted) throw stopped()
+    if (asked?.aborted) throw stopped()
+    if (limit.aborted)
+      throw new Problem(
+        `The backend program had not been fetched after ${Math.round(within / 60_000)} minutes, so it was given up.`,
+        'offline',
+        'It is about 60 MB. Check that this machine is online, then try again.',
+      )
     throw err instanceof Problem ? err : unreachable()
   }
   if (size > ARCHIVE_MOST || hash.digest('hex') !== from.sha256)

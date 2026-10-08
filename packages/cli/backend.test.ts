@@ -3514,6 +3514,31 @@ describe.skipIf(windows)('where the backend program is fetched from', () => {
     }
   }, 60_000)
 
+  test('an archive that never ends is given up when the time for fetching it is over, and said as that', async () => {
+    // Its first bytes come, and then one now and again for as long as anyone listens
+    const release = await place((_, res) => {
+      res.writeHead(200, { 'content-type': 'application/zip' })
+      res.write('PK')
+      const drip = setInterval(() => res.write('.'), 40)
+      res.once('close', () => clearInterval(drip))
+    })
+    try {
+      const began = Date.now()
+      const slow = (await fetchProgram(
+        { url: `${release.at}/a-release/an-archive.zip`, sha256: '0'.repeat(64), plain: true },
+        programFile(),
+        undefined,
+        undefined,
+        600,
+      ).catch((err) => err)) as Problem
+      expect([slow.code, slow.message]).toEqual(['offline', 'The backend program had not been fetched after 0 minutes, so it was given up.'])
+      expect(Date.now() - began).toBeLessThan(5000)
+      expect(existsSync(programFile())).toBe(false)
+    } finally {
+      await release.close()
+    }
+  }, 30_000)
+
   test('what a place on this machine answers with is followed nowhere else, and a place that does not have the release is said to be the one the variable names', async () => {
     const elsewhere = await place((_, res) => res.writeHead(200).end('somewhere else'))
     const release = await place((req, res) =>
