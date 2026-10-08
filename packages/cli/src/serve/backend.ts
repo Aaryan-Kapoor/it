@@ -26,6 +26,7 @@ import {
   statSync,
   utimesSync,
 } from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { ConvexHttpClient } from 'convex/browser'
@@ -396,6 +397,18 @@ export function startOf(pid: number): string | null | undefined {
   return alive(pid) ? undefined : null
 }
 
+/**
+ * When this program itself was started, asked for once: it does not change while the program
+ * runs, and on Windows each asking starts another program to answer it, which a lock that is
+ * tried many times a second cannot wait for. Empty where the system would not say, and then
+ * asked again the next time.
+ */
+let startedAs: string | undefined
+const startedMyself = (): string => {
+  if (!startedAs) startedAs = startOf(process.pid) || undefined
+  return startedAs ?? ''
+}
+
 let here: string | undefined
 /**
  * Where a process number means something: on the machine that gave it out, since that machine
@@ -542,7 +555,7 @@ async function takeLock(
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   // Where the system will not say when this program was started, its lock says nothing of it,
   // and is believed for as long as a process has its number
-  const me: Lock = { pid: process.pid, started: startOf(process.pid) || '', where: where(), holder: randomBytes(8).toString('hex') }
+  const me: Lock = { pid: process.pid, started: startedMyself(), where: where(), holder: randomBytes(8).toString('hex') }
   let said = false
   const watched = {
     signal: opts.signal,
@@ -1785,7 +1798,7 @@ interface Child {
    * it was to listen at is in use, and the last line it began with `Error:`. A program may
    * write a great deal after either, and of what it writes only the last lines are kept.
    */
-  why: () => { taken: boolean; error?: string }
+  why: () => { taken: boolean; denied?: boolean; error?: string }
   /** Ends the program outright, without asking. Only `halt` does, and only on Windows. */
   end: () => void
 }
@@ -1864,13 +1877,14 @@ function launch(file: string, config: ServiceConfig): Child {
     if (mask !== undefined) process.umask(mask)
   }
   const said: string[] = []
-  const why: { taken: boolean; error?: string } = { taken: false }
+  const why: { taken: boolean; denied?: boolean; error?: string } = { taken: false }
   const keep = (line: string) => {
     // biome-ignore lint/suspicious/noControlCharactersInRegex: the program colours what it writes, and the colours are taken out
     const plain = line.replace(/\x1b\[[0-9;]*m/g, '').trim()
     if (plain) said.push(plain.slice(0, 500))
     if (said.length > 40) said.splice(0, said.length - 40)
     if (PORT_TAKEN.test(plain)) why.taken = true
+    if (PORT_DENIED.test(plain)) why.denied = true
     if (plain.startsWith('Error:')) why.error = plain.slice(0, 500)
   }
   // What the program writes is kept a line at a time. A line can arrive in pieces, and a piece
@@ -1997,6 +2011,24 @@ async function halt(child: Child, lock: Held, say: (line: string) => void): Prom
 const UNFINISHED = /^Error: (missing _(tables|index)\.by_id global|bootstrap index \S+ has no `_index` document)$/
 /** What the program says when an address it was to listen at is another program's: in the system's words, or by the number each system gives it. */
 const PORT_TAKEN = /Address already in use|os error (98|48|10048)\b/
+/**
+ * How Windows may refuse a port: as one it will not let this program have. That is what it
+ * says of a port another program is listening on alone, and also of a port the system keeps
+ * aside for itself, so which of the two it is has to be asked of the port.
+ */
+const PORT_DENIED = /os error 10013\b/
+/** Whether something answers at a port of this machine. */
+const answersAt = (port: number): Promise<boolean> =>
+  new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port })
+    const done = (is: boolean) => {
+      socket.destroy()
+      resolve(is)
+    }
+    socket.setTimeout(1000, () => done(false))
+    socket.once('connect', () => done(true))
+    socket.once('error', () => done(false))
+  })
 
 /**
  * Starts the program and waits until it answers. One that ends first is said to have, with why
@@ -2037,9 +2069,18 @@ async function up(file: string, config: ServiceConfig, lock: Held, neverLoaded: 
   if (!child.pid) throw new Problem(`The backend program at ${file} could not be started.`, 'backend_program')
   const last = child.why().error ?? child.said().at(-1)
   const why = last ? `The program said: ${last}` : 'The program said nothing.'
-  if (child.why().taken)
+  const portOf = (address: string) => Number(/:(\d+)\/?$/.exec(address)?.[1])
+  // Refused a port the Windows way: another program's if something answers there, and else one the system keeps aside
+  const anothers = child.why().denied === true && ((await answersAt(portOf(at.api))) || (await answersAt(portOf(at.site))))
+  if (child.why().taken || anothers)
     throw new Problem(
       `The backend program could not listen at ${at.api} or ${at.site}: another program has one of those ports.`,
+      'port_in_use',
+      'IT_PORT names another port for It to count from.',
+    )
+  if (child.why().denied)
+    throw new Problem(
+      `The backend program could not listen at ${at.api} or ${at.site}: this system would not let it have one of those ports, which it may be keeping aside.`,
       'port_in_use',
       'IT_PORT names another port for It to count from.',
     )
