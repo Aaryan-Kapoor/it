@@ -23,6 +23,8 @@ import { ask, home, inHome, Problem, readJson, VERSION, writePrivate } from './l
 /** No program is anywhere near this large, and nothing else of a release is near the second. */
 const PROGRAM_MOST = 400 * 1024 * 1024
 const TEXT_MOST = 8 * 1024 * 1024
+/** How many times a request for a release's file may be sent on to another address. */
+const SENT_ON_AT_MOST = 8
 
 /**
  * Where releases are, and whether that is a place on this machine, which is how an upgrade is
@@ -82,14 +84,24 @@ async function file(name: string, most: number, signal?: AbortSignal, progress?:
     progress?.(answer.body.length, answer.body.length)
     return Buffer.from(answer.body)
   }
-  // Anywhere else is asked as any https address is, and may send on to another https address only
+  // Anywhere else is asked as any https address is. Where it sends on to another address, that
+  // one is asked in its turn, a few times at most and only while each is an https address: no
+  // step of the way is one that somebody on the network could read or answer in its place
   let answer: Response
   try {
-    answer = await fetch(url, { redirect: 'follow', signal })
+    for (let at = url, hops = 0; ; hops++) {
+      answer = await fetch(at, { redirect: 'manual', signal })
+      if (answer.status < 300 || answer.status >= 400) break
+      const on = answer.headers.get('location')
+      await answer.body?.cancel().catch(() => {})
+      if (!on || hops >= SENT_ON_AT_MOST) throw unreachable()
+      at = new URL(on, at).href
+      if (!at.startsWith('https://')) throw unreachable()
+    }
   } catch {
     throw unreachable()
   }
-  if (!answer.ok || !answer.body || !answer.url.startsWith('https://')) throw unreachable()
+  if (!answer.ok || !answer.body) throw unreachable()
   const length = Number(answer.headers.get('content-length'))
   const of = Number.isInteger(length) && length > 0 ? length : undefined
   const pieces: Uint8Array[] = []
