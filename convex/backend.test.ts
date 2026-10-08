@@ -1682,6 +1682,91 @@ describe('clicks and their delivery', () => {
     expect((await inbox(m, [], ['codex'])).map((c) => c.id)).toEqual(queued.slice(0, 2))
   })
 
+  test('a click that another machine handed over is lost to a machine that was at work on it, and one that its own agent said was done is not', async () => {
+    const { t, m, click } = await setup()
+    const other = await machineOf(t, 'alice', 'desktop')
+    const first = (await click('click-0001')).actionId
+    const second = (await click('click-0002')).actionId
+    expect(await m.as.mutation(api.delivery.claim, { ids: [first, second], for: SESSION })).toEqual([first, second])
+    expect(await m.as.query(api.delivery.lost, { ids: [first, second] })).toEqual([])
+    // Its own agent says the first is done, as `it ack` does: held no more, and not lost
+    await m.as.mutation(api.delivery.handedOff, { id: first, route: 'cli' })
+    expect(await m.as.mutation(api.delivery.renew, { ids: [first, second] })).toEqual([second])
+    expect(await m.as.query(api.delivery.lost, { ids: [first] })).toEqual([])
+    // The hold on the second runs out, and an agent waiting on another machine is given it
+    await vi.advanceTimersByTimeAsync(31_000)
+    expect(await m.as.query(api.delivery.lost, { ids: [second] })).toEqual([second])
+    expect(await other.as.mutation(api.delivery.claim, { ids: [second] })).toEqual([second])
+    await other.as.mutation(api.delivery.handedOff, { id: second, route: 'waiter' })
+    expect(await m.as.mutation(api.delivery.renew, { ids: [second] })).toEqual([])
+    expect(await m.as.query(api.delivery.lost, { ids: [second] })).toEqual([second])
+    // And the machine that handed it over has not lost it
+    expect(await other.as.query(api.delivery.lost, { ids: [second] })).toEqual([])
+  })
+
+  test('a stop drops what waits for the conversation on the machine it was stopped on, and nothing of a conversation of the same name on another machine', async () => {
+    const { t, alice, m, p, click } = await setup()
+    const other = await machineOf(t, 'alice', 'desktop')
+    const theirs = await publish(other, 'elsewhere', { session: SESSION })
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    const here = (await click('click-0001')).actionId
+    const there = (
+      await alice.browser.mutation(api.actions.submit, { artifactId: theirs.artifactId, displayKey: displayKey('alice'), envelope: envelope('click-0002') })
+    ).actionId
+    await vi.advanceTimersByTimeAsync(1000)
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    await settle(t)
+    const became = async (id: string) => {
+      const x = await t.run((ctx) => ctx.db.get(id as never) as Promise<{ delivery: string; route?: string } | null>)
+      return [x?.delivery, x?.route]
+    }
+    expect(await became(here)).toEqual(['handed_off', 'stopped'])
+    expect(await became(there)).toEqual(['pending', undefined])
+    expect(await other.as.mutation(api.delivery.claim, { ids: [there], for: SESSION })).toEqual([there])
+  })
+
+  test('everything a machine had set aside for a conversation comes back when the conversation does, however much that is, and is let go of when the machine is revoked', async () => {
+    const { t, alice, m, p } = await setup()
+    const made = Date.now()
+    const aside = () =>
+      t.run(async (ctx) => (await ctx.db.query('actions').collect()).filter((x) => x.delivery === 'pending' && x.parkedBy !== undefined).length)
+    const setAside = (n: number) =>
+      t.run(async (ctx) => {
+        const a = (await ctx.db.get(p.artifactId))!
+        for (let i = 0; i < n; i++)
+          await ctx.db.insert('actions', {
+            userId: a.userId,
+            title: a.title,
+            artifactId: a._id,
+            clientActionId: `aside-${made}-${String(i).padStart(4, '0')}-${Math.random().toString(36).slice(2)}`,
+            name: 'press',
+            payload: '{}',
+            contentVersion: 1,
+            createdAt: made + i,
+            delivery: 'pending',
+            parkedBy: m.id as never,
+            harness: SESSION.harness,
+            sessionId: SESSION.id,
+          })
+        await ctx.db.patch(a._id, { waiting: (a.waiting ?? 0) + n })
+      })
+    // More than one step brings back
+    await setAside(61)
+    expect(await m.as.mutation(api.delivery.unpark, { for: SESSION })).toBe(50)
+    await settle(t)
+    expect(await aside()).toBe(0)
+    expect((await inbox(m, [SESSION], [])).length).toBeGreaterThan(0)
+    // Set aside again, and the machine is revoked: none of it stays tied to a machine that is gone
+    await t.run(async (ctx) => {
+      for (const x of await ctx.db.query('actions').collect()) await ctx.db.patch(x._id, { machineId: undefined, parkedBy: m.id as never })
+    })
+    expect(await aside()).toBe(61)
+    await alice.browser.mutation(api.machines.revoke, { machineId: m.id })
+    await settle(t)
+    expect(await aside()).toBe(0)
+  })
+
   test('a stop drops everything that was waiting for the conversation by then, however much that is, and nothing done on the page after it', async () => {
     const { t, alice, m, p } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })

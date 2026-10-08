@@ -198,8 +198,8 @@ export const stop = mutation({
     // their own, up to the moment of the stop and no later, so that what the person does on the
     // page after stopping is kept.
     const at = Date.now()
-    const dropped = await dropWaiting(ctx, user._id, a.session!, at)
-    if (dropped.more) await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId: user._id, session: a.session!, at })
+    const dropped = await dropWaiting(ctx, user._id, machine._id, a.session!, at)
+    if (dropped.more) await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId: user._id, machineId: machine._id, session: a.session!, at })
     const waiting = { length: dropped.count }
     log('run.stop_asked', { userId: user._id, artifactId, dropped: waiting.length })
     return { stopping: true }
@@ -213,44 +213,65 @@ const DROP_AT_ONCE = 100
  * Drops what is waiting for a conversation that the person stopped, as far as one step goes:
  * the clicks made up to the stop, whether nobody has them yet or a machine has them in hand.
  * Says how many it dropped, and whether there may be more.
+ *
+ * Only what is addressed to the machine the conversation was stopped on, or was set aside by
+ * it: a conversation of the same name on another of the person's machines is another
+ * conversation, which nobody stopped.
  */
-async function dropWaiting(ctx: MutationCtx, userId: Id<'users'>, of: { harness: string; id: string }, at: number): Promise<{ count: number; more: boolean }> {
+async function dropWaiting(
+  ctx: MutationCtx,
+  userId: Id<'users'>,
+  machineId: Id<'machines'>,
+  of: { harness: string; id: string },
+  at: number,
+): Promise<{ count: number; more: boolean }> {
   let count = 0
   let more = false
-  for (const delivery of ['pending', 'leased'] as const) {
-    const batch = await ctx.db
-      .query('actions')
-      .withIndex('by_user_session', (q) => q.eq('userId', userId).eq('delivery', delivery).eq('harness', of.harness).eq('sessionId', of.id))
-      .take(DROP_AT_ONCE)
-    if (batch.length === DROP_AT_ONCE) more = true
-    for (const x of batch) {
-      // Made after the stop: the person did that knowing the agent was stopped, and it is kept
-      if (x.createdAt > at) continue
-      await ctx.db.patch(x._id, {
-        delivery: 'handed_off',
-        route: 'stopped',
-        handedAt: Date.now(),
-        outcome: 'failed',
-        leaseMachineId: undefined,
-        leaseExpiresAt: undefined,
-      })
-      count++
-      // It stops counting as waiting, on its page and for the person, as any click does that is no longer waiting
-      const page = await ctx.db.get(x.artifactId)
-      if (page) await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+  for (const delivery of ['pending', 'leased'] as const)
+    for (const [addressed, aside] of [
+      [machineId, undefined],
+      [undefined, machineId],
+    ] as const) {
+      const batch = await ctx.db
+        .query('actions')
+        .withIndex('by_user_route', (q) =>
+          q
+            .eq('userId', userId)
+            .eq('delivery', delivery)
+            .eq('harness', of.harness)
+            .eq('sessionId', of.id)
+            .eq('machineId', addressed)
+            .eq('parkedBy', aside)
+            // Made after the stop: the person did that knowing the agent was stopped, and it is kept
+            .lte('createdAt', at),
+        )
+        .take(DROP_AT_ONCE)
+      if (batch.length === DROP_AT_ONCE) more = true
+      for (const x of batch) {
+        await ctx.db.patch(x._id, {
+          delivery: 'handed_off',
+          route: 'stopped',
+          handedAt: Date.now(),
+          outcome: 'failed',
+          leaseMachineId: undefined,
+          leaseExpiresAt: undefined,
+        })
+        count++
+        // It stops counting as waiting, on its page and for the person, as any click does that is no longer waiting
+        const page = await ctx.db.get(x.artifactId)
+        if (page) await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+      }
     }
-  }
   if (count) await bump(ctx, userId, { waiting: -count })
-  // A whole step of clicks that were all made after the stop would be found again for ever: nothing more to drop
   return { count, more: more && count > 0 }
 }
 
 /** The rest of what a stop drops, a step at a time, until none that was waiting at the stop is left. */
 export const dropRest = internalMutation({
-  args: { userId: v.id('users'), session, at: v.number() },
-  handler: async (ctx, { userId, session: of, at }) => {
-    const dropped = await dropWaiting(ctx, userId, of, at)
-    if (dropped.more) await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId, session: of, at })
+  args: { userId: v.id('users'), machineId: v.id('machines'), session, at: v.number() },
+  handler: async (ctx, { userId, machineId, session: of, at }) => {
+    const dropped = await dropWaiting(ctx, userId, machineId, of, at)
+    if (dropped.more) await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId, machineId, session: of, at })
     return null
   },
 })

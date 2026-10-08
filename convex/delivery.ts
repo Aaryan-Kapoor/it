@@ -304,10 +304,12 @@ export const renew = mutation({
 
 /**
  * Of clicks a machine was holding and no longer holds, the ones that are somebody else's to
- * deliver by now: waiting again, or held by another machine, or held by this one past the time
- * it had them for. A click that was handed over (as an agent does with `it ack`), or that is
- * gone, is nobody's to deliver, and is not among them. A machine that is running something for
- * a click asks this to tell a click it has lost from one that is simply done with.
+ * deliver by now, or have been delivered by somebody else: waiting again, held by another
+ * machine, held by this one past the time it had them for, or handed over by another machine
+ * (to an agent that was waiting for it there). A click that this machine itself said was handed
+ * over (as an agent on it does with `it ack`), that was stopped, or that is gone, is nobody
+ * else's, and is not among them. A machine that is running something for a click asks this to
+ * tell a click it has lost from one that is simply done with.
  */
 export const lost = query({
   args: { ids: v.array(v.id('actions')) },
@@ -318,7 +320,12 @@ export const lost = query({
     for (const id of ids.slice(0, 50)) {
       const x = await ctx.db.get(id)
       if (!x || x.userId !== user._id) continue
-      if (x.delivery === 'pending' || (x.delivery === 'leased' && (x.leaseMachineId !== machine._id || (x.leaseExpiresAt ?? 0) < now))) theirs.push(id)
+      if (
+        x.delivery === 'pending' ||
+        (x.delivery === 'leased' && (x.leaseMachineId !== machine._id || (x.leaseExpiresAt ?? 0) < now)) ||
+        (x.delivery === 'handed_off' && x.route !== 'stopped' && x.handedBy !== undefined && x.handedBy !== machine._id)
+      )
+        theirs.push(id)
     }
     return theirs
   },
@@ -373,6 +380,7 @@ export const handedOff = mutation({
       leaseExpiresAt: undefined,
       route: route.slice(0, 20),
       handedAt: Date.now(),
+      handedBy: machine._id,
       outcome: 'running',
     })
     await noLongerWaiting(ctx, x)
@@ -471,7 +479,25 @@ export const unpark = mutation({
       .take(50)
     // This machine's again, as they were before it set them aside
     for (const x of aside) await ctx.db.patch(x._id, { machineId: machine._id, parkedBy: undefined })
+    // However many there are: the rest follow a batch at a time, by themselves
+    if (aside.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.unparkRest, { userId: user._id, machineId: machine._id, for: s })
     return aside.length
+  },
+})
+
+/** The rest of what a machine had set aside for a conversation that is back, a batch at a time. */
+export const unparkRest = internalMutation({
+  args: { userId: v.id('users'), machineId: v.id('machines'), for: session },
+  handler: async (ctx, { userId, machineId, for: s }) => {
+    const aside = await ctx.db
+      .query('actions')
+      .withIndex('by_user_route', (q) =>
+        q.eq('userId', userId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id).eq('machineId', undefined).eq('parkedBy', machineId),
+      )
+      .take(50)
+    for (const x of aside) await ctx.db.patch(x._id, { machineId, parkedBy: undefined })
+    if (aside.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.unparkRest, { userId, machineId, for: s })
+    return null
   },
 })
 
@@ -512,6 +538,24 @@ export const orphan = internalMutation({
     for (const x of batch.page) await ctx.db.patch(x._id, { machineId: undefined })
     // Each batch moves what it read out of the list it is reading, so the next starts afresh
     if (!batch.isDone) await ctx.scheduler.runAfter(0, internal.delivery.orphan, { machineId })
+    // What the machine had set aside is addressed to no machine, and is not among the above: it
+    // is found by the pages the machine owned, whose waiting clicks are each addressed afresh,
+    // which lets go of what a machine that is gone had set aside
+    else await ctx.scheduler.runAfter(0, internal.delivery.orphanPages, { machineId })
+    return null
+  },
+})
+
+/** Addresses afresh what waits on each page of a machine that is gone, a few pages at a time. */
+export const orphanPages = internalMutation({
+  args: { machineId: v.id('machines'), cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, { machineId, cursor }) => {
+    const batch = await ctx.db
+      .query('artifacts')
+      .withIndex('by_machine', (q) => q.eq('machineId', machineId))
+      .paginate({ cursor: cursor ?? null, numItems: 20 })
+    for (const page of batch.page) if ((page.waiting ?? 0) > 0) await ctx.scheduler.runAfter(0, internal.actions.readdress, { artifactId: page._id })
+    if (!batch.isDone) await ctx.scheduler.runAfter(0, internal.delivery.orphanPages, { machineId, cursor: batch.continueCursor })
     return null
   },
 })

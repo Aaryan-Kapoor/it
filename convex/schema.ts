@@ -260,6 +260,8 @@ export default defineSchema({
     parkedBy: v.optional(v.id('machines')),
     leaseExpiresAt: v.optional(v.number()),
     route: v.optional(v.string()),
+    /** The machine that said it was handed over, where a machine did: a machine that was at work on it and did not hand it over itself has lost it to that one. */
+    handedBy: v.optional(v.id('machines')),
     handedAt: v.optional(v.number()),
     /** What became of the work the click started, as far as It can tell. */
     outcome: v.optional(v.union(v.literal('running'), v.literal('succeeded'), v.literal('failed'), v.literal('unknown'))),
