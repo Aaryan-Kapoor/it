@@ -297,6 +297,28 @@ export const renew = mutation({
 })
 
 /**
+ * Of clicks a machine was holding and no longer holds, the ones that are somebody else's to
+ * deliver by now: waiting again, or held by another machine, or held by this one past the time
+ * it had them for. A click that was handed over (as an agent does with `it ack`), or that is
+ * gone, is nobody's to deliver, and is not among them. A machine that is running something for
+ * a click asks this to tell a click it has lost from one that is simply done with.
+ */
+export const lost = query({
+  args: { ids: v.array(v.id('actions')) },
+  handler: async (ctx, { ids }) => {
+    const { user, machine } = await requireMachine(ctx)
+    const now = Date.now()
+    const theirs = []
+    for (const id of ids.slice(0, 50)) {
+      const x = await ctx.db.get(id)
+      if (!x || x.userId !== user._id) continue
+      if (x.delivery === 'pending' || (x.delivery === 'leased' && (x.leaseMachineId !== machine._id || (x.leaseExpiresAt ?? 0) < now))) theirs.push(id)
+    }
+    return theirs
+  },
+})
+
+/**
  * What a click goes back to once nobody holds it: waiting, addressed to whoever owns its page
  * now. One that the owner's machine had set aside stays set aside, unless the page has changed
  * hands since.

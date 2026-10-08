@@ -11,7 +11,7 @@
 // Every click carries its own id in the text the agent reads, so a repeat can be told apart.
 import { execFile, spawn } from 'node:child_process'
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, newer, parseJson, QUEUES, WAKE_MOST, WAKES } from '@it/protocol'
@@ -523,9 +523,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * same thing again, once.
    */
   const cutOff = new Set<string>(readJson<string[]>(cutOffFile()) ?? [])
-  try {
-    rmSync(cutOffFile(), { force: true })
-  } catch {}
+  // Each is owed until its conversation has been told, which may be several starts of this
+  // connector later: so the list is kept in its file for as long as anything is on it
+  const keepCutOff = () => {
+    try {
+      while (cutOff.size > 200) cutOff.delete(cutOff.values().next().value!)
+      if (cutOff.size) writePrivate(cutOffFile(), [...cutOff])
+      else rmSync(cutOffFile(), { force: true })
+    } catch {}
+  }
   // A connector that died, where one that is stopped ends what it reopened, left its reopened
   // conversations running with nobody to stop them, and It offering the same click again
   // beside them. Each is ended now, with what it had started, before anything is handed out:
@@ -533,22 +539,63 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // that has since been given the number is touched. Its conversation is told, the next time
   // it is reopened, that its turn was cut off.
   const running = new Map<string, { pid: number; since: string }>()
-  const keepRuns = () => {
+  /**
+   * The runs from before this connector started that could not be checked on, or could not be
+   * ended: each is still noted, is looked at again when its conversation is next to be
+   * reopened, and until it is known to be gone that conversation is reopened for nothing.
+   */
+  const unsettled = new Map<string, { pid: number; since: string }>()
+  /** Writes down which runs there are. `must` is for a run that is about to be given something to do: not written down, it is not to run. */
+  const keepRuns = (must = false) => {
     try {
-      if (running.size) writePrivate(runsFile(), Object.fromEntries(running))
+      const all = { ...Object.fromEntries(unsettled), ...Object.fromEntries(running) }
+      if (Object.keys(all).length) writePrivate(runsFile(), all)
       else rmSync(runsFile(), { force: true })
-    } catch {}
+    } catch (err) {
+      if (must) throw err
+    }
   }
-  for (const [key, was] of Object.entries(readJson<Record<string, { pid?: unknown; since?: unknown }>>(runsFile()) ?? {})) {
-    if (typeof was?.pid !== 'number' || typeof was.since !== 'string') continue
-    if (await endTree(was.pid, was.since).catch(() => false)) {
+  /** Ends a run that was noted before this connector started. True once nothing of it is left. */
+  const settleOld = async (key: string, was: { pid: number; since: string }): Promise<boolean> => {
+    const became = await endTree(was.pid, was.since).catch(() => 'unknown' as const)
+    if (became === 'unknown') return false
+    unsettled.delete(key)
+    if (became === 'ended') {
       cutOff.add(key)
+      keepCutOff()
       say(
         `${a(key.slice(0, key.indexOf(':')))} conversation (${short(key)}) was still running from before this started, with nothing looking after it, and was ended`,
       )
     }
+    return true
   }
-  keepRuns()
+  {
+    let noted: unknown = {}
+    if (existsSync(runsFile()))
+      try {
+        noted = JSON.parse(readFileSync(runsFile(), 'utf8'))
+      } catch {
+        // Not readable as what this program writes there. It is kept under another name, for
+        // whoever looks into it, and said: what it named can be neither found nor ended from here
+        const aside = `${runsFile()}.unreadable`
+        try {
+          renameSync(runsFile(), aside)
+        } catch {}
+        say(
+          `the note of which conversations were running before this started could not be read, and is kept as ${aside}: anything it named is not looked after`,
+        )
+      }
+    for (const [key, was] of Object.entries(noted && typeof noted === 'object' ? (noted as Record<string, { pid?: unknown; since?: unknown }>) : {})) {
+      if (typeof was?.pid !== 'number' || typeof was.since !== 'string') continue
+      const run = { pid: was.pid, since: was.since }
+      unsettled.set(key, run)
+      if (!(await settleOld(key, run)))
+        say(
+          `${a(key.slice(0, key.indexOf(':')))} conversation (${short(key)}) may still be running from before this started, and could not be checked on or ended: it is reopened for nothing until it can be`,
+        )
+    }
+    keepRuns()
+  }
   /**
    * The conversations whose reopened turn is being ended because this machine's hold on what
    * they were reopened for was lost: It was out of reach for as long as a hold lasts, and may
@@ -637,6 +684,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
     })
     if (typeof how === 'string') return how
     if (reopenedNow.has(key)) return 'it is being reopened already'
+    // This connector is stopping: nothing is started that it would not be there to end
+    if (closing) return STOPPED
+    // A run of it from before this connector started may still be there
+    const before = unsettled.get(key)
+    if (before && !(await settleOld(key, before).finally(() => keepRuns())))
+      return 'a turn of it from before It was last started may still be running, and could not be checked on or ended'
+    if (closing) return STOPPED
     const stop = new AbortController()
     reopenedNow.set(key, stop)
     await call('mutation', api.machines.runBegan, { for: session }).catch(() => {})
@@ -651,11 +705,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
           signal: stop.signal,
           keepIn: inHome('logs'),
           said: (words) => saidLast.set(key, words),
+          // Written down before it is given anything to do, or it is not to run: see `carryOn`
           began: (pid) => {
             const since = identity([pid]).get(pid)
-            if (since === undefined) return
+            if (since === undefined) throw new Error('which process it is could not be told')
             running.set(key, { pid, since })
-            keepRuns()
+            try {
+              keepRuns(true)
+            } catch (err) {
+              running.delete(key)
+              throw err
+            }
           },
         },
       )
@@ -665,7 +725,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       else if (ended !== STOPPED) shellMayHaveChanged()
       // Ended because its hold on what it was reopened for was lost: nobody stopped it. Its
       // conversation is told, if it is reopened for the same thing again, that its turn was cut off.
-      if (ended === STOPPED && lostHold.has(key)) cutOff.add(key)
+      if (ended === STOPPED && lostHold.has(key)) {
+        cutOff.add(key)
+        keepCutOff()
+      }
       // Stopped by the person, and not by this connector closing: its next turn is told so
       if (ended === STOPPED && !closing && !lostHold.has(key)) {
         if (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)
@@ -730,6 +793,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const threadOf = (key: string) => key.slice(key.indexOf(':') + 1)
   async function queueNow(click: Offered, reopening: boolean): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
+    /** This hand-over is finished: what its renewals are answered from now on is about nothing that is running. */
+    let over = false
     const line = click.session!.id
     const harness = click.session!.harness
     // What the route is called where it is written down: Codex's own queue, or the reopening of a conversation that was closed
@@ -745,6 +810,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       withIt = []
     }
     try {
+      // This connector is stopping: what stood in line behind a run it has just ended is left for the connector that starts next
+      if (closing) return
       // It went with an earlier click of its conversation, in the same message
       if (rode.delete(click.id)) return
       // An earlier click for this conversation failed while this one was already in line
@@ -770,7 +837,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // And looked at once more, now that the claim is answered: a waiter that began while it
       // was being asked for cannot take what this machine holds, so it is given back to it. It
       // is given back as well when Codex was disconnected in that time.
-      if (awaited(click, Date.now()) || !connected(harness) || (reopening && !wakes(harness, click.at))) {
+      if (closing || awaited(click, Date.now()) || !connected(harness) || (reopening && !wakes(harness, click.at))) {
         journal('released', click.id)
         await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
         return
@@ -804,29 +871,53 @@ async function connecting(say: (line: string) => void): Promise<void> {
           true,
         )
       }
-      // The command can take as long as a lease lasts, so the lease is kept up while it runs
-      // Only a renewal the backend confirmed keeps it. Told that the click is no longer held
-      // here, or told nothing for as long as a hold lasts, a conversation that was reopened for
-      // it is ended: the click may be another machine's by now.
+      // The command can take as long as a lease lasts, so the lease is kept up while it runs.
+      // Only a renewal the backend confirmed keeps it. Told that a click of this hand-over is
+      // somebody else's to deliver by now, or told nothing for as long as a hold lasts, a
+      // conversation that was reopened for it is ended. A click that is no longer held because
+      // it is done with (its agent said so with `it ack`, or it was dropped) is no loss: it
+      // is renewed no more, and the run goes on with the rest.
       let heldUntil = Date.now() + LEASE_MS
+      const keptUp = new Set([click.id, ...withIt.map((c) => c.id)])
       keeping = setInterval(() => {
         const asked = Date.now()
-        void call<string[]>('mutation', api.delivery.renew, { ids: [click.id, ...withIt.map((c) => c.id)] })
+        const ids = [...keptUp]
+        if (!ids.length) return
+        void call<string[]>('mutation', api.delivery.renew, { ids })
+          .then(async (kept) => {
+            const not = ids.filter((id) => !kept.includes(id))
+            // An It from before this could be asked says nothing: what is not held is then taken for lost, as it was
+            const lost = not.length
+              ? await call<string[]>('query', api.delivery.lost, { ids: not }).then(
+                  (theirs) => (Array.isArray(theirs) ? theirs : not),
+                  () => not,
+                )
+              : []
+            return { not, lost }
+          })
           .catch(() => null)
-          .then((kept) => {
-            if (kept?.includes(click.id)) heldUntil = asked + LEASE_MS
-            else if ((kept !== null || Date.now() > heldUntil) && reopening && !closing && !lostHold.has(key)) {
-              const run = reopenedNow.get(follow(key))
-              if (!run) return
-              lostHold.add(key)
-              say(
-                `${a(harness)} conversation (${short(line)}) is ended: this machine’s hold on what it was reopened for was lost, and that may be with another machine by now`,
-              )
-              run.abort()
+          .then((said) => {
+            // An answer that comes after this hand-over is over says nothing of whatever is running by then
+            if (over) return
+            if (said && !said.lost.length) {
+              heldUntil = asked + LEASE_MS
+              for (const id of said.not) keptUp.delete(id)
+              return
             }
+            if (!said && Date.now() <= heldUntil) return
+            if (!reopening || closing || lostHold.has(key)) return
+            const run = reopenedNow.get(follow(key))
+            if (!run) return
+            lostHold.add(key)
+            say(
+              `${a(harness)} conversation (${short(line)}) is ended: this machine’s hold on what it was reopened for was lost, and that may be with another machine by now`,
+            )
+            run.abort()
           })
       }, RENEW_MS)
       journal('queueing', click.id)
+      /** Whether this turn is told that the one before it was cut off: decided before it begins, since its own ending may make such a note anew. */
+      const toldCutOff = cutOff.has(key)
       const sent = { click, toWaiter: false }
       submitting.set(click.id, sent)
       // What the person chose or typed is not put on a command line, where other users of the
@@ -838,11 +929,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // not the same note every time.
           await carry(
             click.session!,
-            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${cutOff.has(key) ? `\n\n${WAS_CUT_OFF}` : ''}`,
+            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF}` : ''}`,
           ).then((ended) => {
             // Told, where the conversation was in fact reopened: one that could not be is told the next time
             if (ended === null || ended === STOPPED) {
-              cutOff.delete(key)
+              // The note it was given is used up. A turn that was itself cut off, by a hold
+              // that was lost or by this connector stopping, is owed the note again
+              if (toldCutOff && !(ended === STOPPED && (lostHold.has(key) || closing))) {
+                cutOff.delete(key)
+                keepCutOff()
+              }
               // Stopped again, it is owed the note again, which the stopping itself has written down
               if (ended === null && stoppedByPerson.delete(key)) keepStopped()
             }
@@ -864,6 +960,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (refused === STOPPED && lostHold.delete(key)) {
         await giveBack()
         journal('lost', click.id)
+        // It may be a click that went with this one that was lost, and this one still held
+        // here: given back, it is reopened for again, with the note that its turn was cut
+        // off. Where it is not this machine's, the giving back does nothing.
+        await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
         return
       }
       const handed = refused === null || refused === STOPPED
@@ -914,6 +1014,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       say(`queue: click ${click.id}: ${why(err)}`)
       await giveBack()
     } finally {
+      over = true
       clearInterval(keeping)
       submitting.delete(click.id)
       queueing.delete(click.id)
@@ -944,6 +1045,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * conversation then wait too, so that what was pressed first still arrives first.
    */
   function queue(click: Offered, reopening: boolean): boolean {
+    if (closing) return false
     let tried = queueTries.get(tag(click))
     if (queueing.has(click.id)) return true
     // Tried one way and now to go the other: its conversation was closed and is open, or was
@@ -981,7 +1083,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     sooner.unref?.()
   }
   async function route(): Promise<void> {
-    if (routing) return
+    if (routing || closing) return
     routing = true
     try {
       const now = Date.now()
@@ -1670,11 +1772,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   closing = true
   // Written down for the connector that starts next: each of these is given what it was
   // reopened for a second time, and must be told that its first turn at it was cut off
-  if (reopenedNow.size) {
-    try {
-      writePrivate(cutOffFile(), [...reopenedNow.keys()])
-    } catch {}
-  }
+  for (const key of reopenedNow.keys()) cutOff.add(key)
+  keepCutOff()
   for (const run of reopenedNow.values()) run.abort()
   // What is held goes back, and what was handed over is confirmed, all at once and for a few
   // seconds at most: whoever asked this program to stop will not wait long, and anything not

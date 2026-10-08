@@ -2,7 +2,7 @@
 // conversation on without a window, how that command is run and stopped, and how often a
 // conversation may be reopened. None of it is done for an app the person has not switched
 // Auto-wake on for, which is the connector's to see to.
-import { execFile, execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, rmSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -243,9 +243,6 @@ export function carryOn(
       return resolve(`${how.app} could not be started`)
     }
     if (into !== null) closeSync(into)
-    // Whoever started it is told which process it is, to write down: a connector that dies
-    // has no other way of knowing, when it next starts, what it left running
-    if (child.pid) opts.began?.(child.pid)
     let over = false
     const end = (why: string | null, itsOwn = false) => {
       if (over) return
@@ -328,6 +325,16 @@ export function carryOn(
       ending ? settle() : stopped ? end(STOPPED) : code === 0 ? end(null) : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),
     )
     child.stdin?.on('error', () => {})
+    // Whoever started it is told which process it is, to write down, before it is given
+    // anything to do: a connector that dies has no other way of knowing, when it next starts,
+    // what it left running. Where it cannot be written down, the app is ended as it stands,
+    // having done nothing: a run that nobody could find again is not left to run.
+    if (child.pid && opts.began)
+      try {
+        opts.began(child.pid)
+      } catch {
+        return quit(`${how.app} was started and could not be noted down, so it was ended before it was given anything to do`)
+      }
     child.stdin?.end(how.input)
   })
 }
@@ -335,14 +342,41 @@ export function carryOn(
 /**
  * Ends a process and everything it started, where it is still the process it was when it was
  * noted (`since`, as `identity` gave it): asked first, and ended for it a few seconds later.
- * Answers once nothing of it is left, with whether there was anything to end. Nothing is done
- * on Windows, where a process cannot be told from another that was given its number since.
+ * Answers once nothing of it is left:
+ *
+ * - `ended`: it, or what it left behind, was there and is not any more.
+ * - `gone`: there was nothing of it. Its number is nobody's, or is another process's by now,
+ *   which is left alone.
+ * - `unknown`: the system could not be asked which processes there are, or something of it is
+ *   still there after being ended. Whoever asked keeps its note, and asks again.
+ *
+ * The process was started in a group of its own, named by its number. Where it is gone and
+ * the group is not, what is in the group is what it started: the system gives a number to no
+ * other process while a group of that number lives. The group is ended then.
+ *
+ * Nothing is done on Windows, where none of this can be told: the answer there is `unknown`.
  */
-export async function endTree(pid: number, since: string): Promise<boolean> {
-  if (process.platform === 'win32' || identity([pid]).get(pid) !== since) return false
-  const all = [pid, ...descendants(pid)]
+export async function endTree(pid: number, since: string): Promise<'ended' | 'gone' | 'unknown'> {
+  if (process.platform === 'win32') return 'unknown'
+  const now = processes([pid])
+  if (now === null) return 'unknown'
+  const groupThere = () => {
+    try {
+      process.kill(-pid, 0)
+      return true
+    } catch {
+      // Not allowed to signal it means it is there, and is not this user's: not what was started here
+      return false
+    }
+  }
+  const itself = now.get(pid) === since
+  // Another process has the number now: neither it nor its group is what was noted
+  if (!itself && now.has(pid)) return 'gone'
+  if (!itself && !groupThere()) return 'gone'
+  const all = itself ? [pid, ...descendants(pid)] : []
   const were = identity(all)
   const left = () => [...identity(all)].filter(([p, at]) => were.get(p) === at).map(([p]) => p)
+  const anything = () => left().length > 0 || groupThere()
   const signal = (how: 'SIGTERM' | 'SIGKILL', to: number[]) => {
     // Its group too: it was started in one of its own, and what it started is in it unless it was moved out
     try {
@@ -354,12 +388,12 @@ export async function endTree(pid: number, since: string): Promise<boolean> {
       } catch {}
   }
   signal('SIGTERM', all)
-  for (let waited = 0; waited < 5000 && left().length; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
-  if (left().length) {
+  for (let waited = 0; waited < 5000 && anything(); waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
+  if (anything()) {
     signal('SIGKILL', left())
-    for (let waited = 0; waited < 2000 && left().length; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
+    for (let waited = 0; waited < 2000 && anything(); waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
   }
-  return true
+  return anything() ? 'unknown' : 'ended'
 }
 
 /**
@@ -368,15 +402,23 @@ export async function endTree(pid: number, since: string): Promise<boolean> {
  * system cannot be asked.
  */
 export function identity(pids: number[]): Map<number, string> {
+  return processes(pids) ?? new Map()
+}
+
+/**
+ * The same, and null where the system could not be asked at all (it has no `ps`, or `ps` did
+ * not answer in time): that is not the same as none of them being there, and whoever is about
+ * to forget a process must know which of the two it is.
+ */
+export function processes(pids: number[]): Map<number, string> | null {
   const found = new Map<number, string>()
-  if (process.platform === 'win32' || pids.length === 0) return found
-  let listed: string
-  try {
-    listed = execFileSync('ps', ['-o', 'pid=,lstart=', '-p', pids.join(',')], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
-  } catch (err) {
-    // It says that none of them is there by failing, with what it found before that in what it printed
-    listed = String((err as { stdout?: unknown }).stdout ?? '')
-  }
+  if (process.platform === 'win32') return null
+  if (pids.length === 0) return found
+  // It says that none of them is there by ending with 1, with what it found before that in
+  // what it printed. Anything else is a `ps` that could not be run, or was ended
+  const ran = spawnSync('ps', ['-o', 'pid=,lstart=', '-p', pids.join(',')], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })
+  if (ran.error || ran.signal || (ran.status !== 0 && ran.status !== 1)) return null
+  const listed = String(ran.stdout ?? '')
   for (const line of listed.split('\n')) {
     const m = /^\s*(\d+)\s+(.+?)\s*$/.exec(line)
     if (m) found.set(Number(m[1]), m[2]!)

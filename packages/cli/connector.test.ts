@@ -68,6 +68,7 @@ vi.mock('./src/lib', async (original) => {
       if (said !== undefined) return said
       // The backend as it answers when nothing is in the way: what is asked for is given
       if (name === 'delivery:claim' || name === 'delivery:renew') return args.ids
+      if (name === 'delivery:lost') return []
       if (name === 'delivery:handedOff') return { already: false }
       return null
     },
@@ -466,13 +467,14 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     }
   })
 
-  test('what the connector before it wrote down of the turns it cut off is taken up once, and not left for the connector after', async () => {
+  test('what the connector before it wrote down of the turns it cut off is kept until each conversation has been told, however often the connector is started again', async () => {
+    const noted = () => JSON.parse(readFileSync(path.join(home, 'cut-off.json'), 'utf8'))
     await start('socket', {}, (home) => writeFileSync(path.join(home, 'cut-off.json'), JSON.stringify(['pi:conversation-1'])))
-    expect(existsSync(path.join(home, 'cut-off.json'))).toBe(false)
-    // Stopped with nothing of its own running, it writes nothing down
+    expect(noted()).toEqual(['pi:conversation-1'])
+    // Stopped before that conversation was reopened again, it is still owed the note
     await stop?.()
     stop = null
-    expect(existsSync(path.join(home, 'cut-off.json'))).toBe(false)
+    expect(noted()).toEqual(['pi:conversation-1'])
   })
 
   test('with reopening switched on, a closed conversation is reopened with the click itself, and Codex’s queue is never used for it', async () => {
@@ -565,21 +567,23 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     },
   )
 
-  test('a conversation reopened for a click is ended when this machine’s hold on the click is lost, and the click is neither handed over from here nor given back', async () => {
+  test('a conversation reopened for a click is ended when this machine’s hold on the click is lost, the click is not handed over from here, and the conversation is told the next time that its turn was cut off', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
     made.push(bin, folder)
     // Codex's own command, which takes what it is given and then works for a long while
-    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\necho $$ > ${bin}/pid\nexec sleep 120\n`, { mode: 0o755 })
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\nn=$(ls ${bin} | grep -c given)\ncat > ${bin}/given-$n\necho $$ > ${bin}/pid-$n\nexec sleep 120\n`, {
+      mode: 0o755,
+    })
     process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
     await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
-    // The backend says, each time it is asked to keep the hold up, that the click is held here no more
-    stand.answer = (name) => (name === 'delivery:renew' ? [] : undefined)
+    // The backend says, each time it is asked to keep the hold up, that the click is held here no more, and that it is another's by now
+    stand.answer = (name, args) => (name === 'delivery:renew' ? [] : name === 'delivery:lost' ? args.ids : undefined)
     stand.closed.add('thread-1')
     stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
     offered(click(1))
-    await until(() => existsSync(path.join(bin, 'pid')) && readFileSync(path.join(bin, 'pid'), 'utf8').trim() !== '')
-    const its = Number(readFileSync(path.join(bin, 'pid'), 'utf8'))
+    await until(() => existsSync(path.join(bin, 'pid-0')) && readFileSync(path.join(bin, 'pid-0'), 'utf8').trim() !== '')
+    const its = Number(readFileSync(path.join(bin, 'pid-0'), 'utf8'))
     const gone = () => {
       try {
         process.kill(its, 0)
@@ -593,10 +597,111 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(gone()).toBe(true)
     await until(() => said.some((line) => line.includes('hold on what it was reopened for was lost')))
     await until(() => stand.calls.some((c) => c.name === 'machines:runEnded'))
-    // It is not this machine's any more: not said to be handed over, and not given back either
+    // It is not this machine's any more: not said to be handed over. Giving it back is asked, which It answers by doing nothing where the click is another's
     expect(called('delivery:handedOff')).toEqual([])
-    expect(called('delivery:release')).toEqual([])
-  }, 40_000)
+    await until(() => called('delivery:release').includes('click-1'))
+    // The turn was cut off, and that is owed to the conversation: written down, and said when it is reopened for the same thing again
+    expect(JSON.parse(readFileSync(path.join(home, 'cut-off.json'), 'utf8'))).toEqual(['codex:thread-1'])
+    stand.answer = null
+    offered()
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'given-1')) && readFileSync(path.join(bin, 'given-1'), 'utf8').length > 0, 20_000)
+    expect(readFileSync(path.join(bin, 'given-1'), 'utf8')).toContain('that turn was cut off before it ended')
+  }, 60_000)
+
+  test('a click that its agent said was done, with `it ack`, while the conversation it was reopened for is still at work is not taken for a hold that was lost: the turn goes on', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    // Codex's own command, at work for longer than it takes the hold to be asked about
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\necho $$ > ${bin}/pid\nsleep 13\necho done > ${bin}/finished\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+    // As the backend answers once the click was handed over by the agent itself: held here no more, and nobody else's to deliver
+    stand.answer = (name) => (name === 'delivery:renew' || name === 'delivery:lost' ? [] : undefined)
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'finished')), 30_000)
+    expect(called('delivery:lost')).toEqual(['click-1'])
+    expect(said.filter((line) => line.includes('hold on what it was reopened for was lost'))).toEqual([])
+    // Asked about once, and not kept up from then on: there is nothing of it left to keep
+    expect(called('delivery:renew')).toEqual(['click-1'])
+  }, 60_000)
+
+  test('an answer about a hold that comes after its turn is over ends nothing of the turn that is running by then', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    // The first turn outlasts one asking about its hold and then ends; the second is at work for a long while
+    writeFileSync(
+      path.join(bin, 'codex'),
+      `#!/bin/sh\nn=$(ls ${bin} | grep -c given)\ncat > ${bin}/given-$n\necho $$ > ${bin}/pid-$n\nif [ "$n" = 0 ]; then sleep 11; exit 0; fi\nexec sleep 120\n`,
+      { mode: 0o755 },
+    )
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+    // The first asking about the hold is not answered until the test says so
+    let answerLate: ((kept: string[]) => void) | null = null
+    stand.answer = (name) => (name === 'delivery:renew' && !answerLate ? new Promise<string[]>((r) => (answerLate = r)) : undefined)
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => answerLate !== null, 25_000)
+    // The first turn ends by itself, and the conversation is reopened for something else
+    await until(() => called('delivery:handedOff').includes('click-1'), 25_000)
+    stand.answer = (name, args) => (name === 'delivery:lost' ? args.ids : undefined)
+    offered({ ...click(2), session: click(1).session })
+    await until(() => existsSync(path.join(bin, 'pid-1')) && readFileSync(path.join(bin, 'pid-1'), 'utf8').trim() !== '', 25_000)
+    const second = Number(readFileSync(path.join(bin, 'pid-1'), 'utf8'))
+    // Now the answer about the first turn's hold arrives: held no more, as it would be of a click that was handed over
+    answerLate!([])
+    await new Promise((r) => setTimeout(r, 1500))
+    expect(() => process.kill(second, 0)).not.toThrow()
+    expect(said.filter((line) => line.includes('hold on what it was reopened for was lost'))).toEqual([])
+  }, 90_000)
+
+  test('a connector that is stopping starts nothing that stood in line behind the turn it ends, and gives it back', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\nn=$(ls ${bin} | grep -c given)\ncat > ${bin}/given-$n\nexec sleep 120\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => existsSync(path.join(bin, 'given-0')) && readFileSync(path.join(bin, 'given-0'), 'utf8').length > 0)
+    // Something else for the same conversation, done while it is at work: it stands in line behind the turn
+    offered(click(1), { ...click(2), session: click(1).session })
+    await new Promise((r) => setTimeout(r, 1500))
+    await stop?.()
+    stop = null
+    // The turn that was running was ended and given back, and no second one was ever begun
+    expect(existsSync(path.join(bin, 'given-1'))).toBe(false)
+    expect(called('delivery:release')).toContain('click-1')
+    expect(called('delivery:handedOff')).toEqual([])
+    expect(JSON.parse(readFileSync(path.join(home, 'cut-off.json'), 'utf8'))).toEqual(['codex:thread-1'])
+  }, 60_000)
+
+  test('a conversation is not reopened where its run cannot be written down: the app is ended before it is given anything, and the page is told why', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexec sleep 120\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+    // Where the note of runs is kept there is now a folder, so that no file can be given that name
+    mkdirSync(path.join(home, 'runs.json', 'in-the-way'), { recursive: true })
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'), 25_000)
+    expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args.why).toContain('could not be noted down')
+    // It was given nothing: what it would have read is still unread, or it never got as far as reading
+    expect(existsSync(path.join(bin, 'given')) ? readFileSync(path.join(bin, 'given'), 'utf8') : '').toBe('')
+    expect(called('delivery:handedOff')).toEqual([])
+  }, 60_000)
 
   test('a conversation that a connector which died left running is ended, with what it had started, before anything is handed out, and is told that its turn was cut off', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
@@ -639,6 +744,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     offered(click(1))
     await until(() => existsSync(path.join(bin, 'given-0')) && readFileSync(path.join(bin, 'given-0'), 'utf8').length > 0)
     expect(readFileSync(path.join(bin, 'given-0'), 'utf8')).toContain('that turn was cut off before it ended')
+    // Told, it is owed the note no more
+    await until(() => !existsSync(path.join(home, 'cut-off.json')))
   }, 30_000)
 
   test('the note of a stop is let go once a turn begins in that conversation which It did not start: the person is in it themselves, and what they stopped is no longer its last turn', async () => {

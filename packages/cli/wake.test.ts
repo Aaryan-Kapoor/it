@@ -1,5 +1,7 @@
 // Reopening a conversation that was closed: the command Claude Code is run with, where it is
 // run, how the click is given to it, and the note of each conversation's folder that says where.
+
+import { spawn } from 'node:child_process'
 import {
   chmodSync,
   closeSync,
@@ -27,6 +29,8 @@ import {
   claudeWroteAt,
   codexHeld,
   codexWroteAt,
+  endTree,
+  identity,
   lastWords,
   mayWake,
   STOPPED,
@@ -529,4 +533,67 @@ describe('the last line an app printed', () => {
     expect(lastWords(`error: ${'x '.repeat(200)}`)!.length).toBe(160)
     expect(lastWords('  \n\n')).toBeNull()
   })
+})
+
+describe.skipIf(process.platform === 'win32')('ending a run that was noted before, by its number and when it began', () => {
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const until = async (what: () => boolean, ms = 8000) => {
+    for (const end = Date.now() + ms; !what(); ) {
+      if (Date.now() > end) throw new Error('what the test waited for did not happen')
+      await new Promise((r) => setTimeout(r, 20))
+    }
+  }
+
+  test('says what became of it: ended where it and what it started were there, gone where nothing of it is, and gone too where another process has its number, which is left alone', async () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-endtree-'))
+    try {
+      const mark = path.join(folder, 'its-command.pid')
+      const run = spawn('sh', ['-c', `sh -c 'echo $$ > "${mark}"; exec sleep 300' & wait`], { detached: true, stdio: 'ignore' })
+      run.unref()
+      await until(() => existsSync(mark) && readFileSync(mark, 'utf8').trim() !== '')
+      const its = Number(readFileSync(mark, 'utf8'))
+      const since = identity([run.pid!]).get(run.pid!)!
+      expect(await endTree(run.pid!, since)).toBe('ended')
+      expect([alive(run.pid!), alive(its)]).toEqual([false, false])
+      // Asked again, there is nothing of it
+      expect(await endTree(run.pid!, since)).toBe('gone')
+      // This program's own number, noted with another beginning, is another process: nothing is done to it
+      expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970')).toBe('gone')
+      expect(alive(process.pid)).toBe(true)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  test('where the run itself is gone and a command it started is still in its group, that command is ended', async () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-endtree-'))
+    try {
+      const mark = path.join(folder, 'its-command.pid')
+      const go = path.join(folder, 'go')
+      // The run starts a command, and then ends by itself while the command goes on
+      const run = spawn('sh', ['-c', `sleep 300 & echo $! > "${mark}"; while [ ! -e "${go}" ]; do sleep 0.05; done; exit 0`], {
+        detached: true,
+        stdio: 'ignore',
+      })
+      await until(() => existsSync(mark) && readFileSync(mark, 'utf8').trim() !== '')
+      const its = Number(readFileSync(mark, 'utf8'))
+      const since = identity([run.pid!]).get(run.pid!)!
+      const ended = new Promise((r) => run.once('exit', r))
+      writeFileSync(go, '')
+      await ended
+      await until(() => !identity([run.pid!]).has(run.pid!))
+      expect(alive(its)).toBe(true)
+      expect(await endTree(run.pid!, since)).toBe('ended')
+      expect(alive(its)).toBe(false)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  }, 30_000)
 })
