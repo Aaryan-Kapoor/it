@@ -4946,8 +4946,8 @@ try {
   if (process.platform === 'win32')
     check(
       'the service wrote down that it started, and that it started again, with its backend program and its door, after it was ended',
-      startedTwice &&
-        / service started[\s\S]* backend: started \(pid \d+\)\n[\s\S]* door open on port \d+[^\n]*\n[\s\S]* service started/.test(wholeLog.slice(begun)),
+      // In what it wrote since the run began, which is after its first start: its second start, whole
+      startedTwice && / backend: started \(pid \d+\)\n[\s\S]* door open on port \d+[^\n]*\n[\s\S]* service started \(pid \d+\)/.test(wholeLog.slice(begun)),
       wholeLog.slice(-800),
     )
   else
