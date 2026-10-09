@@ -28,7 +28,7 @@ curl -fsSL https://itcan.do/install.sh | sh        # macOS and Linux
 irm https://itcan.do/install.ps1 | iex             # Windows
 ```
 
-Each command downloads one program for your system, checks it against its published checksum and puts it in `~/.it/bin`. It asks for no administrator rights and installs nothing else. At a terminal it goes straight on into the setup. No release is published yet, so until one is, It is run from a checkout, as [Contributing](docs/CONTRIBUTING.md#running-it-from-a-checkout) describes.
+Each command downloads one program for your system, checks it against its published checksum and puts it in `~/.it/bin`. It asks for no administrator rights and installs nothing else. At a terminal it goes straight on into the setup.
 
 ## The first two minutes
 
