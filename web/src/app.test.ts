@@ -504,6 +504,30 @@ describe('something that failed while the site was being shown', () => {
     expect(host.textContent).toContain('What should I make?')
   })
 
+  test('a page that is taken away while it is on the screen, as a tour’s pages are when the tour is over, sends the screen back to the person’s pages and not to "No such page"', async () => {
+    cookie = CODES.ownercode00000000001!
+    const { ConvexError } = await import('convex/values')
+    let there = true
+    watched['artifacts:get'] = () => {
+      if (!there) throw new ConvexError({ code: 'not_found', message: 'No such page.' })
+      return { id: 'page-1', slug: 'tour-menu', title: 'The It tour', version: 1, updatedAt: Date.now(), agent: 'pi', machine: 'here', run: null, pending: 0 }
+    }
+    await start('/p/tour-menu')
+    expect(location.pathname).toBe('/p/tour-menu')
+    expect(host.textContent).toContain('The It tour')
+    // The agent takes the page away, and the site is told as it is told of anything it watches
+    there = false
+    const react = await import('react')
+    const { App } = await import('./app')
+    await act(async () => {
+      root.render(react.createElement(App))
+      await tick()
+    })
+    await settle()
+    expect(location.pathname).toBe('/')
+    expect(host.textContent).not.toContain('No such page')
+  })
+
   test('the site does not load itself afresh while something done on a page is in this tab alone: the person is told it would be lost, and it is done once that has been sent', async () => {
     cookie = CODES.ownercode00000000001!
     let answerTheClick!: (said: { actionId: string }) => void

@@ -33,7 +33,7 @@ import {
 import { Machines } from './machines'
 import { Bell, Toasts } from './notifications'
 import { anyUnsaved, drain, outboxBelongsTo, pairedForSomeone, stillPairedFor, thisPairing, watchOutbox } from './outbox'
-import { Grid, PageView } from './pages'
+import { Grid, PageView, wasShown } from './pages'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
 import { codeSeen, current, signOut as endSession, pair, pairAsScreen, recheck, useSession } from './session'
 import { Displays, Settings } from './settings'
@@ -688,7 +688,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
 
   const slug = safeDecode(/^\/p\/([^/]+)$/.exec(path)?.[1])
   const view = (
-    <Guard key={path}>
+    <Guard key={path} shown={slug}>
       {slug ? (
         <PageView slug={slug} user={user} owner={owner} />
       ) : owner && path === '/machines' ? (
@@ -1076,13 +1076,25 @@ class Root extends Component<{ children: ReactNode; onRefused: () => Promise<voi
 }
 
 /** Catches a refusal thrown while showing a view, such as a page that does not exist. */
-class Guard extends Component<{ children: ReactNode }, { error: unknown }> {
+class Guard extends Component<{ children: ReactNode; shown?: string }, { error: unknown }> {
   override state = { error: null as unknown }
   static getDerivedStateFromError(error: unknown) {
     return { error }
   }
+  /** A page that was on this screen and is there no more was taken away: the screen goes back to the person's pages. */
+  private gone(): boolean {
+    const { shown } = this.props
+    return shown !== undefined && wasShown.has(shown) && refusal(this.state.error).code === 'not_found'
+  }
+  override componentDidUpdate() {
+    if (this.state.error && this.gone()) {
+      wasShown.delete(this.props.shown!)
+      navigate('/')
+    }
+  }
   override render() {
     if (!this.state.error) return this.props.children
+    if (this.gone()) return <main className="page-view" role="status" />
     const r = refusal(this.state.error)
     // Being refused as nobody is not this view's to explain: it goes up, where the site asks whether this browser is still paired
     if (r.code === 'unauthenticated') throw this.state.error

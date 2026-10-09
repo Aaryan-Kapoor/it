@@ -189,9 +189,20 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
   )
 }
 
+/**
+ * The pages this tab has had on its screen. One of them that is no longer there was taken
+ * away while it was being looked at, as an agent takes its tour's pages away when the tour is
+ * over: the screen then goes back to the person's pages, and is not left saying that there is
+ * no such page, which is for an address that never led anywhere.
+ */
+export const wasShown = new Set<string>()
+
 export function PageView({ slug, user, owner }: { slug: string; user: string; owner: boolean }) {
   const page = useQuery(api.artifacts.get, { slug })
   const now = useNow()
+  useEffect(() => {
+    if (page) wasShown.add(slug)
+  }, [page, slug])
   /** What the page's own script last failed with, and which version of the page that was. */
   const [fault, setFault] = useState<{ of: string; message: string; agentTold: boolean } | null>(null)
   useEffect(() => {
