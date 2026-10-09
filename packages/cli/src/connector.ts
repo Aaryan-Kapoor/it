@@ -365,6 +365,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // It has said, no app is taken to be connected.
   let wantedNow: string[] | null = null
   let found: HarnessStatus[] = []
+  // When an add-on's speaking last had the machine looked at again, and what does the looking, once the connector has begun to report
+  let lookedAgainAt = 0
+  let lookAgain: () => Promise<void> = async () => {}
   /**
    * Whether the person has chosen this agent app, in `it setup` or on the site. The connector
    * does nothing for an app that was not chosen: its conversations are not listened for, its
@@ -1693,6 +1696,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // the `it` that publishes a page cannot note it itself, and without it the conversation
       // could never be reopened.
       if (typeof body.folder === 'string' && body.folder.length <= 4096 && path.isAbsolute(body.folder)) noteConversation({ harness, id }, body.folder)
+      // An add-on that speaks is one its app lets run. Where the last look found it waiting for
+      // the person's yes, as Codex has an add-on's hooks wait, that has been given since: the
+      // machine is looked at again now, and not at the next half hour, until when `it status`
+      // would go on saying that something is left for the person to do. Not more often than
+      // every quarter of a minute, since a look runs every app's own command.
+      if (found.some((h) => h.id === harness && h.addon === 'needs_approval') && Date.now() - lookedAgainAt > 15_000) {
+        lookedAgainAt = Date.now()
+        void lookAgain()
+      }
       const s = sessions.get(key) ?? { seen: 0, busy: false, busyAt: 0 }
       const isNew = Date.now() - s.seen > KNOWN_MS
       s.seen = Date.now()
@@ -2141,8 +2153,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
   }
   // What is installed on the machine is looked at when the connector starts, when what is
-  // wanted changes, and every half hour: each look runs every harness's own command. The
-  // report in between says the connector is alive, with what was found last time.
+  // wanted changes, when an add-on that was found waiting for the person's yes speaks, and
+  // every half hour: each look runs every harness's own command. The report in between says
+  // the connector is alive, with what was found last time.
   found = await detectAll()
   watch()
   let lookedAt = Date.now()
@@ -2199,6 +2212,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         else say(`report: ${why(err)}`)
       })
   }
+  lookAgain = () => report(true)
   client.onUpdate(
     api.machines.me,
     {},

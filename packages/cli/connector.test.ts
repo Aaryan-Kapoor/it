@@ -1271,6 +1271,32 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     await until(() => stand.codex.length === 1)
   })
 
+  test('an add-on that speaks after its app was found waiting for the person’s yes has the machine looked at again at once, and what is found then is reported', async () => {
+    standIn()
+    await start('socket', { wanted: ['codex'], found: [{ id: 'codex', version: '1.0.0', addon: 'needs_approval' }] })
+    const reportedOfCodex = () =>
+      stand.calls
+        .filter((c) => c.name === 'machines:report')
+        .map((c) => (c.args.harnesses as { id: string; addon: string }[]).find((h) => h.id === 'codex')?.addon)
+    await until(() => reportedOfCodex().length > 0)
+    expect(new Set(reportedOfCodex())).toEqual(new Set(['needs_approval']))
+    // The person has said yes since, at the app's own asking, and the app now runs the add-on's hooks: the first of them is heard
+    stand.found = [{ id: 'codex', version: '1.0.0', addon: 'connected' }]
+    expect(await session('codex', 9)).toEqual({ ok: true })
+    await until(() => reportedOfCodex().at(-1) === 'connected')
+    // Found connected, it has no more looks made for it: what it says next is not answered with one
+    const reports = reportedOfCodex().length
+    stand.found = [{ id: 'codex', version: '1.0.0', addon: 'error' }]
+    expect(await session('codex', 9)).toEqual({ ok: true })
+    await settled()
+    await pass(2)
+    expect(
+      reportedOfCodex()
+        .slice(reports)
+        .filter((addon) => addon !== 'connected'),
+    ).toEqual([])
+  })
+
   test('an add-on that asks from an app the person did not choose is answered and given nothing, and its conversation is not listened for', async () => {
     standIn()
     await start('socket', { wanted: ['codex'] })
