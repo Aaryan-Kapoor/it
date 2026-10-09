@@ -69,6 +69,7 @@ import {
   VERSION,
   why,
   windowsPathCommand,
+  windowsPathHas,
   windowsPathRemoval,
   withoutTables,
   writeAll,
@@ -233,7 +234,7 @@ async function onDisplay<T>(a: Args, run: () => Promise<T>): Promise<T> {
  * nor an agent would otherwise learn why nothing appeared anywhere.
  */
 const noDisplay = () =>
-  `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${siteAddress() ?? 'the site'} in a browser on this machine, already paired. Other displays are added from there.`
+  `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${siteAddress() ?? 'the site'} in a browser on this machine and pair that browser. Other displays are added from there.`
 /** What It answers when asked to show a page: the displays it is now shown on, and each one it was asked onto and is not shown on, with why. */
 interface Shown {
   displays: string[]
@@ -933,6 +934,10 @@ function pathLine(): string | undefined {
   const same = (dir: string) =>
     process.platform === 'win32' ? path.resolve(dir).toLowerCase() === path.resolve(bin).toLowerCase() : path.resolve(dir) === path.resolve(bin)
   if ((process.env.PATH ?? '').split(path.delimiter).some((dir) => dir !== '' && same(dir))) return undefined
+  // Put there by the install script for every terminal opened from now on, it is only not on
+  // the PATH this program was started with, as when an agent installs It and sets it up in
+  // one conversation. Nothing is left for the person to do, and nothing is said.
+  if (onPathLater(bin)) return undefined
   if (process.platform === 'win32') return `Run this in PowerShell, then open a new terminal:\n\n  ${windowsPathCommand(bin)}`
   return `Add this line to the file your shell reads when it starts, then open a new terminal:\n\n  export PATH='${bin.replace(/'/g, `'\\''`)}':"$PATH"`
 }
@@ -970,11 +975,15 @@ function pathLine(): string | undefined {
 /** PowerShell, given one thing to run, exactly as it is written. What it printed, or nothing where it could not be run or ended as a failure. */
 function inPowerShell(script: string): string | undefined {
   try {
-    const ran = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 30_000,
-    })
+    const ran = spawnSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`${service.PS_QUIET}\n${script}`, 'utf16le').toString('base64')],
+      {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 30_000,
+      },
+    )
     return ran.status === 0 ? ran.stdout.trim() : undefined
   } catch {
     return undefined
@@ -1168,7 +1177,8 @@ function replaceWhole(file: string, text: string): void {
   }
 }
 
-function unlisted(bin: string): { changed: string[]; failed: { file: string; why: string }[] } {
+/** The files a shell reads when it starts, each with the line the install script writes into it to put a folder on the PATH. */
+function profileLines(bin: string): Map<string, string> {
   const dirs = [process.env.ZDOTDIR, os.homedir()].filter((d): d is string => typeof d === 'string' && d !== '')
   // The line as the installer writes it for each shell: fish has a file of It's own, and words of its own
   const posix = `export PATH='${bin.replaceAll("'", `'\\''`)}':"$PATH"`
@@ -1181,6 +1191,26 @@ function unlisted(bin: string): { changed: string[]; failed: { file: string; why
     ]),
   )
   files.set(path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'fish', 'conf.d', 'it.fish'), fish)
+  return files
+}
+
+/**
+ * Whether a terminal opened from now on has a folder on its PATH, whatever this program's own
+ * PATH holds: the install script's line for it is in a file the person's shell reads, or the
+ * folder is on the PATH Windows keeps for the account.
+ */
+function onPathLater(bin: string): boolean {
+  if (process.platform === 'win32') return inPowerShell(windowsPathHas(bin))?.trim() === 'on'
+  for (const [file, line] of profileLines(bin)) {
+    try {
+      if (readFileSync(file, 'utf8').split('\n').includes(line)) return true
+    } catch {}
+  }
+  return false
+}
+
+function unlisted(bin: string): { changed: string[]; failed: { file: string; why: string }[] } {
+  const files = profileLines(bin)
   const changed: string[] = []
   const failed: { file: string; why: string }[] = []
   for (const [file, line] of files) {
@@ -1833,8 +1863,8 @@ async function settingUp(a: Args, joined: boolean) {
       const site = siteAddress()
       say(
         site
-          ? `\nIt’s site is at ${site}. Run \`it site\` to open it in a browser on this machine, already paired.`
-          : `\nRun \`it site\` to open It’s site in a browser on this machine, already paired.`,
+          ? `\nIt’s site is at ${site}. No browser is let in until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`
+          : `\nNo browser is let in to It’s site until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`,
       )
     }
     if (!forPerson(a)) out({ harnesses: after, service: background, ...(trouble ? { problem: trouble } : {}), ...(unasked ? { hint: unasked } : {}) })
@@ -2290,7 +2320,7 @@ This machine
                                  Set It up on this machine, keep it running in the
                                  background, and connect your agent apps. --yes connects
                                  every app it would otherwise ask about.
-  it site [--no-open]            Open It's site in a browser on this machine, already paired.
+  it site [--no-open]            Open It's site in a browser on this machine, and pair that browser.
                                  --no-open only prints the address.
   it network [on | off | tailscale]
                                  Say whether It answers your other devices, or turn that on or
@@ -2614,7 +2644,7 @@ async function main(argv: string[]): Promise<void> {
       const elsewhereToo = (await networkAsItStands(true)).addresses.map((address) => `${address}/pair#${code}`)
       const opening = !a.flags['no-open'] && openBrowser(url)
       if (!forPerson(a)) return out({ url, ...(elsewhereToo.length ? { urls: elsewhereToo } : {}) })
-      if (opening) return tell(['It’s site is opening in your browser, already paired:', `  ${url}`])
+      if (opening) return tell(['It’s site is opening in your browser, and this link pairs it:', `  ${url}`])
       // No browser was opened here: nobody is at this machine's own screen, or it has none, or
       // it was asked not to. The address to open is then the one another device can reach,
       // with the one for this machine after it.
@@ -2806,7 +2836,7 @@ async function main(argv: string[]): Promise<void> {
     case 'displays': {
       const shown = await call<{ name: string; paired?: boolean; lastSeenAt?: number }[]>('query', api.displays.list)
       if (!forPerson(a)) return out(shown)
-      if (!shown.length) return tell(['No display is paired. `it site` opens the site in a browser on this machine, already paired.'])
+      if (!shown.length) return tell(['No display is paired. `it site` opens the site in a browser on this machine and pairs that browser.'])
       return tell([
         `${shown.length} display${shown.length === 1 ? '' : 's'}:`,
         ...columns(

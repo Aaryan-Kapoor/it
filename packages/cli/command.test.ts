@@ -1236,7 +1236,7 @@ describe.skipIf(process.platform === 'win32')(
 )
 
 describe.skipIf(process.platform === 'win32')('a page shown when no display is paired', () => {
-  const HINT = `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${SITE} in a browser on this machine, already paired. Other displays are added from there.`
+  const HINT = `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${SITE} in a browser on this machine and pair that browser. Other displays are added from there.`
   const answers = (displays: string[]) => (asked: Asked) =>
     asked.path === 'publish:begin'
       ? { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: 'http://127.0.0.1:9/upload/', grant: 'a-grant' } }
@@ -1353,13 +1353,15 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
     }
   })
 
-  test('`it setup` ends by saying where the site is, and how to open it already paired', async () => {
+  test('`it setup` ends by saying where the site is, and how a browser is paired with it', async () => {
     const m = machine(true, true)
     const b = await backend(m)
     try {
       const ran = await run(m, ['setup', '--yes', '--no-service'], b.env)
       expect(ran.code).toBe(0)
-      expect(ran.err.trimEnd().split('\n').pop()).toBe(`It’s site is at ${SITE}. Run \`it site\` to open it in a browser on this machine, already paired.`)
+      expect(ran.err.trimEnd().split('\n').pop()).toBe(
+        `It’s site is at ${SITE}. No browser is let in until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`,
+      )
     } finally {
       await b.close()
     }
@@ -1804,7 +1806,11 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     try {
       // A screen is there to open a browser on (the test names one, whatever the machine it runs on has)
       const screen = { ...b.env, DISPLAY: ':0' }
-      expect((await atTerminal(m, ['site'], screen)).shown.split('\n')).toEqual(['It’s site is opening in your browser, already paired:', `  ${url}`, ''])
+      expect((await atTerminal(m, ['site'], screen)).shown.split('\n')).toEqual([
+        'It’s site is opening in your browser, and this link pairs it:',
+        `  ${url}`,
+        '',
+      ])
       const ASKED = ['Open this in a browser on this machine:', `  ${url}`, 'It pairs one browser, once, within ten minutes.']
       // With no screen to open one on, it is not said to be opening: the person is given the address to open
       if (process.platform === 'linux') {
@@ -2075,7 +2081,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
           '',
           'Pi: If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.',
           '',
-          `It’s site is at ${b.url}. Run \`it site\` to open it in a browser on this machine, already paired.`,
+          `It’s site is at ${b.url}. No browser is let in until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`,
           '',
         ],
       ])
@@ -2520,7 +2526,7 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
     expect(bare.ran.err).toContain('This machine has joined as "the laptop".')
     expect(bare.ran.err.split('\n')).toContain(SERVE)
     expect(bare.ran.err.trimEnd().split('\n').pop()).toBe(
-      `It’s site is at ${bare.b.url}. Run \`it site\` to open it in a browser on this machine, already paired.`,
+      `It’s site is at ${bare.b.url}. No browser is let in until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`,
     )
     expect(printed(bare.ran)).toMatchObject({ harnesses: [{ id: 'pi', addon: 'not_connected' }], service: { registered: false } })
     expect(bare.registered).toBe(false)
@@ -2530,7 +2536,7 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
     expect(none.ran.err).toContain(`It runs in the background (${RUNS}).`)
     expect(none.ran.err).not.toContain('It is not running in the background')
     expect(none.ran.err.trimEnd().split('\n').pop()).toBe(
-      `It’s site is at ${none.b.url}. Run \`it site\` to open it in a browser on this machine, already paired.`,
+      `It’s site is at ${none.b.url}. No browser is let in until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`,
     )
     expect(printed(none.ran)).toMatchObject({ harnesses: [{ id: 'pi', addon: 'not_connected' }], service: { registered: true } })
     // And with an app connected and no service, the same is said of running It here
@@ -2681,7 +2687,7 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
           version: 1,
           url: `${b.url}/p/plan`,
           shownOn: [],
-          hint: `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${b.url} in a browser on this machine, already paired. Other displays are added from there.`,
+          hint: `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${b.url} in a browser on this machine and pair that browser. Other displays are added from there.`,
         },
       ])
       expect(b.uploads).toEqual([{ path: '/upload/u/index.html', bytes: 9 }])
@@ -3179,6 +3185,16 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent 
       expect(found).toBe(path.join(odd, 'bin', 'it'))
       const onPath = await run(m, ['setup', '--yes', '--no-service'], { ...b.env, IT_HOME: odd, PATH: `${m.bin}${path.delimiter}${path.join(odd, 'bin')}` })
       expect(onPath.err).not.toContain('PATH')
+      // The install script has written that line into a file the shell reads: every new terminal has the folder, this
+      // program's own PATH does not, as when an agent installs It and sets it up in one go, and nothing is left to say
+      writeFileSync(path.join(m.home, '.profile'), `# mine\n\n# It\n${line}\n`)
+      const later = await run(m, ['setup', '--yes', '--no-service'], { ...b.env, IT_HOME: odd })
+      expect(later.code).toBe(0)
+      expect(later.err).not.toContain('PATH')
+      // A line for another folder is not this one's
+      writeFileSync(path.join(m.home, '.profile'), `export PATH='/somewhere/else/bin':"$PATH"\n`)
+      const other = await run(m, ['setup', '--yes', '--no-service'], { ...b.env, IT_HOME: odd })
+      expect(other.err).toContain('`it` is not on your PATH yet')
     } finally {
       await b.close()
     }

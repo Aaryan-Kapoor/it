@@ -965,7 +965,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     expect(ran.err()).toContain('This machine is enrolled as "the desk".')
     expect(ran.err()).toContain('It is not running in the background. Run `it serve`, in a terminal or under a supervisor of your own, to keep it going.')
     expect(ran.err().trimEnd().split('\n').pop()).toBe(
-      `It’s site is at http://localhost:${config.port}. Run \`it site\` to open it in a browser on this machine, already paired.`,
+      `It’s site is at http://localhost:${config.port}. No browser is let in until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`,
     )
     expect(JSON.parse(ran.out())).toEqual({ harnesses: [], service: { registered: false, state: 'not installed' } })
     // Nothing is left running, and no secret was said
@@ -998,7 +998,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     expect(ran.err()).toContain('This machine is enrolled as "the desk".')
     // The person is told where the site is, as after any first run
     expect(ran.err().trimEnd().split('\n').pop()).toBe(
-      `It’s site is at http://localhost:${config.port}. Run \`it site\` to open it in a browser on this machine, already paired.`,
+      `It’s site is at http://localhost:${config.port}. No browser is let in until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`,
     )
     expect(JSON.parse(ran.out())).toEqual({ harnesses: [], service: { registered: false, state: 'not installed' } })
     expect(await health()).toBe(false)

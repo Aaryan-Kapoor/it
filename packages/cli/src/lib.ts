@@ -13,7 +13,7 @@ import { agentAppsAbove } from './ancestry'
 import { CODEX_SHUT_SAID } from './codex-settings'
 import { added, shellEnv } from './shell-env'
 
-export const VERSION = '0.1.0'
+export const VERSION = '0.1.1'
 export const api: any = anyApi
 
 /** A failure the person or agent can act on. `hint` says what to do next. */
@@ -77,6 +77,22 @@ export function windowsPathRemoval(folder: string): string {
     "$all = @(([string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -split ';')",
     `$keep = @($all | Where-Object { -not ($_ -and [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\\') -eq ${dir}) })`,
     "if ($keep.Count -eq $all.Count) { 'absent' } else { $k.SetValue('Path', ($keep -join ';'), $k.GetValueKind('Path')); [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', '1', 'User'); [Environment]::SetEnvironmentVariable('IT_PATH_CHANGED', [NullString]::Value, 'User'); 'off' }",
+    '$k.Close()',
+  ].join('; ')
+}
+
+/**
+ * What asks whether a folder is on the PATH Windows keeps for this account, for PowerShell to
+ * run. An entry is that folder as Windows would read the entry, with a name such as
+ * %USERPROFILE% taken for what it stands for. It says `on` where it is and `absent` where not.
+ */
+export function windowsPathHas(folder: string): string {
+  const dir = psQuote(folder.replace(/[\\/]+$/, ''))
+  return [
+    "$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')",
+    "if (-not $k) { 'absent'; exit 0 }",
+    "$all = @(([string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -split ';')",
+    `if (@($all | Where-Object { $_ -and [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\\') -eq ${dir} }).Count) { 'on' } else { 'absent' }`,
     '$k.Close()',
   ].join('; ')
 }
