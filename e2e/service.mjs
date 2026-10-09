@@ -11,6 +11,7 @@
 // machine made for the run: it refuses unless CI is set, or IT_E2E_SERVICE=1 says the machine
 // is one, and it refuses where a service of that name is there already. It uses a folder of
 // its own for It and takes everything away at its end, whatever became of the checks.
+import './node.mjs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'

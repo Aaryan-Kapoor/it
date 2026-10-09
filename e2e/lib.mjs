@@ -1,6 +1,7 @@
 // What the end-to-end scripts share: where the repository and the running stack are, how the
 // `it` command is run as one machine or another, what a run notes of the credentials it holds,
 // and the checks of what was reported as usage and of an agent app's add-on.
+import './node.mjs'
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { accessSync, appendFileSync, constants, createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
