@@ -220,6 +220,8 @@ const began = (b) => {
   browsers.push(b.browser)
   // The whiles in which the run takes this browser's pairing to be ending or over
   b.notPaired = []
+  // The sessions of this browser that the run knows to be over before the browser can, each from when it knew
+  b.over = []
   namesSessionsAt(b, APP)
   return b
 }
@@ -240,7 +242,7 @@ const { foresee, during, provoking, heldToAccount } = expectations()
 // (`namingsHeld`, e2e/site.mjs), by what the browser sent and by these same whiles.
 const notPairedNow = new Map()
 /** Every naming of a session by a browser so far, held to what the site may do. */
-const namingsOf = (b) => namingsHeld(b.exchanges, b.notPaired)
+const namingsOf = (b) => namingsHeld(b.exchanges, b.notPaired, b.over)
 /** Foresees of a browser that it says by itself each refusal of a naming the site may make, at the site as that browser reaches it. */
 function namesSessionsAt(b, site) {
   for (const status of [401, 409])
@@ -2648,6 +2650,9 @@ try {
       .headersArray()
       .filter((header) => header.name.toLowerCase() === 'set-cookie')
       .map((header) => header.value)
+    // From here the session is over at It, and the browser, kept from the answer, does not know: the check of what it names a session for is told
+    if (response.status() === 200 && new URL(route.request().url()).pathname === '/session/end' && route.request().postDataJSON()?.session === signsOut.session)
+      lateOne.over.push({ session: signsOut.session, from: Date.now() })
     heard({ status: response.status(), cookies: cookiesIn({ headers: { 'set-cookie': lines } }, { 'the session that signed out': signsOut }).join(', ') })
     await keptBack
     await route.fulfill({ response })
@@ -4934,14 +4939,26 @@ try {
   const steps = journal.filter((e) => e.id === delivered?.clicks[0]?.id).map((e) => e.event)
   check('and its journal has each step of a hand-over, in order', steps.join(' ') === 'claimed served acked confirmed', JSON.stringify(steps))
   const wholeLog = existsSync(serviceLog) ? readFileSync(serviceLog, 'utf8') : ''
-  check(
-    'the service wrote down that it started, and that when it was asked to stop it stopped its connector, closed its door and stopped the backend program before it started again',
-    (wholeLog.match(/ service started \(pid \d+\); the site is on port \d+\n/g) ?? []).length >= 2 &&
-      / stopping \(SIGTERM\)\n[\s\S]* door closed\n[\s\S]* backend: stopped\n[\s\S]* service stopped\n[\s\S]* backend: started \(pid \d+\)\n[\s\S]* service started/.test(
-        wholeLog.slice(begun),
-      ),
-    wholeLog.slice(-800),
-  )
+  const startedTwice = (wholeLog.match(/ service started \(pid \d+\); the site is on port \d+\n/g) ?? []).length >= 2
+  // On Windows a program cannot be asked to stop by a signal: one sent there ends it at once,
+  // and it writes nothing of stopping. So the stack ends the service there, and what is looked
+  // for is that it was started again with its backend program and its door, and no more
+  if (process.platform === 'win32')
+    check(
+      'the service wrote down that it started, and that it started again, with its backend program and its door, after it was ended',
+      startedTwice &&
+        / service started[\s\S]* backend: started \(pid \d+\)\n[\s\S]* door open on port \d+[^\n]*\n[\s\S]* service started/.test(wholeLog.slice(begun)),
+      wholeLog.slice(-800),
+    )
+  else
+    check(
+      'the service wrote down that it started, and that when it was asked to stop it stopped its connector, closed its door and stopped the backend program before it started again',
+      startedTwice &&
+        / stopping \(SIGTERM\)\n[\s\S]* door closed\n[\s\S]* backend: stopped\n[\s\S]* service stopped\n[\s\S]* backend: started \(pid \d+\)\n[\s\S]* service started/.test(
+          wholeLog.slice(begun),
+        ),
+      wholeLog.slice(-800),
+    )
   check(
     'and the door, each kind of request it refused: one sent to another name, one from another origin, and one for a part of the backend it does not pass on',
     ['unknown_host', 'foreign_origin', 'api_path'].every((code) => wholeLog.includes(`door refused a request (${code})`)),

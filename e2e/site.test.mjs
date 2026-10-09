@@ -322,6 +322,31 @@ describe('what a browser may name a session for', () => {
     expect([held.refused(SITE, 401), held.refused(SITE, 409)]).toEqual([1, 2])
   })
 
+  test('a session the run knows to be over, while the answer that says so is kept from the browser, is held to what one that is over is held to', () => {
+    // Signed out in the first tab, whose answer is kept back: no answer the browser has had clears the cookie
+    const before = [paired(tabOne, FIRST), token(tabOne, 200), token(tabTwo, 200)]
+    const signsOut = names(tabOne, FIRST, 200)
+    const knownOver = { session: FIRST, from: signsOut.sent + 1 }
+    // Paired again in the second tab, and then the first, answered about its token, names the session it held to have its cookie cleared
+    const pairedAgain = [paired(tabTwo, SECOND), token(tabTwo, 200)]
+    const until = clock + 1
+    const late = [token(tabOne, 200), names(tabOne, FIRST, 409)]
+    const exchanges = [...before, signsOut, ...pairedAgain, ...late]
+    const whiles = [{ from: signsOut.sent, until }]
+    // Not told, the check takes the session for the browser's own still, and the naming for an ending nothing called for
+    expect(site.namingsHeld(exchanges, whiles).wrong).toEqual(['the session the browser holds was named while nothing had ended its pairing (jd7fir…)'])
+    const held = site.namingsHeld(exchanges, whiles, [knownOver])
+    expect(held.wrong).toEqual([])
+    expect(held.refused(SITE, 409)).toBe(1)
+    // And it is still held to that: named once more than the tab's askings account for, or answered as if there were nothing at all, it is wrong
+    expect(site.namingsHeld([...exchanges, names(tabOne, FIRST, 409)], whiles, [knownOver]).wrong).toEqual([
+      'a session that is over was named oftener than the tab’s askings account for (jd7fir…)',
+    ])
+    expect(site.namingsHeld([...before, signsOut, ...pairedAgain, token(tabOne, 200), names(tabOne, FIRST, 401)], whiles, [knownOver]).wrong).toEqual([
+      'naming a session that is over was answered 401 (jd7fir…)',
+    ])
+  })
+
   test('what is wrong is said: the session a paired browser holds named with nothing having ended its pairing, a session that is over named oftener than the tab’s askings account for or told that there is nothing to end while the browser is paired, a session the browser never held, and any other answer', () => {
     const wrongOf = (exchanges, whiles = []) => site.namingsHeld(exchanges, whiles).wrong
     // Its own, named while the run takes it to be paired

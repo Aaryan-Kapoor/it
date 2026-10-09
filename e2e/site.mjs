@@ -235,12 +235,21 @@ export async function launch({ kind = BROWSER, context: contextOptions = {} } = 
  * each, each time it was answered about its token. And a session the browser never held is
  * never named.
  *
+ * `over` is what the run knows to be over before the browser can: where a run keeps an answer
+ * from a browser for a while, as the one that signs out with its answer held back does, the
+ * session is ended at It from the moment It answered, and the browser still has its cookie
+ * until the answer is let through. Naming it in that while ends nothing, and is held to what
+ * naming a session that is over is held to, from `from` on. Without it the session read as the
+ * browser's own for as long as the answer was kept back, and a tab that named it to have its
+ * cookie cleared, as a tab does once it is answered about its token, read as ending a session
+ * with nothing having ended the pairing: which failed a run once in thirty.
+ *
  * Gives `wrong`, a sentence for each naming that is none of that; `about`, for each of those
  * sentences, where the naming stood when it was sent; and `refused`, how many namings that were
  * as they may be were answered with a refusal, by the site they were sent to and the status:
  * that is how often the browser may say so by itself.
  */
-export function namingsHeld(exchanges, notPaired = []) {
+export function namingsHeld(exchanges, notPaired = [], over = []) {
   const held = new Set()
   const has = new Set()
   const accountedFor = new Map()
@@ -277,10 +286,16 @@ export function namingsHeld(exchanges, notPaired = []) {
     wrong.push(what)
     about.push(stood(x))
   }
-  const events = exchanges
-    .flatMap((x) => [{ at: x.sent, x, sent: true }, ...(x.answered === null ? [] : [{ at: x.answered, x, sent: false }])])
-    .sort((a, b) => a.at - b.at)
-  for (const { x, sent } of events) {
+  const events = [
+    ...exchanges.flatMap((x) => [{ at: x.sent, x, sent: true }, ...(x.answered === null ? [] : [{ at: x.answered, x, sent: false }])]),
+    // What the run itself knows to be over, from when it knew: see `over` above
+    ...over.map((o) => ({ at: o.from, ended: cookieOf(o.session) })),
+  ].sort((a, b) => a.at - b.at)
+  for (const { x, sent, ended } of events) {
+    if (ended !== undefined) {
+      has.delete(ended)
+      continue
+    }
     const naming = x.path === '/session/end'
     if (sent) {
       if (!naming) continue
