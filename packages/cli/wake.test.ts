@@ -478,8 +478,12 @@ describe('the mode a Claude Code conversation is reopened in', () => {
       row({ permissionMode: 'bypassPermissions', entrypoint: 'sdk-ts' }) + `${JSON.stringify({ type: 'assistant', pad: 'y'.repeat(700_000) })}\n`.repeat(2),
     )
     expect(claudeModeOf(UUID, '/home/someone/board', config)).toBe('bypassPermissions')
+    // The agent has moved into a folder inside the one the conversation began in, and ran `it` there, so that is the folder It has noted.
+    // Claude Code files the conversation where it began, and it is found there by its id
+    expect(claudeModeOf(UUID, '/home/someone/board/pages/round-two', config)).toBe('bypassPermissions')
+    expect(claudeModeOf(UUID, '/home/someone/elsewhere', config)).toBe('bypassPermissions')
     // Nothing written of it, or nothing but It's own turns: not known
-    expect(claudeModeOf(UUID, '/home/someone/elsewhere', config)).toBeNull()
+    expect(claudeModeOf(UUID.replace(/^./, UUID.startsWith('f') ? 'e' : 'f'), '/home/someone/board', config)).toBeNull()
     writeFileSync(file, row({ permissionMode: 'default', entrypoint: 'sdk-cli' }))
     expect(claudeModeOf(UUID, '/home/someone/board', config)).toBeNull()
     expect(claudeModeOf('../../etc/passwd', '/home/someone/board', config)).toBeNull()
@@ -501,7 +505,7 @@ describe('the mode a Claude Code conversation is reopened in', () => {
 })
 
 describe('when Claude Code last wrote of a conversation', () => {
-  test('is read from the file it keeps of it under the folder the conversation was held in, and is not known where there is none', () => {
+  test('is read from the file it keeps of it, under the folder the conversation was begun in whichever folder its agent has moved to since, and is not known where there is none', () => {
     const config = path.join(scratch, 'claude')
     const id = '3f6c2f0e-1a2b-4c3d-9e8f-000000000001'
     const dir = path.join(config, 'projects', '-home-someone-my-site-v2')
@@ -509,7 +513,10 @@ describe('when Claude Code last wrote of a conversation', () => {
     writeFileSync(path.join(dir, `${id}.jsonl`), '{}\n')
     utimesSync(path.join(dir, `${id}.jsonl`), 1_791_000_000, 1_791_000_000)
     expect(claudeWroteAt(id, '/home/someone/my site.v2', config)).toBe(1_791_000_000_000)
-    expect(claudeWroteAt(id, '/home/someone/elsewhere', config)).toBeNull()
+    // Its agent moved into a folder inside that one and ran `it` there, which is then the folder It has noted: it is at work all the same,
+    // and It has to see that it is, or it would start a second turn beside the one that is running
+    expect(claudeWroteAt(id, '/home/someone/my site.v2/pages', config)).toBe(1_791_000_000_000)
+    expect(claudeWroteAt('3f6c2f0e-1a2b-4c3d-9e8f-000000000002', '/home/someone/my site.v2', config)).toBeNull()
     expect(claudeWroteAt('../../../etc/passwd', '/home/someone/my site.v2', config)).toBeNull()
   })
 })

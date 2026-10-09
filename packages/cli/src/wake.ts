@@ -881,6 +881,28 @@ const found = new Map<string, string>()
 export const CLAUDE_MODES = ['acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'] as const
 
 /**
+ * The file Claude Code keeps of a conversation, or null where there is none. Claude Code files
+ * a conversation under the folder it was begun in. The folder It has noted for a conversation
+ * is the one its agent last ran `it` in, which is another as soon as the agent has moved into
+ * a folder inside it. So where the file is not under the folder that was noted, it is looked
+ * for under every folder Claude Code keeps conversations of: its name is the conversation's
+ * id, which no other conversation has.
+ */
+function claudeRecord(session: string, cwd: string, configDir: string): string | null {
+  if (!/^[0-9a-f-]{36}$/i.test(session)) return null
+  const projects = path.join(configDir, 'projects')
+  const noted = path.join(projects, cwd.replace(/[^A-Za-z0-9]/g, '-'), `${session}.jsonl`)
+  if (existsSync(noted)) return noted
+  try {
+    for (const folder of readdirSync(projects)) {
+      const file = path.join(projects, folder, `${session}.jsonl`)
+      if (existsSync(file)) return file
+    }
+  } catch {}
+  return null
+}
+
+/**
  * The permission mode the person last had a Claude Code conversation in, as Claude Code wrote
  * it down in the file it keeps of the conversation, or null where that cannot be told. A turn
  * that It started itself, by reopening the conversation, says nothing of what the person chose:
@@ -888,8 +910,8 @@ export const CLAUDE_MODES = ['acceptEdits', 'auto', 'dontAsk', 'bypassPermission
  * they are passed over.
  */
 export function claudeModeOf(session: string, cwd: string, configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')): string | null {
-  if (!/^[0-9a-f-]{36}$/i.test(session)) return null
-  const file = path.join(configDir, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${session}.jsonl`)
+  const file = claudeRecord(session, cwd, configDir)
+  if (!file) return null
   let fd: number
   try {
     fd = openSync(file, 'r')
@@ -930,16 +952,17 @@ export function claudeModeOf(session: string, cwd: string, configDir = process.e
 }
 
 /**
- * When Claude Code last wrote anything of a conversation, by the file it keeps of each one
- * under the folder the conversation was held in, or null when there is no such file. A
+ * When Claude Code last wrote anything of a conversation, by the file it keeps of each one,
+ * or null when there is no such file. A
  * conversation that is open where It's add-on is not loaded (one begun before the add-on was
  * installed, say) looks closed to It, and one that wrote a moment ago is at work: it is left
  * alone until it has been quiet.
  */
 export function claudeWroteAt(session: string, cwd: string, configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')): number | null {
-  if (!/^[0-9a-f-]{36}$/i.test(session)) return null
+  const file = claudeRecord(session, cwd, configDir)
+  if (!file) return null
   try {
-    return statSync(path.join(configDir, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${session}.jsonl`)).mtimeMs
+    return statSync(file).mtimeMs
   } catch {
     return null
   }
