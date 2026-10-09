@@ -3240,13 +3240,14 @@ try {
   // Codex, on this machine, already has an add-on under It's name in it, which no It folder has
   // a note of putting there. So when Codex's own command is not run for a click below, that is
   // because the person has not chosen Codex, and for no other reason. The stand-in is run here
-  // by its own address, and never looked for by name.
-  const codexItself = path.join(standInApps(process.env.IT_E2E_APPS), 'codex')
+  // by its own address, and never looked for by name: as the program it is, by this Node, since
+  // the file a system runs it through is another on Windows and cannot be started there as it is.
+  const codexItself = [path.join(standInApps(process.env.IT_E2E_APPS), 'stand-in.mjs'), 'codex']
   for (const words of [
     ['plugin', 'marketplace', 'add', path.join(tmp, 'an-add-on-of-no-folder')],
     ['plugin', 'add', 'it-bridge@it'],
   ])
-    execFileSync(codexItself, words, { env: itEnv(C) })
+    execFileSync(process.execPath, [...codexItself, ...words], { env: itEnv(C) })
   const connector = startConnector(C)
   /** Where a machine's connector says add-ons can reach it, in the file it leaves for them, once it answers there. */
   const connectorOf = async (h) => {
