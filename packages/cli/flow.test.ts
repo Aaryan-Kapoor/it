@@ -1,7 +1,7 @@
 // What a person is drawn at a terminal: the bar of something being fetched, and an address as a
 // code a camera reads. Neither needs a terminal to be said.
 import { describe, expect, test } from 'vitest'
-import { bar, qr } from './src/flow'
+import { bar, qr, row } from './src/flow'
 
 describe('the bar of something being fetched', () => {
   test('fills as it arrives, and says how much of how much', () => {
@@ -32,5 +32,41 @@ describe('an address as a code a camera reads', () => {
 
   test('is another picture for another address', () => {
     expect(qr('http://100.101.42.17:4700/pair#zyxwvutsrq9876543210').join('\n')).not.toBe(lines.join('\n'))
+  })
+})
+
+describe('a row of a list a person chooses from', () => {
+  const on = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, '').length
+  const wide = (columns: number, run: () => void) => {
+    const was = Object.getOwnPropertyDescriptor(process.stderr, 'columns')
+    Object.defineProperty(process.stderr, 'columns', { value: columns, configurable: true })
+    try {
+      run()
+    } finally {
+      if (was) Object.defineProperty(process.stderr, 'columns', was)
+      else delete (process.stderr as { columns?: number }).columns
+    }
+  }
+  const HINT = 'this machine has an address on the internet (2600:1700:8100:c690::838c), and It answers over plain http'
+
+  test('stays on one line of the terminal, however much is said after its label: one that ran onto a second line was drawn again below itself at every key', () => {
+    for (const columns of [40, 63, 80, 120]) {
+      wide(columns, () => {
+        const drawn = row('  ❯ ', 4, 'From any network, the internet included', HINT, true)
+        expect(on(drawn)).toBeLessThan(columns)
+        expect(drawn).toContain('From any network')
+      })
+    }
+    // Where it all fits, nothing is cut
+    wide(200, () => expect(row('    ', 4, 'From this computer only', 'localhost:4700', true)).toContain('From this computer only  '))
+    wide(200, () => expect(row('  ❯ ', 4, 'From any network, the internet included', HINT, true)).toContain('plain http'))
+  })
+
+  test('cuts the label itself where the terminal is narrower than that, and says nothing after it', () => {
+    wide(24, () => {
+      const drawn = row('  ❯ ● ', 6, 'From any network, the internet included', HINT, true)
+      expect(on(drawn)).toBeLessThan(24)
+      expect(drawn.endsWith('…')).toBe(true)
+    })
   })
 })

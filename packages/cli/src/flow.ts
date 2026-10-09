@@ -145,6 +145,25 @@ export interface Option<T> {
   no?: string
 }
 
+/** How many columns the terminal has. Where it does not say, as many as a terminal has had since there were terminals. */
+const columns = (): number => (typeof out.columns === 'number' && out.columns >= 20 ? out.columns : 80)
+
+/**
+ * One row of a list, cut to what one line of the terminal holds. A row that ran onto a second
+ * line was not taken away again when the list was drawn anew, since the list is taken to be as
+ * many lines as it has rows: the whole list was then written out again below itself at every
+ * key. So what is said after a label is cut short, and then the label itself if it must be.
+ * `lead` is what stands before the label and `width` how many columns that takes.
+ */
+export function row(lead: string, width: number, label: string, said: string | undefined, plain: boolean): string {
+  // One column is left empty: a line that fills the last one moves some terminals on to the next
+  const room = Math.max(4, columns() - 1 - width)
+  const name = label.length > room ? `${label.slice(0, room - 1)}…` : label
+  const left = room - name.length - 2
+  const after = said && left >= 8 ? (said.length > left ? `${said.slice(0, left - 1)}…` : said) : ''
+  return `${lead}${plain ? name : dim(name)}${after ? `  ${dim(after)}` : ''}`
+}
+
 /** Draws a list in place of the one drawn before it. */
 function listed(rows: string[], drawn: number): number {
   if (drawn) write(`\x1b[${drawn}A`)
@@ -165,11 +184,7 @@ export async function pick<T>(question: string, options: Option<T>[], first = 0)
     while (!can[at])
   }
   write(`  ${bold(question)}\n`)
-  const rows = () =>
-    options.map((o, i) => {
-      const said = o.no ?? o.hint
-      return `  ${i === at ? green('❯') : ' '} ${i === at ? o.label : dim(o.label)}${said ? `  ${dim(said)}` : ''}`
-    })
+  const rows = () => options.map((o, i) => row(`  ${i === at ? green('❯') : ' '} `, 4, o.label, o.no ?? o.hint, i === at))
   write('\x1b[?25l')
   let drawn = listed(rows(), 0)
   const chosen = await keys<number>((key) => {
@@ -201,8 +216,7 @@ export async function pickMany<T>(question: string, options: (Option<T> & { on: 
   const rows = () =>
     options.map((o, i) => {
       const box = !can[i] ? dim('–') : on[i] ? green('●') : dim('○')
-      const said = o.no ?? o.hint
-      return `  ${i === at && can[i] ? green('❯') : ' '} ${box} ${can[i] ? o.label : dim(o.label)}${said ? `  ${dim(said)}` : ''}`
+      return row(`  ${i === at && can[i] ? green('❯') : ' '} ${box} `, 6, o.label, o.no ?? o.hint, can[i]!)
     })
   write('\x1b[?25l')
   let drawn = listed(rows(), 0)
