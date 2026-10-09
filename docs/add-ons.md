@@ -127,7 +127,7 @@ For this It asks three things of the T3 Code server on the same machine, and not
 
 Where T3 Code is not running, or does not take the click, the conversation is reopened as any closed one is, if Auto-wake is on for its agent app, and that turn runs where T3 Code does not show it.
 
-T3 Code shows Claude's reply to a click that the add-on handed over, and not the click's text; a click that was put to the thread is shown as the message it is. Delivery in the middle of a turn is not proven inside a T3 Code thread, for Claude Code or for Codex. Putting a click to a Codex thread has been seen to reach T3 Code and not yet to run a turn there.
+T3 Code shows Claude's reply to a click that the add-on handed over, and not the click's text; a click that was put to the thread is shown as the message it is. Delivery in the middle of a turn is not proven inside a T3 Code thread, for Claude Code or for Codex.
 
 ### Pi
 
