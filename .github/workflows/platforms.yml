@@ -150,3 +150,41 @@ jobs:
           path: ${{ runner.temp }}/it-kept/
           retention-days: 3
           if-no-files-found: warn
+
+  # It as the system keeps it running: a launchd agent on a Mac, a task of the Task Scheduler
+  # on Windows. Setup registers it, the system starts it again after it is ended from outside,
+  # a second setup leaves it running, and it is taken away again whole. The browser suite above
+  # starts It by hand and asks the system for none of this.
+  service:
+    name: The service, as the system keeps it (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    needs: programs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            program: it-darwin-arm64
+          - os: macos-15-intel
+            program: it-darwin-x64
+          - os: windows-latest
+            program: it-windows-x64.exe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: it-programs
+          path: ${{ runner.temp }}/it-programs
+      - name: Set It up as a person does, and have the system keep it
+        env:
+          PROGRAM: ${{ matrix.program }}
+        run: |
+          chmod +x "$RUNNER_TEMP/it-programs/$PROGRAM"
+          IT_BIN="$RUNNER_TEMP/it-programs/$PROGRAM" node e2e/service.mjs
+
