@@ -39,6 +39,7 @@ import { conversationFolder, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
+import { type T3, t3Send, t3Server, t3ThreadOf } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
 import {
@@ -442,6 +443,59 @@ async function connecting(say: (line: string) => void): Promise<void> {
     return true
   }
   const queueTries = new Map<string, { n: number; at: number; reopening: boolean }>()
+  /**
+   * What is known of the thread in T3 Code that a conversation is held in: the thread, that T3
+   * Code has none of it (asked again after a while, since a conversation may be brought into
+   * T3 Code later), or that it is being asked for at this moment. A conversation T3 Code
+   * could not take a message for is not offered to it again for a while: `t3Refused`.
+   */
+  const t3Known = new Map<string, { thread: string | null; at: number } | 'asking'>()
+  const t3Refused = new Map<string, number>()
+  let t3Seen: { at: number; server: T3 | undefined } | undefined
+  /** How long a conversation that is in no thread of T3 Code is taken to be in none. */
+  const T3_AGAIN_MS = 6 * 3_600_000
+  /** How long a conversation is kept from T3 Code after it could not take a message for it, or could not be asked. */
+  const T3_REFUSED_MS = 10 * 60_000
+  /**
+   * The thread of T3 Code that a closed conversation is held in, with the server to send to:
+   * `asking` while that is being found out, and nothing where it is in none, where T3 Code
+   * is not running here, and where it has just failed to take something for it. Then the
+   * conversation is reopened as any other is.
+   */
+  function t3For(key: string, session: { harness: string; id: string }): { server: T3; thread: string } | 'asking' | undefined {
+    const now = Date.now()
+    const refused = t3Refused.get(key)
+    if (refused !== undefined) {
+      if (now - refused < T3_REFUSED_MS) return undefined
+      t3Refused.delete(key)
+    }
+    // Whether it is running is asked of a small file and of the system, and no oftener than every few seconds
+    if (!t3Seen || now - t3Seen.at > 5000) t3Seen = { at: now, server: t3Server() }
+    const server = t3Seen.server
+    if (!server) return undefined
+    const known = t3Known.get(key)
+    if (known === 'asking') return 'asking'
+    if (known?.thread) return { server, thread: known.thread }
+    if (known && now - known.at < T3_AGAIN_MS) return undefined
+    if (t3Known.size > 2000) t3Known.clear()
+    t3Known.set(key, 'asking')
+    // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
+    const ids = [...new Set([session.id, threadOf(key)])]
+    void t3ThreadOf(server, { harness: session.harness, ids, cwd: conversationFolder(session) })
+      .catch(() => undefined)
+      .then((thread) => {
+        if (thread === undefined) {
+          // T3 Code could not be asked: the conversation is reopened as any other meanwhile, and T3 Code is asked again later
+          t3Known.delete(key)
+          t3Refused.set(key, Date.now())
+        } else {
+          t3Known.set(key, { thread, at: Date.now() })
+          if (thread) say(`${a(session.harness)} conversation (${short(session.id)}) is held in a thread of T3 Code`)
+        }
+        soon(10)
+      })
+    return 'asking'
+  }
   /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
   const queues = new Map<string, Promise<void>>()
   const unconfirmed = queuedButUnconfirmed()
@@ -990,7 +1044,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** The id Codex knows a conversation by now: the one it carries on under, if it was cleared. */
   const threadOf = (key: string) => key.slice(key.indexOf(':') + 1)
-  async function queueNow(click: Offered, reopening: boolean): Promise<void> {
+  async function queueNow(click: Offered, reopening: boolean, t3?: { server: T3; thread: string }): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
     /** This hand-over is finished: what its renewals are answered from now on is about nothing that is running. */
     let over = false
@@ -998,8 +1052,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const mine = {}
     const line = click.session!.id
     const harness = click.session!.harness
-    // What the route is called where it is written down: Codex's own queue, or the reopening of a conversation that was closed
-    const route = reopening ? 'the reopening of its conversation' : 'Codex’s queue'
+    // What the route is called where it is written down: Codex's own queue, the thread T3 Code holds the conversation in, or the reopening of a conversation that was closed
+    const route = reopening ? 'the reopening of its conversation' : t3 ? 'its thread in T3 Code' : 'Codex’s queue'
+    // T3 Code starts a turn for what it is given, as a reopening does, and is given it no oftener than a conversation may be reopened
+    const starting = reopening || t3 !== undefined
     const key = follow(keyOf(harness, line))
     /** The other clicks waiting for the same conversation, which go with this one in the same message. */
     let withIt: Offered[] = []
@@ -1027,10 +1083,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // disconnected it while the click stood in line
       if (!connected(harness)) return
       // Nor is a conversation reopened once the person has switched that off, or more often than it may be
-      if (reopening && (!wakes(harness, click.at) || !room(key, someoneThere(click)))) return
+      if ((reopening && !wakes(harness, click.at)) || (starting && !room(key, someoneThere(click)))) return
       // Codex's queue is for a conversation some Codex has open. One that was closed while this
       // click stood in line is not given it: the click is looked at afresh on the next pass.
-      if (!reopening && !codexHeld(threadOf(key))) return
+      if (!reopening && !t3 && !codexHeld(threadOf(key))) return
       // Only if it is still for this conversation on this machine: the page may have changed
       // hands while the click stood in line here
       // The hold is counted from before it was asked for: It starts counting when it gives it,
@@ -1046,7 +1102,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
         return
       }
-      if (reopening) {
+      if (starting) {
         // Everything else that is waiting for the conversation goes with it, in the one
         // message: a conversation reopened for five clicks is reopened once, and reads all five
         const more = inbox
@@ -1060,7 +1116,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
               !toPark.has(c.id) &&
               !parked.has(tag(c)) &&
               !rode.has(c.id) &&
-              wakes(harness, c.at) &&
+              (t3 !== undefined || wakes(harness, c.at)) &&
               !awaited(c, Date.now()),
           )
           .sort((a, b) => a.at - b.at)
@@ -1215,7 +1271,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
         : // Not once this connector is stopping or the machine has ceased to fit, which may have come while the hold was made good again
           closing || unfitting
           ? NOT_STARTED
-          : await codexQueue(threadOf(key), describeClick(asClick(click), 0))
+          : t3
+            ? // Put to the thread whole, as to a reopened conversation: it goes to T3 Code on this machine alone, on no command line
+              await t3Send(t3.server, t3.thread, [click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n'))
+            : await codexQueue(threadOf(key), describeClick(asClick(click), 0))
       // A conversation the person stopped had what was done all the same: it is handed over,
       // and nothing is tried again for it
       // Ended because this connector is stopping, it is given back, to be reopened for by the
@@ -1265,7 +1324,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         record('agent.woken', { result: 'resumed', agent: agentOf(harness) })
         if (stalled.get(line) === click.id) stalled.delete(line)
         // Only Codex's queue hands a click over behind a turn that is running
-        if (!reopening && !sent.toWaiter && turnRunning(key, Date.now())) {
+        if (!reopening && !t3 && !sent.toWaiter && turnRunning(key, Date.now())) {
           behindTurn.set(click.id, { click, key })
         }
         await confirmAll()
@@ -1276,6 +1335,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
         stalledAt.set(click.id, Date.now())
         record('agent.woken', { result: n >= QUEUE_WAITS.length ? 'failed' : 'declined', agent: agentOf(harness) })
         if (reopening) notReopened(click.session!, refused)
+        // T3 Code could not take it: the conversation is reopened as any other for a while, and that is tried at once
+        if (t3) {
+          t3Refused.set(key, Date.now())
+          soon(10)
+        }
         if (n >= QUEUE_WAITS.length) {
           stalled.delete(line)
           // Given up on from here. It is set aside so that it does not hide clicks that can be
@@ -1331,13 +1395,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * False when it has to wait before it is tried again: the clicks behind it for the same
    * conversation then wait too, so that what was pressed first still arrives first.
    */
-  function queue(click: Offered, reopening: boolean): boolean {
+  function queue(click: Offered, reopening: boolean, t3?: { server: T3; thread: string }): boolean {
     if (closing || unfitting) return false
     // What Codex's queue takes behind a running turn is kept here for a waiter in that turn,
     // and only so much is kept. Past that a click stays with It, where nothing is lost, until
     // a turn ends and makes room: letting go of the oldest copy to make room took it from a
     // turn that may still be waiting for it.
-    if (!reopening && !queueing.has(click.id) && behindTurn.size + submitting.size >= BEHIND_MOST) {
+    if (!reopening && !t3 && !queueing.has(click.id) && behindTurn.size + submitting.size >= BEHIND_MOST) {
       // Those whose turn is over are no longer waited for by anyone, and are let go of first:
       // a Codex that was closed in the middle of a turn says nothing of its ending
       for (const [id, b] of behindTurn) if (!turnRunning(b.key, Date.now())) behindTurn.delete(id)
@@ -1373,7 +1437,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // as it asks, and is looked at again when that hand-over is over.
     if (reopening && before.length) return false
     queueing.add(click.id)
-    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening)))
+    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening, t3)))
     queues.set(key, next)
     void next.then(() => {
       if (queues.get(key) === next) queues.delete(key)
@@ -1463,6 +1527,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
           stalledAt.delete(id)
         }
       }
+      /**
+       * How long a click has been there. That is told by when this machine first saw it, as well
+       * as by when It says it was made: the second is by It's clock, and a joined machine whose
+       * own is three quarters of a minute behind waited that long before every reopening.
+       */
+      const beenThere = (click: Offered, now: number): number => {
+        const here = steady()
+        if (!firstSeen.has(click.id)) {
+          if (firstSeen.size > 5000) firstSeen.clear()
+          firstSeen.set(click.id, here)
+        }
+        return Math.max(now - click.at, here - firstSeen.get(click.id)!)
+      }
       for (const click of [...inbox].sort((a, b) => a.at - b.at)) {
         if (taken(click)) continue
         if (unconfirmed.has(click.id)) {
@@ -1476,6 +1553,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (!chosen(click.session.harness)) continue
         const key = follow(keyOf(click.session.harness, click.session.id))
         if (waitingBehind.has(key)) continue
+        // The thread of T3 Code the conversation is held in, asked for only where no step before it has taken the click
+        const session = click.session
+        let thread: ReturnType<typeof t3For>
+        const heldInT3 = (): boolean => {
+          thread = connected(session.harness) && !reopenedNow.has(key) ? t3For(key, session) : undefined
+          return thread !== undefined
+        }
         const s = sessions.get(key)
         const codex = click.session.harness === 'codex'
         // An add-on that asks every second is listening. Codex's hooks only run at moments in a
@@ -1504,6 +1588,23 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // machine is itself running is not given one that way: that run ends with its turn,
           // and would cut off whatever Codex began for the message.
           if (!queue(click, false)) waitingBehind.add(key)
+        } else if (heldInT3()) {
+          // Route 2b: the conversation is held in a thread of T3 Code, which has let its
+          // program go, as it does when a thread has been quiet or T3 Code is started anew.
+          // The person has not closed anything: the thread is where it was. So the click is
+          // put to the thread, where T3 Code starts a turn for it and shows it, in the mode
+          // the thread is held in. Reopened with the agent app's own command, the same turn
+          // would run where they do not see it. This is not a reopening, and is not asked of
+          // the switch for one. Not for a conversation this machine is itself running that
+          // way at this moment, and not until a few things done together can go together.
+          const left = SETTLE_MS - beenThere(click, now)
+          if (thread === 'asking') {
+            waitingBehind.add(key)
+            soon(300)
+          } else if (left > 0) {
+            waitingBehind.add(key)
+            soon(left + 10)
+          } else if (atWork(click.session, now) || !queue(click, false, thread)) waitingBehind.add(key)
         } else if (wakes(click.session.harness, click.at) && connected(click.session.harness)) {
           // Route 3: the conversation is not listening, which is to say closed, and the person
           // has switched on reopening for its agent app on this machine. It is reopened at once,
@@ -1511,18 +1612,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // line like a queue, one click of a conversation at a time. And only so often: past
           // that the click waits, and goes with the next reopening. Nor while it is at work in a
           // window It cannot see into: it is looked at again once it is quiet.
-          // How long it has been there is told by when this machine first saw it, as well as
-          // by when It says it was made. The second is by It's clock, and a joined machine whose
-          // own is three quarters of a minute behind waited that long before every reopening.
-          const here = steady()
-          if (!firstSeen.has(click.id)) {
-            if (firstSeen.size > 5000) firstSeen.clear()
-            firstSeen.set(click.id, here)
-          }
-          const there = Math.max(now - click.at, here - firstSeen.get(click.id)!)
-          if (there < SETTLE_MS) {
+          const left = SETTLE_MS - beenThere(click, now)
+          if (left > 0) {
             waitingBehind.add(key)
-            soon(SETTLE_MS - there + 10)
+            soon(left + 10)
           } else if (atWork(click.session, now) || !room(key, someoneThere(click)) || !queue(click, true)) waitingBehind.add(key)
         }
         // Route 4: nothing to do. The click stays waiting and the site shows it.

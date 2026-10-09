@@ -13,6 +13,10 @@ const windows = process.platform === 'win32'
 // of the service's definition would look in the folder of whoever runs the tests, and could
 // write there. The tests are started without it, and one that is about it sets its own.
 delete process.env.XDG_CONFIG_HOME
+// Nor is the T3 Code of whoever runs the tests: a connector that a test starts would ask it for
+// a session and read its threads. Every test is started with a folder for it that holds
+// nothing, and one that is about T3 Code names its own.
+process.env.T3CODE_HOME = '/nonexistent/no-t3-code-for-tests'
 
 export default defineConfig({
   test: {

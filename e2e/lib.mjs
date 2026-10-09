@@ -694,6 +694,8 @@ export function itEnv(home) {
     ...(apps ? { ...madeUpApps(apps), [pathName(given)]: pathWithStandIns(apps, given[pathName(given)]) } : {}),
     IT_HARNESSES: 'claude-code,codex',
     IT_TELEMETRY_URL: usageUrl(),
+    // The T3 Code of whoever runs this is nothing to an It that a run starts: it would be asked for a session and for its threads
+    T3CODE_HOME: path.join(home, 'no-t3-code'),
   }
 }
 
