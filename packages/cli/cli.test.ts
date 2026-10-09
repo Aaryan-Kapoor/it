@@ -68,6 +68,7 @@ import {
   windowsLauncher,
   windowsRegisteredFor,
   windowsScript,
+  writeDefinition,
 } from './src/service'
 
 describe('command line', () => {
@@ -1595,6 +1596,43 @@ describe('background service definitions', () => {
       }
     },
   )
+  test('what the system starts It by is left alone where it says already what is to be written, and on Windows is put in place again for a little while where that is refused', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-definition-'))
+    const file = path.join(folder, 'it-service.cmd')
+    const real = { renameSync: fs.renameSync, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+    const renamed: string[] = []
+    let refusals = 0
+    fs.renameSync = (from: fs.PathLike, to: fs.PathLike) => {
+      renamed.push(path.basename(String(to)))
+      // As Windows refuses it while a program that looks into every new file has this one open
+      if (refusals-- > 0) throw Object.assign(new Error(`EPERM: operation not permitted, rename '${String(from)}' -> '${String(to)}'`), { code: 'EPERM' })
+      real.renameSync(from, to)
+    }
+    syncBuiltinESMExports()
+    try {
+      writeDefinition(file, 'one\r\n')
+      expect([readFileSync(file, 'utf8'), renamed]).toEqual(['one\r\n', ['it-service.cmd']])
+      // The same again: nothing is written, and nothing is put in its place
+      writeDefinition(file, 'one\r\n')
+      expect(renamed).toEqual(['it-service.cmd'])
+      // Refused twice on Windows, it is in place at the third asking, with nothing left beside it
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      refusals = 2
+      writeDefinition(file, 'two\r\n')
+      expect([readFileSync(file, 'utf8'), renamed.length, readdirSync(folder)]).toEqual(['two\r\n', 4, ['it-service.cmd']])
+      // Anywhere else a refusal is what it says it is, and the definition that was there stays
+      Object.defineProperty(process, 'platform', { value: 'linux' })
+      refusals = 1
+      expect(() => writeDefinition(file, 'three\r\n')).toThrow('EPERM')
+      expect([readFileSync(file, 'utf8'), readdirSync(folder)]).toEqual(['two\r\n', ['it-service.cmd']])
+    } finally {
+      Object.defineProperty(process, 'platform', real.platform)
+      fs.renameSync = real.renameSync
+      syncBuiltinESMExports()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test('windows: a service the task is already running is stopped before the task is registered again, so that the new one starts with the new settings', () => {
     const lines = windowsScript('C:\\it\\bin', 'it-service.cmd').split('\n')
     const at = (start: string) => lines.findIndex((line) => line.startsWith(start))

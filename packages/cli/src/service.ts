@@ -9,10 +9,10 @@
 // that program cannot be counted on to hear, by ending it once it has been asked. What stops
 // the service is held to asking, on every system.
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { home, inHome, PROFILE_VARS, psQuote, readJson, writeFlushed } from './lib'
+import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
 
 const NAME = 'it'
 const LABEL = 'dev.it'
@@ -425,12 +425,19 @@ export function reachable(): boolean {
  * the definition is being written leaves the one that was there, and never a part of a new
  * one, which the system would read at the next start.
  */
-function writeDefinition(file: string, text: string): void {
+export function writeDefinition(file: string, text: string): void {
+  // One that says already what is to be written is left as it is. It is most of the time, as
+  // when a newer It is set up over an older one, and then nothing is put in its place at all:
+  // on Windows that is refused for as long as another program has either file open, which a
+  // program that looks into every new file does to a script that has just been written
+  try {
+    if (readFileSync(file, 'utf8') === text) return
+  } catch {}
   const part = `${file}.${process.pid}.part`
   try {
     writeFlushed(part, text)
     if (process.platform !== 'win32') chmodSync(part, 0o644)
-    renameSync(part, file)
+    rename(part, file)
   } finally {
     rmSync(part, { force: true })
   }

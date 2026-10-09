@@ -28,7 +28,7 @@ import path from 'node:path'
 import { HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
 import { ADDONS, LICENSE } from './addons.generated'
 import { codexConfig } from './codex-settings'
-import { harnessEnv, home, inHome, Problem, readJson, VERSION, writePrivate } from './lib'
+import { harnessEnv, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
 import { alone as oneAtATime } from './serve/backend'
 
 export type AddonState = 'connected' | 'not_connected' | 'needs_approval' | 'too_old' | 'unavailable' | 'error'
@@ -262,7 +262,8 @@ function putInPlace(data: Buffer, to: string): void {
     } finally {
       closeSync(made)
     }
-    renameSync(part, to)
+    // Tried again for a little while on Windows, where a program that looks into every new file may have this one open for a moment
+    rename(part, to)
   } catch (err) {
     rmSync(part, { force: true })
     throw err

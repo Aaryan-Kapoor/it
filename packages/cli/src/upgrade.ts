@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs'
 import path from 'node:path'
 import { INSTALL, newer } from '@it/protocol'
-import { ask, home, inHome, Problem, readJson, VERSION, writePrivate } from './lib'
+import { ask, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
 
 /** No program is anywhere near this large, and nothing else of a release is near the second. */
 const PROGRAM_MOST = 400 * 1024 * 1024
@@ -194,7 +194,8 @@ function put(to: string, bytes: Buffer, mode: number): void {
     } finally {
       closeSync(out)
     }
-    renameSync(part, to)
+    // Tried again for a little while on Windows, where a program that looks into every new file may have this one open for a moment
+    rename(part, to)
   } finally {
     rmSync(part, { force: true })
   }
