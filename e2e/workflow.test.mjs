@@ -542,7 +542,8 @@ describe.skipIf(!shell || process.platform === 'win32')('stopping It at the end 
         process.kill(pid, 'SIGKILL')
       } catch {}
     }
-    rmSync(dir, { recursive: true, force: true })
+    // What the steps started may still be writing into the folder as it is taken away, which a Mac then says is not empty: tried again
+    rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
   })
   const start = scriptOf(steps('e2e')[stepWith('e2e', 'node e2e/stack.mjs')])
   const stop = scriptOf(steps('e2e')[stepWith('e2e', 'kill "$(cat it-stack.pid)"')])

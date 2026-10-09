@@ -3926,7 +3926,15 @@ try {
   // many that is depends on how the two tabs' requests fall, and each is told there is nothing
   // to end. This browser has signed out of no session before, so one session is all that is named.
   const namedIn = (tab) => one.exchanges.filter((x) => x.path === '/session/end' && x.tab === tab && x.sent >= signedOutFrom)
-  await until(() => namedIn(second).filter((x) => x.answered !== null).length >= 2 && namedIn(page).some((x) => x.answered !== null), 15_000, 50)
+  // Every naming that was sent is waited for: one that is still on its way has no answer to be read, and would be counted as one that was told nothing
+  await until(
+    () =>
+      namedIn(second).filter((x) => x.answered !== null).length >= 2 &&
+      namedIn(page).some((x) => x.answered !== null) &&
+      [...namedIn(second), ...namedIn(page)].every((x) => x.answered !== null),
+    15_000,
+    50,
+  )
   const namedOnSigningOut = {
     whereItWasAsked: namedIn(second)
       .map((x) => x.status)
