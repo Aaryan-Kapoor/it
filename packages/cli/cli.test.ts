@@ -34,6 +34,7 @@ import {
   currentSession,
   forgetMachine,
   harnessEnv,
+  joinLine,
   notReached,
   overClashes,
   Problem,
@@ -1929,5 +1930,28 @@ describe('what It wrote into another program’s TOML file', () => {
     expect(withoutTables(between.replaceAll('\n', '\r\n'), owned)).toBe(left.replaceAll('\n', '\r\n'))
     // Nothing of It's in it: not a byte is changed
     expect(withoutTables(`${theirs}# end`, owned)).toBe(`${theirs}# end`)
+  })
+})
+
+describe('the line a person pastes to join an It on another computer', () => {
+  const URL_ = 'http://192.168.1.20:4700'
+  const CODE = 'abcd1234efgh5678ijkl'
+  test('is read for its address and its invite, in each form the site gives it in', () => {
+    // The line that installs and joins, and the joining alone
+    expect(joinLine(`curl -fsSL https://itcan.do/install.sh | sh -s -- login --url ${URL_} --code ${CODE}`)).toEqual({ url: URL_, code: CODE })
+    expect(joinLine(`it login --url ${URL_} --code ${CODE}`)).toEqual({ url: URL_, code: CODE })
+    expect(joinLine(`  $ it login --url ${URL_} --code ${CODE}  `)).toEqual({ url: URL_, code: CODE })
+    // An address under IPv6 is given in quotation marks, which are not part of it
+    expect(joinLine(`it login --url "http://[fd7a:115c:a1e0::1]:4700" --code ${CODE}`)).toEqual({ url: 'http://[fd7a:115c:a1e0::1]:4700', code: CODE })
+    // Only the address and the invite, as someone might copy them
+    expect(joinLine(`${URL_} ${CODE}`)).toEqual({ url: URL_, code: CODE })
+  })
+
+  test('is nothing where it holds no address of an It or no invite: the address the install comes from is not one', () => {
+    expect(joinLine('')).toBeUndefined()
+    expect(joinLine('yes')).toBeUndefined()
+    expect(joinLine(`it login --url ${URL_}`)).toBeUndefined()
+    expect(joinLine(`it login --code ${CODE}`)).toBeUndefined()
+    expect(joinLine('curl -fsSL https://itcan.do/install.sh | sh')).toBeUndefined()
   })
 })

@@ -98,9 +98,10 @@ const CODE_MS = 10 * 60_000
 /**
  * Adding a machine: another computer where the person's agents run joins this It with a code
  * that works once. What is shown first is one line to run there, which installs It and joins
- * and sets no It up on that computer: installed by itself at a terminal, It is set up there,
- * and a computer that runs an It of its own cannot join another. Under it is the joining alone,
- * for Windows, whose install sets nothing up, and for a computer that has It already. Both
+ * and sets no It up on that computer: installed by itself at a terminal, It asks where the
+ * person's It is, and a computer that is given an It of its own cannot join another. Under it
+ * is the joining alone, which is what is pasted when the install asks, as it does on Windows,
+ * and what a computer runs that has the command already. Both
  * name this machine's address on the person's network, which another computer can reach only
  * once the network is on: until then the dialog shows the command that turns it on, and the
  * others appear by themselves.
@@ -148,8 +149,8 @@ function AddMachine({ onClose }: { onClose: () => void }) {
             <Copyable prompt text={`${INSTALL.sh} -s -- login --url ${quoted(where.address)} --code ${made.code}`} />
           </div>
           <p className="modal-sub">
-            On Windows, install It with <code>{INSTALL.ps}</code>, open a new terminal, and run the line below. It is also all that a computer needs that has It
-            already.
+            On Windows, install It with <code>{INSTALL.ps}</code>. When it asks where your It is, choose “On another computer of mine” and paste the line below.
+            That line is also all that a computer needs that has the <code>it</code> command already.
           </p>
           <div className="pair-command join">
             <Copyable prompt text={`it login --url ${quoted(where.address)} --code ${made.code}`} />

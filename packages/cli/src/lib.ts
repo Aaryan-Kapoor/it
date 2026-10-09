@@ -1524,3 +1524,15 @@ export function withoutTables(text: string, owned: (header: string) => boolean):
   if (dropping && text.endsWith('\n') && out.at(-1) !== '') out.push('')
   return out.join('\n')
 }
+
+/**
+ * What a person pasted, read for the address of an It and the invite to join it with: the
+ * line its site gives under Machines, "Add a machine", whole or in part, in whichever of its
+ * forms. Nothing where either is not there.
+ */
+export function joinLine(pasted: string): { url: string; code: string } | undefined {
+  // An address in quotation marks is one in brackets, which a shell would otherwise read as more than they are
+  const url = /--url[\s=]+["']?(https?:\/\/[^\s"']+)["']?/.exec(pasted)?.[1] ?? /(?:^|\s)["']?(https?:\/\/(?!itcan\.do)[^\s"']+)["']?/.exec(pasted)?.[1]
+  const code = /--code[\s=]+["']?([A-Za-z0-9_-]{6,64})["']?/.exec(pasted)?.[1] ?? /(?:^|\s)([A-Za-z0-9]{16,64})\s*$/.exec(pasted.trim())?.[1]
+  return url && code ? { url, code } : undefined
+}

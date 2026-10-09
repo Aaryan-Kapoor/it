@@ -33,6 +33,8 @@ it setup
 
 `it setup` does everything It needs to exist on this machine, and at a terminal it leads you through it as a short list of steps.
 
+The first time, it begins by asking where your It is. "On this computer" sets It up here, as the steps below describe. "On another computer of mine" is for a second computer: It runs on one of your computers, and the others join it, so that the agents on all of them put their pages on the same screens. Joining takes the line that the first computer's site gives under Machines, "Add a machine", which you paste when you are asked for it. [Agents on another computer](agents.md#agents-on-another-computer) has the rest.
+
 1. It fetches the backend program, once, and checks it against a checksum written in It's own source. It is about 60 MB to download, and a bar shows how far it has got.
 2. It makes It's settings, which hold the port It listens on and the secrets it works with, in `~/.it/service.json`.
 3. It registers It as a background service for your user, and starts it.

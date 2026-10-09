@@ -392,9 +392,9 @@ describe('adding a machine', () => {
     // First the line that installs and joins: It installed by itself at a terminal is set up there, and a computer with an It of its own cannot join
     expect(host.querySelector('.pairing .modal-lede')!.textContent).toBe('Run this on the other computer. It installs It there and joins it to this one.')
     expect(text('.pair-command.install code')).toBe(`curl -fsSL https://itcan.do/install.sh | sh -s -- login --url ${LAN} --code ${CODE}`)
-    // Then the joining alone, for Windows and for a computer that has It already
+    // Then the joining alone, which is pasted where the install asks, as on Windows, and run by a computer that has the command already
     expect(host.querySelector('.pairing p.modal-sub')!.textContent).toBe(
-      'On Windows, install It with irm https://itcan.do/install.ps1 | iex, open a new terminal, and run the line below. It is also all that a computer needs that has It already.',
+      'On Windows, install It with irm https://itcan.do/install.ps1 | iex. When it asks where your It is, choose “On another computer of mine” and paste the line below. That line is also all that a computer needs that has the it command already.',
     )
     expect(text('.pair-command.join code')).toBe(`it login --url ${LAN} --code ${CODE}`)
     expect([...host.querySelectorAll('.pair-command')]).toHaveLength(2)

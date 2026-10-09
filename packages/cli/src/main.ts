@@ -49,6 +49,7 @@ import {
   hasLeft,
   home,
   inHome,
+  joinLine,
   keptFromIt,
   left,
   live,
@@ -1487,11 +1488,12 @@ async function newDisplay(before: Set<string>, forMs: number, given?: AbortSigna
  * know to ask for: how It is to be reached from their other devices, and the pairing of the
  * first screen. It ends by saying the one thing to do next.
  */
-async function settingUpLed(a: Args) {
+async function settingUpLed(a: Args, begunAlready = false) {
   // What the parts say in sentences is kept, and said at the end where the person has to act on it
   const kept: string[] = []
   const quiet = (line: string) => void kept.push(line)
-  if (!process.env.IT_INSTALL_FLOW) flow.banner('setup')
+  // The name is said once: by the install script where that ran, by the question of where It is where that was asked, and else here
+  if (!process.env.IT_INSTALL_FLOW && !(begunAlready && !a.flags.all && text(a, 'only') === undefined && !a.flags.yes)) flow.banner('setup')
   await noneAbandoned()
   const inBackground = !a.flags['no-service']
   let at = flow.step('Backend program')
@@ -1722,9 +1724,68 @@ async function settingUpLed(a: Args) {
   }
 }
 
+/**
+ * A first setup at a terminal begins by asking where the person's It is: on this computer, or
+ * on another of theirs, which this one then joins. Someone with It on one computer who
+ * installs it on a second would otherwise be given a second It, when what they wanted was
+ * their agents here on the screens they have. Joining takes the line that the other
+ * computer's site gives under Machines, "Add a machine", pasted here: the invite is made
+ * there, by the person, and nowhere else. True once this machine has joined.
+ */
+async function joinedInstead(a: Args): Promise<boolean> {
+  // Asked only where nothing is here yet, and of a person who has not already said what they want set up
+  if (existsSync(settingsFile()) || enrolledHere() || a.flags.all || text(a, 'only') !== undefined || a.flags.yes) return false
+  if (!process.env.IT_INSTALL_FLOW) flow.banner('setup')
+  const where = await flow.pick<'here' | 'join'>('Where is your It?', [
+    { value: 'here', label: 'On this computer', hint: 'set it up here' },
+    { value: 'join', label: 'On another computer of mine', hint: 'join that one, and use it from here' },
+  ])
+  if (where === 'here') return false
+  flow.line(`${flow.green('✓')} ${'Joining'.padEnd(20)} ${flow.dim('the It on another computer')}`)
+  flow.line()
+  flow.line('On that computer, open It’s site, go to Machines and press Add a machine.')
+  flow.line('Paste the line it gives you here, and press Enter.')
+  flow.line()
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
+  try {
+    for (;;) {
+      const pasted = (await answerTo(rl, '  › ')).trim()
+      // Nothing pasted is a change of mind: It is set up here after all
+      if (!pasted) return false
+      const asked = joinLine(pasted)
+      if (!asked) {
+        flow.line()
+        flow.line(flow.yellow('That has no address and invite in it. The line begins with `it login` or with `curl`, and holds --url and --code.'))
+        flow.line(flow.dim('Paste it again, or press Enter alone to set It up on this computer.'))
+        flow.line()
+        continue
+      }
+      try {
+        // The folder is this setup's alone already, which is what a joining asks for
+        const done = await login(asked)
+        flow.line()
+        flow.line(`${flow.green('✓')} ${'Joined'.padEnd(20)} ${flow.dim(`as “${done.name}”`)}`)
+        return true
+      } catch (err) {
+        if (!(err instanceof Problem)) throw err
+        flow.line()
+        flow.line(flow.yellow(err.message))
+        if (err.hint) flow.line(flow.dim(err.hint))
+        flow.line(flow.dim('Paste a line again, or press Enter alone to set It up on this computer.'))
+        flow.line()
+      }
+    }
+  } finally {
+    rl.close()
+  }
+}
+
 /** The whole of a setup, once it is known that something is to be set up here: see `setup`. */
 async function settingUp(a: Args, joined: boolean) {
-  if (!joined && led(a)) return settingUpLed(a)
+  // Said already by the question of where It is, where that was asked
+  const asked = !joined && led(a) && !existsSync(settingsFile()) && !enrolledHere()
+  if (asked && (await joinedInstead(a))) return settingUp(a, true)
+  if (!joined && led(a)) return settingUpLed(a, asked)
   // Where It is set up already, `--none` leaves the background service as it is, registered or
   // not. A machine that has only just joined is not set up yet, though it has its identity
   const leaves = a.flags.none === true && !joined && enrolledHere() && (elsewhere() || existsSync(settingsFile()))
