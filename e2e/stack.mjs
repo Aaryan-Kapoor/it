@@ -307,7 +307,8 @@ async function answering(seconds = 240) {
   return false
 }
 
-process.on('SIGUSR2', () => {
+/** Stops the service and starts it again on the same folder. */
+function startAgain() {
   if (stopping || restarting || !service) return
   restarting = (async () => {
     console.log('stopping the service, to start it again')
@@ -318,7 +319,26 @@ process.on('SIGUSR2', () => {
   })().finally(() => {
     restarting = undefined
   })
-})
+}
+process.on('SIGUSR2', startAgain)
+// Windows has no signal a program can be asked anything by: one sent there ends the program at
+// once. So the stack is also asked by a file beside its note, which `askStack` (e2e/lib.mjs)
+// writes: `start-again` for what SIGUSR2 asks, and `stop` for what stopping asks. Looked for
+// a few times a second, taken away as it is heeded.
+const askedBy = setInterval(() => {
+  for (const [name, heed] of [
+    ['start-again', startAgain],
+    ['stop', () => void stop()],
+  ]) {
+    const file = path.join(STACK_LOGS, name)
+    if (!existsSync(file)) continue
+    try {
+      rmSync(file, { force: true })
+    } catch {}
+    heed()
+  }
+}, 300)
+askedBy.unref()
 
 if (!stopping) {
   start()

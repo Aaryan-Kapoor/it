@@ -23,6 +23,7 @@ import path from 'node:path'
 import {
   appCalls,
   ask,
+  askStack,
   backendLeftOn,
   COMMAND,
   connectorTokenIn,
@@ -4204,7 +4205,7 @@ try {
   )
   // While the service is stopped there is nothing for the owner's browser to connect to
   const serviceMoved = during(one, closedUnder(APP, pages, 'the service was stopped and started under an open site'))
-  process.kill(STACK.pid, 'SIGUSR2')
+  askStack('start-again', STACK.pid)
   const startedAgain = await until(
     async () => {
       const now = stack()?.service

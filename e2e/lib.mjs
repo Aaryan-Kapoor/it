@@ -45,6 +45,15 @@ export const PRIVATE_MARK = 'e2e-private-'
 /** Where the stack (e2e/stack.mjs) keeps its log, and beside it the note of where it is itself. */
 export const STACK_LOGS = process.env.IT_STACK_LOGS ?? '/tmp/it-e2e'
 export const stackNote = () => path.join(STACK_LOGS, 'stack.json')
+/**
+ * Asks the stack for something: `start-again`, to stop the service and start it again, or
+ * `stop`. By a signal where a program can be asked by one, and on Windows by a file beside
+ * the stack's note, which the stack looks for and takes away.
+ */
+export function askStack(what, pid) {
+  if (process.platform === 'win32') return void writeFileSync(path.join(STACK_LOGS, what), '')
+  process.kill(pid, what === 'stop' ? 'SIGTERM' : 'SIGUSR2')
+}
 /** What the stack names the machine It runs on: as a person would name it, with the mark that the check of the logs looks for. */
 export const STACK_MACHINE = `e2e laptop ${PRIVATE_MARK}stack`
 /** The port a stack counts from when IT_PORT names none: well clear of the one a person's own It uses, so that the two can run side by side. */
@@ -468,6 +477,18 @@ export function standInApps(folder) {
       writeFileSync(path.join(bin, command), `#!/bin/sh\nexec ${quoted(process.execPath)} ${quoted(program)} ${command} "$@"\n`, { mode: 0o755 })
       accessSync(path.join(bin, command), constants.X_OK)
     }
+  }
+  // On Windows a Codex installed through npm is a .cmd file with Codex's own script beside it,
+  // and It starts that script with Node, since only a shell can start a .cmd file and a shell
+  // would read a page's title as part of the command. The stand-in is laid out as that Codex
+  // is, so that It finds it as it finds the real one.
+  if (process.platform === 'win32') {
+    const beside = path.join(bin, 'node_modules', '@openai', 'codex', 'bin')
+    mkdirSync(beside, { recursive: true })
+    writeFileSync(
+      path.join(beside, 'codex.js'),
+      `process.argv.splice(2, 0, 'codex')\nimport(require('node:url').pathToFileURL(${JSON.stringify(program)}).href)\n`,
+    )
   }
   standing.add(bin)
   return bin

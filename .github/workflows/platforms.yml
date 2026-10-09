@@ -122,7 +122,9 @@ jobs:
         if: always() && steps.stack.outcome != 'skipped'
         working-directory: ${{ runner.temp }}
         run: |
-          [ -f it-stack.pid ] && kill "$(cat it-stack.pid)" 2>/dev/null || true
+          # Asked as each system can be asked: by a signal, and on Windows, where a signal ends a
+          # program at once, by the file the stack looks for
+          if [ "$RUNNER_OS" = Windows ]; then : > "$IT_STACK_LOGS/stop"; else [ -f it-stack.pid ] && kill "$(cat it-stack.pid)" 2>/dev/null || true; fi
           for _ in $(seq 1 120); do [ -s it-stack.ended ] && break; sleep 1; done
           [ -s it-stack.ended ] && echo "the stack ended with $(cat it-stack.ended)" || echo "::warning::The stack had not ended two minutes after it was asked to stop"
           rm -rf it-kept && mkdir it-kept

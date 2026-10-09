@@ -11,7 +11,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { noStack, STACK_LOGS, sleep, stackNote } from './lib.mjs'
+import { askStack, noStack, STACK_LOGS, sleep, stackNote } from './lib.mjs'
 
 /** The stack's note as it stands, whole: where it is, and once it has stopped, how. */
 const note = () => {
@@ -52,7 +52,7 @@ if (!first || !Number.isInteger(first.pid)) {
   process.exit(2)
 }
 const seconds = Number(process.argv[2] ?? 150)
-if (alive(first.pid)) process.kill(first.pid, 'SIGTERM')
+if (alive(first.pid)) askStack('stop', first.pid)
 for (const end = Date.now() + seconds * 1000; alive(first.pid) && Date.now() < end; ) await sleep(200)
 if (alive(first.pid)) {
   console.error(
