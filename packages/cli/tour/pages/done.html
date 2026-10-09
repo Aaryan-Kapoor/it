@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>It can do that</title>
+<style>
+  /* Where the tour ends: the one line It is known by, and the three things worth taking away,
+     each on a colour of its own. The page behind them is the site's own dark, as the menu's is. */
+  :root { --bg: #0a0a0a; --fg: #ffffff; --muted: rgba(255, 255, 255, .62); --line: rgba(255, 255, 255, .14); --ok: #2fd08a; --ink: #0e0e10; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg); overflow-y: auto;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; }
+  main { min-height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 28px; width: min(100%, 1040px); margin: 0 auto; padding: 36px 24px 30px; }
+  h1 { margin: 0; font-size: clamp(38px, 6vw, 68px); font-weight: 750; letter-spacing: -.045em; line-height: 1; }
+  h1 i { display: inline-block; width: .2em; height: .2em; margin-left: .04em; border-radius: 50%; background: var(--ok); }
+  .sub { margin: 12px 0 0; max-width: 44ch; font-size: 17px; line-height: 1.45; color: var(--muted); }
+  .three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .know { display: flex; flex-direction: column; gap: 10px; min-height: 250px; padding: 22px 22px 20px; border-radius: 22px; background: var(--field); color: var(--ink); }
+  .know h2 { margin: 0; font-size: 24px; font-weight: 750; letter-spacing: -.035em; line-height: 1.1; }
+  .know p { margin: 0; font-size: 15px; line-height: 1.42; color: rgba(14, 14, 16, .72); }
+  .know .fill { flex: 1; }
+  /* Something to say, as it would be said */
+  .say { display: flex; flex-direction: column; gap: 6px; }
+  .say span {
+    align-self: flex-start; max-width: 100%; padding: 8px 12px; border-radius: 12px 12px 12px 4px;
+    background: rgba(14, 14, 16, .9); color: #fff; font-size: 14px; font-weight: 550; line-height: 1.3;
+  }
+  .screens { display: flex; align-items: flex-end; gap: 8px; height: 62px; }
+  .screens i { display: block; border-radius: 7px; background: rgba(14, 14, 16, .9); position: relative; }
+  .screens i::after { content: ""; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px; border-radius: 50%; background: var(--ok); }
+  .clock { display: flex; align-items: center; gap: 10px; height: 62px; }
+  .clock b { height: 34px; padding: 0 12px; display: inline-flex; align-items: center; border-radius: 10px; background: rgba(14, 14, 16, .9); color: #fff; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .clock span { flex: 1; height: 3px; border-radius: 2px; background: repeating-linear-gradient(90deg, rgba(14, 14, 16, .55) 0 6px, transparent 6px 12px); }
+  .clock b:last-child { background: #10231b; }
+  .clock b:last-child::before { content: ""; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--ok); }
+  .foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .go { height: 48px; padding: 0 22px; border: 0; border-radius: 999px; background: #fff; color: var(--ink); font-size: 16px; font-weight: 650; cursor: pointer; }
+  .more { height: 48px; padding: 0 18px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 15px; font-weight: 600; cursor: pointer; }
+  .more:hover { color: #fff; border-color: rgba(255, 255, 255, .4); }
+  .go:disabled, .more:disabled { opacity: .4; cursor: default; }
+  .go:focus-visible, .more:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+  .status { font-size: 14px; color: var(--muted); }
+  @media (max-width: 860px) { .three { grid-template-columns: minmax(0, 1fr); } .know { min-height: 0; } main { justify-content: flex-start; } }
+</style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>{{heading}}<i></i></h1>
+      <p class="sub">{{subhead}}</p>
+    </header>
+    <div class="three">
+      <section class="know" style="--field:#dcf36b">
+        <h2>Just say it.</h2>
+        <p>Nothing to set up and nothing to learn. Ask for what you want to see, in your own words.</p>
+        <div class="fill"></div>
+        <div class="say"><span>Show me the plan before you start.</span><span>Put the results on my screen.</span><span>Let’s play chess.</span></div>
+      </section>
+      <section class="know" style="--field:#cdb6ff">
+        <h2>It waits for you.</h2>
+        <p>What you press on a page reaches me even when it is hours later, and I carry on from there.</p>
+        <div class="fill"></div>
+        <div class="clock" aria-hidden="true"><b>09:12</b><span></span><b>14:40</b></div>
+      </section>
+      <section class="know" style="--field:#8fe3bd">
+        <h2>Any screen you own.</h2>
+        <p>Your phone, a tablet, the television. Add one under Displays, and I can put a page on it by name.</p>
+        <div class="fill"></div>
+        <div class="screens" aria-hidden="true"><i style="width:26px;height:46px"></i><i style="width:64px;height:44px"></i><i style="width:96px;height:58px"></i></div>
+      </section>
+    </div>
+    <div class="foot">
+      <button class="go" id="finish" type="button">Finish the tour</button>
+      <button class="more" id="more" type="button">See another one</button>
+      <span class="status" id="status" role="status"></span>
+    </div>
+  </main>
+<script>
+  // Two ways on, each an ordinary action: the agent is what ends the tour, or goes back to its menu.
+  (() => {
+    function init() {
+      var It = window.It || { state: {}, onState: () => () => {}, action: () => Promise.resolve() };
+      var finish = document.getElementById("finish"), more = document.getElementById("more"), status = document.getElementById("status");
+      function go(btn, name, waiting) {
+        btn.addEventListener("click", () => {
+          finish.disabled = more.disabled = true;
+          status.textContent = waiting;
+          It.action(name, {}).catch(() => { finish.disabled = more.disabled = false; status.textContent = "That did not go through. Try again."; });
+        });
+      }
+      go(finish, "finish", "Wrapping up");
+      go(more, "menu", "One moment");
+      // A page the agent has opened again takes what was sent from it as answered
+      It.onState(() => { if ((It.state || {}).status === "open") { finish.disabled = more.disabled = false; status.textContent = ""; } });
+    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
+  })();
+</script>
+</body>
+</html>

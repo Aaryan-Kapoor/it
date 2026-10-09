@@ -1,6 +1,8 @@
 // Packs the tour into the CLI: the guide an agent follows, and the pages it shows as it goes.
 // The pages are whole pages, written here and not by the agent, so that the first things a new
-// person sees are the same for everyone.
+// person sees are the same for everyone. What all of them share (their look, the agent's plate,
+// the two buttons that go on) is written once, in tour/kit, and set into each page here where
+// the page marks the place for it.
 import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,8 +11,18 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const from = path.join(here, 'tour')
 const guide = readFileSync(path.join(from, 'TOUR.md'), 'utf8')
 const said = JSON.parse(readFileSync(path.join(from, 'pages.json'), 'utf8'))
+const kit = (name) => readFileSync(path.join(from, 'kit', name), 'utf8').trimEnd()
+const KIT = { '/*kit.css*/': kit('kit.css'), '/*kit.js*/': kit('kit.js'), '<!--rail-->': kit('rail.html') }
 const pages = {}
-for (const [name, page] of Object.entries(said)) pages[name] = { ...page, html: readFileSync(path.join(from, 'pages', `${name}.html`), 'utf8') }
+for (const [name, page] of Object.entries(said)) {
+  let html = readFileSync(path.join(from, 'pages', `${name}.html`), 'utf8')
+  for (const [mark, text] of Object.entries(KIT)) {
+    // Each place is marked once in a page that has it. The words are set in as they are: a `$` in them is only a `$`
+    if (html.split(mark).length > 2) throw new Error(`tour/pages/${name}.html marks the place for ${mark} more than once`)
+    html = html.replace(mark, () => text)
+  }
+  pages[name] = { ...page, html }
+}
 writeFileSync(
   path.join(here, 'src/tour.generated.ts'),
   `// Written by packages/cli/tour.mjs. Do not edit.\nexport const GUIDE: string = ${JSON.stringify(guide)}\nexport const PAGES: Record<string, { title: string; params: Record<string, unknown>; state: Record<string, unknown>; html: string }> = ${JSON.stringify(pages, null, 1)}\n`,

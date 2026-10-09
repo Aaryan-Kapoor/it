@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A checklist</title>
+<style>
+/*kit.css*/
+  :root { --field: #ffd84d; --w: 480px; }
+  /* The card gives way before the lines under it do: with a long list it is the list that scrolls */
+  .t-card { min-height: 0; padding-bottom: 22px; }
+  .t-log { flex: none; }
+
+  /* How far along it is: a thin line that fills, and the count in words */
+  .meter { display: flex; align-items: center; gap: 12px; margin-top: 2px; }
+  .track { flex: 1; height: 6px; border-radius: 99px; background: var(--paper2); overflow: hidden; }
+  .track i { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--ink); transition: width .4s cubic-bezier(.22, 1, .36, 1); }
+  .count { flex: none; font-size: 13px; font-weight: 600; color: var(--ink3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* The list, which scrolls inside the card when it is longer than the card can be */
+  .pane { position: relative; flex: 1 1 auto; min-height: 98px; display: flex; margin: -4px -10px; }
+  .pane::before, .pane::after {
+    content: ""; position: absolute; left: 0; right: 0; z-index: 1; height: 22px; pointer-events: none; opacity: 0; transition: opacity .2s;
+  }
+  .pane::before { top: 0; background: linear-gradient(#fff, rgba(255, 255, 255, 0)); }
+  .pane::after { bottom: 0; background: linear-gradient(rgba(255, 255, 255, 0), #fff); }
+  .pane[data-up="1"]::before, .pane[data-down="1"]::after { opacity: 1; }
+  .list {
+    position: relative; flex: 1; min-width: 0; min-height: 0; margin: 0; padding: 0; list-style: none;
+    overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #d8d2c6 transparent;
+  }
+  .row { display: block; border-radius: 14px; }
+  .item {
+    width: 100%; display: flex; align-items: flex-start; gap: 13px; padding: 9px 10px; border: 0; border-radius: 14px;
+    background: transparent; text-align: left; cursor: pointer; touch-action: manipulation; transition: background .15s;
+  }
+  .item:focus-visible { outline: 2px solid var(--sky); outline-offset: -2px; }
+  @media (hover: hover) { .item:hover { background: var(--paper); } .item:hover .box { border-color: var(--ink4); } }
+  .box {
+    flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px;
+    border: 2px solid #cfc9bd; background: #fff; transition: background .18s, border-color .18s, transform .12s;
+  }
+  .box svg { display: block; width: 18px; height: 18px; }
+  .box path {
+    fill: none; stroke: #fff; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round;
+    stroke-dasharray: 15; stroke-dashoffset: 15; transition: stroke-dashoffset .18s ease-out;
+  }
+  .item:active .box { transform: scale(.9); }
+  /* Ticked: the box fills with ink, the tick is drawn, and the words are struck through softly */
+  .item[aria-checked="true"] .box, .item[aria-checked="true"]:hover .box { background: var(--ink); border-color: var(--ink); animation: pop .18s cubic-bezier(.3, 1.5, .5, 1); }
+  .item[aria-checked="true"] .box path { stroke-dashoffset: 0; }
+  @keyframes pop { 0% { transform: scale(.8); } 60% { transform: scale(1.1); } 100% { transform: scale(1); } }
+  .words { flex: 1; min-width: 0; padding-top: 3px; font-size: 16.5px; line-height: 22px; font-weight: 550; letter-spacing: -.012em; overflow-wrap: anywhere; }
+  .text {
+    background: linear-gradient(var(--ink4), var(--ink4)) no-repeat 0 56% / 0 1.5px;
+    transition: background-size .18s ease-out, color .18s;
+  }
+  .item[aria-checked="true"] .text { color: var(--ink4); background-size: 100% 1.5px; }
+
+  /* What the agent added: its box is outlined in mint, ticked or not, its name comes after the words,
+     and why it added it under them */
+  .row[data-by="agent"] .box { border-color: var(--mint); }
+  .who { display: inline-flex; align-items: center; gap: 5px; margin-left: 9px; font-size: 12px; line-height: 16px; font-weight: 650; letter-spacing: 0; color: var(--ink3); white-space: nowrap; vertical-align: 1px; }
+  .who i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .why { display: block; margin-top: 1px; font-size: 13px; line-height: 18px; font-weight: 450; letter-spacing: 0; color: var(--ink3); }
+  .why:empty { display: none; }
+  .item[aria-checked="true"] .why { color: var(--ink4); }
+
+  /* Coming, going, and being pointed at. One that comes opens from nothing to its own height and
+     what is in it rises as it does, so that the list is never for a moment longer than it is.
+     The agent's come in on a wash of its green, which then goes */
+  .row.in { overflow: hidden; transition: height .32s cubic-bezier(.22, 1, .36, 1); }
+  .row.in .item { animation: rise .46s cubic-bezier(.22, 1, .36, 1) backwards; }
+  .row.fresh { animation: wash 2s ease-out backwards; }
+  .row.out { height: 0 !important; opacity: 0; overflow: hidden; transition: height .24s cubic-bezier(.4, 0, .2, 1), opacity .18s; }
+  .row.nudge .item { animation: nudge .7s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+  @keyframes wash { from { background-color: rgba(47, 208, 138, .26); } to { background-color: rgba(47, 208, 138, 0); } }
+  @keyframes nudge { 0%, 100% { background-color: transparent; } 25% { background-color: var(--paper2); } }
+
+  /* Adding one of your own */
+  .add { display: flex; gap: 8px; }
+  .add input {
+    flex: 1; min-width: 0; height: 46px; padding: 0 15px; border-radius: 14px; border: 1.5px solid transparent;
+    background: var(--paper); color: var(--ink); font: inherit; font-size: 16px; letter-spacing: -.01em;
+    transition: background .15s, border-color .15s;
+  }
+  .add input::placeholder { color: var(--ink3); opacity: 1; }
+  .add input:focus { outline: none; background: #fff; border-color: var(--ink); }
+  .add .t-btn { flex: none; height: 46px; }
+
+  /* On a screen too short for a card and what is under it, the whole page scrolls and the list does not */
+  @media (max-height: 560px) {
+    body { overflow-y: auto; }
+    .t-wrap { flex: none; min-height: 100%; justify-content: flex-start; }
+    .t-card { max-height: none; }
+    .pane { flex: none; }
+    .list { overflow: visible; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .track i, .box, .box path, .text, .item, .row.in, .row.out { transition: none; }
+    .item[aria-checked="true"] .box, .row.in .item, .row.fresh, .row.nudge .item { animation: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="t-wrap">
+    <div class="t-card">
+      <div class="t-plate" id="t-plate"><i></i><b></b><small></small></div>
+      <h1 class="t-h" id="head">{{heading}}</h1>
+      <p class="t-sub">{{sub}}</p>
+      <div class="meter"><span class="track" aria-hidden="true"><i id="fill"></i></span><span class="count" id="count"></span></div>
+      <div class="pane" id="pane"><ul class="list" id="list" aria-labelledby="head"></ul></div>
+      <form class="add" id="add" autocomplete="off">
+        <input id="new" type="text" maxlength="80" placeholder="Add something" aria-label="Add something" enterkeyhint="done">
+        <button class="t-btn" id="put" type="submit" disabled>Add</button>
+      </form>
+    </div>
+    <div class="t-log" aria-live="polite">
+      <p class="t-you" id="t-you"><span>&larr; you</span><b></b></p>
+      <p class="t-did" id="t-did"><span></span><b></b></p>
+    </div>
+  </div>
+<!--rail-->
+<script>
+/*kit.js*/
+</script>
+<script>
+  // A list to tick off and add to. A moment after the person stops, the agent is told the whole
+  // list. What the agent adds comes back in the page's state, as `added`, and is put on the same
+  // list as the agent's own.
+  Tour.ready(() => {
+    var It = Tour.It, P = Tour.P, agent = Tour.agent;
+    var $ = (id) => document.getElementById(id);
+    var list = $("list"), pane = $("pane"), form = $("add"), field = $("new"), put = $("put"), count = $("count"), fill = $("fill");
+    var TICK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.5l3.2 3.2 6.4-7.2"/></svg>';
+    var MOST = 60;      // as long as a list gets, so that telling the agent of it stays small
+    var PAUSE = 1200;   // how long after the last tick or addition the agent is told
+    var QUIET = 20000;  // how long the plate beats with nothing heard back
+    var calm = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    var items = [], rows = {}, seq = 0;
+    var ticked = {}, unticked = {}, mine = [];   // what the person has done since the agent was last told
+    var telling = 0, quiet = 0, heard = null, lastNote = "", loaded = false;
+
+    function tidy(text, most) {
+      return typeof text === "string" || typeof text === "number" ? String(text).replace(/\s+/g, " ").trim().slice(0, most) : "";
+    }
+    var word = tidy(P.done_word, 24) || "packed";
+    function find(text) {
+      var k = text.toLowerCase();
+      for (var i = 0; i < items.length; i++) if (items[i].text.toLowerCase() === k) return items[i];
+      return null;
+    }
+    var things = (n) => n + (n === 1 ? " thing" : " things");
+    var short = (text) => (text.length > 34 ? text.slice(0, 32).trim() + "…" : text);
+
+    // One row: a checkbox that is the whole row, so that the words can be pressed as well as the box
+    function row(item) {
+      var li = document.createElement("li"), b = document.createElement("button");
+      var box = document.createElement("span"), words = document.createElement("span"), text = document.createElement("span");
+      li.className = "row"; li.setAttribute("data-by", item.by);
+      b.type = "button"; b.className = "item"; b.setAttribute("role", "checkbox");
+      box.className = "box"; box.innerHTML = TICK;
+      words.className = "words"; text.className = "text"; text.textContent = item.text;
+      words.appendChild(text);
+      if (item.by === "agent") {
+        var who = document.createElement("span"), why = document.createElement("span");
+        who.className = "who"; who.appendChild(document.createElement("i")); who.appendChild(document.createTextNode(agent));
+        why.className = "why";
+        words.appendChild(who); words.appendChild(why);
+      }
+      b.appendChild(box); b.appendChild(words); li.appendChild(b);
+      b.addEventListener("click", () => toggle(item));
+      return li;
+    }
+    // What of a row can change: whether it is ticked, and why the agent added it
+    function dress(item) {
+      var li = rows[item.id];
+      if (!li) return;
+      var b = li.firstChild;
+      b.setAttribute("aria-checked", item.done ? "true" : "false");
+      if (item.by !== "agent") return;
+      li.querySelector(".why").textContent = item.why;
+      b.setAttribute("aria-label", item.text + ", added by " + agent + (item.why ? ": " + item.why : ""));
+    }
+    function edges() {
+      pane.setAttribute("data-up", list.scrollTop > 2 ? "1" : "0");
+      pane.setAttribute("data-down", list.scrollTop + list.clientHeight < list.scrollHeight - 2 ? "1" : "0");
+    }
+    // Moves the list some part of the way to where a row is wholly in it
+    function settle(li, part) {
+      var high = li.offsetTop, low = Math.min(high, li.offsetTop + li.offsetHeight - list.clientHeight);
+      var far = (list.scrollTop < low ? low : list.scrollTop > high ? high : list.scrollTop) - list.scrollTop;
+      if (far) list.scrollTop += (far < 0 ? -1 : 1) * Math.min(Math.abs(far), Math.max(1, Math.abs(far) * part));
+    }
+    // Brings a row into sight and keeps it there while it opens, by scrolling the list and nothing outside it
+    var seeing = null, until = 0;
+    function reveal(li) {
+      if (calm) { settle(li, 1); return; }
+      var going = !!seeing;
+      seeing = li;
+      until = performance.now() + 700;
+      if (going) return;
+      requestAnimationFrame(function frame(now) {
+        var last = now > until || !seeing.isConnected;
+        if (seeing.isConnected) settle(seeing, last ? 1 : .24);
+        if (last) { seeing = null; edges(); } else requestAnimationFrame(frame);
+      });
+    }
+    function mount(item, sliding) {
+      if (rows[item.id] || items.indexOf(item) < 0) return;
+      var li = (rows[item.id] = row(item)), after = null;
+      dress(item);
+      // It goes where it is in the list: before the first one after it that is already shown
+      for (var i = items.indexOf(item) + 1; i < items.length && !after; i++) after = rows[items[i].id] || null;
+      list.insertBefore(li, after);
+      if (sliding && !calm) {
+        var tall = li.offsetHeight;
+        li.style.height = "0px";
+        li.classList.add("in");
+        if (item.by === "agent") li.classList.add("fresh");
+        void li.offsetHeight;
+        li.style.height = tall + "px";
+        setTimeout(() => { li.classList.remove("in"); li.style.height = ""; edges(); }, 520);
+      }
+      if (sliding) reveal(li);
+      edges();
+    }
+    function unmount(item) {
+      var li = rows[item.id];
+      delete rows[item.id];
+      if (!li) return;
+      li.style.height = li.offsetHeight + "px";
+      void li.offsetHeight;
+      li.firstChild.disabled = true;
+      li.classList.add("out");
+      setTimeout(() => { li.remove(); edges(); }, calm ? 0 : 280);
+    }
+    function tally() {
+      var n = items.length, d = items.filter((i) => i.done).length;
+      count.textContent = n ? d + " of " + n + " " + word : "Nothing on it yet";
+      fill.style.width = n ? (100 * d) / n + "%" : "0";
+      put.disabled = !field.value.trim() || n >= MOST;
+    }
+
+    // ── What the person does ──
+    function toggle(item) {
+      item.done = !item.done;
+      dress(item);
+      tally();
+      // Ticking one and unticking it again is nothing done
+      var into = item.done ? ticked : unticked, outOf = item.done ? unticked : ticked;
+      if (outOf[item.id]) delete outOf[item.id]; else into[item.id] = 1;
+      soon();
+    }
+    field.addEventListener("input", tally);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      var text = tidy(field.value, 80);
+      if (!text) return;
+      var there = find(text);
+      if (!there && items.length >= MOST) return;
+      // The words are taken, and the place to write stays ready for the next ones, however Add was pressed
+      field.value = "";
+      field.focus();
+      if (there) {
+        // It is on the list already: the one that is there is pointed at, and nothing is added
+        var li = rows[there.id];
+        if (li) { reveal(li); li.classList.remove("nudge"); void li.offsetWidth; li.classList.add("nudge"); }
+        tally();
+        return;
+      }
+      var item = { id: ++seq, text: text, done: false, by: "you", why: "" };
+      items.push(item);
+      mine.push(text);
+      mount(item, true);
+      tally();
+      soon();
+    });
+    function soon() {
+      clearTimeout(telling);
+      if (!Object.keys(ticked).length && !Object.keys(unticked).length && !mine.length) return;
+      telling = setTimeout(tell, PAUSE);
+    }
+    // Tells the agent the whole list as it now is, and says under the card what was just done to it
+    function tell() {
+      var said = [], t = Object.keys(ticked).length, u = Object.keys(unticked).length, a = mine.length;
+      if (t) said.push("ticked " + things(t));
+      if (u) said.push("unticked " + things(u));
+      if (a) said.push("added " + short(mine[0]) + (a > 1 ? " and " + (a - 1) + " more" : ""));
+      var last = said.pop();
+      Tour.say("you", said.length ? said.join(", ") + (a > 1 ? ", " : " and ") + last : last);
+      ticked = {}; unticked = {}; mine = [];
+      clearTimeout(quiet);
+      quiet = setTimeout(() => Tour.plate("", false), QUIET);
+      Tour.act("list", { items: items.map((i) => ({ text: i.text, done: i.done, by: i.by })) }).catch(() => clearTimeout(quiet));
+    }
+
+    // ── What the agent does ──
+    // What the agent has added, as the state has it: each thing once, in words of a sensible length
+    function wanted() {
+      var given = (It.state || {}).added, out = [], had = {};
+      (Array.isArray(given) ? given : []).forEach((one) => {
+        var text = tidy(one && typeof one === "object" ? one.text : one, 80), k = text.toLowerCase();
+        if (!text || had[k] || out.length >= 20) return;
+        had[k] = 1;
+        out.push({ text: text, why: tidy(one && one.why, 120) });
+      });
+      return out;
+    }
+    function hear() {
+      var want = wanted(), note = tidy((It.state || {}).note, 160);
+      var now = JSON.stringify([want, note]);
+      clearTimeout(quiet);
+      // Heard from, with nothing new said: the plate stops beating and all else stays
+      if (now === heard) { Tour.plate($("t-plate").querySelector("small").textContent, false); return; }
+      heard = now;
+      var fresh = [], gone = [], asked = {};
+      want.forEach((one) => {
+        var item = find(one.text);
+        if (item) {
+          // On the list already. Where it is the agent's own it stays, with why as it is now given
+          if (item.by === "agent") { asked[item.id] = 1; item.stays = false; if (item.why !== one.why) { item.why = one.why; dress(item); } }
+          return;
+        }
+        if (items.length >= MOST) return;
+        item = { id: ++seq, text: one.text, done: false, by: "agent", why: one.why, stays: false };
+        items.push(item);
+        asked[item.id] = 1;
+        fresh.push(item);
+      });
+      // What the agent no longer has in `added` goes again, unless the person has ticked it: then
+      // it stays, and goes on staying whatever they do with it after
+      items.slice().forEach((item) => {
+        if (item.by !== "agent" || asked[item.id] || item.stays) return;
+        if (item.done) { item.stays = true; return; }
+        items.splice(items.indexOf(item), 1);
+        gone.push(item);
+        unmount(item);
+      });
+      // They slide in one after another. What was there when the page opened is simply there
+      var step = fresh.length > 6 ? 140 : 260;
+      fresh.forEach((item, i) => { if (loaded && !calm) setTimeout(() => mount(item, true), i * step); else mount(item, false); });
+      tally();
+
+      var told = note && note !== lastNote;
+      lastNote = note;
+      Tour.plate(fresh.length ? "added " + things(fresh.length) : "", false);
+      if (told) Tour.say("did", note);
+      else if (fresh.length) {
+        var first = fresh[0], more = fresh.length - 1;
+        Tour.say("did", "added " + short(first.text) + (first.why ? ", for " + first.why : "") + (more ? (first.why ? ", and " : " and ") + more + " more" : ""));
+      } else if (gone.length) Tour.say("did", "took " + (gone.length === 1 ? short(gone[0].text) : things(gone.length)) + " off again");
+    }
+
+    // ── The list it starts with ──
+    var given = P.items;
+    if (typeof given === "string") { try { given = JSON.parse(given); } catch (e) { given = given.split(/\n|,/); } }
+    if (!Array.isArray(given)) given = ["Passport", "Phone charger", "Toothbrush", "Rain jacket", "Book for the train"];
+    given.forEach((one) => {
+      var text = tidy(one, 80);
+      if (text && !find(text) && items.length < 40) items.push({ id: ++seq, text: text, done: false, by: "you", why: "" });
+    });
+    items.forEach((item) => mount(item, false));
+    list.addEventListener("scroll", edges, { passive: true });
+    window.addEventListener("resize", edges);
+    if (window.ResizeObserver) new ResizeObserver(edges).observe(list);
+    It.onState(hear);
+    hear();
+    loaded = true;
+    edges();
+  });
+</script>
+</body>
+</html>

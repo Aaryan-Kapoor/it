@@ -9,6 +9,7 @@
       "!**/*.generated.ts",
       "!e2e/fixtures",
       "!packages/cli/tour/pages",
+      "!packages/cli/tour/kit",
       "!web/src/film/film.js"
     ]
   },

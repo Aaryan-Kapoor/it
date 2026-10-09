@@ -3,452 +3,217 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Whiteboard</title>
+<title>A whiteboard</title>
 <style>
-  :root {
-    --bg: #0a0a0a;
-    --interactive: #121212;
-    --fg: #ffffff;
-    --fg-muted: rgba(255,255,255,.62);
-    --fg-faint: rgba(255,255,255,.40);
-    --line: rgba(255,255,255,.12);
-    --line-strong: rgba(255,255,255,.34);
-    --ok: #34d399;
-    --ink: #ffffff;      /* what a stroke is drawn in */
-    --paper: #0a0a0a;    /* what the exported PNG is drawn on */
+/*kit.css*/
+  :root { --field: #f4f1ea; --w: 860px; }
+  .t-wrap { gap: 12px; }
+  .t-card { flex: 1; max-height: 640px; min-height: 0; gap: 14px; padding: 22px 24px 20px; }
+  .top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-right: 150px; }
+  .top .t-h { font-size: clamp(22px, 3vw, 30px); }
+  /* The board: paper with a grid of dots, as the film draws it */
+  .board {
+    position: relative; flex: 1; min-height: 180px; border-radius: 18px; overflow: hidden;
+    background-color: #fbfaf7;
+    background-image: radial-gradient(circle, #d9d4c9 1.2px, transparent 1.4px); background-size: 22px 22px;
+    box-shadow: inset 0 0 0 1px var(--line);
   }
-  @media (prefers-color-scheme: light) {
-    :root {
-      --bg: #f6f6f7; --interactive: #ffffff; --fg: #0b0c0e;
-      --fg-muted: rgba(11,12,14,.62); --fg-faint: rgba(11,12,14,.42);
-      --line: rgba(11,12,14,.12); --line-strong: rgba(11,12,14,.34); --ok: #067647;
-      --ink: #0b0c0e; --paper: #ffffff;
-    }
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; }
-  body {
-    margin: 0; background: var(--bg); color: var(--fg);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    -webkit-font-smoothing: antialiased;
-    display: flex; flex-direction: column; height: 100%; overflow: hidden;
-  }
-  header {
-    flex: none;
-    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
-    padding: 20px 24px 0;
-  }
-  h1 { margin: 0; font-size: 19px; font-weight: 620; letter-spacing: -.02em; }
-  .prompt { font-size: 13.5px; color: var(--fg-muted); }
-
-  .stage { flex: 1 1 auto; min-height: 0; padding: 14px 24px; }
-  .paper {
-    position: relative;
-    width: 100%; height: 100%;
-    background: var(--interactive);
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    overflow: hidden;
-    touch-action: none;   /* the canvas owns the gesture */
-  }
-  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
-
+  .board canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
   .hint {
-    position: absolute; inset: 0;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 14px; color: var(--fg-faint); pointer-events: none;
-    transition: opacity .2s ease;
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none;
+    font-size: 17px; font-weight: 600; color: var(--ink4); transition: opacity .25s;
   }
-  .hint[hidden] { display: none; }
-
-  footer {
-    flex: none;
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    padding: 0 24px 20px;
-  }
-  .tool {
-    font: inherit; font-size: 13.5px; font-weight: 500;
-    color: var(--fg); background: var(--interactive);
-    border: 1px solid var(--line); border-radius: 10px;
-    padding: 9px 14px; cursor: pointer;
-    transition: border-color .15s ease;
-  }
-  .tool:hover:not(:disabled) { border-color: var(--line-strong); }
-  .tool:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
-  .tool:disabled { opacity: .35; cursor: default; }
-  .tool.on { border-color: var(--line-strong); box-shadow: inset 0 0 0 1px var(--line-strong); }
-
-  .widths { display: flex; gap: 6px; align-items: center; }
-  .w {
-    width: 34px; height: 34px; display: grid; place-items: center;
-    background: var(--interactive); border: 1px solid var(--line);
-    border-radius: 10px; cursor: pointer; padding: 0;
-  }
-  .w span { display: block; border-radius: 999px; background: var(--fg); }
-  .w:hover { border-color: var(--line-strong); }
-  .w:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
-  .w.on { border-color: var(--line-strong); box-shadow: inset 0 0 0 1px var(--line-strong); }
-
-  .spacer { flex: 1 1 auto; }
-  .send {
-    font: inherit; font-size: 13.5px; font-weight: 600;
-    color: var(--bg); background: var(--fg);
-    border: 0; border-radius: 10px; padding: 10px 18px; cursor: pointer;
-  }
-  .send:disabled { opacity: .3; cursor: default; }
-  .send:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
-
-  .note {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 13px; color: var(--fg-muted); padding: 0 24px 16px;
-    min-height: 18px;
-  }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
-
+  .hint[hidden] { display: flex; opacity: 0; }
+  .tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  /* The pens, as dots of their colour in one pill */
+  .pens { display: inline-flex; align-items: center; gap: 4px; height: 44px; padding: 0 8px; border-radius: 999px; background: var(--paper); }
+  .pen { width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; display: grid; place-items: center; }
+  .pen i { width: 20px; height: 20px; border-radius: 50%; background: var(--c); transition: transform .15s; }
+  .pen[aria-pressed="true"] { box-shadow: inset 0 0 0 2.5px var(--ink4); }
+  .pen[aria-pressed="true"] i { transform: scale(.82); }
+  .pen.rub i { background: #fff; box-shadow: inset 0 0 0 2px var(--ink4); }
+  .tool { height: 44px; padding: 0 14px; border: 0; border-radius: 14px; background: var(--paper); font-size: 14px; font-weight: 600; cursor: pointer; }
+  .tool:disabled { opacity: .4; cursor: default; }
+  .tools .gap { flex: 1; }
   @media (max-width: 620px) {
-    header, .stage, footer, .note { padding-left: 14px; padding-right: 14px; }
-    .tool, .send { padding: 9px 12px; }
-  }
-  @media (prefers-reduced-motion: reduce) { .tool, .hint { transition: none; } }
-
-  /* ── Tour rail ──
-     Present only while this page is a step in the guided tour. It is the
-     one control that is the same object on every demo, so moving on never
-     depends on finding a different button in a different place. */
-  .tour-rail {
-    position: fixed;
-    right: 16px;
-    bottom: 16px;
-    display: none;
-    align-items: center;
-    gap: 12px;
-    padding: 9px 10px 9px 16px;
-    background: var(--interactive, #121212);
-    border: 1px solid var(--line, rgba(255,255,255,.12));
-    border-radius: 999px;
-    box-shadow: 0 12px 34px rgba(0,0,0,.45);
-    z-index: 50;
-  }
-  .tour-rail[data-on="1"] { display: flex; }
-  .tour-step {
-    font-size: 11px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase;
-    color: var(--fg-faint, rgba(255,255,255,.4)); white-space: nowrap;
-  }
-  .tour-next {
-    font: inherit; font-size: 13.5px; font-weight: 600;
-    color: var(--bg, #0a0a0a); background: var(--fg, #fff);
-    border: 0; border-radius: 999px; padding: 8px 18px; cursor: pointer;
-    white-space: nowrap;
-  }
-  .tour-next:disabled { opacity: .4; cursor: default; }
-  .tour-next:focus-visible { outline: 2px solid var(--fg, #fff); outline-offset: 2px; }
-  @media (max-width: 620px) { .tour-rail { left: 14px; right: 14px; justify-content: space-between; } }
-  /* The rail floats over the bottom-right corner, which is exactly where a
-     demo puts its own primary action — it was swallowing the clicks on Send.
-     A page that is a tour step yields that corner. */
-  html[data-tour="1"] footer { padding-right: 208px; }
-  @media (max-width: 620px) {
-    html[data-tour="1"] footer { padding-right: 0; padding-bottom: 66px; }
+    .top { padding-right: 0; padding-top: 14px; }
+    .tool { padding: 0 11px; }
   }
 </style>
 </head>
 <body>
-  <header>
-    <h1>{{title}}</h1>
-    <span class="prompt">{{prompt}}</span>
-  </header>
-
-  <div class="stage">
-    <div class="paper" id="paper">
-      <canvas id="c"></canvas>
-      <div class="hint" id="hint">Draw here</div>
+  <div class="t-wrap">
+    <div class="t-card">
+      <div class="t-plate" id="t-plate"><i></i><b></b><small></small></div>
+      <div class="top"><h1 class="t-h">{{prompt}}</h1></div>
+      <div class="board" id="paper">
+        <canvas id="c" aria-label="The whiteboard. Draw on it with a mouse, a finger or a pen."></canvas>
+        <div class="hint" id="hint">Draw here</div>
+      </div>
+      <div class="tools">
+        <div class="pens" id="pens" role="group" aria-label="Pens"></div>
+        <button class="tool" id="undo" type="button">Undo</button>
+        <button class="tool" id="clear" type="button">Clear</button>
+        <span class="gap"></span>
+        <button class="t-btn" id="send" type="button">Send</button>
+      </div>
+    </div>
+    <div class="t-log" aria-live="polite">
+      <p class="t-you" id="t-you"><span>&larr; you</span><b></b></p>
+      <p class="t-did" id="t-did"><span></span><b></b></p>
     </div>
   </div>
+<!--rail-->
+<script>
+/*kit.js*/
+</script>
+<script>
+  // A board two can draw on. What the person draws is theirs until they send it: the agent is
+  // then given the drawing as a picture and as its lines, and what it draws back comes in the
+  // page's state and is drawn on the same board, in green.
+  // Lines are kept as parts of the board (0 to 1 across and down) and not as pixels, so that
+  // the board survives being made larger or turned, and so that the agent's lines mean on the
+  // way back what the person's meant on the way out.
+  Tour.ready(() => {
+    var It = Tour.It;
+    var PENS = [["#0e0e10", "Black"], ["#ff5b45", "Red"], ["#3d7bff", "Blue"]];
+    var GREEN = "#1fb877", PAPER = "#fbfaf7";
+    var paper = document.getElementById("paper"), canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
+    var hint = document.getElementById("hint"), pens = document.getElementById("pens");
+    var sendBtn = document.getElementById("send"), undoBtn = document.getElementById("undo"), clearBtn = document.getElementById("clear");
+    var mine = [], theirs = [], current = null, colour = PENS[0][0], rubbing = false, sent = false;
 
-  <footer>
-    <button class="tool" id="pen" type="button">Pen</button>
-    <button class="tool" id="eraser" type="button">Eraser</button>
-    <div class="widths" id="widths"></div>
-    <button class="tool" id="undo" type="button">Undo</button>
-    <button class="tool" id="clear" type="button">Clear</button>
-    <span class="spacer"></span>
-    <button class="send" id="send" type="button">Send to agent</button>
-  </footer>
-  <div class="note" id="note"></div>
-
-  <script>
-  (() => {
-    // Strokes are stored normalised (0..1) rather than in pixels, so the board
-    // survives a resize, a rotate and a different screen — and so the agent's
-    // strokes mean the same thing coming back as they did going out.
-    var WIDTHS = [2, 4, 9];
-
-    function init() {
-      var It = window.It || {
-        state: {}, onState: () => () => {},
-        action: () => Promise.resolve()
-      };
-
-      var paper = document.getElementById("paper");
-      var canvas = document.getElementById("c");
-      var ctx = canvas.getContext("2d");
-      var hint = document.getElementById("hint");
-      var noteEl = document.getElementById("note");
-      var sendBtn = document.getElementById("send");
-      var penBtn = document.getElementById("pen");
-      var eraserBtn = document.getElementById("eraser");
-      var undoBtn = document.getElementById("undo");
-      var clearBtn = document.getElementById("clear");
-      var widthsEl = document.getElementById("widths");
-
-      var mine = [];          // strokes drawn here
-      var theirs = [];        // strokes the agent sent back
-      var current = null;
-      var erasing = false;
-      var width = WIDTHS[1];
-
-      function ink() {
-        return getComputedStyle(document.documentElement).getPropertyValue("--ink").trim() || "#ffffff";
-      }
-      function paperColor() {
-        return getComputedStyle(document.documentElement).getPropertyValue("--paper").trim() || "#0a0a0a";
-      }
-
-      WIDTHS.forEach((w) => {
-        var b = document.createElement("button");
-        b.type = "button";
-        b.className = "w" + (w === width ? " on" : "");
-        b.setAttribute("aria-label", "stroke width " + w);
-        var d = document.createElement("span");
-        d.style.width = Math.min(w + 3, 14) + "px";
-        d.style.height = Math.min(w + 3, 14) + "px";
-        b.appendChild(d);
-        b.addEventListener("click", () => {
-          width = w;
-          var kids = widthsEl.children;
-          for (var i = 0; i < kids.length; i++) kids[i].classList.toggle("on", kids[i] === b);
-        });
-        widthsEl.appendChild(b);
+    function tool(label, cls, pick, c) {
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "pen" + (cls ? " " + cls : ""); b.setAttribute("aria-label", label); b.setAttribute("aria-pressed", "false");
+      var dot = document.createElement("i");
+      if (c) dot.style.setProperty("--c", c);
+      b.appendChild(dot);
+      b.addEventListener("click", () => {
+        pick();
+        [].forEach.call(pens.children, (k) => k.setAttribute("aria-pressed", k === b ? "true" : "false"));
       });
-
-      function setTool(isEraser) {
-        erasing = isEraser;
-        penBtn.classList.toggle("on", !isEraser);
-        eraserBtn.classList.toggle("on", isEraser);
-        canvas.style.cursor = isEraser ? "cell" : "crosshair";
-      }
-      penBtn.addEventListener("click", () => { setTool(false); });
-      eraserBtn.addEventListener("click", () => { setTool(true); });
-      setTool(false);
-
-      function size() {
-        var r = paper.getBoundingClientRect();
-        var dpr = window.devicePixelRatio || 1;
-        canvas.width = Math.max(1, Math.round(r.width * dpr));
-        canvas.height = Math.max(1, Math.round(r.height * dpr));
-        redraw();
-      }
-
-      function strokePath(target, s, w, h) {
-        var pts = s.points || [];
-        if (!pts.length) return;
-        target.beginPath();
-        target.lineWidth = (s.width || 4) * (w / 1000);
-        target.lineCap = "round";
-        target.lineJoin = "round";
-        target.strokeStyle = s.erase ? paperColor() : (s.color || ink());
-        target.globalCompositeOperation = s.erase ? "destination-out" : "source-over";
-        if (s.erase) target.strokeStyle = "#000";
-        target.moveTo(pts[0][0] * w, pts[0][1] * h);
-        for (var i = 1; i < pts.length; i++) target.lineTo(pts[i][0] * w, pts[i][1] * h);
-        if (pts.length === 1) target.lineTo(pts[0][0] * w + 0.01, pts[0][1] * h);
-        target.stroke();
-        target.globalCompositeOperation = "source-over";
-      }
-
-      function paintInto(target, w, h) {
-        for (var i = 0; i < mine.length; i++) strokePath(target, mine[i], w, h);
-        for (var j = 0; j < theirs.length; j++) strokePath(target, theirs[j], w, h);
-      }
-
-      function redraw() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        paintInto(ctx, canvas.width, canvas.height);
-        var empty = !mine.length && !theirs.length;
-        hint.hidden = !empty;
-        undoBtn.disabled = !mine.length;
-        clearBtn.disabled = empty;
-        sendBtn.disabled = !mine.length;
-      }
-
-      function at(e) {
-        var r = canvas.getBoundingClientRect();
-        return [
-          Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
-          Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))
-        ];
-      }
-
-      canvas.addEventListener("pointerdown", (e) => {
-        canvas.setPointerCapture(e.pointerId);
-        current = { points: [at(e)], width: width, erase: erasing };
-        mine.push(current);
-        redraw();
-      });
-      canvas.addEventListener("pointermove", (e) => {
-        if (!current) return;
-        current.points.push(at(e));
-        redraw();
-      });
-      function end() { current = null; }
-      canvas.addEventListener("pointerup", end);
-      canvas.addEventListener("pointercancel", end);
-      canvas.addEventListener("pointerleave", end);
-
-      undoBtn.addEventListener("click", () => { mine.pop(); redraw(); });
-      clearBtn.addEventListener("click", () => {
-        mine = [];
-        theirs = [];
-        redraw();
-        It.action("cleared", {}).catch(() => {});
-      });
-
-      // A picture the agent can open, drawn on an opaque page so that a dark stroke on
-      // nothing does not arrive as a blank square. It rides inside an action, which holds
-      // 32 KB, so it is drawn small.
-      function exportPng() {
-        var r = paper.getBoundingClientRect();
-        var w = Math.min(420, Math.round(r.width)) || 420;
-        var h = Math.round(w * (r.height / Math.max(1, r.width))) || 625;
-        var off = document.createElement("canvas");
-        off.width = w;
-        off.height = h;
-        var octx = off.getContext("2d");
-        octx.fillStyle = paperColor();
-        octx.fillRect(0, 0, w, h);
-        paintInto(octx, w, h);
-        try { return off.toDataURL("image/png"); } catch (err) { return null; }
-      }
-
-      // A line under the canvas with the dot that says something is under way
-      function working(text) {
-        noteEl.textContent = "";
-        var d = document.createElement("span");
-        d.className = "dot";
-        noteEl.appendChild(d);
-        noteEl.appendChild(document.createTextNode(text));
-      }
-
-      sendBtn.addEventListener("click", () => {
-        if (!mine.length) return;
-        sendBtn.disabled = true;
-        var png = exportPng();
-        // Where the picture alone would fill the action, the strokes go without it
-        if (png && png.length > 14000) png = null;
-        // A long drawing is sent with fewer points along each stroke, until it fits
-        var every = 1;
-        var budget = 30000 - (png ? png.length : 0);
-        var count = mine.reduce((n, s) => n + s.points.length, 0);
-        while (count / every * 14 > budget) every++;
-        It.action("snapshot", {
-          png: png,
-          strokes: mine.map((s) => {
-            // Round-trip precision beyond three decimals is noise at any real
-            // canvas size, and it triples the payload.
-            return {
-              width: s.width,
-              erase: !!s.erase,
-              points: s.points.filter((p, i) => i % every === 0 || i === s.points.length - 1).map((p) => [Math.round(p[0] * 1000) / 1000, Math.round(p[1] * 1000) / 1000])
-            };
-          })
-        }).then(() => {
-          // It has it. Whether the agent is looking yet is the agent's to say, by what it draws back
-          working("Sent. Waiting for your agent.");
-        }, () => {
-          // Refused: the button is given back, and the page says so
-          sendBtn.disabled = !mine.length;
-          noteEl.textContent = "That did not go through. Send it again.";
-        });
-        working("Sending…");
-      });
-
-      function asStrokes(value) {
-        if (typeof value === "string") {
-          try { value = JSON.parse(value); } catch (err) { return []; }
-        }
-        return Array.isArray(value) ? value : [];
-      }
-
-      function render() {
-        var st = It.state || {};
-        theirs = asStrokes(st.agent_strokes);
-
-        // The board the human drew is kept server-side once sent, so opening it
-        // again — or on another device — shows the drawing rather than a blank
-        // canvas with only the agent's marks on it. Live local strokes always
-        // win: adopting mid-drawing would fight the pointer.
-        if (!mine.length && !current) {
-          var saved = asStrokes(st.user_strokes);
-          if (saved.length) mine = saved;
-        }
-        redraw();
-        // Cleared unconditionally: a note that survives the note being removed
-        // is a caption for a drawing that is no longer on the board.
-        noteEl.textContent = "";
-        if (st.note) {
-          var d = document.createElement("span");
-          d.className = "dot";
-          noteEl.appendChild(d);
-          noteEl.appendChild(document.createTextNode(String(st.note)));
-        }
-      }
-
-      window.addEventListener("resize", size);
-      It.onState(render);
-      size();
-      render();
+      pens.appendChild(b);
+      return b;
     }
+    PENS.forEach((p) => tool(p[1] + " pen", "", () => { colour = p[0]; rubbing = false; }, p[0]));
+    tool("Eraser", "rub", () => { rubbing = true; });
+    pens.firstChild.setAttribute("aria-pressed", "true");
 
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-    else init();
-  })();
-  </script>
-  <div class="tour-rail" id="tour-rail">
-    <span class="tour-step" id="tour-step"></span>
-    <button class="tour-next" id="tour-next" type="button">Next</button>
-  </div>
-
-  <script>
-  // The tour rail. Every demo carries the identical control so that "move on"
-  // is one gesture in one place, and pressing it is an ordinary action — the
-  // agent is what advances the tour, not the page.
-  (() => {
-    function init() {
-      var P = window.__PARAMS || {};
-      if (!P.tour_step && !P.tour_next) return;
-      var rail = document.getElementById("tour-rail");
-      var step = document.getElementById("tour-step");
-      var next = document.getElementById("tour-next");
-      if (!rail || !next) return;
-
-      rail.setAttribute("data-on", "1");
-      document.documentElement.setAttribute("data-tour", "1");
-      step.textContent = String(P.tour_step || "");
-      next.textContent = String(P.tour_next || "Next");
-      next.addEventListener("click", () => {
-        next.disabled = true;
-        next.textContent = "Coming up…";
-        var It = window.It || { action: () => Promise.resolve() };
-        // Refused: the button is given back, so that the tour is not left where it stands
-        It.action("next", { from: P.tour_id || null }).catch(() => {
-          next.disabled = false;
-          next.textContent = "Try again";
-        });
-      });
+    function line(target, s, w, h, fallback) {
+      var pts = s.points || [];
+      if (!pts.length) return;
+      target.beginPath();
+      target.lineWidth = Math.max(1, (Number(s.width) || 4) * (w / 900));
+      target.lineCap = "round"; target.lineJoin = "round";
+      target.globalCompositeOperation = s.erase ? "destination-out" : "source-over";
+      target.strokeStyle = s.erase ? "#000" : (typeof s.color === "string" && s.color ? s.color : fallback);
+      target.moveTo(pts[0][0] * w, pts[0][1] * h);
+      for (var i = 1; i < pts.length; i++) target.lineTo(pts[i][0] * w, pts[i][1] * h);
+      if (pts.length === 1) target.lineTo(pts[0][0] * w + .01, pts[0][1] * h);
+      target.stroke();
+      target.globalCompositeOperation = "source-over";
     }
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-    else init();
-  })();
-  </script>
+    function paint(target, w, h) {
+      mine.forEach((s) => line(target, s, w, h, PENS[0][0]));
+      // The agent's lines are green wherever it gave them no colour of their own, and are never rubbed out by its own strokes
+      theirs.forEach((s) => line(target, { points: s.points, width: s.width, color: s.color }, w, h, GREEN));
+    }
+    function redraw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      paint(ctx, canvas.width, canvas.height);
+      var empty = !mine.length && !theirs.length;
+      hint.hidden = !empty;
+      undoBtn.disabled = !mine.length;
+      clearBtn.disabled = empty;
+      sendBtn.disabled = !mine.length || sent;
+    }
+    function size() {
+      var r = paper.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.round(r.width * dpr));
+      canvas.height = Math.max(1, Math.round(r.height * dpr));
+      redraw();
+    }
+    function at(e) {
+      var r = canvas.getBoundingClientRect();
+      return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
+    }
+    canvas.addEventListener("pointerdown", (e) => {
+      canvas.setPointerCapture(e.pointerId);
+      current = { points: [at(e)], width: rubbing ? 22 : 5, erase: rubbing, color: rubbing ? "" : colour };
+      mine.push(current);
+      sent = false;
+      redraw();
+    });
+    canvas.addEventListener("pointermove", (e) => { if (current) { current.points.push(at(e)); redraw(); } });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((kind) => canvas.addEventListener(kind, () => { current = null; }));
+    undoBtn.addEventListener("click", () => { mine.pop(); sent = false; redraw(); });
+    clearBtn.addEventListener("click", () => {
+      mine = []; theirs = []; sent = false;
+      redraw();
+      Tour.say("you", "cleared the board");
+      It.action("cleared", {}).catch(() => {});
+    });
+
+    // A picture the agent can open, on paper and not on nothing, so that a dark line does not
+    // arrive as a black square. It rides inside an action, which holds 32 KB, so it is drawn small.
+    function picture() {
+      var r = paper.getBoundingClientRect();
+      var w = Math.min(420, Math.round(r.width)) || 420, h = Math.round(w * (r.height / Math.max(1, r.width))) || 280;
+      var off = document.createElement("canvas");
+      off.width = w; off.height = h;
+      var g = off.getContext("2d");
+      // Drawn on a board of their own first: rubbing out takes the paper with it otherwise
+      var ink = document.createElement("canvas");
+      ink.width = w; ink.height = h;
+      paint(ink.getContext("2d"), w, h);
+      g.fillStyle = PAPER; g.fillRect(0, 0, w, h);
+      g.drawImage(ink, 0, 0);
+      try { return off.toDataURL("image/png"); } catch (err) { return null; }
+    }
+    sendBtn.addEventListener("click", () => {
+      if (!mine.length) return;
+      sent = true;
+      redraw();
+      var png = picture();
+      // Where the picture alone would fill the action, the lines go without it
+      if (png && png.length > 14000) png = null;
+      // A long drawing is sent with fewer points along each line, until it fits
+      var every = 1, budget = 30000 - (png ? png.length : 0);
+      var count = mine.reduce((n, s) => n + s.points.length, 0);
+      while (count / every * 14 > budget) every++;
+      Tour.say("you", "drew something, and sent it");
+      Tour.act("snapshot", {
+        png: png,
+        strokes: mine.map((s) => ({
+          width: s.width, erase: !!s.erase, color: s.color || "",
+          // Three decimals is finer than any board is, and more is three times the size
+          points: s.points.filter((p, i) => i % every === 0 || i === s.points.length - 1).map((p) => [Math.round(p[0] * 1000) / 1000, Math.round(p[1] * 1000) / 1000])
+        }))
+      }).catch(() => { sent = false; redraw(); Tour.say("you", "That did not go through. Send it again."); });
+    });
+
+    function lines(value) {
+      if (typeof value === "string") { try { value = JSON.parse(value); } catch (err) { return []; } }
+      return Array.isArray(value) ? value.filter((s) => s && Array.isArray(s.points)) : [];
+    }
+    var drawn = 0;
+    function render() {
+      var st = It.state || {};
+      theirs = lines(st.agent_strokes);
+      redraw();
+      if (theirs.length && theirs.length !== drawn) {
+        Tour.plate("drew on yours", false);
+        Tour.say("did", String(st.note || "looked at it, and drew on the same board"));
+      } else if (st.note) Tour.say("did", String(st.note));
+      drawn = theirs.length;
+    }
+    new ResizeObserver(size).observe(paper);
+    sendBtn.textContent = Tour.P.agent ? "Send to " + Tour.agent : "Send to your agent";
+    It.onState(render);
+    size();
+    render();
+  });
+</script>
 </body>
 </html>

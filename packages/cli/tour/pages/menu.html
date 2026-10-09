@@ -5,289 +5,219 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The It tour</title>
 <style>
-  /* The site's own three planes: the page sinks, and anything you can press lifts. */
+  /* The way in: every thing the tour has, as a picture of itself on its own colour. The page
+     behind them is the site's own dark, so that the colours are the things and nothing else is. */
   :root {
-    --bg: #0a0a0a;
-    --interactive: #121212;
-    --fg: #ffffff;
-    --fg-muted: rgba(255,255,255,.62);
-    --fg-faint: rgba(255,255,255,.40);
-    --line: rgba(255,255,255,.12);
-    --line-strong: rgba(255,255,255,.34);
-    --ok: #34d399;
-  }
-  @media (prefers-color-scheme: light) {
-    :root {
-      --bg: #f6f6f7;
-      --interactive: #ffffff;
-      --fg: #0b0c0e;
-      --fg-muted: rgba(11,12,14,.62);
-      --fg-faint: rgba(11,12,14,.42);
-      --line: rgba(11,12,14,.12);
-      --line-strong: rgba(11,12,14,.34);
-      --ok: #067647;
-    }
+    --bg: #0a0a0a; --fg: #ffffff; --muted: rgba(255, 255, 255, .62); --faint: rgba(255, 255, 255, .4);
+    --line: rgba(255, 255, 255, .12); --ok: #2fd08a; --ink: #0e0e10;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--fg);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    -webkit-font-smoothing: antialiased;
-    display: flex;
-    overflow-y: auto;
+    margin: 0; background: var(--bg); color: var(--fg); overflow-y: auto;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased;
   }
-  main {
-    width: 100%;
-    max-width: 900px;
-    margin: auto;
-    padding: 56px 32px;
-    display: flex;
-    flex-direction: column;
-    gap: 28px;
+  button, input { font: inherit; }
+  main { min-height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 26px; width: min(100%, 1040px); margin: 0 auto; padding: 36px 24px 30px; }
+  h1 { margin: 0; font-size: clamp(34px, 5vw, 56px); font-weight: 750; letter-spacing: -.045em; line-height: 1.02; }
+  h1 i { display: inline-block; width: .2em; height: .2em; margin-left: .04em; border-radius: 50%; background: var(--ok); }
+  .sub { margin: 10px 0 0; max-width: 46ch; font-size: 17px; line-height: 1.45; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .thing {
+    position: relative; display: flex; flex-direction: column; padding: 0; border: 0; border-radius: 22px; overflow: hidden; cursor: pointer;
+    text-align: left; color: var(--ink); background: var(--field, #f4f1ea);
+    transition: transform .25s cubic-bezier(.22, 1, .36, 1), box-shadow .25s, opacity .25s;
   }
-  h1 {
-    margin: 0;
-    font-size: clamp(26px, 4vw, 38px);
-    font-weight: 620;
-    letter-spacing: -.03em;
-    line-height: 1.1;
+  .thing.dark { color: #fff; }
+  .thing:hover { transform: translateY(-3px); box-shadow: 0 22px 40px -22px rgba(0, 0, 0, .9); }
+  .thing:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+  .thing svg { display: block; width: 100%; height: auto; aspect-ratio: 220 / 132; }
+  .thing .words { padding: 0 18px 18px; }
+  .thing .name { font-size: 21px; font-weight: 750; letter-spacing: -.03em; }
+  .thing .line { margin-top: 3px; font-size: 14px; line-height: 1.35; opacity: .66; }
+  /* One that has been seen says so, and one that was just picked says it is on its way */
+  .thing .seen {
+    position: absolute; top: 12px; right: 12px; display: none; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px;
+    border-radius: 999px; background: #10231b; color: #fff; font-size: 12px; font-weight: 650;
   }
-  .sub { margin: -18px 0 0; font-size: 15px; line-height: 1.5; color: var(--fg-muted); max-width: 56ch; }
-
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    gap: 12px;
+  .thing .seen::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .thing[data-seen="1"] .seen { display: inline-flex; }
+  .grid[data-picked] .thing { opacity: .35; cursor: default; transform: none; box-shadow: none; }
+  .grid[data-picked] .thing[data-on="1"] { opacity: 1; outline: 3px solid #fff; outline-offset: 3px; }
+  .own {
+    display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 20px; border-radius: 22px;
+    border: 1.5px dashed rgba(255, 255, 255, .22); color: var(--fg);
   }
-  .pick {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-    text-align: left;
-    font: inherit;
-    color: var(--fg);
-    background: var(--interactive);
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 18px 18px 16px;
-    cursor: pointer;
-    transition: border-color .15s ease, transform .12s ease, box-shadow .15s ease;
+  .own .name { font-size: 21px; font-weight: 750; letter-spacing: -.03em; }
+  .own .line { font-size: 14px; line-height: 1.35; color: var(--muted); }
+  .own form { display: flex; gap: 8px; }
+  .own input {
+    flex: 1; min-width: 0; height: 42px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line);
+    background: rgba(255, 255, 255, .06); color: var(--fg); font-size: 15px;
   }
-  .pick:hover:not(:disabled) {
-    border-color: var(--line-strong);
-    transform: translateY(-3px);
-    box-shadow: 0 10px 30px rgba(0,0,0,.35);
-  }
-  .pick:active:not(:disabled) { transform: translateY(-1px); }
-  .pick:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
-  .pick:disabled { cursor: default; }
-  .pick .title { font-size: 15px; font-weight: 550; letter-spacing: -.01em; }
-  .pick .blurb { font-size: 13px; line-height: 1.45; color: var(--fg-muted); }
-  .pick .proves {
-    margin-top: 3px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 10.5px;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-    color: var(--fg-faint);
-  }
-
-  /* Once a pick lands, the others step back rather than vanishing — the menu
-     stays legible as a record of what else was on offer. */
-  body.picked .pick { opacity: .32; }
-  body.picked .pick.chosen {
-    opacity: 1;
-    border-color: var(--line-strong);
-    box-shadow: 0 0 0 1px var(--line-strong);
-  }
-
-  .other { display: flex; gap: 10px; flex-wrap: wrap; }
-  .other input {
-    flex: 1 1 260px;
-    min-width: 0;
-    font: inherit;
-    font-size: 14px;
-    color: var(--fg);
-    background: var(--interactive);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 12px 14px;
-    outline: none;
-  }
-  .other input::placeholder { color: var(--fg-faint); }
-  .other input:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
-  .send {
-    font: inherit;
-    font-size: 14px;
-    font-weight: 550;
-    color: var(--bg);
-    background: var(--fg);
-    border: 0;
-    border-radius: 10px;
-    padding: 12px 20px;
-    cursor: pointer;
-  }
-  .send:disabled { opacity: .3; cursor: default; }
-  .send:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
-
-  .status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13.5px;
-    color: var(--fg-muted);
-    min-height: 20px;
-  }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
-
-  @media (prefers-reduced-motion: reduce) {
-    .pick { transition: none; }
-    .pick:hover:not(:disabled) { transform: none; }
-  }
+  .own input::placeholder { color: var(--faint); }
+  .own input:focus { outline: none; border-color: rgba(255, 255, 255, .5); }
+  .own button { height: 42px; padding: 0 16px; border: 0; border-radius: 12px; background: #fff; color: var(--ink); font-size: 14.5px; font-weight: 650; cursor: pointer; }
+  .own button:disabled { opacity: .35; cursor: default; }
+  .foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 40px; }
+  .status { display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--muted); }
+  .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: beat .9s ease-in-out infinite; }
+  .status:empty::before { display: none; }
+  @keyframes beat { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.55); opacity: .55; } }
+  .enough { height: 40px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 14px; font-weight: 600; cursor: pointer; }
+  .enough:hover { color: #fff; border-color: rgba(255, 255, 255, .4); }
+  .enough:disabled { opacity: .4; cursor: default; }
+  @media (max-width: 860px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 540px) { .grid { grid-template-columns: minmax(0, 1fr); } main { padding: 26px 14px 22px; justify-content: flex-start; } }
+  @media (prefers-reduced-motion: reduce) { .thing { transition: none; } .status::before { animation: none; } }
 </style>
 </head>
 <body>
   <main>
-    <h1>{{heading}}</h1>
-    <p class="sub">{{subhead}}</p>
-    <div class="grid" id="grid"></div>
-    <div class="other">
-      <input id="other-input" type="text" autocomplete="off"
-             placeholder="Or describe something you'd actually use…">
-      <button class="send" id="other-send" type="button">Build that</button>
+    <header>
+      <h1>{{heading}}<i></i></h1>
+      <p class="sub">{{subhead}}</p>
+    </header>
+    <div class="grid" id="grid">
+      <button class="thing" type="button" data-choice="whiteboard" style="--field:#f4f1ea">
+        <span class="seen">seen</span>
+        <svg viewBox="0 0 220 132" aria-hidden="true">
+          <rect x="34" y="22" width="152" height="96" rx="14" fill="#fff"/>
+          <path d="M58 52c14-9 22 7 34-1s18-10 30 2" fill="none" stroke="#0e0e10" stroke-width="5" stroke-linecap="round"/>
+          <path d="M58 74h46M58 90h30" fill="none" stroke="#0e0e10" stroke-width="5" stroke-linecap="round"/>
+          <circle cx="146" cy="82" r="19" fill="none" stroke="#1fb877" stroke-width="5"/>
+          <path d="M138 82l6 6 11-13" fill="none" stroke="#1fb877" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="words"><span class="name">A whiteboard</span><br><span class="line">Draw anything. I look at it, and draw back.</span></span>
+      </button>
+      <button class="thing" type="button" data-choice="chess" style="--field:#f4f1ea">
+        <span class="seen">seen</span>
+        <svg viewBox="0 0 220 132" aria-hidden="true">
+          <rect x="54" y="10" width="112" height="112" rx="10" fill="#fff"/>
+          <g transform="translate(62 18)">
+            <rect width="96" height="96" fill="#f3ebdc"/>
+            <path d="M24 0h24v24H24zM72 0h24v24H72zM0 24h24v24H0zM48 24h24v24H48zM24 48h24v24H24zM72 48h24v24H72zM0 72h24v24H0zM48 72h24v24H48z" fill="#c9a57c"/>
+            <rect x="48" y="48" width="24" height="24" fill="#f7dd8a"/>
+            <g font-size="21" text-anchor="middle" fill="#0e0e10">
+              <text x="12" y="20">♜</text><text x="60" y="20">♚</text><text x="36" y="44">♟</text>
+              <text x="60" y="68">♘</text><text x="12" y="92">♙</text><text x="84" y="92">♔</text>
+            </g>
+          </g>
+        </svg>
+        <span class="words"><span class="name">A chessboard</span><br><span class="line">Your move. I answer on the board.</span></span>
+      </button>
+      <button class="thing" type="button" data-choice="checklist" style="--field:#ffd84d">
+        <span class="seen">seen</span>
+        <svg viewBox="0 0 220 132" aria-hidden="true">
+          <rect x="44" y="16" width="132" height="104" rx="14" fill="#fff"/>
+          <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="60" y="34" width="18" height="18" rx="5" fill="#1fb877"/><path d="M64 43l4 4 7-8" stroke="#fff" stroke-width="3"/>
+            <rect x="60" y="60" width="18" height="18" rx="5" fill="#1fb877"/><path d="M64 69l4 4 7-8" stroke="#fff" stroke-width="3"/>
+            <rect x="61.5" y="87.5" width="15" height="15" rx="4" stroke="#c9c4ba" stroke-width="3"/>
+            <path d="M90 43h56M90 69h40" stroke="#c9c4ba" stroke-width="5"/><path d="M90 95h64" stroke="#0e0e10" stroke-width="5"/>
+          </g>
+        </svg>
+        <span class="words"><span class="name">A checklist</span><br><span class="line">Tick things off. I add what you forgot.</span></span>
+      </button>
+      <button class="thing dark" type="button" data-choice="drums" style="--field:#151518">
+        <span class="seen">seen</span>
+        <svg viewBox="0 0 220 132" aria-hidden="true">
+          <rect x="52" y="8" width="116" height="116" rx="14" fill="#1b1b1f"/>
+          <g>
+            <rect x="64" y="20" width="26" height="26" rx="7" fill="#b0416a"/><rect x="97" y="20" width="26" height="26" rx="7" fill="#673848"/><rect x="130" y="20" width="26" height="26" rx="7" fill="#673848"/>
+            <rect x="64" y="53" width="26" height="26" rx="7" fill="#6a4335"/><rect x="97" y="53" width="26" height="26" rx="7" fill="#b3683e"/><rect x="130" y="53" width="26" height="26" rx="7" fill="#6a4335"/>
+            <rect x="64" y="86" width="26" height="26" rx="7" fill="#3f9aa0"/><rect x="97" y="86" width="26" height="26" rx="7" fill="#3a585c"/><rect x="130" y="86" width="26" height="26" rx="7" fill="#a8c96c"/>
+            <circle cx="149" cy="27" r="4" fill="#2fd08a"/><circle cx="116" cy="93" r="4" fill="#2fd08a"/>
+          </g>
+        </svg>
+        <span class="words"><span class="name">A drum machine</span><br><span class="line">Tap out a beat. I play between yours.</span></span>
+      </button>
+      <button class="thing dark" type="button" data-choice="button" style="--field:#2f4bff">
+        <span class="seen">seen</span>
+        <svg viewBox="0 0 220 132" aria-hidden="true">
+          <rect x="58" y="12" width="104" height="108" rx="14" fill="#fff"/>
+          <ellipse cx="110" cy="86" rx="38" ry="14" fill="#e9e4da"/>
+          <ellipse cx="110" cy="76" rx="31" ry="12" fill="#b3200e"/>
+          <ellipse cx="110" cy="62" rx="31" ry="27" fill="#ff3b23"/>
+          <ellipse cx="101" cy="52" rx="12" ry="8" fill="#ff8a78" opacity=".8"/>
+        </svg>
+        <span class="words"><span class="name">A big red button</span><br><span class="line">Press it, and I do the thing.</span></span>
+      </button>
+      <div class="own">
+        <div><div class="name">Or anything else</div><div class="line">Name it, and I make it here.</div></div>
+        <form id="own">
+          <input id="text" type="text" maxlength="200" placeholder="a tip calculator" autocomplete="off" aria-label="Something else to make">
+          <button id="make" type="submit" disabled>Make it</button>
+        </form>
+      </div>
     </div>
-    <div class="status" id="status"></div>
+    <div class="foot">
+      <div class="status" id="status" role="status"></div>
+      <button class="enough" id="enough" type="button">That’s enough for now</button>
+    </div>
   </main>
-
-  <script>
+<script>
+  // Picking one tells the agent which. The agent marks what has been seen, in the page's
+  // state, so that coming back here shows how far the tour has got.
   (() => {
-    // The choices are here and not in what the agent is told, so that the first thing a new
-    // person sees is the same for everyone.
-    var BUILT_IN = [
-      { id: "whiteboard", title: "A shared whiteboard",
-        blurb: "You draw, I look at what you drew, and I draw back on the same canvas.",
-        proves: "It sees you back" },
-      { id: "tictactoe", title: "Play tic-tac-toe",
-        blurb: "You move, I move. No refresh, no polling, no chat turn.",
-        proves: "A loop in real time" },
-      { id: "triage", title: "Rank a queue of pull requests",
-        blurb: "Drag them onto a plane of impact and effort. I read the layout you made.",
-        proves: "Any interface, not widgets" },
-      { id: "mockup", title: "Pick a design you like",
-        blurb: "Four live variants side by side. Choose one, tell me why, and I keep going.",
-        proves: "A design review" },
-      { id: "gauge", title: "A number that moves",
-        blurb: "A live gauge I keep updating while you watch, without touching the page.",
-        proves: "State, with nothing rebuilt" }
-    ];
-
     function init() {
-      var It = window.It || {
-        state: {}, onState: () => () => {},
-        action: () => Promise.resolve()
-      };
-      var P = window.__PARAMS || {};
-      var opts = Array.isArray(P.options) && P.options.length ? P.options : BUILT_IN;
-
-      var grid = document.getElementById("grid");
-      var input = document.getElementById("other-input");
-      var send = document.getElementById("other-send");
-      var status = document.getElementById("status");
-      var buttons = [];
-      var locked = false;
-
-      opts.forEach((o) => {
-        var id = String(o && o.id != null ? o.id : o);
-        var b = document.createElement("button");
-        b.type = "button";
-        b.className = "pick";
-        b.setAttribute("data-id", id);
-
-        var t = document.createElement("span");
-        t.className = "title";
-        t.textContent = String(o && o.title != null ? o.title : id);
-        b.appendChild(t);
-
-        if (o && o.blurb) {
-          var d = document.createElement("span");
-          d.className = "blurb";
-          d.textContent = String(o.blurb);
-          b.appendChild(d);
-        }
-        if (o && o.proves) {
-          var pr = document.createElement("span");
-          pr.className = "proves";
-          pr.textContent = String(o.proves);
-          b.appendChild(pr);
-        }
-
-        b.addEventListener("click", () => {
-          if (locked) return;
-          pick(id, String(o && o.title != null ? o.title : id), null);
-        });
-        grid.appendChild(b);
-        buttons.push(b);
-      });
-
-      function pick(id, label, text) {
-        // Refused: the choices are given back, and the page says so
-        It.action("pick", { choice: id, label: label, text: text }).then(() => {
-          // It has it: from here it is the agent's to build
-          if (locked) paint(id, text);
-        }, () => {
-          paint("", null);
-          status.textContent = "That did not go through. Pick again.";
-        });
-        // The pick is shown as made at once, since a button that does nothing for a round trip
-        // reads as broken, and is said to be on its way until It has it
-        paint(id, text, true);
+      var It = window.It || { state: {}, onState: () => () => {}, action: () => Promise.resolve() };
+      var grid = document.getElementById("grid"), status = document.getElementById("status");
+      var things = [].slice.call(grid.querySelectorAll(".thing"));
+      var text = document.getElementById("text"), make = document.getElementById("make"), enough = document.getElementById("enough");
+      var sent = null;
+      function lock(on) {
+        things.forEach((t) => { t.disabled = on; });
+        text.disabled = on; make.disabled = on || !text.value.trim(); enough.disabled = on;
       }
-
-      function submitOther() {
-        var v = input.value.trim();
-        if (locked || !v) return;
-        pick("other", "Something else", v);
-      }
-      input.addEventListener("input", () => { send.disabled = locked || !input.value.trim(); });
-      input.addEventListener("keydown", (e) => { if (e.key === "Enter") submitOther(); });
-      send.addEventListener("click", submitOther);
-      send.disabled = true;
-
-      function paint(picked, text, onItsWay) {
-        locked = !!picked;
-        document.body.classList.toggle("picked", locked);
-        for (var i = 0; i < buttons.length; i++) {
-          buttons[i].disabled = locked;
-          buttons[i].classList.toggle("chosen", buttons[i].getAttribute("data-id") === picked);
-        }
-        input.disabled = locked;
-        send.disabled = locked || !input.value.trim();
-
-        status.textContent = "";
-        if (!locked) return;
-        var dot = document.createElement("span");
-        dot.className = "dot";
-        status.appendChild(dot);
-        status.appendChild(document.createTextNode(
-          onItsWay ? "Sending…" : text ? "Building that — " + text : "Building that now…"
-        ));
-      }
-
       function render() {
         var st = It.state || {};
-        paint(st.status === "picked" ? String(st.picked || "") : "", null);
+        var seen = Array.isArray(st.seen) ? st.seen : [];
+        things.forEach((t) => t.setAttribute("data-seen", seen.indexOf(t.getAttribute("data-choice")) >= 0 ? "1" : "0"));
+        // The agent has shown what was picked, or has come back here: the menu is open again
+        if (st.status !== "picked" && sent && st.status === "open" && st.picked !== sent) { /* waiting for the agent to take it */ }
+        var picked = st.status === "picked" ? String(st.picked || "") : sent;
+        if (picked) {
+          grid.setAttribute("data-picked", picked);
+          things.forEach((t) => t.setAttribute("data-on", t.getAttribute("data-choice") === picked ? "1" : "0"));
+          status.textContent = "Coming up";
+          lock(true);
+        } else {
+          grid.removeAttribute("data-picked");
+          things.forEach((t) => t.setAttribute("data-on", "0"));
+          status.textContent = "";
+          lock(false);
+        }
       }
-
-      It.onState(render);
+      function pick(choice, more) {
+        sent = choice;
+        render();
+        var data = { choice: choice };
+        if (more) data.text = more;
+        It.action("pick", data).catch(() => { sent = null; render(); status.textContent = ""; });
+      }
+      things.forEach((t) => t.addEventListener("click", () => pick(t.getAttribute("data-choice"))));
+      text.addEventListener("input", () => { make.disabled = !text.value.trim(); });
+      document.getElementById("own").addEventListener("submit", (e) => {
+        e.preventDefault();
+        var said = text.value.trim();
+        if (said) pick("other", said);
+      });
+      enough.addEventListener("click", () => {
+        sent = "done";
+        render();
+        status.textContent = "Wrapping up";
+        It.action("done", {}).catch(() => { sent = null; render(); });
+      });
+      It.onState(() => {
+        // A menu the agent has opened again takes what was sent from it as answered
+        if ((It.state || {}).status === "open") sent = null;
+        render();
+      });
       render();
     }
-
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-    else init();
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
   })();
-  </script>
+</script>
 </body>
 </html>

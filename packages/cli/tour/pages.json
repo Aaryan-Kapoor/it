@@ -2,72 +2,78 @@
   "menu": {
     "title": "The It tour",
     "params": {
-      "heading": "What should I show you first?",
-      "subhead": "We go through all of them, and this picks where to start. I build each one here and react to what you do in it.",
-      "options": []
+      "heading": "It can be anything",
+      "subhead": "Pick one, and I make it here. What you do on it comes back to me."
     },
-    "state": { "status": "open", "picked": "" }
+    "state": {
+      "status": "open",
+      "picked": "",
+      "seen": []
+    }
   },
   "whiteboard": {
-    "title": "Whiteboard",
-    "params": { "title": "Whiteboard", "prompt": "Draw something and send it over." },
-    "state": { "agent_strokes": [], "note": "", "status": "idle", "user_strokes": [] }
-  },
-  "tictactoe": {
-    "title": "Tic-tac-toe",
-    "params": { "you": "X", "agent": "O" },
-    "state": { "board": ".........", "turn": "you", "status": "playing", "note": "" }
-  },
-  "triage": {
-    "title": "Pull request triage",
+    "title": "A whiteboard",
     "params": {
-      "title": "Pull request triage",
-      "x_label": "Effort",
-      "y_label": "Impact",
-      "quadrants": ["Do now", "Plan it", "Drop it", "Delegate"],
-      "items": [
-        { "id": "pr-1", "label": "Session expiry fix", "meta": "#87 · +142 −18" },
-        { "id": "pr-2", "label": "Dashboard refresh", "meta": "#86 · +2.1k −430" },
-        { "id": "pr-3", "label": "Bump a dependency", "meta": "#82 · a bot" },
-        { "id": "pr-4", "label": "Desktop bridge", "meta": "#78 · +1.8k" },
-        { "id": "pr-5", "label": "Docs typo", "meta": "#81 · +2 −2" }
-      ]
+      "prompt": "Draw something."
     },
-    "state": { "placements": {}, "note": "", "status": "open" }
+    "state": {
+      "agent_strokes": [],
+      "note": ""
+    }
   },
-  "mockup": {
-    "title": "Which button?",
+  "chess": {
+    "title": "A chessboard",
     "params": {
-      "title": "Which button?",
-      "question": "Same action, four takes.",
-      "variants": [
-        {
-          "label": "A",
-          "caption": "Filled",
-          "html": "<button style=\"font:600 14px system-ui;color:#fff;background:#2563eb;border:0;border-radius:10px;padding:12px 22px\">Deploy to production</button>"
-        },
-        {
-          "label": "B",
-          "caption": "Outlined",
-          "html": "<button style=\"font:600 14px system-ui;color:#8b8b90;background:transparent;border:1.5px solid #8b8b90;border-radius:10px;padding:11px 21px\">Deploy to production</button>"
-        },
-        {
-          "label": "C",
-          "caption": "Says what it costs",
-          "html": "<button style=\"font:600 14px system-ui;color:#fff;background:#e5484d;border:0;border-radius:10px;padding:12px 22px\">Deploy · 3 services restart</button>"
-        },
-        {
-          "label": "D",
-          "caption": "Quiet, with a key",
-          "html": "<button style=\"display:inline-flex;gap:10px;align-items:center;font:500 14px system-ui;color:#fff;background:#1c1c1f;border:1px solid #333;border-radius:999px;padding:10px 16px\">Deploy <kbd style=\"font:11px ui-monospace,monospace;color:#999;border:1px solid #444;border-radius:5px;padding:2px 6px\">⌘↵</kbd></button>"
-        }
-      ]
+      "heading": "Your move."
     },
-    "state": { "status": "open", "chosen": "" }
+    "state": {
+      "reply": "",
+      "note": ""
+    }
   },
-  "gauge": {
-    "title": "Deploy",
-    "params": { "title": "Deploy", "unit": "%", "max": 100, "caption": "" },
-    "state": { "value": 0, "label": "", "note": "" }
+  "checklist": {
+    "title": "A checklist",
+    "params": {
+      "heading": "Packing for the weekend",
+      "sub": "Tick off what is packed. Add what is missing.",
+      "items": ["Passport", "Phone charger", "Toothbrush", "Rain jacket", "Book for the train"],
+      "done_word": "packed"
+    },
+    "state": {
+      "added": [],
+      "note": ""
+    }
+  },
+  "drums": {
+    "title": "A drum machine",
+    "params": {
+      "heading": "Make a beat."
+    },
+    "state": {
+      "theirs": [],
+      "note": ""
+    }
+  },
+  "button": {
+    "title": "A big red button",
+    "params": {
+      "heading": "Ship it?",
+      "sub": "The homepage is ready. One press, and it goes out.",
+      "label": "Ship it"
+    },
+    "state": {
+      "status": "ready",
+      "note": ""
+    }
+  },
+  "done": {
+    "title": "It can do that",
+    "params": {
+      "heading": "It can do that",
+      "subhead": "Three things to take with you."
+    },
+    "state": {
+      "status": "open"
+    }
   }
 }

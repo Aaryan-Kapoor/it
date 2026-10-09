@@ -104,7 +104,7 @@ import {
   whyHeldBack,
 } from './setup'
 import { printEnv } from './shell-env'
-import { GUIDE, STEPS, TOUR_PREFIX, tourPage } from './tour'
+import { GUIDE, NAMES, END as TOUR_END, MENU as TOUR_MENU, TOUR_PREFIX, STEPS as TOUR_STEPS, tourPage } from './tour'
 import { fetchNewer, keepBase, latest, watch, watched } from './upgrade'
 import * as usage from './usage'
 
@@ -280,7 +280,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   serve: [0, 'serve [--log <file>]'],
   service: [1, 'service install | uninstall | status | logs'],
   skill: [0, 'skill'],
-  tour: [2, 'tour [show <name> [--step <n>] | clear]'],
+  tour: [2, 'tour [show <name> | show next | clear]'],
   telemetry: [1, 'telemetry [on | off]'],
   upgrade: [0, 'upgrade [--check]'],
   updates: [1, 'updates [on | off]'],
@@ -405,16 +405,21 @@ async function published(done: { slug: string; version: number; url: string; not
  * The tour an agent gives of It. With nothing after it, the guide is printed for the agent to
  * follow. `show` publishes one of the tour's pages and brings it up, starting afresh each time,
  * and `clear` removes every page of the tour and nothing else.
+ *
+ * Which things the person has been shown is kept in the menu's own state, as `seen`, so that
+ * the menu marks them when it is shown again, and `show next` is the next of them that has
+ * not been: the agent that gives the tour keeps no count of its own. When all have been seen,
+ * what comes next is the ending.
  */
 async function tour(a: Args) {
-  const USAGE = 'tour [show <name> [--step <n>] | clear]'
+  const USAGE = 'tour [show <name> | show next | clear]'
   const what = a._[0]
   if (what === undefined) return written(process.stdout, GUIDE)
   if (what === 'clear') {
     const pages = await call<{ slug: string }[]>('query', api.artifacts.list)
     const gone: string[] = []
     // The tour's own pages, each by its whole id, and no other page whose id only begins as theirs do
-    const its = new Set(['menu', ...STEPS].map((name) => `${TOUR_PREFIX}${name}`))
+    const its = new Set(NAMES.map((name) => `${TOUR_PREFIX}${name}`))
     for (const { slug } of pages.filter((p) => its.has(p.slug))) {
       await call('mutation', api.artifacts.remove, { slug })
       gone.push(slug)
@@ -422,19 +427,36 @@ async function tour(a: Args) {
     return out({ deleted: gone })
   }
   if (what !== 'show') throw new Problem(`It does not know what to do with "${what}".`, 'invalid', `Usage: it ${USAGE}`)
-  const name = need(a._[1], `which page of the tour (menu, ${STEPS.join(', ')})`, USAGE)
+  const asked = need(a._[1], `which page of the tour (${NAMES.join(', ')}, or next)`, USAGE)
+  const menu = `${TOUR_PREFIX}${TOUR_MENU}`
+  // What the menu holds of what has been seen. Nothing where there is no menu yet, or it says nothing of it
+  const seen: string[] = await call<{ json: string }>('query', api.state.get, { slug: menu }).then(
+    (s) => {
+      const said = (JSON.parse(s.json) as { seen?: unknown }).seen
+      return Array.isArray(said) ? said.filter((name): name is string => typeof name === 'string' && TOUR_STEPS.includes(name)) : []
+    },
+    () => [],
+  )
+  const name = asked === 'next' ? (TOUR_STEPS.find((step) => !seen.includes(step)) ?? TOUR_END) : asked
   const given: Record<string, unknown> = {}
   for (const param of a.many.param ?? []) {
     const eq = param.indexOf('=')
     if (eq < 1) throw new Problem('--param is written name=value.', 'invalid')
     given[param.slice(0, eq)] = loose(param.slice(eq + 1))
   }
-  const step = text(a, 'step')
-  const made = tourPage(name, given, step === undefined ? undefined : Number(step))
+  // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
+  const by = sessionAsked()?.session.harness
+  const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
   // The page is this conversation's from now on, whoever showed it last
   const done = await publish({ slug: made.slug, title: made.title, files: gather({ html: made.html }), agent: text(a, 'agent'), state: made.state, take: true })
-  // And it starts as it was first made, whatever a tour before this one left in it
-  await call('mutation', api.state.patch, { slug: made.slug, patch: made.state, replace: true })
+  // And it starts as it was first made, whatever a tour before this one left in it. The menu
+  // alone keeps something: which things have been seen
+  const fresh = JSON.parse(made.state) as Record<string, unknown>
+  await call('mutation', api.state.patch, { slug: made.slug, patch: JSON.stringify(name === TOUR_MENU ? { ...fresh, seen } : fresh), replace: true })
+  // A thing that is shown has been seen from now on, which the menu is told where there is one:
+  // it is there unless the agent began somewhere else, and then nothing is kept
+  if (TOUR_STEPS.includes(name) && !seen.includes(name))
+    await call('mutation', api.state.patch, { slug: menu, patch: JSON.stringify({ seen: [...seen, name] }) }).catch(() => {})
   a.flags.open = true
   await published(done, a)
 }
@@ -2406,7 +2428,8 @@ This machine
                                  answers for you.
   it skill                       Print the instructions an agent needs to use It.
   it tour [show <name> | clear]  Print the tour an agent gives of It. With show, bring up one of
-                                 its pages, and with clear, remove them all.
+                                 its pages, or with show next the next one not yet seen, and
+                                 with clear, remove them all.
   it telemetry [on | off]        Say whether It reports usage counts, or turn that on or off.
                                  It reports them until it is turned off.
   it upgrade [--check]           Put the newest It in place of this one, and start it again where

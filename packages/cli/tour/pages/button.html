@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A big red button</title>
+<style>
+/*kit.css*/
+  :root { --field: #2f4bff; --w: 500px; }
+  .t-card { align-items: center; text-align: center; padding-bottom: 34px; }
+  .well { position: relative; width: min(64vw, 250px); aspect-ratio: 1; margin: 10px 0 2px; }
+  /* The button stands on a base, and goes down into it when it is pressed */
+  .well::before { content: ""; position: absolute; inset: 6% 0 0; border-radius: 50%; background: #e9e4da; box-shadow: inset 0 -10px 0 rgba(14, 14, 16, .08); }
+  .big {
+    position: absolute; inset: 0 7% 14%; border: 0; border-radius: 50%; cursor: pointer;
+    background: radial-gradient(circle at 34% 28%, #ff8a78, #ff3b23 58%, #d92a14);
+    box-shadow: 0 22px 0 #b3200e, 0 34px 38px -8px rgba(160, 30, 12, .55);
+    color: #fff; font-size: clamp(20px, 4.4vw, 28px); font-weight: 800; letter-spacing: -.02em;
+    transition: transform .12s cubic-bezier(.3, .7, .4, 1), box-shadow .12s;
+  }
+  .big:hover { transform: translateY(2px); box-shadow: 0 20px 0 #b3200e, 0 30px 34px -8px rgba(160, 30, 12, .55); }
+  .big:active, .big[data-down="1"] { transform: translateY(18px); box-shadow: 0 4px 0 #b3200e, 0 10px 14px -6px rgba(160, 30, 12, .5); }
+  .big:disabled { cursor: default; }
+  .big[data-done="1"] { background: radial-gradient(circle at 34% 28%, #7be6b3, #1fb877 58%, #14935c); box-shadow: 0 4px 0 #0f7347, 0 10px 14px -6px rgba(15, 115, 71, .5); transform: translateY(18px); }
+</style>
+</head>
+<body class="dark">
+  <div class="t-wrap">
+    <div class="t-card">
+      <div class="t-plate" id="t-plate"><i></i><b></b><small></small></div>
+      <h1 class="t-h">{{heading}}</h1>
+      <p class="t-sub">{{sub}}</p>
+      <div class="well"><button class="big" id="big" type="button">{{label}}</button></div>
+    </div>
+    <div class="t-log" aria-live="polite">
+      <p class="t-you" id="t-you"><span>&larr; you</span><b></b></p>
+      <p class="t-did" id="t-did"><span></span><b></b></p>
+    </div>
+  </div>
+<!--rail-->
+<script>
+/*kit.js*/
+</script>
+<script>
+  // One button. Pressing it tells the agent, and the agent says when it has done what the
+  // button was for: the page then says so, and throws its paper in the air.
+  Tour.ready(() => {
+    var It = Tour.It, big = document.getElementById("big");
+    var thrown = false;
+    function render() {
+      var st = It.state || {};
+      var done = st.status === "done";
+      big.disabled = st.status === "pressed" || done;
+      big.setAttribute("data-down", st.status === "pressed" ? "1" : "0");
+      big.setAttribute("data-done", done ? "1" : "0");
+      if (st.status === "pressed" || done) Tour.say("you", "pressed it");
+      if (done) {
+        big.textContent = "Done";
+        Tour.plate("", false);
+        Tour.say("did", String(st.note || "did it"));
+        if (!thrown) {
+          thrown = true;
+          var r = big.getBoundingClientRect();
+          Tour.confetti(r.left + r.width / 2, r.top + r.height / 2);
+        }
+      }
+    }
+    big.addEventListener("click", () => {
+      big.disabled = true;
+      big.setAttribute("data-down", "1");
+      Tour.say("you", "pressed it");
+      Tour.act("press", {}).catch(() => { big.disabled = false; big.setAttribute("data-down", "0"); });
+    });
+    It.onState(render);
+    render();
+  });
+</script>
+</body>
+</html>

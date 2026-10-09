@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A chessboard</title>
+<style>
+/*kit.css*/
+  /* The board is as wide as the card lets it be and as tall as the window lets it be, whichever
+     is less, and the card is cut to the board */
+  :root { --field: #f4f1ea; --b: max(216px, min(464px, 100vw - 96px, 100vh - 372px)); --w: calc(var(--b) + 56px); }
+  @supports (height: 100dvh) { :root { --b: max(216px, min(464px, 100vw - 96px, 100dvh - 372px)); } }
+  @media (max-width: 620px) {
+    :root { --b: max(216px, min(464px, 100vw - 60px, 100vh - 342px)); --w: calc(var(--b) + 36px); }
+    @supports (height: 100dvh) { :root { --b: max(216px, min(464px, 100vw - 60px, 100dvh - 342px)); } }
+  }
+  .t-h { transition: opacity .3s; }
+  /* While the move is the agent's, the words that say it is yours stand back */
+  .t-card[data-wait="1"] .t-h { opacity: .26; }
+  .t-plate { max-width: calc(100% - 30px); }
+  .t-plate small { overflow: hidden; text-overflow: ellipsis; }
+
+  /* One square is 1em of the board, so that everything on it is cut to its size */
+  .board {
+    position: relative; flex: none; align-self: center; width: var(--b); height: var(--b);
+    display: grid; grid-template: repeat(8, 1fr) / repeat(8, 1fr);
+    border-radius: 12px; overflow: hidden; font-size: calc(var(--b) / 8); line-height: 1;
+    -webkit-user-select: none; user-select: none; touch-action: manipulation;
+    /* Drawn as a layer of its own, which keeps the coloured fringes of sub-pixel text off the pieces */
+    will-change: transform;
+  }
+  .sq {
+    position: relative; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0;
+    -webkit-appearance: none; appearance: none; font-size: 1em; cursor: default;
+    background: #f3ebdc; color: #b99468;
+  }
+  .sq.dk { background: #c9a57c; color: #f3ebdc; }
+  .sq.last { background: #f7dd8a; color: #b48f2f; }
+  .sq.check { background: var(--coral); color: #fff; }
+  .sq.can { cursor: pointer; }
+  @media (hover: hover) { .sq.can:hover { box-shadow: inset 0 0 0 .05em rgba(14, 14, 16, .2); } }
+  .sq.pick, .sq.pick:hover { box-shadow: inset 0 0 0 .065em var(--ink); }
+  .sq:focus-visible { outline: 0; box-shadow: inset 0 0 0 .065em var(--sky); }
+  .sq.pick:focus-visible { box-shadow: inset 0 0 0 .065em var(--sky), inset 0 0 0 .13em var(--ink); }
+  /* Where the piece that is picked up may go: a dot on an empty square, a ring round a piece it would take */
+  .sq.to::after {
+    content: ""; position: absolute; left: 50%; top: 50%; width: 30%; height: 30%; margin: -15% 0 0 -15%;
+    border-radius: 50%; background: rgba(14, 14, 16, .26); pointer-events: none;
+  }
+  .sq.to.cap::after { width: 90%; height: 90%; margin: -45% 0 0 -45%; background: none; box-shadow: inset 0 0 0 .075em rgba(14, 14, 16, .34); }
+  .sq.to:hover::after { background: rgba(14, 14, 16, .42); }
+  .sq.to.cap:hover::after { background: none; box-shadow: inset 0 0 0 .075em rgba(14, 14, 16, .55); }
+  /* The names of the squares, along the left and the bottom, since the moves are said by them */
+  .co { position: absolute; font-size: max(9px, .17em); font-weight: 700; font-style: normal; line-height: 1; pointer-events: none; }
+  .co.r { left: 6%; top: 6%; }
+  .co.f { right: 7%; bottom: 5%; }
+
+  /* The pieces: the solid figures for both sides, so that the shapes match. Black's are ink;
+     White's are white with a line of ink drawn round them, and read on either colour of square */
+  .pc {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-family: "Noto Sans Symbols 2", "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", "Arial Unicode MS", sans-serif;
+    font-size: .86em; font-weight: 400; line-height: 1; color: #0e0e10; pointer-events: none;
+  }
+  .pc.w { color: #ffffff; -webkit-text-stroke: .075em #0e0e10; paint-order: stroke fill; }
+  @supports not (-webkit-text-stroke: 1px #000) {
+    .pc.w { text-shadow: 1px 0 #0e0e10, -1px 0 #0e0e10, 0 1px #0e0e10, 0 -1px #0e0e10, 1px 1px #0e0e10, -1px -1px #0e0e10, 1px -1px #0e0e10, -1px 1px #0e0e10; }
+  }
+  /* A piece on its way from one square to another, over the board and not in any square */
+  .pc.fly { inset: auto; width: 12.5%; height: 12.5%; z-index: 3; }
+
+  .foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; }
+  .hint { margin: 0; font-size: 13.5px; line-height: 1.3; color: var(--ink3); }
+  .new {
+    flex: none; height: 32px; padding: 0 13px; border: 0; border-radius: 10px; cursor: pointer;
+    background: var(--paper); color: var(--ink2); font-size: 13.5px; font-weight: 600; letter-spacing: -.01em;
+  }
+  .new:hover { background: var(--paper2); color: var(--ink); }
+  .new:focus-visible { outline: 2px solid var(--sky); outline-offset: 2px; }
+  /* A window too short for all of it (a phone on its side): nothing is squeezed and nothing is cut off, the page scrolls */
+  @media (max-height: 587px) {
+    .t-wrap { justify-content: flex-start; overflow-y: auto; }
+    .t-card, .t-log { flex: none; max-height: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { .t-h { transition: none; } }
+</style>
+</head>
+<body>
+  <div class="t-wrap">
+    <div class="t-card">
+      <div class="t-plate" id="t-plate"><i></i><b></b><small></small></div>
+      <h1 class="t-h" id="head">{{heading}}</h1>
+      <div class="board" id="board" role="group" aria-label="The chessboard. You play White, from the bottom."></div>
+      <div class="foot">
+        <p class="hint" id="hint"></p>
+        <button class="new" id="new" type="button">New game</button>
+      </div>
+    </div>
+    <div class="t-log" aria-live="polite">
+      <p class="t-you" id="t-you"><span>&larr; you</span><b></b></p>
+      <p class="t-did" id="t-did"><span></span><b></b></p>
+    </div>
+  </div>
+<!--rail-->
+<script>
+/*kit.js*/
+</script>
+<script>
+  // ── engine: begin ──
+  // The game of chess and nothing of the page: plain functions over a position, with no
+  // document in them, so that they can be lifted out and counted (perft) by themselves.
+  // A position is { b, turn, castle, ep, half, full }: `b` is the 64 squares, a1 first and h8
+  // last, each "" or a piece as FEN writes it (White's in capitals); `turn` is "w" or "b";
+  // `castle` is what is left of "KQkq"; `ep` is the square a pawn may be taken on in passing,
+  // or -1. A move is { from, to, piece, took, flag, promo }, where `flag` is "two" (a pawn's
+  // first two squares), "ep", "short" or "long" (castling), and `promo` is "", "q", "r", "b" or "n".
+  var Chess = (() => {
+    var START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    var NAME = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
+    var KNIGHT = [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]];
+    var ROOK = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    var BISHOP = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+    var ROYAL = ROOK.concat(BISHOP);
+
+    function name(s) { return "abcdefgh".charAt(s & 7) + ((s >> 3) + 1); }
+    function square(text) { return (text.charCodeAt(1) - 49) * 8 + (text.charCodeAt(0) - 97); }
+    function side(p) { return !p ? "" : p < "a" ? "w" : "b"; }
+    function kind(p) { return p.toLowerCase(); }
+
+    function read(fen) {
+      var parts = String(fen).trim().split(/\s+/), rows = parts[0].split("/"), b = [];
+      for (var i = 0; i < 64; i++) b.push("");
+      for (var r = 0; r < 8; r++) {
+        var f = 0, row = rows[r] || "";
+        for (var k = 0; k < row.length; k++) {
+          var c = row.charAt(k);
+          if (c >= "1" && c <= "8") f += +c;
+          else { b[(7 - r) * 8 + f] = c; f++; }
+        }
+      }
+      return {
+        b: b, turn: parts[1] === "b" ? "b" : "w", castle: parts[2] && parts[2] !== "-" ? parts[2] : "",
+        ep: parts[3] && parts[3] !== "-" ? square(parts[3]) : -1, half: +parts[4] || 0, full: +parts[5] || 1,
+      };
+    }
+    function fen(pos) {
+      var rows = [];
+      for (var r = 7; r >= 0; r--) {
+        var row = "", gap = 0;
+        for (var f = 0; f < 8; f++) {
+          var p = pos.b[r * 8 + f];
+          if (!p) gap++;
+          else { row += (gap || "") + p; gap = 0; }
+        }
+        rows.push(row + (gap || ""));
+      }
+      return rows.join("/") + " " + pos.turn + " " + (pos.castle || "-") + " " + (pos.ep < 0 ? "-" : name(pos.ep)) + " " + pos.half + " " + pos.full;
+    }
+
+    // Whether any piece of the side `by` bears on the square
+    function attacked(b, s, by) {
+      var f = s & 7, r = s >> 3, white = by === "w", i, d, x, y, p;
+      var pr = r + (white ? -1 : 1), pawn = white ? "P" : "p";
+      if (pr >= 0 && pr < 8) {
+        if (f > 0 && b[pr * 8 + f - 1] === pawn) return true;
+        if (f < 7 && b[pr * 8 + f + 1] === pawn) return true;
+      }
+      var knight = white ? "N" : "n", king = white ? "K" : "k";
+      for (i = 0; i < 8; i++) {
+        x = f + KNIGHT[i][0]; y = r + KNIGHT[i][1];
+        if (x >= 0 && x < 8 && y >= 0 && y < 8 && b[y * 8 + x] === knight) return true;
+        x = f + ROYAL[i][0]; y = r + ROYAL[i][1];
+        if (x >= 0 && x < 8 && y >= 0 && y < 8 && b[y * 8 + x] === king) return true;
+      }
+      var queen = white ? "Q" : "q", line = [white ? "R" : "r", white ? "B" : "b"];
+      for (i = 0; i < 8; i++) {
+        d = ROYAL[i]; x = f + d[0]; y = r + d[1];
+        while (x >= 0 && x < 8 && y >= 0 && y < 8) {
+          p = b[y * 8 + x];
+          if (p) {
+            if (p === queen || p === line[i < 4 ? 0 : 1]) return true;
+            break;
+          }
+          x += d[0]; y += d[1];
+        }
+      }
+      return false;
+    }
+    function king(b, who) { return b.indexOf(who === "w" ? "K" : "k"); }
+    function inCheck(pos, who) {
+      var k = king(pos.b, who);
+      return k >= 0 && attacked(pos.b, k, who === "w" ? "b" : "w");
+    }
+
+    // Every move the pieces of the side to move can make, whether or not it leaves their king to be taken
+    function reach(pos) {
+      var b = pos.b, us = pos.turn, white = us === "w", them = white ? "b" : "w", out = [];
+      var add = (from, to, flag, promo) => {
+        out.push({ from: from, to: to, piece: b[from], took: flag === "ep" ? (white ? "p" : "P") : b[to], flag: flag, promo: promo });
+      };
+      // A pawn that reaches the far side becomes one of four pieces: each is a move of its own
+      var pawn = (from, to, last) => {
+        if (!last) return add(from, to, "", "");
+        add(from, to, "", "q"); add(from, to, "", "r"); add(from, to, "", "b"); add(from, to, "", "n");
+      };
+      for (var s = 0; s < 64; s++) {
+        var p = b[s];
+        if (!p || side(p) !== us) continue;
+        var f = s & 7, r = s >> 3, t = kind(p), i, x, y, to, steps;
+        if (t === "p") {
+          var dir = white ? 1 : -1, y1 = r + dir;
+          if (y1 < 0 || y1 > 7) continue;
+          var last = y1 === (white ? 7 : 0), one = y1 * 8 + f;
+          if (!b[one]) {
+            pawn(s, one, last);
+            if (r === (white ? 1 : 6) && !b[one + dir * 8]) add(s, one + dir * 8, "two", "");
+          }
+          for (i = -1; i <= 1; i += 2) {
+            x = f + i;
+            if (x < 0 || x > 7) continue;
+            to = y1 * 8 + x;
+            if (b[to]) { if (side(b[to]) !== us) pawn(s, to, last); }
+            else if (to === pos.ep) add(s, to, "ep", "");
+          }
+        } else if (t === "n" || t === "k") {
+          steps = t === "n" ? KNIGHT : ROYAL;
+          for (i = 0; i < 8; i++) {
+            x = f + steps[i][0]; y = r + steps[i][1];
+            if (x < 0 || x > 7 || y < 0 || y > 7) continue;
+            to = y * 8 + x;
+            if (side(b[to]) !== us) add(s, to, "", "");
+          }
+          // Castling: the king and that rook have not moved, nothing stands between them, and
+          // the king is not in check, does not pass over a square that is attacked, and does not land on one
+          var home = white ? 4 : 60, rook = white ? "R" : "r";
+          if (t === "k" && s === home && pos.castle && !attacked(b, s, them)) {
+            if (pos.castle.indexOf(white ? "K" : "k") !== -1 && b[home + 3] === rook && !b[home + 1] && !b[home + 2] &&
+                !attacked(b, home + 1, them) && !attacked(b, home + 2, them)) add(s, home + 2, "short", "");
+            if (pos.castle.indexOf(white ? "Q" : "q") !== -1 && b[home - 4] === rook && !b[home - 1] && !b[home - 2] && !b[home - 3] &&
+                !attacked(b, home - 1, them) && !attacked(b, home - 2, them)) add(s, home - 2, "long", "");
+          }
+        } else {
+          steps = t === "r" ? ROOK : t === "b" ? BISHOP : ROYAL;
+          for (i = 0; i < steps.length; i++) {
+            x = f + steps[i][0]; y = r + steps[i][1];
+            while (x >= 0 && x < 8 && y >= 0 && y < 8) {
+              to = y * 8 + x;
+              if (!b[to]) add(s, to, "", "");
+              else {
+                if (side(b[to]) !== us) add(s, to, "", "");
+                break;
+              }
+              x += steps[i][0]; y += steps[i][1];
+            }
+          }
+        }
+      }
+      return out;
+    }
+
+    // The position after a move. The one it is given is left as it was
+    function play(pos, m) {
+      var b = pos.b.slice(), white = pos.turn === "w", t = kind(m.piece), rights = pos.castle, ep = -1;
+      b[m.from] = "";
+      b[m.to] = m.promo ? (white ? m.promo.toUpperCase() : m.promo) : m.piece;
+      if (m.flag === "ep") b[m.to + (white ? -8 : 8)] = "";
+      else if (m.flag === "short") { b[m.to + 1] = ""; b[m.to - 1] = white ? "R" : "r"; }
+      else if (m.flag === "long") { b[m.to - 2] = ""; b[m.to + 1] = white ? "R" : "r"; }
+      else if (m.flag === "two") ep = (m.from + m.to) / 2;
+      if (rights) {
+        if (t === "k") rights = rights.replace(white ? /[KQ]/g : /[kq]/g, "");
+        // A rook that leaves its corner, or is taken in it, takes the castling on that side with it
+        var corners = { 0: "Q", 7: "K", 56: "q", 63: "k" };
+        if (corners[m.from]) rights = rights.replace(corners[m.from], "");
+        if (corners[m.to]) rights = rights.replace(corners[m.to], "");
+      }
+      return { b: b, turn: white ? "b" : "w", castle: rights, ep: ep, half: t === "p" || m.took ? 0 : pos.half + 1, full: pos.full + (white ? 0 : 1) };
+    }
+
+    // The moves that may be played: those that do not leave the mover's own king in check
+    function moves(pos) {
+      var who = pos.turn;
+      return reach(pos).filter((m) => !inCheck(play(pos, m), who));
+    }
+    // How things stand for the side to move: what it may play, whether it is in check, and whether the game is over
+    function state(pos) {
+      var legal = moves(pos), check = inCheck(pos, pos.turn);
+      return { legal: legal, check: check, over: legal.length ? null : check ? "checkmate" : "stalemate" };
+    }
+    // How many ways the game can go on for `depth` moves: the count that shows the rules are right
+    function perft(pos, depth) {
+      var list = moves(pos), n = 0;
+      if (depth <= 1) return depth < 1 ? 1 : list.length;
+      for (var i = 0; i < list.length; i++) n += perft(play(pos, list[i]), depth - 1);
+      return n;
+    }
+
+    function uci(m) { return name(m.from) + name(m.to) + m.promo; }
+    // The move among `list` that the text names, as `e7e5` or `e2e1n`. A pawn that reaches the far side with no piece named becomes a queen
+    function find(list, text) {
+      var want = String(text).toLowerCase().replace(/[^a-z0-9]/g, "");
+      for (var i = 0; i < list.length; i++) {
+        var u = uci(list[i]);
+        if (u === want || (list[i].promo === "q" && u.slice(0, 4) === want)) return list[i];
+      }
+      return null;
+    }
+    // A move in plain words, and what it left the other side in, where that is given
+    function said(m, after) {
+      var text;
+      if (m.flag === "short" || m.flag === "long") text = "castles " + (m.flag === "short" ? "kingside" : "queenside");
+      else {
+        text = NAME[kind(m.piece)] + (m.took ? " takes " + NAME[kind(m.took)] + (m.flag === "ep" ? " en passant" : "") + " on " : " to ") + name(m.to);
+        if (m.promo) text += " and becomes a " + NAME[m.promo];
+      }
+      return text + (after && after.over ? ", " + after.over : after && after.check ? ", check" : "");
+    }
+
+    return { START: START, NAME: NAME, name: name, square: square, side: side, kind: kind, read: read, fen: fen, attacked: attacked, king: king, inCheck: inCheck, play: play, moves: moves, state: state, perft: perft, uci: uci, find: find, said: said };
+  })();
+  // ── engine: end ──
+</script>
+<script>
+  // A game of chess. The person plays White from the bottom and the agent plays Black. Each
+  // move of the person goes to the agent with the position it left and every move the agent may
+  // answer with; the agent answers by setting `reply` in the state to one of those, and the
+  // page plays it on the board. The rules are the engine's, above: nothing here decides a move.
+  Tour.ready(() => {
+    var It = Tour.It, C = Chess;
+    var $ = (id) => document.getElementById(id);
+    var card = document.querySelector(".t-card"), boardEl = $("board"), headEl = $("head"), hintEl = $("hint");
+    var HEADING = String(Tour.P.heading || "") || headEl.textContent.trim() || "Your move.";
+    // The solid figures (U+265A to U+265F), each followed by the mark that asks for it as text and not as a picture
+    var FIGURE = { k: "\u265A\uFE0E", q: "\u265B\uFE0E", r: "\u265C\uFE0E", b: "\u265D\uFE0E", n: "\u265E\uFE0E", p: "\u265F\uFE0E" };
+    var still = !!window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    var pos = C.read(C.START), now = C.state(pos);   // the position, and how it stands for the side to move
+    var picked = -1, goes = {}, last = null;          // the square picked up, where it may go, and the last move
+    var waiting = false, sent = false, turn = 0;      // waiting for the agent; whether it has been told; which move this is
+    var cells = [], shown = [], figures = [], home = 12;
+
+    function figure(p) {
+      var el = document.createElement("span");
+      el.className = "pc " + C.side(p);
+      el.setAttribute("aria-hidden", "true");
+      el.textContent = FIGURE[C.kind(p)];
+      return el;
+    }
+    function square(s) {
+      var el = document.createElement("button"), f = s & 7, r = s >> 3;
+      el.type = "button";
+      el.setAttribute("data-sq", C.name(s));
+      el.tabIndex = s === home ? 0 : -1;
+      var mark = (cls, text) => {
+        var i = document.createElement("i");
+        i.className = "co " + cls;
+        i.setAttribute("aria-hidden", "true");
+        i.textContent = text;
+        el.appendChild(i);
+      };
+      if (f === 0) mark("r", String(r + 1));
+      if (r === 0) mark("f", "abcdefgh".charAt(f));
+      el.addEventListener("click", () => tap(s));
+      // One square of the board is in the order of the tab key, and the arrows go from it to the others
+      el.addEventListener("focus", () => {
+        cells[home].tabIndex = -1;
+        home = s;
+        el.tabIndex = 0;
+      });
+      cells[s] = el;
+      shown[s] = "";
+      figures[s] = null;
+      return el;
+    }
+    for (var row = 7; row >= 0; row--) for (var file = 0; file < 8; file++) boardEl.appendChild(square(row * 8 + file));
+    boardEl.addEventListener("keydown", (e) => {
+      var step = { ArrowUp: 8, ArrowDown: -8, ArrowLeft: -1, ArrowRight: 1 }[e.key], at = cells.indexOf(document.activeElement);
+      if (!step || at < 0) return;
+      e.preventDefault();
+      var to = at + step;
+      if (to >= 0 && to < 64 && (step === 8 || step === -8 || (to >> 3) === (at >> 3))) cells[to].focus();
+    });
+
+    function render() {
+      var mine = !waiting && !now.over && pos.turn === "w";
+      goes = {};
+      // A pawn of the person's that reaches the far side always becomes a queen
+      if (mine && picked >= 0) now.legal.forEach((m) => { if (m.from === picked && (!m.promo || m.promo === "q")) goes[m.to] = m; });
+      var hot = now.check ? C.king(pos.b, pos.turn) : -1;
+      for (var s = 0; s < 64; s++) {
+        var el = cells[s], p = pos.b[s], m = goes[s], own = mine && C.side(p) === "w";
+        el.className = "sq" + (((s & 7) + (s >> 3)) % 2 ? "" : " dk") + (last && (last.from === s || last.to === s) ? " last" : "") +
+          (s === hot ? " check" : "") + (mine && s === picked ? " pick" : "") + (m ? " to" + (m.took ? " cap" : "") : "") + (own || m ? " can" : "");
+        el.setAttribute("aria-label", C.name(s) + (p ? ", " + (C.side(p) === "w" ? "white " : "black ") + C.NAME[C.kind(p)] : "") +
+          (s === hot ? ", in check" : "") + (mine && s === picked ? ", picked up" : "") + (m ? (m.took ? ", can take here" : ", can go here") : ""));
+        if (shown[s] !== p) {
+          if (figures[s]) el.removeChild(figures[s]);
+          figures[s] = p ? el.appendChild(figure(p)) : null;
+          shown[s] = p;
+        }
+      }
+      headEl.textContent = now.over === "checkmate" ? "Checkmate." : now.over === "stalemate" ? "Stalemate." : HEADING;
+      card.setAttribute("data-wait", waiting ? "1" : "0");
+      hintEl.textContent = now.over === "checkmate" ? (pos.turn === "b" ? "You won." : Tour.agent + " won.")
+        : now.over ? (pos.turn === "b" ? Tour.agent + " has" : "You have") + " no move, so it is a draw."
+        : now.check && pos.turn === "w" ? "Your king is in check."
+        : "You play White.";
+    }
+
+    // A piece drawn over the board, on the square `s`, for as long as it is moving
+    function flying(p, s) {
+      var el = figure(p);
+      el.className += " fly";
+      el.style.left = (s & 7) * 12.5 + "%";
+      el.style.top = (7 - (s >> 3)) * 12.5 + "%";
+      return boardEl.appendChild(el);
+    }
+    // Slides what now stands on `to` there from `from`. The piece itself is already in its place:
+    // only a picture of it travels, so that nothing is left half-way if the board changes meanwhile.
+    function slide(from, to, ms) {
+      var real = figures[to];
+      if (!real || still || !real.animate) return;
+      var fly = flying(pos.b[to], to), dx = ((from & 7) - (to & 7)) * 100, dy = ((to >> 3) - (from >> 3)) * 100;
+      real.style.visibility = "hidden";
+      var a = fly.animate([{ transform: "translate(" + dx + "%," + dy + "%)" }, { transform: "translate(0,0)" }], { duration: ms, easing: "cubic-bezier(.3,.75,.3,1)" });
+      a.onfinish = a.oncancel = () => { real.style.visibility = ""; fly.remove(); };
+    }
+    // Plays a move on the board: the position, then the picture of it
+    function put(m, ms) {
+      var took = m.took ? { piece: m.took, at: m.flag === "ep" ? m.to + (pos.turn === "w" ? -8 : 8) : m.to } : null;
+      pos = C.play(pos, m);
+      now = C.state(pos);
+      last = m;
+      picked = -1;
+      turn++;
+      return () => {
+        // The piece that was taken fades where it stood, under the one that takes it
+        if (took && !still && boardEl.animate) {
+          var ghost = flying(took.piece, took.at), a = ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: ms, easing: "ease-in" });
+          a.onfinish = a.oncancel = () => ghost.remove();
+        }
+        slide(m.from, m.to, ms);
+        // In castling the rook goes too
+        if (m.flag === "short") slide(m.to + 1, m.to - 1, ms);
+        if (m.flag === "long") slide(m.to - 2, m.to + 1, ms);
+      };
+    }
+
+    // A move as something done, by the person ("moved a pawn to e4") or by the agent ("moved its knight to f6")
+    function told(m, mine) {
+      var who = C.NAME[C.kind(m.piece)], at = C.name(m.to), text;
+      var the = mine ? (who === "king" || who === "queen" ? "the " : "a ") : "its ";
+      if (m.flag === "short" || m.flag === "long") text = "castled " + (m.flag === "short" ? "kingside" : "queenside");
+      else if (m.flag === "ep") text = "took " + (mine ? "a" : "your") + " pawn en passant on " + at;
+      else if (m.took) text = "took " + (mine ? "the " : "your ") + C.NAME[C.kind(m.took)] + " on " + at + (mine ? " with " + the + who : "");
+      else text = "moved " + the + who + " to " + at;
+      if (m.promo) text += " and made a " + C.NAME[m.promo];
+      return text + (now.over ? ", " + now.over : now.check ? ", check" : "");
+    }
+    // The same in a few words, for the plate: "Knight to f6"
+    function brief(m) {
+      var text = m.flag === "short" ? "castles kingside" : m.flag === "long" ? "castles queenside" : C.NAME[C.kind(m.piece)] + (m.took ? " takes " : " to ") + C.name(m.to);
+      if (m.promo) text += ", a new " + C.NAME[m.promo];
+      return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    // The person's move: played at once, and told to the agent with all it needs to answer
+    function mine(m) {
+      var before = { pos: pos, last: last }, draw = put(m, 180), at = turn;
+      waiting = !now.over;
+      sent = false;
+      render();
+      draw();
+      Tour.say("you", told(m, true));
+      Tour.act("move", { move: C.uci(m), said: C.said(m, now), fen: C.fen(pos), legal: now.legal.map(C.uci), check: now.check, over: now.over }).then(() => {
+        if (turn !== at) return;
+        sent = true;
+        // A move that ended the game has no answer to wait for
+        if (now.over) Tour.plate("", false);
+      }, () => {
+        if (turn !== at) return;
+        // The agent was not told: the move is taken back, so that the board and the agent do not come apart
+        pos = before.pos; last = before.last; now = C.state(pos); waiting = false; turn++;
+        Tour.say("you", "");
+        render();
+      });
+      if (now.over === "checkmate") {
+        var r = boardEl.getBoundingClientRect();
+        Tour.confetti(r.left + r.width / 2, r.top + r.height / 2);
+      }
+    }
+    // The agent's move
+    function theirs(m) {
+      var draw = put(m, 250);
+      waiting = false;
+      render();
+      draw();
+      Tour.plate(brief(m), false);
+      Tour.say("did", told(m, false));
+    }
+
+    function tap(s) {
+      if (waiting || now.over || pos.turn !== "w") return;
+      if (goes[s]) return mine(goes[s]);
+      // Another of their pieces is picked up in its place; the same one again, or anywhere else, puts it down
+      picked = C.side(pos.b[s]) === "w" && s !== picked ? s : -1;
+      render();
+    }
+
+    // What the agent set as its move. It counts only while the move is the agent's and the agent
+    // has been told of the person's: anything seen before that was set for an earlier position.
+    function answer(reply, fresh) {
+      if (!waiting || !sent || now.over || pos.turn !== "b" || !reply.trim()) return;
+      var m = C.find(now.legal, reply);
+      if (m) theirs(m);
+      // Not a move it may make: the agent is told so, once for what it set, and the person is shown nothing of it
+      else if (fresh) Tour.act("illegal", { move: reply.slice(0, 40), fen: C.fen(pos), legal: now.legal.map(C.uci) }).catch(() => {});
+    }
+    var text = (v) => (v == null ? "" : String(v));
+    var revision = () => (typeof It.revision === "number" ? It.revision : -1);
+    // What was in the state when the page opened is of an earlier game, and is not a move in this one
+    var seenReply = text((It.state || {}).reply), seenNote = "", seenRev = revision();
+    function heard() {
+      var st = It.state || {}, reply = text(st.reply), note = text(st.note).slice(0, 160);
+      var rev = revision(), again = seenRev >= 0 && rev > seenRev;
+      seenRev = rev;
+      if (reply !== seenReply) {
+        seenReply = reply;
+        answer(reply, true);
+      } else if (again && note === seenNote) {
+        // The state was written again and reads the same: the same move set a second time, as
+        // the first answer of a new game may well be the last of the one before
+        answer(reply, false);
+      }
+      if (note !== seenNote) {
+        seenNote = note;
+        if (note) Tour.say("did", note);
+      }
+    }
+
+    $("new").addEventListener("click", () => {
+      turn++;
+      pos = C.read(C.START); now = C.state(pos); last = null; picked = -1; waiting = false; sent = false;
+      render();
+      Tour.say("you", "started a new game");
+      Tour.say("did", "");
+      Tour.act("reset", {}).then(() => Tour.plate("", false), () => {});
+    });
+
+    It.onState(heard);
+    render();
+    heard();
+  });
+</script>
+</body>
+</html>

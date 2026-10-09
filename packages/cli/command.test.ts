@@ -359,6 +359,54 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it tour show next` shows the first thing the menu does not say has been seen, tells the menu, and shows the ending once all have been', async () => {
+    const m = machine()
+    let seen: string[] | null = ['whiteboard']
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'state:get')
+        return seen ? { json: JSON.stringify({ status: 'open', picked: '', seen }), revision: 1 } : new Refusal({ code: 'not_found', message: 'No such page.' })
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'shown', version: 1, url: 'https://site.example/p/shown' }
+      if (fn === 'displays:show') return { displays: ['Desk'] }
+      return null
+    })
+    try {
+      const shown = async (name: string) => {
+        b.asked.length = 0
+        const ran = await run(m, ['tour', 'show', name], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' })
+        expect([name, ran.code, ran.err]).toEqual([name, 0, ''])
+        return {
+          page: b.asked.find((x) => x.path === 'publish:begin')!.args.slug,
+          told: b.asked.filter((x) => x.path === 'state:patch').map((x) => [x.args.slug, JSON.parse(x.args.patch as string)]),
+        }
+      }
+      // The whiteboard has been seen: the chessboard is next, it starts as it was made, and the menu is told that it has been seen
+      expect(await shown('next')).toEqual({
+        page: 'tour-chess',
+        told: [
+          ['tour-chess', { reply: '', note: '' }],
+          ['tour-menu', { seen: ['whiteboard', 'chess'] }],
+        ],
+      })
+      // One that is asked for by name and was seen before is shown again, and the menu is told nothing new
+      expect((await shown('whiteboard')).told.map(([slug]) => slug)).toEqual(['tour-whiteboard'])
+      // The menu, shown again, starts open and keeps what was seen
+      seen = ['whiteboard', 'chess']
+      expect(await shown('menu')).toEqual({ page: 'tour-menu', told: [['tour-menu', { status: 'open', picked: '', seen: ['whiteboard', 'chess'] }]] })
+      // Everything seen: what is next is the ending, and nothing more is told the menu
+      seen = ['whiteboard', 'chess', 'checklist', 'drums', 'button']
+      expect((await shown('next')).page).toBe('tour-done')
+      // Something in the menu's state that is no thing of the tour is not counted as one
+      seen = ['whiteboard', 'tictactoe', 'done']
+      expect((await shown('next')).page).toBe('tour-chess')
+      // With no menu yet, as when an agent begins somewhere else, the first thing is next, and there is no menu to tell
+      seen = null
+      expect((await shown('next')).page).toBe('tour-whiteboard')
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it tour clear` removes the tour’s own pages and no other, also one whose id only begins as theirs do', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>
