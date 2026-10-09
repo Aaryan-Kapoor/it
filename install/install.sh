@@ -571,6 +571,15 @@ if [ "${led}" = 0 ]; then
   say "It is installed. Start it, and connect your agents, with:"
   say ""
   say "  ${it_quoted} setup"
+  # An agent that was told to install It reads this and nothing else, unless it found the
+  # guide: so what it does next is here, in the two commands that ask nothing of a terminal
+  say ""
+  say "An agent that is installing It for someone goes on with these two, which ask nothing at a terminal. The first sets It up on this computer and connects one agent app: claude-code, codex, pi, opencode or hermes. The second prints a link for the person to open in a browser on this computer."
+  say ""
+  say "  ${it_quoted} setup --only <app>"
+  say "  ${it_quoted} site --no-open"
+  say ""
+  say "What to ask the person first is in https://itcan.do/install.md"
   exit 0
 fi
 quietly "Source-available under the It License, which is in ${HOME_DIR}/LICENSE.md."

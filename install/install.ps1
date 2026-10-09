@@ -355,6 +355,15 @@
       Write-Host 'It is installed. Start it, and connect your agents, with:'
       Write-Host ''
       Write-Host "  & $quoted setup"
+      # An agent that was told to install It reads this and nothing else, unless it found the
+      # guide: so what it does next is here, in the two commands that ask nothing of a terminal
+      Write-Host ''
+      Write-Host 'An agent that is installing It for someone goes on with these two, which ask nothing at a terminal. The first sets It up on this computer and connects one agent app: claude-code, codex, pi, opencode or hermes. The second prints a link for the person to open in a browser on this computer.'
+      Write-Host ''
+      Write-Host "  & $quoted setup --only <app>"
+      Write-Host "  & $quoted site --no-open"
+      Write-Host ''
+      Write-Host 'What to ask the person first is in https://itcan.do/install.md'
     }
   } finally {
     # Stopped before all three were in, what was there is put back: the old file where one was

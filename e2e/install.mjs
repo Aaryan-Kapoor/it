@@ -360,8 +360,15 @@ try {
   )
   check(
     'and how it ended and what to run next are the last things it says, set apart from the rest by a line with nothing on it',
-    /\n\nIt is installed\. Start it, and connect your agents, with:\n\n {2}.* setup\n?$/.test(one.said.replace(/\r\n/g, '\n')),
-    JSON.stringify(one.said.slice(-300)),
+    /\n\nIt is installed\. Start it, and connect your agents, with:\n\n {2}.* setup\n\n/.test(one.said.replace(/\r\n/g, '\n')),
+    JSON.stringify(one.said.slice(-900)),
+  )
+  check(
+    'and after that what an agent that is installing It for someone does next: the two commands that ask nothing at a terminal, by the program’s whole path, and where the guide is',
+    /setup\n\nAn agent that is installing It for someone goes on with these two[^\n]*claude-code, codex, pi, opencode or hermes[^\n]*\n\n {2}.* setup --only <app>\n {2}.* site --no-open\n\nWhat to ask the person first is in https:\/\/itcan\.do\/install\.md\n?$/.test(
+      one.said.replace(/\r\n/g, '\n'),
+    ),
+    JSON.stringify(one.said.slice(-900)),
   )
   check(
     'it says nothing of the usage counts It reports, which the program says itself at the first command a person runs, and leaves no note that anyone was told',
