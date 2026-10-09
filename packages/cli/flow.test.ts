@@ -36,7 +36,9 @@ describe('an address as a code a camera reads', () => {
 })
 
 describe('a row of a list a person chooses from', () => {
-  const on = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, '').length
+  // The codes that colour a piece of text take no room on the screen
+  const COLOURS = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
+  const on = (text: string) => text.replace(COLOURS, '').length
   const wide = (columns: number, run: () => void) => {
     const was = Object.getOwnPropertyDescriptor(process.stderr, 'columns')
     Object.defineProperty(process.stderr, 'columns', { value: columns, configurable: true })
