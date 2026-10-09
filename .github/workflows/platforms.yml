@@ -1,0 +1,150 @@
+name: It on macOS and Windows
+
+# The whole product in a browser on the systems where the main workflow only starts the
+# program and runs its install script: a Mac of each kind, and Windows. It is the same suite
+# the main workflow runs on Linux against the standalone program, in its quick form.
+#
+# Run by hand, or by a push to a branch named `platforms`, and by nothing else: never by a
+# pull request or a push to master. Where minutes are paid for, a Mac's cost ten times a
+# Linux machine's, and these jobs are asked for when a release is near, not for every commit.
+# Nothing waits on it, and no job of the main workflow needs it.
+#
+# Like the main workflow: every action is pinned to a commit, no job keeps the checkout's
+# credentials, the token can only read, and no job is given a secret.
+on:
+  workflow_dispatch:
+  push:
+    branches: [platforms]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The same two as the main workflow says once each (it.yml)
+  NODE_VERSION: 24
+  BUN_VERSION: 1.3.11
+
+jobs:
+  # The programs, built once on Linux as the main workflow builds them. What that workflow
+  # checks of them (the checksums, the notices, the install script) is its to check.
+  programs:
+    name: Standalone programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: npm ci
+      - run: npm run generate
+      - run: node packages/cli/release.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: it-programs
+          path: packages/cli/dist/bin/
+          retention-days: 3
+          if-no-files-found: error
+
+  # Everything together on the runner, as a person has it: It running as one service, which
+  # starts the backend program, opens the door and runs the connector; the `it` command; and
+  # a real browser, paired with it. Each system is tried by itself, so that one that fails
+  # says nothing of the others.
+  flow:
+    name: The product in a browser (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    needs: programs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            program: it-darwin-arm64
+          - os: macos-15-intel
+            program: it-darwin-x64
+          - os: windows-latest
+            program: it-windows-x64.exe
+    steps:
+      - name: Where this run keeps things
+        run: |
+          echo "IT_HOME=$RUNNER_TEMP/it-home" >> "$GITHUB_ENV"
+          echo "IT_PORT=4700" >> "$GITHUB_ENV"
+          echo "IT_STACK_LOGS=$RUNNER_TEMP/it-logs" >> "$GITHUB_ENV"
+          echo "IT_E2E_LOGS=$RUNNER_TEMP/it-logs/run" >> "$GITHUB_ENV"
+          echo "IT_E2E_INVENTORY=$RUNNER_TEMP/it-run-holds.jsonl" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: it-programs
+          path: ${{ runner.temp }}/it-programs
+      - name: Use the standalone program for this system
+        env:
+          PROGRAM: ${{ matrix.program }}
+        run: |
+          chmod +x "$RUNNER_TEMP/it-programs/$PROGRAM"
+          "$RUNNER_TEMP/it-programs/$PROGRAM" --version
+          echo "IT_BIN=$RUNNER_TEMP/it-programs/$PROGRAM" >> "$GITHUB_ENV"
+      # The stack goes on running behind the steps that follow, as in the main workflow
+      - name: Start It
+        id: stack
+        run: |
+          mkdir -p "$IT_STACK_LOGS"
+          nohup bash -c 'node e2e/stack.mjs & echo $! > "$RUNNER_TEMP/it-stack.pid"; wait $!; echo $? > "$RUNNER_TEMP/it-stack.ended"' > "$IT_STACK_LOGS/stack.log" 2>&1 &
+          node e2e/ready.mjs 300
+      - name: The whole product, in a browser
+        run: node e2e/run.mjs --quick
+      - name: Stop It, and set aside what was written
+        id: stop
+        if: always() && steps.stack.outcome != 'skipped'
+        working-directory: ${{ runner.temp }}
+        run: |
+          [ -f it-stack.pid ] && kill "$(cat it-stack.pid)" 2>/dev/null || true
+          for _ in $(seq 1 120); do [ -s it-stack.ended ] && break; sleep 1; done
+          [ -s it-stack.ended ] && echo "the stack ended with $(cat it-stack.ended)" || echo "::warning::The stack had not ended two minutes after it was asked to stop"
+          rm -rf it-kept && mkdir it-kept
+          [ -d it-logs ] && cp -R it-logs/. it-kept/
+          echo "set-aside=yes" >> "$GITHUB_OUTPUT"
+      # Nothing of what was written is shown or kept unless it is first found to hold no
+      # credential, as in the main workflow: what a run prints here can be read by whoever
+      # can read the repository
+      - name: Nothing that was written down holds a credential
+        id: scan
+        if: always() && steps.stop.outputs.set-aside == 'yes'
+        run: node e2e/logs.mjs "$RUNNER_TEMP/it-kept"
+      # On a system the suite has not passed on yet, this is how it is learned why
+      - name: What the stack and the service wrote
+        if: always() && steps.scan.outcome == 'success'
+        working-directory: ${{ runner.temp }}/it-kept
+        run: |
+          for log in stack.log service.log; do echo "::group::$log"; tail -n 150 "$log" 2>/dev/null || echo "(there is none)"; echo "::endgroup::"; done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && steps.scan.outcome == 'success'
+        with:
+          name: it-flow-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/it-kept/
+          retention-days: 3
+          if-no-files-found: warn
