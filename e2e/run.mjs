@@ -4542,7 +4542,7 @@ try {
   check(
     'and a browser paired after that finds nothing left of what was there',
     (await until(
-      async () => (await three.page.getByText('What should I make?').isVisible()) && (await three.page.locator('a.cover').count()) === 0,
+      async () => (await three.page.getByText('Say this to your agent').isVisible()) && (await three.page.locator('a.cover').count()) === 0,
       60_000,
       1000,
     )) &&

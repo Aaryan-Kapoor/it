@@ -3,7 +3,7 @@ import { ALIVE, NOUN, WAKE_BACK_MS } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { type CSSProperties, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { copy, IconBack, IconLink, IconPin, IconStop, IconX, Mark } from './brand'
-import { ago, api, type Id, navigate, refusal, useNow } from './lib'
+import { agentName, ago, api, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
 import { onItsWayUntil, outboxChanges, unsaved, unsent, watchOutbox } from './outbox'
@@ -22,8 +22,7 @@ export interface Card {
   pinned: boolean
 }
 
-const AGENTS: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', openclaw: 'OpenClaw', hermes: 'Hermes', opencode: 'OpenCode', pi: 'Pi' }
-export const agentName = (a: string | null) => (a ? (AGENTS[a] ?? a) : null)
+export { agentName }
 
 /** A hue for a page, from its id: the same page has the same one on every display, and two neighbours seldom share one. */
 function hueOf(id: string): number {

@@ -405,3 +405,7 @@ export function useStored(key: string, initial = ''): [string, (v: string) => vo
   )
   return [value, set]
 }
+
+/** Each agent app as a person knows it, by the name It has for it. */
+const AGENTS: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', openclaw: 'OpenClaw', hermes: 'Hermes', opencode: 'OpenCode', pi: 'Pi' }
+export const agentName = (a: string | null) => (a ? (AGENTS[a] ?? a) : null)

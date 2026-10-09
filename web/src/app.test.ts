@@ -185,17 +185,17 @@ describe('a browser that is not paired', () => {
       { what: '/session/token' },
       { what: 'displays:register', args: { key: localStorage.getItem('it.display'), userAgent: navigator.userAgent } },
     ])
-    expect(host.textContent).toContain('What should I make?')
+    expect(host.textContent).toContain('Say this to your agent')
     // The owner is offered the tour, and is not sent to connect an agent app while it is not known that none is connected
-    expect(button('Start the tour')).toBeDefined()
-    expect(host.querySelector('.empty-connect')).toBeNull()
+    expect(host.querySelector('.hello-say .copyable-text')!.textContent).toBe('Give me the It tour.')
+    expect(host.querySelector('.hello-connect')).toBeNull()
   })
 
   test('the person’s own code in the address pairs it without a word, and the address is left without it', async () => {
     await start('/pair#ownercode00000000001')
     expect(location.pathname + location.hash).toBe('/')
     expect(names().slice(0, 4)).toEqual(['/session/code', '/session/redeem', '/session/token', 'displays:register'])
-    expect(host.textContent).toContain('What should I make?')
+    expect(host.textContent).toContain('Say this to your agent')
   })
 
   test('a screen’s code in the address pairs it only when the person says this browser is that screen', async () => {
@@ -241,7 +241,7 @@ describe('a browser that is not paired', () => {
     // The same code, put again once the minute is over, pairs the browser
     wrongCodesFor = null
     await press('Pair this browser')
-    expect(host.textContent).toContain('What should I make?')
+    expect(host.textContent).toContain('Say this to your agent')
     expect(asked.filter((a) => a.what === '/session/redeem').map((a) => a.args)).toEqual(Array(4).fill({ code: 'ownercode00000000001' }))
   })
 
@@ -304,7 +304,7 @@ describe('a display the person forgot', () => {
     expect(registered[1]).not.toBe('the-forgotten-display-key')
     expect(localStorage.getItem('it.display')).toBe(registered[1])
     expect(names()).not.toContain('/session/end')
-    expect(host.textContent).toContain('What should I make?')
+    expect(host.textContent).toContain('Say this to your agent')
   })
 
   test('it does not come back under the session it had: the browser is signed out, and its key let go of', async () => {
@@ -339,7 +339,7 @@ describe('a display key that another paired browser holds', () => {
     expect(localStorage.getItem('it.display')).toBe(registered[1])
     expect(registered[1]).not.toBe('another-browsers-display-key')
     expect(names()).not.toContain('/session/end')
-    expect(host.textContent).toContain('What should I make?')
+    expect(host.textContent).toContain('Say this to your agent')
   })
 })
 
@@ -359,9 +359,9 @@ describe('what each kind of session is shown', () => {
       }
       await start(at)
       expect(sections()).toEqual(['Pages'])
-      expect(host.textContent).toContain('What should I make?')
+      expect(host.textContent).toContain('Say this to your agent')
       // Nor is it told to set anything up: that is done on the machine It runs on, by the owner
-      expect(host.querySelector('.empty-connect')).toBeNull()
+      expect(host.querySelector('.hello-connect')).toBeNull()
     }
     expect(names().filter((n) => /^(machines|sessions|account):|^displays:(list|forget)$/.test(n))).toEqual([])
     await act(async () => root.unmount())
@@ -475,7 +475,7 @@ describe('something that failed while the site was being shown', () => {
     expect(button('Try again')).toBeDefined()
     await press('Try again')
     expect(host.textContent).not.toContain('That did not work')
-    expect(host.textContent).toContain('What should I make?')
+    expect(host.textContent).toContain('Say this to your agent')
   })
 
   test('the way back to the pages shows them where it was the pages that could not be shown, and a page that is not there is offered nothing to try again', async () => {
@@ -487,7 +487,7 @@ describe('something that failed while the site was being shown', () => {
     await press('Back to your pages')
     expect(location.pathname).toBe('/')
     expect(host.textContent).not.toContain('That did not work')
-    expect(host.textContent).toContain('What should I make?')
+    expect(host.textContent).toContain('Say this to your agent')
     // A page that was deleted is said to be that, and asking for it again would find it no more there
     await act(async () => root.unmount())
     host.remove()
@@ -501,7 +501,7 @@ describe('something that failed while the site was being shown', () => {
     expect(button('Try again')).toBeUndefined()
     await press('Back to your pages')
     expect(location.pathname).toBe('/')
-    expect(host.textContent).toContain('What should I make?')
+    expect(host.textContent).toContain('Say this to your agent')
   })
 
   test('a page that is taken away while it is on the screen, as a tour’s pages are when the tour is over, sends the screen back to the person’s pages and not to "No such page"', async () => {

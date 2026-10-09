@@ -379,6 +379,70 @@ const BACKEND_LICENSE = { 'precompiled-2026-09-28-5c7cb5b': 'LicenseRef-FSL-1.1-
 if (!Object.hasOwn(BACKEND_LICENSE, release))
   throw new Error(`It fetches the release ${release} of the backend program: read from that program what license it names, and write it in BACKEND_LICENSE`)
 
+// The site also carries typefaces, which no bundle shows: files in web/public/fonts, served as
+// they are. Each is named here with whose it is and what it is under, and every file in that
+// folder has to be one of them: a face that was added and not named would be given out with no
+// word of whose it is.
+const FONTS = [
+  {
+    name: 'Inter and Inter Display 4.000',
+    by: 'The Inter Project Authors (Rasmus Andersson)',
+    files: ['display-600', 'display-700', 'display-800', 'text-400', 'text-500', 'text-600', 'text-700'],
+    what: 'Latin subsets of seven weights',
+    says: 'Copyright 2016 The Inter Project Authors',
+    license: 'SIL Open Font License 1.1',
+    source: 'https://github.com/rsms/inter',
+    kept: 'inter-OFL.txt',
+  },
+  {
+    name: 'Noto Sans Symbols 2 2.003',
+    by: 'The Noto Project Authors',
+    files: ['chess'],
+    what: 'the twelve chess pieces, and nothing else of it',
+    says: 'Copyright 2017 Google Inc. All Rights Reserved.',
+    license: 'SIL Open Font License 1.1',
+    source: 'https://github.com/notofonts/symbols',
+    kept: 'noto-sans-symbols-2-OFL.txt',
+  },
+  {
+    name: 'Arimo Bold 1.33',
+    by: 'Steve Matteson, for Google',
+    files: ['mark'],
+    what: 'five glyphs, and nothing else of it',
+    says: 'Copyright 2010 Google Inc. All Rights Reserved.',
+    license: 'Apache License 2.0',
+    source: 'https://fonts.google.com/specimen/Arimo',
+    kept: 'apache-2.0.txt',
+  },
+]
+const served = readdirSync(path.join(root, 'web/public/fonts'))
+  .filter((file) => file.endsWith('.woff2'))
+  .map((file) => file.slice(0, -'.woff2'.length))
+  .sort()
+const named = FONTS.flatMap((f) => f.files).sort()
+if (served.join() !== named.join())
+  throw new Error(
+    `web/public/fonts holds ${served.join(', ')}, and scripts/notices.mjs names ${named.join(', ')}: every typeface the site serves is named there, with its license`,
+  )
+const fontLines = [
+  '## Typefaces the site carries',
+  '',
+  'The pictures on the first screen of the site are drawn in typefaces that the site serves from `/fonts/`, as files converted to WOFF2. Each remains under its own license, which is given here in full.',
+  '',
+  ...FONTS.flatMap((f) => [
+    `### ${f.name}`,
+    '',
+    `By ${f.by}. License: ${f.license}. Served as: ${f.files.map((name) => `\`${name}.woff2\``).join(', ')}, which hold ${f.what}. The files themselves say: "${f.says}" Source: <${f.source}>.`,
+    '',
+    fence(
+      readFileSync(path.join(root, 'scripts/notices/fonts', f.kept), 'utf8')
+        .replace(/\r\n/g, '\n')
+        .trimEnd(),
+    ),
+    '',
+  ]),
+]
+
 const sorted = [...packages.values()].sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version))
 const lines = [
   '# Third-party notices',
@@ -404,6 +468,7 @@ const lines = [
   '',
   `The program is Convex's work and stays under Convex's terms. In the description of its own API, which it carries, it names its license as \`${BACKEND_LICENSE[release]}\`. The terms themselves are in its repository, <${releases}>.`,
   '',
+  ...fontLines,
   '## Packages',
   '',
 ]
