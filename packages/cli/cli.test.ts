@@ -1310,7 +1310,12 @@ describe('background service definitions', () => {
       'set IT_HOME=C:\\R^&D 100%%',
       'set IT_URL=http://127.0.0.1:23000/?a=1^&b=%%USERNAME%%',
       'set CODEX_HOME=C:\\odd ^"name^" ^^ ^(x^) ^| ^<y^>',
+      // Started again five seconds after it ends as a failure, and not after it ends well
+      ':again',
       '"C:\\R&D 100%%\\bin\\it.exe" serve --log "C:\\R&D 100%%\\logs\\it.log"',
+      'if %errorlevel% equ 0 exit /b 0',
+      'ping -n 6 127.0.0.1 >nul 2>&1',
+      'goto again',
       '',
     ])
     // A PATH too long for one line of a .cmd file is left as the task has it, and the rest is still set

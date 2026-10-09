@@ -225,7 +225,13 @@ export function windowsLauncher(cmd: string[], env: Record<string, string>): str
     // cmd.exe reads no line longer than this. A PATH that is, is left as the task has it.
     if (line.length <= 8000) lines.push(line)
   }
-  lines.push(cmd.map(cmdWord).join(' '))
+  // The program is started again five seconds after it has ended as a failure, as systemd and
+  // launchd are told to start it again: ended from outside or fallen over, it comes back by
+  // itself. Stopped on purpose, it ends well and stays stopped, and a task that is ended takes
+  // this file's own cmd.exe with it. The Task Scheduler is told to do the same a minute after
+  // a task has failed, and was seen not to, which is why it is done here. The wait is a ping,
+  // since `timeout` refuses to wait where it has no keyboard to be interrupted from.
+  lines.push(':again', cmd.map(cmdWord).join(' '), 'if %errorlevel% equ 0 exit /b 0', 'ping -n 6 127.0.0.1 >nul 2>&1', 'goto again')
   return `${lines.join('\r\n')}\r\n`
 }
 const windowsLauncherFile = () => inHome('bin', 'it-service.cmd')
@@ -250,6 +256,14 @@ export function windowsScript(folder: string, launcher: string): string {
   ].join('\n')
 }
 /**
+ * What every script given to PowerShell begins with. PowerShell says how far it has got with
+ * what it is doing ("Preparing modules for first use", the first time a person's account runs
+ * it) as a block of XML among what it prints, where it has no window to draw that in. Told
+ * this, it says nothing of the kind, and what it prints is what the script printed.
+ */
+export const PS_QUIET = "$ProgressPreference = 'SilentlyContinue'"
+
+/**
  * Runs a script in Windows PowerShell and gives what it printed, read as UTF-8. The script is
  * told first to print as UTF-8, which it otherwise does in the code page of its console. Where
  * it has no console to be told so, that is passed over, and what it prints is in the system's
@@ -257,7 +271,11 @@ export function windowsScript(folder: string, launcher: string): string {
  */
 function powershell(script: string, forMs?: number) {
   const asUtf8 = 'try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch {}'
-  return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`${asUtf8}\n${script}`, 'utf16le').toString('base64')], forMs)
+  return run(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`${PS_QUIET}\n${asUtf8}\n${script}`, 'utf16le').toString('base64')],
+    forMs,
+  )
 }
 /** PowerShell, asked something it only has to answer. */
 const powershellAsked = (script: string) => powershell(script, ASKED_WINDOWS_MS)
@@ -551,7 +569,8 @@ export function status(): ServiceStatus {
   }
   if (process.platform === 'win32') {
     const r = powershellAsked(`(Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction Stop).State`)
-    return { registered: r.ok, state: r.ok ? r.out : 'not registered', where: `Scheduled Task "${NAME}"` }
+    // The state is one word, on the first line of what was printed. Anything PowerShell said after it is not the state
+    return { registered: r.ok, state: r.ok ? (r.out.split(/\r?\n/)[0]?.trim() ?? '') || 'unknown' : 'not registered', where: `Scheduled Task "${NAME}"` }
   }
   return { registered: false, state: 'unsupported', where: home() }
 }

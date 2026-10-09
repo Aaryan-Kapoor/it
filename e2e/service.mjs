@@ -71,13 +71,33 @@ const end = (pid) => {
   if (windows) spawnSync('taskkill', ['/F', '/PID', String(pid)], { windowsHide: true })
   else process.kill(pid, 'SIGKILL')
 }
-const tail = () => {
+const tail = (most = 1500) => {
   try {
-    return readFileSync(path.join(home, 'logs', 'it.log'), 'utf8').slice(-1500)
+    return readFileSync(path.join(home, 'logs', 'it.log'), 'utf8').slice(-most)
   } catch {
     return '(the service wrote no log)'
   }
 }
+/** What the system itself says of the service and of the programs that are It's, for a run in which a check failed to say why. */
+const seen = () => {
+  const asked = (cmd, args) => {
+    const ran = spawnSync(cmd, args, { encoding: 'utf8', timeout: 60_000, windowsHide: true })
+    return `${ran.stdout ?? ''}${ran.stderr ?? ''}`.trim()
+  }
+  if (windows)
+    return [
+      asked('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "$ProgressPreference = 'SilentlyContinue'; Get-ScheduledTask -TaskName 'it' | Get-ScheduledTaskInfo | Format-List LastRunTime, LastTaskResult, NextRunTime, NumberOfMissedRuns; Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(it|it-windows-x64|convex-local-backend|conhost|cmd)' } | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-Table -AutoSize -Wrap | Out-String -Width 220",
+      ]),
+    ].join('\n')
+  if (process.platform === 'darwin') return asked('launchctl', ['print', `gui/${process.getuid()}/dev.it`]).slice(0, 1500)
+  return asked('systemctl', ['--user', 'status', 'it', '--no-pager']).slice(0, 1500)
+}
+/** Said apart from a check that failed, in full: a check's own line holds little. */
+const why = (what) => console.log(`\n--- ${what}\nwhat the system says:\n${seen()}\nthe end of the service's log:\n${tail(4000)}\n---\n`)
 
 let registered = false
 try {
@@ -118,8 +138,9 @@ try {
     check(
       'ended from outside, as a crash ends it, it is started again by the system, and its site answers again',
       Boolean(down) && Boolean(again),
-      `went down: ${Boolean(down)}; now: ${JSON.stringify(stands())}\n${tail()}`,
+      `went down: ${Boolean(down)}; now: ${JSON.stringify(stands())}`,
     )
+    if (!down || !again) why('after it was ended from outside')
   } else
     check('ended from outside, as a crash ends it, it is started again by the system, and its site answers again', false, 'there was no running service to end')
 
@@ -129,8 +150,9 @@ try {
   check(
     'a second setup, which is what an update runs over a service that is running, ends well and leaves it running',
     second.code === 0 && second.json?.service?.registered === true && Boolean(still),
-    `${second.said.slice(-600)}\nnow: ${JSON.stringify(stands())}\n${tail()}`,
+    `${second.said.slice(-600)}\nnow: ${JSON.stringify(stands())}`,
   )
+  if (!(second.code === 0 && second.json?.service?.registered === true && still)) why('after the second setup')
 
   // ---------- taken away ----------
   const off = it(['service', 'uninstall', '--json'], 180_000)
