@@ -3555,9 +3555,16 @@ try {
     viaQueue?.data?.plan === PLAN && viaQueue.delivery === 'handed_off' && queuedInCodex().length === 1,
     `${JSON.stringify(viaQueue)}; Codex's queue was asked ${queuedInCodex().length} time(s)`,
   )
-  // The page goes while it is open, and the person is told
+  // The page goes while it is open: the screen goes back to the person's pages, and is not left saying that there is no such page
   await it(C, ['delete', xslug])
-  check('a page deleted while it is open is taken off the screen', await until(() => page.getByText('No such page').isVisible(), 15_000))
+  check(
+    'a page deleted while it is open is taken off the screen, which goes back to the person’s pages',
+    await until(async () => new URL(page.url()).pathname === '/' && !(await page.getByText('No such page').isVisible()), 15_000),
+    page.url(),
+  )
+  // An address that never led to a page still says so
+  await page.goto(`${APP}/p/no-such-page-was-ever-here`)
+  check('and an address that leads to no page says that there is no such page', await until(() => page.getByText('No such page').isVisible(), 15_000))
   const afterDeleting = await until(async () => ((await plain(deletedAt)).status !== 200 ? (await plain(deletedAt)).status : undefined), 20_000, 1000)
   check(
     'and the address it was shown at gives its files no more',
