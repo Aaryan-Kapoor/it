@@ -1,0 +1,99 @@
+name: The install from itcan.do
+
+# What a person's machine does when they follow It's page: the one line for their system, run
+# against the site as it is served and the release it sends them on to. Nothing here is built
+# from this repository. What is installed is whatever is published, on each of the five systems
+# a program is published for.
+#
+# Run by hand and by nothing else: it says how the published release stands, which no commit
+# changes, so it is asked for after a release is made or the site is changed.
+#
+# Like the main workflow: the token can only read, and no job is given a secret. No action is
+# used at all.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  install:
+    name: Installed from itcan.do (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            program: it-linux-x64
+          - os: ubuntu-24.04-arm
+            program: it-linux-arm64
+          - os: macos-latest
+            program: it-darwin-arm64
+          - os: macos-15-intel
+            program: it-darwin-x64
+          - os: windows-latest
+            program: it-windows-x64.exe
+    steps:
+      - name: The one line from the page, on macOS and Linux
+        if: runner.os != 'Windows'
+        run: curl -fsSL https://itcan.do/install.sh | sh
+      # In the PowerShell that Windows comes with, which is the one a person has
+      - name: The one line from the page, on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: irm https://itcan.do/install.ps1 | iex
+      - name: Where it was put
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then echo "IT=$HOME/.it/bin/it.exe" >> "$GITHUB_ENV"; else echo "IT=$HOME/.it/bin/it" >> "$GITHUB_ENV"; fi
+      - name: What was installed is the release's program, by the checksum published with it
+        env:
+          PROGRAM: ${{ matrix.program }}
+        run: |
+          set -euo pipefail
+          sum() { if command -v sha256sum > /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+          published=$(curl -fsSL https://itcan.do/releases/latest/download/SHA256SUMS | awk -v p="$PROGRAM" '$2 == p || $2 == "*" p { print $1 }')
+          installed=$(sum "$IT")
+          echo "published $published"
+          echo "installed $installed"
+          [ -n "$published" ] && [ "$published" = "$installed" ]
+          "$IT" --version
+          # The version the site says is the latest is the one that was installed
+          latest=$(curl -fsSL https://itcan.do/releases/latest/download/latest.json)
+          echo "latest.json says $latest"
+          "$IT" --version | tr -d ' \n' | grep -F "$(echo "$latest" | tr -d ' \n{}')"
+      - name: Its license and notices are beside it
+        run: |
+          set -euo pipefail
+          test -s "$HOME/.it/LICENSE.md"
+          test -s "$HOME/.it/THIRD_PARTY_NOTICES.md"
+      - name: Set it up, and see its site answer
+        run: |
+          set -euo pipefail
+          "$IT" setup --none --json
+          for _ in $(seq 1 60); do "$IT" status --json | grep -q '"running": true' && break; sleep 2; done
+          "$IT" status --json
+          "$IT" status --json | grep -q '"running": true'
+          site=$("$IT" status --json | sed -n 's/.*"site": "\(http[^"]*\)".*/\1/p' | head -1)
+          echo "its site is at $site"
+          [ "$(curl -s -o /dev/null -w '%{http_code}' "$site/")" = 200 ]
+          # A pairing link is given, as an agent gives one to the person it installed It for
+          "$IT" site --no-open --json | grep -q '"url": "http://localhost:[0-9]*/pair#'
+      - name: A page can be published, and is listed as live
+        run: |
+          set -euo pipefail
+          printf '<!doctype html><title>Hello</title><h1>Hello from a machine that never had It</h1>\n' > "$RUNNER_TEMP/hello.html"
+          "$IT" create Hello --id hello --file "$RUNNER_TEMP/hello.html" --json
+          "$IT" list --json | grep -q '"id": "hello"'
+          "$IT" read hello | grep -q '"status": "live"'
+      - name: Take it off again
+        if: always()
+        run: |
+          [ -x "$IT" ] || exit 0
+          "$IT" uninstall --yes --json
+          [ ! -e "$HOME/.it/service.json" ]
