@@ -157,8 +157,13 @@ export function likeliest(shell: { threads?: unknown; projects?: unknown }, of: 
   const roots = new Map<string, string>()
   for (const p of Array.isArray(shell.projects) ? (shell.projects as { id?: unknown; workspaceRoot?: unknown }[]) : [])
     if (typeof p?.id === 'string' && typeof p.workspaceRoot === 'string') roots.set(p.id, p.workspaceRoot)
+  // Windows takes either stroke between the parts of a folder's name, and T3 Code and an agent app need not write the same one
+  const strokes = process.platform === 'win32' ? ['\\', '/'] : [path.sep]
   const within = (root: unknown) =>
-    typeof root === 'string' && root !== '' && of.cwd !== undefined && (of.cwd === root || of.cwd.startsWith(root.endsWith(path.sep) ? root : root + path.sep))
+    typeof root === 'string' &&
+    root !== '' &&
+    of.cwd !== undefined &&
+    (of.cwd === root || (of.cwd.startsWith(root) && (strokes.some((s) => root.endsWith(s)) || strokes.includes(of.cwd[root.length]!))))
   return (Array.isArray(shell.threads) ? (shell.threads as ShellThread[]) : [])
     .filter((t): t is ShellThread & { id: string } => typeof t?.id === 'string' && !t.deletedAt && !t.archivedAt)
     .map((t) => ({
