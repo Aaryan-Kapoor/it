@@ -1146,13 +1146,16 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     // Thirty-four clicks that each carry as much as a click may, taken by Codex’s queue behind the turn that is running
     const carried = JSON.stringify('x'.repeat(31_000))
     const ids: string[] = []
+    // Each of the sixty-eight waits below is given half a minute and not the usual eight seconds:
+    // nothing here is held to a time, and on a machine that is busy with the other suites one
+    // step of so many has taken longer than eight
     for (let i = 0; i < 34; i++) {
       const commands = stand.codex.length
       ids.push(`click-big-${i}`)
       offered({ ...click(6), id: ids[i]!, payload: carried })
-      await until(() => stand.codex.length === commands + 1)
+      await until(() => stand.codex.length === commands + 1, 30_000)
       stand.codex[commands]!.end()
-      await until(() => called('delivery:handedOff').includes(ids[i]!))
+      await until(() => called('delivery:handedOff').includes(ids[i]!), 30_000)
       offered()
     }
     // Together they are over a megabyte, which is more than a waiter reads of one answer
@@ -1168,7 +1171,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect([...given].sort()).toEqual([...ids].sort())
     // More than one asking was needed, and a further one is given nothing a second time
     expect((await waitingFor(6))?.clicks).toBeUndefined()
-  }, 60_000)
+  }, 240_000)
 
   test('one that Codex’s queue took while the conversation’s turn was running is given to a waiter that begins in that turn, and only once', async () => {
     await start()
