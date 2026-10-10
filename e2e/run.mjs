@@ -880,7 +880,26 @@ async function framedBy(other, browser, address, shows, keepsOut) {
  * waited for no more: the run stops there, and says what its browser had asked for and not
  * been answered, which is what the tab is waiting on.
  */
+// The door gives one session thirty tokens at once and one more each second, and tells a
+// browser that asks for more to wait. The site's own pages ask for theirs as they load. So the
+// run's own askings, which are many where it looks at one browser again and again, are kept to
+// a part of that: ten in any twenty seconds for one browser, and an asking that would be the
+// eleventh waits its turn. Without this a run on a fast machine was once told to wait in the
+// middle of a check, which then read the browser as not paired.
+const askedOf = new WeakMap()
+async function unhurried(context) {
+  const times = askedOf.get(context) ?? []
+  askedOf.set(context, times)
+  for (;;) {
+    const now = Date.now()
+    while (times.length && now - times[0] > 20_000) times.shift()
+    if (times.length < 10) break
+    await sleep(times[0] + 20_050 - now)
+  }
+  times.push(Date.now())
+}
 async function sessionOf(p) {
+  await unhurried(p.context())
   const late = Symbol('late')
   const s = await Promise.race([
     p.evaluate(() => fetch('/session/token', { method: 'POST', headers: { 'x-it-site': '1' } }).then(async (r) => ({ status: r.status, ...(await r.json()) }))),
@@ -3484,6 +3503,11 @@ try {
   await page.goto(`${APP}/p/${xslug}`)
   const xframe = page.frameLocator('.mount iframe')
   const deletedAt = (await pageIn(page, { id: xslug })).url()
+  // The click is made once any click the browser is still reporting from before has worn off,
+  // which it does five seconds after it was made. One made sooner is told from the earlier one
+  // only by a look taken at the very end of those seconds, and on a slow machine that look has
+  // come a moment too late and found nothing, so that a click a person made was told as nobody's
+  await sleep(5200)
   await xframe.locator('#approve').click()
   // The click has reached It once the machine lists it as waiting, or once Codex's command has been run for it
   await until(async () => (await waitingOn(xslug)).length === 1 || queuedInCodex().length > 0, 15_000)
