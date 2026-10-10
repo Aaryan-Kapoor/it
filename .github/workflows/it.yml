@@ -140,7 +140,8 @@ jobs:
           echo "IT_BACKEND_BIN=$program" >> "$GITHUB_ENV"
       - name: Install the browsers that pages are run in
         if: ${{ !cancelled() }}
-        run: npx playwright install --with-deps chromium firefox
+        # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
+        run: for n in 1 2 3; do npx playwright install --with-deps chromium firefox && exit 0; sleep 20; done; exit 1
       # The tests are run whatever became of the steps before them, so that a system where
       # one fails still says which tests pass there. The job fails with it all the same.
       # Where the first run left no backend program, the tests that start it skip themselves,
@@ -333,7 +334,8 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Install the browser
-        run: npx playwright install --with-deps chromium
+        # Fetching a browser fails on a runner now and then, before anything of It has run: it is tried three times
+        run: for n in 1 2 3; do npx playwright install --with-deps chromium && exit 0; sleep 20; done; exit 1
       # The Node bundle, with the site and the backend's functions inside it, named so that
       # every script of the suite runs this one
       - name: Build the Node bundle, and use it

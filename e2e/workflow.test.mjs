@@ -162,7 +162,8 @@ describe('what the jobs are held to running', () => {
     expect(install).toBeGreaterThan(-1)
     expect(stepWith('test', 'run: npm test')).toBeGreaterThan(install)
     const step = steps('test')[install]
-    expect(step).toMatch(/run: npx playwright install --with-deps chromium firefox$/m)
+    // Tried three times: fetching a browser fails on a runner now and then, and that is no failure of It's
+    expect(step).toMatch(/run: for n in 1 2 3; do npx playwright install --with-deps chromium firefox && exit 0; sleep 20; done; exit 1$/m)
     // On every system, and never passed over when it fails
     expect(step).not.toMatch(/runner\.os|matrix\.os/)
     expect(step).not.toMatch(/continue-on-error/)
