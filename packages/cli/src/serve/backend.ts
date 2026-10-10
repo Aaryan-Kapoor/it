@@ -392,6 +392,9 @@ export function startOf(pid: number): string | null | undefined {
     }
   }
   if (process.platform === 'win32') {
+    // Asking when costs the start of another program here, and a number no process has needs none:
+    // a lock that was left behind is told to be so at once
+    if (!alive(pid)) return null
     const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { $p.StartTime.ToFileTimeUtc() } else { 'none' }`
     const ran = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
       encoding: 'utf8',

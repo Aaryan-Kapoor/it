@@ -1228,13 +1228,20 @@ describe('the lock one program holds while it changes what is installed', () => 
       loader: { '.md': 'text', '.txt': 'text' },
       logLevel: 'silent',
     })
+    // What Windows gives every program and its own programs cannot start without, PowerShell among
+    // them, which is what says there when a lock's holder was started
+    const ofTheSystem = Object.fromEntries(
+      (process.platform === 'win32' ? ['SystemRoot', 'SystemDrive', 'windir', 'ComSpec', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE'] : []).flatMap((name) =>
+        process.env[name] === undefined ? [] : [[name, process.env[name]]],
+      ),
+    )
     try {
       for (let round = 0; round < 5; round++) {
         const [tally, go] = [path.join(scratch, `tally-${round}`), path.join(scratch, `go-${round}`)]
         writeFileSync(lock(), leftBehind(shape))
         const contenders = Array.from({ length: 3 }, () => {
           const child = spawn(process.execPath, [script, tally, go], {
-            env: { PATH: process.env.PATH, IT_HOME: process.env.IT_HOME },
+            env: { PATH: process.env.PATH, IT_HOME: process.env.IT_HOME, ...ofTheSystem },
             stdio: ['ignore', 'pipe', 'pipe'],
           })
           let said = ''
@@ -1250,11 +1257,17 @@ describe('the lock one program holds while it changes what is installed', () => 
         // All three are there before any of them comes for the lock
         await vi.waitFor(() => expect(contenders.every((c) => c.ready())).toBe(true), { timeout: 30_000 })
         writeFileSync(go, '')
-        expect([round, await Promise.all(contenders.map((c) => c.ended)), contenders.map((c) => c.said().replace('ready\n', ''))]).toEqual([
-          round,
-          [0, 0, 0],
-          ['', '', ''],
-        ])
+        // One that has not ended in a minute never will: said with what there is to go by, where the test's own time running out says nothing
+        const late = setTimeout(() => {
+          for (const c of contenders) c.child.kill()
+        }, 60_000)
+        const endedAs = await Promise.all(contenders.map((c) => c.ended))
+        clearTimeout(late)
+        if (endedAs.includes(null))
+          throw new Error(
+            `round ${round}: not all three had ended in a minute. They said: ${JSON.stringify(contenders.map((c) => c.said()))}. The tally: ${JSON.stringify(existsSync(tally) ? readFileSync(tally, 'utf8') : null)}. Beside the lock: ${JSON.stringify(beside())}`,
+          )
+        expect([round, endedAs, contenders.map((c) => c.said().replace('ready\n', ''))]).toEqual([round, [0, 0, 0], ['', '', '']])
         // Each came in and went out again before the next came in
         const lines = readFileSync(tally, 'utf8').trim().split('\n')
         const pids = contenders.map((c) => String(c.child.pid)).sort()
