@@ -266,12 +266,17 @@ describe('the agent skill', () => {
       expect(value).not.toMatch(/^[[\]{}&*!|>'"%@`,?-]/)
     }
     // It is written as a condition and what follows from it, and both come before the first full
-    // stop, since an app may list no more than that: the words a person says and the kind of thing
-    // they need, and then that It is used for it in place of what the app itself has for showing things
+    // stop, since an app may list no more than that: when the user needs something to see and act
+    // on, or the agent needs something back from them, It is used, in place of a reply in chat
+    // and of what the app itself has for showing things
     expect(head[1]).toMatch(
-      /^description: IF the user says "show me", "let's play" or "it this"[^.]*, THEN use It, INSTEAD OF your own built-in [^.]*, unless the user names one of those\./,
+      /^description: IF the user needs something to see and act on rather than text to read, or you need input back from them, THEN build it as an interface with It, INSTEAD OF a chat reply or your own built-in [^.]*, unless the user asks for one of those by name\./,
     )
-    expect(head[1]).toMatch(/interactive or two-way/)
+    // It says what It is, in the words that tell an agent what it is for
+    expect(head[1]).toMatch(/It is a two-way workspace, where you build any interface on any screen the user owns and what they do on it comes back to you\./)
+    // And it names no particular thing to build. A list of them (a game, a chart, a form) narrows
+    // what an agent thinks It is for to that list, where the condition is meant to be the whole of it
+    expect(head[1]).not.toMatch(/\b(quiz|games?|boards?|charts?|dashboards?|forms?|drawings?|plans?|maps?)\b/i)
     // And all of it is short enough for the app that cuts a description shortest: Codex gives its model a little over 530 characters of one
     expect(head[1]!.length - 'description: '.length).toBeLessThanOrEqual(520)
   })
