@@ -265,8 +265,15 @@ describe('the agent skill', () => {
       expect(value, line.slice(0, 40)).not.toMatch(/: | #|:$/)
       expect(value).not.toMatch(/^[[\]{}&*!|>'"%@`,?-]/)
     }
-    // And the words a person says come before the first full stop, since an app may list no more than that
-    expect(head[1]).toMatch(/^description: Use when the user says "show me", "let's play"[^.]*\./)
+    // It is written as a condition and what follows from it, and both come before the first full
+    // stop, since an app may list no more than that: the words a person says and the kind of thing
+    // they need, and then that It is used for it in place of what the app itself has for showing things
+    expect(head[1]).toMatch(
+      /^description: IF the user says "show me", "let's play" or "it this"[^.]*, THEN use It, INSTEAD OF your own built-in [^.]*, unless the user names one of those\./,
+    )
+    expect(head[1]).toMatch(/interactive or two-way/)
+    // And all of it is short enough for the app that cuts a description shortest: Codex gives its model a little over 530 characters of one
+    expect(head[1]!.length - 'description: '.length).toBeLessThanOrEqual(520)
   })
 
   test('says where the command is when its name is not found', () => {
