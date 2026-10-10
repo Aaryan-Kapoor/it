@@ -16,6 +16,7 @@ import {
   speaksFor,
 } from './lib/authz'
 import { overClashes } from './lib/clash'
+import { counted, screenOf } from './lib/counted'
 import { fail } from './lib/errors'
 import { quota, rateLimit } from './lib/limits'
 import { log } from './lib/log'
@@ -23,6 +24,8 @@ import { mint } from './lib/signing'
 import { endSession, signOutDisplay } from './sessions'
 
 const KEY = /^[A-Za-z0-9_-]{16,128}$/
+/** A display that has not been seen for this long has closed the site, and opens it anew when it comes back. */
+const AWAY_MS = 600_000
 
 /** "Chrome on Linux", from what the browser says about itself. */
 function generatedName(ua: string): string {
@@ -129,9 +132,39 @@ export const register = mutation({
       lastSeenAt: now,
       epoch: 0,
       sessionId: session._id,
+      screen: screenOf(userAgent),
     })
     log('display.registered', { userId: user._id, displayId: id, sessionId: session._id, role: session.role })
     return view((await ctx.db.get(id))!)
+  },
+})
+
+/**
+ * A display says that it has the site open, and whether it reached It at this machine's own
+ * address. This is for the counts of how It is used and for nothing else: that a display was
+ * paired, the first time one that was just registered says so, and that a display opened the
+ * site, each time one says so after having been away. A display that is not registered is
+ * answered and nothing is noted.
+ */
+export const reached = mutation({
+  args: { key: v.string(), local: v.boolean() },
+  handler: async (ctx, { key, local }) => {
+    const c = await requireBrowser(ctx)
+    const display = KEY.test(key) ? await findDisplay(ctx, c, key) : null
+    if (!display) return null
+    const now = Date.now()
+    if (display.reachedAt !== undefined && now - display.reachedAt <= AWAY_MS) return null
+    const what = { screen: display.screen ?? 'computer', sameMachine: local }
+    if (display.reachedAt === undefined && now - display.createdAt <= AWAY_MS) {
+      const others = await ctx.db
+        .query('displays')
+        .withIndex('by_user', (q) => q.eq('userId', c.user._id))
+        .take(2)
+      await counted(ctx, 'display.paired', { ...what, first: others.length < 2 })
+    }
+    await counted(ctx, 'screen.connected', what)
+    await ctx.db.patch(display._id, { reachedAt: now, local })
+    return null
   },
 })
 

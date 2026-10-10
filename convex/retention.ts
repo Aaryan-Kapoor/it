@@ -344,6 +344,7 @@ export const sweep = internalMutation({
     await ctx.scheduler.runAfter(0, internal.retention.sweepActions, {})
     await ctx.scheduler.runAfter(0, internal.retention.sweepRecords, {})
     await ctx.scheduler.runAfter(0, internal.retention.resumeDeletions, {})
+    await ctx.scheduler.runAfter(0, internal.counted.sweep, {})
     return null
   },
 })

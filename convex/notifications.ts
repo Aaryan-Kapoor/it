@@ -8,6 +8,7 @@ import type { Id } from './_generated/dataModel'
 import { type MutationCtx, mutation, query } from './_generated/server'
 import { record } from './actions'
 import { artifactBySlug, type Browser, displayByKey, findDisplay, requireBrowser, requireMachine } from './lib/authz'
+import { counted } from './lib/counted'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { button } from './schema'
@@ -132,7 +133,12 @@ export const dismiss = mutation({
   handler: async (ctx, { key, ids }) => {
     const mine = await shownOn(ctx, await requireBrowser(ctx), key, ids)
     if (ids.length === 1 && mine.length === 0) fail('not_found', 'No such notification.')
-    for (const n of mine) if (!n.dismissedAt) await ctx.db.patch(n._id, { dismissedAt: Date.now() })
+    for (const n of mine)
+      if (!n.dismissedAt) {
+        await ctx.db.patch(n._id, { dismissedAt: Date.now() })
+        // Counted where it was put away unanswered: one that was answered has been counted as that
+        if (!n.answeredAt) await counted(ctx, 'notification.ended', { how: 'dismissed', pushed: (n.pushedTo?.length ?? 0) > 0 })
+      }
     return null
   },
 })
@@ -168,6 +174,9 @@ export const answer = mutation({
       ...(n.title === undefined ? {} : { title: n.title }),
     })
     await ctx.db.patch(id, { answeredAt: Date.now(), answer: action, seenAt: n.seenAt ?? Date.now() })
+    // Counted: that a notification was answered, from what kind of screen, and whether it had been pushed to a closed one
+    await counted(ctx, 'notification.ended', { how: 'answered', pushed: (n.pushedTo?.length ?? 0) > 0 })
+    await counted(ctx, 'answer.sent', { screen: display.screen ?? 'computer', from: 'notification' })
     return { actionId }
   },
 })

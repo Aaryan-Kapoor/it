@@ -5,6 +5,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { ref, resolveArtifact } from './artifacts'
 import { findDisplay, ownArtifact, requireBrowser, requireCaller } from './lib/authz'
+import { counted } from './lib/counted'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
@@ -199,7 +200,9 @@ export const submit = mutation({
     // person's own whether or not it is: a display's record can be let go to make room while
     // its tab sleeps, and what the person did there before must not be lost for that.
     const display = await findDisplay(ctx, c, displayKey)
-    const { actionId } = await record(ctx, artifact, { ...envelope, ...(display ? { displayId: display._id } : {}) })
+    const { actionId, duplicate } = await record(ctx, artifact, { ...envelope, ...(display ? { displayId: display._id } : {}) })
+    // Counted: that something was sent from a page, and from what kind of screen. Never its name or what it carried
+    if (!duplicate) await counted(ctx, 'answer.sent', { screen: display?.screen ?? 'computer', from: 'page' })
     return { actionId }
   },
 })

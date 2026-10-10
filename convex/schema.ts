@@ -86,6 +86,10 @@ export default defineSchema({
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
+    /** What kind of screen it is, as its browser's own name for itself said when it registered, whether it reached It at this machine's own address, and when it last said that it had the site open. For the counts of how It is used, and nothing else. */
+    screen: v.optional(v.union(v.literal('phone'), v.literal('tablet'), v.literal('computer'), v.literal('tv'))),
+    local: v.optional(v.boolean()),
+    reachedAt: v.optional(v.number()),
   })
     .index('by_user', ['userId'])
     .index('by_user_key', ['userId', 'key'])
@@ -379,4 +383,10 @@ export default defineSchema({
     background: v.optional(v.boolean()),
     usage: v.optional(v.boolean()),
   }),
+
+  // Things that happened between a screen and the backend, noted for the counts of how It is
+  // used and kept only until the service takes them (see lib/counted.ts): a name, properties
+  // that are each one of a fixed set of words, as JSON text, and when. Nothing of a page, a
+  // display's name or the person is in one, and none is made while counts are not being sent.
+  counted: defineTable({ name: v.string(), properties: v.string(), at: v.number() }).index('by_at', ['at']),
 })

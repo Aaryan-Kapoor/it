@@ -9,6 +9,7 @@ import { action, internalMutation, mutation } from './_generated/server'
 import { prefixOf } from './artifacts'
 import { displayByKey, ownArtifact, requireBrowser, speaksFor } from './lib/authz'
 import { overClashes } from './lib/clash'
+import { counted } from './lib/counted'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
@@ -18,6 +19,8 @@ const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padSt
 
 /** How long the site has to ask for a showing's ticket. */
 const TICKET_MS = 120_000
+/** A page a display shows within this long of an agent asking that display for it is shown at the agent's asking. */
+const ASKED_MS = 60_000
 
 export const create = mutation({
   args: { artifactId: v.id('artifacts'), displayKey: v.string() },
@@ -40,6 +43,9 @@ export const create = mutation({
       ticketGiven: false,
       epoch: display.epoch,
     })
+    // Counted: that a page was shown, on what kind of screen, and whether an agent had just asked this display for it or the person opened it
+    const asked = display.showing?.artifactId === artifactId && Date.now() - display.showing.at < ASKED_MS
+    await counted(ctx, 'page.shown', { screen: display.screen ?? 'computer', by: asked ? 'agent' : 'person' })
     return { mountId, version: artifact.currentVersion }
   },
 })

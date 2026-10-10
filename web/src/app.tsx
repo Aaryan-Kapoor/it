@@ -314,6 +314,10 @@ function Paired() {
         await register()
       }
       if (live) noteRegistered(session)
+      // Said for the counts of how It is used, and nothing waits for it: that this display has the
+      // site open, and whether it reached It at the machine's own address. A backend from before
+      // this was asked refuses it, which changes nothing
+      void convex.mutation(api.displays.reached, { key: displayKey(), local: ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) }).catch(() => {})
       if (user) void drain(convex, user)
     })().then(
       () => live && setState({ ready: true, session }),
