@@ -13,7 +13,7 @@ import { agentAppsAbove } from './ancestry'
 import { CODEX_SHUT_SAID } from './codex-settings'
 import { added, shellEnv } from './shell-env'
 
-export const VERSION = '0.1.10'
+export const VERSION = '0.1.13'
 export const api: any = anyApi
 
 /** A failure the person or agent can act on. `hint` says what to do next. */
