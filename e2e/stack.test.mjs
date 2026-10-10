@@ -118,7 +118,7 @@ const surroundings = (logs) => ({
  * Starts the stack with the stand-in, told how to behave, and waits until it says it is ready.
  * Gives what is needed to stop it and to see how it ended.
  */
-async function startStack(how, more = {}) {
+async function startStack(how, more = {}, tries = 3) {
   const folder = mkdtempSync(path.join(dir, 'stack-'))
   const [logs, home] = [path.join(folder, 'logs'), path.join(folder, 'home')]
   const port = await freeBase()
@@ -138,7 +138,20 @@ async function startStack(how, more = {}) {
     }
   }
   if (!(await until(() => /^ready: /m.test(said) || child.exitCode !== null))) throw new Error(`the stack did not say it was ready: ${said}`)
-  if (!/^ready: /m.test(said)) throw new Error(`the stack ended before it was ready: ${said}`)
+  if (!/^ready: /m.test(said)) {
+    // The two ports were free when they were looked for, and something else on the machine took
+    // one before the stand-in did, as another suite running beside this one may: that is no
+    // doing of the stack's, and it is started again on two others
+    let wrote = ''
+    try {
+      wrote = readFileSync(path.join(logs, 'service.log'), 'utf8')
+    } catch {}
+    if (tries > 1 && /EADDRINUSE/.test(wrote)) {
+      await ended
+      return startStack(how, more, tries - 1)
+    }
+    throw new Error(`the stack ended before it was ready: ${said}`)
+  }
   started.push(note().service)
   // Where the service was told to look for the agent apps' settings, once it has noted it
   const given = await until(() => {
