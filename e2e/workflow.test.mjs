@@ -184,10 +184,10 @@ describe('what the jobs are held to running', () => {
     expect(content).toMatch(/run: npm run test:bun -w @it\/content$/m)
     // Each is a step of its own, run whatever became of the one before it, and neither is allowed to fail
     expect(content).not.toBe(door)
-    for (const step of [door, content]) {
-      expect(step).toMatch(/if: \$\{\{ !cancelled\(\) \}\}/)
-      expect(step).not.toMatch(/continue-on-error/)
-    }
+    expect(door).toMatch(/if: \$\{\{ !cancelled\(\) \}\}/)
+    // The content service's are left out on Windows, where vitest cannot load its files under Bun and the step ran none of them
+    expect(content).toMatch(/if: \$\{\{ !cancelled\(\) && runner\.os != 'Windows' \}\}/)
+    for (const step of [door, content]) expect(step).not.toMatch(/continue-on-error/)
     expect(stepWith('test', 'uses: oven-sh/setup-bun@')).toBeGreaterThan(-1)
   })
 

@@ -161,8 +161,11 @@ jobs:
       - name: The service, under Bun
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: bun test ./packages/cli/serve.test.ts
+      # Not on Windows: vitest cannot load its own files under Bun there, so the step ran no test
+      # and failed. The content service is run under Bun on Windows by the other workflow, in the
+      # standalone program that the product's browser suite is run against.
       - name: The content service, under Bun
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
         run: npm run test:bun -w @it/content
       - if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: npm run test:hermes
