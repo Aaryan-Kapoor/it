@@ -432,6 +432,30 @@ describe('what each kind of session is shown', () => {
     expect(errors).toEqual([])
   })
 
+  test('a refusal is asked about three times, each a little later than the one before, and one that comes a good while after the site was shown again is counted from the first', async () => {
+    const { refusals } = await import('./app')
+    let now = 1_000_000
+    const counted = refusals(() => now)
+    // One refusal that keeps coming back: at once, then after a wait that grows, and then no more
+    expect([counted.again(), counted.again(), counted.again(), counted.again()]).toEqual([0, 400, 800, null])
+    // A tab left open for weeks is refused now and then, as when the service is started again under it
+    const longAfter = refusals(() => now)
+    for (let time = 0; time < 10; time++) {
+      expect(longAfter.again(), `time ${time}`).toBe(0)
+      longAfter.shown()
+      now += 61_000
+    }
+    // Refused again within the minute of being shown again, it is the same refusal still
+    const soonAfter = refusals(() => now)
+    const waits = []
+    for (let time = 0; time < 4; time++) {
+      waits.push(soonAfter.again())
+      soonAfter.shown()
+      now += 5000
+    }
+    expect(waits).toEqual([0, 400, 800, null])
+  })
+
   test('a refusal that comes back however often the backend says this browser is paired is not asked about for ever, and is then written down as an error', async () => {
     cookie = CODES.ownercode00000000001!
     vi.resetModules()
@@ -440,7 +464,8 @@ describe('what each kind of session is shown', () => {
       throw new ConvexError({ code: 'unauthenticated', message: 'This browser is not paired.' })
     }
     await start('/p/plan')
-    await settle()
+    // Each asking after the first waits a little longer before what was refused is shown again, so the three take a moment
+    for (let waited = 0; waited < 40 && !host.textContent?.includes('Something went wrong.'); waited++) await act(() => tick(150))
     await settle()
     expect(names()).not.toContain('/session/end')
     expect(names().filter((n) => n === '/session/token').length).toBeLessThan(6)

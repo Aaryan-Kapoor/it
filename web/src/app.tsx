@@ -991,8 +991,40 @@ function safeDecode(part: string | undefined): string | undefined {
   }
 }
 
-/** How often one showing of the site asks whether the browser is still paired before it gives a refusal up as something else. */
+/** How often the site asks whether the browser is still paired, over one refusal that keeps coming back, before it gives it up as something else. */
 const ASKS = 3
+/**
+ * How much longer each asking after the first waits before what was refused is shown again. A
+ * session that was just put in the place of this tab's, by another tab, takes a moment to
+ * reach the live connection, and three askings one upon the other were once all spent within
+ * that moment on a slow machine.
+ */
+const AGAIN_AFTER_MS = 400
+/** How long the site has to have shown without a refusal for one that comes after to be counted from the first again. */
+const UNREFUSED_MS = 60_000
+/**
+ * Counts how often the site has asked whether the browser is paired over one refusal that
+ * keeps coming back. `again` says, at a refusal, how much longer to wait before what was
+ * refused is shown again, or nothing once it has been asked about often enough. A refusal that
+ * comes a good while after the site was last shown again is another matter and is counted
+ * from the first: a tab left open for weeks is refused now and then, as when the service is
+ * started again under it, and what it was refused before is not held against it.
+ */
+export function refusals(clock: () => number = Date.now) {
+  let asked = 0
+  let shownAt: number | undefined
+  return {
+    again(): number | null {
+      if (shownAt !== undefined && clock() - shownAt >= UNREFUSED_MS) asked = 0
+      if (asked >= ASKS) return null
+      asked++
+      return (asked - 1) * AGAIN_AFTER_MS
+    },
+    shown(): void {
+      shownAt = clock()
+    },
+  }
+}
 
 /**
  * Around everything a paired browser shows. If the backend refuses a query as coming from
@@ -1004,7 +1036,7 @@ const ASKS = 3
  */
 class Root extends Component<{ children: ReactNode; onRefused: () => Promise<void> }, { error: unknown; asking: boolean }> {
   override state = { error: null as unknown, asking: false }
-  private asked = 0
+  private refused = refusals()
   private here = false
   /** The reload that puts the site right by itself is due, and waits only for what it would lose. */
   private due = false
@@ -1044,11 +1076,19 @@ class Root extends Component<{ children: ReactNode; onRefused: () => Promise<voi
       // refusal that comes back each time the backend has said the browser is paired is
       // something else, is left for the person to see, and is written down as the error it is
       if (isLeaving()) return
-      if (this.asked >= ASKS) return console.error(error)
-      this.asked++
+      const longer = this.refused.again()
+      if (longer === null) return console.error(error)
       this.setState({ asking: true })
-      // Paired still, and as the session this was shown under: what was refused is shown again
-      void this.props.onRefused().then(() => this.here && this.setState({ error: null, asking: false }))
+      // Paired still, and as the session this was shown under: what was refused is shown again,
+      // a little later each time it has been refused again
+      void this.props
+        .onRefused()
+        .then(() => new Promise((shown) => setTimeout(shown, longer)))
+        .then(() => {
+          if (!this.here) return
+          this.refused.shown()
+          this.setState({ error: null, asking: false })
+        })
       return
     }
     // A display nobody is standing at puts itself right: one reload, and not a second within
