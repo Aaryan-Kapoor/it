@@ -1197,14 +1197,16 @@ describe('the lock one program holds while it changes what is installed', () => 
     }
   }, 120_000)
 
-  test('three programs that come at the same moment for a lock that was left behind have it one after another, and never two of them at once', async () => {
-    const shape = await aLock()
-    const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-three-'))
-    const script = path.join(scratch, 'contender.mjs')
-    // What each of the three runs: it says that it is ready, waits for the word to go, and does its work under the lock
-    await build({
-      stdin: {
-        contents: `
+  test(
+    'three programs that come at the same moment for a lock that was left behind have it one after another, and never two of them at once',
+    async () => {
+      const shape = await aLock()
+      const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-three-'))
+      const script = path.join(scratch, 'contender.mjs')
+      // What each of the three runs: it says that it is ready, waits for the word to go, and does its work under the lock
+      await build({
+        stdin: {
+          contents: `
           import fs from 'node:fs'
           import { alone } from ${JSON.stringify(path.join(__dirname, 'src/setup'))}
           const [tally, go] = process.argv.slice(2)
@@ -1216,76 +1218,79 @@ describe('the lock one program holds while it changes what is installed', () => 
             fs.appendFileSync(tally, 'out ' + process.pid + '\\n')
           })
         `,
-        resolveDir: __dirname,
-        loader: 'ts',
-      },
-      bundle: true,
-      platform: 'node',
-      format: 'esm',
-      target: 'node22',
-      outfile: script,
-      banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
-      loader: { '.md': 'text', '.txt': 'text' },
-      logLevel: 'silent',
-    })
-    // What Windows gives every program and its own programs cannot start without, PowerShell among
-    // them, which is what says there when a lock's holder was started
-    const ofTheSystem = Object.fromEntries(
-      (process.platform === 'win32' ? ['SystemRoot', 'SystemDrive', 'windir', 'ComSpec', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE'] : []).flatMap((name) =>
-        process.env[name] === undefined ? [] : [[name, process.env[name]]],
-      ),
-    )
-    try {
-      for (let round = 0; round < 5; round++) {
-        const [tally, go] = [path.join(scratch, `tally-${round}`), path.join(scratch, `go-${round}`)]
-        writeFileSync(lock(), leftBehind(shape))
-        const contenders = Array.from({ length: 3 }, () => {
-          const child = spawn(process.execPath, [script, tally, go], {
-            env: { PATH: process.env.PATH, IT_HOME: process.env.IT_HOME, ...ofTheSystem },
-            stdio: ['ignore', 'pipe', 'pipe'],
+          resolveDir: __dirname,
+          loader: 'ts',
+        },
+        bundle: true,
+        platform: 'node',
+        format: 'esm',
+        target: 'node22',
+        outfile: script,
+        banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
+        loader: { '.md': 'text', '.txt': 'text' },
+        logLevel: 'silent',
+      })
+      // On Windows the three are given everything this test has: PowerShell, which is what says
+      // there when a lock's holder was started, does not start in good time with less. And each
+      // look at a holder starts it, so a round that takes moments elsewhere takes a while there.
+      const ofTheSystem = process.platform === 'win32' ? process.env : {}
+      const slow = process.platform === 'win32'
+      try {
+        for (let round = 0; round < 5; round++) {
+          const [tally, go] = [path.join(scratch, `tally-${round}`), path.join(scratch, `go-${round}`)]
+          writeFileSync(lock(), leftBehind(shape))
+          const contenders = Array.from({ length: 3 }, () => {
+            const child = spawn(process.execPath, [script, tally, go], {
+              env: { ...ofTheSystem, PATH: process.env.PATH, IT_HOME: process.env.IT_HOME },
+              stdio: ['ignore', 'pipe', 'pipe'],
+            })
+            let said = ''
+            child.stdout.on('data', (piece: Buffer) => (said += piece))
+            child.stderr.on('data', (piece: Buffer) => (said += piece))
+            return {
+              child,
+              ready: () => said.includes('ready'),
+              said: () => said,
+              ended: new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code))),
+            }
           })
-          let said = ''
-          child.stdout.on('data', (piece: Buffer) => (said += piece))
-          child.stderr.on('data', (piece: Buffer) => (said += piece))
-          return {
-            child,
-            ready: () => said.includes('ready'),
-            said: () => said,
-            ended: new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code))),
-          }
-        })
-        // All three are there before any of them comes for the lock
-        await vi.waitFor(() => expect(contenders.every((c) => c.ready())).toBe(true), { timeout: 30_000 })
-        writeFileSync(go, '')
-        // One that has not ended in a minute never will: said with what there is to go by, where the test's own time running out says nothing
-        const late = setTimeout(() => {
-          for (const c of contenders) c.child.kill()
-        }, 60_000)
-        const endedAs = await Promise.all(contenders.map((c) => c.ended))
-        clearTimeout(late)
-        if (endedAs.includes(null))
-          throw new Error(
-            `round ${round}: not all three had ended in a minute. They said: ${JSON.stringify(contenders.map((c) => c.said()))}. The tally: ${JSON.stringify(existsSync(tally) ? readFileSync(tally, 'utf8') : null)}. Beside the lock: ${JSON.stringify(beside())}`,
+          // All three are there before any of them comes for the lock
+          await vi.waitFor(() => expect(contenders.every((c) => c.ready())).toBe(true), { timeout: 30_000 })
+          writeFileSync(go, '')
+          // One that has not ended in a minute never will, or in three on Windows: said with what there is to go by, where the test's own time running out says nothing
+          const late = setTimeout(
+            () => {
+              for (const c of contenders) c.child.kill()
+            },
+            slow ? 180_000 : 60_000,
           )
-        expect([round, endedAs, contenders.map((c) => c.said().replace('ready\n', ''))]).toEqual([round, [0, 0, 0], ['', '', '']])
-        // Each came in and went out again before the next came in
-        const lines = readFileSync(tally, 'utf8').trim().split('\n')
-        const pids = contenders.map((c) => String(c.child.pid)).sort()
-        expect([
-          round,
-          lines.length,
-          lines
-            .filter((line) => line.startsWith('in '))
-            .map((line) => line.slice(3))
-            .sort(),
-        ]).toEqual([round, 6, pids])
-        for (let n = 0; n < lines.length; n += 2) expect([round, lines[n + 1]]).toEqual([round, lines[n]!.replace(/^in /, 'out ')])
-        expect([round, beside()]).toEqual([round, []])
+          const endedAs = await Promise.all(contenders.map((c) => c.ended))
+          clearTimeout(late)
+          if (endedAs.includes(null))
+            throw new Error(
+              `round ${round}: not all three had ended in time. They said: ${JSON.stringify(contenders.map((c) => c.said()))}. The tally: ${JSON.stringify(existsSync(tally) ? readFileSync(tally, 'utf8') : null)}. Beside the lock: ${JSON.stringify(beside())}`,
+            )
+          expect([round, endedAs, contenders.map((c) => c.said().replace('ready\n', ''))]).toEqual([round, [0, 0, 0], ['', '', '']])
+          // Each came in and went out again before the next came in
+          const lines = readFileSync(tally, 'utf8').trim().split('\n')
+          const pids = contenders.map((c) => String(c.child.pid)).sort()
+          expect([
+            round,
+            lines.length,
+            lines
+              .filter((line) => line.startsWith('in '))
+              .map((line) => line.slice(3))
+              .sort(),
+          ]).toEqual([round, 6, pids])
+          for (let n = 0; n < lines.length; n += 2) expect([round, lines[n + 1]]).toEqual([round, lines[n]!.replace(/^in /, 'out ')])
+          expect([round, beside()]).toEqual([round, []])
+        }
+      } finally {
+        rmSync(scratch, { recursive: true, force: true })
       }
-    } finally {
-      rmSync(scratch, { recursive: true, force: true })
-    }
-  }, 120_000)
+    },
+    process.platform === 'win32' ? 900_000 : 120_000,
+  )
 
   test('many that want it at the same moment each have it by themselves, one after another', async () => {
     let inside = 0
