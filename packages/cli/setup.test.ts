@@ -28,7 +28,7 @@ import path from 'node:path'
 import type { Harness } from '@it/protocol'
 import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { ADDONS } from './src/addons.generated'
+import { ADDONS, SKILL } from './src/addons.generated'
 import { CODEX_SHUT_SAID } from './src/codex-settings'
 import { shutIn, VERSION } from './src/lib'
 import { startOf } from './src/serve/backend'
@@ -523,6 +523,94 @@ describe('an add-on whose files It copies into an app’s folder', () => {
 
 /** A folder's permissions mean nothing to an administrator, and Windows keeps them another way. */
 const permissionsHold = process.platform !== 'win32' && process.getuid?.() !== 0
+
+describe('the skill, for the two apps whose add-on is a plugin of their own', () => {
+  // A skill inside a plugin is listed to the agent as "it-bridge:it". Beside the person's own
+  // skills it is listed as "it". So the plugin carries the hooks alone, and the skill is copied.
+  const APPS = [
+    { id: 'claude-code' as const, bin: 'claude', variable: 'CLAUDE_CONFIG_DIR', label: 'Claude Code' },
+    { id: 'codex' as const, bin: 'codex', variable: 'CODEX_HOME', label: 'Codex' },
+  ]
+  test.each(APPS)('$label is given the skill beside the person’s own skills, and it is taken out again with the add-on', async ({ id, bin }) => {
+    const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+    expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+    expect(read(skill)).toBe(SKILL)
+    // It is noted as a file this program put there, by where it is and what it held
+    expect(noted(id).installs[0]!.files!.map((f) => f.path)).toEqual([skill])
+    // Connected again, nothing is set aside and nothing is said of it: the file is its own, and as it left it
+    const { said, say } = lines()
+    await connect(id, say)
+    expect(said.filter((line) => /set aside|kept beside|had not put there/.test(line))).toEqual([])
+    expect(under(path.dirname(skill))).toEqual(['SKILL.md'])
+    expect(await disconnect(id, () => {})).toBe(true)
+    expect(existsSync(path.dirname(skill))).toBe(false)
+    expect(existsSync(stampFile(id))).toBe(false)
+  })
+  test.each(APPS)('where $label is told to keep its settings elsewhere, the skill goes there', async ({ id, bin, variable }) => {
+    const elsewhere = path.join(tmp, `settings-of-${bin}`)
+    vi.stubEnv(variable, elsewhere)
+    await connect(id, () => {})
+    expect(read(path.join(elsewhere, 'skills/it/SKILL.md'))).toBe(SKILL)
+    expect(existsSync(path.join(person, `.${bin}`, 'skills/it/SKILL.md'))).toBe(false)
+    // And it is taken out from there, though the variable has gone since
+    vi.stubEnv(variable, '')
+    delete process.env[variable]
+    expect(await disconnect(id, () => {})).toBe(true)
+    expect(existsSync(path.join(elsewhere, 'skills/it'))).toBe(false)
+  })
+  test.each(APPS)(
+    'a skill of that name the person had in $label is kept under another name, and what they keep beside it is left alone',
+    async ({ id, bin, label }) => {
+      const folder = path.join(folderOf(bin), 'skills/it')
+      put(path.join(folder, 'SKILL.md'), 'a skill of the person’s own')
+      put(path.join(folder, 'notes.md'), 'something the person keeps beside it')
+      const { said, say } = lines()
+      await connect(id, say)
+      expect(read(path.join(folder, 'SKILL.md'))).toBe(SKILL)
+      expect(read(path.join(folder, 'SKILL.md.set-aside-by-it'))).toBe('a skill of the person’s own')
+      expect(said).toContain(
+        `${label}: one file that It had not put there, or that had been changed since, was in the add-on’s place. Nothing was written over: it is kept beside the add-on, as ${path.join(folder, 'SKILL.md.set-aside-by-it')}`,
+      )
+      expect(await disconnect(id, () => {})).toBe(true)
+      // Its own file is gone, and the person's two are where they were, in a folder that is therefore not taken away
+      expect(under(folder)).toEqual(['SKILL.md.set-aside-by-it', 'notes.md'])
+    },
+  )
+  test.each(APPS)('a skill the person has changed since is theirs, and stays when $label is disconnected', async ({ id, bin, label }) => {
+    const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+    await connect(id, () => {})
+    writeFileSync(skill, `${read(skill)}\nA line of the person’s own.\n`)
+    const { said, say } = lines()
+    expect(await disconnect(id, say)).toBe(false)
+    expect(read(skill)).toContain('A line of the person’s own.')
+    expect(said.join('\n')).toContain(
+      `one of the add-on’s files had been changed since It put it there, and was left where it is, so the add-on is not all gone from ${label}`,
+    )
+    // The plugin itself was taken out by the app's own command
+    expect((await statusOf(id))!.addon).toBe('not_connected')
+  })
+  test.each(APPS)(
+    'an add-on of $label that an It from before installed, with the skill inside the plugin, is replaced by one with the skill beside it',
+    async ({ id, bin }) => {
+      await connect(id, () => {})
+      const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+      // As an It from before left its note: an add-on of another version, and no list of files, since it copied none
+      rmSync(skill)
+      const before = noted(id).installs[0]!
+      writeFileSync(stampFile(id), JSON.stringify({ installs: [{ version: 'an-earlier-one', at: before.at, by: '0.1.10', env: before.env }] }))
+      const { said, say } = lines()
+      expect((await connect(id, say)).addon).toMatch(/^(connected|needs_approval)$/)
+      expect(read(skill)).toBe(SKILL)
+      expect(noted(id).installs).toHaveLength(1)
+      expect(said.filter((line) => /set aside|kept beside|had not put there/.test(line))).toEqual([])
+      // And one such installation that is only ever disconnected has no skill to take out, and is gone all the same
+      rmSync(skill)
+      writeFileSync(stampFile(id), JSON.stringify({ installs: [{ version: 'an-earlier-one', at: before.at, by: '0.1.10', env: before.env }] }))
+      expect(await disconnect(id, () => {})).toBe(true)
+      expect(existsSync(stampFile(id))).toBe(false)
+    },
+  )
+})
 
 describe('what It writes and removes in an app’s folder', () => {
   test.skipIf(process.platform === 'win32')('is never written through a link, wherever one has been put in its way', async () => {
@@ -1022,8 +1110,13 @@ describe('two It folders connected to one app', () => {
     rmSync(stampFile('claude-code'))
     const { said, say } = lines()
     expect((await connect('claude-code', say)).addon).toBe('connected')
-    // Nothing is said of replacing someone else's: it is its own
-    expect(said).toEqual(['connecting Claude Code'])
+    // Nothing is said of replacing someone else's add-on: it is its own. The skill beside the
+    // person's own skills is another matter: with the note gone, nothing says that this program
+    // put it there, so it is kept under another name like any file of the person's
+    expect(said).toEqual([
+      'connecting Claude Code',
+      `Claude Code: one file that It had not put there, or that had been changed since, was in the add-on’s place. Nothing was written over: it is kept beside the add-on, as ${path.join(folderOf('claude'), 'skills/it/SKILL.md.set-aside-by-it')}`,
+    ])
     expect(existsSync(stampFile('claude-code'))).toBe(true)
   })
 
@@ -1350,6 +1443,8 @@ describe('what the connector writes down about installing and removing', () => {
     expect(said).toEqual([
       'connecting Claude Code',
       'Claude Code: the add-on in it came from an It folder that has no note of it any more, and now belongs to this one',
+      // The skill that folder had put beside the person's own skills is nobody's on record, and is kept under another name
+      'Claude Code: one file that It had not put there, or that had been changed since, was kept beside the add-on under another name',
     ])
     for (const line of said) expect(line).not.toContain(tmp)
   })

@@ -506,6 +506,46 @@ async function openclawHas(at: Place): Promise<{ enabled?: boolean; status?: str
   }
 }
 
+// Claude Code and Codex are given the add-on as a plugin, by their own commands. A skill inside
+// a plugin is listed to the agent under the plugin's name and its own, as "it-bridge:it". Beside
+// the person's own skills it is listed as "it", which is what the person calls it and what every
+// other app lists it as. So the plugin carries the hooks alone, and the skill is copied into
+// the app's own skills folder, with the care every copied file is given: a skill of that name
+// that this program did not put there is the person's, and is kept beside it.
+const SKILL_FILE = 'skills/it/SKILL.md'
+/** The app's own settings folder at a place: the one its variable named when the add-on was installed there, and otherwise the usual one. */
+const settingsAt = (at: Place, variable: string, usual: string): string => {
+  const said = at.env[variable]
+  return path.resolve(said ? said.replace(/^~(?=$|[\\/])/, os.homedir()) : path.join(os.homedir(), usual))
+}
+/** Puts the skill into an app's settings folder, once the app's own command has put the plugin in. */
+function withSkill(
+  installed: Ran,
+  root: string,
+  dir: string,
+  was: Installation | undefined,
+  wrote: (files: Put[]) => void,
+): Ran & { files?: Put[]; aside?: string[] } {
+  if (!installed.ok) return installed
+  const put = putFiles(
+    root,
+    () => {
+      const data = readFileSync(path.join(dir, ...SKILL_FILE.split('/')))
+      return [{ to: path.join(root, ...SKILL_FILE.split('/')), data, sha256: sum(data) }]
+    },
+    was,
+    wrote,
+  )
+  return { ok: put.err === undefined, out: installed.out, err: put.err ?? installed.err, files: put.files, aside: put.aside }
+}
+/** Takes the skill out again, where this program has a note of putting it there. An installation from before the skill was put beside the plugin has none, and nothing to take. */
+function withoutSkill(root: string, was: Installation | undefined): Left | undefined {
+  if (!was?.files) return undefined
+  const left = takeFiles(root, was.files)
+  takeFolders(root, [path.dirname(SKILL_FILE)])
+  return left.changed.length || left.closed.length || left.outside.length ? left : undefined
+}
+
 const ADAPTERS: Partial<Record<Harness, Adapter>> = {
   'claude-code': {
     profile: ['CLAUDE_CONFIG_DIR'],
@@ -519,7 +559,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       const ours = await claudeHas(at)
       return typeof ours?.installPath === 'string' && path.isAbsolute(ours.installPath) ? path.join(ours.installPath, HOME_NOTE) : null
     },
-    async install(dir, at) {
+    async install(dir, at, was, wrote) {
       // Looked at before anything is taken out, so that an install that cannot go ahead leaves what was there
       if (unsafe([dir])) return UNSAFE
       const env = envAt(this.profile, at)
@@ -527,7 +567,8 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       await run('claude', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
       const added = await run('claude', ['plugin', 'marketplace', 'add', dir], 60_000, env)
       if (!added.ok) return added
-      return run('claude', ['plugin', 'install', `${PLUGIN}@${MARKET}`, '--scope', 'user'], 60_000, env)
+      const installed = await run('claude', ['plugin', 'install', `${PLUGIN}@${MARKET}`, '--scope', 'user'], 60_000, env)
+      return withSkill(installed, settingsAt(at, 'CLAUDE_CONFIG_DIR', '.claude'), dir, was, wrote)
     },
     async remove(at, was) {
       if (await unplaced(this, at, was)) return NOWHERE
@@ -536,7 +577,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       // The place it was installed from goes only once the add-on itself is seen to be gone:
       // while it is still listed, there is something left to try removing again
       if ((await this.present(at)) === false) await run('claude', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
-      return undefined
+      return withoutSkill(settingsAt(at, 'CLAUDE_CONFIG_DIR', '.claude'), was)
     },
   },
   codex: {
@@ -553,7 +594,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       const from = /^installed\b.*?\s{2,}\S+\s{2,}(\S.*)$/.exec((await codexHas(at)) ?? '')?.[1]?.trim()
       return from && path.isAbsolute(from) ? path.join(from, HOME_NOTE) : null
     },
-    async install(dir, at) {
+    async install(dir, at, was, wrote) {
       // Looked at before anything is taken out, so that an install that cannot go ahead leaves what was there
       if (unsafe([dir])) return UNSAFE
       const env = envAt(this.profile, at)
@@ -561,7 +602,8 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
       const added = await run('codex', ['plugin', 'marketplace', 'add', dir], 60_000, env)
       if (!added.ok) return added
-      return run('codex', ['plugin', 'add', `${PLUGIN}@${MARKET}`], 60_000, env)
+      const installed = await run('codex', ['plugin', 'add', `${PLUGIN}@${MARKET}`], 60_000, env)
+      return withSkill(installed, settingsAt(at, 'CODEX_HOME', '.codex'), dir, was, wrote)
     },
     async remove(at, was) {
       if (await unplaced(this, at, was)) return NOWHERE
@@ -571,7 +613,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       // gone from Codex (whoever removed it): otherwise a failed removal would look like a
       // finished one.
       if ((await this.present(at)) === false) await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
-      return undefined
+      return withoutSkill(settingsAt(at, 'CODEX_HOME', '.codex'), was)
     },
     pending() {
       // Codex runs no hook until the person has approved it, and says nothing when it skips one.
@@ -625,6 +667,106 @@ function onlyOurs(root: string, dir: string, files: Put[]): boolean {
   }
 }
 
+/** A file an add-on is to have in a harness's folder: where, and what it holds. */
+interface Wanted {
+  to: string
+  data: Buffer
+  sha256: string
+}
+
+/**
+ * Puts an add-on's files into a harness's folder. Only a file this program put there itself, and
+ * that is still as it left it, is written over. Whatever else stands in a file's place is the
+ * person's, though it hold the very same words, and is kept beside the new one under another
+ * name. `wanted` is asked for here, so that a file of the add-on that cannot be read is a
+ * failure like any other. `wrote` is told, each time a file has been written, every file that is
+ * this program's now. What is returned says the same at the end, with what was set aside, and
+ * with why it stopped where it did not finish.
+ */
+function putFiles(
+  root: string,
+  wanted: () => Wanted[],
+  was: Installation | undefined,
+  wrote: (files: Put[]) => void,
+): { files: Put[]; aside: string[]; err?: string } {
+  const kept: string[] = []
+  // The files that are this program's: what the last install left, and then each file this
+  // one writes, from the moment it has been written and no sooner
+  const mine = new Map((was?.files ?? []).map((f) => [f.path, f.sha256]))
+  const noted = () => [...mine].map(([file, sha256]) => ({ path: file, sha256 }))
+  try {
+    const files = wanted()
+    const look = (file: string) => {
+      const now = lookAt(root, file)
+      if (now.is === 'outside') throw new Error(`${file} is not inside ${root}, so nothing was written there`)
+      if (now.is === 'closed') throw new Error(`${file} could not be looked at, so nothing was written there`)
+      return now
+    }
+    // Every place is looked at before anything is written, so that an add-on which cannot
+    // all go in is not put in by halves
+    for (const f of files) look(f.to)
+    for (const f of files) {
+      const now = look(f.to)
+      const own = now.is === 'file' && mine.get(f.to) === now.sha256
+      if (own && now.sha256 === f.sha256) continue
+      makeWithin(root, path.dirname(f.to))
+      // Whatever is there that this program did not put there, or that has been changed
+      // since, is the person's, though it hold the very same words
+      if (now.is !== 'none' && !own) {
+        const name = aside(f.to)
+        renameSync(f.to, name)
+        mine.delete(f.to)
+        kept.push(name)
+      }
+      putInPlace(f.data, f.to)
+      mine.set(f.to, f.sha256)
+      wrote(noted())
+    }
+    // A file noted as put there that this add-on does not have is taken away, where it is still as it was put
+    for (const [file, sha256] of [...mine]) {
+      if (files.some((f) => f.to === file)) continue
+      const now = lookAt(root, file)
+      if (now.is === 'file' && now.sha256 === sha256) rmSync(file, { force: true })
+      if (now.is !== 'closed') mine.delete(file)
+    }
+    return { files: noted(), aside: kept }
+  } catch (err) {
+    return { files: noted(), aside: kept, err: (err as Error).message }
+  }
+}
+
+/** Notes a file that a removal leaves where it is, under what it was found to be. */
+function leaveAs(left: Left, file: string, now: Found): void {
+  if (now.is === 'file' || now.is === 'other') left.changed.push(file)
+  else if (now.is !== 'none') left[now.is].push(file)
+}
+/** Takes out each file this program put into a harness's folder that is still as it left it. What it did not take out is returned. */
+function takeFiles(root: string, files: Put[]): Left {
+  const left: Left = { changed: [], closed: [], outside: [] }
+  for (const f of files) {
+    const now = lookAt(root, f.path)
+    if (now.is !== 'file' || now.sha256 !== f.sha256) leaveAs(left, f.path, now)
+    else
+      try {
+        rmSync(f.path)
+      } catch (err) {
+        if (!absent(err)) left.closed.push(f.path)
+      }
+  }
+  return left
+}
+/** Takes away each folder that was an add-on's alone, where nothing is left in it. */
+function takeFolders(root: string, own: readonly string[]): void {
+  for (const folder of own) {
+    const dir = path.join(root, ...folder.split('/'))
+    // A link standing where the folder was is not the add-on's folder
+    if (lookAt(root, dir).is !== 'other' || lstatSync(dir).isSymbolicLink()) continue
+    try {
+      rmdirSync(dir)
+    } catch {}
+  }
+}
+
 /**
  * An add-on that is copied in. It is given the same care a harness's own installer would take:
  * this program replaces and removes only the files it put there itself and that are still as
@@ -655,54 +797,18 @@ function copied(id: Harness, c: Copied): Adapter {
       return all(at).find((f) => path.basename(f.rel) === HOME_NOTE)?.to ?? null
     },
     async install(dir, at, was, wrote) {
-      const root = at.dir!
-      const kept: string[] = []
-      // The files that are this program's: what the last install left, and then each file this
-      // one writes, from the moment it has been written and no sooner
-      const mine = new Map((was?.files ?? []).map((f) => [f.path, f.sha256]))
-      const noted = () => [...mine].map(([file, sha256]) => ({ path: file, sha256 }))
-      try {
-        const wanted = all(at).map((f) => {
-          const data = readFileSync(path.join(dir, ...f.rel.split('/')))
-          return { to: f.to, data, sha256: sum(data) }
-        })
-        const look = (file: string) => {
-          const now = lookAt(root, file)
-          if (now.is === 'outside') throw new Error(`${file} is not inside ${root}, so nothing was written there`)
-          if (now.is === 'closed') throw new Error(`${file} could not be looked at, so nothing was written there`)
-          return now
-        }
-        // Every place is looked at before anything is written, so that an add-on which cannot
-        // all go in is not put in by halves
-        for (const f of wanted) look(f.to)
-        for (const f of wanted) {
-          const now = look(f.to)
-          const own = now.is === 'file' && mine.get(f.to) === now.sha256
-          if (own && now.sha256 === f.sha256) continue
-          makeWithin(root, path.dirname(f.to))
-          // Whatever is there that this program did not put there, or that has been changed
-          // since, is the person's, though it hold the very same words
-          if (now.is !== 'none' && !own) {
-            const name = aside(f.to)
-            renameSync(f.to, name)
-            mine.delete(f.to)
-            kept.push(name)
-          }
-          putInPlace(f.data, f.to)
-          mine.set(f.to, f.sha256)
-          wrote(noted())
-        }
-        // A file noted as put there that this add-on does not have is taken away, where it is still as it was put
-        for (const [file, sha256] of [...mine]) {
-          if (wanted.some((f) => f.to === file)) continue
-          const now = lookAt(root, file)
-          if (now.is === 'file' && now.sha256 === sha256) rmSync(file, { force: true })
-          if (now.is !== 'closed') mine.delete(file)
-        }
-        return { ...((await c.after?.(at)) ?? { ok: true, out: '', err: '' }), files: noted(), aside: kept }
-      } catch (err) {
-        return { ok: false, out: '', err: (err as Error).message, files: noted(), aside: kept }
-      }
+      const put = putFiles(
+        at.dir!,
+        () =>
+          all(at).map((f) => {
+            const data = readFileSync(path.join(dir, ...f.rel.split('/')))
+            return { to: f.to, data, sha256: sum(data) }
+          }),
+        was,
+        wrote,
+      )
+      if (put.err !== undefined) return { ok: false, out: '', err: put.err, files: put.files, aside: put.aside }
+      return { ...((await c.after?.(at)) ?? { ok: true, out: '', err: '' }), files: put.files, aside: put.aside }
     },
     async remove(at, was) {
       const root = at.dir!
@@ -724,39 +830,18 @@ function copied(id: Harness, c: Copied): Adapter {
         if (now.is === 'other' || (now.is === 'file' && now.sha256 !== loaded.sha256)) return { changed: [main], closed: [], outside: [], whole: true }
       }
       await c.before?.(at, was)
-      const left: Left = { changed: [], closed: [], outside: [] }
-      const leave = (file: string, now: Found) => {
-        if (now.is === 'file' || now.is === 'other') left.changed.push(file)
-        else if (now.is !== 'none') left[now.is].push(file)
-      }
-      if (was?.files) {
-        for (const f of was.files) {
-          const now = lookAt(root, f.path)
-          if (now.is !== 'file' || now.sha256 !== f.sha256) leave(f.path, now)
-          else
-            try {
-              rmSync(f.path)
-            } catch (err) {
-              if (!absent(err)) left.closed.push(f.path)
-            }
-        }
-      } else {
+      let left: Left = { changed: [], closed: [], outside: [] }
+      if (was?.files) left = takeFiles(root, was.files)
+      else {
         // Its files cannot be shown to be as this program left them, so they are put out of the
         // harness's way under another name and not deleted.
         for (const f of all(at)) {
           const now = lookAt(root, f.to)
           if (now.is === 'file' || now.is === 'other') renameSync(f.to, aside(f.to))
-          else leave(f.to, now)
+          else leaveAs(left, f.to, now)
         }
       }
-      for (const own of c.own) {
-        const dir = path.join(root, ...own.split('/'))
-        // A link standing where the folder was is not the add-on's folder
-        if (lookAt(root, dir).is !== 'other' || lstatSync(dir).isSymbolicLink()) continue
-        try {
-          rmdirSync(dir)
-        } catch {}
-      }
+      takeFolders(root, c.own)
       return left
     },
     // Neither harness that is given its files this way asks the person to approve anything

@@ -1684,10 +1684,21 @@ describe('add-ons carried by the CLI', () => {
   })
   afterAll(() => rmSync(home, { recursive: true, force: true }))
 
-  test('Claude Code and Codex each have one, with the skill inside', () => {
+  test('Claude Code and Codex each have one, with the skill beside the plugin and not inside it', () => {
     expect(Object.keys(ADDONS).sort()).toEqual(expect.arrayContaining(['claude-code', 'codex']))
-    expect(ADDONS['claude-code']!.files['it-bridge/skills/it/SKILL.md']).toBe(SKILL)
-    expect(ADDONS.codex!.files['plugins/it-bridge/skills/it/SKILL.md']).toBe(SKILL)
+    // Beside the plugin: `it setup` copies it from there into the app's own skills folder, where the agent is shown it as "it"
+    expect(ADDONS['claude-code']!.files['skills/it/SKILL.md']).toBe(SKILL)
+    expect(ADDONS.codex!.files['skills/it/SKILL.md']).toBe(SKILL)
+    // Inside the plugin it would be shown under the plugin's name as well, as "it-bridge:it"
+    for (const id of ['claude-code', 'codex'] as const)
+      expect(
+        Object.keys(ADDONS[id]!.files).filter((file) => /it-bridge\/.*skills?\//.test(file)),
+        id,
+      ).toEqual([])
+    expect(JSON.parse(ADDONS.codex!.files['plugins/it-bridge/.codex-plugin/plugin.json']!).skills).toBeUndefined()
+    // Every file an app reads as JSON is JSON: one that is not is an add-on the app refuses whole
+    for (const [id, addon] of Object.entries(ADDONS))
+      for (const [file, text] of Object.entries(addon.files)) if (file.endsWith('.json')) expect(() => JSON.parse(text), `${id}: ${file}`).not.toThrow()
     expect(SKILL).toMatch(/^---\nname: it\n/)
   })
   test('the terms go wherever an add-on goes', async () => {

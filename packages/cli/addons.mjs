@@ -11,10 +11,15 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(here, '../../addons')
 const skill = readFileSync(path.join(root, 'skill/SKILL.md'), 'utf8')
 const license = readFileSync(path.join(here, '../../LICENSE.md'), 'utf8')
-/** Where each harness's add-on wants the skill, relative to the add-on's folder. */
+/**
+ * Where each harness's add-on wants the skill, relative to the add-on's folder. For Claude Code
+ * and Codex that is beside the plugin and not inside it: `it setup` copies it from there into
+ * the app's own skills folder, where the agent is shown it as "it". Inside the plugin it would
+ * be shown as "it-bridge:it".
+ */
 const SKILL_AT = {
-  'claude-code': 'it-bridge/skills/it/SKILL.md',
-  codex: 'plugins/it-bridge/skills/it/SKILL.md',
+  'claude-code': 'skills/it/SKILL.md',
+  codex: 'skills/it/SKILL.md',
   pi: 'skills/it/SKILL.md',
   opencode: 'skills/it/SKILL.md',
   openclaw: 'skills/it/SKILL.md',

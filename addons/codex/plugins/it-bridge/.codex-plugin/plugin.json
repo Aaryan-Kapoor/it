@@ -1,8 +1,7 @@
 {
   "name": "it-bridge",
   "version": "0.1.0",
-  "description": "Brings what the user does on It pages into this conversation, and teaches Codex to use the it command.",
+  "description": "Brings what the user does on It pages into this conversation. The skill that teaches the agent to use the it command is put beside your own skills, under the name it.",
   "author": { "name": "It" },
-  "hooks": "./hooks/hooks.json",
-  "skills": "./skills/"
+  "hooks": "./hooks/hooks.json"
 }
