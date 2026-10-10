@@ -330,7 +330,7 @@ async function create(a: Args) {
   // says so, with `it open` or with --take. `it update` leaves a page with whoever has it,
   // unless told --take.
   const take = a.flags.take === true
-  const page = { slug, title, files: await source(a), agent: text(a, 'agent'), state }
+  const page = { slug, title, files: await source(a), agent: text(a, 'agent'), state, shown: a.flags.open === true }
   let done: Awaited<ReturnType<typeof publish>>
   try {
     done = await publish({ ...page, take, own: !take })
@@ -415,28 +415,32 @@ async function tour(a: Args) {
   const USAGE = 'tour [show <name> | show next | clear]'
   const what = a._[0]
   if (what === undefined) return written(process.stdout, GUIDE)
+  const menu = `${TOUR_PREFIX}${TOUR_MENU}`
+  // What the menu holds of what has been seen. Nothing where there is no menu yet, or it says nothing of it
+  const seenSoFar = (): Promise<string[]> =>
+    call<{ json: string }>('query', api.state.get, { slug: menu })
+      .then((s) => {
+        const said = (JSON.parse(s.json) as { seen?: unknown }).seen
+        return Array.isArray(said) ? [...new Set(said.filter((name): name is string => typeof name === 'string' && TOUR_STEPS.includes(name)))] : []
+      })
+      .catch(() => [])
   if (what === 'clear') {
     const pages = await call<{ slug: string }[]>('query', api.artifacts.list)
     const gone: string[] = []
     // The tour's own pages, each by its whole id, and no other page whose id only begins as theirs do
     const its = new Set(NAMES.map((name) => `${TOUR_PREFIX}${name}`))
+    const had = pages.some((p) => its.has(p.slug)) ? await seenSoFar() : undefined
     for (const { slug } of pages.filter((p) => its.has(p.slug))) {
       await call('mutation', api.artifacts.remove, { slug })
       gone.push(slug)
     }
+    // Counted where there was a tour to end: how many of its things had been looked at, and never which
+    if (had) usage.record('tour.ended', { seen: String(Math.min(had.length, 5)) as '0' | '1' | '2' | '3' | '4' | '5' })
     return out({ deleted: gone })
   }
   if (what !== 'show') throw new Problem(`It does not know what to do with "${what}".`, 'invalid', `Usage: it ${USAGE}`)
   const asked = need(a._[1], `which page of the tour (${NAMES.join(', ')}, or next)`, USAGE)
-  const menu = `${TOUR_PREFIX}${TOUR_MENU}`
-  // What the menu holds of what has been seen. Nothing where there is no menu yet, or it says nothing of it
-  const seen: string[] = await call<{ json: string }>('query', api.state.get, { slug: menu }).then(
-    (s) => {
-      const said = (JSON.parse(s.json) as { seen?: unknown }).seen
-      return Array.isArray(said) ? said.filter((name): name is string => typeof name === 'string' && TOUR_STEPS.includes(name)) : []
-    },
-    () => [],
-  )
+  const seen = await seenSoFar()
   const name = asked === 'next' ? (TOUR_STEPS.find((step) => !seen.includes(step)) ?? TOUR_END) : asked
   const given: Record<string, unknown> = {}
   for (const param of a.many.param ?? []) {
@@ -448,7 +452,17 @@ async function tour(a: Args) {
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
   // The page is this conversation's from now on, whoever showed it last
-  const done = await publish({ slug: made.slug, title: made.title, files: gather({ html: made.html }), agent: text(a, 'agent'), state: made.state, take: true })
+  const done = await publish({
+    slug: made.slug,
+    title: made.title,
+    files: gather({ html: made.html }),
+    agent: text(a, 'agent'),
+    state: made.state,
+    take: true,
+    itsOwn: true,
+  })
+  // Counted as a page of the tour that was shown, by its name, which is It's own
+  usage.record('tour.shown', { page: name as usage.TourPage, agent: usage.agentOf(by) })
   // And it starts as it was first made, whatever a tour before this one left in it. The menu
   // alone keeps something: which things have been seen
   const fresh = JSON.parse(made.state) as Record<string, unknown>
@@ -474,6 +488,7 @@ async function update(a: Args) {
     files: await source(a),
     agent: text(a, 'agent'),
     take: a.flags.take === true,
+    shown: a.flags.open === true,
   })
   await published(done, a)
 }
@@ -1094,6 +1109,9 @@ async function uninstall(a: Args) {
     ])
     if (!go) return forPerson(a) ? tell(['Nothing was changed.']) : out({ removed: false })
   }
+  // Counted before anything goes, and sent from here, since the service that sends will be gone: that It was taken off, and how long it had been here, as a band
+  const since = usage.sinceBegun()
+  if (since !== undefined) await usage.sendNow('installation.removed', { age: usage.ageBand(since) })
   const left: string[] = []
   // First of all the background service, since it is the one thing that may refuse: where it
   // could not be stopped, nothing else is taken away, so that It is still whole and this can
@@ -1343,6 +1361,26 @@ function crumbs(folder: string): void {
       } catch {}
     }
   }
+}
+
+/**
+ * Counts that a setup came to its end: who led it (a person at a terminal, an agent in its
+ * conversation, or a script), whether It was new here, joined to an It on another computer or
+ * set up again, whether it is registered to run in the background, how many agent apps have
+ * its add-on, and whether it was done over SSH. `was` is whether It was set up here before.
+ */
+function setUp(a: Args, was: boolean): void {
+  try {
+    const apps = HARNESSES.filter((id) => existsSync(stampFile(id))).length
+    const wantedInBackground = !a.flags['no-service'] && !a.flags.none
+    usage.record('setup.finished', {
+      led: sessionAsked() ? 'agent' : process.stderr.isTTY ? 'person' : 'script',
+      kind: was ? 'again' : elsewhere() ? 'joined' : 'new',
+      service: service.installedHere() ? 'registered' : wantedInBackground ? 'failed' : 'none',
+      apps: apps >= 3 ? '3 or more' : (String(apps) as '0' | '1' | '2'),
+      ssh: Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY),
+    })
+  } catch {}
 }
 
 async function setup(a: Args, joined = false) {
@@ -2468,14 +2506,12 @@ async function main(argv: string[]): Promise<void> {
     written(process.stdout, HELP)
     return
   }
-  // Said once, and only at a terminal, where a person reads it: a command an agent or a script
-  // runs says nothing and counts nothing. Never by the service or the connector, which nobody
-  // is watching, nor by a command that only prints what it was asked for.
   noMore(cmd, a)
-  // A setup that leads a person through it says it as one of its own quiet lines, in fewer words
-  const quietly = cmd === 'setup' && led(a)
-  if (!['serve', 'service', 'version', '--version', '-v', 'skill', 'telemetry'].includes(cmd))
-    usage.tellOnce(quietly ? (line) => flow.line(flow.dim(line)) : say, process.stderr.isTTY === true, quietly ? usage.NOTICE_BRIEF : usage.NOTICE)
+  // Counting begins with the first command, whoever runs it, and nothing is said of it here: the
+  // first screen of the site says it. Not by a command that only prints what it was asked for,
+  // nor by `it telemetry`, which is how a person turns it off before it has begun. The service
+  // begins it for itself as it starts.
+  if (!['serve', 'service', 'version', '--version', '-v', 'skill', 'telemetry'].includes(cmd)) usage.begin()
   switch (cmd) {
     case 'version':
     case '--version':
@@ -2486,10 +2522,7 @@ async function main(argv: string[]): Promise<void> {
       if (to !== undefined && to !== 'on' && to !== 'off' && to !== 'status')
         throw new Problem('It is `it telemetry`, `it telemetry on` or `it telemetry off`.', 'invalid')
       if (to !== 'on' && to !== 'off') return out(usage.status())
-      // Someone who turns it on and has not been told what that means is told then: the line
-      // is said before anything is written down, and nothing is where it cannot be said or
-      // where a variable keeps reporting off
-      return out(usage.set(to === 'on', say))
+      return out(usage.set(to === 'on'))
     }
     case 'upgrade': {
       // Asked only whether a newer one is out
@@ -2536,6 +2569,8 @@ async function main(argv: string[]): Promise<void> {
       // The new program is in place either way, and that is said. That It is not running as it
       // is said too, and by how this ends: whoever asked for the upgrade from a script goes by that
       if (started === 'failed') process.exitCode = 1
+      // Counted: from which version to which, and whether It runs as the new one
+      usage.record('upgrade.done', { from: usage.three(done.from), to: usage.three(done.to), by: 'command', result: started === 'failed' ? 'failed' : 'ok' })
       const result = { upgraded: true, from: done.from, to: done.to, started, ...(why ? { problem: why } : {}) }
       if (!forPerson(a)) return out(result)
       return tell([
@@ -2764,8 +2799,11 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'status':
       return status(a)
-    case 'setup':
-      return setup(a)
+    case 'setup': {
+      const was = enrolledHere() || existsSync(settingsFile())
+      await setup(a)
+      return setUp(a, was)
+    }
     case 'uninstall':
       return uninstall(a)
     case 'service':
@@ -2905,17 +2943,24 @@ async function main(argv: string[]): Promise<void> {
         if (eq < 1) throw new Problem('A button is "Label=action".', 'invalid')
         return { label: b.slice(0, eq), action: b.slice(eq + 1) }
       })
-      return out(
-        await onDisplay(a, () =>
-          call('mutation', api.notifications.send, {
-            text: body,
-            ...(text(a, 'id') ? { slug: text(a, 'id') } : {}),
-            ...(text(a, 'on') ? { display: text(a, 'on') } : {}),
-            ...(a.flags.sticky ? { sticky: true } : {}),
-            ...(buttons.length ? { buttons } : {}),
-          }),
-        ),
+      const sent = await onDisplay(a, () =>
+        call('mutation', api.notifications.send, {
+          text: body,
+          ...(text(a, 'id') ? { slug: text(a, 'id') } : {}),
+          ...(text(a, 'on') ? { display: text(a, 'on') } : {}),
+          ...(a.flags.sticky ? { sticky: true } : {}),
+          ...(buttons.length ? { buttons } : {}),
+        }),
       )
+      // Counted: which agent app sent it, whether it had buttons, stays up, or is about a page, and whether it went to one display or to all. Never what it says
+      usage.record('notification.sent', {
+        agent: usage.agentOf(sessionAsked()?.session.harness),
+        buttons: buttons.length > 0,
+        sticky: a.flags.sticky === true,
+        page: text(a, 'id') !== undefined,
+        to: text(a, 'on') ? 'one' : 'all',
+      })
+      return out(sent)
     }
     case 'displays': {
       const shown = await call<{ name: string; paired?: boolean; lastSeenAt?: number }[]>('query', api.displays.list)
@@ -3006,15 +3051,39 @@ async function main(argv: string[]): Promise<void> {
 // And however a command ends, the process does not end before what it printed has left it: into
 // a pipe, what was written is still on its way for a moment after it was written.
 const whileItRuns = setInterval(() => {}, 1000)
+const began = Date.now()
+/**
+ * Counts that a command was run: which of It's commands, who ran it (a person at a terminal, an
+ * agent app in a conversation, or a script), how it ended and how long it took, in bands. Never
+ * what was typed after the command. What an agent app runs as a hook, what the service has the
+ * shell run, and the service itself are not commands anyone gave.
+ */
+function counted(code?: string): void {
+  try {
+    const cmd = process.argv[2]
+    if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'serve') return
+    const harness = sessionAsked()?.session.harness
+    const by = harness
+      ? (HARNESSES as readonly string[]).includes(harness)
+        ? (harness as Harness)
+        : 'other'
+      : process.stdout.isTTY || process.stderr.isTTY
+        ? 'person'
+        : 'script'
+    usage.record('command.run', { command: usage.commandOf(cmd), by, result: usage.resultOf(code), took: usage.timeBand(Date.now() - began) })
+  } catch {}
+}
 main(process.argv.slice(2)).then(
   () => {
     clearInterval(whileItRuns)
+    counted()
     if (!['wait', 'serve'].includes(process.argv[2] ?? '')) process.exitCode ??= 0
     return left()
   },
   (err) => {
     clearInterval(whileItRuns)
     const p = err instanceof Problem ? err : new Problem(String((err as Error)?.message ?? err))
+    counted(p.code)
     say(JSON.stringify({ error: { code: p.code, message: p.message, ...(p.hint ? { hint: p.hint } : {}) } }))
     return end(p.code === 'invalid' ? 2 : 1)
   },

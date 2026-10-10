@@ -407,6 +407,39 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('each command is counted by its own name, who ran it and how it ended, and never by what was typed after it', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:list' ? [{ slug: 'tour-menu' }] : asked.path === 'state:get' ? { json: '{"seen":["chess","drums"]}' } : null,
+    )
+    try {
+      await run(m, ['list'], b.env)
+      await run(m, ['frobnicate', 'my-secret-plan'], b.env)
+      await run(m, ['create'], b.env)
+      await run(m, ['tour', 'clear'], b.env)
+      const counted = readFileSync(path.join(m.it, 'usage.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { name: string; properties: Record<string, string> })
+      const commands = counted.filter((c) => c.name === 'command.run')
+      expect(commands.map((c) => [c.properties.command, c.properties.result])).toEqual([
+        ['list', 'ok'],
+        ['other', 'invalid'],
+        ['create', 'invalid'],
+        ['tour', 'ok'],
+      ])
+      // Run by this test, which is a script, or by the agent whose conversation the tests are run in
+      for (const c of commands) expect(['script', 'person', 'claude-code', 'codex', 'openclaw', 'hermes', 'opencode', 'pi', 'other']).toContain(c.properties.by)
+      for (const c of commands) expect(c.properties.took).toMatch(/second|minute/)
+      // The tour that was cleared is counted as ended, with how many of its things had been shown
+      expect(counted.filter((c) => c.name === 'tour.ended').map((c) => c.properties)).toEqual([{ seen: '2' }])
+      expect(JSON.stringify(counted)).not.toContain('secret')
+      expect(JSON.stringify(counted)).not.toContain('frobnicate')
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it tour clear` removes the tour’s own pages and no other, also one whose id only begins as theirs do', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>

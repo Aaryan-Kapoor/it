@@ -21,6 +21,7 @@ import {
   backend,
   call,
   direct,
+  elsewhere,
   enrolledHere,
   harnessEnv,
   home,
@@ -41,7 +42,7 @@ import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
 import { type T3, t3Send, t3Server, t3ThreadOf } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
-import { agentOf, record, startSender, thisProgram, timeBand } from './usage'
+import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
   Budget,
   bootId,
@@ -2010,10 +2011,32 @@ async function connecting(say: (line: string) => void): Promise<void> {
   writePrivate(infoFile(), info)
   // Where it listens is said by kind: the socket's own address would name the person's home folder
   say(`connector ${VERSION} started (pid ${process.pid}); connector listening on ${info.socket ? 'its socket' : `127.0.0.1:${info.port}`}`)
-  // Usage counts are sent from here, in the background, for every command on this machine
+  // Usage counts are sent from here, in the background, for every command on this machine.
+  // Counting begins here where no command has begun it: an installation an agent made, where
+  // no person ever ran a command, is counted like any other.
+  begin()
   const usage = startSender()
-  record('service.started', thisProgram())
+  /** What is counted as this service starts, and once a day while it runs: that it runs, and what kind of machine this is. */
+  const countMachine = () => {
+    record('service.started', thisProgram())
+    record('machine.seen', thisMachine(elsewhere() ? 'joined' : 'serves'))
+  }
+  countMachine()
   let countedAt = Date.now()
+  /**
+   * Counts the agent apps this machine was last found to have: which app, how its add-on
+   * stands, the three numbers of its version, and whether its closed conversations are
+   * reopened here. Once the machine has first been looked at, and once a day after.
+   */
+  const countApps = () => {
+    for (const h of found)
+      record('app.seen', {
+        agent: agentOf(h.id),
+        addon: h.addon,
+        version: /^\d{1,4}\.\d{1,4}\.\d{1,4}/.exec(h.version ?? '')?.[0] ?? 'unknown',
+        wake: wakesOn(process.platform) && wakesNow.has(h.id),
+      })
+  }
 
   // ---- what It says ----
   let notOurs = false
@@ -2118,6 +2141,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Its sentences are a person's, and one of them names the folder the program is in: that one is said here without the folder
       const done = await fetchNewer({ say: (line) => say(`upgrade: ${line.startsWith('Installed in ') ? 'installed' : line}`) })
       if (!done) return void (await call('mutation', api.machines.upgrading, { state: 'none' }).catch(() => {}))
+      // Counted: from which version to which, asked for on the site
+      record('upgrade.done', { from: three(done.from), to: three(done.to), by: 'site', result: 'ok' })
       // Not on Windows: there this connector runs inside the very task that starting again
       // stops, and what it starts may be ended with that task before it has started anything.
       // The new program is in place, and the person is told what starts It as it.
@@ -2157,6 +2182,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // every half hour: each look runs every harness's own command. The report in between says
   // the connector is alive, with what was found last time.
   found = await detectAll()
+  countApps()
   watch()
   let lookedAt = Date.now()
   let looking = false
@@ -2350,7 +2376,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // Once a day while it runs, so that an installation left running is still counted as in use
     if (now - countedAt > 86_400_000) {
       countedAt = now
-      record('service.started', thisProgram())
+      countMachine()
+      countApps()
     }
   }, 60_000)
 

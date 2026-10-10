@@ -49,6 +49,7 @@ import {
   stopped,
   toldAboutUsage,
   usageReceiver,
+  wrongWithBatch,
   wrongWithUsage,
 } from './lib.mjs'
 import { inviteMachine, join } from './login.mjs'
@@ -4790,15 +4791,26 @@ try {
 
   // ------------------------------------------------------------------
   section('Usage reporting')
-  const LINE = /It reports usage counts under a random id for this installation/
+  const LINE = /reports usage|usage counts|telemetry/i
   const U = home('u')
-  // Nobody is watching these commands: they are not run at a terminal
-  const unwatched = await it(U, ['list'], { raw: true })
+  // The first command anyone runs begins the counting, whoever they are, and says nothing of it:
+  // where it is said is the first screen of the site
+  const first1 = await it(U, ['list'], { raw: true })
   await it(U, ['list'], { raw: true })
+  const begunHere = existsSync(path.join(U, 'telemetry.json')) ? JSON.parse(readFileSync(path.join(U, 'telemetry.json'), 'utf8')) : {}
+  const countedSoFar = existsSync(path.join(U, 'usage.jsonl'))
+    ? readFileSync(path.join(U, 'usage.jsonl'), 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => JSON.parse(l))
+    : []
   check(
-    'a command nobody is watching says nothing about usage reporting, and counts nothing',
-    !LINE.test(unwatched.err) && !existsSync(path.join(U, 'usage.jsonl')) && !existsSync(path.join(U, 'telemetry.json')),
-    unwatched.err.slice(0, 300),
+    'a first command says nothing about usage reporting, begins the counting under a random id, and is itself counted by its name and how it ended',
+    !LINE.test(first1.err) &&
+      /^[0-9a-f-]{36}$/.test(begunHere.installation ?? '') &&
+      typeof begunHere.told === 'number' &&
+      countedSoFar.filter((e) => e.name === 'command.run' && e.properties.command === 'list').length === 2,
+    `${first1.err.slice(0, 200)} ${JSON.stringify({ kept: Object.keys(begunHere), counted: countedSoFar.map((e) => [e.name, e.properties.command, e.properties.result]) })}`,
   )
   const on = await it(U, ['telemetry'])
   const off = await it(U, ['telemetry', 'off'])
@@ -4815,21 +4827,21 @@ try {
       !told().installation,
     JSON.stringify({ on, off, offBy: offBy(), kept: told() }),
   )
-  // Whoever turned it off has plainly been told, and is not told again on turning it back on.
-  // Someone whose first command turns it on has not been, and is
+  // Turning it on says nothing either, to someone who had it on before or to someone whose first command it is
   const backOn = await it(U, ['telemetry', 'on'], { raw: true })
   const first = told().installation
   const onAgain = offBy()
-  const neverTold = await it(home('n'), ['telemetry', 'on'], { raw: true })
+  const neverBegun = await it(home('n'), ['telemetry', 'on'], { raw: true })
   // A command run where the variable is set: it is the background service that sends, and it never sees this
   const withVariable = await it(U, ['telemetry'], { extraEnv: { IT_TELEMETRY_ENABLED: 'false' } })
   const withoutIt = await it(U, ['telemetry'])
   // And turning it on where the variable is still set changes nothing, and says why not
   const onUnderIt = await refused(it(U, ['telemetry', 'on'], { extraEnv: { IT_TELEMETRY_ENABLED: 'false' } }))
   check(
-    'turned on by someone who was never told, it says the line, and says it once; and a variable that turns it off is written down for the service, which stays off without it, and is not turned on over it',
-    LINE.test(neverTold.err) &&
+    'turning it on says no line of its own, to anyone, and gives the installation a new id; and a variable that turns it off is written down for the service, which stays off without it, and is not turned on over it',
+    !LINE.test(neverBegun.err) &&
       !LINE.test(backOn.err) &&
+      first !== begunHere.installation &&
       /^[0-9a-f-]{36}$/.test(first) &&
       onAgain === null &&
       withVariable.enabled === false &&
@@ -4839,7 +4851,7 @@ try {
       onUnderIt === 'refused' &&
       offBy() === 'IT_TELEMETRY_ENABLED' &&
       !told().installation,
-    JSON.stringify({ said: neverTold.err.slice(0, 120), again: backOn.err.slice(0, 120), withVariable, withoutIt, onUnderIt, offBy: offBy(), kept: told() }),
+    JSON.stringify({ said: neverBegun.err.slice(0, 120), again: backOn.err.slice(0, 120), withVariable, withoutIt, onUnderIt, offBy: offBy(), kept: told() }),
   )
   const doNotTrack = await it(home('q'), ['telemetry'], { extraEnv: { DO_NOT_TRACK: '1' } })
   check('DO_NOT_TRACK=1 turns it off too', doNotTrack.enabled === false && doNotTrack.because === 'DO_NOT_TRACK', JSON.stringify(doNotTrack))
@@ -4850,6 +4862,51 @@ try {
     await until(() => ['service.started', 'page.published', 'answer.delivered'].every((n) => names().has(n)), 45_000, 1000),
     JSON.stringify([...names()]),
   )
+  // What the run did on the way, each counted where it happened: the commands and the kind of
+  // machine by the program, and what happened between a browser and the backend by the backend,
+  // from which the service took it
+  const ALSO = ['command.run', 'machine.seen']
+  check(
+    'and what else the run’s own programs did is counted too: the commands that were run, and the kind of machine',
+    await until(() => ALSO.every((n) => names().has(n)), 60_000, 1000),
+    JSON.stringify(ALSO.filter((n) => !names().has(n))),
+  )
+  // What happened between a browser and the backend is noted by the backend and sent by the
+  // service of the It the run is held against, which the stack started and which sends to a
+  // stand-in of the stack's own. A run against an It that something else started has no such file
+  const stackSent = path.join(STACK_LOGS, 'usage.received.jsonl')
+  if (existsSync(stackSent)) {
+    /** Every batch the stack's It has sent so far: each request is three lines, of which the third is what it carried. */
+    const fromTheStack = () =>
+      readFileSync(stackSent, 'utf8')
+        .split('\n')
+        .filter((_, n) => n % 3 === 2)
+        .flatMap((text) => {
+          try {
+            return [JSON.parse(text)]
+          } catch {
+            return []
+          }
+        })
+    const said = () =>
+      new Set(
+        fromTheStack()
+          .flatMap((b) => b.events ?? [])
+          .map((e) => e.name),
+      )
+    const BY_THE_BACKEND = ['installation.seen', 'display.paired', 'screen.connected', 'page.shown', 'answer.sent']
+    check(
+      'what happened between a browser and the backend is counted by the service of the It itself: how much it holds, a display paired and opening the site, a page shown and something sent from it',
+      await until(() => BY_THE_BACKEND.every((n) => said().has(n)), 60_000, 1000),
+      JSON.stringify(BY_THE_BACKEND.filter((n) => !said().has(n))),
+    )
+    const wrongThere = fromTheStack().map(wrongWithBatch).filter(Boolean)
+    check(
+      'and every batch that service sent is what the page about usage reporting says a batch is, with nothing in it that the run named, titled or typed',
+      fromTheStack().length > 0 && wrongThere.length === 0 && ![PRIVATE_MARK, slug, session1].some((mine_) => readFileSync(stackSent, 'utf8').includes(mine_)),
+      wrongThere.slice(0, 3).join('; '),
+    )
+  } else console.log('  skip  what the It’s own service counts: this run is held against an It the stack did not start, which keeps no note of what it sent')
   const wrong = wrongWithUsage(usage)
   check(
     'every batch is exactly what the page about usage reporting says: a hash for the installation, and events of a name, an hour, an id of their own and properties from the fixed lists; and each is sent to the one address, with headers that say only that it is It',

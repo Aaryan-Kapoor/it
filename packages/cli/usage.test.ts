@@ -32,9 +32,11 @@ const lines = () => linesIn(spool())
 const waiting = () => readdirSync(home).filter((f) => f.startsWith('usage.jsonl'))
 /** Every file in It's folder and what it holds, to tell whether anything was changed. */
 const folder = () => Object.fromEntries(readdirSync(home).map((f) => [f, readFileSync(path.join(home, f), 'utf8')]))
-/** A person at a terminal runs a first command. */
-const told = () => usage.tellOnce(() => {}, true)
-const published = (as: Usage = usage) => as.record('page.published', { agent: 'claude-code', change: 'new', kind: 'custom', size: 'under 10 KB' })
+/** A first command is run, by whomever, and counting begins. */
+const told = () => usage.begin()
+/** A page as one is counted: every property, each one of the values it may have. */
+const aPage = { change: 'new', kind: 'custom', size: 'under 10 KB', files: '1', state: false, actions: true, pictures: false, shown: true } as const
+const published = (as: Usage = usage) => as.record('page.published', { agent: 'claude-code', ...aPage })
 /** A line as the program writes one this moment, to be made into others. */
 const aLine = (): Line => {
   published()
@@ -116,110 +118,89 @@ afterEach(() => {
   for (const name of CONVERSATION) delete process.env[name]
 })
 
-describe('telling the person', () => {
-  test('it is on until someone turns it off, and a command at a terminal says so once', () => {
+describe('when counting begins', () => {
+  test('it is on until someone turns it off, and begins with the first command, which says nothing', () => {
     expect(usage.status()).toMatchObject({ enabled: true, because: 'the default' })
-    const said: string[] = []
-    usage.tellOnce((line) => said.push(line), true)
-    usage.tellOnce((line) => said.push(line), true)
-    expect(said).toEqual([usage.NOTICE])
-    expect(usage.NOTICE).toMatch(/it telemetry off/)
-    expect(usage.NOTICE).toMatch(/IT_TELEMETRY_ENABLED=false/)
-    expect(usage.NOTICE).toMatch(/itcan\.do\/usage-reporting$/)
-    // The word that would be the easiest to hold against it is not used
-    expect(usage.NOTICE).not.toMatch(/anonymous/i)
-    // What is kept is when the person was told and a random id, and nothing else
-    expect(Object.keys(kept()).sort()).toEqual(['installation', 'told'])
+    // On, and nothing has begun it: nothing is counted yet
+    expect(usage.counting()).toBe(false)
+    published()
+    expect(lines()).toEqual([])
+    usage.begin()
+    expect(usage.counting()).toBe(true)
+    published()
+    expect(lines()).toHaveLength(1)
+    // What is kept is when it began and a random id, and nothing else, and a second command changes neither
+    const first = kept()
+    expect(Object.keys(first).sort()).toEqual(['installation', 'told'])
+    expect(first.installation).toMatch(/^[0-9a-f-]{36}$/)
+    usage.begin()
+    expect(kept()).toEqual(first)
+    // Nothing in the module is a sentence to say at a terminal: where it is said is the site's first screen
+    expect(Object.keys(usage).filter((name) => /notice/i.test(name))).toEqual([])
   })
-  test('counts are said to be sent only once a person has been told, and for as long as reporting is on', () => {
-    // On, and nobody has been told: nothing is counted yet
+  test.each([
+    ['CLAUDE_CODE_SESSION_ID', {}],
+    ['CODEX_THREAD_ID', {}],
+    ['IT_SESSION', { IT_HARNESS: 'pi' }],
+  ])('a command an agent runs begins it as a person’s does, so that an installation an agent made is counted (%s)', (name, more) => {
+    Object.assign(process.env, { [name]: 'a-conversation', ...more })
+    usage.begin()
+    published()
+    expect(lines()).toHaveLength(1)
+    expect(usage.counting()).toBe(true)
+  })
+  test('where reporting is off it does not begin, and nothing is written down until it is turned on', () => {
+    process.env.DO_NOT_TRACK = '1'
+    usage.begin()
+    expect(existsSync(settingsFile())).toBe(false)
+    delete process.env.DO_NOT_TRACK
+    writeFileSync(offFile(), 'command')
+    usage.begin()
+    expect(existsSync(settingsFile())).toBe(false)
+    published()
+    expect(lines()).toEqual([])
+    usage.set(true)
+    expect(usage.counting()).toBe(true)
+  })
+  test('counts are said to be sent only once counting has begun, and for as long as reporting is on', () => {
     expect([usage.status().enabled, usage.counting()]).toEqual([true, false])
     told()
     expect(usage.counting()).toBe(true)
     usage.set(false)
     expect(usage.counting()).toBe(false)
-    usage.set(true, () => {})
+    usage.set(true)
     expect(usage.counting()).toBe(true)
     // Turned off where this program runs, which is how a service started by hand is told
     process.env.DO_NOT_TRACK = '1'
     expect(usage.counting()).toBe(false)
     delete process.env.DO_NOT_TRACK
     expect(usage.counting()).toBe(true)
-    // Someone the install script told has no id until a first command makes one, and until then nothing is counted
-    writeFileSync(settingsFile(), JSON.stringify({ told: 1 }))
-    expect(usage.counting()).toBe(false)
   })
-  test('a command that nobody is watching says nothing and counts nothing, and the next one at a terminal says it', () => {
-    const said: string[] = []
-    // An agent, a script or a service runs the first commands
-    usage.tellOnce((line) => said.push(line), false)
-    published()
-    usage.tellOnce((line) => said.push(line), false)
-    expect(said).toEqual([])
-    expect(lines()).toEqual([])
-    expect(existsSync(settingsFile())).toBe(false)
-    // Then a person does
-    usage.tellOnce((line) => said.push(line), true)
-    expect(said).toEqual([usage.NOTICE])
-    published()
-    expect(lines()).toHaveLength(1)
-  })
-  test.each([
-    ['CLAUDE_CODE_SESSION_ID', {}],
-    ['CODEX_THREAD_ID', {}],
-    ['IT_SESSION', { IT_HARNESS: 'pi' }],
-  ])('a command an agent runs is not a person being told, though the agent app gives it a terminal (%s)', (name, more) => {
-    Object.assign(process.env, { [name]: 'a-conversation', ...more })
-    const said: string[] = []
-    usage.tellOnce((line) => said.push(line), true)
-    published()
-    expect(said).toEqual([])
-    expect(lines()).toEqual([])
-    expect(existsSync(settingsFile())).toBe(false)
-    // The person's own command, in a terminal no agent runs, is still the one that says it
-    for (const each of CONVERSATION) delete process.env[each]
-    usage.tellOnce((line) => said.push(line), true)
-    expect(said).toEqual([usage.NOTICE])
-  })
-  test('nothing is recorded before the person has been told', () => {
-    published()
-    expect(lines()).toEqual([])
-    told()
-    published()
-    expect(lines()).toHaveLength(1)
-  })
-  test('someone the install script told is not told again, and is given an id by the first command', () => {
-    // What install.sh and install.ps1 leave, having printed the line themselves
-    writeFileSync(settingsFile(), `{"told": ${Date.now()}}\n`)
-    const said: string[] = []
-    usage.tellOnce((line) => said.push(line), false)
-    expect(said).toEqual([])
+  test('an installation that began under an earlier It, when a person was told at a terminal, goes on under the id it has', () => {
+    const before = { told: 1_790_000_000_000, installation: randomUUID() }
+    writeFileSync(settingsFile(), JSON.stringify(before))
+    usage.begin()
+    expect(kept()).toEqual(before)
+    // And one that was told and given no id yet is given one, with the time it had
+    writeFileSync(settingsFile(), `{"told": 1790000000000}\n`)
+    usage.begin()
+    expect(kept().told).toBe(1_790_000_000_000)
     expect(kept().installation).toMatch(/^[0-9a-f-]{36}$/)
-    published()
-    expect(lines()).toHaveLength(1)
   })
-  test('neither install script says it or leaves a note that it was said: the program does, at the first command a person runs', () => {
-    const sentence = usage.NOTICE.split('. ')[0]!
+  test('how long ago it began is told from the time that was noted, and is nothing before it has', () => {
+    expect(usage.sinceBegun()).toBeUndefined()
+    writeFileSync(settingsFile(), JSON.stringify({ told: Date.now() - 3 * 86_400_000, installation: randomUUID() }))
+    expect(usage.sinceBegun()).toBeGreaterThanOrEqual(3 * 86_400_000)
+    expect(usage.sinceBegun()).toBeLessThan(3 * 86_400_000 + 60_000)
+  })
+  test('neither install script says anything of it or leaves a note', () => {
     for (const script of ['install.sh', 'install.ps1']) {
       const text = readFileSync(path.join(__dirname, '../../install', script), 'utf8')
-      expect(text, script).not.toContain(sentence)
-      expect(text, script).not.toContain(usage.NOTICE_BRIEF.split('. ')[0]!)
+      expect(text, script).not.toMatch(/reports usage/i)
       expect(text, script).not.toContain('telemetry off')
       expect(text, script).not.toContain('telemetry.json')
       expect(text, script).not.toMatch(/"told"/)
     }
-  })
-  test('a setup that leads a person through it says the same in fewer words, once, and that counts as told', () => {
-    const said: string[] = []
-    usage.tellOnce((line) => said.push(line), true, usage.NOTICE_BRIEF)
-    usage.tellOnce((line) => said.push(line), true)
-    expect(said).toEqual([usage.NOTICE_BRIEF])
-    // The same three things: that it reports, that it never sends what is on a page, and how to turn it off
-    expect(usage.NOTICE_BRIEF.startsWith(usage.NOTICE.split(' for this installation')[0]!)).toBe(true)
-    expect(usage.NOTICE_BRIEF).toMatch(/never what is on a page/)
-    expect(usage.NOTICE_BRIEF).toMatch(/`it telemetry off`/)
-    expect(usage.NOTICE_BRIEF).not.toMatch(/anonymous/i)
-    expect(usage.wasTold()).toBe(true)
   })
   test.each([
     ['an id and no telling', (s: { told: number; installation: string }) => ({ installation: s.installation })],
@@ -267,12 +248,11 @@ describe('turning it off', () => {
     ['DO_NOT_TRACK', '2'],
     ['DO_NOT_TRACK', 'y'],
     ['DO_NOT_TRACK', '"1"'],
-  ])('%s=%s turns it off: nothing is said, recorded or sent', async (name, value) => {
+  ])('%s=%s turns it off: nothing is recorded or sent', async (name, value) => {
     told()
     process.env[name] = value
     expect(usage.status()).toMatchObject({ enabled: false, because: name })
-    const said: string[] = []
-    usage.tellOnce((line) => said.push(line), true)
+    usage.begin()
     published()
     expect(lines()).toEqual([])
     const posts: string[] = []
@@ -281,7 +261,6 @@ describe('turning it off', () => {
     await sender.tick()
     sender.stop()
     expect(posts).toEqual([])
-    expect(said).toEqual([])
   })
   test.each([
     ['IT_TELEMETRY_ENABLED', ''],
@@ -319,7 +298,7 @@ describe('turning it off', () => {
     const posts: string[] = []
     const sender = noting(posts, () => 0, service)
     service.record('service.started', service.thisProgram())
-    for (let i = 0; i < 25; i++) service.record('page.published', { agent: 'codex', change: 'new', kind: 'custom', size: 'under 10 KB' })
+    for (let i = 0; i < 25; i++) service.record('page.published', { agent: 'codex', ...aPage })
     await sender.tick()
     sender.stop()
     expect(posts).toEqual([])
@@ -470,53 +449,25 @@ describe('turning it off', () => {
     ids.push(kept().installation)
     expect(new Set(ids).size).toBe(4)
   })
-  test('`it telemetry on` says the line to someone who has not been told before it writes anything down', async () => {
-    // Where the line cannot be said, nothing is changed
-    expect(() =>
-      usage.set(true, () => {
-        throw new Error('closed')
-      }),
-    ).toThrow()
-    expect(readdirSync(home)).toEqual([])
-    // Nor is it said, or anything changed, where a variable keeps reporting off
-    const said: string[] = []
+  test('`it telemetry on` begins counting where it had not begun, and changes nothing where a variable keeps reporting off', () => {
     process.env.DO_NOT_TRACK = '1'
-    expect(() => usage.set(true, (line) => said.push(line))).toThrow(/DO_NOT_TRACK/)
-    expect(said).toEqual([])
-    expect(readdirSync(home)).toEqual([])
+    expect(() => usage.set(true)).toThrow(/DO_NOT_TRACK/)
+    expect(readdirSync(home).filter((f) => f !== 'telemetry-off')).toEqual([])
     delete process.env.DO_NOT_TRACK
-    // Turned on with nothing to say the line with, nobody has been told, and nothing is recorded until someone is
+    rmSync(offFile(), { force: true })
     usage.set(true)
-    expect(usage.wasTold()).toBe(false)
-    published()
-    expect(lines()).toEqual([])
-    // Said first, and only then written down that it was
-    const order: string[] = []
-    await withFiles(
-      {
-        renameSync:
-          (real) =>
-          (...args: any[]) => {
-            order.push('written')
-            return real(...args)
-          },
-      },
-      () => usage.set(true, () => order.push('said')),
-    )
-    expect(order).toEqual(['said', 'written'])
-    expect(usage.wasTold()).toBe(true)
+    expect(usage.counting()).toBe(true)
     published()
     expect(lines()).toHaveLength(1)
-    // And not said a second time
-    usage.set(true, (line) => said.push(line))
-    expect(said).toEqual([])
   })
-  test('turning it off by the command counts as having been told, so nothing is said afterwards', () => {
+  test('turning it off and on again keeps when counting first began, under a new id', () => {
+    told()
+    const before = kept()
     usage.set(false)
+    expect(kept()).toEqual({ told: before.told })
     usage.set(true)
-    const said: string[] = []
-    usage.tellOnce((line) => said.push(line), true)
-    expect(said).toEqual([])
+    expect(kept().told).toBe(before.told)
+    expect(kept().installation).not.toBe(before.installation)
   })
   test('a program that writes the settings from an old view of them cannot turn reporting back on', async () => {
     // The install script told the person. The first command reads that, and is about to write the id it made
@@ -535,7 +486,7 @@ describe('turning it off', () => {
           return real(from, to)
         },
       },
-      () => usage.tellOnce(() => {}, false),
+      () => usage.begin(),
     )
     expect(turnedOff).toMatchObject({ enabled: false, because: 'it telemetry off' })
     // The first command's settings are what is on disk now, and reporting is off all the same
@@ -1101,13 +1052,133 @@ describe('what an event may hold', () => {
     vi.doMock('./src/lib', async (original) => ({ ...(await original<typeof import('./src/lib')>()), VERSION: version }))
     try {
       const released = await import('./src/usage')
-      released.tellOnce(() => {}, true)
+      released.begin()
       expect(released.thisProgram().version).toBe(counted)
       released.record('service.started', released.thisProgram())
       expect(lines().map((l) => l.properties.version)).toEqual([counted])
     } finally {
       vi.doUnmock('./src/lib')
     }
+  })
+  test('how many, how many files and how old are bands, and never the number', () => {
+    expect([0, 1, 2, 5, 6, 20, 21, 100, 101, 5000].map(usage.countBand)).toEqual([
+      '0',
+      '1',
+      '2 to 5',
+      '2 to 5',
+      '6 to 20',
+      '6 to 20',
+      '21 to 100',
+      '21 to 100',
+      'over 100',
+      'over 100',
+    ])
+    expect([1, 2, 5, 6, 20, 21].map(usage.filesBand)).toEqual(['1', '2 to 5', '2 to 5', '6 to 20', '6 to 20', 'over 20'])
+    const day = 86_400_000
+    expect([0, day - 1, day, 7 * day, 8 * day, 30 * day, 31 * day, 90 * day, 91 * day, 400 * day].map(usage.ageBand)).toEqual([
+      'under 1 day',
+      'under 1 day',
+      '1 to 7 days',
+      '1 to 7 days',
+      '8 to 30 days',
+      '8 to 30 days',
+      '31 to 90 days',
+      '31 to 90 days',
+      'over 90 days',
+      'over 90 days',
+    ])
+  })
+  test('a command is counted by its own name, and anything else that was typed is "other"', () => {
+    expect(['create', 'tour', 'upgrade', '--version', '-v', undefined, '--help', 'my-secret-plan', 'constructor'].map(usage.commandOf)).toEqual([
+      'create',
+      'tour',
+      'upgrade',
+      'version',
+      'version',
+      'help',
+      'help',
+      'other',
+      'other',
+    ])
+    expect([undefined, 'invalid', 'offline', 'ok', 'something of its own', 'constructor'].map(usage.resultOf)).toEqual([
+      'ok',
+      'invalid',
+      'offline',
+      'other',
+      'other',
+      'other',
+    ])
+    expect(['port_taken', 'backend_exited', undefined, 'a path /home/someone'].map(usage.failureOf)).toEqual(['port_taken', 'backend_exited', 'other', 'other'])
+    expect(['0.1.6', '0.2.0-rc.1', 'not a version'].map(usage.three)).toEqual(['0.1.6', '0.2.0', '0.0.0'])
+  })
+  test('this machine is told in a few fixed words, each one the table allows, and never by its name', () => {
+    told()
+    const machine = usage.thisMachine('serves')
+    expect(Object.keys(machine).sort()).toEqual(['arch', 'container', 'linux', 'os', 'role', 'shell', 'wsl'])
+    for (const [property, value] of Object.entries(machine))
+      expect((usage.ALLOWED['machine.seen'] as unknown as Record<string, readonly unknown[]>)[property], property).toContain(value)
+    expect(machine.linux === 'none').toBe(process.platform !== 'linux')
+    usage.record('machine.seen', machine)
+    usage.record('machine.seen', usage.thisMachine('joined'))
+    expect(lines().map((l) => l.properties.role)).toEqual(['serves', 'joined'])
+    expect(JSON.stringify(lines())).not.toContain(os.hostname())
+  })
+  test('what the backend noted is recorded if it is an event with the values it may have, and is not if it is anything else', () => {
+    told()
+    usage.recordNoted('display.paired', JSON.stringify({ screen: 'phone', sameMachine: false, first: true }))
+    usage.recordNoted('page.shown', JSON.stringify({ screen: 'tv', by: 'agent' }))
+    // A name there is no event for, a value it may not have, a property too many, and what is no JSON
+    usage.recordNoted('display.named', JSON.stringify({ name: 'Kitchen tablet' }))
+    usage.recordNoted('page.shown', JSON.stringify({ screen: 'Kitchen tablet', by: 'agent' }))
+    usage.recordNoted('page.shown', JSON.stringify({ screen: 'tv', by: 'agent', title: 'Plan' }))
+    usage.recordNoted('page.shown', 'not json')
+    expect(lines().map((l) => [l.name, l.properties])).toEqual([
+      ['display.paired', { screen: 'phone', sameMachine: false, first: true }],
+      ['page.shown', { screen: 'tv', by: 'agent' }],
+    ])
+  })
+  test('one event can be sent at once by the command that records it, as a batch like any other, and is not where reporting is off or has not begun', async () => {
+    const got: { headers: http.IncomingHttpHeaders; body: string }[] = []
+    const server = http.createServer((req, res) => {
+      let body = ''
+      req
+        .on('data', (piece) => (body += piece))
+        .on('end', () => {
+          got.push({ headers: req.headers, body })
+          res.writeHead(204).end()
+        })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    process.env.IT_TELEMETRY_URL = `http://127.0.0.1:${(server.address() as { port: number }).port}/usage`
+    try {
+      // Not begun: nothing is sent
+      await usage.sendNow('installation.removed', { age: 'under 1 day' })
+      expect(got).toEqual([])
+      told()
+      await usage.sendNow('installation.removed', { age: '1 to 7 days' })
+      expect(got).toHaveLength(1)
+      const batch = JSON.parse(got[0]!.body)
+      expect(Object.keys(batch).sort()).toEqual(['events', 'installation', 'v'])
+      expect(batch.installation).toMatch(/^[0-9a-f]{64}$/)
+      expect(batch.events).toHaveLength(1)
+      expect(batch.events[0]).toMatchObject({ name: 'installation.removed', properties: { age: '1 to 7 days' } })
+      expect(batch.events[0].at).toMatch(/T\d\d:00:00\.000Z$/)
+      expect(got[0]!.headers['user-agent']).toMatch(/^it\//)
+      // Something that is no event is not sent, and neither is anything once reporting is off
+      await usage.sendNow('installation.removed', { age: 'a long while' } as never)
+      usage.set(false)
+      await usage.sendNow('installation.removed', { age: 'under 1 day' })
+      expect(got).toHaveLength(1)
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
+  })
+  test('sending one event at once never throws and never waits long, where nothing answers', async () => {
+    told()
+    process.env.IT_TELEMETRY_URL = 'http://127.0.0.1:9/usage'
+    const began = Date.now()
+    await expect(usage.sendNow('installation.removed', { age: 'under 1 day' })).resolves.toBeUndefined()
+    expect(Date.now() - began).toBeLessThan(6000)
   })
   test('the page that tells people what is sent names every event, property and value', () => {
     const page = readFileSync(path.join(__dirname, '../../docs/usage-reporting.md'), 'utf8')
@@ -1476,7 +1547,7 @@ describe('sending', () => {
     writeFileSync(file, '')
     process.env.IT_HOME = file
     expect(() => published()).not.toThrow()
-    expect(() => usage.tellOnce(() => {}, true)).not.toThrow()
+    expect(() => usage.begin()).not.toThrow()
     expect(() => usage.heed()).not.toThrow()
     process.env.DO_NOT_TRACK = '1'
     expect(() => usage.heed()).not.toThrow()
@@ -1599,13 +1670,12 @@ describe('what cannot be trusted', () => {
     sender.stop()
     expect(posts).toHaveLength(1)
     expect(waiting()).toEqual([])
-    // Where the settings are: nothing is known, so nobody has been told and nothing is recorded
+    // Where the settings are: nothing is known, so counting has not begun and nothing is recorded
     pipe(settingsFile())
     const command = await another()
-    expect(command.wasTold()).toBe(false)
+    expect(command.counting()).toBe(false)
     expect(command.status()).toMatchObject({ enabled: true })
     command.heed()
-    command.tellOnce(() => {}, false)
     published(command)
     expect(waiting()).toEqual([])
     rmSync(settingsFile())
@@ -1644,7 +1714,7 @@ describe('what cannot be trusted', () => {
       rmSync(settingsFile())
       symlinkSync(real, settingsFile())
       const command = await another()
-      expect(command.wasTold()).toBe(false)
+      expect(command.counting()).toBe(false)
       published(command)
       expect(waiting()).toEqual([])
     } finally {
@@ -1695,7 +1765,7 @@ describe('what cannot be trusted', () => {
       writeFileSync(real, readFileSync(settingsFile()))
       rmSync(settingsFile())
       symlinkSync(real, settingsFile())
-      expect(program.wasTold()).toBe(false)
+      expect(program.counting()).toBe(false)
     } finally {
       vi.doUnmock('node:fs')
       rmSync(elsewhere, { recursive: true, force: true })
@@ -1748,7 +1818,7 @@ describe('what cannot be trusted', () => {
     try {
       // The settings, as a command reads them
       const command = await another()
-      await replacing('telemetry.json', settings, () => expect(command.wasTold()).toBe(false))
+      await replacing('telemetry.json', settings, () => expect(command.counting()).toBe(false))
       writeFileSync(settingsFile(), settings)
       // The lines, as a command adds one
       await replacing('usage.jsonl', '', () => published())

@@ -1,11 +1,12 @@
 // Usage reporting: counts of what It is used for, and nothing of what was in it.
 //
-// It is on unless the person turns it off, and nothing is recorded until a person has been
-// told so once, by the first command a person runs at a terminal, which the setup is. An
-// event is a name and a few properties, each of which is one of a fixed set of words or bands:
-// `ALLOWED` below is the whole of what can be sent, and an event with anything else in it is not
-// sent at all. `docs/usage-reporting.md` says the same to the person, and a test holds the two
-// together.
+// It is on unless the person turns it off, and it begins with the installation: the first
+// command, or the first start of the background service, gives the installation its random id,
+// and says nothing. Where it is said is the first screen of It's site, the privacy policy at
+// itcan.do, and `docs/usage-reporting.md`. An event is a name and a few properties, each of
+// which is one of a fixed set of words or bands: `ALLOWED` below is the whole of what can be
+// sent, and an event with anything else in it is not sent at all. `docs/usage-reporting.md`
+// says the same to the person, and a test holds the two together.
 //
 // Off is a file of its own in It's folder, `telemetry-off`, and never a field of the settings:
 // whoever writes the settings, however old their view of them, cannot then turn reporting back
@@ -23,16 +24,14 @@
 // batches; a batch that cannot be sent is tried a few more times, less and less often, and then
 // dropped.
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmdirSync, rmSync, writeSync } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmdirSync, rmSync, writeSync } from 'node:fs'
+import { release as osRelease, userInfo } from 'node:os'
 import path from 'node:path'
 import { HARNESSES } from '@it/protocol'
-import { currentSession, inHome, Problem, VERSION } from './lib'
+import { inHome, Problem, VERSION } from './lib'
 
 export const DEFAULT_URL = 'https://itcan.do/api/usage'
 export const DOCS = 'https://itcan.do/usage-reporting'
-export const NOTICE = `It reports usage counts under a random id for this installation, and never what is on a page. Turn it off with \`it telemetry off\` or IT_TELEMETRY_ENABLED=false. What is sent: ${DOCS}`
-/** The same in fewer words, for one quiet line among the few a setup led at a terminal shows. `it telemetry` says the rest. */
-export const NOTICE_BRIEF = 'It reports usage counts under a random id, and never what is on a page. `it telemetry off` turns that off.'
 
 // ---------- what can be sent ----------
 
@@ -62,22 +61,179 @@ export const timeBand = (ms: number): (typeof TIMES)[number] =>
               ? TIMES[5]
               : TIMES[6]
 
+const COUNTS = ['0', '1', '2 to 5', '6 to 20', '21 to 100', 'over 100'] as const
+/** How many of something there are, as a band: never the number itself. */
+export const countBand = (n: number): (typeof COUNTS)[number] =>
+  n < 1 ? COUNTS[0] : n < 2 ? COUNTS[1] : n <= 5 ? COUNTS[2] : n <= 20 ? COUNTS[3] : n <= 100 ? COUNTS[4] : COUNTS[5]
+
+const FILES = ['1', '2 to 5', '6 to 20', 'over 20'] as const
+export const filesBand = (n: number): (typeof FILES)[number] => (n <= 1 ? FILES[0] : n <= 5 ? FILES[1] : n <= 20 ? FILES[2] : FILES[3])
+
+const AGES = ['under 1 day', '1 to 7 days', '8 to 30 days', '31 to 90 days', 'over 90 days'] as const
+/** How long an installation has been counting, as a band. */
+export const ageBand = (ms: number): (typeof AGES)[number] => {
+  const days = ms / 86_400_000
+  return days < 1 ? AGES[0] : days < 8 ? AGES[1] : days < 31 ? AGES[2] : days < 91 ? AGES[3] : AGES[4]
+}
+
+const SCREENS = ['phone', 'tablet', 'computer', 'tv'] as const
+const SYSTEMS = ['linux', 'macos', 'windows', 'other'] as const
+const CHIPS = ['x64', 'arm64', 'other'] as const
+const EITHER = [true, false] as const
+const VERSION_SHAPE = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/
+
+/** Every command there is, and one word for anything else that was typed: what was typed is never sent. */
+const COMMANDS = [
+  'create',
+  'update',
+  'list',
+  'read',
+  'delete',
+  'rollback',
+  'set',
+  'patch',
+  'state',
+  'open',
+  'notify',
+  'displays',
+  'wait',
+  'actions',
+  'action',
+  'ack',
+  'setup',
+  'site',
+  'network',
+  'status',
+  'whoami',
+  'service',
+  'login',
+  'logout',
+  'uninstall',
+  'skill',
+  'tour',
+  'telemetry',
+  'upgrade',
+  'runs',
+  'updates',
+  'version',
+  'help',
+  'other',
+] as const
+export const commandOf = (typed: string | undefined): (typeof COMMANDS)[number] =>
+  typed === '--version' || typed === '-v'
+    ? 'version'
+    : !typed || typed === '--help' || typed === '-h'
+      ? 'help'
+      : (COMMANDS as readonly string[]).includes(typed)
+        ? (typed as (typeof COMMANDS)[number])
+        : 'other'
+
+/** How a command ended: well, or with one of the codes a problem of It's own carries. A code It does not know is "other". */
+const RESULTS = [
+  'ok',
+  'invalid',
+  'limit',
+  'error',
+  'backend_program',
+  'unavailable',
+  'offline',
+  'busy',
+  'backend_silent',
+  'unauthenticated',
+  'timeout',
+  'stopped',
+  'settings',
+  'refused',
+  'record_unread',
+  'rate_limited',
+  'port_taken',
+  'not_set_up',
+  'lock_not_taken',
+  'lock_lost',
+  'checksum',
+  'not_found',
+  'forbidden',
+  'another_session',
+  'other',
+] as const
+export const resultOf = (code: string | undefined): (typeof RESULTS)[number] =>
+  code === undefined ? 'ok' : (RESULTS as readonly string[]).includes(code) && code !== 'ok' ? (code as (typeof RESULTS)[number]) : 'other'
+
+/** Who ran a command: a person at a terminal, an agent app in one of its conversations, or a script. */
+const RUNNERS = ['person', 'script', ...HARNESSES, 'other'] as const
+
+/** What went wrong with the service, as one of a few words. */
+const FAILURES = ['backend_program', 'backend_silent', 'backend_exited', 'port_taken', 'lock_lost', 'functions', 'door', 'other'] as const
+export const failureOf = (code: string | undefined): (typeof FAILURES)[number] =>
+  (FAILURES as readonly string[]).includes(code ?? '') ? (code as (typeof FAILURES)[number]) : 'other'
+
+const TOUR_PAGES = ['menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done'] as const
+export type TourPage = (typeof TOUR_PAGES)[number]
+
 /**
- * Every event that exists, and for each property the values it may have. Two of the events are
- * not sent yet: they happen between a screen and the backend, where this program is not.
+ * Every event that exists, and for each property the values it may have. Six of them happen
+ * between a screen and the backend, where this program is not: the backend notes each as it
+ * happens, in these same words, and the service takes the notes from it and records them here.
  */
 export const ALLOWED = {
-  'service.started': {
-    version: /^\d{1,4}\.\d{1,4}\.\d{1,4}$/,
-    os: ['linux', 'macos', 'windows', 'other'],
-    arch: ['x64', 'arm64', 'other'],
-    installed: ['script', 'source', 'other'],
+  'service.started': { version: VERSION_SHAPE, os: SYSTEMS, arch: CHIPS, installed: ['script', 'source', 'other'] },
+  'machine.seen': {
+    role: ['serves', 'joined'],
+    os: SYSTEMS,
+    arch: CHIPS,
+    linux: ['debian', 'fedora', 'arch', 'suse', 'alpine', 'nix', 'other', 'none'],
+    wsl: EITHER,
+    container: EITHER,
+    shell: ['bash', 'zsh', 'fish', 'sh', 'powershell', 'cmd', 'other', 'unknown'],
   },
-  'screen.connected': { screen: ['phone', 'tablet', 'computer', 'tv'], sameMachine: [true, false] },
-  'page.published': { agent: AGENTS, change: ['new', 'update'], kind: ['custom'], size: SIZES },
-  'answer.sent': { screen: ['phone', 'tablet', 'computer', 'tv'], agentRunning: [true, false] },
+  'app.seen': {
+    agent: AGENTS,
+    addon: ['connected', 'needs_approval', 'unavailable', 'too_old', 'error', 'not_connected'],
+    version: /^(\d{1,4}\.\d{1,4}\.\d{1,4}|unknown)$/,
+    wake: EITHER,
+  },
+  'installation.seen': {
+    pages: COUNTS,
+    displays: COUNTS,
+    machines: COUNTS,
+    conversations: COUNTS,
+    network: ['off', 'lan', 'tailscale'],
+    background: EITHER,
+    push: EITHER,
+    age: AGES,
+  },
+  'setup.finished': {
+    led: ['person', 'agent', 'script'],
+    kind: ['new', 'joined', 'again'],
+    service: ['registered', 'none', 'failed'],
+    apps: ['0', '1', '2', '3 or more'],
+    ssh: EITHER,
+  },
+  'command.run': { command: COMMANDS, by: RUNNERS, result: RESULTS, took: TIMES },
+  'page.published': {
+    agent: AGENTS,
+    change: ['new', 'update'],
+    kind: ['custom'],
+    size: SIZES,
+    files: FILES,
+    state: EITHER,
+    actions: EITHER,
+    pictures: EITHER,
+    shown: EITHER,
+  },
+  'page.shown': { screen: SCREENS, by: ['agent', 'person'] },
+  'screen.connected': { screen: SCREENS, sameMachine: EITHER },
+  'display.paired': { screen: SCREENS, sameMachine: EITHER, first: EITHER },
+  'answer.sent': { screen: SCREENS, from: ['page', 'notification'] },
   'answer.delivered': { path: ['heard', 'woke', 'waited'], after: TIMES, agent: AGENTS },
   'agent.woken': { result: ['resumed', 'declined', 'failed'], agent: AGENTS },
+  'notification.sent': { agent: AGENTS, buttons: EITHER, sticky: EITHER, page: EITHER, to: ['one', 'all'] },
+  'notification.ended': { how: ['answered', 'dismissed'], pushed: EITHER },
+  'tour.shown': { page: TOUR_PAGES, agent: AGENTS },
+  'tour.ended': { seen: ['0', '1', '2', '3', '4', '5'] },
+  'upgrade.done': { from: VERSION_SHAPE, to: VERSION_SHAPE, by: ['command', 'site'], result: ['ok', 'failed'] },
+  'service.failed': { what: FAILURES },
+  'installation.removed': { age: AGES },
 } as const
 export type EventName = keyof typeof ALLOWED
 type Value = string | boolean
@@ -230,7 +386,7 @@ function putWhole(file: string, text: string): void {
 // ---------- on, off, and who ----------
 
 interface Settings {
-  /** When a person was told, once, that It reports usage. Nothing is recorded before. */
+  /** When counting began on this installation. Nothing is recorded before. (The name is from when a person was told at a terminal first.) */
   told?: number
   /** A random id for this installation. What is sent is a hash of it. A new one is made every time reporting is turned on. */
   installation?: string
@@ -336,15 +492,12 @@ export function status(): Status {
     notes.push('IT_TELEMETRY_URL is set where this command runs. The background service sends to the address it was installed with, which may be another.')
   return { enabled: !why, because: why ?? 'the default', sendsTo: url(), whatIsSent: DOCS, ...(notes.length ? { note: notes.join(' ') } : {}) }
 }
-/** Whether a person has been told, by a command at a terminal. */
-export const wasTold = (): boolean => fresh().told !== undefined
-
 /** How this installation is named in what is sent: a hash of its random id. */
 const named = (installation: string): string => createHash('sha256').update(`it-usage:${installation}`).digest('hex')
 /**
- * The name to send under and the tag to record under, once a person has been told and there is
- * an id. Null before, and then nothing is recorded or sent. The tag is a hash of its own, so
- * that no part of what stays on this machine is in what is sent.
+ * The name to send under and the tag to record under, once counting has begun and there is an
+ * id. Null before, and then nothing is recorded or sent. The tag is a hash of its own, so that
+ * no part of what stays on this machine is in what is sent.
  */
 function identity(kept: Settings): { who: string; tag: string } | null {
   if (kept.told === undefined || !kept.installation) return null
@@ -354,8 +507,8 @@ function identity(kept: Settings): { who: string; tag: string } | null {
 const tagFrom = (kept: Settings): string | null => identity(kept)?.tag ?? null
 /**
  * Whether counts are being sent from this installation as things stand this moment: reporting
- * is on, a person has been told of it, and there is an id to send under. Before that, and
- * whenever it is off, nothing is counted. Where that cannot be read, it is said that none are.
+ * is on, and there is an id to send under. Before that, and whenever it is off, nothing is
+ * counted. Where that cannot be read, it is said that none are.
  */
 export function counting(): boolean {
   try {
@@ -441,13 +594,8 @@ export function heed(): void {
  * waiting to be sent and forgets the installation's id. Turning it on removes the file and makes
  * a new id, always: nothing recorded under an earlier one is then sent. While a variable where
  * this command runs turns reporting off, turning it on is refused and nothing is changed.
- *
- * Someone who turns it on without having been told is told through `say`, before anything is
- * written down: a command stopped between the two has then said the line and noted nothing, and
- * never the other way about. Where the line cannot be said, nothing is changed. With no `say`
- * given, nobody counts as told, and nothing is recorded until a command at a terminal says it.
  */
-export function set(on: boolean, say?: (line: string) => void): Status {
+export function set(on: boolean): Status {
   if (!on) {
     let written = true
     try {
@@ -456,7 +604,7 @@ export function set(on: boolean, say?: (line: string) => void): Status {
       written = offFileIsThere()
     }
     try {
-      // Whoever runs this command has plainly been told
+      // The id is forgotten, and when counting first began is kept
       save({ told: fresh().told ?? Date.now() })
     } catch {}
     discard()
@@ -471,13 +619,8 @@ export function set(on: boolean, say?: (line: string) => void): Status {
   const variable = offInEnvironment()
   if (variable)
     throw new Problem(`${variable} is set where this command runs, so usage reporting stays off. Run \`it telemetry on\` again without it.`, 'refused')
-  let told = fresh().told
-  if (told === undefined && say) {
-    say(NOTICE)
-    told = Date.now()
-  }
   try {
-    save({ told, installation: randomUUID() })
+    save({ told: fresh().told ?? Date.now(), installation: randomUUID() })
   } catch {
     throw new Problem('Usage reporting was left as it was, because nothing could be written in It’s folder.', 'error')
   }
@@ -494,27 +637,30 @@ export function set(on: boolean, say?: (line: string) => void): Status {
 }
 
 /**
- * Says once that usage is reported and how to turn it off, and only where a person will read
- * it: at a terminal, and not inside an agent's conversation, since some agent apps give the
- * commands they run a terminal. Run by an agent, a script or a service, a command says nothing
- * and counts nothing, and the next command a person runs at a terminal says it. Until it has
- * been said nothing is recorded. The install scripts say nothing of it and leave no note: the
- * setup they lead into is the command that says it. `notice` is the sentence, where it is to be
- * the shorter one.
+ * Begins counting on this installation, where reporting is on and it has not begun: the
+ * installation is given its random id, and the time is noted. Nothing is said, whoever runs the
+ * command: that It counts its use, and how to turn that off, is said on the first screen of its
+ * site and in the privacy policy that screen links to. Run by every command but the few that
+ * only print something, and by the background service as it starts, so that an installation an
+ * agent made, where no person ever ran a command, is counted like any other. Where reporting
+ * is off nothing is written, and there is no id until it is turned on.
  */
-export function tellOnce(say: (line: string) => void, atTerminal: boolean, notice: string = NOTICE): void {
+export function begin(): void {
   try {
     const { off, kept } = standing()
     known = { file: settingsFile(), tag: tagFrom(kept) }
-    if (off) return
-    if (kept.told !== undefined) {
-      if (!kept.installation) save({ told: kept.told, installation: randomUUID() })
-      return
-    }
-    if (!atTerminal || currentSession()) return
-    say(notice)
-    save({ told: Date.now(), installation: randomUUID() })
+    if (off || (kept.told !== undefined && kept.installation)) return
+    save({ told: kept.told ?? Date.now(), installation: randomUUID() })
   } catch {}
+}
+/** How long ago counting began here, in milliseconds, or nothing where it has not. */
+export function sinceBegun(): number | undefined {
+  try {
+    const { told } = fresh()
+    return told === undefined ? undefined : Math.max(0, Date.now() - told)
+  } catch {
+    return undefined
+  }
 }
 
 // ---------- recording ----------
@@ -545,7 +691,7 @@ export function record<N extends EventName>(name: N, properties: Properties<N>):
   try {
     if (!sending && known?.file !== settingsFile()) known = { file: settingsFile(), tag: tagFrom(fresh()) }
     const tag = sending ? seen.tag : known!.tag
-    // Nobody has been told yet, or there is no id to record under
+    // Counting has not begun, or there is no id to record under
     if (!tag) return
     // A command that is not the sender looks for the off file every time, since another program
     // may have made it since this one began
@@ -563,6 +709,17 @@ export function record<N extends EventName>(name: N, properties: Properties<N>):
     // One line, for the connector to pick up. A file that has grown large means nothing has
     // been picking it up, and it is left as it is.
     addLines(spoolFile(), [JSON.stringify(event)], SPOOL_MOST_BYTES)
+  } catch {}
+}
+
+/**
+ * Notes something the backend noted, as it gave it: a name and properties as JSON text. It is
+ * held to the table like anything else, so a note this program has no event for, or one with a
+ * value it may not have, is not recorded.
+ */
+export function recordNoted(name: string, properties: string): void {
+  try {
+    record(name as EventName, JSON.parse(properties) as never)
   } catch {}
 }
 
@@ -742,7 +899,7 @@ export function startSender(
     if (busy || s.off) return
     busy = true
     try {
-      // Nobody has been told yet, or there is no id: nothing may be sent, whatever is waiting
+      // Counting has not begun, or there is no id: nothing may be sent, whatever is waiting
       if (!s.who || !s.tag) return forget()
       only(s.tag)
       queue.push(...fromSpool(s.tag, QUEUE_MOST - queue.length))
@@ -860,8 +1017,80 @@ export function thisProgram(): Properties<'service.started'> {
   // the bundle or the source, run as a script, wherever it lies.
   const program = process.execPath
   const installed = program.startsWith(inHome('bin')) ? 'script' : /(^|[\\/])(node|bun)(\.exe)?$/i.test(program) ? 'source' : 'other'
-  // The three numbers a version begins with, and nothing after them: a version with more to it
-  // is counted under those three, and is not left out for failing to be only them
-  const version = /^\d{1,4}\.\d{1,4}\.\d{1,4}/.exec(VERSION)?.[0] ?? '0.0.0'
-  return { version, os, arch, installed }
+  return { version: three(VERSION), os, arch, installed }
+}
+/**
+ * The three numbers a version begins with, and nothing after them: a version with more to it
+ * is counted under those three, and is not left out for failing to be only them.
+ */
+export const three = (version: string): string => /^\d{1,4}\.\d{1,4}\.\d{1,4}/.exec(version)?.[0] ?? '0.0.0'
+
+/**
+ * This machine, in the few words that say what kind it is: whether it is the one It runs on or
+ * one that joined it, its system and chip, which family of Linux, whether that Linux runs
+ * inside Windows or inside a container, and which shell its person has. Never its name.
+ */
+export function thisMachine(role: 'serves' | 'joined'): Properties<'machine.seen'> {
+  const { os, arch } = thisProgram()
+  let linux: Properties<'machine.seen'>['linux'] = 'none'
+  let wsl = false
+  let container = false
+  if (process.platform === 'linux') {
+    linux = 'other'
+    try {
+      // The system's own file, which on most is a link to where it is kept: read as any program reads it
+      const said = readFileSync('/etc/os-release', 'utf8').slice(0, 16 * 1024)
+      const of = (key: string) => (new RegExp(`^${key}=["']?([^"'\\n]*)`, 'm').exec(said)?.[1] ?? '').toLowerCase()
+      const names = ` ${of('ID')} ${of('ID_LIKE')} `
+      linux = / (debian|ubuntu) /.test(names)
+        ? 'debian'
+        : / (fedora|rhel|centos) /.test(names)
+          ? 'fedora'
+          : / arch /.test(names)
+            ? 'arch'
+            : / (suse|opensuse) /.test(names)
+              ? 'suse'
+              : / alpine /.test(names)
+                ? 'alpine'
+                : / nixos /.test(names)
+                  ? 'nix'
+                  : 'other'
+    } catch {}
+    wsl = Boolean(process.env.WSL_DISTRO_NAME) || /microsoft/i.test(osRelease())
+    container = Boolean(process.env.container) || stands('/.dockerenv') || stands('/run/.containerenv')
+  }
+  let shell: Properties<'machine.seen'>['shell'] = 'unknown'
+  if (process.platform !== 'win32') {
+    let named = process.env.SHELL ?? ''
+    try {
+      named = userInfo().shell || named
+    } catch {}
+    const name = path.basename(named)
+    shell = name === 'bash' || name === 'zsh' || name === 'fish' || name === 'sh' ? name : name ? 'other' : 'unknown'
+  }
+  return { role, os, arch, linux, wsl, container, shell }
+}
+
+/**
+ * Sends one event at once, from the command that records it, and waits a few seconds at most
+ * for it: for what the background service will not be there to send, which is that It was
+ * taken off the machine. Nothing is sent where reporting is off or has not begun, and whatever
+ * goes wrong here stops nothing.
+ */
+export async function sendNow<N extends EventName>(name: N, properties: Properties<N>): Promise<void> {
+  try {
+    const { off, kept } = standing()
+    const id = off ? null : identity(kept)
+    const fits = allowed(name, properties)
+    if (!id || !fits) return
+    const hour = new Date()
+    hour.setUTCMinutes(0, 0, 0)
+    await fetch(url(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'user-agent': `it/${VERSION}` },
+      body: JSON.stringify({ v: 1, installation: id.who, events: [{ id: randomUUID(), name, at: hour.toISOString(), properties: fits }] }),
+      redirect: 'error',
+      signal: AbortSignal.timeout(4000),
+    }).then((r) => void r.body?.cancel().catch(() => {}))
+  } catch {}
 }

@@ -23,7 +23,7 @@ Nothing It asks of its own backend or its own door goes through a proxy, whateve
 
 ## Usage counts
 
-It reports counts of how it is used, and it does so unless you turn it off. The counts go to `https://itcan.do/api/usage` under a random id for the installation: that the service started, that a page was published, that an answer reached an agent and by which path. It never reports what is on a page, what anyone clicked, or who you are. The first ordinary command a person runs at a terminal says so, which after an install is `it setup`; until it has, nothing is counted.
+It reports counts of how it is used, and it does so unless you turn it off. The counts go to `https://itcan.do/api/usage` under a random id for the installation: that the service started and on what kind of machine, which commands were run and how they ended, that a page was published or shown, that an answer reached an agent and by which path, and the like. Each is a name and a few properties, every one of them one of a fixed list of words. It never reports what is on a page, what anyone clicked, or who you are. Counting begins with the installation, and nothing is printed about it in a terminal: the first screen of It's site says it in one line, and the privacy policy at `https://itcan.do/privacy` says what is kept.
 
 `it telemetry off` turns it off, and so does `IT_TELEMETRY_ENABLED=false` or `DO_NOT_TRACK=1` wherever an `it` command runs. `it telemetry` says whether it is on. [Usage reporting](usage-reporting.md) lists every event and every property, what is never sent, and what a request reveals by being sent at all.
 

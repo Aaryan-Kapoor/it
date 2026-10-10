@@ -9,6 +9,8 @@ import { agentName, api, navigate } from './lib'
 
 /** What the person gives their agent to be led through It. */
 export const TOUR_PROMPT = 'Give me the It tour.'
+/** Where it is said what It counts of its use, and how to turn that off. */
+const PRIVACY = 'https://itcan.do/privacy'
 
 /**
  * The things It is shown being, in the film's own order, each with what a person says to an
@@ -144,6 +146,13 @@ export function Welcome({ owner }: { owner: boolean }) {
             No agent app is connected yet. Connect one
           </a>
         )}
+        <p className="hello-counts">
+          It collects usage data to help improve it, under a random id and never what is on a page. To read how it is used and how to opt out, see the{' '}
+          <a href={PRIVACY} target="_blank" rel="noreferrer noopener">
+            privacy policy
+          </a>
+          .
+        </p>
       </div>
       <div className="hello-show" aria-hidden={things.length ? undefined : 'true'}>
         {/* It stays on what it shows for as long as it is pointed at */}

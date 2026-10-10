@@ -3265,6 +3265,25 @@ form.row-main {
   color: var(--fg);
 }
 
+/* One quiet line, the last of the first screen's words: that It counts its use, and where that is read about */
+.hello-counts {
+  margin: 0;
+  max-width: 44ch;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+
+.hello-counts a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.hello-counts a:hover {
+  color: var(--fg);
+}
+
 .hello-show {
   display: flex;
   flex-direction: column;

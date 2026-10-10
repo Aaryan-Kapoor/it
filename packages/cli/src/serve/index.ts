@@ -8,7 +8,7 @@ import { contentPort } from '@it/protocol'
 import { runConnector } from '../connector'
 import { elsewhere, type Machine, machine, machineFile, notSetUp, Problem, readJson, why } from '../lib'
 import { startsByItself, stopFile } from '../service'
-import { counting } from '../usage'
+import { ageBand, begin, countBand, counting, failureOf, record, recordNoted, sinceBegun } from '../usage'
 import { asAdmin, type Backend, endOf, removeCopies, startBackend } from './backend'
 import { backendFolder, readConfig, type ServiceConfig } from './config'
 import { makeContent, startDoor } from './door'
@@ -43,11 +43,18 @@ export async function serve(say: (line: string) => void = (line) => void process
     hear('SIGTERM')
   }, 500)
   let failed = false
+  // Counting begins with the service where no command has begun it, so that a service that
+  // cannot start is counted as one that could not
+  begin()
   try {
     failed = config ? await here(config, say, asked, told) : await connector(say, asked.signal, told)
   } catch (err) {
     // Asked to stop while it was still starting, it has stopped, which is no failure
-    if (!(err instanceof Problem && err.code === 'stopped')) throw err
+    if (!(err instanceof Problem && err.code === 'stopped')) {
+      // Counted by the one word of what went wrong, where It has a word for it, and never by what was said of it
+      record('service.failed', { what: failureOf(err instanceof Problem ? err.code : undefined) })
+      throw err
+    }
   } finally {
     clearInterval(asking)
     process.off('SIGINT', hear)
@@ -112,12 +119,14 @@ async function here(config: ServiceConfig, say: (line: string) => void, asked: A
     void backend.ended.then((end) => {
       if (asked.signal.aborted || stopping) return
       say(`backend: ended by itself (${endOf(end)}); stopping`)
+      record('service.failed', { what: 'backend_exited' })
       failed = true
       asked.abort()
     })
     const door = asked.signal.aborted
       ? null
       : await keptDoor(config, backend, say, () => {
+          record('service.failed', { what: 'door' })
           failed = true
           asked.abort()
         })
@@ -136,6 +145,8 @@ async function here(config: ServiceConfig, say: (line: string) => void, asked: A
 
 /** How often the service looks at whether the network is to be on, and at which addresses this machine has. */
 const LOOK_MS = 1000
+/** How often the service takes from the backend what it noted for the counts of how It is used. */
+const COLLECT_MS = 20_000
 
 /**
  * What the service says to the backend of how it stands, under the names the backend's
@@ -301,10 +312,56 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   }
   await telling()
   const timer = setInterval(() => void look(), LOOK_MS)
+  // What happened between a screen and the backend is noted there, and taken from it here a few
+  // times a minute, where what is sent is sent from (see `convex/lib/counted.ts`). Once a day
+  // the backend is also asked how much this It holds, which is counted in bands. A backend that
+  // serves the functions of an earlier It keeps no notes and is asked for none. Whatever goes
+  // wrong in this stops nothing, and is tried again at the next pass.
+  let collecting = false
+  let picturedAt = 0
+  const collect = async () => {
+    if (collecting || stopped || backend.behind !== undefined) return
+    collecting = true
+    try {
+      const on = counting()
+      for (let pass = 0, more = true; more && pass < 5; pass++) {
+        const got = (await asAdmin(backend, 'counted:take', { keep: on })) as { notes?: { name: string; properties: string }[]; more?: boolean }
+        for (const note of got.notes ?? []) recordNoted(note.name, note.properties)
+        more = got.more === true
+      }
+      if (on && Date.now() - picturedAt > 86_400_000) {
+        const holds = (await asAdmin(backend, 'counted:picture', {})) as {
+          pages: number
+          displays: number
+          machines: number
+          conversations: number
+          push: boolean
+        }
+        picturedAt = Date.now()
+        record('installation.seen', {
+          pages: countBand(holds.pages),
+          displays: countBand(holds.displays),
+          machines: countBand(holds.machines),
+          conversations: countBand(holds.conversations),
+          network: !now.network ? 'off' : now.tailnet ? 'tailscale' : 'lan',
+          background: startsByItself(),
+          push: holds.push === true,
+          age: ageBand(sinceBegun() ?? 0),
+        })
+      }
+    } catch {
+    } finally {
+      collecting = false
+    }
+  }
+  const collector = setInterval(() => void collect(), COLLECT_MS)
+  collector.unref()
+  void collect()
   return {
     async stop() {
       stopped = true
       clearInterval(timer)
+      clearInterval(collector)
       // A door that is being opened anew at this moment is waited for, and then closed
       while (looking) await new Promise((resolve) => setTimeout(resolve, 20))
       await now.door.stop().catch(() => {})

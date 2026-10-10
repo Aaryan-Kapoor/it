@@ -221,15 +221,13 @@ describe('what the service tells the backend of how it stands', () => {
         writeFileSync(path.join(user, 'commands', 'systemctl'), '#!/bin/sh\ncase " $* " in *" is-enabled "*) echo enabled ;; esac\nexit 0\n', { mode: 0o755 })
         process.env.PATH = path.join(user, 'commands')
         expect(said()).toEqual({ background: false, usage: false })
-        // A person has been told of usage reporting, as the install script leaves it, and a first command makes the id counts are sent under
-        writeFileSync(path.join(folder, 'telemetry.json'), JSON.stringify({ told: 1 }))
-        expect(said()).toEqual({ background: false, usage: false })
-        usage.tellOnce(() => {}, false)
+        // Counting begins with a first command, which makes the id counts are sent under
+        usage.begin()
         expect(said()).toEqual({ background: false, usage: true })
         // They turn it off, and on again
         usage.set(false)
         expect(said()).toEqual({ background: false, usage: false })
-        usage.set(true, () => {})
+        usage.set(true)
         expect(said()).toEqual({ background: false, usage: true })
         // The service is registered for this folder, and taken away again
         const registered =

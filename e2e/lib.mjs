@@ -300,9 +300,9 @@ export function usageReceiver(file) {
 }
 
 /**
- * Leaves in a test machine's folder what the install script leaves: the note that the person
- * was told about usage reporting. A program nobody is watching says nothing and counts nothing
- * until someone has been told, and these machines are installed by no script.
+ * Leaves in a test machine's folder the note of when counting began there, which the first
+ * command or the service's first start would make, so that what the run's programs count is
+ * counted from their first moment.
  */
 export function toldAboutUsage(home) {
   mkdirSync(home, { recursive: true })
@@ -310,25 +310,106 @@ export function toldAboutUsage(home) {
 }
 
 /** Everything a usage event may be, said again here and not read from the program: a check of its own. */
+const AGENT_APPS = ['claude-code', 'codex', 'openclaw', 'hermes', 'opencode', 'pi', 'other', 'unknown']
+const SCREEN_KINDS = ['phone', 'tablet', 'computer', 'tv']
+const HOW_LONG = ['under 1 second', '1 to 10 seconds', '10 to 60 seconds', '1 to 10 minutes', '10 to 60 minutes', '1 to 24 hours', 'over 24 hours']
+const HOW_MANY = ['0', '1', '2 to 5', '6 to 20', '21 to 100', 'over 100']
+const HOW_OLD = ['under 1 day', '1 to 7 days', '8 to 30 days', '31 to 90 days', 'over 90 days']
+const SO_OR_NOT = [true, false]
+const THREE_NUMBERS = /^\d+\.\d+\.\d+$/
 export const USAGE_MAY_BE = {
   'service.started': {
-    version: /^\d+\.\d+\.\d+$/,
+    version: THREE_NUMBERS,
     os: ['linux', 'macos', 'windows', 'other'],
     arch: ['x64', 'arm64', 'other'],
     installed: ['script', 'source', 'other'],
   },
+  'machine.seen': {
+    role: ['serves', 'joined'],
+    os: ['linux', 'macos', 'windows', 'other'],
+    arch: ['x64', 'arm64', 'other'],
+    linux: ['debian', 'fedora', 'arch', 'suse', 'alpine', 'nix', 'other', 'none'],
+    wsl: SO_OR_NOT,
+    container: SO_OR_NOT,
+    shell: ['bash', 'zsh', 'fish', 'sh', 'powershell', 'cmd', 'other', 'unknown'],
+  },
+  'app.seen': {
+    agent: AGENT_APPS,
+    addon: ['connected', 'needs_approval', 'unavailable', 'too_old', 'error', 'not_connected'],
+    version: /^(\d+\.\d+\.\d+|unknown)$/,
+    wake: SO_OR_NOT,
+  },
+  'installation.seen': {
+    pages: HOW_MANY,
+    displays: HOW_MANY,
+    machines: HOW_MANY,
+    conversations: HOW_MANY,
+    network: ['off', 'lan', 'tailscale'],
+    background: SO_OR_NOT,
+    push: SO_OR_NOT,
+    age: HOW_OLD,
+  },
+  'setup.finished': {
+    led: ['person', 'agent', 'script'],
+    kind: ['new', 'joined', 'again'],
+    service: ['registered', 'none', 'failed'],
+    apps: ['0', '1', '2', '3 or more'],
+    ssh: SO_OR_NOT,
+  },
+  'command.run': {
+    command: [
+      ...['create', 'update', 'list', 'read', 'delete', 'rollback', 'set', 'patch', 'state', 'open', 'notify', 'displays', 'wait', 'actions', 'action', 'ack'],
+      ...[
+        'setup',
+        'site',
+        'network',
+        'status',
+        'whoami',
+        'service',
+        'login',
+        'logout',
+        'uninstall',
+        'skill',
+        'tour',
+        'telemetry',
+        'upgrade',
+        'runs',
+        'updates',
+      ],
+      ...['version', 'help', 'other'],
+    ],
+    by: ['person', 'script', 'claude-code', 'codex', 'openclaw', 'hermes', 'opencode', 'pi', 'other'],
+    result: [
+      ...['ok', 'invalid', 'limit', 'error', 'backend_program', 'unavailable', 'offline', 'busy', 'backend_silent', 'unauthenticated', 'timeout', 'stopped'],
+      ...['settings', 'refused', 'record_unread', 'rate_limited', 'port_taken', 'not_set_up', 'lock_not_taken', 'lock_lost', 'checksum', 'not_found'],
+      ...['forbidden', 'another_session', 'other'],
+    ],
+    took: HOW_LONG,
+  },
   'page.published': {
-    agent: ['claude-code', 'codex', 'openclaw', 'hermes', 'opencode', 'pi', 'other', 'unknown'],
+    agent: AGENT_APPS,
     change: ['new', 'update'],
     kind: ['custom'],
     size: ['under 10 KB', '10 to 100 KB', '100 KB to 1 MB', '1 to 10 MB', 'over 10 MB'],
+    files: ['1', '2 to 5', '6 to 20', 'over 20'],
+    state: SO_OR_NOT,
+    actions: SO_OR_NOT,
+    pictures: SO_OR_NOT,
+    shown: SO_OR_NOT,
   },
-  'answer.delivered': {
-    path: ['heard', 'woke', 'waited'],
-    after: ['under 1 second', '1 to 10 seconds', '10 to 60 seconds', '1 to 10 minutes', '10 to 60 minutes', '1 to 24 hours', 'over 24 hours'],
-    agent: ['claude-code', 'codex', 'openclaw', 'hermes', 'opencode', 'pi', 'other', 'unknown'],
-  },
-  'agent.woken': { result: ['resumed', 'declined', 'failed'], agent: ['claude-code', 'codex', 'openclaw', 'hermes', 'opencode', 'pi', 'other', 'unknown'] },
+  'page.shown': { screen: SCREEN_KINDS, by: ['agent', 'person'] },
+  'screen.connected': { screen: SCREEN_KINDS, sameMachine: SO_OR_NOT },
+  'display.paired': { screen: SCREEN_KINDS, sameMachine: SO_OR_NOT, first: SO_OR_NOT },
+  'answer.sent': { screen: SCREEN_KINDS, from: ['page', 'notification'] },
+  'answer.delivered': { path: ['heard', 'woke', 'waited'], after: HOW_LONG, agent: AGENT_APPS },
+  'agent.woken': { result: ['resumed', 'declined', 'failed'], agent: AGENT_APPS },
+  'notification.sent': { agent: AGENT_APPS, buttons: SO_OR_NOT, sticky: SO_OR_NOT, page: SO_OR_NOT, to: ['one', 'all'] },
+  'notification.ended': { how: ['answered', 'dismissed'], pushed: SO_OR_NOT },
+  'tour.shown': { page: ['menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done'], agent: AGENT_APPS },
+  'tour.ended': { seen: ['0', '1', '2', '3', '4', '5'] },
+  'upgrade.done': { from: THREE_NUMBERS, to: THREE_NUMBERS, by: ['command', 'site'], result: ['ok', 'failed'] },
+  'service.failed': { what: ['backend_program', 'backend_silent', 'backend_exited', 'port_taken', 'lock_lost', 'functions', 'door', 'other'] },
+  'installation.removed': { age: HOW_OLD },
 }
 /** Whether this is an object with fields of its own and nothing behind them: not a list, not nothing, and made by no class. */
 const plain = (v) => typeof v === 'object' && v !== null && !Array.isArray(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v))
@@ -353,7 +434,7 @@ export function wrongWithBatch(batch) {
     if (!plain(e.properties)) return `${e.name} has properties that are not an object`
     if (fields(e.properties) !== fields(may)) return `${e.name} has the properties ${fields(e.properties)}`
     for (const [k, v] of Object.entries(e.properties))
-      if (typeof v !== 'string' || !(may[k] instanceof RegExp ? may[k].test(v) : may[k].includes(v))) return `${e.name}.${k} is not one of the values it may be`
+      if (may[k] instanceof RegExp ? typeof v !== 'string' || !may[k].test(v) : !may[k].includes(v)) return `${e.name}.${k} is not one of the values it may be`
   }
   return null
 }

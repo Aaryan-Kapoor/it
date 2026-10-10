@@ -6,7 +6,7 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readd
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN } from '@it/protocol'
 import { api, call, direct, doorRefusal, inHome, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
-import { agentOf, record, sizeBand } from './usage'
+import { agentOf, filesBand, record, sizeBand } from './usage'
 
 interface Gathered {
   entry: FileEntry
@@ -221,6 +221,11 @@ async function put(where: string, grant: string, f: Gathered): Promise<void> {
   }
 }
 
+/** Whether a page's own files call It to say what the person did: looked for in its markup and scripts, and nothing of them is kept. */
+function sendsBack(files: Gathered[]): boolean {
+  return files.some((f) => /\.(html?|m?js)$/i.test(f.entry.path) && f.data.length <= 2_000_000 && /\bIt\.action\s*\(/.test(f.data.toString('utf8')))
+}
+
 export async function publish(input: {
   slug?: string
   title: string
@@ -232,6 +237,10 @@ export async function publish(input: {
   take?: boolean
   /** This conversation is making a page of its own: where the id is another conversation's page, nothing is published. */
   own?: boolean
+  /** Whether the command that publishes it also brings it up on a display. Counted, and nothing else. */
+  shown?: boolean
+  /** One of It's own pages, which the tour's are: not counted as a page somebody made. */
+  itsOwn?: boolean
 }): Promise<{ slug: string; version: number; url: string; note?: string }> {
   const bytes = input.files.reduce((n, f) => n + f.entry.size, 0)
   if (bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
@@ -269,8 +278,22 @@ export async function publish(input: {
     artifactId: begun.artifactId,
     version: begun.version,
   })
-  // Counted: which agent app, new or not, and how large in a few bands. Never its title or what is in it.
-  record('page.published', { agent: agentOf(session?.harness), change: done.version === 1 ? 'new' : 'update', kind: 'custom', size: sizeBand(bytes) })
+  // Counted: which agent app, new or not, how large and of how many files in a few bands, and
+  // four things that are each so or not: whether it was given a state to start with, whether it
+  // sends anything back, whether it carries a picture, and whether it was brought up at once.
+  // Never its title or what is in it.
+  if (!input.itsOwn)
+    record('page.published', {
+      agent: agentOf(session?.harness),
+      change: done.version === 1 ? 'new' : 'update',
+      kind: 'custom',
+      size: sizeBand(bytes),
+      files: filesBand(input.files.length),
+      state: input.state !== undefined,
+      actions: sendsBack(input.files),
+      pictures: input.files.some((f) => /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(f.entry.path)),
+      shown: input.shown === true,
+    })
   // Which conversation this was done as was a choice among the apps that had marked this
   // command: said, so that a click going to another conversation is not a surprise. A new page,
   // and one taken over, is that conversation's from now on; a later version of a page leaves

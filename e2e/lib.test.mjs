@@ -47,7 +47,17 @@ const batch = (event = {}, over = {}) => ({
       id: '0b7f6a52-5c0e-4e0b-9d1c-2f1f3f0a8d11',
       at: '2026-10-04T05:00:00.000Z',
       name: 'page.published',
-      properties: { agent: 'claude-code', change: 'new', kind: 'custom', size: 'under 10 KB' },
+      properties: {
+        agent: 'claude-code',
+        change: 'new',
+        kind: 'custom',
+        size: 'under 10 KB',
+        files: '1',
+        state: false,
+        actions: true,
+        pictures: false,
+        shown: true,
+      },
       ...event,
     },
   ],
@@ -74,12 +84,15 @@ describe('the check of a batch of usage counts', () => {
       { ...good, size: 'e2e-private-size' },
       { ...good, change: ['new'] },
       { ...good, size: 7 },
+      // What is so or not is so or not, and no word for it
+      { ...good, state: 'false' },
+      { ...good, shown: 1 },
       Object.entries(good),
       null,
       'under 10 KB',
       Object.assign(Object.create(good), {}),
-      Object.assign(Object.create({ size: 'under 10 KB' }), { agent: 'claude-code', change: 'new', kind: 'custom' }),
-      JSON.parse('{"agent":"claude-code","change":"new","kind":"custom","size":"under 10 KB","__proto__":{"title":"e2e-private-title"}}'),
+      Object.assign(Object.create({ size: 'under 10 KB' }), Object.fromEntries(Object.entries(good).filter(([name]) => name !== 'size'))),
+      JSON.parse(`${JSON.stringify(good).slice(0, -1)},"__proto__":{"title":"e2e-private-title"}}`),
     ]
     for (const properties of wrong) expect(wrongWithBatch(batch({ properties })), JSON.stringify(properties)).toEqual(expect.any(String))
     expect(wrongWithBatch(batch({ name: 'service.started', properties: { version: ['0.1.0'], os: 'linux', arch: 'x64', installed: 'script' } }))).toMatch(

@@ -52,6 +52,7 @@ import {
   STACK_PORT,
   sleep,
   stackNote,
+  usageReceiver,
   whereabouts,
 } from './lib.mjs'
 import { redact } from './logs.mjs'
@@ -104,6 +105,12 @@ if (archives && !statSync(archives, { throwIfNoEntry: false })?.isDirectory()) {
   cannot(`IT_STACK_BACKEND_ARCHIVES names the folder that holds the backend program’s archive, and ${archives} is no folder.`)
 }
 const release = archives ? await backendRelease(archives) : null
+// What the stack's own It counts of its use goes to a stand-in here, for as long as the stack
+// stands, and what it is sent is kept beside its log: what happens between a browser and the
+// backend is counted by this It's service and by none of the programs a run starts
+rmSync(path.join(logs, 'usage.received.jsonl'), { force: true })
+const usage = await usageReceiver(path.join(logs, 'usage.received.jsonl'))
+process.env.IT_E2E_USAGE_URL = usage.url
 if (release) process.env.IT_BACKEND_RELEASES = release.url
 const at = whereabouts({ home, port })
 /** What did not stop when it was asked to, each time it happened, in the words it was said in. Empty in a run in which everything did. */
@@ -198,6 +205,7 @@ function stop(code = 0) {
     if (unnoted) console.error('A credential the stack held could not be noted where the check of what was written down looks.')
     rmSync(apps, { recursive: true, force: true })
     await release?.close()
+    await usage.close().catch(() => {})
     // The folder goes only when nothing is left running on it: a program that is still there is still writing to it
     if (!nothingLeft) console.error(`A backend program is still running on ${home}, which is left as it is.`)
     else if (!given) rmSync(home, { recursive: true, force: true })

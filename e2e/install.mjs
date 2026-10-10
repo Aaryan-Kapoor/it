@@ -371,7 +371,7 @@ try {
     JSON.stringify(one.said.slice(-900)),
   )
   check(
-    'it says nothing of the usage counts It reports, which the program says itself at the first command a person runs, and leaves no note that anyone was told',
+    'it says nothing of the usage counts It reports, and leaves no note of them: counting begins with the program’s first command',
     !saysOfUsage(one) && !existsSync(path.join(one.folder, 'telemetry.json')),
     one.said,
   )
@@ -491,7 +491,7 @@ try {
       watched.said,
     )
     check(
-      'and it says nothing there of usage reporting either, and leaves no note: the setup it leads into is the command that says it',
+      'and it says nothing there of usage reporting either, and leaves no note: the site’s first screen is where it is said',
       watched.code === 0 && !saysOfUsage(watched) && noteOf(watched) === null,
       `${watched.said} ${JSON.stringify(noteOf(watched))}`,
     )

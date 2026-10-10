@@ -45,9 +45,12 @@ vi.mock('node:child_process', async (original) => ({
 vi.mock('./src/setup', () => ({ detectAll: async () => stand.found, newerProgramSeen: () => false, reconcile: async () => {} }))
 vi.mock('./src/usage', () => ({
   agentOf: (harness: unknown) => String(harness ?? 'unknown'),
+  begin: () => {},
   record: () => {},
   startSender: () => ({ stop: () => {} }),
+  thisMachine: () => ({}),
   thisProgram: () => ({}),
+  three: (version: string) => version,
   timeBand: () => '',
 }))
 vi.mock('./src/lib', async (original) => {
