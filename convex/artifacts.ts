@@ -79,7 +79,9 @@ export const get = query({
           : null,
       // When the page's agent last changed it: published it, or wrote its state. What was done on
       // the page before then has, as far as can be seen from here, been answered there.
-      answeredAt: Math.max(a.updatedAt, state?.agentAt ?? 0),
+      answeredAt: Math.max(a.updatedAt, state?.agentAt ?? 0, a.said?.at ?? 0),
+      // What its agent last said above the page, for an answer that has no place on the page itself
+      said: a.said ?? null,
       // Whether the page's conversation is running now because It reopened it, which is what can be stopped from here
       run: running(machine, a),
       // Why it could not be reopened, the last time that was tried and did not work, and when
@@ -109,6 +111,25 @@ export const get = query({
       stateRevision: state?.revision ?? 0,
       versions: versions.map((x) => ({ n: x.n, bytes: x.bytes, files: x.files.length, status: x.status, createdAt: x.createdAt })),
     }
+  },
+})
+
+/**
+ * An agent says something above a page, in a line of its own words: an answer that has no
+ * place on the page itself, shown where the person is looking. Each one takes the place of the
+ * one before, and saying nothing takes it away.
+ */
+export const say = mutation({
+  args: { slug: v.string(), text: v.string() },
+  handler: async (ctx, { slug, text }) => {
+    const { user } = await requireMachine(ctx)
+    await rateLimit(ctx, 'patchState', user._id)
+    const a = await resolve(ctx, user._id, { slug })
+    const said = text.trim()
+    if (said.length > LIMITS.saidText)
+      fail('limit', `What is said above a page is at most ${LIMITS.saidText} characters. Put anything longer on the page itself.`)
+    await ctx.db.patch(a._id, { said: said ? { text: said, at: Date.now() } : undefined })
+    return { said: said !== '' }
   },
 })
 

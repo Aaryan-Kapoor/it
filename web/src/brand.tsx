@@ -70,6 +70,18 @@ export const IconX = () => (
   </svg>
 )
 
+export const IconSay = () => (
+  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" {...stroke} strokeWidth="2">
+    <path d="M21 12a8 8 0 0 1-11.8 7L4 20.5l1.4-4.6A8 8 0 1 1 21 12Z" />
+  </svg>
+)
+export const IconSend = () => (
+  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" {...stroke} strokeWidth="2.2">
+    <path d="M12 19V5" />
+    <path d="m6 11 6-6 6 6" />
+  </svg>
+)
+
 export const IconStop = () => (
   <svg viewBox="0 0 24 24" width="9" height="9" aria-hidden="true">
     <rect x="4" y="4" width="16" height="16" rx="3" fill="currentColor" />

@@ -11,7 +11,7 @@
 // from, and by nothing else. Nothing a page says is believed beyond "this page wants to submit
 // this action for itself", and how much it may ask of the site is bounded here, before
 // anything reaches the backend.
-import { contentPort, FAULT, isStoreKey, LIMITS, type PageToSite, parseJson, SANDBOX, type SiteToPage } from '@it/protocol'
+import { contentPort, FAULT, isStoreKey, LIMITS, MESSAGE, type PageToSite, parseJson, SANDBOX, type SiteToPage } from '@it/protocol'
 import { useConvex, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
@@ -270,6 +270,8 @@ export function Mount({
         if (!allowed()) throw new Error('This page is sending too much at once. Try again in a moment.')
         if (message.type === 'it:action') {
           const e = message.envelope
+          // The name of what a person types above a page is the site's own, and no page's to send under
+          if (e.name === MESSAGE) throw new Error(`A page may not send an action named ${MESSAGE}.`)
           // Said by the site, not the page: whether the person was at this page when it sent this.
           // A page can send actions with nobody touching it, and its agent should know which is which.
           const was = attended()

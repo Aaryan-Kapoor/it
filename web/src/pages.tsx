@@ -1,9 +1,9 @@
 // The person's pages: the grid of all of them, and one of them shown.
-import { ALIVE, NOUN, WAKE_BACK_MS } from '@it/protocol'
+import { ALIVE, LIMITS, NOUN, WAKE_BACK_MS } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
-import { type CSSProperties, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import { copy, IconBack, IconLink, IconPin, IconStop, IconX, Mark } from './brand'
-import { agentName, ago, api, type Id, navigate, refusal, useNow } from './lib'
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { copy, IconBack, IconLink, IconPin, IconSay, IconSend, IconStop, IconX, Mark } from './brand'
+import { agentName, ago, api, displayKey, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
 import { onItsWayUntil, outboxChanges, unsaved, unsent, watchOutbox } from './outbox'
@@ -204,6 +204,8 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
   }, [page, slug])
   /** What the page's own script last failed with, and which version of the page that was. */
   const [fault, setFault] = useState<{ of: string; message: string; agentTold: boolean } | null>(null)
+  /** Whether the box to type to the page's agent in is open. */
+  const [talking, setTalking] = useState(false)
   useEffect(() => {
     if (page) document.title = `${page.title} · It`
     return () => {
@@ -284,6 +286,18 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
           )}
         </span>
         <div className="page-nav-actions">
+          {page.version !== null && (
+            <button
+              type="button"
+              className="nav-action"
+              aria-pressed={talking}
+              title={`Type to ${agentName(page.agent) ?? 'your agent'}`}
+              aria-label={`Type to ${agentName(page.agent) ?? 'your agent'}`}
+              onClick={() => setTalking(!talking)}
+            >
+              <IconSay />
+            </button>
+          )}
           <Bell compact />
           <button
             type="button"
@@ -296,6 +310,17 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
           </button>
         </div>
       </header>
+      {page.version !== null && (
+        <Talk
+          // Another page is another box: what was being typed to one agent is not sent to the next
+          key={page.id}
+          artifactId={page.id as Id<'artifacts'>}
+          agent={agentName(page.agent)}
+          said={page.said ?? null}
+          open={talking}
+          onClose={() => setTalking(false)}
+        />
+      )}
       {page.version === null ? (
         <div className="page-frame-unavailable">This {NOUN.one} has nothing published yet.</div>
       ) : (
@@ -310,6 +335,125 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
         />
       )}
     </main>
+  )
+}
+
+/** How long what an agent said above a page is shown by itself. After that it is there for whoever opens the box. */
+export const SAID_FOR_MS = 30 * 60_000
+
+/**
+ * What passes between a person at a page and the page's agent that needs nothing of the page
+ * itself: the line the agent last said above the page, and a box to type to it in. The box is
+ * a second way to the agent, beside what the page has for it, and what is typed in it goes as
+ * anything done on the page goes: to the conversation the page belongs to, kept until it is
+ * taken. So that someone at a display does not have to go to the agent's own window to say a
+ * word, or to read one.
+ */
+function Talk({
+  artifactId,
+  agent,
+  said,
+  open,
+  onClose,
+}: {
+  artifactId: Id<'artifacts'>
+  agent: string | null
+  said: { text: string; at: number } | null
+  open: boolean
+  onClose: () => void
+}) {
+  const convex = useConvex()
+  const now = useNow()
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState('')
+  const box = useRef<HTMLInputElement>(null)
+  // One id for what is in the box until it has been taken, so that sending it twice over a
+  // connection that dropped is one message. Not `randomUUID`, which a browser offers only to a
+  // site it reached securely
+  const fresh = () => `typed-${Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('')}`
+  const id = useRef(fresh())
+  // The line a person closed stays closed, in this tab: the next thing the agent says is another line
+  const closedKey = `it.said.${artifactId}`
+  const [closed, setClosed] = useState(() => Number(sessionStorage.getItem(closedKey) ?? 0))
+  useEffect(() => {
+    if (open) box.current?.focus()
+  }, [open])
+  const line = said && said.at > closed && (open || now - said.at < SAID_FOR_MS) ? said : null
+  if (!open && !line) return null
+  const send = async () => {
+    const typed = text.trim()
+    if (!typed || sending) return
+    setSending(true)
+    setError('')
+    try {
+      await convex.mutation(api.actions.message, { artifactId, displayKey: displayKey(), clientActionId: id.current, text: typed })
+      id.current = fresh()
+      setText('')
+    } catch (err) {
+      // Left in the box, to be sent again: nothing of it is kept anywhere else
+      setError(refusal(err).message)
+    } finally {
+      setSending(false)
+    }
+  }
+  return (
+    <div className="page-talk">
+      {line && (
+        // Said aloud as it arrives, to whoever cannot see it
+        <p className="page-talk-said" role="status">
+          <b>{agent ?? 'Your agent'}</b>
+          <span>{line.text}</span>
+          <button
+            type="button"
+            className="page-talk-x"
+            aria-label="Dismiss"
+            title="Dismiss"
+            onClick={() => {
+              sessionStorage.setItem(closedKey, String(line.at))
+              setClosed(line.at)
+            }}
+          >
+            <IconX />
+          </button>
+        </p>
+      )}
+      {open && (
+        <form
+          className="page-talk-form"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void send()
+          }}
+        >
+          <input
+            ref={box}
+            className="page-talk-box"
+            aria-label={`Type to ${agent ?? 'your agent'}`}
+            placeholder={`Type to ${agent ?? 'your agent'}…`}
+            autoComplete="off"
+            maxLength={LIMITS.messageText}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              // Escape closes the box, and does not leave the page as it does anywhere else on the bar
+              if (e.key !== 'Escape') return
+              e.preventDefault()
+              e.nativeEvent.stopImmediatePropagation()
+              onClose()
+            }}
+          />
+          <button type="submit" className="page-talk-send" disabled={sending || !text.trim()} aria-label="Send" title="Send (enter)">
+            <IconSend />
+          </button>
+          {error && (
+            <span className="error" role="alert">
+              {error}
+            </span>
+          )}
+        </form>
+      )}
+    </div>
   )
 }
 

@@ -1,4 +1,4 @@
-import { LIMITS, PROTOCOL_VERSION, parseJson, QUOTA } from '@it/protocol'
+import { LIMITS, MESSAGE, PROTOCOL_VERSION, parseJson, QUOTA } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -26,11 +26,16 @@ export async function record(
     attended?: boolean
     /** The page's title as whoever is recording this knew it then, where they kept it: a notification's button knows the title its page had when it was sent. */
     title?: string
+    /** Typed by a person in the site's own box above the page, which only the function for that box says. */
+    typed?: boolean
   },
 ): Promise<{ actionId: Id<'actions'>; duplicate: boolean }> {
   if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(input.clientActionId)) fail('invalid', 'That is not an action id.')
   if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(input.name))
     fail('invalid', `An action name is 1 to ${LIMITS.actionName} letters, digits, dots, colons, dashes or underscores.`)
+  // The name what a person typed above a page is kept under is the site's own. A page that
+  // sends an action of that name is refused: its agent would read the page's words as the person's
+  if (input.name === MESSAGE && !input.typed) fail('invalid', `A page may not send an action named ${MESSAGE}.`)
   const bytes = new TextEncoder().encode(input.payload).length
   if (bytes > LIMITS.actionPayloadBytes) fail('limit', `An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB.`)
   if (parseJson(input.payload) === undefined) fail('invalid', 'What an action carries must be JSON.')
@@ -203,6 +208,38 @@ export const submit = mutation({
     const { actionId, duplicate } = await record(ctx, artifact, { ...envelope, ...(display ? { displayId: display._id } : {}) })
     // Counted: that something was sent from a page, and from what kind of screen. Never its name or what it carried
     if (!duplicate) await counted(ctx, 'answer.sent', { screen: display?.screen ?? 'computer', from: 'page' })
+    return { actionId }
+  },
+})
+
+/**
+ * A person typed something to a page's agent, in the box the site has above the page. It is
+ * kept and delivered as anything done on the page is, under a name of the site's own, so that
+ * its agent is told it as the person's words. Nothing in a page can call this: a page has no
+ * session of the browser's, and reaches It only through what the site sends for it.
+ */
+export const message = mutation({
+  args: { artifactId: v.id('artifacts'), displayKey: v.string(), clientActionId: v.string(), text: v.string() },
+  handler: async (ctx, { artifactId, displayKey, clientActionId, text }) => {
+    const c = await requireBrowser(ctx)
+    const artifact = await ownArtifact(ctx, c.user._id, artifactId)
+    const typed = text.trim()
+    if (!typed) fail('invalid', 'There is nothing to send.')
+    if (typed.length > LIMITS.messageText) fail('limit', `A message is at most ${LIMITS.messageText} characters.`)
+    if (artifact.currentVersion === undefined) fail('invalid', 'This page has nothing published yet.')
+    const display = await findDisplay(ctx, c, displayKey)
+    const { actionId, duplicate } = await record(ctx, artifact, {
+      ...(display ? { displayId: display._id } : {}),
+      clientActionId,
+      name: MESSAGE,
+      payload: JSON.stringify({ text: typed }),
+      contentVersion: artifact.currentVersion,
+      // Typed on the site itself, where no page's script can type
+      attended: true,
+      typed: true,
+    })
+    // Counted: that something was typed to an agent above a page, and from what kind of screen. Never the words
+    if (!duplicate) await counted(ctx, 'answer.sent', { screen: display?.screen ?? 'computer', from: 'message' })
     return { actionId }
   },
 })

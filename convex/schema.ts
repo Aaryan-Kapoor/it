@@ -193,6 +193,8 @@ export default defineSchema({
     waiting: v.optional(v.number()),
     /** When a person last stopped the agent from this page: what was done on the page up to then is delivered to nobody, whoever the page belongs to by now. */
     stoppedThrough: v.optional(v.number()),
+    /** What the page's agent last said above the page, in its own words, and when. */
+    said: v.optional(v.object({ text: v.string(), at: v.number() })),
   })
     .index('by_user_slug', ['userId', 'slug'])
     .index('by_user_updated', ['userId', 'updatedAt'])

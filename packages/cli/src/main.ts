@@ -2422,6 +2422,9 @@ State
                                  --if-revision changes the state only while it is still at
                                  that revision, which \`it state\` prints.
   it state <id>
+  it say <id> "<text>"           A line of your own words above the ${NOUN.one}, where the person is
+                                 looking: an answer that has no place on the ${NOUN.one} itself.
+                                 With no text, what was said before is taken away.
 
 Displays
   it open <id> [--on "<display>"]
@@ -2885,6 +2888,12 @@ async function main(argv: string[]): Promise<void> {
           ...(base === undefined ? {} : { baseRevision: Number(base) }),
         }),
       )
+    }
+    case 'say': {
+      const slug = need(a._[0], `which ${NOUN.one}`, 'say <id> "<text>"')
+      // Everything after the id is what is said, as `it set` reads its value. With nothing after
+      // it, what was said before is taken away
+      return out({ id: slug, ...(await call('mutation', api.artifacts.say, { slug, text: a._.slice(1).join(' ') })) })
     }
     case 'state': {
       const slug = need(a._[0], `which ${NOUN.one}`, 'state <id>')

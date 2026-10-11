@@ -131,6 +131,25 @@ describe('text that is piped in', () => {
 
 describe('the words an agent reads for an action', () => {
   const action = { id: 'k57', artifact: 'plan', title: 'Deploy plan', name: 'approve', payload: { plan: 'B' }, at: 1 }
+  test('give what a person typed above the page as their own message, with where to answer it', () => {
+    const typed = { ...action, name: 'it:message', payload: { text: 'Make the board bigger, "please".' }, attended: true }
+    const said = describeClick(typed)
+    expect(said).toMatch(/^\[It\] The user typed this to you in the box above the page "Deploy plan" \(plan\), at a display of theirs\./)
+    // Their words, in quotation marks that nothing in them can close
+    expect(said).toContain(' "Make the board bigger, \\"please\\"." ')
+    expect(said).toContain('`it say plan "…"`')
+    expect(said).toMatch(/\[action k57\]$/)
+    // Where what an action carried is left out, so are they, with how to read them
+    expect(describeClick(typed, 0)).toContain('Run `it action k57` to read it.')
+    expect(describeClick(typed, 0)).not.toContain('bigger')
+    // A long one is cut, and says so
+    expect(describeClick({ ...typed, payload: { text: 'x'.repeat(5000) } })).toContain('… (cut short: run `it action k57` to read all of it)')
+    // The short line carries them as they were typed, on one line: they are the person's, and stand as that
+    expect(briefClick({ ...typed, payload: { text: 'Make it\n  bigger' } })).toBe('[It] "Deploy plan" (plan), typed above it: Make it bigger [action k57]')
+    expect(briefClick({ ...typed, payload: { text: 'x'.repeat(5000) } })).toMatch(/x{1000}… \(cut short\) \[action k57\]$/)
+    // Whatever is under the name that is no text is nothing typed
+    expect(briefClick({ ...typed, payload: { text: { a: 1 } } })).toBe('[It] "Deploy plan" (plan), typed above it:  [action k57]')
+  })
   test('say whether the site saw someone use the page just before it sent the action, and never that the person chose it or that the page acted alone', () => {
     expect(describeClick({ ...action, attended: true })).toBe(
       '[It] The page "Deploy plan" (plan) sent this just after someone used it: approve {"plan":"B"} [action k57]',
