@@ -23,6 +23,11 @@ import path from 'node:path'
 const IT_HOME_AT_SETUP = null
 
 const HARNESS = 'pi'
+// What the agent is told of It among its own instructions, which this add-on adds: when a page
+// is the answer. The skill says how, and an agent reads it only once it has decided to use It.
+// The same words as every add-on that says them, kept in It's protocol as `WHEN`.
+const WHEN =
+  'It is set up on this machine: the user’s own two-way workspace, on any screen they own. Whatever the user is to look at, use, play, choose from, fill in or decide on is built as a page with It and not written into the chat, and so is anything you would otherwise lay out in the chat as a table, a set of options or a document. Load the skill named `it` before the first page. A plain answer to a plain question stays in the chat.'
 const ANSWER_MS = 1500 // how long the connector may stay silent before it is given up on
 const DEADLINE_MS = 3000 // how long one question may take from start to finish, however its answer arrives
 const MOST_BYTES = 256 * 1024 // an answer longer than this is not read to its end, and counts as no answer
@@ -325,6 +330,12 @@ export default function (pi) {
     // The timer alone must never keep Pi from exiting
     timer.unref?.()
     void check()
+  })
+  // Said among the guidelines Pi gives its agent, once, as a turn is about to begin. A Pi from
+  // before it gave an add-on those has nothing to add to, and is left as it is.
+  pi.on('before_agent_start', (event) => {
+    const guidelines = event?.systemPromptOptions?.promptGuidelines
+    if (Array.isArray(guidelines) && !guidelines.includes(WHEN)) guidelines.push(WHEN)
   })
   pi.on('session_shutdown', () => {
     // Clicks given to Pi and not yet shown in the conversation were never reported as handed

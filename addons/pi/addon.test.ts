@@ -7,7 +7,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { describeClick } from '@it/protocol'
+import { describeClick, WHEN } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import addon from './extensions/it.js'
 
@@ -237,6 +237,16 @@ afterEach(async () => {
 })
 
 describe('the Pi add-on', () => {
+  it('adds when a page is the answer to the guidelines Pi gives its agent, once, in the words every add-on says', () => {
+    const app = pi('a')
+    const options = { promptGuidelines: ['Be brief.'] }
+    app.emit('before_agent_start', { prompt: 'hello', systemPromptOptions: options })
+    app.emit('before_agent_start', { prompt: 'again', systemPromptOptions: options })
+    expect(options.promptGuidelines).toEqual(['Be brief.', WHEN])
+    // A Pi from before it gave an add-on its guidelines is left as it is, and nothing fails
+    expect(() => app.emit('before_agent_start', { prompt: 'hello' })).not.toThrow()
+  })
+
   it('asks the connector for this conversation, as pi, once a second', async () => {
     standIn()
     await connect()

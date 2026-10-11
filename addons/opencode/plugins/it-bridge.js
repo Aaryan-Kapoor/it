@@ -30,6 +30,11 @@ import path from 'node:path'
 const IT_HOME_AT_SETUP = null
 
 const HARNESS = 'opencode'
+// What the agent is told of It among its own instructions, which this add-on adds: when a page
+// is the answer. The skill says how, and an agent reads it only once it has decided to use It.
+// The same words as every add-on that says them, kept in It's protocol as `WHEN`.
+const WHEN =
+  'It is set up on this machine: the user’s own two-way workspace, on any screen they own. Whatever the user is to look at, use, play, choose from, fill in or decide on is built as a page with It and not written into the chat, and so is anything you would otherwise lay out in the chat as a table, a set of options or a document. Load the skill named `it` before the first page. A plain answer to a plain question stays in the chat.'
 const EVERY_MS = 1000 // the connector stops counting a conversation as listening after 5 seconds
 const ANSWER_MS = 1500 // how long the connector may stay silent, and how long OpenCode is given to say who started a conversation
 const DEADLINE_MS = 3000 // how long one question to the connector may take from start to finish, however its answer arrives
@@ -378,6 +383,10 @@ export const ItBridge = async ({ client }) => {
   }
 
   return {
+    // Said last among the agent's instructions, once, each time OpenCode puts them together
+    'experimental.chat.system.transform': async (_input, output) => {
+      if (Array.isArray(output?.system) && !output.system.includes(WHEN)) output.system.push(WHEN)
+    },
     // Every message that reaches a conversation passes here, whoever sent it
     'chat.message': async (input, output) => {
       try {

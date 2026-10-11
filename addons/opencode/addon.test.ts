@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { describeClick } from '@it/protocol'
+import { describeClick, WHEN } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as addon from './plugins/it-bridge.js'
 
@@ -268,6 +268,18 @@ type Hooks = Awaited<ReturnType<typeof addon.ItBridge>>
 const texts = (prompts: { body: any }[]) => prompts.map((p) => p.body.parts.map((x: any) => x.text).join(''))
 
 describe('the OpenCode add-on', () => {
+  it('adds when a page is the answer to the agent’s instructions, last and once, in the words every add-on says', async () => {
+    const opencode = fakeOpenCode()
+    const hooks = await addon.ItBridge({ client: opencode.client } as any)
+    const output = { system: ['You are OpenCode.'] }
+    await hooks['experimental.chat.system.transform']({ model: {} }, output)
+    await hooks['experimental.chat.system.transform']({ model: {} }, output)
+    expect(output.system).toEqual(['You are OpenCode.', WHEN])
+    // Where there is nothing to add to, nothing fails
+    await hooks['experimental.chat.system.transform']({ model: {} }, {} as any)
+    await hooks.dispose?.()
+  })
+
   let home: string
   let before: string | undefined
   const loaded: Hooks[] = []
