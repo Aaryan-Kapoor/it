@@ -79,7 +79,7 @@ vi.mock('./src/lib', async (original) => {
   }
 })
 
-import { type ConnectorInfo, infoFile, local, mac, runConnector } from './src/connector'
+import { type ConnectorInfo, infoFile, local, mac, runConnector, wayOf } from './src/connector'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
 import { identity, SINCE_TOLD, WAS_STOPPED } from './src/wake'
@@ -1664,5 +1664,35 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     stand.answer = null
     expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=pi&session=conversation-1'))?.clicks.map((c) => c.id)).toEqual(['click-1'])
     expect(journal()).toEqual(['claimed', 'served'])
+  })
+})
+
+describe('the way a click goes when no add-on is there to take it', () => {
+  /** The way, and what was asked to find it, in the order it was asked. */
+  const way = (has: { inT3: boolean; codexOpen: boolean; reopens: boolean }) => {
+    const asked: string[] = []
+    const says = (name: keyof typeof has) => () => {
+      asked.push(name)
+      return has[name]
+    }
+    return { way: wayOf({ inT3: says('inT3'), codexOpen: says('codexOpen'), reopens: says('reopens') }), asked }
+  }
+
+  test('a conversation held in a thread of T3 Code goes to the thread, also while T3 Code still holds its Codex', () => {
+    // Codex's queue would take it, and start the turn inside the Codex that T3 Code holds: the
+    // page changed and the thread showed nothing. So Codex is not even asked.
+    expect(way({ inT3: true, codexOpen: true, reopens: true })).toEqual({ way: 't3', asked: ['inT3'] })
+  })
+
+  test('one that is in no thread of T3 Code and that some Codex has open goes into Codex’s queue', () => {
+    expect(way({ inT3: false, codexOpen: true, reopens: true })).toEqual({ way: 'queue', asked: ['inT3', 'codexOpen'] })
+  })
+
+  test('one that nothing has open is reopened, where reopening is switched on', () => {
+    expect(way({ inT3: false, codexOpen: false, reopens: true })).toEqual({ way: 'reopen', asked: ['inT3', 'codexOpen', 'reopens'] })
+  })
+
+  test('and otherwise it goes no way: it waits, in view', () => {
+    expect(way({ inT3: false, codexOpen: false, reopens: false }).way).toBeUndefined()
   })
 })

@@ -214,6 +214,26 @@ function textOfBytes(bytes: Buffer): string | null {
   }
 }
 
+/**
+ * The way a click goes when no add-on is there to take it, of the three that start a turn for
+ * it. The order is the point of this, and each is asked only where the one before said no:
+ *
+ * - `t3`: the conversation is held in a thread of T3 Code, which starts the turn and shows it.
+ *   It comes before Codex's queue, because a message put in that queue starts its turn inside
+ *   the very Codex that T3 Code holds for the thread, and T3 Code shows the turns it started
+ *   itself: the agent did the work, the page changed, and the thread showed nothing.
+ * - `queue`: some Codex has the conversation open, and takes a message from its own queue.
+ * - `reopen`: the conversation is closed, and reopening is switched on for its agent app.
+ *
+ * Nothing where none of them holds: the click waits, and the site shows it.
+ */
+export function wayOf(of: { inT3: () => boolean; codexOpen: () => boolean; reopens: () => boolean }): 't3' | 'queue' | 'reopen' | undefined {
+  if (of.inT3()) return 't3'
+  if (of.codexOpen()) return 'queue'
+  if (of.reopens()) return 'reopen'
+  return undefined
+}
+
 /** Null when Codex took the message. Otherwise why it did not, for the log: never what Codex printed, which may repeat the message. */
 export function codexQueue(thread: string, text: string): Promise<string | null> {
   // A thread id is letters, digits and dashes. Anything else is not one, and is never put on a command line.
@@ -441,11 +461,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   const submitting = new Map<string, { click: Offered; toWaiter: boolean }>()
   /**
-   * Taken by Codex's queue while the conversation's turn was running. Codex hands such a click
-   * over only when that turn is done, so an agent that begins to wait for it in the same turn
-   * would wait for a message that stands behind its own turn. It is given the click as well
-   * (see `/waiting`). Kept, by the conversation it is for, until the conversation is heard to
-   * end the turn or begin another, which is when Codex itself hands the click over.
+   * Taken by Codex's queue, or by T3 Code for a thread of Codex, while the conversation's turn
+   * was running. Either hands such a click over only when that turn is done, so an agent that
+   * begins to wait for it in the same turn would wait for a message that stands behind its own
+   * turn. It is given the click as well (see `/waiting`). Kept, by the conversation it is for,
+   * until the conversation is heard to end the turn or begin another, which is when the click
+   * is handed over.
    */
   const behindTurn = new Map<string, { click: Offered; key: string }>()
   /** How many of them are kept at once. */
@@ -478,10 +499,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** How long a conversation is kept from T3 Code after it could not take a message for it, or could not be asked. */
   const T3_REFUSED_MS = 10 * 60_000
   /**
-   * The thread of T3 Code that a closed conversation is held in, with the server to send to:
+   * The thread of T3 Code that a conversation is held in, with the server to send to:
    * `asking` while that is being found out, and nothing where it is in none, where T3 Code
    * is not running here, and where it has just failed to take something for it. Then the
-   * conversation is reopened as any other is.
+   * click goes the way it would without T3 Code.
    */
   function t3For(key: string, session: { harness: string; id: string }): { server: T3; thread: string } | 'asking' | undefined {
     const now = Date.now()
@@ -1344,8 +1365,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         record('agent.woken', { result: 'resumed', agent: agentOf(harness) })
         if (stalled.get(line) === click.id) stalled.delete(line)
-        // Only Codex's queue hands a click over behind a turn that is running
-        if (!reopening && !t3 && !sent.toWaiter && turnRunning(key, Date.now())) {
+        // Codex's queue hands a click over behind a turn that is running, and so does T3 Code
+        // for a thread whose turn is running. A reopening never does: nothing was running
+        if (!reopening && !sent.toWaiter && turnRunning(key, Date.now())) {
           behindTurn.set(click.id, { click, key })
         }
         await confirmAll()
@@ -1418,11 +1440,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   function queue(click: Offered, reopening: boolean, t3?: { server: T3; thread: string }): boolean {
     if (closing || unfitting) return false
-    // What Codex's queue takes behind a running turn is kept here for a waiter in that turn,
-    // and only so much is kept. Past that a click stays with It, where nothing is lost, until
-    // a turn ends and makes room: letting go of the oldest copy to make room took it from a
-    // turn that may still be waiting for it.
-    if (!reopening && !t3 && !queueing.has(click.id) && behindTurn.size + submitting.size >= BEHIND_MOST) {
+    // What Codex's queue or T3 Code takes behind a running turn is kept here for a waiter in
+    // that turn, and only so much is kept. Past that a click stays with It, where nothing is
+    // lost, until a turn ends and makes room: letting go of the oldest copy to make room took
+    // it from a turn that may still be waiting for it.
+    if (!reopening && !queueing.has(click.id) && behindTurn.size + submitting.size >= BEHIND_MOST) {
       // Those whose turn is over are no longer waited for by anyone, and are let go of first:
       // a Codex that was closed in the middle of a turn says nothing of its ending
       for (const [id, b] of behindTurn) if (!turnRunning(b.key, Date.now())) behindTurn.delete(id)
@@ -1588,7 +1610,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const listening = !codex && s !== undefined && now - s.seen < LIVE_MS
         // A Codex turn that is running will reach a hook: after its next command, or when it stops
         const inTurn = codex && turnRunning(key, now)
-        if (listening || (inTurn && now - click.at < FRESH_MS)) {
+        const forAddOn = listening || (inTurn && now - click.at < FRESH_MS)
+        // Which of the other ways it goes, asked only where the first does not take it
+        const way = forAddOn
+          ? undefined
+          : wayOf({
+              inT3: heldInT3,
+              codexOpen: () => codex && connected('codex') && !reopenedNow.has(key) && codexHeld(threadOf(key)),
+              reopens: () => wakes(session.harness, click.at) && connected(session.harness),
+            })
+        if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
           const asked = steady()
           const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session })
@@ -1602,22 +1633,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
             held.set(click.id, { click, key, claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
             journal('claimed', click.id)
           }
-        } else if (codex && connected('codex') && !reopenedNow.has(key) && codexHeld(threadOf(key))) {
-          // Route 2: some Codex has the conversation open, and takes a message from Codex's own
-          // queue by itself: at once when it is idle, after its turn when it is not. Not waited
-          // for here: one slow command must not hold up every other click. A conversation this
-          // machine is itself running is not given one that way: that run ends with its turn,
-          // and would cut off whatever Codex began for the message.
-          if (!queue(click, false)) waitingBehind.add(key)
-        } else if (heldInT3()) {
-          // Route 2b: the conversation is held in a thread of T3 Code, which has let its
-          // program go, as it does when a thread has been quiet or T3 Code is started anew.
-          // The person has not closed anything: the thread is where it was. So the click is
-          // put to the thread, where T3 Code starts a turn for it and shows it, in the mode
-          // the thread is held in. Reopened with the agent app's own command, the same turn
-          // would run where they do not see it. This is not a reopening, and is not asked of
-          // the switch for one. Not for a conversation this machine is itself running that
-          // way at this moment, and not until a few things done together can go together.
+        } else if (way === 't3') {
+          // Route 2: the conversation is held in a thread of T3 Code. The click is put to the
+          // thread, where T3 Code starts a turn for it and shows it, in the mode the thread is
+          // held in. That is so whether T3 Code still holds the conversation's program or has
+          // let it go, as it does when a thread has been quiet or T3 Code is started anew: the
+          // person has closed nothing, and the thread is where it was. Any other way runs the
+          // turn where they do not see it. Reopened with the agent app's own command, it runs
+          // outside T3 Code. And put in Codex's own queue while T3 Code holds Codex, it runs
+          // inside the very program T3 Code holds, and the thread still shows nothing: T3
+          // Code shows the turns it started. This is not a reopening, and is not asked of the
+          // switch for one. Not for a conversation this machine is itself running at this
+          // moment, and not until a few things done together can go together.
           const left = SETTLE_MS - beenThere(click, now)
           if (thread === 'asking') {
             waitingBehind.add(key)
@@ -1626,7 +1653,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
             waitingBehind.add(key)
             soon(left + 10)
           } else if (atWork(click.session, now) || !queue(click, false, thread)) waitingBehind.add(key)
-        } else if (wakes(click.session.harness, click.at) && connected(click.session.harness)) {
+        } else if (way === 'queue') {
+          // Route 2b: some Codex has the conversation open, in a window or an app that is not
+          // T3 Code, and takes a message from Codex's own queue by itself: at once when it is
+          // idle, after its turn when it is not. Not waited for here: one slow command must
+          // not hold up every other click. A conversation this machine is itself running is
+          // not given one that way: that run ends with its turn, and would cut off whatever
+          // Codex began for the message.
+          if (!queue(click, false)) waitingBehind.add(key)
+        } else if (way === 'reopen') {
           // Route 3: the conversation is not listening, which is to say closed, and the person
           // has switched on reopening for its agent app on this machine. It is reopened at once,
           // but for the moment that lets a few things done together go together. It is run in
