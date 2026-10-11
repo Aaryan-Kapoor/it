@@ -358,7 +358,7 @@ export const USAGE_MAY_BE = {
   },
   'command.run': {
     command: [
-      ...['create', 'update', 'list', 'read', 'delete', 'rollback', 'set', 'patch', 'state', 'open', 'notify', 'displays', 'wait', 'actions', 'action', 'ack'],
+      ...['create', 'update', 'list', 'read', 'delete', 'rollback', 'set', 'patch', 'state', 'say', 'open', 'notify', 'displays', 'wait', 'actions', 'action', 'ack'],
       ...[
         'setup',
         'site',
@@ -400,7 +400,7 @@ export const USAGE_MAY_BE = {
   'page.shown': { screen: SCREEN_KINDS, by: ['agent', 'person'] },
   'screen.connected': { screen: SCREEN_KINDS, sameMachine: SO_OR_NOT },
   'display.paired': { screen: SCREEN_KINDS, sameMachine: SO_OR_NOT, first: SO_OR_NOT },
-  'answer.sent': { screen: SCREEN_KINDS, from: ['page', 'notification'] },
+  'answer.sent': { screen: SCREEN_KINDS, from: ['page', 'notification', 'message'] },
   'answer.delivered': { path: ['heard', 'woke', 'waited'], after: HOW_LONG, agent: AGENT_APPS },
   'agent.woken': { result: ['resumed', 'declined', 'failed'], agent: AGENT_APPS },
   'notification.sent': { agent: AGENT_APPS, buttons: SO_OR_NOT, sticky: SO_OR_NOT, page: SO_OR_NOT, to: ['one', 'all'] },

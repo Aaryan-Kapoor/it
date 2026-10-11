@@ -1386,6 +1386,8 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
         id: 'plan',
         version: 1,
         url: `${door}/p/plan`,
+        // And the agent is told to put that address in the chat, as for every page newly made
+        tell: 'Give the user this url in the chat, in one short line that says what is on the page.',
       })
       // Read back from the second machine, it is all there
       expect(await said(['read', 'plan'])).toMatchObject({
