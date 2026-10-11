@@ -239,9 +239,13 @@ export interface ActionEnvelope {
  * once it has decided to use It, which the skill's own short description did not bring it to
  * often enough: asked for a game or a report, a model answered in the chat. With this said at
  * the start of a conversation, the same model built the page.
+ *
+ * It says what It is first, a workspace made for the user that answers back, and then names what
+ * the user does there. It names no form a reply can take: with "a table" among its words, a
+ * model built a page for a request that asked for nothing but a table in the chat.
  */
 export const WHEN =
-  'It is set up on this machine: the user’s own two-way workspace, on any screen they own. Whatever the user is to look at, use, play, choose from, fill in or decide on is built as a page with It and not written into the chat, and so is anything you would otherwise lay out in the chat as a table, a set of options or a document. Load the skill named `it` before the first page. A plain answer to a plain question stays in the chat.'
+  'It is set up on this machine: a two-way workspace that you custom-make for the user, on any screen they own. You build the interface the task calls for as a page, what the user does on it comes back to you, and you answer on the page. Whenever the user is to see, use, play, choose, fill in or decide on something, build it there and do not write it into the chat. Load the skill named `it` before the first page. A plain answer to a plain question stays in the chat.'
 
 /** A click as the connector hands it to an add-on. */
 export interface Click {
