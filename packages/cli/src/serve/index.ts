@@ -10,9 +10,10 @@ import { elsewhere, type Machine, machine, machineFile, notSetUp, Problem, readJ
 import { startsByItself, stopFile } from '../service'
 import { ageBand, begin, countBand, counting, failureOf, record, recordNoted, sinceBegun } from '../usage'
 import { asAdmin, type Backend, endOf, removeCopies, startBackend } from './backend'
-import { backendFolder, readConfig, type ServiceConfig } from './config'
+import { backendFolder, noteNetwork, readConfig, type ServiceConfig } from './config'
 import { makeContent, startDoor } from './door'
-import { reachable } from './network'
+import { onTheInternet, reachable } from './network'
+import { tailnetAddresses } from './tailnet'
 
 /**
  * Runs the service until it is asked to stop. A backend that ends by itself, and a newer It
@@ -162,8 +163,15 @@ export const standsAs = (door: { network: boolean; tailnet?: boolean }, wanted: 
   addresses: door.network ? reachable(port, undefined, door.tailnet === true) : [],
   background: startsByItself(),
   usage: counting(),
+  // What the site needs to offer the network as a switch: whether the door answers the tailnet
+  // alone, whether this machine is on one, and why "on" would mean the internet here
+  tailnet: door.network && door.tailnet === true,
+  canTailnet: tailnetAddresses().length > 0,
+  ...(onTheInternet() ? { exposed: onTheInternet()!.why } : {}),
 })
 type Stands = ReturnType<typeof standsAs>
+/** What the owner may ask of the network on the site: off, on for every network this machine is on, or on for the tailnet alone. */
+type Way = 'off' | 'on' | 'tailscale'
 /** How long a backend that would not take everything said is told only how the door stands, before it is told everything again. */
 const SHORT_MS = 600_000
 /**
@@ -280,10 +288,37 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
     )
   let looking = false
   let stopped = false
+  /**
+   * What the owner asked of the network on the site, where something waits: it is written into
+   * the settings as `it network` writes it, so that the look that follows opens the door anew,
+   * and what became of it is said to the backend once the door stands. Asked for the tailnet on
+   * a machine that is on none, it is answered as that and nothing is changed. A backend that
+   * serves the functions of an earlier It has no such asking, and is not asked for one.
+   */
+  const asked = async (): Promise<Way | undefined> => {
+    if (backend.behind !== undefined) return undefined
+    try {
+      if (!(await asAdmin(backend, 'network:waiting', {}))) return undefined
+      const taken = (await asAdmin(backend, 'network:taken', {})) as { to?: Way } | null
+      const to = taken?.to
+      if (to !== 'off' && to !== 'on' && to !== 'tailscale') return undefined
+      if (to === 'tailscale' && tailnetAddresses().length === 0) {
+        await asAdmin(backend, 'network:answer', { to, ok: false, why: 'no_tailnet' })
+        return undefined
+      }
+      say(`door: asked on the site for the network to be ${to === 'off' ? 'off' : to === 'on' ? 'on' : 'on for the tailnet alone'}`)
+      noteNetwork(to !== 'off', to === 'tailscale')
+      return to
+    } catch {
+      // A backend that cannot be asked just now is asked again at the next look
+      return undefined
+    }
+  }
   const look = async () => {
     if (looking || stopped) return
     looking = true
     try {
+      const to = await asked()
       // Settings that cannot be read just now say nothing, and the door stays as it is
       let said: boolean | undefined
       let saidTailnet = false
@@ -300,6 +335,17 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
           await now.door.stop()
           now = await open(said, saidTailnet)
         }
+      }
+      if (to !== undefined) {
+        // Asked to listen on the network, and it could not: the setting is put back, as `it network on`
+        // puts it back, so that the same is not tried each time the service starts, and that is the answer
+        const stands = to === 'off' ? !now.network : now.network && now.tailnet === (to === 'tailscale')
+        if (!stands && to !== 'off') {
+          noteNetwork(false)
+          wanted = false
+          wantedTailnet = false
+        }
+        await asAdmin(backend, 'network:answer', { to, ok: stands, ...(stands ? {} : { why: 'cannot_listen' }) }).catch(() => {})
       }
       await telling()
     } catch (err) {

@@ -403,6 +403,18 @@ export default defineSchema({
     addresses: v.array(v.string()),
     background: v.optional(v.boolean()),
     usage: v.optional(v.boolean()),
+    /** Whether the door, being open to the network, answers the person's tailnet and nothing else. */
+    tailnet: v.optional(v.boolean()),
+    /** Whether the machine It runs on is on a tailnet, so that It can be kept to one. */
+    canTailnet: v.optional(v.boolean()),
+    /** Why turning the network on there opens It to the internet, in words that finish "This machine …", where it would. */
+    exposed: v.optional(v.string()),
+    /** What the owner asked of the network on the site, until the service has taken it up. */
+    asked: v.optional(v.object({ to: v.union(v.literal('off'), v.literal('on'), v.literal('tailscale')), at: v.number() })),
+    /** What became of the last such asking: whether the door stands as was asked, and in a word why not where it does not. */
+    answered: v.optional(
+      v.object({ to: v.union(v.literal('off'), v.literal('on'), v.literal('tailscale')), at: v.number(), ok: v.boolean(), why: v.optional(v.string()) }),
+    ),
   }),
 
   // Things that happened between a screen and the backend, noted for the counts of how It is

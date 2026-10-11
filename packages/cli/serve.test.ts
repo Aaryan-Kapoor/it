@@ -178,7 +178,7 @@ describe.skipIf(process.platform === 'win32')('the look at whether a port is fre
 })
 
 describe('what the service tells the backend of how it stands', () => {
-  const stands = { on: false, wanted: false, addresses: [] as string[], background: true, usage: true }
+  const stands = { on: false, wanted: false, addresses: [] as string[], background: true, usage: true, tailnet: false, canTailnet: false }
   /** Something that is told, which notes what it was told and refuses what the test says it refuses. */
   const backendThat = (refuses: (said: Record<string, unknown>) => boolean = () => false) => {
     const told: Record<string, unknown>[] = []
@@ -198,9 +198,17 @@ describe('what the service tells the backend of how it stands', () => {
 
   test('it says how its door stands, whether It starts by itself from this folder, and whether usage counts are being sent', () => {
     // A folder that was only just made: nothing is registered for it, and nobody has been told of usage reporting
-    expect(standsAs({ network: false }, true, 21000)).toEqual({ on: false, wanted: true, addresses: [], background: false, usage: false })
+    // And with that, what the site needs to offer the network as a switch: whether the door is kept to
+    // the tailnet, whether this machine is on one, and why "on" would mean the internet here, where it would
+    const { canTailnet, exposed, ...shut } = standsAs({ network: false }, true, 21000)
+    expect(shut).toEqual({ on: false, wanted: true, addresses: [], background: false, usage: false, tailnet: false })
+    expect(typeof canTailnet).toBe('boolean')
+    expect(exposed === undefined || /^(has|is) /.test(exposed)).toBe(true)
     const open = standsAs({ network: true }, true, 21000)
-    expect([open.on, open.addresses.every((address) => address.endsWith(':21000'))]).toEqual([true, true])
+    expect([open.on, open.tailnet, open.addresses.every((address) => address.endsWith(':21000'))]).toEqual([true, false, true])
+    // A door kept to the tailnet says so, and one that is shut is never said to be kept to it
+    expect(standsAs({ network: true, tailnet: true }, true, 21000).tailnet).toBe(true)
+    expect(standsAs({ network: false, tailnet: true }, false, 21000).tailnet).toBe(false)
   })
 
   test.skipIf(process.platform === 'win32')(

@@ -3305,6 +3305,44 @@ try {
       )),
     JSON.stringify(turnedOff),
   )
+  // The same from the site: the owner chooses who can reach It under Displays, and the service
+  // does what `it network` has it do, with nothing run at a terminal. Where the machine is one
+  // the internet reaches, as a rented one is, the site asks first, and is told yes.
+  if (mayOpen) {
+    await page.goto(`${APP}/displays`)
+    const ways = page.locator('.net-way input')
+    const offered = (await until(async () => (await ways.count()) === 3, 20_000, 300)) === true
+    const answersYes = (dialog) => void dialog.accept().catch(() => {})
+    page.on('dialog', answersYes)
+    let onFromTheSite
+    let offFromTheSite
+    try {
+      if (offered) await ways.nth(1).check()
+      onFromTheSite = offered && (await until(async () => (await it(A, ['network'])).network === true, 20_000, 500))
+      const saidOn = onFromTheSite && (await until(async () => (await ways.nth(1).isChecked()) && (await page.locator('.net-said').count()) === 0, 15_000, 300))
+      const reachedWhenOn = onFromTheSite ? await reachedFromANetwork() : ''
+      check(
+        'the owner turns the network on from the site, and the service opens its door to it as the command has it do',
+        onFromTheSite === true && saidOn === true && (onANetwork.length === 0 || reachedWhenOn.includes('the site')),
+        `offered: ${offered}; on: ${onFromTheSite}; the switch says so: ${saidOn}; reached from a network: ${reachedWhenOn || 'nothing'}`,
+      )
+    } finally {
+      // Off again, from the site where the site can, and by the command whatever became of that
+      if (offered && onFromTheSite)
+        await ways
+          .nth(0)
+          .check()
+          .catch(() => {})
+      offFromTheSite = offered && onFromTheSite && (await until(async () => (await it(A, ['network'])).network === false, 20_000, 500))
+      if (offFromTheSite !== true) await it(A, ['network', 'off']).catch(() => {})
+      page.off('dialog', answersYes)
+    }
+    check(
+      'and off again from the site, after which nothing of It is reached from a network',
+      offFromTheSite === true && (await until(async () => (await reachedFromANetwork()) === '', 15_000, 500)) === true,
+      `off: ${offFromTheSite}`,
+    )
+  }
   // The owner's browser and the screen on this machine were open while the door was closed and opened: both carry on
   await page.goto(`${APP}/`)
   check(

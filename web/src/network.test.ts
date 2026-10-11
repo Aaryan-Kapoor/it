@@ -434,3 +434,117 @@ describe('adding a machine', () => {
     expect(text('[role="alert"]')).toBe('Too many at once. Try again in a moment.')
   })
 })
+
+describe('the network as a switch', () => {
+  /** How the door stands where the service says enough of itself for the switch to be offered. */
+  const stands = (more: Record<string, unknown> = {}) => ({
+    on: false,
+    addresses: [],
+    tailnet: false,
+    canTailnet: false,
+    exposed: null,
+    asked: null,
+    answered: null,
+    ...more,
+  })
+  const ways = () => [...host.querySelectorAll<HTMLInputElement>('.net-way input')]
+  const said = () => text('.net-said')
+  const pick = (n: number) => act(async () => ways()[n]!.click())
+  const networkStands = (more: Record<string, unknown>) => networkIs(stands(more) as never)
+  async function panel() {
+    const { NetworkSwitch } = await import('./network')
+    await show(createElement(NetworkSwitch))
+  }
+
+  test('shows how the network stands, offers the tailnet only where the machine is on one, and asks the backend for what is chosen', async () => {
+    watched['network:get'] = stands()
+    await panel()
+    expect(ways().map((w) => [w.checked, w.disabled])).toEqual([
+      [true, false],
+      [false, false],
+      [false, true],
+    ])
+    expect(host.textContent).toContain('Tailscale was not found on the machine It runs on.')
+    await pick(1)
+    expect(calls).toEqual(['network:ask'])
+    expect(asked).toEqual([{ to: 'on' }])
+    // What was chosen is shown as chosen while it is being done, and nothing more can be chosen meanwhile
+    expect(ways()[1]!.checked).toBe(true)
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(true)
+    expect(said()).toBe('Turning the network on…')
+    // The service opened its door and said so: the switch is as the door is, and says no more
+    await networkStands({ on: true, addresses: [LAN], answered: { to: 'on', at: Date.now() + 1000, ok: true } })
+    expect(ways().map((w) => w.checked)).toEqual([false, true, false])
+    expect(said()).toBeNull()
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
+  })
+
+  test('says why in a sentence where the service could not do what was asked, and goes back to how the door stands', async () => {
+    watched['network:get'] = stands({ canTailnet: true })
+    await panel()
+    expect(ways()[2]!.disabled).toBe(false)
+    await pick(1)
+    await networkStands({ canTailnet: true, answered: { to: 'on', at: Date.now() + 1000, ok: false, why: 'cannot_listen' } })
+    expect(ways().map((w) => w.checked)).toEqual([true, false, false])
+    expect(said()).toContain('It could not listen on that machine’s network addresses, so the network is left off.')
+  })
+
+  test('an answer to an earlier asking is not taken for the answer to this one', async () => {
+    watched['network:get'] = stands({ answered: { to: 'on', at: Date.now() - 60_000, ok: false, why: 'cannot_listen' } })
+    await panel()
+    // What failed a minute ago was asked somewhere else, or before this was opened: nothing is said of it here
+    expect(said()).toBeNull()
+    await pick(1)
+    expect(said()).toBe('Turning the network on…')
+  })
+
+  test('on a machine the internet reaches, turning it on is asked about first, with why, and nothing is done on a no', async () => {
+    watched['network:get'] = stands({ exposed: 'has a public address (203.0.113.7)' })
+    const asking = vi.fn((_: string) => false)
+    vi.stubGlobal('confirm', asking)
+    await panel()
+    expect(host.textContent).toContain('Every network this machine is on, the internet included')
+    await pick(1)
+    expect(asking.mock.calls[0]![0]).toContain(
+      'This machine has a public address (203.0.113.7). With the network on, It answers the internet, over plain http.',
+    )
+    expect(calls).toEqual([])
+    asking.mockReturnValue(true)
+    await pick(1)
+    expect(asked).toEqual([{ to: 'on' }])
+  })
+
+  test('a browser that came over the network is told what it loses before the network is turned off from it', async () => {
+    browser.reconfigure({ url: `${LAN}/displays` })
+    watched['network:get'] = stands({ on: true, addresses: [LAN] })
+    const asking = vi.fn((_: string) => false)
+    vi.stubGlobal('confirm', asking)
+    await panel()
+    await pick(0)
+    expect(asking.mock.calls[0]![0]).toContain('This browser reaches It over the network. With the network off it loses It')
+    expect(calls).toEqual([])
+    // On the machine It runs on there is nothing to lose, and nothing is asked
+    browser.reconfigure({ url: HOME })
+    asking.mockClear()
+    await act(async () => root.unmount())
+    host.remove()
+    await panel()
+    await pick(0)
+    expect(asking).not.toHaveBeenCalled()
+    expect(asked).toEqual([{ to: 'off' }])
+  })
+
+  test('where the service says too little of itself for a switch, as one of an earlier It does, the command is shown as before', async () => {
+    // Only how the door stands, and nothing of a tailnet
+    watched['network:get'] = { on: false, addresses: [] }
+    const { NoAddress, useWhere } = await import('./network')
+    const Asked = () => createElement(NoAddress, { where: useWhere() })
+    await show(createElement(Asked))
+    expect(text('.copyable-text')).toBe('it network on')
+    expect(host.querySelector('.net')).toBeNull()
+    // And with a service that says enough, the place of the command is the switch
+    await networkIs(stands() as never)
+    expect(host.querySelector('.copyable')).toBeNull()
+    expect(ways()).toHaveLength(3)
+  })
+})

@@ -4,6 +4,7 @@
 import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
+import { ASKED_FOR_MS } from './network'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -57,21 +58,21 @@ afterEach(() => vi.restoreAllMocks())
 describe('what the service says of its door', () => {
   test('until it has said anything, the network is off and there are no addresses', async () => {
     const { t, owner } = await household()
-    expect(await owner.query(api.network.get, {})).toEqual({ on: false, addresses: [] })
+    expect(await owner.query(api.network.get, {})).toMatchObject({ on: false, addresses: [] })
     expect(await t.query(internal.network.current, {})).toEqual({ on: false, wanted: false, addresses: [] })
   })
 
   test('is what the owner’s browser and the command are told, in the order it was said, and there is one record of it however often it is said', async () => {
     const { t, owner } = await household()
     await t.mutation(internal.network.report, { on: true, wanted: true, addresses: [LAN, SIX] })
-    expect(await owner.query(api.network.get, {})).toEqual({ on: true, addresses: [LAN, SIX] })
+    expect(await owner.query(api.network.get, {})).toMatchObject({ on: true, addresses: [LAN, SIX] })
     expect(await t.query(internal.network.current, {})).toEqual({ on: true, wanted: true, addresses: [LAN, SIX] })
     // The machine moves to another network
     await t.mutation(internal.network.report, { on: true, wanted: true, addresses: ['http://10.0.0.20:39000'] })
-    expect(await owner.query(api.network.get, {})).toEqual({ on: true, addresses: ['http://10.0.0.20:39000'] })
+    expect(await owner.query(api.network.get, {})).toMatchObject({ on: true, addresses: ['http://10.0.0.20:39000'] })
     // Turned off, no address is given, whatever was sent with the word
     await t.mutation(internal.network.report, { on: false, wanted: false, addresses: [LAN] })
-    expect(await owner.query(api.network.get, {})).toEqual({ on: false, addresses: [] })
+    expect(await owner.query(api.network.get, {})).toMatchObject({ on: false, addresses: [] })
     expect((await rows(t)).length).toBe(1)
   })
 
@@ -88,7 +89,7 @@ describe('what the service says of its door', () => {
     const { t, owner } = await household()
     await t.mutation(internal.network.report, { on: false, wanted: true, addresses: [LAN] })
     expect(await t.query(internal.network.current, {})).toEqual({ on: false, wanted: true, addresses: [] })
-    expect(await owner.query(api.network.get, {})).toEqual({ on: false, addresses: [] })
+    expect(await owner.query(api.network.get, {})).toMatchObject({ on: false, addresses: [] })
   })
 
   test('only whole addresses over plain http are kept, each once, and no more than a few', async () => {
@@ -130,7 +131,7 @@ describe('what the service says of itself', () => {
     // A service that says only how its door stands leaves both unsaid
     await t.mutation(internal.network.report, { ...stands, on: true, wanted: true, addresses: [LAN] })
     expect(await owner.query(api.network.service, {})).toEqual({ port: 39000, background: null, usage: null })
-    expect(await owner.query(api.network.get, {})).toEqual({ on: true, addresses: [LAN] })
+    expect(await owner.query(api.network.get, {})).toMatchObject({ on: true, addresses: [LAN] })
   })
 
   test('whether It starts by itself and whether counts of its use are sent are told to the owner’s browser as the service said them last', async () => {
@@ -181,5 +182,85 @@ describe('who is told', () => {
     expect(await refusal(screen.query(api.network.get, {}))).toBe('forbidden')
     expect(await refusal(machine.query(api.network.get, {}))).toBe('forbidden')
     expect(await refusal(t.query(api.network.get, {}))).toBe('unauthenticated')
+  })
+})
+
+describe('the network as a switch on the site', () => {
+  const told = { on: false, wanted: false, addresses: [] as string[], tailnet: false, canTailnet: false }
+  // The clock is held: an asking is told with when it was made, and one that waited too long is let go of
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  test('until the service has said, the site is told nothing it could offer a switch by', async () => {
+    const { owner } = await household()
+    expect(await owner.query(api.network.get, {})).toEqual({
+      on: false,
+      addresses: [],
+      tailnet: false,
+      canTailnet: null,
+      exposed: null,
+      asked: null,
+      answered: null,
+    })
+  })
+
+  test('what the owner asks waits for the service, is taken up once, and is answered with what became of it', async () => {
+    const { t, owner } = await household()
+    await t.mutation(internal.network.report, told)
+    expect(await t.query(internal.network.waiting, {})).toBeNull()
+    await owner.mutation(api.network.ask, { to: 'on' })
+    expect((await owner.query(api.network.get, {})).asked).toEqual({ to: 'on', at: Date.now() })
+    expect(await t.query(internal.network.waiting, {})).toMatchObject({ to: 'on' })
+    // Taken once: the service has it, and nothing waits any more
+    expect(await t.mutation(internal.network.taken, {})).toEqual({ to: 'on' })
+    expect(await t.mutation(internal.network.taken, {})).toBeNull()
+    expect((await owner.query(api.network.get, {})).asked).toBeNull()
+    // The door is open, and the service says so and that it is what was asked
+    await t.mutation(internal.network.report, { ...told, on: true, wanted: true, addresses: [LAN] })
+    await t.mutation(internal.network.answer, { to: 'on', ok: true })
+    expect(await owner.query(api.network.get, {})).toMatchObject({ on: true, addresses: [LAN], answered: { to: 'on', ok: true } })
+    // What it says of the door afterwards leaves what was asked and answered as it is
+    await t.mutation(internal.network.report, { ...told, on: true, wanted: true, addresses: [LAN, SIX] })
+    expect((await owner.query(api.network.get, {})).answered).toMatchObject({ to: 'on', ok: true })
+    expect(await rows(t)).toHaveLength(1)
+  })
+
+  test('an asking takes the place of one that still waits, and one that waited too long is not carried out', async () => {
+    const { t, owner } = await household()
+    await t.mutation(internal.network.report, told)
+    await owner.mutation(api.network.ask, { to: 'on' })
+    await owner.mutation(api.network.ask, { to: 'off' })
+    expect(await t.mutation(internal.network.taken, {})).toEqual({ to: 'off' })
+    await owner.mutation(api.network.ask, { to: 'on' })
+    vi.advanceTimersByTime(ASKED_FOR_MS + 1)
+    // The service was not there to take it: by now the person may have forgotten it
+    expect(await t.mutation(internal.network.taken, {})).toBeNull()
+    expect(await owner.query(api.network.get, {})).toMatchObject({ asked: null, answered: { to: 'on', ok: false, why: 'too_late' } })
+  })
+
+  test('the tailnet is offered only where the service says the machine is on one, and why "on" would mean the internet is passed on', async () => {
+    const { t, owner } = await household()
+    await t.mutation(internal.network.report, told)
+    expect(await refusal(owner.mutation(api.network.ask, { to: 'tailscale' }))).toBe('invalid')
+    await t.mutation(internal.network.report, { ...told, canTailnet: true, exposed: 'has a public address (203.0.113.7)' })
+    expect(await owner.query(api.network.get, {})).toMatchObject({ canTailnet: true, exposed: 'has a public address (203.0.113.7)' })
+    expect(await refusal(owner.mutation(api.network.ask, { to: 'tailscale' }))).toBe('ok')
+    // Kept to the tailnet, the door says so, and only while it is open
+    await t.mutation(internal.network.report, { ...told, on: true, wanted: true, addresses: [LAN], tailnet: true, canTailnet: true })
+    expect((await owner.query(api.network.get, {})).tailnet).toBe(true)
+  })
+
+  test('only the owner’s browser asks: a screen, a machine and a stranger are refused, and one asked before the service ever spoke is kept for it', async () => {
+    const { t, owner, screen, machine } = await household()
+    expect(await refusal(screen.mutation(api.network.ask, { to: 'on' }))).toBe('forbidden')
+    expect(await refusal(machine.mutation(api.network.ask, { to: 'on' }))).toBe('forbidden')
+    expect(await refusal(t.mutation(api.network.ask, { to: 'on' }))).toBe('unauthenticated')
+    expect(await rows(t)).toEqual([])
+    await owner.mutation(api.network.ask, { to: 'on' })
+    expect(await rows(t)).toMatchObject([{ on: false, wanted: false, addresses: [], asked: { to: 'on' } }])
   })
 })
