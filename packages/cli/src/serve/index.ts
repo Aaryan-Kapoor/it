@@ -148,6 +148,8 @@ async function here(config: ServiceConfig, say: (line: string) => void, asked: A
 const LOOK_MS = 1000
 /** How often the service takes from the backend what it noted for the counts of how It is used. */
 const COLLECT_MS = 20_000
+/** How long the backend is given to say whether something was asked of the network on the site. It is asked again a second later. */
+const ASKED_MS = 5_000
 
 /**
  * What the service says to the backend of how it stands, under the names the backend's
@@ -172,6 +174,13 @@ export const standsAs = (door: { network: boolean; tailnet?: boolean }, wanted: 
 type Stands = ReturnType<typeof standsAs>
 /** What the owner may ask of the network on the site: off, on for every network this machine is on, or on for the tailnet alone. */
 type Way = 'off' | 'on' | 'tailscale'
+/**
+ * What some work comes to, or nothing once `over` is: whichever is first, and nothing too where
+ * the work fails. The work itself is not ended, only no longer waited for.
+ */
+export const unless = <T>(work: Promise<T>, over: Promise<unknown>): Promise<T | undefined> =>
+  Promise.race([work.catch(() => undefined), over.then(() => undefined)])
+
 /**
  * Whether the settings are acted on at this look: when they say something other than what was
  * last tried, and when something was asked for on the site, whatever was last tried. A service
@@ -299,6 +308,18 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
     )
   let looking = false
   let stopped = false
+  /**
+   * Resolved when the door is being stopped. What a look asks of the backend is waited for only
+   * until then: the service stops its door before its backend, and a backend that is slow to
+   * answer at that moment, as one is that has much to do, would otherwise hold the stopping up
+   * for as long as an asking of it may take.
+   */
+  let halt: () => void = () => {}
+  const halted = new Promise<undefined>((resolve) => {
+    halt = () => resolve(undefined)
+  })
+  /** What the backend answers, or nothing where it has not answered by the time the door is stopped, or cannot be asked. */
+  const fromBackend = (name: string, args: Record<string, unknown>): Promise<unknown> => unless(asAdmin(backend, name, args, ASKED_MS), halted)
   /** The asking last written into the log, by its name: one that is gone on with at a later look is written there once. */
   let saidOf = 0
   /**
@@ -314,14 +335,15 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   const asked = async (): Promise<{ to: Way; at: number } | undefined> => {
     if (backend.behind !== undefined) return undefined
     try {
-      const waits = (await asAdmin(backend, 'network:waiting', {})) as { to?: Way; at?: number; taken?: boolean } | null
-      if (!waits) return undefined
-      const mine = waits.taken ? waits : ((await asAdmin(backend, 'network:taken', {})) as { to?: Way; at?: number } | null)
+      const waits = (await fromBackend('network:waiting', {})) as { to?: Way; at?: number; taken?: boolean } | null | undefined
+      if (!waits || stopped) return undefined
+      const mine = waits.taken ? waits : ((await fromBackend('network:taken', {})) as { to?: Way; at?: number } | null | undefined)
       const to = mine?.to
       const at = mine?.at
-      if ((to !== 'off' && to !== 'on' && to !== 'tailscale') || typeof at !== 'number') return undefined
+      // A door that is being stopped changes nothing more: what was taken stays with the backend, as taken, for the service that starts next
+      if (stopped || (to !== 'off' && to !== 'on' && to !== 'tailscale') || typeof at !== 'number') return undefined
       if (to === 'tailscale' && tailnetAddresses().length === 0) {
-        await asAdmin(backend, 'network:answer', { asked: at, to, ok: false, why: 'no_tailnet' })
+        await fromBackend('network:answer', { asked: at, to, ok: false, why: 'no_tailnet' })
         return undefined
       }
       if (saidOf !== at) say(`door: asked on the site for the network to be ${to === 'off' ? 'off' : to === 'on' ? 'on' : 'on for the tailnet alone'}`)
@@ -338,6 +360,7 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
     looking = true
     try {
       const taken = await asked()
+      if (stopped) return
       // Settings that cannot be read just now say nothing, and the door stays as it is
       let said: boolean | undefined
       let saidTailnet = false
@@ -365,7 +388,7 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
           wantedTailnet = false
         }
         // Where the backend cannot be told, the asking stays with it as taken, and the next look goes on with it and says this again
-        await asAdmin(backend, 'network:answer', { asked: taken.at, to: taken.to, ok: stands, ...(stands ? {} : { why: 'cannot_listen' }) }).catch(() => {})
+        await fromBackend('network:answer', { asked: taken.at, to: taken.to, ok: stands, ...(stands ? {} : { why: 'cannot_listen' }) })
       }
       await telling()
     } catch (err) {
@@ -426,6 +449,7 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   return {
     async stop() {
       stopped = true
+      halt()
       clearInterval(timer)
       clearInterval(collector)
       // A door that is being opened anew at this moment is waited for, and then closed

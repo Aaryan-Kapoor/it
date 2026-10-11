@@ -20,7 +20,7 @@ import { ask, backendAt, Problem, VERSION } from './src/lib'
 import { asAdmin, endOf, fetchProgram, type Running, startBackend } from './src/serve/backend'
 import { cannotRunHere, doorKey, instanceName, makeConfig, noteLoaded, programFile, RELEASE, readConfig, type ServiceConfig } from './src/serve/config'
 import { startDoor } from './src/serve/door'
-import { erasing, opensAnew, standsAs, teller } from './src/serve/index'
+import { erasing, opensAnew, standsAs, teller, unless } from './src/serve/index'
 import { environment, launchdPlist, logFile, systemdUnit } from './src/service'
 import * as usage from './src/usage'
 import { bases } from './test-ports'
@@ -270,6 +270,27 @@ describe('what the service tells the backend of how it stands', () => {
     // Asked for on the site: tried, though "on" is what the settings said already and what was last tried
     expect(opensAnew(on, on, true)).toBe(true)
     expect(opensAnew(off, off, true)).toBe(true)
+  })
+
+  test('what a look asks of the backend is waited for only until the door is stopped, so that a backend slow to answer does not hold the stopping up', async () => {
+    let stop: () => void = () => {}
+    const stopped = new Promise<void>((resolve) => {
+      stop = resolve
+    })
+    // A backend that never answers: once the door is stopped, the asking is let go of, with nothing
+    const never = unless(new Promise<string>(() => {}), stopped)
+    let came: string | undefined = 'not yet'
+    void never.then((got) => {
+      came = got
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(came).toBe('not yet')
+    stop()
+    await never
+    expect(came).toBeUndefined()
+    // One that answers in time is heard, and one that cannot be asked is nothing, and neither fails the look
+    expect(await unless(Promise.resolve('waiting'), new Promise(() => {}))).toBe('waiting')
+    expect(await unless(Promise.reject(new Error('refused')), new Promise(() => {}))).toBeUndefined()
   })
 
   test('it is said once, and again only when something of it has changed', async () => {
