@@ -113,6 +113,7 @@ const FRESH_MS = 8_000 // a click this new, in a running Codex turn, is held for
 const HOOK_HOLD_MS = 60_000 // and this is how long it is held before Codex's queue gets it instead
 const TURN_QUIET_MS = 30 * 60_000 // a turn that has run no hook for this long is taken to be over
 const WAIT_MS = 5_000 // an `it wait` that said so this recently is still waiting
+const WAIT_AGAIN_MS = 120_000 // how long after an `it wait` ended its conversation, where it is one never heard from, is taken to be coming to wait again
 const QUEUE_WAITS = [0, 10_000, 60_000, 600_000] // how long before each try at a harness's own queue; after the last, the click is left waiting
 const QUEUE_AT_ONCE = 3 // how many of a harness's queue commands run at the same time
 const RUNS_AT_ONCE = 3 // and how many conversations are reopened and running at the same time
@@ -399,10 +400,26 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // else. A waiter names a page, or, naming none, waits for its own conversation's clicks only.
   // The ids a waiter watches are the ones it was told (its own and its latest few earlier ones),
   // and only clicks recorded under exactly those are left for it.
-  const waiters = new Map<string, { slug: string | null; sessions: Set<string>; seen: number }>()
+  //
+  // A waiter that has ended is kept a while longer, with when it ended. An agent in a
+  // conversation this connector has never heard from waits for each thing in turn, with a
+  // command of its own each time, and thinks in between: such a conversation was open before
+  // It's add-on was there, or its app has not yet been let run the add-on, and says nothing
+  // of its turns. What is done on a page between two of its waits is the next wait's. Taken
+  // for a conversation with nothing to do, it went into Codex's own queue, which hands it
+  // over only when the turn is done, behind the very turn that then waited for it for ever.
+  // A conversation that is heard from needs none of this: what it is told by its add-on is
+  // not held up for a waiter that has gone.
+  const waiters = new Map<string, { slug: string | null; sessions: Set<string>; seen: number; endedAt?: number }>()
   const waitedFor = (w: { slug: string | null; sessions: Set<string> }, click: Offered) =>
     w.slug === null ? click.session !== null && w.sessions.has(keyOf(click.session.harness, click.session.id)) : w.slug === click.artifact
-  const awaited = (click: Offered, now: number) => [...waiters.values()].some((w) => now - w.seen < WAIT_MS && waitedFor(w, click))
+  /** Whether this connector has heard, from its add-on, of the conversation a click is for. */
+  const heardFrom = (click: Offered) => click.session !== null && sessions.has(follow(keyOf(click.session.harness, click.session.id)))
+  const awaited = (click: Offered, now: number) =>
+    [...waiters.values()].some(
+      // Waiting now; or, where the conversation is one never heard from, ended or gone quiet a little while ago
+      (w) => waitedFor(w, click) && (now - w.seen < WAIT_MS || (now - (w.endedAt ?? w.seen) < WAIT_AGAIN_MS && !heardFrom(click))),
+    )
   const held = new Map<string, Held>()
   /** Handed to an agent, and not yet confirmed to It: confirmed again and again until it is. */
   const toConfirm = new Map<string, string>()
@@ -1831,8 +1848,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (req.method === 'POST' && url.pathname === '/waiting') {
       const who = String(body.id ?? '')
       if (!who) return [400, { error: 'say who is waiting' }]
-      if (body.done) waiters.delete(who)
-      else {
+      if (body.done) {
+        // Kept, as one that has ended: see `waiters`
+        const ended = waiters.get(who)
+        if (ended) ended.endedAt = Date.now()
+      } else {
         const slug = typeof body.slug === 'string' ? body.slug : null
         // With no page named, the waiter says which conversation it is, and only that
         // conversation's clicks are left for it: everyone else's are delivered as usual. A
@@ -2363,7 +2383,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const beat = setInterval(() => {
     const now = Date.now()
     for (const [k, s] of sessions) if (now - s.seen > 3_600_000) sessions.delete(k)
-    for (const [k, w] of waiters) if (now - w.seen > 60_000) waiters.delete(k)
+    for (const [k, w] of waiters) if (now - (w.endedAt ?? w.seen) > Math.max(60_000, WAIT_AGAIN_MS)) waiters.delete(k)
     // Another connector has the lock, which it could only take by finding no sign that this one lived: this one stops
     if (!holdsLock()) {
       say('another connector has taken over; stopping')

@@ -4645,7 +4645,9 @@ try {
   )
   // An agent that waits to give the tour puts a button on that first screen, in place of the
   // sentence to carry to it, and is the one that hears of the button being pressed
-  const waitingToTour = it(A, ['tour', '--wait', '--timeout', '60'], { raw: true })
+  // The tour is an agent's to give, from inside a conversation: its pages are that conversation's
+  const touring = { extraEnv: { IT_HARNESS: 'pi', IT_SESSION: 'the-tour-conversation' } }
+  const waitingToTour = it(A, ['tour', '--wait', '--timeout', '60'], { raw: true, ...touring })
   const tourOffered = await until(() => three.page.locator('.hello-go').isVisible(), 30_000, 500)
   if (tourOffered) await three.page.locator('.hello-go').click()
   const tourGiven = await waitingToTour
@@ -4657,9 +4659,9 @@ try {
   check('and the screen says that the tour is on its way', await until(() => three.page.locator('.hello-coming').isVisible(), 10_000, 300))
   // The tour's menu comes up by itself, and when the tour's pages are taken away at its end the
   // screen goes back to the person's pages, which now show things to ask for and not the way in again
-  await it(A, ['tour', 'show', 'menu'])
+  await it(A, ['tour', 'show', 'menu'], touring)
   const onTourMenu = await until(() => new URL(three.page.url()).pathname === '/p/tour-menu', 20_000, 300)
-  await it(A, ['tour', 'clear'])
+  await it(A, ['tour', 'clear'], touring)
   check(
     'when the tour’s pages are taken away at its end, the screen goes back to the person’s pages, and with none it shows things to ask for',
     onTourMenu === true &&

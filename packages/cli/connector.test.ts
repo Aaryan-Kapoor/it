@@ -1173,6 +1173,29 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect((await waitingFor(6))?.clicks).toBeUndefined()
   }, 240_000)
 
+  test('what is done between two waits of a conversation never heard from is left for its next wait, and one that is heard from is not held up for a waiter that has gone', async () => {
+    await start()
+    const ended = (n: number) => local('/waiting', { method: 'POST', body: { id: `waiter-${n}`, done: true } })
+    // Its agent waited and was given nothing, and the wait ended: it is thinking, and waits again in a moment.
+    // No hook has ever said anything of this conversation, as of one that was open before It's add-on was there
+    expect(await waitingFor(7)).toMatchObject({ ok: true })
+    await ended(7)
+    const commands = stand.codex.length
+    offered(click(7))
+    // Codex's own command would be started at once for a conversation with nothing to do
+    await new Promise((r) => setTimeout(r, 900))
+    expect(stand.codex.length).toBe(commands)
+    expect(called('delivery:claim')).not.toContain('click-7')
+    // A conversation whose add-on is heard from: its wait ended, and what is done next goes the usual way, at once
+    await turn(8, false)
+    expect(await waitingFor(8)).toMatchObject({ ok: true })
+    await ended(8)
+    offered(click(7), click(8))
+    await until(() => stand.codex.length === commands + 1)
+    expect(called('delivery:claim')).toContain('click-8')
+    expect(called('delivery:claim')).not.toContain('click-7')
+  })
+
   test('one that Codex’s queue took while the conversation’s turn was running is given to a waiter that begins in that turn, and only once', async () => {
     await start()
     expect(await turn(6, true)).toEqual({ ok: true })

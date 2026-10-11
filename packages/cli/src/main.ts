@@ -463,7 +463,18 @@ async function tourWhenAsked(a: Args) {
   const until = Date.now() + seconds * 1000
   for (;;) {
     const { asked } = await call<{ asked: boolean }>('mutation', api.tour.wait, harness ? { harness } : {})
-    if (asked) return written(process.stdout, tourForOneThatWaited(GUIDE))
+    if (asked) {
+      // What the person does on the tour's first page may come before this agent's first wait
+      // for it. The connector is told now that this conversation waits for each thing in turn,
+      // as one that has just waited does, so that it leaves that for the wait and puts it nowhere else
+      const me = sessionAsked()?.session
+      if (me) {
+        const who = crypto.randomUUID()
+        await local('/waiting', { method: 'POST', body: { id: who, slug: null, session: me } }).catch(() => {})
+        await local('/waiting', { method: 'POST', body: { id: who, done: true } }).catch(() => {})
+      }
+      return written(process.stdout, tourForOneThatWaited(GUIDE))
+    }
     const left = until - Date.now()
     if (left <= 0) break
     await new Promise((r) => setTimeout(r, Math.min(TOUR_ASK_EVERY_MS, left)))
