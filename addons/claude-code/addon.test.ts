@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { briefClick, describeClick, FAULT } from '@it/protocol'
+import { briefClick, describeClick, FAULT, WHEN } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 interface Click {
@@ -748,6 +748,27 @@ describe('the Claude Code add-on', () => {
     const host = await start()
     await host.tick()
     expect(host.submits).toEqual([])
+  })
+})
+
+describe('what the add-on tells Claude of It before anything is asked', () => {
+  const made = { sections: [{ id: 'intro', text: 'You are Claude Code.', scope: 'shared' }] }
+  test('it adds when a page is the answer to Claude’s own instructions, last and as this session’s, in the words every add-on says', async () => {
+    const host = await start()
+    const composed = await host.fire('prompt.compose', { tools: ['Bash', 'Read', 'Skill'] }, made)
+    expect(composed.sections).toEqual([...made.sections, { id: 'it-bridge:when', text: WHEN, scope: 'session' }])
+    // Composed again from what it gave, it is there once
+    expect((await host.fire('prompt.compose', { tools: ['Bash', 'Skill'] }, composed)).sections).toEqual(composed.sections)
+    expect(WHEN).toContain('Load the skill named `it` before the first page.')
+  })
+
+  test('a helper with no shell to run `it` in, or no skill to read, is told nothing, and what cannot be read is left as it was', async () => {
+    const host = await start()
+    expect(await host.fire('prompt.compose', { tools: ['Read', 'Grep'] }, made)).toBe(made)
+    expect(await host.fire('prompt.compose', { tools: ['Bash', 'Read'] }, made)).toBe(made)
+    expect(await host.fire('prompt.compose', {}, made)).toBe(made)
+    const odd = { text: 'not sections' }
+    expect(await host.fire('prompt.compose', { tools: ['Bash', 'Skill'] }, odd)).toBe(odd)
   })
 })
 

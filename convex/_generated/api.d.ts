@@ -40,6 +40,7 @@ import type * as push from "../push.js";
 import type * as retention from "../retention.js";
 import type * as sessions from "../sessions.js";
 import type * as state from "../state.js";
+import type * as tour from "../tour.js";
 
 import type {
   ApiFromModules,
@@ -80,6 +81,7 @@ declare const fullApi: ApiFromModules<{
   retention: typeof retention;
   sessions: typeof sessions;
   state: typeof state;
+  tour: typeof tour;
 }>;
 
 /**

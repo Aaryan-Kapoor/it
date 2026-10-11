@@ -1,12 +1,18 @@
 // The agent skill is the contract an agent reads, and it is written by hand. These tests hold
 // it to the program it describes: a command, a flag or a field that the skill names is one the
 // `it` command and the in-page script really have.
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import { LIMITS, QUOTA } from '../../packages/protocol/src/index'
 
 const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8')
-const skill = source('./SKILL.md')
+/** What an agent reads whole each time it uses It. */
+const short = source('./SKILL.md')
+/** The parts it leaves for when they are needed, each printed by `it help` and its name. */
+const PARTS = ['actions', 'page', 'showing', 'waiting']
+const more = Object.fromEntries(PARTS.map((part) => [part, source(`./more/${part}.md`)]))
+/** Everything an agent can be told: most of what is held to the program here may stand in either. */
+const skill = [short, ...Object.values(more)].join('\n')
 const main = source('../../packages/cli/src/main.ts')
 const help = /const HELP = `([\s\S]*?)`\n/.exec(main)![1]!
 
@@ -16,6 +22,28 @@ const code = [...skill.matchAll(/```[a-z]*\n([\s\S]*?)```|`([^`\n]+)`/g)].flatMa
 const commands = code.filter((line) => /^it [a-z]/.test(line)).map((line) => line.split(/\s+/))
 
 describe('the agent skill', () => {
+  test('is short, and names each part it leaves out where an agent would want it, by the command that prints it', () => {
+    // It is read whole every time, by every agent that uses It: what it once held was 27 KB
+    expect(Buffer.byteLength(short)).toBeLessThan(12_500)
+    expect(readdirSync(new URL('./more', import.meta.url)).sort()).toEqual(PARTS.map((part) => `${part}.md`))
+    // A part nothing in the skill points to is never opened
+    for (const part of PARTS) expect(short, part).toContain(`\`it help ${part}\``)
+    // The program prints a part by its name, and its own help says which there are
+    expect(main).toMatch(/cmd === 'help' && a\._\[0\] !== undefined && Object\.hasOwn\(MORE, a\._\[0\]\)/)
+    expect(help.replace(/\s+/g, ' ')).toContain('showing, page, waiting or actions')
+    expect(source('../../packages/cli/addons.mjs')).toContain("readdirSync(path.join(root, 'skill/more'))")
+  })
+
+  test('says in its own lines what every page needs: the link in chat, the answer on the page, and what is not a page', () => {
+    expect(short).toContain('**Give the user the `url` in chat, every time you make a page**')
+    expect(short).toContain('**Answer on the page.** The user is looking at the page and not at this conversation')
+    expect(short).toContain('`it say deploy-plan "…"`')
+    expect(short).toContain('Only a plain answer to a plain question stays in chat.')
+    // What the person types above a page is told to the agent in these words, by the program
+    expect(short).toContain('"The user typed this to you in the box above the page"')
+    expect(source('../../packages/protocol/src/index.ts')).toContain('[It] The user typed this to you in the box above the ')
+  })
+
   test('names only commands that the `it` command has', () => {
     const named = [...new Set(commands.map((words) => words[1]!))].sort()
     expect(named.length).toBeGreaterThan(15)
@@ -76,11 +104,11 @@ describe('the agent skill', () => {
   test('names only what the in-page script gives a page', () => {
     const runtime = source('../../packages/runtime/src/it.ts')
     for (const name of ['action', 'stage', 'commit', 'onState', 'store']) {
-      expect(skill).toContain(`It.${name}`)
+      expect(short).toContain(`It.${name}`)
       expect(runtime, name).toMatch(new RegExp(`\\b${name}\\b`))
     }
     for (const attribute of ['data-it-bind', 'data-it-show']) {
-      expect(skill).toContain(attribute)
+      expect(short).toContain(attribute)
       expect(runtime).toContain(attribute)
     }
   })
@@ -257,7 +285,7 @@ describe('the agent skill', () => {
     // An app reads the lines between the dashes as YAML. Pi reads them strictly: a colon followed by a space
     // inside the description begins a mapping there, the whole skill is refused ("Nested mappings are not
     // allowed in compact mappings") and its agent is never told that It exists.
-    const head = /^---\n([\s\S]*?)\n---\n/.exec(skill)![1]!.split('\n')
+    const head = /^---\n([\s\S]*?)\n---\n/.exec(short)![1]!.split('\n')
     expect(head.map((line) => line.slice(0, line.indexOf(':')))).toEqual(['name', 'description'])
     for (const line of head) {
       const value = line.slice(line.indexOf(':') + 1).trim()

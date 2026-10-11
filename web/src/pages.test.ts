@@ -92,6 +92,50 @@ const connection = (up: boolean) =>
     for (const fn of told) fn()
   })
 
+describe('the line that moves under a page’s bar', () => {
+  test('is there while the last thing done is on its way or with the agent, and gone once it is answered, stopped or old', async () => {
+    await shown()
+    const { inHand } = await import('./pages')
+    const at = NOW - 5000
+    // Sent and not taken, and taken and not yet answered
+    expect(inHand([{ at, delivery: 'pending' }], null, false, NOW)).toBe(true)
+    expect(inHand([{ at, delivery: 'leased' }], null, false, NOW)).toBe(true)
+    expect(inHand([{ at, delivery: 'handed_off', outcome: 'running' }], at - 1000, false, NOW)).toBe(true)
+    expect(inHand([{ at, delivery: 'handed_off', outcome: null }], null, false, NOW)).toBe(true)
+    // The agent changed the page since, said it was done or could not be, or was stopped
+    expect(inHand([{ at, delivery: 'handed_off', outcome: 'running' }], at + 1000, false, NOW)).toBe(false)
+    expect(inHand([{ at, delivery: 'handed_off', outcome: 'succeeded' }], null, false, NOW)).toBe(false)
+    expect(inHand([{ at, delivery: 'handed_off', outcome: 'failed' }], null, false, NOW)).toBe(false)
+    expect(inHand([{ at, delivery: 'handed_off', outcome: 'failed', route: 'stopped' }], null, false, NOW)).toBe(false)
+    // Something older that still waits counts before a later thing that was dealt with
+    expect(
+      inHand(
+        [
+          { at, delivery: 'handed_off', outcome: 'succeeded' },
+          { at: at - 1000, delivery: 'pending' },
+        ],
+        null,
+        false,
+        NOW,
+      ),
+    ).toBe(true)
+    // Long ago is not under way, nothing done is nothing, and a reopened conversation at work always is
+    expect(inHand([{ at: NOW - 11 * 60_000, delivery: 'pending' }], null, false, NOW)).toBe(false)
+    expect(inHand([], null, false, NOW)).toBe(false)
+    expect(inHand(undefined, null, false, NOW)).toBe(false)
+    expect(inHand([], null, true, NOW)).toBe(true)
+  })
+
+  test('is drawn on the bar for something that waits, and not for something that was done', async () => {
+    recent = [{ at: NOW - 2000, delivery: 'pending' }]
+    await shown()
+    expect(host.querySelector('.page-nav .page-progress')).not.toBeNull()
+    recent = [{ at: NOW - 2000, delivery: 'handed_off', outcome: 'succeeded' }]
+    await drawnAgain()
+    expect(host.querySelector('.page-progress')).toBeNull()
+  })
+})
+
 describe('what the page’s bar says of the last thing the person did', () => {
   test('when It has not been reachable for a few seconds the bar says so, whatever was last done, and stops saying so when It is back', async () => {
     vi.useFakeTimers()

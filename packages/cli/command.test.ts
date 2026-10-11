@@ -11,7 +11,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { PORTS } from '@it/protocol'
+import { PORTS, WHEN } from '@it/protocol'
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
@@ -405,6 +405,62 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     } finally {
       await b.close()
     }
+  })
+
+  test('`it tour --wait` says it is waiting until the person asks for the tour on the site, prints the tour then, and says when nobody asked', async () => {
+    const m = machine()
+    let waits = 0
+    const b = await backend(m, (asked) => (asked.path === 'tour:wait' ? { asked: ++waits >= 2 } : null))
+    try {
+      const env = { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' }
+      const given = await run(m, ['tour', '--wait'], env)
+      expect(given.code).toBe(0)
+      // What is different for an agent that has just installed It comes first, and then the tour as `it tour` prints it
+      expect(given.out).toMatch(/^The person pressed "Take the tour" on It's site a moment ago/)
+      expect(given.out).toContain('run `it wait --timeout 100` in the foreground')
+      expect(given.out).toContain('# The It tour')
+      // It said so twice, as the agent app it was run from, and did not say it had given up
+      expect(b.asked.map((x) => [x.path, x.args])).toEqual([
+        ['tour:wait', { harness: 'pi' }],
+        ['tour:wait', { harness: 'pi' }],
+      ])
+      // With the time up and nobody having asked, that is said, and It is told that nobody waits any more
+      b.asked.length = 0
+      waits = -100
+      const nobody = await run(m, ['tour', '--wait', '--timeout', '1'], env)
+      expect(nobody.code).toBe(0)
+      expect(JSON.parse(nobody.out)).toMatchObject({ timedOut: true })
+      expect(b.asked.at(-1)!.path).toBe('tour:leave')
+      const refused = await run(m, ['tour', '--wait', '--timeout', 'soon'], env)
+      expect(refused.code).not.toBe(0)
+      expect(refused.err).toContain('--timeout is a number of seconds.')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('Codex is told when a page is the answer as a conversation starts, also where no connector is there to hear of it', async () => {
+    const m = machine()
+    /** Runs Codex's hook as Codex does, with what it says of the event on standard input. */
+    const hooked = (event: Record<string, unknown>) =>
+      new Promise<string>((resolve) => {
+        const child = spawn(process.execPath, [program, 'hook', 'codex'], {
+          cwd: m.home,
+          env: { PATH: m.bin, HOME: m.home, IT_HOME: m.it, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage' },
+          stdio: ['pipe', 'pipe', 'ignore'],
+        })
+        let out = ''
+        child.stdout.on('data', (c) => (out += c))
+        child.on('close', () => resolve(out))
+        child.stdin.end(JSON.stringify(event))
+      })
+    const started = JSON.parse(await hooked({ session_id: 'thread-1', hook_event_name: 'SessionStart', cwd: m.home }))
+    expect(started).toEqual({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: WHEN } })
+    // Any other event, with no connector to ask, says nothing and breaks nothing
+    expect(await hooked({ session_id: 'thread-1', hook_event_name: 'UserPromptSubmit', cwd: m.home })).toBe('')
+    expect(await hooked({ session_id: 'thread-1', hook_event_name: 'Stop', cwd: m.home })).toBe('')
+    // And run by hand, with nothing said of any event, it says nothing either
+    expect(await hooked({})).toBe('')
   })
 
   test('each command is counted by its own name, who ran it and how it ended, and never by what was typed after it', async () => {

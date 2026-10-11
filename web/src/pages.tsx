@@ -8,7 +8,7 @@ import { Mount } from './mount'
 import { Bell, say } from './notifications'
 import { onItsWayUntil, outboxChanges, unsaved, unsent, watchOutbox } from './outbox'
 import { Preview } from './preview'
-import { Welcome } from './welcome'
+import { Starters, useTour, Welcome } from './welcome'
 
 export interface Card {
   id: string
@@ -60,7 +60,7 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
   }, [pages, query, sort, filter])
 
   if (pages === undefined) return <main className="grid-view" role="status" />
-  if (pages.length === 0) return <Welcome owner={owner} />
+  if (pages.length === 0) return <Empty owner={owner} />
   const act = (p: Promise<unknown>) => p.catch((err) => say(refusal(err).message, 'error'))
   return (
     <main className="grid-view">
@@ -189,6 +189,17 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
 }
 
 /**
+ * What someone with no pages is shown. Until they have had the tour, or said they want none,
+ * the way into it. After that, things to ask an agent for: the tour's own screen does not come
+ * back when its pages are taken away at the end of it.
+ */
+function Empty({ owner }: { owner: boolean }) {
+  const tour = useTour()
+  if (!tour.known) return <main className="grid-view" role="status" />
+  return tour.done && !tour.waiting && !tour.coming ? <Starters owner={owner} /> : <Welcome owner={owner} />
+}
+
+/**
  * The pages this tab has had on its screen. One of them that is no longer there was taken
  * away while it was being looked at, as an agent takes its tour's pages away when the tour is
  * over: the screen then goes back to the person's pages, and is not left saying that there is
@@ -206,6 +217,11 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
   const [fault, setFault] = useState<{ of: string; message: string; agentTold: boolean } | null>(null)
   /** Whether the box to type to the page's agent in is open. */
   const [talking, setTalking] = useState(false)
+  // Whether something done here is with the page's agent, or on its way to it, and not yet
+  // answered: shown as a line that moves under the bar, which is seen where the few words
+  // beside the title are not
+  const recent = useQuery(api.actions.forArtifact, page ? { artifactId: page.id as Id<'artifacts'> } : 'skip')
+  const underWay = page ? inHand(recent, page.answeredAt ?? null, page.run !== null && page.run !== undefined, now) : false
   useEffect(() => {
     if (page) document.title = `${page.title} · It`
     return () => {
@@ -222,6 +238,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
   return (
     <main className="page-view">
       <header className="page-bar page-nav">
+        {underWay && <span className="page-progress" aria-hidden="true" />}
         <button type="button" className="back-btn" aria-label={`Back to your ${NOUN.many}`} title="Back (esc)" onClick={() => navigate('/')}>
           <IconBack />
         </button>
@@ -336,6 +353,26 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
       )}
     </main>
   )
+}
+
+/** How long after something was done on a page it is still shown as under way, where nothing has come of it. */
+const UNDER_WAY_MS = 10 * 60_000
+/**
+ * Whether the last thing done on a page is still with its agent, or on its way to it: sent and
+ * not yet taken, or taken and not yet answered on the page. Not what a stop dropped, nor what
+ * its agent said was done or could not be done, nor anything from long ago.
+ */
+export function inHand(
+  recent: { at: number; delivery: string; route?: string | null; outcome?: string | null }[] | undefined,
+  answeredAt: number | null,
+  running: boolean,
+  now: number,
+): boolean {
+  if (running) return true
+  const last = recent?.find((a) => a.delivery !== 'handed_off') ?? recent?.[0]
+  if (!last || now - last.at > UNDER_WAY_MS || last.route === 'stopped') return false
+  if (last.delivery !== 'handed_off') return true
+  return (last.outcome === null || last.outcome === undefined || last.outcome === 'running') && !(answeredAt !== null && answeredAt > last.at)
 }
 
 /** How long what an agent said above a page is shown by itself. After that it is there for whoever opens the box. */

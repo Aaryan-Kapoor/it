@@ -1,11 +1,12 @@
 // What a display shows while there is nothing on it: the things It can be, played one after
 // another as the launch film draws them, and beside them the sentence that gets a person
 // started, to give to their agent.
-import { useQuery } from 'convex/react'
+import { useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
 import type { Playing } from './film/play'
-import { agentName, api, navigate } from './lib'
+import { agentName, api, navigate, refusal, useNow } from './lib'
+import { say as toast } from './notifications'
 
 /** What the person gives their agent to be led through It. */
 export const TOUR_PROMPT = 'Give me the It tour.'
@@ -32,29 +33,184 @@ const THINGS: { key: string; name: string; say: string }[] = [
   { key: 'late', name: 'hours later', say: 'Ask me on my screen, and wait for my answer' },
 ]
 
-/** The dialog that hands the person the one sentence to give their agent. */
-export function TourDialog({ onClose }: { onClose: () => void }) {
+/**
+ * Things to ask an agent for, shown to someone who has no pages and has had the tour: one for
+ * each of a few ways It is used, in words a person would say. They are not the film's things,
+ * which show what a page can be: these are what a day's work asks for.
+ */
+export const STARTERS: { use: string; say: string }[] = [
+  { use: 'To leave up', say: 'Make me a dashboard for this project that I can leave open, and keep it up to date as you work' },
+  { use: 'Before a change', say: 'Show me the plan first, and let me approve it before you touch anything' },
+  { use: 'While I am away', say: 'When you need a decision, ask me on my phone and wait for my answer' },
+  { use: 'To read', say: 'Put what you found in a report I can read and comment on' },
+  { use: 'To decide', say: 'Lay out the options side by side and let me pick one' },
+  { use: 'To think', say: 'Open a whiteboard so I can sketch what I mean' },
+]
+
+/** How things stand with the tour, as the backend keeps it. Times are the backend's own. */
+interface Tour {
+  waitingUntil: number | null
+  by: string | null
+  askedAt: number | null
+  takenAt: number | null
+  doneAt: number | null
+}
+/** How long an agent that was asked has to bring the tour up before the person is given the sentence as well. */
+export const TOUR_SLOW_MS = 40_000
+
+/**
+ * The tour, as the site can ask for it. An agent that is waiting to give it (`it tour --wait`,
+ * which an agent that has just installed It runs) says so every few seconds, and for as long as
+ * one does the person asks with a button, which the agent hears of. With none waiting there is
+ * only the sentence to give an agent, as before there was a button.
+ */
+export function useTour() {
+  const tour = useQuery(api.tour.get, {}) as Tour | undefined
+  const asking = useMutation(api.tour.ask)
+  const ending = useMutation(api.tour.done)
+  // Looked at often while this is on screen: whether an agent waits is a matter of seconds
+  const now = useNow(2_000)
+  /** When the person pressed the button here, and whether an agent was waiting to hear it. */
+  const [pressed, setPressed] = useState<{ at: number; heard: boolean } | null>(null)
+  const waiting = tour !== undefined && tour.waitingUntil !== null && tour.waitingUntil > now
+  const by = agentName(tour?.by ?? null) ?? 'Your agent'
+  const ask = useCallback(() => {
+    asking({}).then(
+      (said) => setPressed({ at: Date.now(), heard: (said as { waiting: boolean }).waiting }),
+      (err) => toast(refusal(err).message, 'error'),
+    )
+  }, [asking])
+  const skip = useCallback(() => void ending({}).catch((err) => toast(refusal(err).message, 'error')), [ending])
+  return {
+    /** Whether the backend has said how things stand. */
+    known: tour !== undefined,
+    /** An agent is waiting to give the tour: the button reaches it. */
+    waiting,
+    /** The name of the agent app that waits, or last did. */
+    by,
+    /** The person asked here and an agent heard: the tour is on its way. */
+    coming: pressed?.heard === true,
+    /** They asked and nothing has come of it for a while, or nobody was waiting: the sentence is what is left. */
+    stalled: pressed !== null && (!pressed.heard || Date.now() - pressed.at > TOUR_SLOW_MS),
+    /** A tour was finished, or the person wanted none. */
+    done: tour !== undefined && tour.doneAt !== null,
+    ask,
+    skip,
+  }
+}
+
+/** The way into the tour: a button where an agent is waiting to give it, and the sentence to give an agent where none is. */
+export function TourAsk({ tour, quiet = false }: { tour: ReturnType<typeof useTour>; quiet?: boolean }) {
+  if (tour.coming && !tour.stalled)
+    return (
+      <p className="hello-coming" role="status">
+        <span className="hello-coming-dot" />
+        {tour.by} is starting the tour. It comes up here by itself.
+      </p>
+    )
+  if (tour.waiting && !tour.stalled)
+    return (
+      <>
+        <button type="button" className="hello-go" onClick={tour.ask}>
+          Take the tour
+        </button>
+        {!quiet && <p className="hello-hint">{tour.by} is ready, and shows you round in a couple of minutes, on this screen.</p>}
+      </>
+    )
   return (
-    <Dialog eyebrow="Tour" title="Hand this to your agent" onClose={onClose}>
-      <p className="modal-lede">Your agent gives the tour. Paste this into its chat.</p>
-      <Copyable text={TOUR_PROMPT} label="Copy prompt" />
+    <>
+      <div className="hello-label">{tour.stalled && tour.coming ? `${tour.by} has not answered. Say this in its chat` : 'Say this to your agent'}</div>
+      <Copyable text={TOUR_PROMPT} label={quiet ? 'Copy prompt' : 'Copy'} />
+      {!quiet && <p className="hello-hint">It shows you round in a couple of minutes, on this screen.</p>}
+    </>
+  )
+}
+
+/** The dialog the bar's button opens: the same way into the tour, from anywhere on the site. */
+export function TourDialog({ onClose }: { onClose: () => void }) {
+  const tour = useTour()
+  return (
+    <Dialog eyebrow="Tour" title={tour.waiting || tour.coming ? 'Your agent gives the tour' : 'Hand this to your agent'} onClose={onClose}>
+      {!tour.waiting && !tour.coming && <p className="modal-lede">Your agent gives the tour. Paste this into its chat.</p>}
+      <div className="hello-say hello-say--dialog">
+        <TourAsk tour={tour} quiet />
+      </div>
     </Dialog>
   )
 }
 
-/** The agent apps that are connected on any machine, for the owner. Unknown until the backend has said. */
-function useConnected(owner: boolean): string[] | undefined {
+/**
+ * The agent apps on the person's machines, for the owner: those that are connected, and those
+ * that were found there and could be. Unknown until the backend has said.
+ */
+function useApps(owner: boolean): { connected: string[]; more: string[] } | undefined {
   const machines = useQuery(api.machines.list, owner ? {} : 'skip') as { harnesses: { id: string; addon: string }[] }[] | undefined
   if (!owner || !machines) return undefined
-  const ids = machines.flatMap((m) => m.harnesses.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval').map((h) => h.id))
-  return [...new Set(ids)].map((id) => agentName(id) ?? id)
+  const named = (ids: string[]) => [...new Set(ids)].map((id) => agentName(id) ?? id)
+  const all = machines.flatMap((m) => m.harnesses)
+  const on = all.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval').map((h) => h.id)
+  // Found and not connected, and nothing stands in the way of connecting it: not one that is too old, or that It cannot connect yet
+  const off = all.filter((h) => !on.includes(h.id) && h.addon !== 'unavailable' && h.addon !== 'too_old').map((h) => h.id)
+  return { connected: named(on), more: named(off) }
 }
 
 /** A list of names as a person says it: "Claude Code", "Claude Code and Codex", "Claude Code, Codex and Pi". */
 const listed = (names: string[]) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : (names[0] ?? ''))
 
+/** A link to another part of the site, which goes there without loading the site afresh. */
+function To({ href, children }: { href: string; children: string }) {
+  return (
+    <a
+      className="hello-connect"
+      href={href}
+      onClick={(e) => {
+        e.preventDefault()
+        navigate(href)
+      }}
+    >
+      {children}
+    </a>
+  )
+}
+
+/**
+ * What a person who has no pages and has had the tour is shown: a few things to ask an agent
+ * for, each to copy, and the way back into the tour.
+ */
+export function Starters({ owner }: { owner: boolean }) {
+  const apps = useApps(owner)
+  const [tour, setTour] = useState(false)
+  return (
+    <main className="starters">
+      <div className="starters-in">
+        <h2 className="starters-h">Nothing here yet</h2>
+        <p className="starters-lede">
+          Your agent makes a page when you ask for something to see or to use. Say what you want in its chat, in your own words. A few to start from:
+        </p>
+        <ul className="starters-list">
+          {STARTERS.map((s) => (
+            <li key={s.say}>
+              <span className="hello-label">{s.use}</span>
+              <Copyable text={s.say} />
+            </li>
+          ))}
+        </ul>
+        <p className="starters-foot">
+          {apps?.connected.length === 0 && <To href="/machines">No agent app is connected yet. Connect one</To>}
+          <button type="button" className="link" onClick={() => setTour(true)}>
+            Take the tour again
+          </button>
+        </p>
+      </div>
+      {tour && <TourDialog onClose={() => setTour(false)} />}
+    </main>
+  )
+}
+
 export function Welcome({ owner }: { owner: boolean }) {
-  const connected = useConnected(owner)
+  const apps = useApps(owner)
+  const connected = apps?.connected
+  const tour = useTour()
   const panel = useRef<HTMLDivElement>(null)
   const stage = useRef<HTMLDivElement>(null)
   const first = useRef<HTMLSpanElement>(null)
@@ -124,9 +280,7 @@ export function Welcome({ owner }: { owner: boolean }) {
         </h2>
         <p className="hello-lede">Your agent builds whatever the moment needs, here, and what you do on it goes back to the agent.</p>
         <div className="hello-say">
-          <div className="hello-label">Say this to your agent</div>
-          <Copyable text={TOUR_PROMPT} />
-          <p className="hello-hint">It shows you round in a couple of minutes, on this screen.</p>
+          <TourAsk tour={tour} />
         </div>
         {up && (
           <div className="hello-say hello-say--quiet">
@@ -134,17 +288,25 @@ export function Welcome({ owner }: { owner: boolean }) {
             <Copyable text={up.say} />
           </div>
         )}
-        {connected?.length === 0 && (
-          <a
-            className="hello-connect"
-            href="/machines"
-            onClick={(e) => {
-              e.preventDefault()
-              navigate('/machines')
-            }}
-          >
-            No agent app is connected yet. Connect one
-          </a>
+        {/* What a setup at a terminal asks and an agent's does not: the other agent apps, and the other screens */}
+        {owner && apps && (
+          <ul className="hello-setup">
+            <li>
+              {apps.connected.length === 0 ? (
+                <To href="/machines">No agent app is connected yet. Connect one</To>
+              ) : apps.more.length > 0 ? (
+                <To href="/machines">{`${listed(apps.more)} ${apps.more.length > 1 ? 'are' : 'is'} on this machine too. Connect ${apps.more.length > 1 ? 'them' : 'it'}`}</To>
+              ) : null}
+            </li>
+            <li>
+              <To href="/displays">Add your phone or another screen</To>
+            </li>
+            <li>
+              <button type="button" className="link hello-skip" onClick={tour.skip}>
+                Skip the tour
+              </button>
+            </li>
+          </ul>
         )}
         <p className="hello-counts">
           It collects usage data to help improve it, under a random id and never what is on a page. To read how it is used and how to opt out, see the{' '}

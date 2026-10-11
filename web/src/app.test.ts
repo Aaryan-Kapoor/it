@@ -142,7 +142,13 @@ beforeEach(() => {
     'displays:signOut': () => ({ job: 'job-1' }),
     'displays:signOutConfirmed': () => true,
   }
-  watched = { 'displays:mine': DISPLAY, 'artifacts:list': [], 'notifications:list': [] }
+  watched = {
+    'displays:mine': DISPLAY,
+    'artifacts:list': [],
+    'notifications:list': [],
+    // Nobody has had the tour, and no agent is waiting to give it: the first screen has the sentence to give one
+    'tour:get': { waitingUntil: null, by: null, askedAt: null, takenAt: null, doneAt: null },
+  }
   localStorage.clear()
   sessionStorage.clear()
   errors.length = 0

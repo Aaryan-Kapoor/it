@@ -6,6 +6,7 @@
 // wrong, this prints nothing and exits 0.
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { WHEN } from '@it/protocol'
 import { type Delivered, local } from './connector'
 import { textOf, written } from './lib'
 import { hookSeenFile } from './setup'
@@ -43,6 +44,10 @@ async function codex(): Promise<void> {
   // never reopened.
   const from = { harness: 'codex', session, ...(typeof ev.cwd === 'string' && path.isAbsolute(ev.cwd) ? { folder: ev.cwd } : {}) }
   if (event === 'SessionStart') {
+    // Said to Codex as a conversation starts, beside what it is given then: when a page is the
+    // answer. Written out before the connector is told, so that a connector that is slow or
+    // not there takes nothing from it
+    written(process.stdout, JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: WHEN } }))
     await local('/session', { method: 'POST', body: from })
     return
   }

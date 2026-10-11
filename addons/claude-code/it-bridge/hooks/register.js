@@ -15,6 +15,11 @@
 // Claude Code 2.1.287, a call left open when a turn ends delays the host's next message until
 // it returns. Ownership, retries and receipts live in the connector.
 const HARNESS = 'claude-code'
+// What Claude is told of It as a part of its own instructions, which this add-on adds: when a
+// page is the answer. The skill says how, and Claude reads it only once it has decided to use
+// It. The same words as every add-on that says them, kept in It's protocol as `WHEN`.
+const WHEN =
+  'It is set up on this machine: the user’s own two-way workspace, on any screen they own. Whatever the user is to look at, use, play, choose from, fill in or decide on is built as a page with It and not written into the chat, and so is anything you would otherwise lay out in the chat as a table, a set of options or a document. Load the skill named `it` before the first page. A plain answer to a plain question stays in the chat.'
 // Where It's folder was when this add-on was set up, if not the usual place. Filled in by `it setup`.
 const IT_HOME_AT_SETUP = null
 let connector = null // { socket | port, token }, read from the connector's own file
@@ -287,6 +292,15 @@ let generation = 0
 let ticking = false
 
 export function register(on) {
+  // Said last among Claude's instructions, on the side of them that is this session's own.
+  // Only to an agent that can act on it: one with a shell to run `it` in and the skill to read,
+  // which leaves out the helpers a conversation starts for a search or a review.
+  on('prompt.compose', async (_$, e, next) => {
+    const made = await next(e)
+    const tools = Array.isArray(e?.tools) ? e.tools : []
+    if (!made || !Array.isArray(made.sections) || !tools.includes('Bash') || !tools.includes('Skill')) return made
+    return { ...made, sections: [...made.sections.filter((s) => s?.id !== 'it-bridge:when'), { id: 'it-bridge:when', text: WHEN, scope: 'session' }] }
+  })
   on('session.start', async ($, e, next) => {
     running = false
     // One timer, however often a session starts in this process

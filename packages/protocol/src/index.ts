@@ -233,6 +233,16 @@ export interface ActionEnvelope {
   attended?: boolean
 }
 
+/**
+ * What an agent is told of It before anything is asked of it, where its app lets an add-on say
+ * something then: when a page is the answer. The skill says how, and an agent reads it only
+ * once it has decided to use It, which the skill's own short description did not bring it to
+ * often enough: asked for a game or a report, a model answered in the chat. With this said at
+ * the start of a conversation, the same model built the page.
+ */
+export const WHEN =
+  'It is set up on this machine: the user’s own two-way workspace, on any screen they own. Whatever the user is to look at, use, play, choose from, fill in or decide on is built as a page with It and not written into the chat, and so is anything you would otherwise lay out in the chat as a table, a set of options or a document. Load the skill named `it` before the first page. A plain answer to a plain question stays in the chat.'
+
 /** A click as the connector hands it to an add-on. */
 export interface Click {
   id: string

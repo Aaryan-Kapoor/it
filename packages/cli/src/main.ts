@@ -27,7 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
 import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
-import { SKILL } from './addons.generated'
+import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, parse, text } from './args'
 import { local } from './connector'
 import * as flow from './flow'
@@ -280,7 +280,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   serve: [0, 'serve [--log <file>]'],
   service: [1, 'service install | uninstall | status | logs'],
   skill: [0, 'skill'],
-  tour: [2, 'tour [show <name> | show next | clear]'],
+  tour: [2, 'tour [--wait] [show <name> | show next | clear]'],
   telemetry: [1, 'telemetry [on | off]'],
   upgrade: [0, 'upgrade [--check]'],
   updates: [1, 'updates [on | off]'],
@@ -401,6 +401,43 @@ async function published(done: { slug: string; version: number; url: string; not
   }
 }
 
+/** How often an agent that waits to give the tour says so, and asks whether it was asked for. */
+const TOUR_ASK_EVERY_MS = 2500
+/**
+ * What an agent that waited is told before the tour itself, when the person has asked for it
+ * on the site. Such an agent has usually just installed It, in a conversation that was open
+ * before It's add-on was there, and is told nothing by itself: so it waits for each thing the
+ * person does, which the tour's own first rule forbids an agent whose person is at its chat.
+ */
+const TOUR_ASKED = `The person pressed "Take the tour" on It's site a moment ago, and is looking at that screen now. Give them the tour below, in this conversation, starting now. The tour's menu is what answers their press, so show it before you say anything.
+
+One thing is different here from the tour's first rule. A conversation that was open before It's add-on was installed is told nothing by itself, and this may be one. So after every page you show and every answer you give, run \`it wait --timeout 100\` in the foreground (with \`--id\` and the id of the page that is up, where it is refused without) and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Go on like that until the tour is over. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing.`
+
+/**
+ * `it tour --wait`: waits until the person asks for the tour with the button on the site, and
+ * then prints the tour for the agent to give. While it waits the site says that an agent is
+ * ready, which is what makes the button more than a sentence to copy. When the time is up and
+ * nobody has asked, it says so and ends, and may be run again.
+ */
+async function tourWhenAsked(a: Args) {
+  const seconds = text(a, 'timeout') === undefined ? 100 : Number(text(a, 'timeout'))
+  if (!Number.isFinite(seconds) || seconds <= 0) throw new Problem('--timeout is a number of seconds.', 'invalid')
+  const harness = sessionAsked()?.session.harness
+  const until = Date.now() + seconds * 1000
+  for (;;) {
+    const { asked } = await call<{ asked: boolean }>('mutation', api.tour.wait, harness ? { harness } : {})
+    if (asked) return written(process.stdout, `${TOUR_ASKED}\n\n${GUIDE}`)
+    const left = until - Date.now()
+    if (left <= 0) break
+    await new Promise((r) => setTimeout(r, Math.min(TOUR_ASK_EVERY_MS, left)))
+  }
+  await call('mutation', api.tour.leave, {}).catch(() => {})
+  return out({
+    timedOut: true,
+    hint: 'Nobody has pressed "Take the tour" on the site yet. Run this again to go on waiting. If the person has not opened the pairing link yet, that comes first.',
+  })
+}
+
 /**
  * The tour an agent gives of It. With nothing after it, the guide is printed for the agent to
  * follow. `show` publishes one of the tour's pages and brings it up, starting afresh each time,
@@ -412,8 +449,9 @@ async function published(done: { slug: string; version: number; url: string; not
  * what comes next is the ending.
  */
 async function tour(a: Args) {
-  const USAGE = 'tour [show <name> | show next | clear]'
+  const USAGE = 'tour [--wait] [show <name> | show next | clear]'
   const what = a._[0]
+  if (a.flags.wait === true && what === undefined) return tourWhenAsked(a)
   if (what === undefined) return written(process.stdout, GUIDE)
   const menu = `${TOUR_PREFIX}${TOUR_MENU}`
   // What the menu holds of what has been seen. Nothing where there is no menu yet, or it says nothing of it
@@ -436,6 +474,9 @@ async function tour(a: Args) {
     }
     // Counted where there was a tour to end: how many of its things had been looked at, and never which
     if (had) usage.record('tour.ended', { seen: String(Math.min(had.length, 5)) as '0' | '1' | '2' | '3' | '4' | '5' })
+    // And It is told that a tour is over, so that the site no longer leads someone with no pages
+    // into one. An It from before it kept that refuses this, which changes nothing
+    if (had) await call('mutation', api.tour.done, {}).catch(() => {})
     return out({ deleted: gone })
   }
   if (what !== 'show') throw new Problem(`It does not know what to do with "${what}".`, 'invalid', `Usage: it ${USAGE}`)
@@ -2471,6 +2512,9 @@ This machine
   it tour [show <name> | clear]  Print the tour an agent gives of It. With show, bring up one of
                                  its pages, or with show next the next one not yet seen, and
                                  with clear, remove them all.
+  it tour --wait [--timeout <seconds>]
+                                 Wait until the person presses "Take the tour" on the site, and
+                                 print the tour then. For an agent that has just installed It.
   it telemetry [on | off]        Say whether It reports usage counts, or turn that on or off.
                                  It reports them until it is turned off.
   it upgrade [--check]           Put the newest It in place of this one, and start it again where
@@ -2482,6 +2526,8 @@ This machine
   it updates [on | off]          Say whether It looks every half hour for a newer version,
                                  or turn that on or off. It looks until it is turned off.
   it version | it help
+  it help <part>                 Print one part of what an agent may need that the agent skill
+                                 leaves for then: showing, page, waiting or actions.
 
 Run at a terminal, it setup, it site, it network, it status, it service status, it list,
 it displays, it whoami, it upgrade, it updates and it uninstall say how things stand in a
@@ -2506,7 +2552,10 @@ async function main(argv: string[]): Promise<void> {
   if (cmd === 'shell-env') return printEnv()
   const a = parse(rest)
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h' || a.flags.help) {
-    written(process.stdout, HELP)
+    // `it help <word>` prints one of the parts the agent skill leaves for when it is needed.
+    // Any other word after it, a command's name among them, prints the whole help as before
+    const more = cmd === 'help' && a._[0] !== undefined && Object.hasOwn(MORE, a._[0]) ? MORE[a._[0]] : undefined
+    written(process.stdout, more ?? HELP)
     return
   }
   noMore(cmd, a)

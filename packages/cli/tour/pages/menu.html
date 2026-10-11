@@ -180,7 +180,8 @@
         if (picked) {
           grid.setAttribute("data-picked", picked);
           things.forEach((t) => t.setAttribute("data-on", t.getAttribute("data-choice") === picked ? "1" : "0"));
-          status.textContent = "Coming up";
+          // Said in a sentence, with whose doing it is: a word and a dot read as nothing happening
+          status.textContent = ((window.__PARAMS || {}).agent || "Your agent") + " is getting it ready. It takes a few seconds.";
           lock(true);
         } else {
           grid.removeAttribute("data-picked");
@@ -206,7 +207,7 @@
       enough.addEventListener("click", () => {
         sent = "done";
         render();
-        status.textContent = "Wrapping up";
+        status.textContent = ((window.__PARAMS || {}).agent || "Your agent") + " is wrapping up.";
         It.action("done", {}).catch(() => { sent = null; render(); });
       });
       It.onState(() => {

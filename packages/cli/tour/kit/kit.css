@@ -134,6 +134,13 @@ button {
 .t-plate small:empty {
   display: none;
 }
+/* While the agent has what was done and has not answered, the plate says so in a word: a light that beats says less than it seems to */
+.t-plate[data-busy="1"]:has(small:empty)::after {
+  content: "thinking…";
+  font-size: 13.5px;
+  font-weight: 600;
+  opacity: 0.72;
+}
 @keyframes t-beat {
   0%,
   100% {

@@ -21,6 +21,21 @@ export default defineSchema({
     subject: v.string(),
     createdAt: v.number(),
     deletedAt: v.optional(v.number()),
+    /**
+     * How things stand with the tour an agent gives of It: until when an agent has said it is
+     * waiting to give it, and which agent app that is; when the person last asked for it on the
+     * site, and when an agent last took such an asking up; and when a tour was last finished,
+     * or the person said they wanted none.
+     */
+    tour: v.optional(
+      v.object({
+        waitingUntil: v.optional(v.number()),
+        by: v.optional(v.string()),
+        askedAt: v.optional(v.number()),
+        takenAt: v.optional(v.number()),
+        doneAt: v.optional(v.number()),
+      }),
+    ),
   })
     .index('by_subject', ['subject'])
     .index('by_deleted', ['deletedAt']),
