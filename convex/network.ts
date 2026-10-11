@@ -81,7 +81,9 @@ export const report = internalMutation({
  * The owner asks, on the site, for the network to be off, on, or on for their tailnet alone.
  * Nothing is changed here: the service that listens is what opens its door anew, and it takes
  * the asking up within a second or two (`taken`), does it as `it network` would, and says what
- * became of it (`answer`). An asking takes the place of one that was still waiting.
+ * became of it (`answer`). An asking takes the place of one that was still waiting. The answer
+ * names the asking, by when it was made, so that a browser can tell the answer to its own from
+ * the answer to one made in another tab.
  */
 export const ask = mutation({
   args: { to: way },
@@ -91,24 +93,29 @@ export const ask = mutation({
     const row = await ctx.db.query('network').first()
     // Asked for where it cannot be had: said at once, and not after the service has found the same
     if (to === 'tailscale' && row?.canTailnet !== true) fail('invalid', 'The machine It runs on is on no tailnet, so there is none to keep It to.')
-    const asked = { to, at: Date.now() }
+    // Never the name of the one before it, though two are made within the same moment
+    const at = Math.max(Date.now(), (row?.asked?.at ?? 0) + 1, (row?.answered?.asked ?? 0) + 1)
+    const asked = { to, at }
     if (row) await ctx.db.patch(row._id, { asked })
     else await ctx.db.insert('network', { on: false, wanted: false, addresses: [], asked })
     log('network.asked', { to })
-    return null
+    return { asked: at }
   },
 })
 
-/** What the owner asked for and the service has not yet taken up, for the service, which looks every second. Nothing where nothing waits. */
+/** What the owner asked for and the service has not yet answered, for the service, which looks every second. Nothing where nothing waits. */
 export const waiting = internalQuery({
   args: {},
   handler: async (ctx) => (await ctx.db.query('network').first())?.asked ?? null,
 })
 
 /**
- * The service takes an asking up: it is given what was asked, once, and from then on nothing
- * waits. One that has waited too long is let go of and answered as that, and not carried out:
- * the person may have forgotten it by the time the service is running again.
+ * The service takes an asking up, and is given what was asked and the asking's name. It stays
+ * with the backend, as taken, until the service has answered for it: taken away here, one the
+ * service could not answer for would have left the site waiting for ever. Asked for again while
+ * it is taken, it is given again. One that has waited too long without being taken up is let go
+ * of and answered as that, and not carried out: the person may have forgotten it by the time
+ * the service is running again.
  */
 export const taken = internalMutation({
   args: {},
@@ -116,18 +123,30 @@ export const taken = internalMutation({
     const row = await ctx.db.query('network').first()
     if (!row?.asked) return null
     const { to, at } = row.asked
-    const stale = Date.now() - at > ASKED_FOR_MS
-    await ctx.db.patch(row._id, { asked: undefined, ...(stale ? { answered: { to, at: Date.now(), ok: false, why: 'too_late' } } : {}) })
-    return stale ? null : { to }
+    if (row.asked.taken) return { to, at }
+    if (Date.now() - at > ASKED_FOR_MS) {
+      await ctx.db.patch(row._id, { asked: undefined, answered: { to, at: Date.now(), ok: false, why: 'too_late', asked: at } })
+      return null
+    }
+    await ctx.db.patch(row._id, { asked: { to, at, taken: true } })
+    return { to, at }
   },
 })
 
-/** The service says what became of an asking it took up. */
+/**
+ * The service says what became of an asking it took up, by the asking's name. The asking is
+ * done with only now, and only if it is still the one that waits: another may have taken its
+ * place meanwhile, and that one is the service's to take up next.
+ */
 export const answer = internalMutation({
-  args: { to: way, ok: v.boolean(), why: v.optional(v.string()) },
-  handler: async (ctx, { to, ok, why }) => {
+  args: { asked: v.number(), to: way, ok: v.boolean(), why: v.optional(v.string()) },
+  handler: async (ctx, { asked, to, ok, why }) => {
     const row = await ctx.db.query('network').first()
-    if (row) await ctx.db.patch(row._id, { answered: { to, at: Date.now(), ok, ...(why ? { why: why.slice(0, 40) } : {}) } })
+    if (!row) return null
+    await ctx.db.patch(row._id, {
+      answered: { to, at: Date.now(), ok, ...(why ? { why: why.slice(0, 40) } : {}), asked },
+      ...(row.asked?.at === asked ? { asked: undefined } : {}),
+    })
     log('network.answered', { to, ok, why })
     return null
   },

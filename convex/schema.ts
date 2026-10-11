@@ -409,11 +409,22 @@ export default defineSchema({
     canTailnet: v.optional(v.boolean()),
     /** Why turning the network on there opens It to the internet, in words that finish "This machine …", where it would. */
     exposed: v.optional(v.string()),
-    /** What the owner asked of the network on the site, until the service has taken it up. */
-    asked: v.optional(v.object({ to: v.union(v.literal('off'), v.literal('on'), v.literal('tailscale')), at: v.number() })),
-    /** What became of the last such asking: whether the door stands as was asked, and in a word why not where it does not. */
+    /**
+     * What the owner asked of the network on the site, until the service has said what became
+     * of it. When it was asked is also the name the asking goes by. `taken` once the service
+     * has taken it up: it stays here until it is answered, so that one the service could not
+     * answer for, the backend being out of reach at that moment, is gone on with and not lost.
+     */
+    asked: v.optional(v.object({ to: v.union(v.literal('off'), v.literal('on'), v.literal('tailscale')), at: v.number(), taken: v.optional(v.boolean()) })),
+    /** What became of the last such asking, named by when it was asked: whether the door stands as was asked, and in a word why not where it does not. */
     answered: v.optional(
-      v.object({ to: v.union(v.literal('off'), v.literal('on'), v.literal('tailscale')), at: v.number(), ok: v.boolean(), why: v.optional(v.string()) }),
+      v.object({
+        to: v.union(v.literal('off'), v.literal('on'), v.literal('tailscale')),
+        at: v.number(),
+        ok: v.boolean(),
+        why: v.optional(v.string()),
+        asked: v.optional(v.number()),
+      }),
     ),
   }),
 

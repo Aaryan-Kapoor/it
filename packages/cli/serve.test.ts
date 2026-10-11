@@ -20,7 +20,7 @@ import { ask, backendAt, Problem, VERSION } from './src/lib'
 import { asAdmin, endOf, fetchProgram, type Running, startBackend } from './src/serve/backend'
 import { cannotRunHere, doorKey, instanceName, makeConfig, noteLoaded, programFile, RELEASE, readConfig, type ServiceConfig } from './src/serve/config'
 import { startDoor } from './src/serve/door'
-import { erasing, standsAs, teller } from './src/serve/index'
+import { erasing, opensAnew, standsAs, teller } from './src/serve/index'
 import { environment, launchdPlist, logFile, systemdUnit } from './src/service'
 import * as usage from './src/usage'
 import { bases } from './test-ports'
@@ -255,6 +255,22 @@ describe('what the service tells the backend of how it stands', () => {
       }
     },
   )
+
+  test('the door is opened anew when the settings change, and for an asking on the site though the settings say what they said', () => {
+    const off = { network: false, tailnet: false }
+    const on = { network: true, tailnet: false }
+    const tailnet = { network: true, tailnet: true }
+    // Nothing changed and nothing asked: a door that could not listen when the service started is not tried again every second
+    expect(opensAnew(on, on, false)).toBe(false)
+    expect(opensAnew(off, off, false)).toBe(false)
+    // The settings say something else, as after `it network on`, or after turning to or from the tailnet alone
+    expect(opensAnew(on, off, false)).toBe(true)
+    expect(opensAnew(tailnet, on, false)).toBe(true)
+    expect(opensAnew(off, tailnet, false)).toBe(true)
+    // Asked for on the site: tried, though "on" is what the settings said already and what was last tried
+    expect(opensAnew(on, on, true)).toBe(true)
+    expect(opensAnew(off, off, true)).toBe(true)
+  })
 
   test('it is said once, and again only when something of it has changed', async () => {
     const backend = backendThat()

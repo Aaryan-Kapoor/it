@@ -5,7 +5,7 @@
 // owner's browser reads that here, and what it shows changes by itself when `it network on` or
 // `it network off` is run.
 import { useMutation, useQuery } from 'convex/react'
-import { useCallback, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import { Copyable } from './dialog'
 import { api, pairingAddress, refusal, useNow } from './lib'
 
@@ -68,11 +68,15 @@ interface Stands {
   canTailnet?: boolean | null
   /** Why "on" would mean the internet on that machine, in words that finish "This machine …", where it would. */
   exposed?: string | null
+  /** What was asked and is not yet answered. When it was asked is the name it goes by. */
   asked?: { to: Way; at: number } | null
-  answered?: { to: Way; at: number; ok: boolean; why?: string } | null
+  /** What became of the last asking that was answered, and under `asked` which asking that was. */
+  answered?: { to: Way; at: number; ok: boolean; why?: string; asked?: number } | null
 }
 /** How long an asking may go untaken before the person is told that It has not taken it. The service looks every second. */
 export const UNTAKEN_MS = 8000
+/** How long an asking is waited for at all. After that the choice is given back, with how the network stands, and nobody is left looking at a choice they cannot make. */
+export const GIVEN_UP_MS = 30_000
 /** What is said of an asking that came to nothing, by the service's one word for why. */
 const WHY_NOT: Record<string, string> = {
   cannot_listen:
@@ -92,13 +96,36 @@ export function useNetwork() {
   const said = useQuery(api.network.get, {}) as Stands | undefined
   const asking = useMutation(api.network.ask)
   const now = useNow(1000)
-  /** What was asked here: for which way, when by this browser's clock, and what the last answer before it was, to tell its own answer by. */
-  const [mine, setMine] = useState<{ to: Way; at: number; before: number } | null>(null)
-  const [refused, setRefused] = useState('')
+  /**
+   * What was asked here and is not yet over: for which way, when by this browser's clock, and
+   * the name the backend gave the asking, once it has. An answer is this asking's only if it
+   * names it: with the site open in two tabs, the answer to what the other asked is not taken
+   * for the answer to this, and what the other was refused is not said here.
+   */
+  const [mine, setMine] = useState<{ to: Way; at: number; id: number | null } | null>(null)
+  /** Why what was last asked here did not come about, in a sentence, until something else is asked. */
+  const [failed, setFailed] = useState('')
   const way: Way | undefined = said === undefined ? undefined : !said.on ? 'off' : said.tailnet ? 'tailscale' : 'on'
-  /** The answer to what was asked here, once the service has given it. */
-  const answer = mine && said?.answered && said.answered.at > mine.before ? said.answered : null
-  const waiting = mine !== null && answer === null
+  useEffect(() => {
+    if (!mine || mine.id === null || !said) return
+    const answered = said.answered
+    // Answered: it is over, and where it did not come about, why is said
+    if (answered && answered.asked === mine.id) {
+      setMine(null)
+      setFailed(answered.ok ? '' : (WHY_NOT[answered.why ?? ''] ?? 'It could not do that.'))
+    }
+    // Another asking took its place before the service came to it, here or in another tab: it
+    // is over too, and nothing is said of it. The choice shows how the network stands
+    else if ((said.asked && said.asked.at !== mine.id) || (answered && (answered.asked ?? 0) > mine.id)) setMine(null)
+  }, [mine, said])
+  // Never waited for for ever: an asking that nothing is heard of gives the choice back
+  const givenUp = mine !== null && now - mine.at > GIVEN_UP_MS && Date.now() - mine.at > GIVEN_UP_MS
+  useEffect(() => {
+    if (!givenUp) return
+    setMine(null)
+    setFailed('It has not said what became of that. The choice shows how the network stands now.')
+  }, [givenUp])
+  const waiting = mine !== null
   const ask = useCallback(
     (to: Way) => {
       if (!said || waiting) return
@@ -113,12 +140,17 @@ export function useNetwork() {
             : 'Kept to your tailnet, It answers this browser only if it reached It over the tailnet.'
         if (!confirm(`${loses} Go on?`)) return
       }
-      setRefused('')
-      setMine({ to, at: Date.now(), before: said.answered?.at ?? 0 })
-      asking({ to }).catch((err) => {
-        setMine(null)
-        setRefused(refusal(err).message)
-      })
+      setFailed('')
+      const at = Date.now()
+      setMine({ to, at, id: null })
+      asking({ to }).then(
+        // The name the backend gave it, by which its answer is known
+        (given) => setMine((was) => (was && was.at === at ? { ...was, id: (given as { asked?: number } | null)?.asked ?? null } : was)),
+        (err) => {
+          setMine(null)
+          setFailed(refusal(err).message)
+        },
+      )
     },
     [asking, said, waiting],
   )
@@ -131,11 +163,11 @@ export function useNetwork() {
     exposed: said?.exposed ?? null,
     addresses: said?.on ? said.addresses : [],
     /** What is being turned to, while the service has not yet said what became of it. */
-    turning: waiting ? mine.to : null,
+    turning: mine ? mine.to : null,
     /** It has gone unanswered for longer than the service takes to look. */
-    untaken: waiting && now - mine.at > UNTAKEN_MS && Date.now() - mine.at > UNTAKEN_MS,
+    untaken: mine !== null && now - mine.at > UNTAKEN_MS && Date.now() - mine.at > UNTAKEN_MS,
     /** Why what was asked here did not come about, in a sentence, where it did not. */
-    failed: refused || (answer && !answer.ok ? (WHY_NOT[answer.why ?? ''] ?? 'It could not do that.') : ''),
+    failed,
     ask,
   }
 }

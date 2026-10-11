@@ -436,6 +436,13 @@ describe('adding a machine', () => {
 })
 
 describe('the network as a switch', () => {
+  /** The name the stand-in backend gives each asking, which is what its answer is known by. */
+  const ASKED = 1_800_000_000_000
+  const UNTAKEN = 8000
+  const GIVEN_UP = 30_000
+  beforeEach(() => {
+    answers['network:ask'] = () => ({ asked: ASKED })
+  })
   /** How the door stands where the service says enough of itself for the switch to be offered. */
   const stands = (more: Record<string, unknown> = {}) => ({
     on: false,
@@ -472,8 +479,8 @@ describe('the network as a switch', () => {
     expect(ways()[1]!.checked).toBe(true)
     expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(true)
     expect(said()).toBe('Turning the network on…')
-    // The service opened its door and said so: the switch is as the door is, and says no more
-    await networkStands({ on: true, addresses: [LAN], answered: { to: 'on', at: Date.now() + 1000, ok: true } })
+    // The service opened its door and said so, of this very asking: the switch is as the door is, and says no more
+    await networkStands({ on: true, addresses: [LAN], answered: { to: 'on', at: Date.now() + 1000, ok: true, asked: ASKED } })
     expect(ways().map((w) => w.checked)).toEqual([false, true, false])
     expect(said()).toBeNull()
     expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
@@ -484,18 +491,54 @@ describe('the network as a switch', () => {
     await panel()
     expect(ways()[2]!.disabled).toBe(false)
     await pick(1)
-    await networkStands({ canTailnet: true, answered: { to: 'on', at: Date.now() + 1000, ok: false, why: 'cannot_listen' } })
+    await networkStands({ canTailnet: true, answered: { to: 'on', at: Date.now() + 1000, ok: false, why: 'cannot_listen', asked: ASKED } })
     expect(ways().map((w) => w.checked)).toEqual([true, false, false])
     expect(said()).toContain('It could not listen on that machine’s network addresses, so the network is left off.')
   })
 
-  test('an answer to an earlier asking is not taken for the answer to this one', async () => {
-    watched['network:get'] = stands({ answered: { to: 'on', at: Date.now() - 60_000, ok: false, why: 'cannot_listen' } })
+  test('an answer is this asking’s only if it names it: one for an earlier asking, or for what another tab asked, is not taken for it', async () => {
+    watched['network:get'] = stands({ answered: { to: 'on', at: Date.now() - 60_000, ok: false, why: 'cannot_listen', asked: ASKED - 5 } })
     await panel()
     // What failed a minute ago was asked somewhere else, or before this was opened: nothing is said of it here
     expect(said()).toBeNull()
     await pick(1)
     expect(said()).toBe('Turning the network on…')
+    // The other tab's asking is answered, as refused, a moment after this one was made: this one goes on waiting, and says nothing of that
+    await networkStands({ asked: { to: 'on', at: ASKED }, answered: { to: 'on', at: Date.now() + 500, ok: false, why: 'cannot_listen', asked: ASKED - 1 } })
+    expect(said()).toBe('Turning the network on…')
+    // Its own answer ends it
+    await networkStands({ on: true, addresses: [LAN], answered: { to: 'on', at: Date.now() + 1000, ok: true, asked: ASKED } })
+    expect(said()).toBeNull()
+    expect(ways().map((w) => w.checked)).toEqual([false, true, false])
+    // And it is over for good: what another tab is refused afterwards is not said here as this one's
+    await networkStands({ on: true, addresses: [LAN], answered: { to: 'tailscale', at: Date.now() + 2000, ok: false, why: 'no_tailnet', asked: ASKED + 7 } })
+    expect(said()).toBeNull()
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
+  })
+
+  test('an asking that another took the place of before the service came to it is over, with nothing said, and the choice is as the network stands', async () => {
+    watched['network:get'] = stands()
+    await panel()
+    await pick(1)
+    // Another tab asked for something else before this one was taken up
+    await networkStands({ asked: { to: 'off', at: ASKED + 3 } })
+    expect(said()).toBeNull()
+    expect(ways().map((w) => w.checked)).toEqual([true, false, false])
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
+  })
+
+  test('nobody is left at a choice they cannot make: an asking that nothing is heard of gives the choice back, and says so', async () => {
+    vi.useFakeTimers()
+    watched['network:get'] = stands()
+    await panel()
+    await pick(1)
+    await act(async () => void (await vi.advanceTimersByTimeAsync(UNTAKEN + 1500)))
+    expect(said()).toContain('It has not taken that yet.')
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(true)
+    await act(async () => void (await vi.advanceTimersByTimeAsync(GIVEN_UP)))
+    expect(said()).toBe('It has not said what became of that. The choice shows how the network stands now.')
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
+    expect(ways().map((w) => w.checked)).toEqual([true, false, false])
   })
 
   test('on a machine the internet reaches, turning it on is asked about first, with why, and nothing is done on a no', async () => {
