@@ -83,6 +83,7 @@ describe('the agent skill', () => {
       'revision',
       'timedOut',
       'sentByThePageItself',
+      'typedByTheUser',
       'pageIsNowAtVersion',
       'stateIsNowAtRevision',
       'harnesses',

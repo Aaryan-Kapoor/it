@@ -26,7 +26,20 @@ import {
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
-import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
+import {
+  describeClick,
+  firstFile,
+  HARNESSES,
+  type Harness,
+  isSlug,
+  LIMITS,
+  MESSAGE,
+  NOUN,
+  newer,
+  PROTOCOL_VERSION,
+  parseJson,
+  withoutFiles,
+} from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, parse, text } from './args'
 import { local } from './connector'
@@ -598,6 +611,15 @@ const printed = (c: Listed) => ({
   at: c.at,
   // Said only when the site saw no sign that anyone had just used the page, which an agent should know
   ...(c.attended === false ? { sentByThePageItself: true } : {}),
+  // What the person typed in the box above the page is told as that, with where to answer it: an
+  // agent that only ever reads this, and not the words an add-on is given, would otherwise take
+  // it for one more thing the page sent, and answer it in a chat the person is not looking at
+  ...(c.name === MESSAGE
+    ? {
+        typedByTheUser: true,
+        answer: `They typed this in the box above the ${NOUN.one} and are looking at that ${NOUN.one}, not at the chat: answer there, by changing the ${NOUN.one} or with \`it say ${c.artifact} "…"\`.`,
+      }
+    : {}),
   // Which version of the page, and which revision of its state, the person was looking at
   ...(c.version === undefined ? {} : { version: c.version }),
   ...(c.stateRevision === undefined ? {} : { stateRevision: c.stateRevision }),

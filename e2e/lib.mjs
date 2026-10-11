@@ -358,7 +358,25 @@ export const USAGE_MAY_BE = {
   },
   'command.run': {
     command: [
-      ...['create', 'update', 'list', 'read', 'delete', 'rollback', 'set', 'patch', 'state', 'say', 'open', 'notify', 'displays', 'wait', 'actions', 'action', 'ack'],
+      ...[
+        'create',
+        'update',
+        'list',
+        'read',
+        'delete',
+        'rollback',
+        'set',
+        'patch',
+        'state',
+        'say',
+        'open',
+        'notify',
+        'displays',
+        'wait',
+        'actions',
+        'action',
+        'ack',
+      ],
       ...[
         'setup',
         'site',
