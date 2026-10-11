@@ -427,13 +427,28 @@ async function published(done: { slug: string; version: number; url: string; not
 const TOUR_ASK_EVERY_MS = 2500
 /**
  * What an agent that waited is told before the tour itself, when the person has asked for it
- * on the site. Such an agent has usually just installed It, in a conversation that was open
- * before It's add-on was there, and is told nothing by itself: so it waits for each thing the
- * person does, which the tour's own first rule forbids an agent whose person is at its chat.
+ * on the site.
  */
-const TOUR_ASKED = `The person pressed "Take the tour" on It's site a moment ago, and is looking at that screen now. Give them the tour below, in this conversation, starting now. The tour's menu is what answers their press, so show it before you say anything.
-
-One thing is different here from the tour's first rule. A conversation that was open before It's add-on was installed is told nothing by itself, and this may be one. So after every page you show and every answer you give, run \`it wait --timeout 100\` in the foreground (with \`--id\` and the id of the page that is up, where it is refused without) and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Go on like that until the tour is over. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing.`
+const TOUR_ASKED = `The person pressed "Take the tour" on It's site a moment ago, and is looking at that screen now. Give them the tour below, in this conversation, starting now. The tour's menu is what answers their press, so show it before you say anything.`
+/** The words the tour's first rule begins with, by which it is found. */
+const TOUR_RULE_ONE = '1. **Never block.**'
+/**
+ * The tour's first rule for an agent that waited for the button. Such an agent has usually just
+ * installed It, in a conversation that was open before It's add-on was there, and is told
+ * nothing by itself. The rule as the tour has it sends such an agent to a waiter left running
+ * in the background, which an app without one runs in front and never hears from again: so
+ * here the rule is another, in the place of the first, and not a second word against it.
+ */
+const TOUR_RULE_ONE_WAITING = `1. **Wait for each thing they do.** This conversation was open before It's add-on was installed, so nothing the person does on a page arrives here by itself. After every page you show and every answer you give, run \`it wait --timeout 100\` and act on what it prints: an action, or \`{"timedOut": true}\`, which means that nothing has happened yet, and you run it again. Where it is refused because your harness does not tell \`it\` which conversation this is, add \`--id\` and the id of the page that is on the screen. Do not use \`--follow\`, and do not put the command in the background: it has to end for you to be shown what it printed. The person is at the screen and not at this chat, so a command that holds your terminal costs them nothing.`
+/** The tour as an agent that waited for the button is given it. */
+function tourForOneThatWaited(guide: string): string {
+  const lines = guide.split('\n')
+  const at = lines.findIndex((line) => line.startsWith(TOUR_RULE_ONE))
+  // Where the tour no longer has that rule, it is given as it is, with the rule said before it
+  if (at < 0) return `${TOUR_ASKED}\n\n${TOUR_RULE_ONE_WAITING}\n\n${guide}`
+  lines[at] = TOUR_RULE_ONE_WAITING
+  return `${TOUR_ASKED}\n\n${lines.join('\n')}`
+}
 
 /**
  * `it tour --wait`: waits until the person asks for the tour with the button on the site, and
@@ -448,7 +463,7 @@ async function tourWhenAsked(a: Args) {
   const until = Date.now() + seconds * 1000
   for (;;) {
     const { asked } = await call<{ asked: boolean }>('mutation', api.tour.wait, harness ? { harness } : {})
-    if (asked) return written(process.stdout, `${TOUR_ASKED}\n\n${GUIDE}`)
+    if (asked) return written(process.stdout, tourForOneThatWaited(GUIDE))
     const left = until - Date.now()
     if (left <= 0) break
     await new Promise((r) => setTimeout(r, Math.min(TOUR_ASK_EVERY_MS, left)))
