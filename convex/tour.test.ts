@@ -31,6 +31,7 @@ async function household() {
     return { user: user._id as string, session: session as string, machine: machine._id as string }
   })
   return {
+    t,
     browser: t.withIdentity({ issuer: SITE, subject: user, kind: 'browser', sid: session, role: 'owner' }),
     agent: t.withIdentity({ issuer: SITE, subject: machine, kind: 'machine' }),
   }
@@ -51,10 +52,22 @@ describe('asking for the tour on the site', () => {
   })
 
   test('an agent that waits is said to be waiting for a little while each time it says so, and no longer', async () => {
-    const { browser, agent } = await household()
+    const { t, browser, agent } = await household()
     expect(await agent.mutation(api.tour.wait, { harness: 'claude-code' })).toEqual({ asked: false })
     const said = await browser.query(api.tour.get, {})
     expect(said).toMatchObject({ waitingUntil: Date.now() + WAITING_MS, by: 'claude-code' })
+    // Said again a moment later, nothing is written: what is written is good for a while yet, and
+    // each writing has the site ask again for what it shows. Said again when it is about to run out, it is
+    const written = () => t.run(async (ctx) => (await ctx.db.query('tours').first())!.waitingUntil)
+    const first = await written()
+    vi.advanceTimersByTime(2500)
+    await agent.mutation(api.tour.wait, { harness: 'claude-code' })
+    expect(await written()).toBe(first)
+    vi.advanceTimersByTime(WAITING_MS / 2)
+    await agent.mutation(api.tour.wait, { harness: 'claude-code' })
+    expect(await written()).toBe(Date.now() + WAITING_MS)
+    // And none of it is written in the person's own record, which every function reads
+    expect(await t.run(async (ctx) => (await ctx.db.query('users').first())!.tour ?? null)).toBeNull()
     vi.advanceTimersByTime(WAITING_MS + 1)
     // It has gone quiet: the button would reach nobody, and the site is told so when it asks
     expect(await browser.mutation(api.tour.ask, {})).toEqual({ waiting: false, by: 'claude-code' })

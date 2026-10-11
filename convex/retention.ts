@@ -134,6 +134,12 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
     .withIndex('by_user', (q) => q.eq('userId', userId))
     .take(5)
   for (const t of tallies) await ctx.db.delete(t._id)
+  // And how things stood with the tour, which is kept apart from the person's record in the same way
+  const tours = await ctx.db
+    .query('tours')
+    .withIndex('by_user', (q) => q.eq('userId', userId))
+    .take(5)
+  for (const t of tours) await ctx.db.delete(t._id)
   await forgetCounts(ctx, userId)
   // Only one such job at a time, however often this is run. It is not asked a second time
   // later, as the deleting of one page is: nothing may name the person once their own record

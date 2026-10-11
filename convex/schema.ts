@@ -21,21 +21,8 @@ export default defineSchema({
     subject: v.string(),
     createdAt: v.number(),
     deletedAt: v.optional(v.number()),
-    /**
-     * How things stand with the tour an agent gives of It: until when an agent has said it is
-     * waiting to give it, and which agent app that is; when the person last asked for it on the
-     * site, and when an agent last took such an asking up; and when a tour was last finished,
-     * or the person said they wanted none.
-     */
-    tour: v.optional(
-      v.object({
-        waitingUntil: v.optional(v.number()),
-        by: v.optional(v.string()),
-        askedAt: v.optional(v.number()),
-        takenAt: v.optional(v.number()),
-        doneAt: v.optional(v.number()),
-      }),
-    ),
+    /** Where a build that was never released kept how things stand with the tour. It is in `tours` now, and this is neither read nor written. */
+    tour: v.optional(v.any()),
   })
     .index('by_subject', ['subject'])
     .index('by_deleted', ['deletedAt']),
@@ -44,6 +31,23 @@ export default defineSchema({
   // clicks not yet handed to an agent, and publishes begun and not finished, by number and by
   // the bytes they declared. Both of the latter count against the quota.
   tallies: defineTable({ userId: v.id('users'), waiting: v.number(), stagingCount: v.number(), stagingBytes: v.number() }).index('by_user', ['userId']),
+
+  // How things stand with the tour an agent gives of It, kept apart from the person's own
+  // record as their totals are. Every function reads that record to know who is asking, and an
+  // agent that waits to give the tour says so every few seconds: written there, each saying
+  // would have had everything a display shows asked for again, and stood in the way of
+  // whatever else was being written for the person at that moment. Until when an agent has
+  // said it is waiting, and which agent app that is; when the person last asked for the tour
+  // on the site, and when an agent last took such an asking up; and when a tour was last
+  // finished, or the person said they wanted none.
+  tours: defineTable({
+    userId: v.id('users'),
+    waitingUntil: v.optional(v.number()),
+    by: v.optional(v.string()),
+    askedAt: v.optional(v.number()),
+    takenAt: v.optional(v.number()),
+    doneAt: v.optional(v.number()),
+  }).index('by_user', ['userId']),
 
   // A browser that was paired, for as long as it stays paired. What its cookie holds is a
   // secret that is never kept here: only the hash of it, which is what it is found by.
