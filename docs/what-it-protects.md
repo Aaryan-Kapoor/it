@@ -88,7 +88,7 @@ It speaks plain `http` and has no encryption of its own. As it stands it also ca
 - They can read a pairing code as it is traded, and a session's cookie or token as it is sent, and with any of them use the site as that browser.
 - They can read the path a page's files are at. That path is the whole of what is asked for those files while the showing lasts, so whoever has it can read the page until the showing ends.
 - Anyone on the network can open the pairing screen and try codes there. A code is too long to come upon by trying, and the door slows whoever tries, but the screen itself is closed to nobody.
-- `it network on` makes It listen on every address the machine has. An address under IPv6 is often one that can be reached from the whole internet, wherever the router lets it be. On a laptop that is carried to another network, It is open to everyone on that network. Run `it network off` before you leave a network you trust.
+- `it network on` makes It listen on every address the machine has. An address under IPv6 is often one that can be reached from the whole internet, wherever the router lets it be. On a laptop that is carried to another network, It is open to everyone on that network. Run `it network off` before you leave a network you trust. The network is turned on and off from the site as well, under Displays, by a browser paired as yours and by no other: a paired screen cannot, and neither can a page, which has no way to ask anything of the site but to send what was done on it. So whoever holds a browser paired as yours can open It to the networks its machine is on, as they can do everything else that is yours to do.
 
 Turn the network on only on a network where you trust every device and everyone who can join it.
 

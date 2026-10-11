@@ -40,7 +40,7 @@ At most fifty browsers are paired at once: when one more is paired, the one that
 
 A phone, a tablet or a TV on the same network becomes a display in three steps.
 
-1. On the machine It runs on, run `it network on`. Until then It answers only to that machine itself.
+1. Turn the network on: in your paired browser, open Displays and choose who can reach It under "Network", or run `it network on` on the machine It runs on. Until then It answers only to that machine itself.
 2. In your paired browser, open Displays and choose "Add a display". It shows the address for the other screen to open, as text and as a QR code, and a code to type.
 3. On the other screen, open that address or read the QR code with its camera, and press "Make this browser a screen of It". Or open the machine's address there and type the code.
 
@@ -51,6 +51,8 @@ A screen paired this way can open every one of your pages and answer on any of t
 ## The network
 
 `it network on` makes It answer at every network address this machine has, which at home means other devices on the same network, and on a machine the internet can reach means the internet, over plain http: the command says so where it sees a public address, one of the internet's own addresses under IPv6, or a server rented from a company that rents them. `it network tailscale` makes it answer the devices of your tailnet and no others, `it network off` returns it to this machine only, and `it network` says which it is. At a terminal each says how the network stands in a sentence, with the addresses other devices open the site at under it. With `--json`, or where a program reads it, each prints `{ "network": true or false, "addresses": [...] }`, with `"tailnet": true` beside them where It is kept to the tailnet. `it status` says the same of the network. `it setup`, run at a terminal, asks which of the three you want as one of its steps.
+
+The same three are a choice on the site, under Displays, in a browser paired as yours: "This computer only", "My home network" and "My tailnet only". Choosing one asks the service that listens, which takes it up within a second or two and opens its door anew, exactly as the command has it do, and the choice shows how the door then stands. The tailnet is offered only where the machine It runs on is on one. On a machine the internet reaches, the choice is named "Every network this machine is on, the internet included", says why under it, and asks before it is done. A browser that reached It over the network is told what it loses before the network is turned off from it, since the network is then turned on again only at the machine itself. If It cannot listen on the machine's network addresses, the choice goes back to "This computer only" and says so. "Add a display" and "Add a machine" show the same choice in the place of an address while the network is off. A paired screen is shown none of this, and can change none of it.
 
 ### Over Tailscale
 

@@ -2404,9 +2404,9 @@ export async function startBackend(config: ServiceConfig, say: (line: string) =>
  * internal ones included. The function is named as `module:function`, or with a dot between
  * the two.
  */
-export async function asAdmin(backend: Pick<Backend, 'api' | 'adminKey'>, name: string, args: unknown): Promise<unknown> {
+export async function asAdmin(backend: Pick<Backend, 'api' | 'adminKey'>, name: string, args: unknown, within = 60_000): Promise<unknown> {
   const client = new ConvexHttpClient(backend.api, {
-    fetch: (input, init) => direct(input, { ...init, signal: AbortSignal.timeout(60_000) }),
+    fetch: (input, init) => direct(input, { ...init, signal: AbortSignal.timeout(within) }),
     logger: false,
   }) as unknown as { setAdminAuth(key: string): void; function(name: string, component: undefined, args: unknown): Promise<unknown> }
   client.setAdminAuth(backend.adminKey)
