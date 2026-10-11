@@ -5,7 +5,7 @@
 // owner's browser reads that here, and what it shows changes by itself when `it network on` or
 // `it network off` is run.
 import { useMutation, useQuery } from 'convex/react'
-import { useCallback, useState } from 'react'
+import { useCallback, useId, useState } from 'react'
 import { Copyable } from './dialog'
 import { api, pairingAddress, refusal, useNow } from './lib'
 
@@ -149,6 +149,10 @@ const WAYS: Way[] = ['off', 'on', 'tailscale']
  */
 export function NetworkSwitch() {
   const net = useNetwork()
+  // A name of its own for each place the choice is shown. Under one name, the choice in "Add a
+  // display" and the one on the page behind it were one group to the browser, which lets only
+  // one of a group be chosen: the one in the dialog stood with nothing chosen.
+  const group = useId()
   if (net.way === undefined) return null
   const label: Record<Way, string> = {
     off: 'This computer only',
@@ -170,7 +174,7 @@ export function NetworkSwitch() {
             <input
               type="radio"
               className="net-radio"
-              name="it-network"
+              name={group}
               checked={shown === to}
               disabled={to === 'tailscale' && !net.canTailnet}
               onChange={() => net.ask(to)}

@@ -534,6 +534,18 @@ describe('the network as a switch', () => {
     expect(asked).toEqual([{ to: 'off' }])
   })
 
+  test('shown in two places at once, as on the Displays page and in the dialog over it, each shows how the network stands', async () => {
+    watched['network:get'] = stands()
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    await press('Add a display')
+    // Two of them are on the screen, and the browser lets one of a group of the same name be chosen: so each is a group of its own
+    const all = [...host.querySelectorAll<HTMLInputElement>('.net-way input')]
+    expect(all).toHaveLength(6)
+    expect(all.map((w) => w.checked)).toEqual([true, false, false, true, false, false])
+    expect(new Set(all.map((w) => w.name)).size).toBe(2)
+  })
+
   test('where the service says too little of itself for a switch, as one of an earlier It does, the command is shown as before', async () => {
     // Only how the door stands, and nothing of a tailnet
     watched['network:get'] = { on: false, addresses: [] }
