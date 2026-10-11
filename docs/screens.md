@@ -14,6 +14,20 @@ A browser paired this way is yours: everything on the site can be done from it. 
 
 A display stays on the Displays page when the pairing of its browser is ended, and is said there to be not paired. It shows nothing until that browser is paired again, which makes it the same display, and forgetting it takes it off the page.
 
+## The first screen, and the tour
+
+Someone with no pages is shown what It is for, and the way into the tour, which an agent gives on that screen in a couple of minutes. The way in is one of two things. Where an agent is waiting to give the tour, as one is that has just installed It for you and run `it tour --wait`, it is a button, "Take the tour": pressing it tells that agent, and the tour comes up by itself. Where none is waiting, it is the sentence to say to your agent, "Give me the It tour.", to copy into its chat. The same choice is behind the question mark in the bar at the top. Under it the first screen says what a setup at a terminal would have asked and an agent's setup does not: the other agent apps that were found on your machines, with the way to connect them, and the way to add your phone or another screen. "Skip the tour" takes this screen away.
+
+When a tour is over its agent takes the tour's pages away, and the screen goes back to your pages. From then on, with no pages, it shows a few things to ask an agent for, each to copy, and the way back into the tour.
+
+## Typing to a page's agent, and what it says back
+
+A page that is open has a bar above it: the way back, the page's title, which agent app made it and when it last changed, and what has become of the last thing you did there. While something you did is on its way to the agent, or with it and not yet answered on the page, a thin line moves along the bar's lower edge.
+
+The speech bubble in the bar opens a box to type to the page's agent in. What you type there goes as anything done on the page goes: to the conversation the page belongs to, kept until it is taken, and reopening that conversation where Auto-wake is on. The agent is told that you typed it, in your own words, which is a thing no page can do: a page that tries to send something under that name is refused. It is a second way to the agent beside whatever the page itself has for it, so that you do not have to go back to the agent's own window to say something about what is in front of you. A message is at most 4,000 characters.
+
+An agent can answer in the same place. `it say <id> "<text>"` puts a line of its words above the page, under the bar, for an answer that has no place on the page itself. It is shown by itself for half an hour, can be dismissed, and is there afterwards for whoever opens the box. Each line takes the place of the one before, and is at most 600 characters.
+
 ## Paired browsers
 
 A browser that is used stays paired. Its pairing ends when you end it, or a year after the browser last used it. The Displays page lists every paired browser, the ones that show no display among them, with when each was paired, by whose code, and when it was last used. Each has a button that ends it, and "End all others" ends every one but the browser you are reading on.
