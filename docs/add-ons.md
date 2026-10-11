@@ -17,8 +17,8 @@ An add-on is how what you do on a page gets back into the conversation that made
 A click is stored before anything tries to deliver it, and then tries these routes in order, stopping at the first that works:
 
 1. **The add-on, live.** The add-on inside the conversation that owns the page puts the click into it now, or at the agent's next step if it is busy.
-2. **The app's own queue**, where it has one. Codex has, and Codex's is the only queue It uses. It is used for a conversation that some Codex on the machine has open, which takes a queued message by itself: at once when it is idle, and when its turn ends when it is not.
-3. **The thread in T3 Code**, for a conversation that T3 Code holds and has let go of: [T3 Code](#t3-code) says how. T3 Code starts a turn in the thread and shows it there.
+2. **The thread in T3 Code**, for a conversation that is held in one: [T3 Code](#t3-code) says how. T3 Code starts a turn in the thread and shows it there.
+3. **The app's own queue**, where it has one. Codex has, and Codex's is the only queue It uses. It is used for a conversation that some Codex on the machine has open and that is in no thread of T3 Code. Such a Codex takes a queued message by itself: at once when it is idle, and when its turn ends when it is not.
 4. **Reopening the conversation**, where Auto-wake is on for the agent app on that machine, as it is unless you have turned it off: [below](#a-conversation-that-has-been-closed) says how. A Codex conversation that no Codex has open goes this way too, and nothing is put in its queue: a queued message would wait there until the conversation was opened and a turn of it had ended.
 5. **The inbox.** Everything else waits, in view: the site shows it, and the agent takes it with `it wait`.
 
@@ -117,17 +117,17 @@ The same add-on serves Codex in three places, and they differ in what happens to
 
 - **In the terminal.** A click reaches a busy conversation and an idle one.
 - **In the desktop app.** A click for an idle thread starts a turn by itself. A click for a busy thread waits in view there, with a Steer button, and runs by itself when the turn ends. Delivery in the middle of a turn is not proven in the desktop app.
-- **Inside T3 Code.** T3 Code closes a Codex session after 30 idle minutes, and when T3 Code itself is started again. From then a click is put to the thread in T3 Code, which starts a turn there: [T3 Code](#t3-code) says how.
+- **Inside T3 Code.** A click in the middle of a turn reaches that turn, as in the terminal. A click for a thread that is not in the middle of one is put to the thread in T3 Code, which starts a turn there, whether T3 Code still holds its Codex session or has closed it, as it does after 30 idle minutes and when T3 Code itself is started again: [T3 Code](#t3-code) says how.
 
 ### T3 Code
 
-It has no add-on for T3 Code. T3 Code runs the unmodified Claude Code and Codex, so their add-ons load inside its sessions, and a click on an idle thread starts a turn by itself in either, for as long as T3 Code holds the program it runs for that thread.
+It has no add-on for T3 Code. T3 Code runs the unmodified Claude Code and Codex, so their add-ons load inside its sessions. Claude Code's add-on is alive for as long as T3 Code holds the program it runs for a thread, and a click on an idle thread starts a turn through it, which T3 Code shows. Codex's add-on runs only at moments inside a turn, so it hands over a click that comes in the middle of one and can do nothing for a thread that is idle.
 
-T3 Code lets that program go when the thread has been quiet for a while, and when T3 Code itself is started again. The add-on goes with it, and the conversation is then closed as far as its agent app can tell, while the thread is where you left it. So a click for such a conversation is put to the thread: T3 Code starts a turn there, in the mode the thread is held in, and you see it in the thread as you would a message of your own. This is not Auto-wake, and does not ask whether Auto-wake is on: nothing is run that T3 Code does not show.
+T3 Code shows the turns it starts itself. A turn that Codex's own queue starts, inside the very Codex that T3 Code holds for a thread, runs and changes the page, and the thread shows nothing of it. And T3 Code lets a thread's program go when the thread has been quiet for a while, and when T3 Code itself is started again: the add-on goes with it, and the conversation is then closed as far as its agent app can tell, while the thread is where you left it. So a click for a conversation in a thread that its add-on is not there to take is put to the thread: T3 Code starts a turn there, in the mode the thread is held in, and you see it in the thread as you would a message of your own. Where the thread is in the middle of a turn, T3 Code keeps the click for when that turn is over. This is not Auto-wake, and does not ask whether Auto-wake is on: nothing is run that T3 Code does not show.
 
 For this It asks three things of the T3 Code server on the same machine, and nothing of any other: a session of its own, which T3 Code's own command issues (`t3 auth session issue`, for reading threads and sending to them, kept in memory and never written down); which thread holds the conversation, which T3 Code knows by the id the agent app gave it; and that the click be put to that thread. It does this wherever T3 Code is running, and there is nothing to set up. In T3 Code's list of sessions it is the one labelled "It".
 
-Where T3 Code is not running, or does not take the click, the conversation is reopened as any closed one is, if Auto-wake is on for its agent app, and that turn runs where T3 Code does not show it.
+Where T3 Code is running, the first click for a Codex conversation waits for T3 Code to say whether it has a thread of it, which took between a fifth of a second and two seconds where it was measured, and what it said is kept. Where T3 Code is not running, or does not take the click, the click goes the way it would without T3 Code: into Codex's queue where some Codex has the conversation open, and otherwise the conversation is reopened as any closed one is, if Auto-wake is on for its agent app. Either way that turn runs where T3 Code does not show it.
 
 T3 Code shows Claude's reply to a click that the add-on handed over, and not the click's text; a click that was put to the thread is shown as the message it is. Delivery in the middle of a turn is not proven inside a T3 Code thread, for Claude Code or for Codex.
 
