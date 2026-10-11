@@ -140,6 +140,9 @@ function run(
   })
 }
 
+/** What the command that made a page tells its agent, beside the page: to give the person the page's address in the chat. */
+const TELL = 'Give the user this url in the chat, in one short line that says what is on the page.'
+
 interface Asked {
   path: string
   args: Record<string, unknown>
@@ -1014,6 +1017,7 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
           // The page's address is at the address this machine was told to ask
           url: `${b.url}/p/plan`,
           note: 'This page was given to the an-app-of-their-own conversation theirs-1. This command also carried the marks of Codex, and which of them ran it could not be told. If that is not the conversation you are in, publish it again with --take, and with IT_HARNESS and IT_SESSION set to your own app and conversation.',
+          tell: TELL,
         },
       ])
       // And that is the conversation the backend was told
@@ -1028,7 +1032,7 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
       // One app's marks alone leave nothing to say
       b.asked.length = 0
       const alone = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CODEX_THREAD_ID: 'codex-1' })
-      expect([alone.code, printed(alone)]).toEqual([0, { id: 'plan', version: 1, url: `${b.url}/p/plan` }])
+      expect([alone.code, printed(alone)]).toEqual([0, { id: 'plan', version: 1, url: `${b.url}/p/plan`, tell: TELL }])
       expect(b.asked.find((x) => x.path === 'publish:begin')!.args.session).toEqual({ harness: 'codex', id: 'codex-1' })
     } finally {
       await b.close()
@@ -1395,7 +1399,7 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
       const opened = await run(m, ['open', 'plan'], b.env)
       expect([opened.code, printed(opened)]).toEqual([0, { id: 'plan', shownOn: [], hint: HINT }])
       const created = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--open'], b.env)
-      expect([created.code, printed(created)]).toEqual([0, { id: 'plan', version: 1, url: 'https://site.example/p/plan', shownOn: [], hint: HINT }])
+      expect([created.code, printed(created)]).toEqual([0, { id: 'plan', version: 1, url: 'https://site.example/p/plan', tell: TELL, shownOn: [], hint: HINT }])
     } finally {
       await b.close()
     }
@@ -1416,6 +1420,7 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
           id: 'plan',
           version: 1,
           url: `${b.url}/p/plan`,
+          tell: TELL,
           shownOn: [],
           notShown: { code: 'rate_limited', message: 'Too many at once. Try again in a moment.' },
           hint: 'The page is published, and only showing it failed: `notShown` says why. Do not publish it again. Run `it open plan` to show it.',
@@ -1477,6 +1482,7 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
           id: 'plan',
           version: 1,
           url: 'https://site.example/p/plan',
+          tell: TELL,
           shownOn: ['Desk'],
           notShownOn: [
             { display: 'Kitchen', reason: 'not_paired' },
@@ -2369,7 +2375,7 @@ describe.skipIf(process.platform === 'win32')('with a proxy named in the environ
           const listed = await run(m, ['list'], env, runtime)
           expect([listed.code, printed(listed)]).toEqual([0, []])
           const created = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>a page of the person’s own</p>'], env, runtime)
-          expect([created.code, printed(created)]).toEqual([0, { id: 'plan', version: 1, url: `${b.url}/p/plan` }])
+          expect([created.code, printed(created)]).toEqual([0, { id: 'plan', version: 1, url: `${b.url}/p/plan`, tell: TELL }])
           expect(b.uploads).toEqual([{ path: '/upload/u/index.html', bytes: Buffer.byteLength('<p>a page of the person’s own</p>') }])
           const status = printed(await run(m, ['status'], env, runtime))
           expect(status).toMatchObject({ running: true, enrolled: true, connector: { ok: true } })
@@ -2823,6 +2829,7 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
           id: 'plan',
           version: 1,
           url: `${b.url}/p/plan`,
+          tell: TELL,
           shownOn: [],
           hint: `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${b.url} in a browser on this machine and pair that browser. Other displays are added from there.`,
         },

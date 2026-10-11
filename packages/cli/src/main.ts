@@ -341,7 +341,7 @@ async function create(a: Args) {
     if (theirs?.session && carriedOn(theirs.session)) done = await publish({ ...page, take: true })
     else throw anothers(slug, theirs)
   }
-  await published(done, a)
+  await published(done, a, done.version === 1)
 }
 
 /** What is known of a page that a conversation meant to make and that is another's. */
@@ -383,8 +383,17 @@ function anothers(slug: string, theirs: Made | null): Problem {
  * exists by now whatever becomes of showing it, so it is always said, with what went wrong
  * beside it: an agent told only "no such display" would publish the same page a second time.
  */
-async function published(done: { slug: string; version: number; url: string; note?: string }, a: Args): Promise<void> {
-  const result = { id: done.slug, version: done.version, url: done.url, ...(done.note ? { note: done.note } : {}) }
+async function published(done: { slug: string; version: number; url: string; note?: string }, a: Args, fresh = false): Promise<void> {
+  const result = {
+    id: done.slug,
+    version: done.version,
+    url: done.url,
+    ...(done.note ? { note: done.note } : {}),
+    // A page that was just made is one the person has no way to yet, but for a display that
+    // happens to be open: the agent is told, each time, to put its address in the chat. Said
+    // by the command and not left to the skill, which an agent has read once and long ago
+    ...(fresh ? { tell: `Give the user this url in the chat, in one short line that says what is on the ${NOUN.one}.` } : {}),
+  }
   if (!a.flags.open) return out(result)
   try {
     out({ ...result, ...shownAs(await show(done.slug, a)) })
