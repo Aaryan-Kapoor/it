@@ -20,7 +20,7 @@ import { ask, backendAt, Problem, VERSION } from './src/lib'
 import { asAdmin, endOf, fetchProgram, type Running, startBackend } from './src/serve/backend'
 import { cannotRunHere, doorKey, instanceName, makeConfig, noteLoaded, programFile, RELEASE, readConfig, type ServiceConfig } from './src/serve/config'
 import { startDoor } from './src/serve/door'
-import { erasing, standsAs, teller } from './src/serve/index'
+import { erasing, opensAnew, standsAs, teller, unless } from './src/serve/index'
 import { environment, launchdPlist, logFile, systemdUnit } from './src/service'
 import * as usage from './src/usage'
 import { bases } from './test-ports'
@@ -178,7 +178,7 @@ describe.skipIf(process.platform === 'win32')('the look at whether a port is fre
 })
 
 describe('what the service tells the backend of how it stands', () => {
-  const stands = { on: false, wanted: false, addresses: [] as string[], background: true, usage: true }
+  const stands = { on: false, wanted: false, addresses: [] as string[], background: true, usage: true, tailnet: false, canTailnet: false }
   /** Something that is told, which notes what it was told and refuses what the test says it refuses. */
   const backendThat = (refuses: (said: Record<string, unknown>) => boolean = () => false) => {
     const told: Record<string, unknown>[] = []
@@ -198,9 +198,17 @@ describe('what the service tells the backend of how it stands', () => {
 
   test('it says how its door stands, whether It starts by itself from this folder, and whether usage counts are being sent', () => {
     // A folder that was only just made: nothing is registered for it, and nobody has been told of usage reporting
-    expect(standsAs({ network: false }, true, 21000)).toEqual({ on: false, wanted: true, addresses: [], background: false, usage: false })
+    // And with that, what the site needs to offer the network as a switch: whether the door is kept to
+    // the tailnet, whether this machine is on one, and why "on" would mean the internet here, where it would
+    const { canTailnet, exposed, ...shut } = standsAs({ network: false }, true, 21000)
+    expect(shut).toEqual({ on: false, wanted: true, addresses: [], background: false, usage: false, tailnet: false })
+    expect(typeof canTailnet).toBe('boolean')
+    expect(exposed === undefined || /^(has|is) /.test(exposed)).toBe(true)
     const open = standsAs({ network: true }, true, 21000)
-    expect([open.on, open.addresses.every((address) => address.endsWith(':21000'))]).toEqual([true, true])
+    expect([open.on, open.tailnet, open.addresses.every((address) => address.endsWith(':21000'))]).toEqual([true, false, true])
+    // A door kept to the tailnet says so, and one that is shut is never said to be kept to it
+    expect(standsAs({ network: true, tailnet: true }, true, 21000).tailnet).toBe(true)
+    expect(standsAs({ network: false, tailnet: true }, false, 21000).tailnet).toBe(false)
   })
 
   test.skipIf(process.platform === 'win32')(
@@ -247,6 +255,43 @@ describe('what the service tells the backend of how it stands', () => {
       }
     },
   )
+
+  test('the door is opened anew when the settings change, and for an asking on the site though the settings say what they said', () => {
+    const off = { network: false, tailnet: false }
+    const on = { network: true, tailnet: false }
+    const tailnet = { network: true, tailnet: true }
+    // Nothing changed and nothing asked: a door that could not listen when the service started is not tried again every second
+    expect(opensAnew(on, on, false)).toBe(false)
+    expect(opensAnew(off, off, false)).toBe(false)
+    // The settings say something else, as after `it network on`, or after turning to or from the tailnet alone
+    expect(opensAnew(on, off, false)).toBe(true)
+    expect(opensAnew(tailnet, on, false)).toBe(true)
+    expect(opensAnew(off, tailnet, false)).toBe(true)
+    // Asked for on the site: tried, though "on" is what the settings said already and what was last tried
+    expect(opensAnew(on, on, true)).toBe(true)
+    expect(opensAnew(off, off, true)).toBe(true)
+  })
+
+  test('what a look asks of the backend is waited for only until the door is stopped, so that a backend slow to answer does not hold the stopping up', async () => {
+    let stop: () => void = () => {}
+    const stopped = new Promise<void>((resolve) => {
+      stop = resolve
+    })
+    // A backend that never answers: once the door is stopped, the asking is let go of, with nothing
+    const never = unless(new Promise<string>(() => {}), stopped)
+    let came: string | undefined = 'not yet'
+    void never.then((got) => {
+      came = got
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(came).toBe('not yet')
+    stop()
+    await never
+    expect(came).toBeUndefined()
+    // One that answers in time is heard, and one that cannot be asked is nothing, and neither fails the look
+    expect(await unless(Promise.resolve('waiting'), new Promise(() => {}))).toBe('waiting')
+    expect(await unless(Promise.reject(new Error('refused')), new Promise(() => {}))).toBeUndefined()
+  })
 
   test('it is said once, and again only when something of it has changed', async () => {
     const backend = backendThat()

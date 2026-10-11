@@ -2815,6 +2815,62 @@ span.card-fallback {
   color: var(--fg);
 }
 
+/* The network as three ways to choose from, each with what it lets in said under it */
+.net {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.net-ways {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.net-way {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.net-way[data-on] {
+  background: var(--interactive);
+}
+.net-radio {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  accent-color: var(--ok);
+}
+.net-way b {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+.net-way small {
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+.net-way:has(input:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+.net-said,
+.panel-said {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+
 .page-frame-unavailable {
   flex: 1;
   display: flex;

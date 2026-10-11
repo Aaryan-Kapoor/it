@@ -8,7 +8,7 @@ import { version } from '../package.json'
 import { About } from './about'
 import { Dialog } from './dialog'
 import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow } from './lib'
-import { NoAddress, OtherAddresses, useWhere } from './network'
+import { NetworkSwitch, NoAddress, OtherAddresses, useNetwork, useWhere } from './network'
 import { thisPairing } from './outbox'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
 import { pushSupport, turnOffPush, turnOnPush } from './push'
@@ -184,9 +184,37 @@ export function Displays({ thisDisplay }: { thisDisplay?: string }) {
           <DisplayItem key={d.id} d={d} here={d.id === thisDisplay} owner now={now} act={act} along={alongWith(d.id)} />
         ))}
       </ul>
+      <Network />
       <PairedBrowsers />
       {adding && <AddDisplay onClose={done} />}
     </main>
+  )
+}
+
+/**
+ * Who can reach It, for the owner to choose here: this computer only, the networks its machine
+ * is on, or the person's tailnet alone. Until now that was a command at a terminal, which
+ * someone adding a phone had to go and find. Left out where the service says too little of
+ * itself to offer it, as one of an earlier It does.
+ */
+function Network() {
+  const net = useNetwork()
+  if (!net.offered) return null
+  return (
+    <section>
+      <div className="section-head">
+        <h3>Network</h3>
+      </div>
+      <div className="panel panel-pad">
+        <NetworkSwitch />
+        {net.addresses.length > 0 && (
+          <p className="panel-said">
+            Another device opens It at <span className="mono">{net.addresses[0]}</span>
+            {net.addresses.length > 1 ? `, or at one of ${net.addresses.length - 1} more that “Add a display” lists.` : '.'}
+          </p>
+        )}
+      </div>
+    </section>
   )
 }
 

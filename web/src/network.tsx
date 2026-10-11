@@ -4,10 +4,10 @@
 // and tells the backend whether the network is on and at which addresses it is reached; the
 // owner's browser reads that here, and what it shows changes by itself when `it network on` or
 // `it network off` is run.
-import { useQuery } from 'convex/react'
-import { useState } from 'react'
+import { useMutation, useQuery } from 'convex/react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import { Copyable } from './dialog'
-import { api, pairingAddress } from './lib'
+import { api, pairingAddress, refusal, useNow } from './lib'
 
 export interface Where {
   /**
@@ -57,14 +57,200 @@ export function OtherAddresses({ where }: { where: Where }) {
   )
 }
 
+/** The three ways the network can be: off, on for every network the machine is on, or on for the person's tailnet alone. */
+export type Way = 'off' | 'on' | 'tailscale'
+/** How the door stands, as the backend tells the owner's browser, with what was asked of it here and what became of that. */
+interface Stands {
+  on: boolean
+  addresses: string[]
+  tailnet?: boolean
+  /** Whether the machine It runs on is on a tailnet. Null while its service has not said, as one of an earlier It never does. */
+  canTailnet?: boolean | null
+  /** Why "on" would mean the internet on that machine, in words that finish "This machine …", where it would. */
+  exposed?: string | null
+  /** What was asked and is not yet answered. When it was asked is the name it goes by. */
+  asked?: { to: Way; at: number } | null
+  /** What became of the last asking that was answered, and under `asked` which asking that was. */
+  answered?: { to: Way; at: number; ok: boolean; why?: string; asked?: number } | null
+}
+/** How long an asking may go untaken before the person is told that It has not taken it. The service looks every second. */
+export const UNTAKEN_MS = 8000
+/** How long an asking is waited for at all. After that the choice is given back, with how the network stands, and nobody is left looking at a choice they cannot make. */
+export const GIVEN_UP_MS = 30_000
+/** What is said of an asking that came to nothing, by the service's one word for why. */
+const WHY_NOT: Record<string, string> = {
+  cannot_listen:
+    'It could not listen on that machine’s network addresses, so the network is left off. Another program may have one of the ports It listens on there.',
+  no_tailnet: 'That machine is on no tailnet, so there is none to keep It to.',
+  too_late: 'It was not running to do that. Try it again.',
+}
+/** Whether this browser reached the site at a name that only means the machine It runs on. */
+const onThatMachine = () => ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)
+
 /**
- * What is shown in place of an address when there is none to give: the command that turns the
- * network on, or that the machine is on no network. What is waited for appears by itself once
- * there is an address.
+ * The network as the owner turns it on and off from the site. Nothing is changed by the
+ * asking itself: the service that listens takes it up within a second or two, opens its door
+ * anew as `it network` has it do, and says what became of it, which is what is shown here.
+ */
+export function useNetwork() {
+  const said = useQuery(api.network.get, {}) as Stands | undefined
+  const asking = useMutation(api.network.ask)
+  const now = useNow(1000)
+  /**
+   * What was asked here and is not yet over: for which way, when by this browser's clock, and
+   * the name the backend gave the asking, once it has. An answer is this asking's only if it
+   * names it: with the site open in two tabs, the answer to what the other asked is not taken
+   * for the answer to this, and what the other was refused is not said here.
+   */
+  const [mine, setMine] = useState<{ to: Way; at: number; id: number | null } | null>(null)
+  /** Why what was last asked here did not come about, in a sentence, until something else is asked. */
+  const [failed, setFailed] = useState('')
+  const way: Way | undefined = said === undefined ? undefined : !said.on ? 'off' : said.tailnet ? 'tailscale' : 'on'
+  useEffect(() => {
+    if (!mine || mine.id === null || !said) return
+    const answered = said.answered
+    // Answered: it is over, and where it did not come about, why is said
+    if (answered && answered.asked === mine.id) {
+      setMine(null)
+      setFailed(answered.ok ? '' : (WHY_NOT[answered.why ?? ''] ?? 'It could not do that.'))
+    }
+    // Another asking took its place before the service came to it, here or in another tab: it
+    // is over too, and nothing is said of it. The choice shows how the network stands
+    else if ((said.asked && said.asked.at !== mine.id) || (answered && (answered.asked ?? 0) > mine.id)) setMine(null)
+  }, [mine, said])
+  // Never waited for for ever: an asking that nothing is heard of gives the choice back
+  const givenUp = mine !== null && now - mine.at > GIVEN_UP_MS && Date.now() - mine.at > GIVEN_UP_MS
+  useEffect(() => {
+    if (!givenUp) return
+    setMine(null)
+    setFailed('It has not said what became of that. The choice shows how the network stands now.')
+  }, [givenUp])
+  const waiting = mine !== null
+  const ask = useCallback(
+    (to: Way) => {
+      if (!said || waiting) return
+      // What "on" means on a machine the internet reaches is said before it is done, and so is
+      // what a browser that came over the network loses with the way it came by
+      if (to === 'on' && said.exposed && !confirm(`This machine ${said.exposed}. With the network on, It answers the internet, over plain http. Turn it on?`))
+        return
+      if (to !== 'on' && said.on && !onThatMachine()) {
+        const loses =
+          to === 'off'
+            ? 'This browser reaches It over the network. With the network off it loses It, and the network is turned on again only at the machine It runs on.'
+            : 'Kept to your tailnet, It answers this browser only if it reached It over the tailnet.'
+        if (!confirm(`${loses} Go on?`)) return
+      }
+      setFailed('')
+      const at = Date.now()
+      setMine({ to, at, id: null })
+      asking({ to }).then(
+        // The name the backend gave it, by which its answer is known
+        (given) => setMine((was) => (was && was.at === at ? { ...was, id: (given as { asked?: number } | null)?.asked ?? null } : was)),
+        (err) => {
+          setMine(null)
+          setFailed(refusal(err).message)
+        },
+      )
+    },
+    [asking, said, waiting],
+  )
+  return {
+    /** How it stands now: undefined until the backend has said. */
+    way,
+    /** Whether the service says enough of itself for the switch to be offered. One of an earlier It does not, and the command is shown instead. */
+    offered: said !== undefined && said.canTailnet !== null && said.canTailnet !== undefined,
+    canTailnet: said?.canTailnet === true,
+    exposed: said?.exposed ?? null,
+    addresses: said?.on ? said.addresses : [],
+    /** What is being turned to, while the service has not yet said what became of it. */
+    turning: mine ? mine.to : null,
+    /** It has gone unanswered for longer than the service takes to look. */
+    untaken: mine !== null && now - mine.at > UNTAKEN_MS && Date.now() - mine.at > UNTAKEN_MS,
+    /** Why what was asked here did not come about, in a sentence, where it did not. */
+    failed,
+    ask,
+  }
+}
+
+const WAYS: Way[] = ['off', 'on', 'tailscale']
+
+/**
+ * The network as three ways to choose from, with what each lets in said under it, and what
+ * became of the last choosing. Turned on, It speaks plain http to whatever can reach it, which
+ * is why none of the three is chosen by a single press where the machine is one the internet reaches.
+ */
+export function NetworkSwitch() {
+  const net = useNetwork()
+  // A name of its own for each place the choice is shown. Under one name, the choice in "Add a
+  // display" and the one on the page behind it were one group to the browser, which lets only
+  // one of a group be chosen: the one in the dialog stood with nothing chosen.
+  const group = useId()
+  if (net.way === undefined) return null
+  const label: Record<Way, string> = {
+    off: 'This computer only',
+    on: net.exposed ? 'Every network this machine is on, the internet included' : 'My home network',
+    tailscale: 'My tailnet only',
+  }
+  const hint: Record<Way, string> = {
+    off: 'Nothing but the machine It runs on can open It.',
+    on: net.exposed ? `This machine ${net.exposed}. It answers over plain http.` : 'Other devices on the same network can open It, over plain http.',
+    tailscale: net.canTailnet ? 'Only your own devices that are signed in to Tailscale.' : 'Tailscale was not found on the machine It runs on.',
+  }
+  const shown = net.turning ?? net.way
+  return (
+    <div className="net">
+      <fieldset className="net-ways" disabled={net.turning !== null}>
+        <legend className="sr-only">Who can reach It</legend>
+        {WAYS.map((to) => (
+          <label key={to} className="net-way" data-on={shown === to || undefined}>
+            <input
+              type="radio"
+              className="net-radio"
+              name={group}
+              checked={shown === to}
+              disabled={to === 'tailscale' && !net.canTailnet}
+              onChange={() => net.ask(to)}
+            />
+            <span>
+              <b>{label[to]}</b>
+              <small>{hint[to]}</small>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      {net.turning !== null && (
+        <p className="net-said" role="status">
+          {net.untaken
+            ? 'It has not taken that yet. It looks every second while it is running: if this goes on, run `it status` on the machine It runs on.'
+            : net.turning === 'off'
+              ? 'Turning the network off…'
+              : 'Turning the network on…'}
+        </p>
+      )}
+      {net.turning === null && net.failed && (
+        <p className="net-said error" role="alert">
+          {net.failed}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * What is shown in place of an address when there is none to give: the network to turn on, or
+ * that the machine is on no network. What is waited for appears by itself once there is an
+ * address. Where the service says too little of itself for the switch, as one of an earlier It
+ * does, the command that turns the network on is shown as before.
  */
 export function NoAddress({ where }: { where: Where }) {
+  const net = useNetwork()
   if (where.state === 'off')
-    return (
+    return net.offered ? (
+      <>
+        <p className="modal-lede">It answers only its own machine for now. Choose who else can reach it:</p>
+        <NetworkSwitch />
+      </>
+    ) : (
       <>
         <p className="modal-lede">It answers only its own machine for now. Turn the network on there:</p>
         <Copyable prompt text="it network on" />
