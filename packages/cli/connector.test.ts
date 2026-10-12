@@ -1740,8 +1740,8 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     offered(click(1))
     await until(() => stand.t3.sent.length >= 1)
     await until(() => called('delivery:handedOff').includes('click-1'))
-    expect(stand.t3.sent[0]).toMatchObject({ thread: 't3-thread-a' })
-    expect(stand.t3.sent[0]!.text).toContain('[action click-1]')
+    // What stands in the thread is one short line: the page, what was done, and the id the rest is read by
+    expect(stand.t3.sent[0]).toEqual({ thread: 't3-thread-a', text: '[It] "A page" (page-1): approve, with details [action click-1]' })
     // The Codex that T3 Code holds has the conversation open, and its queue would have taken it
     expect(stand.closed.has('thread-1')).toBe(false)
     expect(stand.codex).toEqual([])
@@ -1750,12 +1750,29 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.t3.sent.length).toBe(1)
   })
 
+  test('what a person typed above a page stands in the thread as they typed it, with none of It’s words to the agent, and is kept off Codex’s command line', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-6', 't3-thread-f')
+    await start()
+    const typed = (n: number) => ({ ...click(n), name: 'it:message', payload: '{"text":"Make the board bigger"}' })
+    offered(typed(6))
+    await until(() => stand.t3.sent.length >= 1)
+    expect(stand.t3.sent[0]!.text).toBe('[It] "A page" (page-6), typed above it: Make the board bigger [action click-6]')
+    // In Codex's queue the line is an argument of a command, which others on the machine can read
+    offered(typed(7))
+    await until(() => stand.codex.length === 1)
+    expect(stand.codex[0]!.args).toContain('--message=[It] "A page" (page-7), typed above it: read it with `it action click-7` [action click-7]')
+    expect(JSON.stringify(stand.codex[0]!.args)).not.toContain('bigger')
+  })
+
   test('one whose conversation is in no thread goes into Codex’s queue, once T3 Code has said so, and T3 Code is not asked again for the next', async () => {
     withT3Code()
     await start()
     offered(click(2))
     await until(() => stand.codex.length === 1)
     expect(stand.codex[0]!.args).toContain('--thread=thread-2')
+    // The same short line as a thread is given
+    expect(stand.codex[0]!.args).toContain('--message=[It] "A page" (page-2): approve, with details [action click-2]')
     expect(stand.t3.asked.map((a) => a.ids)).toEqual([['thread-2']])
     expect(stand.t3.sent).toEqual([])
     stand.codex[0]!.end()
@@ -1803,8 +1820,9 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     const second = { ...click(5, 4), id: 'click-5' }
     offered(first, second)
     await until(() => stand.t3.sent.length >= 1)
-    expect(stand.t3.sent[0]!.text).toContain('[action click-4]')
-    expect(stand.t3.sent[0]!.text).toContain('[action click-5]')
+    expect(stand.t3.sent[0]!.text).toBe(
+      '[It] "A page" (page-4): approve, with details [action click-4]\n[It] "A page" (page-5): approve, with details [action click-5]',
+    )
     await until(() => ['click-4', 'click-5'].every((id) => called('delivery:handedOff').includes(id)))
     offered()
     // The agent of the running turn waits for the second page: T3 Code holds its click behind this very turn

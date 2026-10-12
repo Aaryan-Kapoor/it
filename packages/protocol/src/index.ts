@@ -408,9 +408,13 @@ export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
  * with `it action`, where it arrives as data. It says only that there is something to read,
  * that nobody was at the page, or that the page has changed since, each in a word or two.
  */
-/** How much of what a person typed stands in the short line: more is read with `it action`. */
+/**
+ * How much of what a person typed stands in the short line: more is read with `it action`.
+ * With `typed` false nothing of it does, for a line that is put on a command line, where the
+ * other users of the machine can read it: the agent is told to read it.
+ */
 const BRIEF_TYPED = 1000
-export function briefClick(c: Click): string {
+export function briefClick(c: Click, typed = true): string {
   const full = c.payload === undefined || c.payload === null ? '' : JSON.stringify(c.payload)
   const named = c.title ? `${titled(c.title)} (${c.artifact})` : `(${c.artifact})`
   // The page's own script failed: said as that, in the few words this line has
@@ -418,6 +422,7 @@ export function briefClick(c: Click): string {
   // What a person typed above the page is theirs, and stands here as it was typed: it is the one
   // thing an action carries that the page did not choose. A long one is cut, and read with `it action`
   if (c.name === MESSAGE) {
+    if (!typed) return `[It] ${named}, typed above it: read it with \`it action ${c.id}\` [action ${c.id}]`
     const text = typedOf(c.payload).replace(/\s+/g, ' ').trim()
     return `[It] ${named}, typed above it: ${text.length > BRIEF_TYPED ? `${text.slice(0, BRIEF_TYPED)}… (cut short)` : text} [action ${c.id}]`
   }

@@ -1330,9 +1330,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
           closing || unfitting
           ? NOT_STARTED
           : t3
-            ? // Put to the thread whole, as to a reopened conversation: it goes to T3 Code on this machine alone, on no command line
-              await t3Send(t3.server, t3.thread, [click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n'))
-            : await codexQueue(threadOf(key), describeClick(asClick(click), 0))
+            ? // What stands in the thread is the person's to look at, so it is the short line for
+              // each click and nothing else: no instructions, and nothing the action carried
+              // but what they typed themselves. It goes to T3 Code on this machine alone, on no
+              // command line.
+              await t3Send(t3.server, t3.thread, [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n'))
+            : // The same short line, without what they typed: this one is put on a command line
+              await codexQueue(threadOf(key), briefClick(asClick(click), false))
       // A conversation the person stopped had what was done all the same: it is handed over,
       // and nothing is tried again for it
       // Ended because this connector is stopping, it is given back, to be reopened for by the

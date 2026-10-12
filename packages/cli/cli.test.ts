@@ -149,6 +149,12 @@ describe('the words an agent reads for an action', () => {
     expect(briefClick({ ...typed, payload: { text: 'x'.repeat(5000) } })).toMatch(/x{1000}… \(cut short\) \[action k57\]$/)
     // Whatever is under the name that is no text is nothing typed
     expect(briefClick({ ...typed, payload: { text: { a: 1 } } })).toBe('[It] "Deploy plan" (plan), typed above it:  [action k57]')
+    // For a command line, which the other users of the machine can read: nothing of what was typed, and where to read it
+    expect(briefClick({ ...typed, payload: { text: 'Make it bigger' } }, false)).toBe(
+      '[It] "Deploy plan" (plan), typed above it: read it with `it action k57` [action k57]',
+    )
+    // A press is the same line either way: it never held what the action carried
+    expect(briefClick({ ...typed, name: 'approve', payload: { plan: 'B' } }, false)).toBe(briefClick({ ...typed, name: 'approve', payload: { plan: 'B' } }))
   })
   test('say whether the site saw someone use the page just before it sent the action, and never that the person chose it or that the page acted alone', () => {
     expect(describeClick({ ...action, attended: true })).toBe(
