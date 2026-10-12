@@ -1,14 +1,18 @@
 // T3 Code runs agent apps' conversations inside threads of its own: it starts Claude Code or
 // Codex for a thread, shows what the agent does there, and lets the program go again when the
 // thread has been quiet, or when T3 Code itself is started anew. While T3 Code holds the
-// program, It's add-on is alive inside it and hands a click over as it does in any open
-// conversation. Once the program is gone, the conversation is closed as far as its agent app can
-// tell, and reopening it with that app's own command would run the turn where the person does
-// not see it: the thread in T3 Code would show nothing.
+// program, Claude Code's add-on is alive inside it and hands a click over as it does in any
+// open conversation, and T3 Code shows the turn. Codex's add-on runs only at moments inside a
+// turn. For an idle thread of Codex there is Codex's own queue, and a message put there starts
+// a turn inside the Codex that T3 Code holds, which T3 Code did not start and does not show.
+// Once the program is gone, the conversation is closed as far as its agent app can tell, and
+// reopening it with that app's own command runs the turn outside T3 Code. Either way the
+// thread in T3 Code would show nothing.
 //
-// So a click for such a conversation is handed to T3 Code itself, which starts a turn in the
-// thread, in the mode the thread is held in, and shows it. This is everything It asks of T3
-// Code, and all of it is asked of the server on this machine, as the person who runs both:
+// So a click for a conversation in a thread, which its add-on is not there to take, is handed
+// to T3 Code itself, which starts a turn in the thread, in the mode the thread is held in, and
+// shows it. This is everything It asks of T3 Code, and all of it is asked of the server on
+// this machine, as the person who runs both:
 //
 // - which server is running, from the note T3 Code keeps of it in its own folder;
 // - a session of its own, for reading threads and sending to them, from T3 Code's own command

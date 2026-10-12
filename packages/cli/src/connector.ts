@@ -14,7 +14,7 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
+import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, MARK, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
 import {
   api,
   ask,
@@ -148,6 +148,8 @@ export const infoFile = () => inHome('connector.json')
 const socketFile = () => inHome('connector.sock')
 const journalFile = () => inHome('journal.jsonl')
 const aliasFile = () => inHome('aliases.json')
+/** The conversations whose hooks have been heard from, so that it is known across a restart where a hook of It's runs. */
+const heardFile = () => inHome('heard.json')
 /** Where a connector that is stopping writes down which conversations it cut off in the middle of a turn. */
 const cutOffFile = () => inHome('cut-off.json')
 /** The conversations this connector has reopened and that are running now, each with the process that is it: read by the connector that starts next, if this one dies. */
@@ -212,6 +214,26 @@ function textOfBytes(bytes: Buffer): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * The way a click goes when no add-on is there to take it, of the three that start a turn for
+ * it. The order is the point of this, and each is asked only where the one before said no:
+ *
+ * - `t3`: the conversation is held in a thread of T3 Code, which starts the turn and shows it.
+ *   It comes before Codex's queue, because a message put in that queue starts its turn inside
+ *   the very Codex that T3 Code holds for the thread, and T3 Code shows the turns it started
+ *   itself: the agent did the work, the page changed, and the thread showed nothing.
+ * - `queue`: some Codex has the conversation open, and takes a message from its own queue.
+ * - `reopen`: the conversation is closed, and reopening is switched on for its agent app.
+ *
+ * Nothing where none of them holds: the click waits, and the site shows it.
+ */
+export function wayOf(of: { inT3: () => boolean; codexOpen: () => boolean; reopens: () => boolean }): 't3' | 'queue' | 'reopen' | undefined {
+  if (of.inT3()) return 't3'
+  if (of.codexOpen()) return 'queue'
+  if (of.reopens()) return 'reopen'
+  return undefined
 }
 
 /** Null when Codex took the message. Otherwise why it did not, for the log: never what Codex printed, which may repeat the message. */
@@ -441,11 +463,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   const submitting = new Map<string, { click: Offered; toWaiter: boolean }>()
   /**
-   * Taken by Codex's queue while the conversation's turn was running. Codex hands such a click
-   * over only when that turn is done, so an agent that begins to wait for it in the same turn
-   * would wait for a message that stands behind its own turn. It is given the click as well
-   * (see `/waiting`). Kept, by the conversation it is for, until the conversation is heard to
-   * end the turn or begin another, which is when Codex itself hands the click over.
+   * Taken by Codex's queue, or by T3 Code for a thread of Codex, while the conversation's turn
+   * was running. Either hands such a click over only when that turn is done, so an agent that
+   * begins to wait for it in the same turn would wait for a message that stands behind its own
+   * turn. It is given the click as well (see `/waiting`). Kept, by the conversation it is for,
+   * until the conversation is heard to end the turn or begin another, which is when the click
+   * is handed over.
    */
   const behindTurn = new Map<string, { click: Offered; key: string }>()
   /** How many of them are kept at once. */
@@ -471,6 +494,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * could not take a message for is not offered to it again for a while: `t3Refused`.
    */
   const t3Known = new Map<string, { thread: string | null; at: number } | 'asking'>()
+  /** When each conversation that is being asked for was first asked for, by the clock that only goes forward. */
+  const t3Asked = new Map<string, number>()
   const t3Refused = new Map<string, number>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
   /** How long a conversation that is in no thread of T3 Code is taken to be in none. */
@@ -478,10 +503,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** How long a conversation is kept from T3 Code after it could not take a message for it, or could not be asked. */
   const T3_REFUSED_MS = 10 * 60_000
   /**
-   * The thread of T3 Code that a closed conversation is held in, with the server to send to:
+   * How long T3 Code is given to say which thread holds a conversation, before a click for it
+   * goes the way it would without T3 Code. It says so in a fifth of a second to two seconds
+   * where it is well. One that answers the first question and then stalls would otherwise keep
+   * a click waiting through two dozen threads at twenty seconds each, which some Codex could
+   * have taken at once. What it says in the end is kept, for the clicks that come after.
+   */
+  const T3_ASKED_MS = 5_000
+  /**
+   * The thread of T3 Code that a conversation is held in, with the server to send to:
    * `asking` while that is being found out, and nothing where it is in none, where T3 Code
-   * is not running here, and where it has just failed to take something for it. Then the
-   * conversation is reopened as any other is.
+   * is not running here, where it has just failed to take something for it, and where it has
+   * been asked for longer than it is given to say. Then the click goes the way it would
+   * without T3 Code.
    */
   function t3For(key: string, session: { harness: string; id: string }): { server: T3; thread: string } | 'asking' | undefined {
     const now = Date.now()
@@ -495,16 +529,21 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const server = t3Seen.server
     if (!server) return undefined
     const known = t3Known.get(key)
-    if (known === 'asking') return 'asking'
+    if (known === 'asking') return steady() - (t3Asked.get(key) ?? 0) < T3_ASKED_MS ? 'asking' : undefined
     if (known?.thread) return { server, thread: known.thread }
     if (known && now - known.at < T3_AGAIN_MS) return undefined
-    if (t3Known.size > 2000) t3Known.clear()
+    if (t3Known.size > 2000) {
+      t3Known.clear()
+      t3Asked.clear()
+    }
     t3Known.set(key, 'asking')
+    t3Asked.set(key, steady())
     // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
     const ids = [...new Set([session.id, threadOf(key)])]
     void t3ThreadOf(server, { harness: session.harness, ids, cwd: conversationFolder(session) })
       .catch(() => undefined)
       .then((thread) => {
+        t3Asked.delete(key)
         if (thread === undefined) {
           // T3 Code could not be asked: the conversation is reopened as any other meanwhile, and T3 Code is asked again later
           t3Known.delete(key)
@@ -516,6 +555,98 @@ async function connecting(say: (line: string) => void): Promise<void> {
         soon(10)
       })
     return 'asking'
+  }
+  /**
+   * What each mark that was put into a conversation stands for, by the conversation: the
+   * words for its clicks in full, kept until one of the conversation's own hooks asks for
+   * them, which it does as the turn begins that the mark started, or at the next moment one
+   * of them runs. A mark nobody asks about in time was put where no hook of It's runs.
+   */
+  const marked = new Map<string, { id: string; texts: string[]; at: number }[]>()
+  /** The conversations a mark went unasked about: they are given the short line from then on, for as long as this connector runs. */
+  const unmarked = new Set<string>()
+  /** How long a conversation's hooks are given to ask what a mark stands for, and to say that they have it. An agent app that has to be started first takes ten seconds or so. */
+  const MARK_ASKED_MS = 20_000
+  /** How long after each try the short line is tried again, where the app did not take it. Past the last, what the mark stood for is kept for the conversation's next hook. */
+  const MARK_AGAIN_MS = [20_000, 60_000, 300_000]
+  const markTimers = new Set<ReturnType<typeof setTimeout>>()
+  /**
+   * The conversations whose add-on has been heard from on this machine, kept across a restart
+   * of the connector: those are the ones a hook of It's is known to run in. Only so many.
+   */
+  const heardBefore = new Set<string>(Object.keys(readJson<Record<string, number>>(heardFile()) ?? {}))
+  const HEARD_MOST = 300
+  const noteHeard = (key: string) => {
+    if (heardBefore.has(key)) return
+    heardBefore.add(key)
+    while (heardBefore.size > HEARD_MOST) heardBefore.delete(heardBefore.values().next().value!)
+    try {
+      writePrivate(heardFile(), Object.fromEntries([...heardBefore].map((k) => [k, 1])))
+    } catch {
+      // Not kept: it is heard from again soon enough
+    }
+  }
+  /**
+   * Whether a conversation is given the mark alone. Its agent app has to have a hook of It's
+   * that runs as a turn begins (Codex and Claude Code have). The conversation's add-on has to
+   * have been heard from, so that its hooks are known to run there. No turn of it may be
+   * running, since a mark put into a running turn starts none, and no hook runs for it as one
+   * begins. And it must not have left a mark unasked about before.
+   */
+  const marks = (key: string, harness: string) =>
+    (harness === 'codex' || harness === 'claude-code') && (sessions.has(key) || heardBefore.has(key)) && !unmarked.has(key) && !turnRunning(key, Date.now())
+  /**
+   * Notes what a mark stands for, before the mark is sent. Given back: how to take the note
+   * away again, where the mark was not taken, and how to start the wait for a hook to say that
+   * it has what the mark stood for.
+   *
+   * A note is kept until a hook says it has it, and not only until one has asked: an answer
+   * that is lost on its way, or a hook that dies with it unread, would otherwise have used up
+   * what the click was, when It has long been told that the click was handed over. Should no
+   * hook say so in time, the short line is sent after the mark, so that the agent is told
+   * after all, and the conversation is given no mark again. Where the app does not take the
+   * line either, it is tried again a few times, and the note stays for the conversation's
+   * next hook whatever becomes of that.
+   */
+  const noteMark = (key: string, harness: string, texts: string[], again: () => Promise<unknown>) => {
+    const entry = { id: randomBytes(8).toString('hex'), texts, at: Date.now() }
+    marked.set(key, [...(marked.get(key) ?? []), entry])
+    const kept = () => (marked.get(key) ?? []).includes(entry)
+    const takeAway = () => {
+      const left = (marked.get(key) ?? []).filter((m) => m !== entry)
+      if (left.length) marked.set(key, left)
+      else marked.delete(key)
+    }
+    const who = `${a(agentOf(harness))} conversation (${short(threadOf(key))})`
+    const after = (ms: number, what: () => void) => {
+      const timer = setTimeout(() => {
+        markTimers.delete(timer)
+        if (!closing && kept()) what()
+      }, ms)
+      markTimers.add(timer)
+    }
+    const line = (tried: number) => {
+      void again()
+        .catch(() => 'it could not be sent')
+        .then((refused) => {
+          if (!kept()) return
+          // Taken: the agent has it in the line, and the note is done with
+          if (refused === null) return takeAway()
+          const next = MARK_AGAIN_MS[tried]
+          if (next === undefined) {
+            say(`${who} did not take the short line either, ${tried + 1} times; what its mark stood for is kept for the next of its hooks that runs`)
+            return
+          }
+          after(next, () => line(tried + 1))
+        })
+    }
+    const wait = () =>
+      after(MARK_ASKED_MS, () => {
+        unmarked.add(key)
+        say(`${who} was given a mark and none of its hooks said it had what the mark stood for; it is given the short line now, and from here on`)
+        line(0)
+      })
+    return { takeAway, wait }
   }
   /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
   const queues = new Map<string, Promise<void>>()
@@ -1258,6 +1389,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
       const toldCutOff = cutOff.has(key)
       const sent = { click, toWaiter: false }
       submitting.set(click.id, sent)
+      // What is put into a conversation that is open, or into a thread: the mark alone, where a
+      // hook of It's hands the agent the rest, and otherwise one short line for each click
+      const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
+      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexQueue(threadOf(key), text))
+      const mark =
+        !reopening && marks(key, harness)
+          ? noteMark(
+              key,
+              harness,
+              [click, ...(t3 ? withIt : [])].map((c) => describeClick(asClick(c))),
+              () => put(lines()),
+            )
+          : undefined
       // Whose run it will be, where one is started: should every run be ended at once, as when
       // the machine is found not to fit, the note of that is this hand-over's to let go of
       if (reopening && !reopenedNow.has(key)) handing.set(key, mine)
@@ -1292,10 +1436,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
         : // Not once this connector is stopping or the machine has ceased to fit, which may have come while the hold was made good again
           closing || unfitting
           ? NOT_STARTED
-          : t3
-            ? // Put to the thread whole, as to a reopened conversation: it goes to T3 Code on this machine alone, on no command line
-              await t3Send(t3.server, t3.thread, [click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n'))
-            : await codexQueue(threadOf(key), describeClick(asClick(click), 0))
+          : // What stands in the thread, or in the conversation, is the person's to look at: the
+            // mark alone, or the short line for each click, and never It's words to the agent.
+            // In a thread the line holds what they typed themselves, since it goes to T3 Code
+            // on this machine alone. In Codex's queue it does not: that one is put on a
+            // command line.
+            await put(mark ? MARK : lines())
+      // A mark that was not taken stands for nothing. One that was is waited on: a hook asks
+      if (mark && refused !== null) mark.takeAway()
+      else mark?.wait()
       // A conversation the person stopped had what was done all the same: it is handed over,
       // and nothing is tried again for it
       // Ended because this connector is stopping, it is given back, to be reopened for by the
@@ -1344,9 +1493,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         record('agent.woken', { result: 'resumed', agent: agentOf(harness) })
         if (stalled.get(line) === click.id) stalled.delete(line)
-        // Only Codex's queue hands a click over behind a turn that is running
-        if (!reopening && !t3 && !sent.toWaiter && turnRunning(key, Date.now())) {
-          behindTurn.set(click.id, { click, key })
+        // Codex's queue hands a click over behind a turn that is running, and so does T3 Code
+        // for a thread whose turn is running, with every click that went along in the same
+        // message: an agent that waits in that turn for one of those would wait for a message
+        // that stands behind its own turn. A reopening never does: nothing was running
+        if (!reopening && turnRunning(key, Date.now())) {
+          for (const c of [click, ...withIt]) if (c !== click || !sent.toWaiter) behindTurn.set(c.id, { click: c, key })
         }
         await confirmAll()
       } else {
@@ -1418,11 +1570,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   function queue(click: Offered, reopening: boolean, t3?: { server: T3; thread: string }): boolean {
     if (closing || unfitting) return false
-    // What Codex's queue takes behind a running turn is kept here for a waiter in that turn,
-    // and only so much is kept. Past that a click stays with It, where nothing is lost, until
-    // a turn ends and makes room: letting go of the oldest copy to make room took it from a
-    // turn that may still be waiting for it.
-    if (!reopening && !t3 && !queueing.has(click.id) && behindTurn.size + submitting.size >= BEHIND_MOST) {
+    // What Codex's queue or T3 Code takes behind a running turn is kept here for a waiter in
+    // that turn, and only so much is kept. Past that a click stays with It, where nothing is
+    // lost, until a turn ends and makes room: letting go of the oldest copy to make room took
+    // it from a turn that may still be waiting for it.
+    if (!reopening && !queueing.has(click.id) && behindTurn.size + submitting.size >= BEHIND_MOST) {
       // Those whose turn is over are no longer waited for by anyone, and are let go of first:
       // a Codex that was closed in the middle of a turn says nothing of its ending
       for (const [id, b] of behindTurn) if (!turnRunning(b.key, Date.now())) behindTurn.delete(id)
@@ -1588,7 +1740,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const listening = !codex && s !== undefined && now - s.seen < LIVE_MS
         // A Codex turn that is running will reach a hook: after its next command, or when it stops
         const inTurn = codex && turnRunning(key, now)
-        if (listening || (inTurn && now - click.at < FRESH_MS)) {
+        const forAddOn = listening || (inTurn && now - click.at < FRESH_MS)
+        // Which of the other ways it goes, asked only where the first does not take it
+        const way = forAddOn
+          ? undefined
+          : wayOf({
+              inT3: heldInT3,
+              codexOpen: () => codex && connected('codex') && !reopenedNow.has(key) && codexHeld(threadOf(key)),
+              reopens: () => wakes(session.harness, click.at) && connected(session.harness),
+            })
+        if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
           const asked = steady()
           const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session })
@@ -1602,22 +1763,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
             held.set(click.id, { click, key, claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
             journal('claimed', click.id)
           }
-        } else if (codex && connected('codex') && !reopenedNow.has(key) && codexHeld(threadOf(key))) {
-          // Route 2: some Codex has the conversation open, and takes a message from Codex's own
-          // queue by itself: at once when it is idle, after its turn when it is not. Not waited
-          // for here: one slow command must not hold up every other click. A conversation this
-          // machine is itself running is not given one that way: that run ends with its turn,
-          // and would cut off whatever Codex began for the message.
-          if (!queue(click, false)) waitingBehind.add(key)
-        } else if (heldInT3()) {
-          // Route 2b: the conversation is held in a thread of T3 Code, which has let its
-          // program go, as it does when a thread has been quiet or T3 Code is started anew.
-          // The person has not closed anything: the thread is where it was. So the click is
-          // put to the thread, where T3 Code starts a turn for it and shows it, in the mode
-          // the thread is held in. Reopened with the agent app's own command, the same turn
-          // would run where they do not see it. This is not a reopening, and is not asked of
-          // the switch for one. Not for a conversation this machine is itself running that
-          // way at this moment, and not until a few things done together can go together.
+        } else if (way === 't3') {
+          // Route 2: the conversation is held in a thread of T3 Code. The click is put to the
+          // thread, where T3 Code starts a turn for it and shows it, in the mode the thread is
+          // held in. That is so whether T3 Code still holds the conversation's program or has
+          // let it go, as it does when a thread has been quiet or T3 Code is started anew: the
+          // person has closed nothing, and the thread is where it was. Any other way runs the
+          // turn where they do not see it. Reopened with the agent app's own command, it runs
+          // outside T3 Code. And put in Codex's own queue while T3 Code holds Codex, it runs
+          // inside the very program T3 Code holds, and the thread still shows nothing: T3
+          // Code shows the turns it started. This is not a reopening, and is not asked of the
+          // switch for one. Not for a conversation this machine is itself running at this
+          // moment, and not until a few things done together can go together.
           const left = SETTLE_MS - beenThere(click, now)
           if (thread === 'asking') {
             waitingBehind.add(key)
@@ -1626,7 +1783,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
             waitingBehind.add(key)
             soon(left + 10)
           } else if (atWork(click.session, now) || !queue(click, false, thread)) waitingBehind.add(key)
-        } else if (wakes(click.session.harness, click.at) && connected(click.session.harness)) {
+        } else if (way === 'queue') {
+          // Route 2b: some Codex has the conversation open, in a window or an app that is not
+          // T3 Code, and takes a message from Codex's own queue by itself: at once when it is
+          // idle, after its turn when it is not. Not waited for here: one slow command must
+          // not hold up every other click. A conversation this machine is itself running is
+          // not given one that way: that run ends with its turn, and would cut off whatever
+          // Codex began for the message.
+          if (!queue(click, false)) waitingBehind.add(key)
+        } else if (way === 'reopen') {
           // Route 3: the conversation is not listening, which is to say closed, and the person
           // has switched on reopening for its agent app on this machine. It is reopened at once,
           // but for the moment that lets a few things done together go together. It is run in
@@ -1696,6 +1861,25 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     const harness = String(url.searchParams.get('harness') ?? body.harness ?? '').slice(0, 40)
     const id = String(url.searchParams.get('session') ?? body.session ?? '').slice(0, 200)
+    // What the marks put into a conversation stand for: asked by the conversation's own hook
+    // as the turn begins that a mark started, or at the next moment one of its hooks runs.
+    // Given for as long as no hook has said that it has it, so that an answer lost on its way
+    // is asked for again and given again.
+    if (req.method === 'POST' && url.pathname === '/marked') {
+      if (!harness || !id) return [400, { error: 'say which harness and session' }]
+      const key = follow(keyOf(harness, id))
+      // The hook has what it was given, and says which: only then is it let go of
+      if (Array.isArray(body.taken)) {
+        const left = (marked.get(key) ?? []).filter((m) => !body.taken.includes(m.id))
+        if (left.length) marked.set(key, left)
+        else marked.delete(key)
+        return [200, { ok: true }]
+      }
+      // For a turn the person started with a message of their own, only what has waited past
+      // its time is handed over: a mark's own turn is still to come, and has first claim
+      const due = (marked.get(key) ?? []).filter((m) => body.own !== true || Date.now() - m.at > MARK_ASKED_MS)
+      return [200, { ok: true, marks: due.map((m) => m.id), texts: due.flatMap((m) => m.texts) }]
+    }
     if (url.pathname === '/session' || url.pathname === '/clicks') {
       if (!harness || !id) return [400, { error: 'say which harness and session' }]
       // An add-on in an app that is not connected (one the person has disconnected, still
@@ -1739,6 +1923,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (url.pathname === '/session') for (const [clickId, b] of behindTurn) if (b.key === follow(key)) behindTurn.delete(clickId)
       }
       sessions.set(key, s)
+      if (isNew && (harness === 'codex' || harness === 'claude-code')) noteHeard(key)
       let changed = false
       // A conversation that is here under its own id is not somewhere else under another
       if (aliases.delete(key)) changed = true
@@ -2426,6 +2611,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // started: nothing It runs with nobody watching runs on once It has been stopped. What each
   // was reopened for is given back, and is reopened for again when It next starts.
   closing = true
+  for (const timer of markTimers) clearTimeout(timer)
   // Written down for the connector that starts next: each of these is given what it was
   // reopened for a second time, and must be told that its first turn at it was cut off
   // (Not the run a person has just stopped, which is ending for that reason and is noted as
