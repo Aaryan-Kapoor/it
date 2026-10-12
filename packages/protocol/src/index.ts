@@ -441,6 +441,24 @@ export function briefClick(c: Click, typed = true): string {
       : ''
   return `[It] ${named}: ${c.name}${details}${alone}${since} [action ${c.id}]`
 }
+/**
+ * What stands in a conversation for something done on a page, where the agent app lets the
+ * words for it be handed to the agent beside the message, out of the person's sight: Codex
+ * through a hook that runs as a turn begins, Claude Code through its add-on. The person reads
+ * their conversation, and what It says to an agent about a click is nothing they need to read
+ * there: they did it themselves, on the page. A turn cannot be started with nothing (Codex
+ * refuses an empty message), so this is as little as can stand there.
+ */
+export const MARK = '[It]'
+/**
+ * What the agent is handed beside the mark: that the mark is It's, what it stands for, each
+ * click in full, and that it is to be acted on. Said as that, since these words do not arrive
+ * as a message: told only what the mark stood for, a model took a button's press for something
+ * it had been let know, answered nothing and did nothing.
+ */
+export function behindMark(texts: readonly string[]): string {
+  return `The message "${MARK}" is a mark that It put into this conversation in place of what follows, which the user is not shown here. It is what has just happened on a page of yours, and this turn was started for it: act on it now, as you would had it arrived as a message, and answer on the page.\n${texts.join('\n')}`
+}
 export function describeClicks(clicks: readonly Click[], max = CLICK_TEXT_BYTES): string {
   return clicks.map((c) => describeClick(c, max)).join('\n')
 }
