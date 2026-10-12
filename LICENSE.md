@@ -62,7 +62,11 @@ If you use the software in violation of these terms, such use is not licensed, a
 
 ### No Liability
 
-As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.
+**As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.**
+
+**This means there is no warranty of any kind, express or implied, including of merchantability, fitness for a particular purpose, title, and non-infringement, and no promise that the software is secure, free of errors, or will keep working. It also means the licensor is not liable for any loss of or damage to data, any loss of profits or business, any cost that someone else charges you, anything an agent or other program does after the software starts it, resumes it, or passes anything to it, whether or not anyone is watching, or anything done by someone who reaches the software over a network. These are examples, and they do not limit the paragraph above.**
+
+**You use the software at your own risk. You are responsible for the computers and networks you run it on, for keeping your own copies of anything you care about, for what your agents do with it, and for obeying the laws that apply to your use of it.**
 
 ### Definitions
 

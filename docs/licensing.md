@@ -46,6 +46,10 @@ The license also gives you a license under the licensor's patents, for the paten
 
 As far as the law allows, It comes as it is, without any warranty or condition, and the licensor is not liable to you for any damages arising from the terms or from the use or nature of the software.
 
+The license says what that takes in. There is no warranty of any kind, and no promise that It is secure, free of errors or will keep working. The licensor is not liable for lost or damaged data, for lost profits or business, for what someone else charges you, for what an agent or another program does after It starts it, resumes it or passes anything to it, whether or not anyone is watching, or for what someone does who reaches It over a network. Those are examples, and they do not narrow the sentence above.
+
+You use It at your own risk. You are responsible for the computers and networks you run it on, for keeping your own copies of anything you care about, for what your agents do with it, and for obeying the laws that apply to your use of it. [What It protects, and what it does not](what-it-protects.md) describes the limits of the software itself, and [What It keeps](data.md) says how to keep a copy.
+
 ## Other people's code
 
 It includes packages written by other people, and each stays under its own license. [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) lists every one that is built into It, with its license text where the package ships one, and it says where it has no text to give, and where the backend program that It fetches comes from. The standalone programs hold the Bun runtime as well, and the same file gives Bun's own statement of what that runtime links and embeds, with the words of each license the statement names and the commit or the version each was taken from. After them it gives the words for what was found that Bun builds in and its statement does not name, and it says where no text could be established.
