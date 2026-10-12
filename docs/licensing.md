@@ -8,7 +8,7 @@ It is source-available. You can read the code, run it, and change it for yoursel
 
 - **Install It on your own computer and use it with your own agents,** for as long as you like. That includes using it for your own work, provided it was your own choice to use it and no company or other organization installs or manages it for you, pays for your use of it, or tells you to use it.
 - **Read the source and change it for your own use.** You may fix something, add an add-on for an agent app you use, or reshape it to suit how you work. What you may not change is a license key, a usage limit or payment functionality in the software, and you may not alter, remove or hide the licensor's notices; the list below comes back to both.
-- **Evaluate it on behalf of your company for up to 30 days.** That is for finding out whether it suits the company, and the company gets one such period for everyone in it, not one for each person.
+- **Use it on behalf of your company before 12 January 2027.** Until that date, which the license calls the company date, a company may use It and change it, and no clock is running. From that date on a company may only evaluate It, for up to 30 days, which is for finding out whether it suits the company. Days before the date are not counted, and the company gets one such period for everyone in it, not one for each person.
 - **Give a copy to someone else, changed or not, if you do it free of charge and not for a commercial purpose.** The copy has to come with the license. Any copy you have changed has to carry a prominent notice saying that you changed it. The person you give a copy to then uses it under the same license.
 - **Charge for your help.** You may be paid to install, set up or teach It for other people, as long as each of them uses It under their own license.
 - **Copy and share the agent skill and these documents freely.** Everything in `addons/skill/` and in `docs/` may be copied and redistributed without restriction.
@@ -17,7 +17,7 @@ It is source-available. You can read the code, run it, and change it for yoursel
 
 ## You can't
 
-- **Use it because your company decided you should.** If a company or another organization installs or manages It for you, pays for your use of it, or tells you to use it, that is not individual use. A company may only evaluate It, for no more than 30 days.
+- **From 12 January 2027, use it because your company decided you should.** If a company or another organization installs or manages It for you, pays for your use of it, or tells you to use it, that is not individual use. Before the company date the license allows it all the same. From that date on, a company may only evaluate It, for no more than 30 days.
 - **Run It as a service for other people.** You may not offer it to others as a hosted or managed service.
 - **Sell it, or build it into something you offer to others.** You may not charge for copies, and you may not include It in a product or service that you offer to others.
 - **Use it to provide something that competes.** You may not use It to provide a product or service that competes with It, or with any other product or service the licensor provides.
@@ -26,11 +26,13 @@ It is source-available. You can read the code, run it, and change it for yoursel
 
 Anything the license does not allow needs separate written permission from the licensor.
 
-## Two terms the examples lean on
+## Three terms the examples lean on
 
 **Individual use** is use by one person, on that person's own initiative, including for that person's own work. It stops being individual use when a company or other organization installs or manages the software for you, pays for your use of it, or directs you to use it. So an employee who decides for themselves to install It and use it in their own work is within it, as long as the employer does not install or manage it for them, pay for it, or tell them to use it. A team that is told to install It is not.
 
 **Your company** means every organization you work for, together with the organizations that control it, that it controls, or that are under the same control as it. A sole proprietorship counts as one, so someone who works for themselves has a company in this sense too. The 30 days of evaluation are counted once across all of them.
+
+**The company date** is 12 January 2027, or a later date if the licensor publishes one where It is distributed. Before it, a company may use It. From it on, a company may only evaluate It, for 30 days, and no day before it counts toward the 30. The license lets the date be moved later, and gives no way to move it earlier.
 
 ## If you break the terms
 

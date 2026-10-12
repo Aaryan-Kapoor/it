@@ -24,7 +24,7 @@ The licensor grants you a non-exclusive, royalty-free, worldwide, non-sublicensa
 
 ### Limitations
 
-You may use or modify the software only for individual use, or to evaluate it on behalf of your company for no more than 30 days. Your company gets one evaluation period for all of its people, not one per person.
+You may use or modify the software only for individual use, except as this paragraph allows. Before the company date, you may also use or modify it on behalf of your company. From the company date on, you may do so only to evaluate it, for no more than 30 days, and days before the company date do not count. Your company gets one evaluation period for all of its people, not one per person.
 
 You may distribute the software or provide it to others only if you do so free of charge for non-commercial purposes.
 
@@ -75,6 +75,8 @@ The "software" is the software the licensor makes available under these terms, i
 "Individual use" is use by one person, on that person's own initiative, including for that person's own work. Use is not individual use if a company or other organization installs or manages the software for you, pays for your use of it, or directs you to use it.
 
 "Your company" is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization. Control means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise. Control can be direct or indirect.
+
+The "company date" is 12 January 2027, or any later date the licensor publishes where the licensor distributes the software.
 
 "Your license" is the license granted to you for the software under these terms.
 
