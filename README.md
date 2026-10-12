@@ -25,10 +25,8 @@ Then say "Give me the It tour" to your agent.
 
 ## Good to know
 
-- **It is made for one person**, on their own computer and their home network. It is not made for the public internet. [What It protects, and what it does not](docs/what-it-protects.md) lists every limit.
+- **It is made for one person**, on their own computer and their home network. It is not made for the public internet. [What It protects, and what it does not](docs/what-it-protects.md) lists every limit. It comes as it is, with no warranty.
 - **It can reopen a conversation you closed** when you use one of its pages, and the page's bar lets you stop it. You turn that off on the Machines page. [Add-ons](docs/add-ons.md) says what to expect of each agent app.
-- **It has been used on Linux and on Windows**, and on macOS only on test machines so far.
-- **It is source-available** under the [It License](LICENSE.md), which [What the It License lets you do](docs/licensing.md) explains with examples. It comes as it is, with no warranty, and you use it at your own risk.
 
 ## Read more
 
