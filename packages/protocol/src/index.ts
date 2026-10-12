@@ -423,8 +423,14 @@ export function briefClick(c: Click, typed = true): string {
   // thing an action carries that the page did not choose. A long one is cut, and read with `it action`
   if (c.name === MESSAGE) {
     if (!typed) return `[It] ${named}, typed above it: read it with \`it action ${c.id}\` [action ${c.id}]`
-    const text = typedOf(c.payload).replace(/\s+/g, ' ').trim()
-    return `[It] ${named}, typed above it: ${text.length > BRIEF_TYPED ? `${text.slice(0, BRIEF_TYPED)}… (cut short)` : text} [action ${c.id}]`
+    // On one line, as the line is. Where that changed what they typed (a line break in it, a
+    // run of spaces that meant something, as in code or a table) or cut it short, the line
+    // says so and where the whole is read: an agent is not left to act on words that were altered
+    const whole = typedOf(c.payload)
+    const text = whole.replace(/\s+/g, ' ').trim()
+    const shown = text.length > BRIEF_TYPED ? `${text.slice(0, BRIEF_TYPED)}…` : text
+    const altered = shown !== whole.trim() ? ` (not as typed: read it with \`it action ${c.id}\`)` : ''
+    return `[It] ${named}, typed above it: ${shown}${altered} [action ${c.id}]`
   }
   const details = full === '' || full === '{}' ? '' : ', with details'
   const alone = c.attended === false ? ', sent by the page itself' : ''
