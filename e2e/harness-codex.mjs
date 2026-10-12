@@ -202,7 +202,9 @@ try {
       .map((s) => s.params.item.text)
       .join('\n')
   /** Whether the conversation was given a click since `from`, whatever the model then chose to say about it. */
-  const heard = (from) => seen.slice(from).some((s) => JSON.stringify(s.params ?? {}).includes('sent this just after someone used it'))
+  // In full where it joins a turn that is running, and as one short line where Codex's queue starts a turn with it
+  const heard = (from) =>
+    seen.slice(from).some((s) => /sent this just after someone used it|\[It\] \\"[^\\]*\\" \([a-z0-9-]+\): approve/.test(JSON.stringify(s.params ?? {})))
   const turn = (threadId, text) => request('turn/start', { threadId, input: [{ type: 'text', text }] })
 
   await request('initialize', { clientInfo: { name: 'it-e2e', title: 'It end to end', version: '0' }, capabilities: { experimentalApi: true } })

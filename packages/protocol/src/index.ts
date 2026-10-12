@@ -408,9 +408,13 @@ export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
  * with `it action`, where it arrives as data. It says only that there is something to read,
  * that nobody was at the page, or that the page has changed since, each in a word or two.
  */
-/** How much of what a person typed stands in the short line: more is read with `it action`. */
+/**
+ * How much of what a person typed stands in the short line: more is read with `it action`.
+ * With `typed` false nothing of it does, for a line that is put on a command line, where the
+ * other users of the machine can read it: the agent is told to read it.
+ */
 const BRIEF_TYPED = 1000
-export function briefClick(c: Click): string {
+export function briefClick(c: Click, typed = true): string {
   const full = c.payload === undefined || c.payload === null ? '' : JSON.stringify(c.payload)
   const named = c.title ? `${titled(c.title)} (${c.artifact})` : `(${c.artifact})`
   // The page's own script failed: said as that, in the few words this line has
@@ -418,8 +422,15 @@ export function briefClick(c: Click): string {
   // What a person typed above the page is theirs, and stands here as it was typed: it is the one
   // thing an action carries that the page did not choose. A long one is cut, and read with `it action`
   if (c.name === MESSAGE) {
-    const text = typedOf(c.payload).replace(/\s+/g, ' ').trim()
-    return `[It] ${named}, typed above it: ${text.length > BRIEF_TYPED ? `${text.slice(0, BRIEF_TYPED)}… (cut short)` : text} [action ${c.id}]`
+    if (!typed) return `[It] ${named}, typed above it: read it with \`it action ${c.id}\` [action ${c.id}]`
+    // On one line, as the line is. Where that changed what they typed (a line break in it, a
+    // run of spaces that meant something, as in code or a table) or cut it short, the line
+    // says so and where the whole is read: an agent is not left to act on words that were altered
+    const whole = typedOf(c.payload)
+    const text = whole.replace(/\s+/g, ' ').trim()
+    const shown = text.length > BRIEF_TYPED ? `${text.slice(0, BRIEF_TYPED)}…` : text
+    const altered = shown !== whole.trim() ? ` (not as typed: read it with \`it action ${c.id}\`)` : ''
+    return `[It] ${named}, typed above it: ${shown}${altered} [action ${c.id}]`
   }
   const details = full === '' || full === '{}' ? '' : ', with details'
   const alone = c.attended === false ? ', sent by the page itself' : ''
@@ -429,6 +440,24 @@ export function briefClick(c: Click): string {
       ? ', on the page as it was before it last changed'
       : ''
   return `[It] ${named}: ${c.name}${details}${alone}${since} [action ${c.id}]`
+}
+/**
+ * What stands in a conversation for something done on a page, where the agent app lets the
+ * words for it be handed to the agent beside the message, out of the person's sight: Codex
+ * through a hook that runs as a turn begins, Claude Code through its add-on. The person reads
+ * their conversation, and what It says to an agent about a click is nothing they need to read
+ * there: they did it themselves, on the page. A turn cannot be started with nothing (Codex
+ * refuses an empty message), so this is as little as can stand there.
+ */
+export const MARK = '[It]'
+/**
+ * What the agent is handed beside the mark: that the mark is It's, what it stands for, each
+ * click in full, and that it is to be acted on. Said as that, since these words do not arrive
+ * as a message: told only what the mark stood for, a model took a button's press for something
+ * it had been let know, answered nothing and did nothing.
+ */
+export function behindMark(texts: readonly string[]): string {
+  return `The message "${MARK}" is a mark that It put into this conversation in place of what follows, which the user is not shown here. It is what has just happened on a page of yours, and this turn was started for it: act on it now, as you would had it arrived as a message, and answer on the page.\n${texts.join('\n')}`
 }
 export function describeClicks(clicks: readonly Click[], max = CLICK_TEXT_BYTES): string {
   return clicks.map((c) => describeClick(c, max)).join('\n')

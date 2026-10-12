@@ -145,10 +145,24 @@ describe('the words an agent reads for an action', () => {
     // A long one is cut, and says so
     expect(describeClick({ ...typed, payload: { text: 'x'.repeat(5000) } })).toContain('… (cut short: run `it action k57` to read all of it)')
     // The short line carries them as they were typed, on one line: they are the person's, and stand as that
-    expect(briefClick({ ...typed, payload: { text: 'Make it\n  bigger' } })).toBe('[It] "Deploy plan" (plan), typed above it: Make it bigger [action k57]')
-    expect(briefClick({ ...typed, payload: { text: 'x'.repeat(5000) } })).toMatch(/x{1000}… \(cut short\) \[action k57\]$/)
+    expect(briefClick({ ...typed, payload: { text: 'Make it\n  bigger' } })).toBe(
+      '[It] "Deploy plan" (plan), typed above it: Make it bigger (not as typed: read it with `it action k57`) [action k57]',
+    )
+    expect(briefClick({ ...typed, payload: { text: 'x'.repeat(5000) } })).toMatch(/x{1000}… \(not as typed: read it with `it action k57`\) \[action k57\]$/)
+    // Put on one line, what was typed on several is no longer what was typed, and the line says so. What is on one line already is left as it is
+    expect(briefClick({ ...typed, payload: { text: 'if ok:\n    go()' } })).toBe(
+      '[It] "Deploy plan" (plan), typed above it: if ok: go() (not as typed: read it with `it action k57`) [action k57]',
+    )
+    expect(briefClick({ ...typed, payload: { text: 'a  b' } })).toContain('(not as typed: read it with `it action k57`)')
+    expect(briefClick({ ...typed, payload: { text: '  Make it bigger \n' } })).toBe('[It] "Deploy plan" (plan), typed above it: Make it bigger [action k57]')
     // Whatever is under the name that is no text is nothing typed
     expect(briefClick({ ...typed, payload: { text: { a: 1 } } })).toBe('[It] "Deploy plan" (plan), typed above it:  [action k57]')
+    // For a command line, which the other users of the machine can read: nothing of what was typed, and where to read it
+    expect(briefClick({ ...typed, payload: { text: 'Make it bigger' } }, false)).toBe(
+      '[It] "Deploy plan" (plan), typed above it: read it with `it action k57` [action k57]',
+    )
+    // A press is the same line either way: it never held what the action carried
+    expect(briefClick({ ...typed, name: 'approve', payload: { plan: 'B' } }, false)).toBe(briefClick({ ...typed, name: 'approve', payload: { plan: 'B' } }))
   })
   test('say whether the site saw someone use the page just before it sent the action, and never that the person chose it or that the page acted alone', () => {
     expect(describeClick({ ...action, attended: true })).toBe(

@@ -3658,12 +3658,14 @@ try {
   const message = queued?.find((arg) => arg.startsWith('--message=')) ?? ''
   check(
     'once Codex is chosen, the click on a page a Codex conversation made is put in Codex’s own queue, for that conversation',
-    choseCodex === 'answered' && queued?.includes(`--thread=${thread}`) && /\(.*-x\) sent this just after someone used it: approve /.test(message),
+    choseCodex === 'answered' &&
+      queued?.includes(`--thread=${thread}`) &&
+      /^--message=\[It\] ".*" \(.*-x\): approve, with details \[action [a-z0-9]+\]$/.test(message),
     `chosen: ${choseCodex}; ${JSON.stringify(queued)} connector said: ${connector.log.slice(-400)}`,
   )
   check(
-    'naming the action and where to read what it carried, and never putting that on a command line',
-    /run `it action [a-z0-9]+` to read what it carried/.test(message) && !message.includes('{') && !JSON.stringify(codexCalls()).includes('\\"plan\\"'),
+    'in one short line that names the page and the action and says there is more to read, with no instructions in it and nothing of what the action carried',
+    !/sent this|run `it|someone used it/.test(message) && !message.includes('{') && !JSON.stringify(codexCalls()).includes('\\"plan\\"'),
     message,
   )
   const viaQueue = await until(async () => {
