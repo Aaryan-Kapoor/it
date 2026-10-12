@@ -451,6 +451,17 @@ function tourForOneThatWaited(guide: string): string {
 }
 
 /**
+ * What setup says last to whoever ran it without a terminal, which is an agent installing It
+ * for someone. An agent reads what a command prints whole. The install guide it may not have
+ * read at all: an agent app's own tool for fetching a page hands its agent a summary, and in
+ * the summaries seen the guide's last step was gone, so the agent installed It, gave the
+ * pairing link and stopped, with no tour. So the two steps that follow setup are said here,
+ * with how to read the guide itself.
+ */
+export const AFTER_SETUP =
+  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+
+/**
  * `it tour --wait`: waits until the person asks for the tour with the button on the site, and
  * then prints the tour for the agent to give. While it waits the site says that an agent is
  * ready, which is what makes the button more than a sentence to copy. When the time is up and
@@ -2086,7 +2097,16 @@ async function settingUp(a: Args, joined: boolean) {
           : `\nNo browser is let in to It’s site until it is paired: \`it site\` opens the site in a browser on this machine and pairs that browser, and \`it site --no-open\` prints the link that does.`,
       )
     }
-    if (!forPerson(a)) out({ harnesses: after, service: background, ...(trouble ? { problem: trouble } : {}), ...(unasked ? { hint: unasked } : {}) })
+    if (!forPerson(a))
+      out({
+        harnesses: after,
+        service: background,
+        ...(trouble ? { problem: trouble } : {}),
+        ...(unasked ? { hint: unasked } : {}),
+        // An agent that is installing It reads this whole, whatever it was given of the guide.
+        // Said once an agent app is connected: until then the hint above is what comes next
+        ...(after.some((h) => h.addon === 'connected' || h.addon === 'needs_approval') ? { next: AFTER_SETUP } : {}),
+      })
     // Setup that leaves It not running where it was wanted has not done what it was asked, and ends by saying so
     if (trouble) process.exitCode = 1
   } finally {
