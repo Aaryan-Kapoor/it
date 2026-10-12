@@ -6,7 +6,7 @@ Portions of this software are licensed as follows:
 - All third party components incorporated into the software are licensed under the original license provided by the owner of the applicable component.
 - Content outside of the above is available under the "It License" as defined below.
 
-By contributing to this project, you agree to the Contributor License Agreement in `CONTRIBUTOR_LICENSE_AGREEMENT.md`.
+By contributing to this project, you agree to the Contributor License Agreement in `docs/CONTRIBUTOR_LICENSE_AGREEMENT.md`.
 
 ## It License
 
