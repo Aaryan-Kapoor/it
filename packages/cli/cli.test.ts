@@ -1741,7 +1741,7 @@ describe('add-ons carried by the CLI', () => {
     for (const [id, addon] of Object.entries(ADDONS))
       for (const [name, text] of Object.entries(addon.files))
         if (/\.(js|py)$/.test(name))
-          expect(text.split('\n').slice(0, 2).join(' '), `${id}/${name}`).toMatch(/Copyright \(c\) 2026 Aaryan Kapoor\. .*It License 1\.0\..*LICENSE\.md/)
+          expect(text.split('\n').slice(0, 2).join(' '), `${id}/${name}`).toMatch(/Copyright \(c\) 2026 Aaryan Kapoor\. .*It License 1\.1\..*LICENSE\.md/)
   })
   test('a package.json names the license, in every package', () => {
     const root = path.join(__dirname, '../..')

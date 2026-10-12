@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Aaryan Kapoor. Part of It, which is source-available under the It License 1.0.
+// Copyright (c) 2026 Aaryan Kapoor. Part of It, which is source-available under the It License 1.1.
 // The terms are in LICENSE.md beside this add-on.
 //
 // What this add-on reads and keeps in It's own folder on this machine (`~/.it`, or wherever

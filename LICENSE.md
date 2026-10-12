@@ -10,7 +10,7 @@ By contributing to this project, you agree to the Contributor License Agreement 
 
 ## It License
 
-Version 1.0
+Version 1.1
 
 Copyright (c) 2026 Aaryan Kapoor
 

@@ -396,6 +396,6 @@ describe('what the script writes to the console', () => {
 
 describe('the script itself', () => {
   test('says whose it is and under what terms, in its first line', () => {
-    expect(RUNTIME.split('\n')[0]).toMatch(/^\/\*! It\. Copyright \(c\) 2026 Aaryan Kapoor\. Source-available under the It License 1\.0\./)
+    expect(RUNTIME.split('\n')[0]).toMatch(/^\/\*! It\. Copyright \(c\) 2026 Aaryan Kapoor\. Source-available under the It License 1\.1\./)
   })
 })
