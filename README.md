@@ -50,6 +50,6 @@ Each command downloads one program for your system, checks it against its publis
 
 ## What It is, and what it is not
 
-It is made for one person, on their own computer and their home network. It is not made for the public internet: it speaks plain `http` and has no defence built for strangers at its door, and [What It protects, and what it does not](docs/what-it-protects.md) lists every limit, which is worth reading before you turn its network on. It has been used on Linux, and on macOS and Windows only on test machines so far.
+It is made for one person, on their own computer and their home network. It is not made for the public internet: it speaks plain `http` and has no defence built for strangers at its door, and [What It protects, and what it does not](docs/what-it-protects.md) lists every limit, which is worth reading before you turn its network on. It has been used on Linux and on Windows, and on macOS only on test machines so far.
 
 It is source-available under the [It License](LICENSE.md), which [What the It License lets you do](docs/licensing.md) explains with examples. The work of others that It includes is listed in [the third-party notices](THIRD_PARTY_NOTICES.md).
