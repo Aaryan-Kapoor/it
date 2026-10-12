@@ -492,6 +492,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * could not take a message for is not offered to it again for a while: `t3Refused`.
    */
   const t3Known = new Map<string, { thread: string | null; at: number } | 'asking'>()
+  /** When each conversation that is being asked for was first asked for, by the clock that only goes forward. */
+  const t3Asked = new Map<string, number>()
   const t3Refused = new Map<string, number>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
   /** How long a conversation that is in no thread of T3 Code is taken to be in none. */
@@ -499,10 +501,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** How long a conversation is kept from T3 Code after it could not take a message for it, or could not be asked. */
   const T3_REFUSED_MS = 10 * 60_000
   /**
+   * How long T3 Code is given to say which thread holds a conversation, before a click for it
+   * goes the way it would without T3 Code. It says so in a fifth of a second to two seconds
+   * where it is well. One that answers the first question and then stalls would otherwise keep
+   * a click waiting through two dozen threads at twenty seconds each, which some Codex could
+   * have taken at once. What it says in the end is kept, for the clicks that come after.
+   */
+  const T3_ASKED_MS = 5_000
+  /**
    * The thread of T3 Code that a conversation is held in, with the server to send to:
    * `asking` while that is being found out, and nothing where it is in none, where T3 Code
-   * is not running here, and where it has just failed to take something for it. Then the
-   * click goes the way it would without T3 Code.
+   * is not running here, where it has just failed to take something for it, and where it has
+   * been asked for longer than it is given to say. Then the click goes the way it would
+   * without T3 Code.
    */
   function t3For(key: string, session: { harness: string; id: string }): { server: T3; thread: string } | 'asking' | undefined {
     const now = Date.now()
@@ -516,16 +527,21 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const server = t3Seen.server
     if (!server) return undefined
     const known = t3Known.get(key)
-    if (known === 'asking') return 'asking'
+    if (known === 'asking') return steady() - (t3Asked.get(key) ?? 0) < T3_ASKED_MS ? 'asking' : undefined
     if (known?.thread) return { server, thread: known.thread }
     if (known && now - known.at < T3_AGAIN_MS) return undefined
-    if (t3Known.size > 2000) t3Known.clear()
+    if (t3Known.size > 2000) {
+      t3Known.clear()
+      t3Asked.clear()
+    }
     t3Known.set(key, 'asking')
+    t3Asked.set(key, steady())
     // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
     const ids = [...new Set([session.id, threadOf(key)])]
     void t3ThreadOf(server, { harness: session.harness, ids, cwd: conversationFolder(session) })
       .catch(() => undefined)
       .then((thread) => {
+        t3Asked.delete(key)
         if (thread === undefined) {
           // T3 Code could not be asked: the conversation is reopened as any other meanwhile, and T3 Code is asked again later
           t3Known.delete(key)
@@ -1366,9 +1382,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
         record('agent.woken', { result: 'resumed', agent: agentOf(harness) })
         if (stalled.get(line) === click.id) stalled.delete(line)
         // Codex's queue hands a click over behind a turn that is running, and so does T3 Code
-        // for a thread whose turn is running. A reopening never does: nothing was running
-        if (!reopening && !sent.toWaiter && turnRunning(key, Date.now())) {
-          behindTurn.set(click.id, { click, key })
+        // for a thread whose turn is running, with every click that went along in the same
+        // message: an agent that waits in that turn for one of those would wait for a message
+        // that stands behind its own turn. A reopening never does: nothing was running
+        if (!reopening && turnRunning(key, Date.now())) {
+          for (const c of [click, ...withIt]) if (c !== click || !sent.toWaiter) behindTurn.set(c.id, { click: c, key })
         }
         await confirmAll()
       } else {

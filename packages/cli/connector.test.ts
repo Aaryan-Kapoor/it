@@ -29,6 +29,33 @@ const stand = vi.hoisted(() => ({
   codex: [] as { args: string[]; end: (err?: unknown) => void }[],
   /** The Codex conversations that no Codex has open. Every other one is open somewhere, as it is in a window. */
   closed: new Set<string>(),
+  /**
+   * T3 Code as a test has it, which is not running unless the test says so: the thread each
+   * conversation is held in, by the conversation's id; every time it was asked which thread
+   * holds one, with how the test answers where it has told T3 Code to keep its answer back;
+   * and what was put to its threads.
+   */
+  t3: {
+    running: false,
+    threads: new Map<string, string>(),
+    slow: false,
+    asked: [] as { ids: string[]; answer: (thread: string | null | undefined) => void }[],
+    sent: [] as { thread: string; text: string }[],
+  },
+}))
+// T3 Code is asked over its own server and its own command (t3.test.ts tries what is read from
+// them). Here it is a stand-in, so that the way a click goes can be tried with T3 Code running.
+vi.mock('./src/t3', () => ({
+  t3Server: () => (stand.t3.running ? { origin: 'http://127.0.0.1:1', home: '/no-t3-code', program: 't3' } : undefined),
+  t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }) =>
+    new Promise<string | null | undefined>((answer) => {
+      stand.t3.asked.push({ ids: [...of.ids], answer })
+      if (!stand.t3.slow) answer(of.ids.map((id) => stand.t3.threads.get(id)).find((thread) => thread !== undefined) ?? null)
+    }),
+  t3Send: async (_t3: unknown, thread: string, text: string) => {
+    stand.t3.sent.push({ thread, text })
+    return null
+  },
 }))
 // Whether some Codex has a conversation open is read from Codex's own folder and from the system
 // (wake.test.ts tries that against real files). Here the test says which are closed.
@@ -176,6 +203,12 @@ afterEach(async () => {
   stand.codex.length = 0
   stand.closed.clear()
   stand.answer = null
+  // A lookup a test left unanswered is answered, so that nothing of it outlasts the test
+  for (const asked of stand.t3.asked) asked.answer(null)
+  Object.assign(stand.t3, { running: false, slow: false })
+  stand.t3.threads.clear()
+  stand.t3.asked.length = 0
+  stand.t3.sent.length = 0
   if (home) rmSync(home, { recursive: true, force: true })
   home = ''
   for (const k of Object.keys(process.env)) if (!(k in before)) delete process.env[k]
@@ -1664,6 +1697,122 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     stand.answer = null
     expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=pi&session=conversation-1'))?.clicks.map((c) => c.id)).toEqual(['click-1'])
     expect(journal()).toEqual(['claimed', 'served'])
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('a click for a Codex conversation, where T3 Code is running', () => {
+  const click = (n: number, thread = n) => ({
+    id: `click-${n}`,
+    artifact: `page-${n}`,
+    title: 'A page',
+    name: 'approve',
+    payload: '{"plan":"B"}',
+    at: Date.now() - 10_000 + n,
+    attended: true,
+    session: { harness: 'codex', id: `thread-${thread}` },
+  })
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inbox')!(clicks)
+  const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
+  const turn = (n: number, busy: boolean) => local('/session', { method: 'POST', body: { harness: 'codex', session: `thread-${n}`, busy } })
+  /**
+   * T3 Code is running, and It answers as it does: a click it has been told was handed over is
+   * given to no machine again, whatever a list of what is waiting still says for a moment.
+   */
+  const withT3Code = () => {
+    stand.t3.running = true
+    const handed = new Set<string>()
+    stand.answer = (name, args) => {
+      if (name === 'delivery:handedOff') handed.add(args.id)
+      if (name === 'delivery:claim') return (args.ids as string[]).filter((id) => !handed.has(id))
+      return undefined
+    }
+  }
+  const waitingFor = (n: number, page?: number) =>
+    local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
+      method: 'POST',
+      body: { id: `waiter-${n}`, session: { harness: 'codex', id: `thread-${n}` }, ...(page === undefined ? {} : { slug: `page-${page}` }) },
+    })
+
+  test('one whose conversation is held in a thread is put to the thread, though some Codex has the conversation open, and Codex’s queue is not used', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-1', 't3-thread-a')
+    await start()
+    offered(click(1))
+    await until(() => stand.t3.sent.length >= 1)
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    expect(stand.t3.sent[0]).toMatchObject({ thread: 't3-thread-a' })
+    expect(stand.t3.sent[0]!.text).toContain('[action click-1]')
+    // The Codex that T3 Code holds has the conversation open, and its queue would have taken it
+    expect(stand.closed.has('thread-1')).toBe(false)
+    expect(stand.codex).toEqual([])
+    // And it was put to the thread once, however long the list of what is waiting goes on naming it
+    await pause(2500)
+    expect(stand.t3.sent.length).toBe(1)
+  })
+
+  test('one whose conversation is in no thread goes into Codex’s queue, once T3 Code has said so, and T3 Code is not asked again for the next', async () => {
+    withT3Code()
+    await start()
+    offered(click(2))
+    await until(() => stand.codex.length === 1)
+    expect(stand.codex[0]!.args).toContain('--thread=thread-2')
+    expect(stand.t3.asked.map((a) => a.ids)).toEqual([['thread-2']])
+    expect(stand.t3.sent).toEqual([])
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-2'))
+    offered({ ...click(2), id: 'click-2-again' })
+    await until(() => stand.codex.length === 2)
+    expect(stand.t3.asked.length).toBe(1)
+  })
+
+  test('a T3 Code that does not say which thread holds a conversation is waited for only so long: the click then goes into Codex’s queue, and what T3 Code says in the end holds for the next', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    stand.t3.threads.set('thread-3', 't3-thread-c')
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    // For as long as it is given, nothing else is tried
+    await pause(1500)
+    expect(stand.codex).toEqual([])
+    expect(called('delivery:claim')).not.toContain('click-3')
+    // Past that the click is not kept from the Codex that has the conversation open
+    await until(() => stand.codex.length === 1, 12_000)
+    expect(stand.codex[0]!.args).toContain('--thread=thread-3')
+    expect(stand.t3.sent).toEqual([])
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-3'))
+    // T3 Code answers at last: the conversation is in a thread, and the next click goes there
+    stand.t3.asked[0]!.answer('t3-thread-c')
+    await settled()
+    offered({ ...click(3), id: 'click-3-next' })
+    await until(() => stand.t3.sent.length >= 1)
+    expect(stand.t3.sent[0]).toMatchObject({ thread: 't3-thread-c' })
+    expect(stand.t3.sent.length).toBe(1)
+    expect(stand.codex.length).toBe(1)
+    expect(stand.t3.asked.length).toBe(1)
+  }, 30_000)
+
+  test('every click that T3 Code took in one message while the thread’s turn was running is given to an agent that begins to wait in that turn, and each only once', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-4', 't3-thread-d')
+    await start()
+    expect(await turn(4, true)).toEqual({ ok: true })
+    // Two things done on two pages of the one conversation, which go to the thread together
+    const first = click(4)
+    const second = { ...click(5, 4), id: 'click-5' }
+    offered(first, second)
+    await until(() => stand.t3.sent.length >= 1)
+    expect(stand.t3.sent[0]!.text).toContain('[action click-4]')
+    expect(stand.t3.sent[0]!.text).toContain('[action click-5]')
+    await until(() => ['click-4', 'click-5'].every((id) => called('delivery:handedOff').includes(id)))
+    offered()
+    // The agent of the running turn waits for the second page: T3 Code holds its click behind this very turn
+    expect((await waitingFor(4, 5))?.clicks?.map((c) => c.id)).toEqual(['click-5'])
+    expect((await waitingFor(4, 5))?.clicks).toBeUndefined()
+    // And one that waits for whatever its conversation has is given the other, once
+    expect((await waitingFor(4))?.clicks?.map((c) => c.id)).toEqual(['click-4'])
+    expect((await waitingFor(4))?.clicks).toBeUndefined()
   })
 })
 
