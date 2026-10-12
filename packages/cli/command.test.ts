@@ -12,6 +12,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { behindMark, MARK, PORTS, WHEN } from '@it/protocol'
+
+// What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
+const AFTER_SETUP =
+  'If you are an agent installing It for someone, two steps of the install guide come after this one: give the person the link that `it site --no-open` prints, to open on this computer, then run `it tour --wait` in the same turn and do what it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
@@ -2768,6 +2773,13 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
     // And with an app connected and no service, the same is said of running It here
     const one = await joining(['--only', 'pi', '--no-service'])
     expect([one.ran.code, one.registered]).toEqual([0, false])
+    // An agent that set an app up is told what follows setup, and how to read the guide whole: it may have been given only a summary of it
+    expect(printed(one.ran).next).toBe(AFTER_SETUP)
+    expect(AFTER_SETUP).toContain('`it site --no-open`')
+    expect(AFTER_SETUP).toContain('`it tour --wait`')
+    expect(AFTER_SETUP).toContain('`curl -fsSL https://itcan.do/install.md`')
+    // Where nothing was set up, nothing follows
+    expect(printed(none.ran).next).toBeUndefined()
     expect(one.ran.err.split('\n')).toContain(SERVE)
     expect(printed(one.ran)).toMatchObject({ harnesses: [{ id: 'pi', addon: 'connected' }] })
   }, 60_000)
@@ -3256,6 +3268,7 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
         expect(printed(setup)).toEqual({
           harnesses: [{ id: 'pi', version: '0.82.0', addon: 'connected' }],
           service: { registered: false, state: 'not installed' },
+          next: AFTER_SETUP,
         })
         expect(setup.err).not.toContain('There is no terminal here')
         expect([flags, ran().filter((words) => words.startsWith('install')).length, chose(b)]).toEqual([flags, 1, [['pi']]])
