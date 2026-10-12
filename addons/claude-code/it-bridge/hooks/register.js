@@ -25,7 +25,7 @@ const WHEN =
 // protocol, as `MARK` and `behindMark`.
 const MARK = '[It]'
 const behindMark = (texts) =>
-  `It put the message "${MARK}" into this conversation to start a turn for what follows. The user sees that mark and nothing else of this:\n${texts.join('\n')}`
+  `The message "${MARK}" is a mark that It put into this conversation in place of what follows, which the user is not shown here. It is what has just happened on a page of yours, and this turn was started for it: act on it now, as you would had it arrived as a message, and answer on the page.\n${texts.join('\n')}`
 // Where It's folder was when this add-on was set up, if not the usual place. Filled in by `it setup`.
 const IT_HOME_AT_SETUP = null
 let connector = null // { socket | port, token }, read from the connector's own file

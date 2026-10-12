@@ -444,9 +444,14 @@ export function briefClick(c: Click, typed = true): string {
  * refuses an empty message), so this is as little as can stand there.
  */
 export const MARK = '[It]'
-/** What the agent is handed beside the mark: that the mark is It's, and what it stands for, each click in full. */
+/**
+ * What the agent is handed beside the mark: that the mark is It's, what it stands for, each
+ * click in full, and that it is to be acted on. Said as that, since these words do not arrive
+ * as a message: told only what the mark stood for, a model took a button's press for something
+ * it had been let know, answered nothing and did nothing.
+ */
 export function behindMark(texts: readonly string[]): string {
-  return `It put the message "${MARK}" into this conversation to start a turn for what follows. The user sees that mark and nothing else of this:\n${texts.join('\n')}`
+  return `The message "${MARK}" is a mark that It put into this conversation in place of what follows, which the user is not shown here. It is what has just happened on a page of yours, and this turn was started for it: act on it now, as you would had it arrived as a message, and answer on the page.\n${texts.join('\n')}`
 }
 export function describeClicks(clicks: readonly Click[], max = CLICK_TEXT_BYTES): string {
   return clicks.map((c) => describeClick(c, max)).join('\n')
