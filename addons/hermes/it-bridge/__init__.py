@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Aaryan Kapoor. Part of It, which is source-available under the It License 1.0.
+# Copyright (c) 2026 Aaryan Kapoor. Part of It, which is source-available under the It License 1.1.
 # The terms are in LICENSE.md beside this add-on.
 """The It add-on for Hermes Agent.
 

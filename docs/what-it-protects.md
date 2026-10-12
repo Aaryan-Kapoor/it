@@ -2,6 +2,8 @@
 
 It is one program that a person runs on their own computer, for themselves and for the screens in their home. This page says what It keeps closed, and where that stops. The limits are in the second half, every one of them, and they are meant to be read before you decide to run It.
 
+This page describes how It is built. It is not a warranty: under [the license](../LICENSE.md), It comes as it is, and you use it at your own risk.
+
 To report a security problem, see [the security policy](SECURITY.md).
 
 ## Who It is for

@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Aaryan Kapoor. Part of It, which is source-available under the It License 1.0.
+// Copyright (c) 2026 Aaryan Kapoor. Part of It, which is source-available under the It License 1.1.
 // This notice stays with the file. The terms are in LICENSE.md, in It's own folder on this machine.
 //
 // The It add-on for OpenCode. It runs inside OpenCode and brings the user's clicks on pages a

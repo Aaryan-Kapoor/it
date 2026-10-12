@@ -6,11 +6,11 @@ Portions of this software are licensed as follows:
 - All third party components incorporated into the software are licensed under the original license provided by the owner of the applicable component.
 - Content outside of the above is available under the "It License" as defined below.
 
-By contributing to this project, you agree to the Contributor License Agreement in `CONTRIBUTOR_LICENSE_AGREEMENT.md`.
+By contributing to this project, you agree to the Contributor License Agreement in `docs/CONTRIBUTOR_LICENSE_AGREEMENT.md`.
 
 ## It License
 
-Version 1.0
+Version 1.1
 
 Copyright (c) 2026 Aaryan Kapoor
 
@@ -24,7 +24,7 @@ The licensor grants you a non-exclusive, royalty-free, worldwide, non-sublicensa
 
 ### Limitations
 
-You may use or modify the software only for individual use, or to evaluate it on behalf of your company for no more than 30 days. Your company gets one evaluation period for all of its people, not one per person.
+You may use or modify the software only for individual use, except as this paragraph allows. Before the company date, you may also use or modify it on behalf of your company. From the company date on, you may do so only to evaluate it, for no more than 30 days, and days before the company date do not count. Your company gets one evaluation period for all of its people, not one per person.
 
 You may distribute the software or provide it to others only if you do so free of charge for non-commercial purposes.
 
@@ -62,7 +62,11 @@ If you use the software in violation of these terms, such use is not licensed, a
 
 ### No Liability
 
-As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.
+**As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.**
+
+**This means there is no warranty of any kind, express or implied, including of merchantability, fitness for a particular purpose, title, and non-infringement, and no promise that the software is secure, free of errors, or will keep working. It also means the licensor is not liable for any loss of or damage to data, any loss of profits or business, any cost that someone else charges you, anything an agent or other program does after the software starts it, resumes it, or passes anything to it, whether or not anyone is watching, or anything done by someone who reaches the software over a network. These are examples, and they do not limit the paragraph above.**
+
+**You use the software at your own risk. You are responsible for the computers and networks you run it on, for keeping your own copies of anything you care about, for what your agents do with it, and for obeying the laws that apply to your use of it.**
 
 ### Definitions
 
@@ -75,6 +79,8 @@ The "software" is the software the licensor makes available under these terms, i
 "Individual use" is use by one person, on that person's own initiative, including for that person's own work. Use is not individual use if a company or other organization installs or manages the software for you, pays for your use of it, or directs you to use it.
 
 "Your company" is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization. Control means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise. Control can be direct or indirect.
+
+The "company date" is 12 January 2027, or any later date the licensor publishes where the licensor distributes the software.
 
 "Your license" is the license granted to you for the software under these terms.
 
