@@ -11,7 +11,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { PORTS, WHEN } from '@it/protocol'
+import { behindMark, MARK, PORTS, WHEN } from '@it/protocol'
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
@@ -470,6 +470,70 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     expect(await hooked({ session_id: 'thread-1', hook_event_name: 'Stop', cwd: m.home })).toBe('')
     // And run by hand, with nothing said of any event, it says nothing either
     expect(await hooked({})).toBe('')
+  })
+
+  test('Codex’s agent is handed what a mark stands for by the hook that runs as its turn begins, and by the next hook that runs where the mark joined a turn', async () => {
+    const m = machine()
+    const words = '[It] The page "Deploy plan" (plan) sent this just after someone used it: approve {"plan":"B"} [action k57]'
+    /** What the stand-in connector holds behind the marks of a conversation, and what it was asked. */
+    let behind: string[] = []
+    const asked: string[] = []
+    const socket = path.join(m.it, 'connector.sock')
+    mkdirSync(m.it, { recursive: true })
+    const connector = http.createServer((req, res) => {
+      let text = ''
+      req
+        .on('data', (c) => (text += c))
+        .on('end', () => {
+          asked.push(`${req.url} ${text}`)
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(
+            JSON.stringify(req.url === '/marked' ? { ok: true, texts: behind.splice(0) } : req.url?.startsWith('/clicks') ? { clicks: [] } : { ok: true }),
+          )
+        })
+    })
+    await new Promise<void>((resolve) => connector.listen(socket, resolve))
+    writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'a'.repeat(48), pid: process.pid, version: '0.0.0' }))
+    const hooked = (event: Record<string, unknown>) =>
+      new Promise<string>((resolve) => {
+        const child = spawn(process.execPath, [program, 'hook', 'codex'], {
+          cwd: m.home,
+          env: { PATH: m.bin, HOME: m.home, IT_HOME: m.it, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage' },
+          stdio: ['pipe', 'pipe', 'ignore'],
+        })
+        let out = ''
+        child.stdout.on('data', (c) => (out += c))
+        child.on('close', () => resolve(out))
+        child.stdin.end(JSON.stringify(event))
+      })
+    try {
+      const turn = { session_id: 'thread-1', cwd: m.home }
+      // The turn the mark started: the words are handed over beside the message
+      behind = [words]
+      expect(JSON.parse(await hooked({ ...turn, hook_event_name: 'UserPromptSubmit', prompt: MARK }))).toEqual({
+        hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: behindMark([words]) },
+      })
+      expect(asked.some((a) => a.startsWith('/marked ') && a.includes('"session":"thread-1"') && a.includes('"harness":"codex"'))).toBe(true)
+      // Given once: a mark with nothing behind it says nothing
+      expect(await hooked({ ...turn, hook_event_name: 'UserPromptSubmit', prompt: MARK })).toBe('')
+      // A message of the person's own is not handed what a mark stands for: the mark's own turn is still to come
+      behind = [words]
+      expect(await hooked({ ...turn, hook_event_name: 'UserPromptSubmit', prompt: 'Carry on with the plan' })).toBe('')
+      expect(behind).toEqual([words])
+      // Where Codex does not say what the message is, the words are handed over all the same
+      expect(JSON.parse(await hooked({ ...turn, hook_event_name: 'UserPromptSubmit' })).hookSpecificOutput.additionalContext).toBe(behindMark([words]))
+      // A mark that joined a running turn started none: its words come with the next command's result, or as the turn would end
+      behind = [words]
+      expect(JSON.parse(await hooked({ ...turn, hook_event_name: 'PostToolUse' }))).toEqual({
+        hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: behindMark([words]) },
+      })
+      behind = [words]
+      expect(JSON.parse(await hooked({ ...turn, hook_event_name: 'Stop' }))).toEqual({ decision: 'block', reason: behindMark([words]) })
+      // And with nothing behind a mark and no click, a turn ends as it did before
+      expect(await hooked({ ...turn, hook_event_name: 'Stop' })).toBe('')
+    } finally {
+      await new Promise((resolve) => connector.close(resolve))
+    }
   })
 
   test('each command is counted by its own name, who ran it and how it ended, and never by what was typed after it', async () => {

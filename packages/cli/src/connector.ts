@@ -14,7 +14,7 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
+import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, MARK, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
 import {
   api,
   ask,
@@ -148,6 +148,8 @@ export const infoFile = () => inHome('connector.json')
 const socketFile = () => inHome('connector.sock')
 const journalFile = () => inHome('journal.jsonl')
 const aliasFile = () => inHome('aliases.json')
+/** The conversations whose hooks have been heard from, so that it is known across a restart where a hook of It's runs. */
+const heardFile = () => inHome('heard.json')
 /** Where a connector that is stopping writes down which conversations it cut off in the middle of a turn. */
 const cutOffFile = () => inHome('cut-off.json')
 /** The conversations this connector has reopened and that are running now, each with the process that is it: read by the connector that starts next, if this one dies. */
@@ -553,6 +555,72 @@ async function connecting(say: (line: string) => void): Promise<void> {
         soon(10)
       })
     return 'asking'
+  }
+  /**
+   * What each mark that was put into a conversation stands for, by the conversation: the
+   * words for its clicks in full, kept until one of the conversation's own hooks asks for
+   * them, which it does as the turn begins that the mark started, or at the next moment one
+   * of them runs. A mark nobody asks about in time was put where no hook of It's runs.
+   */
+  const marked = new Map<string, { texts: string[]; again: () => Promise<unknown> }[]>()
+  /** The conversations a mark went unasked about: they are given the short line from then on, for as long as this connector runs. */
+  const unmarked = new Set<string>()
+  /** How long a conversation's hooks are given to ask what a mark stands for. An agent app that has to be started first takes ten seconds or so. */
+  const MARK_ASKED_MS = 20_000
+  const markTimers = new Set<ReturnType<typeof setTimeout>>()
+  /**
+   * The conversations whose add-on has been heard from on this machine, kept across a restart
+   * of the connector: those are the ones a hook of It's is known to run in. Only so many.
+   */
+  const heardBefore = new Set<string>(Object.keys(readJson<Record<string, number>>(heardFile()) ?? {}))
+  const HEARD_MOST = 300
+  const noteHeard = (key: string) => {
+    if (heardBefore.has(key)) return
+    heardBefore.add(key)
+    while (heardBefore.size > HEARD_MOST) heardBefore.delete(heardBefore.values().next().value!)
+    try {
+      writePrivate(heardFile(), Object.fromEntries([...heardBefore].map((k) => [k, 1])))
+    } catch {
+      // Not kept: it is heard from again soon enough
+    }
+  }
+  /**
+   * Whether a conversation is given the mark alone. Its agent app has to have a hook of It's
+   * that runs as a turn begins (Codex and Claude Code have). The conversation's add-on has to
+   * have been heard from, so that its hooks are known to run there. No turn of it may be
+   * running, since a mark put into a running turn starts none, and no hook runs for it as one
+   * begins. And it must not have left a mark unasked about before.
+   */
+  const marks = (key: string, harness: string) =>
+    (harness === 'codex' || harness === 'claude-code') && (sessions.has(key) || heardBefore.has(key)) && !unmarked.has(key) && !turnRunning(key, Date.now())
+  /**
+   * Notes what a mark stands for, before the mark is sent. Given back: how to take the note
+   * away again, where the mark was not taken, and how to start the wait for a hook to ask
+   * about it. Should none ask, the short line is sent after it, so that the agent is told
+   * after all, and the conversation is given no mark again.
+   */
+  const noteMark = (key: string, harness: string, texts: string[], again: () => Promise<unknown>) => {
+    const entry = { texts, again }
+    marked.set(key, [...(marked.get(key) ?? []), entry])
+    const takeAway = () => {
+      const left = (marked.get(key) ?? []).filter((m) => m !== entry)
+      if (left.length) marked.set(key, left)
+      else marked.delete(key)
+    }
+    const wait = () => {
+      const timer = setTimeout(() => {
+        markTimers.delete(timer)
+        if (closing || !(marked.get(key) ?? []).includes(entry)) return
+        takeAway()
+        unmarked.add(key)
+        say(
+          `${a(agentOf(harness))} conversation (${short(threadOf(key))}) was given a mark and none of its hooks asked what it stood for; it is given the short line now, and from here on`,
+        )
+        void again().catch(() => {})
+      }, MARK_ASKED_MS)
+      markTimers.add(timer)
+    }
+    return { takeAway, wait }
   }
   /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
   const queues = new Map<string, Promise<void>>()
@@ -1295,6 +1363,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
       const toldCutOff = cutOff.has(key)
       const sent = { click, toWaiter: false }
       submitting.set(click.id, sent)
+      // What is put into a conversation that is open, or into a thread: the mark alone, where a
+      // hook of It's hands the agent the rest, and otherwise one short line for each click
+      const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
+      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexQueue(threadOf(key), text))
+      const mark =
+        !reopening && marks(key, harness)
+          ? noteMark(
+              key,
+              harness,
+              [click, ...(t3 ? withIt : [])].map((c) => describeClick(asClick(c))),
+              () => put(lines()),
+            )
+          : undefined
       // Whose run it will be, where one is started: should every run be ended at once, as when
       // the machine is found not to fit, the note of that is this hand-over's to let go of
       if (reopening && !reopenedNow.has(key)) handing.set(key, mine)
@@ -1329,14 +1410,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
         : // Not once this connector is stopping or the machine has ceased to fit, which may have come while the hold was made good again
           closing || unfitting
           ? NOT_STARTED
-          : t3
-            ? // What stands in the thread is the person's to look at, so it is the short line for
-              // each click and nothing else: no instructions, and nothing the action carried
-              // but what they typed themselves. It goes to T3 Code on this machine alone, on no
-              // command line.
-              await t3Send(t3.server, t3.thread, [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n'))
-            : // The same short line, without what they typed: this one is put on a command line
-              await codexQueue(threadOf(key), briefClick(asClick(click), false))
+          : // What stands in the thread, or in the conversation, is the person's to look at: the
+            // mark alone, or the short line for each click, and never It's words to the agent.
+            // In a thread the line holds what they typed themselves, since it goes to T3 Code
+            // on this machine alone. In Codex's queue it does not: that one is put on a
+            // command line.
+            await put(mark ? MARK : lines())
+      // A mark that was not taken stands for nothing. One that was is waited on: a hook asks
+      if (mark && refused !== null) mark.takeAway()
+      else mark?.wait()
       // A conversation the person stopped had what was done all the same: it is handed over,
       // and nothing is tried again for it
       // Ended because this connector is stopping, it is given back, to be reopened for by the
@@ -1753,6 +1835,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     const harness = String(url.searchParams.get('harness') ?? body.harness ?? '').slice(0, 40)
     const id = String(url.searchParams.get('session') ?? body.session ?? '').slice(0, 200)
+    // What the marks put into a conversation stand for: asked by the conversation's own hook
+    // as the turn begins that a mark started, or at the next moment one of its hooks runs.
+    // Given once, to whoever of the conversation asks first.
+    if (req.method === 'POST' && url.pathname === '/marked') {
+      if (!harness || !id) return [400, { error: 'say which harness and session' }]
+      const key = follow(keyOf(harness, id))
+      const texts = (marked.get(key) ?? []).flatMap((m) => m.texts)
+      marked.delete(key)
+      return [200, { ok: true, texts }]
+    }
     if (url.pathname === '/session' || url.pathname === '/clicks') {
       if (!harness || !id) return [400, { error: 'say which harness and session' }]
       // An add-on in an app that is not connected (one the person has disconnected, still
@@ -1796,6 +1888,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (url.pathname === '/session') for (const [clickId, b] of behindTurn) if (b.key === follow(key)) behindTurn.delete(clickId)
       }
       sessions.set(key, s)
+      if (isNew && (harness === 'codex' || harness === 'claude-code')) noteHeard(key)
       let changed = false
       // A conversation that is here under its own id is not somewhere else under another
       if (aliases.delete(key)) changed = true
@@ -2483,6 +2576,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // started: nothing It runs with nobody watching runs on once It has been stopped. What each
   // was reopened for is given back, and is reopened for again when It next starts.
   closing = true
+  for (const timer of markTimers) clearTimeout(timer)
   // Written down for the connector that starts next: each of these is given what it was
   // reopened for a second time, and must be told that its first turn at it was cut off
   // (Not the run a person has just stopped, which is ending for that reason and is noted as

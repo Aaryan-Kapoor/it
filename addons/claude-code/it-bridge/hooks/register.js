@@ -20,6 +20,12 @@ const HARNESS = 'claude-code'
 // It. The same words as every add-on that says them, kept in It's protocol as `WHEN`.
 const WHEN =
   'It is set up on this machine: a two-way workspace that you custom-make for the user, on any screen they own. You build the interface the task calls for as a page, what the user does on it comes back to you, and you answer on the page. Whenever the user is to see, use, play, choose, fill in or decide on something, build it there and do not write it into the chat. Load the skill named `it` before the first page. A plain answer to a plain question stays in the chat.'
+// What It puts into a conversation to start a turn where the words for the agent can be
+// handed over beside the message, and what stands before those words. The same as in It's
+// protocol, as `MARK` and `behindMark`.
+const MARK = '[It]'
+const behindMark = (texts) =>
+  `It put the message "${MARK}" into this conversation to start a turn for what follows. The user sees that mark and nothing else of this:\n${texts.join('\n')}`
 // Where It's folder was when this add-on was set up, if not the usual place. Filled in by `it setup`.
 const IT_HOME_AT_SETUP = null
 let connector = null // { socket | port, token }, read from the connector's own file
@@ -300,6 +306,18 @@ export function register(on) {
     const tools = Array.isArray(e?.tools) ? e.tools : []
     if (!made || !Array.isArray(made.sections) || !tools.includes('Bash') || !tools.includes('Skill')) return made
     return { ...made, sections: [...made.sections.filter((s) => s?.id !== 'it-bridge:when'), { id: 'it-bridge:when', text: WHEN, scope: 'session' }] }
+  })
+  // A turn that It started with its mark alone, through a thread of T3 Code that had let this
+  // program go: Claude is handed what the mark stands for beside the message, where the person
+  // does not see it. Anything else that is submitted goes on as it is.
+  on('prompt.submit', async ($, e, next) => {
+    if (typeof e?.text !== 'string' || e.text.trim() !== MARK) return next(e)
+    let texts = []
+    try {
+      const got = await ask($, '/marked', { harness: HARNESS, session: await $.session.id() })
+      texts = Array.isArray(got?.texts) ? got.texts.filter((t) => typeof t === 'string' && t) : []
+    } catch {}
+    return texts.length ? next({ ...e, context: [...(e.context ?? []), behindMark(texts)] }) : next(e)
   })
   on('session.start', async ($, e, next) => {
     running = false

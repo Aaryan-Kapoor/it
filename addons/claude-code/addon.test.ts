@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { briefClick, describeClick, FAULT, WHEN } from '@it/protocol'
+import { behindMark, briefClick, describeClick, FAULT, MARK, WHEN } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 interface Click {
@@ -19,6 +19,8 @@ let server: http.Server
 /** What the stand-in connector will offer, and what it was told. */
 let offered: Click[]
 let asked: { path: string; body: any }[]
+/** What the stand-in connector says the marks put into the conversation stand for. Given once, as the connector gives it. */
+let behind: string[] = []
 
 function fakeConnector(socket: string): Promise<http.Server> {
   const s = http.createServer((req, res) => {
@@ -34,7 +36,8 @@ function fakeConnector(socket: string): Promise<http.Server> {
         asked.push({ path: req.url ?? '', body })
         if (req.url?.startsWith('/ack')) offered = offered.filter((c) => !body.ids.includes(c.id))
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(req.url?.startsWith('/clicks') ? { clicks: offered } : { ok: true }))
+        const marked = req.url?.startsWith('/marked') ? { ok: true, texts: behind.splice(0) } : null
+        res.end(JSON.stringify(marked ?? (req.url?.startsWith('/clicks') ? { clicks: offered } : { ok: true })))
       })
   })
   return new Promise((resolve) => s.listen(socket, () => resolve(s)))
@@ -748,6 +751,48 @@ describe('the Claude Code add-on', () => {
     const host = await start()
     await host.tick()
     expect(host.submits).toEqual([])
+  })
+})
+
+describe('a turn that It started with its mark alone', () => {
+  const words = '[It] The page "Deploy plan" (plan) sent this just after someone used it: approve {"plan":"B"} [action k57]'
+  /** Submits a prompt as Claude Code does, and gives back what went on into the session. */
+  const submitted = async (host: Awaited<ReturnType<typeof start>>, text: string, context?: string[]) => {
+    let entered: { text: string; context?: readonly string[] } | undefined
+    await host.handlers['prompt.submit']!(host.$, { text, wait: false, origin: { kind: 'user' }, ...(context ? { context } : {}) }, async (e: any) => {
+      entered = e
+      return e
+    })
+    return entered!
+  }
+
+  test('is handed what the mark stands for beside the message, where the person does not see it, in the words every add-on says', async () => {
+    const host = await start()
+    behind = [words]
+    asked = []
+    const entered = await submitted(host, MARK, ['what was there'])
+    expect(entered.text).toBe(MARK)
+    expect(entered.context).toEqual(['what was there', behindMark([words])])
+    expect(asked).toEqual([{ path: '/marked', body: { harness: 'claude-code', session: 'session-1' } }])
+    // Asked once: the mark's words are given once, and a second mark with nothing behind it is passed on as it is
+    expect((await submitted(host, MARK)).context).toBeUndefined()
+  })
+
+  test('and nothing is asked, and nothing added, for a message that is anything else', async () => {
+    const host = await start()
+    behind = [words]
+    asked = []
+    for (const text of ['Carry on', `${MARK} "Deploy plan" (plan): approve [action k57]`, ''])
+      expect(await submitted(host, text)).toEqual({ text, wait: false, origin: { kind: 'user' } })
+    expect(asked).toEqual([])
+    expect(behind).toEqual([words])
+    behind = []
+  })
+
+  test('with no connector to ask, the message goes on as it is', async () => {
+    rmSync(path.join(home, 'connector.json'))
+    const host = await start()
+    expect(await submitted(host, MARK)).toEqual({ text: MARK, wait: false, origin: { kind: 'user' } })
   })
 })
 

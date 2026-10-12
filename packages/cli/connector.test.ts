@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { PROTOCOL_VERSION } from '@it/protocol'
+import { MARK, PROTOCOL_VERSION } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { conversationFolder, noteConversation } from './src/publish'
@@ -1763,6 +1763,82 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     await until(() => stand.codex.length === 1)
     expect(stand.codex[0]!.args).toContain('--message=[It] "A page" (page-7), typed above it: read it with `it action click-7` [action click-7]')
     expect(JSON.stringify(stand.codex[0]!.args)).not.toContain('bigger')
+  })
+
+  /** The conversation's hooks are heard from, as they are once a turn of it has run with It's add-on there. */
+  const heard = (n: number) => turn(n, false)
+  /** What a hook of the conversation is handed when it asks what the marks put into it stand for. */
+  const behindMarks = async (n: number) =>
+    (await local<{ texts: string[] }>('/marked', { method: 'POST', body: { harness: 'codex', session: `thread-${n}` } }))?.texts
+  const inFull = (n: number, name = 'approve {"plan":"B"}') =>
+    `[It] The page "A page" (page-${n}) sent this just after someone used it: ${name} [action click-${n}]`
+
+  test('a conversation whose hooks are heard from is given the mark alone in its thread, and its hook is handed what the mark stands for, once', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-8', 't3-thread-h')
+    await start()
+    await heard(8)
+    offered(click(8))
+    await until(() => stand.t3.sent.length >= 1)
+    expect(stand.t3.sent[0]).toEqual({ thread: 't3-thread-h', text: MARK })
+    await until(() => called('delivery:handedOff').includes('click-8'))
+    // The hook that runs as the turn begins asks, and is given the click in full
+    expect(await behindMarks(8)).toEqual([inFull(8)])
+    expect(await behindMarks(8)).toEqual([])
+    // Another conversation's hook is given nothing of it
+    offered({ ...click(8), id: 'click-8-next' })
+    await until(() => stand.t3.sent.length >= 2)
+    expect(await behindMarks(1)).toEqual([])
+    expect((await behindMarks(8))?.length).toBe(1)
+    expect(stand.codex).toEqual([])
+  })
+
+  test('the mark goes into Codex’s queue as well, and what a person typed is handed over behind it and kept off the command line', async () => {
+    await start()
+    await heard(9)
+    offered({ ...click(9), name: 'it:message', payload: '{"text":"Make the board bigger"}' })
+    await until(() => stand.codex.length === 1)
+    expect(stand.codex[0]!.args).toContain(`--message=${MARK}`)
+    expect(JSON.stringify(stand.codex[0]!.args)).not.toContain('bigger')
+    const behind = await behindMarks(9)
+    expect(behind?.length).toBe(1)
+    expect(behind![0]).toContain('The user typed this to you in the box above the page "A page" (page-9)')
+    expect(behind![0]).toContain('"Make the board bigger"')
+  })
+
+  test('a conversation that was heard from before the connector was started anew is given the mark as well', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-10', 't3-thread-j')
+    await start('socket', {}, (home) => writeFileSync(path.join(home, 'heard.json'), JSON.stringify({ 'codex:thread-10': 1 })))
+    offered(click(10))
+    await until(() => stand.t3.sent.length >= 1)
+    expect(stand.t3.sent[0]).toEqual({ thread: 't3-thread-j', text: MARK })
+  })
+
+  test('a mark that no hook asks about is followed by the short line, so that the agent is told after all, and the conversation is given no mark again', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-11', 't3-thread-k')
+    standIn(true)
+    await start()
+    await heard(11)
+    offered(click(11))
+    for (let i = 0; i < 5 && stand.t3.sent.length < 1; i++) await pass()
+    expect(stand.t3.sent).toEqual([{ thread: 't3-thread-k', text: MARK }])
+    await until(() => called('delivery:handedOff').includes('click-11'))
+    offered()
+    // For as long as a hook is given to ask, nothing more is put to the thread
+    await pass(18)
+    expect(stand.t3.sent.length).toBe(1)
+    await pass(3)
+    await until(() => stand.t3.sent.length === 2)
+    expect(stand.t3.sent[1]).toEqual({ thread: 't3-thread-k', text: '[It] "A page" (page-11): approve, with details [action click-11]' })
+    expect(said.some((line) => /was given a mark and none of its hooks asked what it stood for/.test(line))).toBe(true)
+    // What the mark stood for is no longer kept for a hook that comes late: the agent has it in the line
+    expect(await behindMarks(11)).toEqual([])
+    // And the next thing done goes as the short line at once
+    offered({ ...click(11), id: 'click-11-next' })
+    for (let i = 0; i < 5 && stand.t3.sent.length < 3; i++) await pass()
+    expect(stand.t3.sent[2]).toEqual({ thread: 't3-thread-k', text: '[It] "A page" (page-11): approve, with details [action click-11-next]' })
   })
 
   test('one whose conversation is in no thread goes into Codex’s queue, once T3 Code has said so, and T3 Code is not asked again for the next', async () => {
