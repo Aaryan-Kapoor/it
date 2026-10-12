@@ -1190,13 +1190,28 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     // Each of the sixty-eight waits below is given half a minute and not the usual eight seconds:
     // nothing here is held to a time, and on a machine that is busy with the other suites one
     // step of so many has taken longer than eight
+    // Where a step does not come about, what the connector did and said by then is told: on
+    // one of the workflow's machines the first step has not, and nothing said why
+    const sofar = (step: string, i: number) => (err: unknown) => {
+      throw new Error(
+        `${step} of click ${i} did not come about: ${JSON.stringify({
+          codex: stand.codex.length,
+          claimed: called('delivery:claim').length,
+          released: called('delivery:release').length,
+          handedOff: called('delivery:handedOff').length,
+          calls: [...new Set(stand.calls.map((c) => c.name))],
+          said: said.slice(-12),
+        })}`,
+        { cause: err },
+      )
+    }
     for (let i = 0; i < 34; i++) {
       const commands = stand.codex.length
       ids.push(`click-big-${i}`)
       offered({ ...click(6), id: ids[i]!, payload: carried })
-      await until(() => stand.codex.length === commands + 1, 30_000)
+      await until(() => stand.codex.length === commands + 1, 30_000).catch(sofar('Codex’s command', i))
       stand.codex[commands]!.end()
-      await until(() => called('delivery:handedOff').includes(ids[i]!), 30_000)
+      await until(() => called('delivery:handedOff').includes(ids[i]!), 30_000).catch(sofar('telling It', i))
       offered()
     }
     // Together they are over a megabyte, which is more than a waiter reads of one answer
