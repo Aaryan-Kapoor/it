@@ -1,7 +1,5 @@
 # What the It License lets you do
 
-> **Draft.** This page may change.
-
 It is source-available. You can read the code, run it, and change it for yourself, and the license sets limits on how it is used by companies and on what you may do with it for other people. This page explains those limits with examples. It is a summary and not the license: where the two differ, [`LICENSE.md`](../LICENSE.md) is what counts. Using It is what accepts the license's terms.
 
 ## You can
