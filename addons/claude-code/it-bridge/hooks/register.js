@@ -313,11 +313,20 @@ export function register(on) {
   on('prompt.submit', async ($, e, next) => {
     if (typeof e?.text !== 'string' || e.text.trim() !== MARK) return next(e)
     let texts = []
+    let marks = []
+    let who = null
     try {
-      const got = await ask($, '/marked', { harness: HARNESS, session: await $.session.id() })
+      who = { harness: HARNESS, session: await $.session.id() }
+      const got = await ask($, '/marked', who)
       texts = Array.isArray(got?.texts) ? got.texts.filter((t) => typeof t === 'string' && t) : []
+      marks = Array.isArray(got?.marks) ? got.marks : []
     } catch {}
-    return texts.length ? next({ ...e, context: [...(e.context ?? []), behindMark(texts)] }) : next(e)
+    if (!texts.length) return next(e)
+    const entered = await next({ ...e, context: [...(e.context ?? []), behindMark(texts)] })
+    // The connector keeps what a mark stands for until it is told that Claude has it: only once
+    // the prompt has gone in with it. One that another hook refused has not, and nothing is said.
+    if (marks.length && !(entered && entered.drop !== undefined)) void ask($, '/marked', { ...who, taken: marks })
+    return entered
   })
   on('session.start', async ($, e, next) => {
     running = false

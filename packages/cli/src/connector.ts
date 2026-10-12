@@ -562,11 +562,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * them, which it does as the turn begins that the mark started, or at the next moment one
    * of them runs. A mark nobody asks about in time was put where no hook of It's runs.
    */
-  const marked = new Map<string, { texts: string[]; again: () => Promise<unknown> }[]>()
+  const marked = new Map<string, { id: string; texts: string[]; at: number }[]>()
   /** The conversations a mark went unasked about: they are given the short line from then on, for as long as this connector runs. */
   const unmarked = new Set<string>()
-  /** How long a conversation's hooks are given to ask what a mark stands for. An agent app that has to be started first takes ten seconds or so. */
+  /** How long a conversation's hooks are given to ask what a mark stands for, and to say that they have it. An agent app that has to be started first takes ten seconds or so. */
   const MARK_ASKED_MS = 20_000
+  /** How long after each try the short line is tried again, where the app did not take it. Past the last, what the mark stood for is kept for the conversation's next hook. */
+  const MARK_AGAIN_MS = [20_000, 60_000, 300_000]
   const markTimers = new Set<ReturnType<typeof setTimeout>>()
   /**
    * The conversations whose add-on has been heard from on this machine, kept across a restart
@@ -595,31 +597,55 @@ async function connecting(say: (line: string) => void): Promise<void> {
     (harness === 'codex' || harness === 'claude-code') && (sessions.has(key) || heardBefore.has(key)) && !unmarked.has(key) && !turnRunning(key, Date.now())
   /**
    * Notes what a mark stands for, before the mark is sent. Given back: how to take the note
-   * away again, where the mark was not taken, and how to start the wait for a hook to ask
-   * about it. Should none ask, the short line is sent after it, so that the agent is told
-   * after all, and the conversation is given no mark again.
+   * away again, where the mark was not taken, and how to start the wait for a hook to say that
+   * it has what the mark stood for.
+   *
+   * A note is kept until a hook says it has it, and not only until one has asked: an answer
+   * that is lost on its way, or a hook that dies with it unread, would otherwise have used up
+   * what the click was, when It has long been told that the click was handed over. Should no
+   * hook say so in time, the short line is sent after the mark, so that the agent is told
+   * after all, and the conversation is given no mark again. Where the app does not take the
+   * line either, it is tried again a few times, and the note stays for the conversation's
+   * next hook whatever becomes of that.
    */
   const noteMark = (key: string, harness: string, texts: string[], again: () => Promise<unknown>) => {
-    const entry = { texts, again }
+    const entry = { id: randomBytes(8).toString('hex'), texts, at: Date.now() }
     marked.set(key, [...(marked.get(key) ?? []), entry])
+    const kept = () => (marked.get(key) ?? []).includes(entry)
     const takeAway = () => {
       const left = (marked.get(key) ?? []).filter((m) => m !== entry)
       if (left.length) marked.set(key, left)
       else marked.delete(key)
     }
-    const wait = () => {
+    const who = `${a(agentOf(harness))} conversation (${short(threadOf(key))})`
+    const after = (ms: number, what: () => void) => {
       const timer = setTimeout(() => {
         markTimers.delete(timer)
-        if (closing || !(marked.get(key) ?? []).includes(entry)) return
-        takeAway()
-        unmarked.add(key)
-        say(
-          `${a(agentOf(harness))} conversation (${short(threadOf(key))}) was given a mark and none of its hooks asked what it stood for; it is given the short line now, and from here on`,
-        )
-        void again().catch(() => {})
-      }, MARK_ASKED_MS)
+        if (!closing && kept()) what()
+      }, ms)
       markTimers.add(timer)
     }
+    const line = (tried: number) => {
+      void again()
+        .catch(() => 'it could not be sent')
+        .then((refused) => {
+          if (!kept()) return
+          // Taken: the agent has it in the line, and the note is done with
+          if (refused === null) return takeAway()
+          const next = MARK_AGAIN_MS[tried]
+          if (next === undefined) {
+            say(`${who} did not take the short line either, ${tried + 1} times; what its mark stood for is kept for the next of its hooks that runs`)
+            return
+          }
+          after(next, () => line(tried + 1))
+        })
+    }
+    const wait = () =>
+      after(MARK_ASKED_MS, () => {
+        unmarked.add(key)
+        say(`${who} was given a mark and none of its hooks said it had what the mark stood for; it is given the short line now, and from here on`)
+        line(0)
+      })
     return { takeAway, wait }
   }
   /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
@@ -1837,13 +1863,22 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const id = String(url.searchParams.get('session') ?? body.session ?? '').slice(0, 200)
     // What the marks put into a conversation stand for: asked by the conversation's own hook
     // as the turn begins that a mark started, or at the next moment one of its hooks runs.
-    // Given once, to whoever of the conversation asks first.
+    // Given for as long as no hook has said that it has it, so that an answer lost on its way
+    // is asked for again and given again.
     if (req.method === 'POST' && url.pathname === '/marked') {
       if (!harness || !id) return [400, { error: 'say which harness and session' }]
       const key = follow(keyOf(harness, id))
-      const texts = (marked.get(key) ?? []).flatMap((m) => m.texts)
-      marked.delete(key)
-      return [200, { ok: true, texts }]
+      // The hook has what it was given, and says which: only then is it let go of
+      if (Array.isArray(body.taken)) {
+        const left = (marked.get(key) ?? []).filter((m) => !body.taken.includes(m.id))
+        if (left.length) marked.set(key, left)
+        else marked.delete(key)
+        return [200, { ok: true }]
+      }
+      // For a turn the person started with a message of their own, only what has waited past
+      // its time is handed over: a mark's own turn is still to come, and has first claim
+      const due = (marked.get(key) ?? []).filter((m) => body.own !== true || Date.now() - m.at > MARK_ASKED_MS)
+      return [200, { ok: true, marks: due.map((m) => m.id), texts: due.flatMap((m) => m.texts) }]
     }
     if (url.pathname === '/session' || url.pathname === '/clicks') {
       if (!harness || !id) return [400, { error: 'say which harness and session' }]

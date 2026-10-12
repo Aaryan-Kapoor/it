@@ -478,6 +478,8 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     /** What the stand-in connector holds behind the marks of a conversation, and what it was asked. */
     let behind: string[] = []
     const asked: string[] = []
+    /** The marks the hook said the agent has. */
+    const taken: string[] = []
     const socket = path.join(m.it, 'connector.sock')
     mkdirSync(m.it, { recursive: true })
     const connector = http.createServer((req, res) => {
@@ -487,9 +489,18 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         .on('end', () => {
           asked.push(`${req.url} ${text}`)
           res.writeHead(200, { 'content-type': 'application/json' })
-          res.end(
-            JSON.stringify(req.url === '/marked' ? { ok: true, texts: behind.splice(0) } : req.url?.startsWith('/clicks') ? { clicks: [] } : { ok: true }),
-          )
+          const body = text ? JSON.parse(text) : {}
+          // As the connector answers: what is behind the marks, by name, for as long as the hook
+          // has not said that it has it, and nothing of it yet for a message of the person's own
+          const marked = () => {
+            if (Array.isArray(body.taken)) {
+              taken.push(...body.taken)
+              behind = []
+              return { ok: true }
+            }
+            return body.own ? { ok: true, marks: [], texts: [] } : { ok: true, marks: behind.map((_, i) => `mark-${i}`), texts: behind }
+          }
+          res.end(JSON.stringify(req.url === '/marked' ? marked() : req.url?.startsWith('/clicks') ? { clicks: [] } : { ok: true }))
         })
     })
     await new Promise<void>((resolve) => connector.listen(socket, resolve))
@@ -514,7 +525,9 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: behindMark([words]) },
       })
       expect(asked.some((a) => a.startsWith('/marked ') && a.includes('"session":"thread-1"') && a.includes('"harness":"codex"'))).toBe(true)
-      // Given once: a mark with nothing behind it says nothing
+      // Said first, then confirmed: the hook told the connector that the agent has it, by the name it was given
+      expect(taken).toEqual(['mark-0'])
+      // And a mark with nothing behind it says nothing
       expect(await hooked({ ...turn, hook_event_name: 'UserPromptSubmit', prompt: MARK })).toBe('')
       // A message of the person's own is not handed what a mark stands for: the mark's own turn is still to come
       behind = [words]

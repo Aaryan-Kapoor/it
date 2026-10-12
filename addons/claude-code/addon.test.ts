@@ -36,7 +36,14 @@ function fakeConnector(socket: string): Promise<http.Server> {
         asked.push({ path: req.url ?? '', body })
         if (req.url?.startsWith('/ack')) offered = offered.filter((c) => !body.ids.includes(c.id))
         res.writeHead(200, { 'content-type': 'application/json' })
-        const marked = req.url?.startsWith('/marked') ? { ok: true, texts: behind.splice(0) } : null
+        // As the connector answers: kept until the add-on says that Claude has it
+        let marked: Record<string, unknown> | null = null
+        if (req.url?.startsWith('/marked')) {
+          if (Array.isArray(body?.taken)) {
+            behind = []
+            marked = { ok: true }
+          } else marked = { ok: true, marks: behind.map((_, i) => `mark-${i}`), texts: behind }
+        }
         res.end(JSON.stringify(marked ?? (req.url?.startsWith('/clicks') ? { clicks: offered } : { ok: true })))
       })
   })
@@ -773,8 +780,13 @@ describe('a turn that It started with its mark alone', () => {
     const entered = await submitted(host, MARK, ['what was there'])
     expect(entered.text).toBe(MARK)
     expect(entered.context).toEqual(['what was there', behindMark([words])])
-    expect(asked).toEqual([{ path: '/marked', body: { harness: 'claude-code', session: 'session-1' } }])
-    // Asked once: the mark's words are given once, and a second mark with nothing behind it is passed on as it is
+    // Asked as the prompt goes in, and told once it has gone in with the words that Claude has them
+    await until(() => asked.length === 2, 'the add-on telling the connector that Claude has what the mark stood for')
+    expect(asked).toEqual([
+      { path: '/marked', body: { harness: 'claude-code', session: 'session-1' } },
+      { path: '/marked', body: { harness: 'claude-code', session: 'session-1', taken: ['mark-0'] } },
+    ])
+    // A second mark with nothing behind it is passed on as it is
     expect((await submitted(host, MARK)).context).toBeUndefined()
   })
 
