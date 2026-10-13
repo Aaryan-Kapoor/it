@@ -162,24 +162,43 @@ const lockFile = () => inHome('connector.lock')
 
 function journal(event: string, id: string): void {
   try {
-    if (existsSync(journalFile()) && statSync(journalFile()).size > 1_000_000)
-      writeFileSync(journalFile(), readFileSync(journalFile(), 'utf8').split('\n').slice(-500).join('\n'))
-    appendFileSync(journalFile(), `${JSON.stringify({ t: Date.now(), event, id })}\n`, { mode: 0o600 })
+    // Cut down to its last records once it is large, into a file beside it that then takes its
+    // place: cut down where it lies, a disk that filled in the middle left it with nothing
+    if (existsSync(journalFile()) && statSync(journalFile()).size > 1_000_000) {
+      const fewer = `${journalFile()}.${process.pid}.tmp`
+      writeFileSync(fewer, `${readFileSync(journalFile(), 'utf8').split('\n').filter(Boolean).slice(-500).join('\n')}\n`, { mode: 0o600 })
+      renameSync(fewer, journalFile())
+    }
+    // Begun on a line of its own, whatever the record before it ended with: one that was cut
+    // short, by a crash or a full disk, would otherwise take this one with it
+    appendFileSync(journalFile(), `\n${JSON.stringify({ t: Date.now(), event, id })}\n`, { mode: 0o600 })
   } catch {}
+}
+/** What the journal holds, in the order it was written. A line that cannot be read, as one cut short is, is passed over and says nothing of the lines after it. */
+function journalled(): { event: string; id: string }[] {
+  let text = ''
+  try {
+    text = readFileSync(journalFile(), 'utf8')
+  } catch {}
+  const out: { event: string; id: string }[] = []
+  for (const line of text.split('\n')) {
+    if (!line) continue
+    try {
+      const e = JSON.parse(line) as { event?: unknown; id?: unknown } | null
+      if (typeof e?.event === 'string' && typeof e.id === 'string') out.push({ event: e.event, id: e.id })
+    } catch {}
+  }
+  return out
 }
 /** Clicks the journal says a harness's queue accepted, but which were never confirmed to It. */
 function queuedButUnconfirmed(): Set<string> {
   const out = new Set<string>()
-  try {
-    for (const line of readFileSync(journalFile(), 'utf8').split('\n')) {
-      if (!line) continue
-      const e = JSON.parse(line) as { event: string; id: string }
-      // "queueing" is only the intent. If nothing follows it, the command may never have run,
-      // so the click is sent again: a repeat can be told apart by its id, a loss cannot be undone.
-      if (e.event === 'queued') out.add(e.id)
-      if (e.event === 'confirmed') out.delete(e.id)
-    }
-  } catch {}
+  for (const e of journalled()) {
+    // "queueing" is only the intent. If nothing follows it, the command may never have run,
+    // so the click is sent again: a repeat can be told apart by its id, a loss cannot be undone.
+    if (e.event === 'queued') out.add(e.id)
+    if (e.event === 'confirmed') out.delete(e.id)
+  }
   return out
 }
 
@@ -190,14 +209,10 @@ function queuedButUnconfirmed(): Set<string> {
  */
 function claimedAndLeft(): string[] {
   const out = new Set<string>()
-  try {
-    for (const line of readFileSync(journalFile(), 'utf8').split('\n')) {
-      if (!line) continue
-      const e = JSON.parse(line) as { event: string; id: string }
-      if (e.event === 'claimed' || e.event === 'queueing' || e.event === 'served') out.add(e.id)
-      else out.delete(e.id)
-    }
-  } catch {}
+  for (const e of journalled()) {
+    if (e.event === 'claimed' || e.event === 'queueing' || e.event === 'served') out.add(e.id)
+    else out.delete(e.id)
+  }
   return [...out]
 }
 

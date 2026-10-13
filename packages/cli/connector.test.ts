@@ -1277,12 +1277,12 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       writeFileSync(
         path.join(folder, 'journal.jsonl'),
         [
-          { t: Date.now() - 5000, event: 'claimed', id: 'click-done' },
-          { t: Date.now() - 4000, event: 'acked', id: 'click-done' },
-          { t: Date.now() - 2000, event: 'claimed', id: 'click-left' },
-        ]
-          .map((e) => `${JSON.stringify(e)}\n`)
-          .join(''),
+          `${JSON.stringify({ t: Date.now() - 5000, event: 'claimed', id: 'click-done' })}\n`,
+          `${JSON.stringify({ t: Date.now() - 4000, event: 'acked', id: 'click-done' })}\n`,
+          // A record that a crash cut short, with nothing to end its line: it is passed over, and says nothing of what was written after it
+          '{"t":17,"event":"cla',
+          `\n${JSON.stringify({ t: Date.now() - 2000, event: 'claimed', id: 'click-left' })}\n`,
+        ].join(''),
       ),
     )
     offered(click(6))
