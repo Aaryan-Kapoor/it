@@ -560,6 +560,43 @@ describe('the network as a switch', () => {
     }
   })
 
+  test('an asking that was given up on and is refused afterwards leaves the next asking alone: that one goes on, and what is said is its own', async () => {
+    vi.useFakeTimers()
+    const { ConvexError } = await import('convex/values')
+    let refuse!: (err: unknown) => void
+    answers['network:ask'] = () =>
+      new Promise((_, reject) => {
+        refuse = reject
+      })
+    watched['network:get'] = stands()
+    await panel()
+    await pick(1)
+    await act(async () => void (await vi.advanceTimersByTimeAsync(GIVEN_UP + 1500)))
+    expect(said()).toBe('It has not said what became of that. The choice shows how the network stands now.')
+    // Asked again, and this time the backend takes it
+    answers['network:ask'] = () => ({ asked: ASKED })
+    await pick(1)
+    expect(said()).toBe('Turning the network on…')
+    // The first asking is refused only now
+    await act(async () => refuse(new ConvexError({ code: 'busy', message: 'The first asking was refused.' })))
+    expect(said()).toBe('Turning the network on…')
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(true)
+    // And the second is still known by its name when the service answers it
+    await networkStands({ answered: { to: 'on', at: Date.now() + 1000, ok: false, why: 'cannot_listen', asked: ASKED } })
+    expect(said()).toContain('It could not listen on that machine’s network addresses, so the network is left off.')
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
+  })
+
+  test('an asking the backend refuses is over at once, and what the backend said is shown', async () => {
+    const { ConvexError } = await import('convex/values')
+    answers['network:ask'] = () => Promise.reject(new ConvexError({ code: 'busy', message: 'The asking was refused.' }))
+    watched['network:get'] = stands()
+    await panel()
+    await pick(1)
+    expect(said()).toBe('The asking was refused.')
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
+  })
+
   test('on a machine the internet reaches, turning it on is asked about first, with why, and nothing is done on a no', async () => {
     watched['network:get'] = stands({ exposed: 'has a public address (203.0.113.7)' })
     const asking = vi.fn((_: string) => false)

@@ -5,7 +5,7 @@
 // owner's browser reads that here, and what it shows changes by itself when `it network on` or
 // `it network off` is run.
 import { useMutation, useQuery } from 'convex/react'
-import { useCallback, useEffect, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Copyable } from './dialog'
 import { api, pairingAddress, refusal, useNow } from './lib'
 
@@ -107,6 +107,8 @@ export function useNetwork() {
    * for the answer to this, and what the other was refused is not said here.
    */
   const [mine, setMine] = useState<{ to: Way; at: number; id: number | null } | null>(null)
+  /** When the last asking was made here, which is the one a refusal has to be of to be said here. */
+  const last = useRef(0)
   /** Why what was last asked here did not come about, in a sentence, until something else is asked. */
   const [failed, setFailed] = useState('')
   const way: Way | undefined = said === undefined ? undefined : !said.on ? 'off' : said.tailnet ? 'tailscale' : 'on'
@@ -146,11 +148,15 @@ export function useNetwork() {
       }
       setFailed('')
       const at = Date.now()
+      last.current = at
       setMine({ to, at, id: null })
       asking({ to }).then(
         // The name the backend gave it, by which its answer is known
         (given) => setMine((was) => (was && was.at === at ? { ...was, id: (given as { asked?: number } | null)?.asked ?? null } : was)),
         (err) => {
+          // Refused only after it was given up on and something else was asked: that asking
+          // goes on, and what is said is its own
+          if (last.current !== at) return
           setMine(null)
           setFailed(refusal(err).message)
         },
