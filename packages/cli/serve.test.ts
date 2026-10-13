@@ -718,7 +718,8 @@ describe.skipIf(!program)('the backend program, started by the service', () => {
       mkdirSync(path.dirname(database), { recursive: true })
       const broken = Buffer.from('this is not a database\n'.repeat(1000))
       writeFileSync(database, broken)
-      expect(await refusal(startBackend(config, say))).toBe('backend_exited')
+      // Each start here is one the test's end stops, should the program start where it is expected to be refused
+      expect(await refusal(start(config))).toBe('backend_exited')
       expect(readFileSync(database).equals(broken)).toBe(true)
       // Nothing was known of it, so a copy of it was kept before the program was started on it
       expect(said).toEqual([
@@ -727,10 +728,16 @@ describe.skipIf(!program)('the backend program, started by the service', () => {
       ])
       rmSync(path.dirname(database), { recursive: true })
       await (await start(config)).stop()
-      // Now functions have been loaded, and what the database holds is the person's
+      // Now functions have been loaded, and what the database holds is the person's. A program
+      // that was ended in the middle of a write, as one may be on Windows when it is stopped,
+      // leaves the journal of that write beside the database, and the next to open it writes the
+      // database back out of the journal. That is a database that opens, and this is about one
+      // that does not: so whatever the program left beside it is taken away with it
+      for (const beside of readdirSync(path.dirname(database)))
+        if (beside.startsWith(`${path.basename(database)}-`)) rmSync(path.join(path.dirname(database), beside))
       writeFileSync(database, broken)
       said = []
-      expect(await refusal(startBackend(readConfig()!, say))).toBe('backend_exited')
+      expect(await refusal(start(readConfig()!))).toBe('backend_exited')
       expect(readFileSync(database).equals(broken)).toBe(true)
       expect(said).toEqual(['backend: the program ended as soon as it was started (code 1)'])
       // What the program said is for a person at a terminal, and is in no line that is written down
