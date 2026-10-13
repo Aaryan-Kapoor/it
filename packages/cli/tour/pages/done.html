@@ -92,7 +92,7 @@
           finish.disabled = more.disabled = true;
           status.textContent = waiting;
           clearTimeout(slow);
-          It.action(name, {}).then(() => {
+          It.action(name, { from: "done", from_version: It.version }).then(() => {
             // An agent that answers takes this page away, or opens it again. That It took the
             // press is neither: where the page is still waiting a while after, the buttons are given back
             slow = setTimeout(() => {

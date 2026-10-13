@@ -22,7 +22,7 @@ it displays
 
 If the list is empty, or every display in it has `"paired": false`, the person has no screen paired. Tell them to run `it site`, which opens the site in a browser and pairs that browser, and wait for them. If more than one display is paired, use the one they are most likely looking at, and add `--on "<its name>"` to every `it tour show` below. What `it tour show` prints says which displays were asked to bring the page up, in `shownOn`: if that is empty, nobody is looking at the page, so say that in place of the page's line.
 
-Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written.
+Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written. Keep the `id` and `version` printed by each `it tour show`: together they identify the showing now on the screen.
 
 ## The menu
 
@@ -44,7 +44,9 @@ it tour show next
 
 The menu also has **That's enough for now**, which arrives as **`done`**: go to the ending.
 
-A page gives its buttons back to the person when it is still on the screen forty seconds after one was pressed, and they may press again. So `next` and `menu` carry `from`, the page they were pressed on: one that comes from a page you have since moved on from is such a second press, and is not acted on again.
+A page gives its buttons back to the person when it is still on the screen forty seconds after one was pressed, and they may press again. So `next` and `menu` carry `from`, the page they were pressed on, and so do `pick`, `done` and `finish`. All five carry `from_version`, the version of that showing. Before acting on `pick`, `next`, `menu`, `done` or `finish`, compare `tour-<from>` and `from_version` with that `id` and `version`. Act only when both match. If those fields are not shown in the message, run `it action <the action's id>`: its `page` and `version` identify the showing.
+
+Once you show another page, build what they named or clear the tour, discard every queued request from the showing you left, even if you later return to the same page. A later showing has a new version. A queued retry must never show a page again, restart a game or end the tour after the person has gone on.
 
 ## The whiteboard
 

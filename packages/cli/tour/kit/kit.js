@@ -59,7 +59,7 @@ window.Tour = (() => {
         }
         more.disabled = next.disabled = true
         btn.textContent = waiting
-        It.action(name, { from: P.tour_id || null }).then(
+        It.action(name, { from: P.tour_id || null, from_version: It.version }).then(
           () =>
             setTimeout(() => {
               back()
