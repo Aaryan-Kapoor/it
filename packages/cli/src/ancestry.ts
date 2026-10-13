@@ -107,10 +107,10 @@ export function appsFrom(pid: number, look: (pid: number) => Proc | undefined, m
     seen.add(pid)
     const proc = look(pid)
     if (!proc) break
+    // Joined words can hide an inner app's script path, even behind a prefix shaped like a launcher.
+    if (proc.unknownScript) break
     const app = agentApp(proc)
     if (app && !found.includes(app)) found.push(app)
-    // Joined words can hide an inner app's script path. An app further above is then not known to have run the command.
-    if (!app && proc.unknownScript) break
     pid = proc.parent
   }
   return found
@@ -166,8 +166,8 @@ export function psTable(text: string): Map<number, Proc> {
  * `ps -o pid= -o args=` printed. There the words of a command line come run together, so the
  * program is taken off the front as it is already known, and only the rest is split. A script
  * in a folder with a space in its name is then read as two words. Where its runtime cannot be
- * identified, that is kept with the process so the walk cannot take an outer app for the one
- * that ran the command. A launcher whose path has no space can still be identified.
+ * identified, or a launcher-shaped prefix has a possible path continuation, that is kept with
+ * the process so the walk cannot take an outer app for the one that ran the command.
  */
 export function psWords(table: Map<number, Proc>, text: string): void {
   for (const line of text.split('\n')) {
@@ -176,7 +176,13 @@ export function psWords(table: Map<number, Proc>, text: string): void {
     const program = proc?.argv[0]
     if (!m || !proc || !program || !m[2]!.startsWith(program)) continue
     proc.argv = [program, ...m[2]!.slice(program.length).split(/\s+/).filter(Boolean).slice(0, 15)]
-    if (RUNTIME.test(named(program)) && !agentApp(proc)) proc.unknownScript = true
+    const script = scriptOf(proc.argv)
+    // A path after a launcher-shaped prefix may still be the rest of a script path containing spaces.
+    const continuedPath =
+      script !== undefined &&
+      /(?:^|\/)\.?bin\/[^/]+$/.test(script) &&
+      proc.argv.slice(proc.argv.indexOf(script) + 1).some((word) => !word.startsWith('-') && word.includes('/'))
+    if (RUNTIME.test(named(program)) && (!agentApp(proc) || continuedPath)) proc.unknownScript = true
     else delete proc.unknownScript
   }
 }

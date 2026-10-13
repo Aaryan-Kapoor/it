@@ -1194,6 +1194,19 @@ describe('the agent apps a command was started from', () => {
     })
   })
 
+  test('a launcher-shaped prefix of a joined script path leaves the conversation unsettled', () => {
+    const table = psTable(['101 1 /opt/node', '102 101 /bin/zsh', '103 102 /opt/node', '104 103 /bin/sh'].join('\n'))
+    psWords(table, '101 /opt/node /opt/bin/pi\n103 /opt/node /Volumes/bin/pi tools/node_modules/@anthropic-ai/claude-code/cli.js')
+    const env = { IT_HARNESS: 'claude-code', IT_SESSION: 'inner-claude', PI_SESSION_ID: 'outer-pi', CLAUDE_CODE_SESSION_ID: 'inner-claude' }
+    expect(sessionAsked(env, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({
+      session: { harness: 'claude-code', id: 'inner-claude' },
+      unsettled: ['pi'],
+    })
+    expect(appsFrom(104, (pid) => table.get(pid))).toEqual([])
+    table.set(103, { parent: 102, argv: ['/opt/node', '/Volumes/bin/pi tools/node_modules/@anthropic-ai/claude-code/cli.js'] })
+    expect(sessionAsked(env, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({ session: { harness: 'claude-code', id: 'inner-claude' }, unsettled: [] })
+  })
+
   test.skipIf(process.platform === 'win32' || !existsSync('/bin/ps'))(
     'the real `ps` of this system gives a table that holds this process and what started it',
     () => {
