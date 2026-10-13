@@ -5,7 +5,20 @@
 
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import http from 'node:http'
 import type net from 'node:net'
@@ -1403,6 +1416,37 @@ describe('a version that was deleted', () => {
     // Another version of the same page is declared as usual
     expect((await stage(`u/${USER}/replayed/2/`, [entry('index.html', data)])).status).toBe(200)
   })
+
+  // What a folder lets its owner do is another thing on Windows, and whoever may do anything is stopped by none of it
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'whose folder cannot be removed is not answered as a deletion that got part of the way: the backend is told it failed, each time, until the folder can be',
+    async () => {
+      const own = make()
+      const on = own.content
+      began = lines.length
+      const prefix = `u/${USER}/stuck/1/`
+      // The folder above the version's, where what was declared is kept, may be read and not written: the version's own folder cannot be taken out of it
+      const above = path.join(own.settings.dir, 'manifest', 'u', USER, 'stuck')
+      try {
+        await seedFiles(prefix, { 'index.html': INDEX }, on)
+        chmodSync(above, 0o500)
+        for (let i = 0; i < 3; i++) {
+          const told = await control('delete', { prefix }, undefined, { on })
+          expect([told.status, told.buf.length]).toEqual([500, 0])
+        }
+        expect(wrote((e) => e.event === 'unexpected' && e.part === 'control')).toMatchObject({ kind: 'EACCES' })
+        // It is deleted all the same to whoever asks for it: nothing of it is shown or taken
+        expect((await redeem(ticket(newMount(), { p: prefix }), { on })).status).toBe(401)
+        expect((await upload('index.html', INDEX, { prefix, on })).status).toBe(403)
+        chmodSync(above, 0o700)
+        expect((await control('delete', { prefix }, undefined, { on })).json()).toEqual({ removed: 1, more: false })
+        expect(filesUnder(path.join(own.settings.dir, 'u', USER, 'stuck'))).toEqual([])
+      } finally {
+        chmodSync(above, 0o700)
+        await on.close()
+      }
+    },
+  )
 
   test('deleted at the very moment its files are being declared: nothing stays declared, and a message that comes after writes nothing at all', async () => {
     const own = make()

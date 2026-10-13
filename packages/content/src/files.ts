@@ -304,10 +304,17 @@ export function createFiles(folder: string): Files {
       })
       left.files -= 1
     }
-    // An upload that is arriving at this moment may have put a file back: then the folder stays, with that file in it
+    // An upload that is arriving at this moment may have put a file back: then the folder stays,
+    // with that file in it, and there is more to remove. A folder that cannot be removed for any
+    // other reason is the disk's trouble and is thrown, as a file's is: said to be more to
+    // remove, it would be asked for again at once, and without end, with nothing ever removed.
     return rmdir(dir).then(
       () => true,
-      (err) => gone(err),
+      (err) => {
+        if (gone(err)) return true
+        if (['ENOTEMPTY', 'EEXIST'].includes((err as { code?: string }).code ?? '')) return false
+        throw err
+      },
     )
   }
 

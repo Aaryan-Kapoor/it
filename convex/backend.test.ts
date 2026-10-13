@@ -46,6 +46,8 @@ let content: {
   stageOk: boolean
   failNext: number
   moreNext: number
+  /** How many deletions it is next to answer as one that got nowhere: there is more, and nothing was removed. */
+  stuckNext: number
   garbleNext: number
 }
 /**
@@ -63,7 +65,7 @@ let sender: {
 
 beforeEach(() => {
   vi.useFakeTimers()
-  content = { calls: [], verifyOk: true, stageOk: true, failNext: 0, moreNext: 0, garbleNext: 0 }
+  content = { calls: [], verifyOk: true, stageOk: true, failNext: 0, moreNext: 0, stuckNext: 0, garbleNext: 0 }
   sender = { asked: [], keyAsked: [], answers: () => undefined, down: false }
   vi.stubGlobal(
     'fetch',
@@ -95,6 +97,10 @@ beforeEach(() => {
         return new Response('{"removed": 10, "mo', { status: 200 })
       }
       if (op === 'verify') return new Response(JSON.stringify({ ok: content.verifyOk, missing: content.verifyOk ? [] : ['index.html'] }))
+      if (op === 'delete' && content.stuckNext > 0) {
+        content.stuckNext--
+        return new Response(JSON.stringify({ removed: 0, more: true }))
+      }
       if (op === 'delete' && content.moreNext > 0) {
         content.moreNext--
         return new Response(JSON.stringify({ removed: 1000, more: true }))
@@ -4057,6 +4063,24 @@ describe('leaving', () => {
     await settle(t)
     // Three times told there was more, a fourth that finished it, and the look twenty minutes
     // later that catches anything an upload already under way wrote meanwhile
+    expect(content.calls.filter((c) => c.op === 'delete').length).toBe(5)
+    expect(await t.run((ctx) => ctx.db.query('contentJobs').collect())).toEqual([])
+  })
+
+  test('a deletion that is told there is more, and that nothing was removed, is not asked for again at once: it waits as one that failed does', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    content.stuckNext = 3
+    await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    for (let i = 0; i < 4; i++) await runWhatIsDue(t)
+    // Asked once. Carried on at once, as a deletion that removed something is, it would be asked without end and without a pause where a folder cannot be removed
+    expect(content.calls.filter((c) => c.op === 'delete').length).toBe(1)
+    const [job] = (await t.run((ctx) => ctx.db.query('contentJobs').collect())).sort((a, b) => a.nextAt - b.nextAt)
+    expect([job!.attempts, job!.nextAt - Date.now()]).toEqual([1, 5000])
+    await settle(t)
+    // Three times that got nowhere, each after a longer wait, the one that finished it, and the look twenty minutes later
     expect(content.calls.filter((c) => c.op === 'delete').length).toBe(5)
     expect(await t.run((ctx) => ctx.db.query('contentJobs').collect())).toEqual([])
   })
