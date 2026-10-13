@@ -87,6 +87,22 @@ describe('the threads looked into for a conversation', () => {
     expect(likeliest({}, { harness: 'claude-code' })).toEqual([])
     expect(likeliest({ threads: 'none', projects: 3 }, { harness: 'claude-code' })).toEqual([])
   })
+
+  test('on Windows a folder is the same folder with either stroke and in either case, and one whose name only begins alike is another', () => {
+    const windows = (workspaceRoot: string) => ({
+      projects: [{ id: 'site', workspaceRoot }],
+      threads: [
+        { id: 'in-project', projectId: 'site', providerInstanceId: 'codex', updatedAt: '2026-10-01T10:00:00.000Z' },
+        ...Array.from({ length: 30 }, (_, i) => ({ id: `newer-${i}`, projectId: 'other', providerInstanceId: 'codex', updatedAt: '2026-10-08T10:00:00.000Z' })),
+      ],
+    })
+    const cwd = 'C:\\Users\\Jane Doe\\work\\site\\pages'
+    for (const root of ['C:\\Users\\Jane Doe\\work\\site', 'C:/Users/Jane Doe/work/site', 'c:\\users\\jane doe\\work\\site', 'C:/Users/Jane Doe/work/site/'])
+      expect([root, likeliest(windows(root), { harness: 'codex', cwd }, 24, 'win32')[0]]).toEqual([root, 'in-project'])
+    expect(likeliest(windows('C:\\Users\\Jane Doe\\work\\si'), { harness: 'codex', cwd }, 24, 'win32')).not.toContain('in-project')
+    // Elsewhere a name in another case is another folder
+    expect(likeliest(windows('/home/Someone/site'), { harness: 'codex', cwd: '/home/someone/site/pages' }, 24, 'linux')).not.toContain('in-project')
+  })
 })
 
 describe('the thread a conversation is held in', () => {
