@@ -1168,7 +1168,11 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
           throw Object.assign(new Error('the folder cannot be looked at'), { code: 'EACCES' })
         })
       ran = []
-      await connect('openclaw', () => {}, true)
+      const result = await connect('openclaw', () => {}, true)
+      expect(result.addon).toBe('error')
+      expect(result.detail).toContain('no add-on was removed')
+      expect(result.detail).toContain('A second profile may still receive and answer clicks')
+      expect((await statusOf('openclaw'))!).toMatchObject({ addon: 'error', detail: result.detail })
       expect(commands('openclaw').filter((words) => /uninstall|install|enable/.test(words))).toEqual([])
       expect(existsSync(root(first))).toBe(true)
       expect(existsSync(root(second))).toBe(true)
@@ -1185,6 +1189,61 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
     expect((await statusOf('openclaw'))!.addon).toBe('not_connected')
     expect((await connect('openclaw', () => {})).addon).toBe('connected')
   })
+
+  test.each([
+    { background: false, from: 'retained' },
+    { background: false, from: 'older' },
+    { background: true, from: 'retained' },
+    { background: true, from: 'older' },
+  ])(
+    'a failed removal is reported and retried from the $from profile with background logging $background until the other add-on is gone',
+    async ({ background, from }) => {
+      const first = path.join(tmp, 'first')
+      const second = path.join(tmp, 'second')
+      vi.stubEnv('IT_HARNESSES', 'openclaw')
+      vi.stubEnv('OPENCLAW_STATE_DIR', first)
+      await connect('openclaw', () => {})
+      const [one] = noted('openclaw').installs
+      rmSync(stampFile('openclaw'))
+      vi.stubEnv('OPENCLAW_STATE_DIR', second)
+      await connect('openclaw', () => {})
+      const [two] = noted('openclaw').installs
+      const installs = [
+        { ...one, version: 'older', at: 1000 },
+        { ...two, at: 2000 },
+      ]
+      put(stampFile('openclaw'), JSON.stringify({ installs }))
+      vi.stubEnv('OPENCLAW_STATE_DIR', from === 'retained' ? second : first)
+      failing = ['openclaw plugins uninstall it-bridge --force']
+      const detail =
+        'It has not finished taking its add-on out of the other OpenClaw profiles. A second profile may still receive and answer clicks on your OpenClaw pages, including new pages. Run `it setup` again to retry; the background service will retry as well.'
+      const { said, say } = lines()
+      ran = []
+      expect(await connect('openclaw', say, background)).toMatchObject({ addon: 'error', detail })
+      expect((await statusOf('openclaw'))!).toMatchObject({ addon: 'error', detail })
+      expect(said).toContain(`OpenClaw: ${detail}`)
+      expect(said.every((line) => !line.includes(tmp))).toBe(true)
+      expect(existsSync(root(first))).toBe(true)
+      expect(existsSync(root(second))).toBe(true)
+      expect(noted('openclaw').installs).toEqual(installs)
+      expect(commands('openclaw').filter((words) => /install|enable/.test(words) && !words.includes('uninstall'))).toEqual([])
+      const attempted = () => commands('openclaw').filter((words) => words === 'plugins uninstall it-bridge --force').length
+      expect(attempted()).toBe(1)
+      await reconcile(['openclaw'], say, background)
+      expect(attempted()).toBe(2)
+      expect((await statusOf('openclaw'))!.addon).toBe('error')
+      failing = []
+      await reconcile(['openclaw'], say, background)
+      expect(attempted()).toBe(3)
+      expect(existsSync(root(first))).toBe(false)
+      expect(existsSync(root(second))).toBe(true)
+      expect(noted('openclaw').installs).toEqual([installs[1]])
+      vi.stubEnv('OPENCLAW_STATE_DIR', second)
+      const after = (await statusOf('openclaw'))!
+      expect(after.addon).toBe('connected')
+      expect(after.detail).toBeUndefined()
+    },
+  )
 
   test('where an It from before connected it in two, it is taken out of all but the one it was put into last, wherever setup is run from', async () => {
     const first = path.join(tmp, 'first')
@@ -1208,7 +1267,7 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
     const { said, say } = lines()
     expect((await connect('openclaw', say)).addon).toBe('unavailable')
     expect(said[0]).toBe(
-      'OpenClaw: It’s add-on was in more than one of the folders OpenClaw keeps its settings in, where each could be handed what was done on the other’s pages. It is taken out of all but the one it was put into last',
+      'OpenClaw: It’s add-on was in more than one of the folders OpenClaw keeps its settings in, where each could be handed what was done on the other’s pages. It will try to take the add-on out of all but the one it was put into last.',
     )
     expect(existsSync(root(first))).toBe(false)
     expect(existsSync(root(second))).toBe(true)

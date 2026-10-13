@@ -1150,8 +1150,15 @@ const sameProfile = async (adapter: Pick<Adapter, 'note'>, a: Place, b: Place): 
   const [first, second] = await Promise.all([profileFolder(adapter, a), profileFolder(adapter, b)])
   return first !== undefined && first === second
 }
+async function profileFolders(adapter: Pick<Adapter, 'note'>, all: Installation[]): Promise<Map<Installation, string | undefined>> {
+  const folders = new Map<Installation, string | undefined>()
+  for (const i of all) if (!folderGone(i)) folders.set(i, placed(i) ? await profileFolder(adapter, placed(i)!) : undefined)
+  return folders
+}
+const unfinishedProfiles = (label: string) =>
+  `It has not finished taking its add-on out of the other ${label} profiles. A second profile may still receive and answer clicks on your ${label} pages, including new pages. Run \`it setup\` again to retry; the background service will retry as well.`
 const uncertainProfiles = (label: string) =>
-  `It could not tell whether the recorded ${label} places are different folders, so no add-on was removed. Run \`it setup\` again to retry; the background service will retry as well.`
+  `It could not tell whether the recorded ${label} places are different folders, so no add-on was removed. A second profile may still receive and answer clicks on your ${label} pages, including new pages. Run \`it setup\` again to retry; the background service will retry as well.`
 /** What a person is told when such a harness is asked for in a second folder. It may be shown on the site, and names no folder. */
 const oneOnly = (label: string) =>
   `It’s add-on is already in another folder that ${label} keeps its settings in, and it is connected in one only: ${label} gives a conversation the same name in each, so what is done on a page made in one could reach a conversation in the other. To have it here instead, untick ${label} in \`it setup\`, which takes the add-on out of that folder, and then run \`it setup\` again from here.`
@@ -1190,6 +1197,15 @@ async function look(id: Harness): Promise<Seen | HarnessStatus | null> {
   let was = all.find((i) => samePlace(placed(i) ?? at, at))
   // Connected in one folder only, and that folder is another than this one
   const stays = adapter.single ? staying(all) : undefined
+  if (stays && all.some((i) => i !== stays && !folderGone(i))) {
+    const folders = await profileFolders(adapter, all)
+    const detail = [...folders.values()].some((dir) => dir === undefined)
+      ? uncertainProfiles(KNOWN[id].label)
+      : [...folders.values()].some((dir) => dir !== folders.get(stays))
+        ? unfinishedProfiles(KNOWN[id].label)
+        : undefined
+    if (detail) return { adapter, at, all, was, from: null, other: null, status: { id, version, addon: 'error', detail } }
+  }
   if (stays && !samePlace(placed(stays) ?? at, at)) {
     if (!(await sameProfile(adapter, placed(stays) ?? at, at)))
       return { adapter, at, all, was, from: null, other: null, status: { id, version, addon: 'unavailable', detail: oneOnly(KNOWN[id].label) } }
@@ -1281,8 +1297,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   const seen = await look(id)
   if (!seen) return { id, addon: 'error', detail: `${label} was not found on this machine.` }
   if (!('status' in seen)) return seen
-  const { adapter, at, from, other } = seen
-  let { status: before } = seen
+  const { status: before, adapter, at, from, other } = seen
   let { all, was } = seen
   // A harness that is connected in one folder only. Which folder that is goes by what is on
   // record and not by where this command was run from, so that a setup in a terminal and the
@@ -1292,8 +1307,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   if (stays) {
     const where = (i: Installation) => placed(i) ?? at
     if (all.some((i) => i !== stays && !folderGone(i))) {
-      const folders = new Map<Installation, string | undefined>()
-      for (const i of all) if (!folderGone(i)) folders.set(i, placed(i) ? await profileFolder(adapter, where(i)) : undefined)
+      const folders = await profileFolders(adapter, all)
       if ([...folders.values()].some((dir) => dir === undefined)) {
         const detail = uncertainProfiles(label)
         say(`${label}: ${detail}`)
@@ -1304,11 +1318,17 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
       keep(id, all)
       if (all.some((i) => i !== stays)) {
         say(
-          `${label}: It’s add-on was in more than one of the folders ${label} keeps its settings in, where each could be handed what was done on the other’s pages. It is taken out of all but the one it was put into last`,
+          `${label}: It’s add-on was in more than one of the folders ${label} keeps its settings in, where each could be handed what was done on the other’s pages. It will try to take the add-on out of all but the one it was put into last.`,
         )
         await disconnect(id, say, { only: (i) => !samePlace(where(i), where(stays)) }, forLog)
         all = installations(id)
-        before = (await statusOf(id)) ?? before
+        if (all.some((i) => i !== staying(all) && !folderGone(i))) {
+          const detail = unfinishedProfiles(label)
+          say(`${label}: ${detail}`)
+          return { id, version: before.version, addon: 'error', detail }
+        }
+        // Cleanup may have changed what the harness has. Inspect it afresh before deciding whether to install anything.
+        return connect(id, say, forLog)
       }
       was = all.find((i) => samePlace(where(i), at)) ?? ((await sameProfile(adapter, where(stays), at)) ? stays : undefined)
     }
