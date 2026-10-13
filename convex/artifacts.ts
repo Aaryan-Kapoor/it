@@ -285,6 +285,9 @@ async function dropWaiting(
   artifactId?: Id<'artifacts'>,
 ): Promise<{ count: number; more: boolean }> {
   let count = 0
+  // How many of them still counted as waiting for the person: all but those of a page that has
+  // been deleted meanwhile, which gave back everything that was waiting on it when it went
+  let tallied = 0
   let more = false
   for (const delivery of ['pending', 'leased'] as const)
     for (const [addressed, aside] of [
@@ -324,7 +327,10 @@ async function dropWaiting(
         count++
         // It stops counting as waiting, on its page and for the person, as any click does that is no longer waiting
         const page = await ctx.db.get(x.artifactId)
-        if (page) await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+        if (page) {
+          await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+          tallied++
+        }
       }
     }
   // And whatever else waits on the page the stop was asked from, from before the stop: a click
@@ -354,10 +360,13 @@ async function dropWaiting(
         })
         count++
         const page = await ctx.db.get(x.artifactId)
-        if (page) await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+        if (page) {
+          await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+          tallied++
+        }
       }
     }
-  if (count) await bump(ctx, userId, { waiting: -count })
+  if (tallied) await bump(ctx, userId, { waiting: -tallied })
   return { count, more: more && count > 0 }
 }
 

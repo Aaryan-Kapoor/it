@@ -1994,6 +1994,54 @@ describe('clicks and their delivery', () => {
     expect((await alice.browser.query(api.artifacts.list, {})).map((x) => x.pending)).toEqual([0, 0, 0])
   })
 
+  test('a page deleted while a stop is still dropping what waited on it gives back what was waiting on it once, and what waits on another page goes on being counted', async () => {
+    const { t, alice, m, p } = await setup()
+    const another = { harness: 'claude-code', id: 'sess-2' }
+    const other = await publish(m, 'other', { session: another })
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    const made = Date.now()
+    await t.run(async (ctx) => {
+      const put = async (artifactId: string, of: { harness: string; id: string }, n: number) => {
+        const a = (await ctx.db.get(artifactId as never)) as { _id: never; userId: never; title: string }
+        for (let i = 0; i < n; i++)
+          await ctx.db.insert('actions', {
+            userId: a.userId,
+            title: a.title,
+            artifactId: a._id,
+            clientActionId: `waiting-${of.id}-${String(i).padStart(4, '0')}`,
+            name: 'press',
+            payload: '{}',
+            contentVersion: 1,
+            createdAt: made + i,
+            delivery: 'pending',
+            machineId: m.id as never,
+            harness: of.harness,
+            sessionId: of.id,
+          })
+        await ctx.db.patch(a._id, { waiting: n })
+      }
+      await put(p.artifactId, SESSION, 300)
+      await put(other.artifactId, another, 40)
+      const [tally] = await ctx.db.query('tallies').collect()
+      await ctx.db.patch(tally!._id, { waiting: 340 })
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+    const at = Date.now()
+    expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+    // The stop has dropped its first hundred, and two hundred of the page's are still to be dropped
+    expect((await totals(t)).waiting).toBe(240)
+    await alice.browser.mutation(api.artifacts.remove, { artifactId: p.artifactId })
+    // Deleting the page gave back all that still counted as waiting on it
+    expect((await totals(t)).waiting).toBe(40)
+    // The stop's next step comes before the page's records have been cleared away, and finds them: it gives back none of them again
+    await t.mutation(internal.artifacts.dropRest, { userId: alice.user as never, machineId: m.id, session: SESSION, at, artifactId: p.artifactId })
+    expect((await totals(t)).waiting).toBe(40)
+    await settle(t)
+    expect((await totals(t)).waiting).toBe(40)
+    expect((await alice.browser.query(api.artifacts.list, {})).map((x) => [x.slug, x.pending])).toEqual([['other', 40]])
+  })
+
   test('a reopened conversation is said to be running for as long as its machine says so, and anyone who can use the page can stop it: what was waiting by then goes with the stop', async () => {
     const { t, alice, m, p, click } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
