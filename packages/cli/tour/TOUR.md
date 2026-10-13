@@ -62,7 +62,7 @@ If it says that `drawing.png` is there already, that file is the person's: save 
 
 **Look at the picture.** Read that file with whatever you read images with, and delete it when you have: the one you saved is yours, and the person did not ask for a file in their folder. Do not decode the picture yourself and do not save it anywhere else, such as `/tmp`: your harness may stop to ask the person about either, and they are looking at the whiteboard, not at you. Where `png` is `null` the drawing was too large to send as a picture, and the strokes are all there is (`it action <the action's id>` prints them): each is `{ points: [[x, y], …], width, erase, color }`, with `x` and `y` from 0 to 1 and the origin at the top left. Where `strokes` is empty the drawing had more lines than an action holds, and the picture is all there is.
 
-Then draw back, in the same form, adding to their drawing and not starting your own in a corner, and say on the board what you saw. Your lines are drawn in green:
+Then draw back, in the same form, adding to their drawing and not starting your own in a corner, and say on the board what you saw. Your lines are drawn in green. `agent_strokes` is the whole of what you have drawn, so give all of it each time:
 
 ```sh
 it set tour-whiteboard agent_strokes '[{"points":[[0.55,0.30],[0.75,0.30],[0.75,0.55],[0.55,0.55],[0.55,0.30]],"width":4}]'
@@ -70,6 +70,12 @@ it set tour-whiteboard note "saw a house, and gave it a neighbour"
 ```
 
 **Say:** one sentence about what they drew. Not "I received your drawing". If it is a house, say that it is a house. If you cannot tell what it is, say so cheerfully. This one sentence is the whole point of the page. They may draw and send again: answer each one.
+
+`cleared` means they wiped the board, your lines with their own. Take yours out of the state too, since the board draws whatever is there again with the next thing you set, and say nothing:
+
+```sh
+it patch tour-whiteboard '{"agent_strokes":[],"note":""}'
+```
 
 ## The chessboard
 

@@ -190,6 +190,17 @@ describe('the guide', () => {
     expect(GUIDE).toContain('**`menu`**')
   })
 
+  test('every action a page sends by name is spoken of where the guide tells the agent of that page', () => {
+    const parts = GUIDE.split(/^## /m)
+    for (const name of NAMES) {
+      const part = parts.find((text) => text.includes(`\nit tour show ${name}\n`))!
+      const sends = [...tourPage(name).html.matchAll(/(?:It\.action|Tour\.act)\("([a-z:]+)"/g)].map((m) => m[1]!)
+      for (const action of new Set(sends)) expect(part, `${name} sends ${action}`).toContain(`\`${action}\``)
+    }
+    // A board that was wiped is wiped of the agent's lines only on the page: the agent is told to take them out of the state, where the page reads them again
+    expect(parts.find((text) => text.startsWith('The whiteboard'))).toContain('it patch tour-whiteboard \'{"agent_strokes":[],"note":""}\'')
+  })
+
   test('what it tells the agent to set in a page’s state is what the page reads', () => {
     for (const [name, key] of [
       ['whiteboard', 'agent_strokes'],
