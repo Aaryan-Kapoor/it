@@ -17,6 +17,7 @@ const stand = vi.hoisted(() => ({
   doorClosed: false,
   contentClosed: false,
   backendStopped: false,
+  backendEnded: new Promise<{ code: number; signal: null }>(() => {}),
 }))
 vi.mock('./src/serve/config', async (original) => ({
   ...(await original<typeof import('./src/serve/config')>()),
@@ -31,7 +32,7 @@ vi.mock('./src/serve/backend', async (original) => ({
     stop: async () => {
       stand.backendStopped = true
     },
-    ended: new Promise(() => {}),
+    ended: stand.backendEnded,
   }),
   asAdmin: async (_backend: unknown, name: string) => {
     if (name !== 'network:report') return null
@@ -74,6 +75,7 @@ describe.skipIf(process.platform === 'win32')('a service that is asked to stop w
     stand.doorClosed = false
     stand.contentClosed = false
     stand.backendStopped = false
+    stand.backendEnded = new Promise(() => {})
   })
   afterEach(async () => {
     for (const name of KEPT)
@@ -145,5 +147,33 @@ describe.skipIf(process.platform === 'win32')('a service that is asked to stop w
     expect(stand.tellings).toBe(1)
     expect(said.some((line) => line.includes('could not be told'))).toBe(false)
     expect(said.at(-1)).toBe('service stopped')
+  })
+
+  test('ends as a failure so its supervisor restarts it when the backend dies during the first status report', async () => {
+    const before = process.exitCode
+    let died: (end: { code: number; signal: null }) => void = () => {}
+    stand.backendEnded = new Promise((resolve) => {
+      died = resolve
+    })
+    let release: () => void = () => {}
+    stand.told = [
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(null)
+        }),
+    ]
+    const serving = serve(() => {})
+    try {
+      for (const until = Date.now() + 10_000; stand.tellings < 1 && Date.now() < until; ) await pause(25)
+      expect(stand.tellings).toBe(1)
+      died({ code: 1, signal: null })
+      await serving
+      expect([stand.doorClosed, stand.contentClosed, stand.backendStopped]).toEqual([true, true, true])
+      expect(process.exitCode).toBe(1)
+    } finally {
+      release()
+      await serving
+      process.exitCode = before
+    }
   })
 })

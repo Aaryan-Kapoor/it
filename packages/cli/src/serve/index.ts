@@ -347,7 +347,7 @@ async function keptDoor(
   say: (line: string) => void,
   signal: AbortSignal,
   lost: () => void,
-): Promise<{ stop(): Promise<void> }> {
+): Promise<{ stop(): Promise<void> } | null> {
   const erased = erasing(say)
   const content = makeContent(config, backend, say, erased)
   const open = async (network: boolean, tailnet: boolean) => {
@@ -504,7 +504,7 @@ async function keptDoor(
     signal.removeEventListener('abort', askedToStop)
     await now.door.stop().catch(() => {})
     await content.close().catch(() => {})
-    throw new Problem('The service was asked to stop while its door was starting.', 'stopped')
+    return null
   }
   const timer = setInterval(() => void look(), LOOK_MS)
   // What happened between a screen and the backend is noted there, and taken from it here a few
