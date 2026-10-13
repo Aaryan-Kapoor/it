@@ -73,15 +73,34 @@ export function useTour() {
   const now = useNow(2_000)
   /** When the person pressed the button here, and whether an agent was waiting to hear it. */
   const [pressed, setPressed] = useState<{ at: number; heard: boolean } | null>(null)
+  // A reply to an older asking must not bring the tour back after the person chose Skip.
+  const request = useRef(0)
   const waiting = tour !== undefined && tour.waitingUntil !== null && tour.waitingUntil > now
   const by = agentName(tour?.by ?? null) ?? 'Your agent'
   const ask = useCallback(() => {
+    const mine = ++request.current
     asking({}).then(
-      (said) => setPressed({ at: Date.now(), heard: (said as { waiting: boolean }).waiting }),
-      (err) => toast(refusal(err).message, 'error'),
+      (said) => {
+        if (request.current === mine) setPressed({ at: Date.now(), heard: (said as { waiting: boolean }).waiting })
+      },
+      (err) => {
+        if (request.current === mine) toast(refusal(err).message, 'error')
+      },
     )
   }, [asking])
-  const skip = useCallback(() => void ending({}).catch((err) => toast(refusal(err).message, 'error')), [ending])
+  const skip = useCallback(() => {
+    const mine = request.current
+    void ending({}).then(
+      () => {
+        if (request.current !== mine) return
+        request.current++
+        setPressed(null)
+      },
+      (err) => {
+        if (request.current === mine) toast(refusal(err).message, 'error')
+      },
+    )
+  }, [ending])
   return {
     /** Whether the backend has said how things stand. */
     known: tour !== undefined,

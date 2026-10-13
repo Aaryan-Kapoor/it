@@ -14,11 +14,13 @@ let machines: { harnesses: { id: string; addon: string }[]; lastSeenAt?: number;
 /** What the backend was asked to do, and what it answers an asking for the tour with. */
 const asked: string[] = []
 let waitingWhenAsked = true
+let askReply: Promise<{ waiting: boolean }> | null = null
+let doneReply: Promise<null> | null = null
 vi.mock('convex/react', () => ({
   useConvex: () => ({}),
   useMutation: (fn: unknown) => async () => {
     asked.push(getFunctionName(fn as never))
-    return getFunctionName(fn as never) === 'tour:ask' ? { waiting: waitingWhenAsked, by: 'claude-code' } : null
+    return getFunctionName(fn as never) === 'tour:ask' ? (askReply ?? { waiting: waitingWhenAsked, by: 'claude-code' }) : doneReply
   },
   useQuery: (fn: unknown, args: unknown) => (args === 'skip' ? undefined : { 'tour:get': tour, 'machines:list': machines }[getFunctionName(fn as never)]),
 }))
@@ -48,6 +50,8 @@ beforeEach(() => {
   machines = [{ harnesses: [{ id: 'claude-code', addon: 'connected' }], lastSeenAt: NOW, connectorVersion: '0.1.22' }]
   asked.length = 0
   waitingWhenAsked = true
+  askReply = null
+  doneReply = null
 })
 afterEach(async () => {
   await act(async () => root.unmount())
@@ -168,6 +172,81 @@ describe('once the tour is over, or the person wanted none', () => {
     const { Grid } = await import('./pages')
     await act(async () => root.render(createElement(Grid, { pages: [], owner: true, query: '', onQuery: () => {} })))
     expect(host.textContent).toContain('Claude Code is starting the tour. It comes up here by itself.')
+    expect(host.querySelector('.starters')).toBeNull()
+  })
+
+  test('a tour asked for again can be skipped after its agent takes the asking, without loading the site afresh', async () => {
+    tour = { ...NOBODY, doneAt: NOW - 1000, waitingUntil: NOW + 10_000, by: 'claude-code' }
+    await shown()
+    await act(async () => button('Take the tour')!.click())
+    expect(host.textContent).toContain('Claude Code is starting the tour')
+    tour = { ...tour, waitingUntil: null, askedAt: NOW, takenAt: NOW }
+    const { Grid } = await import('./pages')
+    await act(async () => root.render(createElement(Grid, { pages: [], owner: true, query: '', onQuery: () => {} })))
+    await act(async () => button('Skip the tour')!.click())
+    expect(asked).toEqual(['tour:ask', 'tour:done'])
+    tour = { ...tour, waitingUntil: null, doneAt: NOW + 1000 }
+    await act(async () => root.render(createElement(Grid, { pages: [], owner: true, query: '', onQuery: () => {} })))
+    expect(host.querySelector('.starters')).not.toBeNull()
+    expect(host.querySelector('.hello')).toBeNull()
+  })
+
+  test('an asking answered after a successful Skip does not bring the tour screen back', async () => {
+    tour = { ...NOBODY, doneAt: NOW - 1000, waitingUntil: NOW + 10_000, by: 'claude-code' }
+    let accept!: (said: { waiting: boolean }) => void
+    askReply = new Promise((yes) => {
+      accept = yes
+    })
+    await shown()
+    await act(async () => button('Take the tour')!.click())
+    await act(async () => button('Skip the tour')!.click())
+    tour = { ...tour, waitingUntil: null, doneAt: NOW + 1000 }
+    const { Grid } = await import('./pages')
+    await act(async () => root.render(createElement(Grid, { pages: [], owner: true, query: '', onQuery: () => {} })))
+    expect(host.querySelector('.starters')).not.toBeNull()
+    await act(async () => accept({ waiting: true }))
+    expect(asked).toEqual(['tour:ask', 'tour:done'])
+    expect(host.querySelector('.starters')).not.toBeNull()
+    expect(host.querySelector('.hello')).toBeNull()
+  })
+
+  test('a Skip that is still on its way or was refused leaves the tour that was asked for on the screen', async () => {
+    tour = { ...NOBODY, doneAt: NOW - 1000, waitingUntil: NOW + 10_000, by: 'claude-code' }
+    await shown()
+    await act(async () => button('Take the tour')!.click())
+    tour = { ...tour, waitingUntil: null, askedAt: NOW, takenAt: NOW }
+    const { Grid } = await import('./pages')
+    await act(async () => root.render(createElement(Grid, { pages: [], owner: true, query: '', onQuery: () => {} })))
+    let refuse!: (why: unknown) => void
+    doneReply = new Promise((_yes, no) => {
+      refuse = no
+    })
+    await act(async () => button('Skip the tour')!.click())
+    expect(host.textContent).toContain('Claude Code is starting the tour')
+    await act(async () => refuse(new Error('The backend could not answer.')))
+    expect(host.textContent).toContain('Claude Code is starting the tour')
+    expect(host.querySelector('.starters')).toBeNull()
+  })
+
+  test('an asking answered after Skip was refused still says that the tour is on its way', async () => {
+    tour = { ...NOBODY, doneAt: NOW - 1000, waitingUntil: NOW + 10_000, by: 'claude-code' }
+    let accept!: (said: { waiting: boolean }) => void
+    askReply = new Promise((yes) => {
+      accept = yes
+    })
+    let refuse!: (why: unknown) => void
+    doneReply = new Promise((_yes, no) => {
+      refuse = no
+    })
+    await shown()
+    await act(async () => button('Take the tour')!.click())
+    await act(async () => button('Skip the tour')!.click())
+    await act(async () => refuse(new Error('The backend could not answer.')))
+    tour = { ...tour, waitingUntil: null, askedAt: NOW, takenAt: NOW }
+    const { Grid } = await import('./pages')
+    await act(async () => root.render(createElement(Grid, { pages: [], owner: true, query: '', onQuery: () => {} })))
+    await act(async () => accept({ waiting: true }))
+    expect(host.textContent).toContain('Claude Code is starting the tour')
     expect(host.querySelector('.starters')).toBeNull()
   })
 
