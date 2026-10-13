@@ -515,7 +515,17 @@ async function tourWhenAsked(a: Args) {
   const harness = sessionAsked()?.session.harness
   const until = Date.now() + seconds * 1000
   for (;;) {
-    const { asked } = await call<{ asked: boolean }>('mutation', api.tour.wait, harness ? { harness } : {})
+    const answer = await call<{ asked: boolean }>('mutation', api.tour.wait, harness ? { harness } : {}).catch((err) => {
+      if (
+        err instanceof Problem &&
+        err.code === 'conflict' &&
+        err.message === 'The person said on the site that they want no tour, so there is nothing to wait for. Give the tour when they ask you for it.'
+      )
+        return null
+      throw err
+    })
+    if (answer === null) return written(process.stdout, 'The person skipped the tour.\n')
+    const { asked } = answer
     if (asked) {
       // What the person does on the tour's first page may come before this agent's first wait
       // for it. The connector is told now that this conversation waits for each thing in turn,

@@ -57,7 +57,7 @@ const RUNS = process.platform === 'linux' ? 'active' : 'running'
 /** The answers of a stand-in for the system's commands that has the service registered and running: systemd's to `is-active` and `is-enabled`, and launchd's to `print`. */
 const SAYS_IT_RUNS = '*" is-active "*) echo active ;; *" is-enabled "*) echo enabled ;; *" print "*) echo "state = running" ;;'
 /** The base ports a test here takes when it has something listen where It would: each from a block of this file's own, and held until the test gives it back. */
-const ports = bases(16_000, 20)
+const ports = bases(33_000, 20)
 /** The port the site is said to be at, on a machine that has It's settings. Nothing listens there. */
 const SITE_PORT = 21000
 const SITE = `http://localhost:${SITE_PORT}`
@@ -509,6 +509,27 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       const refused = await run(m, ['tour', '--wait', '--timeout', 'soon'], env)
       expect(refused.code).not.toBe(0)
       expect(refused.err).toContain('--timeout is a number of seconds.')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it tour --wait` ends plainly when the person skips the tour, and other refusals still fail', async () => {
+    const m = machine()
+    let waits = 0
+    let message = 'The person said on the site that they want no tour, so there is nothing to wait for. Give the tour when they ask you for it.'
+    const b = await backend(m, ({ path }) => {
+      if (path === 'tour:wait') return ++waits === 1 ? { asked: false } : new Refusal({ code: 'conflict', message })
+      return null
+    })
+    try {
+      const skipped = await run(m, ['tour', '--wait'], b.env)
+      expect([skipped.code, skipped.out, skipped.err]).toEqual([0, 'The person skipped the tour.\n', ''])
+      expect(b.asked.map(({ path }) => path)).toEqual(['tour:wait', 'tour:wait'])
+      message = 'Another tour is already under way.'
+      const refused = await run(m, ['tour', '--wait'], b.env)
+      expect([refused.code, error(refused).code]).toEqual([1, 'conflict'])
+      expect(refused.err).toContain(message)
     } finally {
       await b.close()
     }
