@@ -141,6 +141,28 @@ describe('the addresses another device can open the site at', () => {
     expect(listed).toEqual(['http://192.168.0.14:4700', 'http://100.90.1.2:4700'])
   })
 
+  test('on Windows a switch that joins its virtual machines to the network itself carries the machine’s own address there, and is given: after any other adapter’s, and seen where it is a public one', () => {
+    // An external switch takes the wire's address for its own, and the wire is left with none. Its name is whatever the person called it
+    const behindASwitch = {
+      Ethernet: [],
+      'vEthernet (External Switch)': [six('fe80::91c2:4d10:7a3e:55b1'), four('192.168.1.50'), six('fd12:3456:789a:1::50')],
+      'vEthernet (Default Switch)': [four('172.20.32.1')],
+      'vEthernet (WSL (Hyper-V firewall))': [four('172.29.112.1')],
+      'vEthernet (nat)': [four('172.24.64.1')],
+      'vEthernet (DockerNAT)': [four('10.0.75.1')],
+    }
+    expect(reachable(4700, behindASwitch)).toEqual(['http://192.168.1.50:4700', 'http://[fd12:3456:789a:1::50]:4700'])
+    // Beside an adapter that is no switch, that adapter's address is the likelier, and comes first
+    expect(reachable(4700, { 'vEthernet (LAN bridge)': [four('192.168.1.50')], 'Wi-Fi': [four('192.168.0.14')] })).toEqual([
+      'http://192.168.0.14:4700',
+      'http://192.168.1.50:4700',
+    ])
+    // A public address on such a switch is the machine's own, and whoever turns the network on is told of it
+    expect(publicAddress({ 'vEthernet (External Switch)': [four('203.0.113.9')] })).toBe('203.0.113.9')
+    expect(publicAddress6({ 'vEthernet (External Switch)': [six('2001:db8::9')] })).toBe('2001:db8::9')
+    expect(publicAddress({ 'vEthernet (Default Switch)': [four('203.0.113.9')] })).toBeUndefined()
+  })
+
   test('an address a machine gave itself comes after every other under IPv4, a public one after the home network’s, and each address is given once', () => {
     const listed = reachable(39500, {
       eth0: [four('169.254.10.20'), four('203.0.113.9'), four('192.168.1.20'), four('192.168.1.20')],

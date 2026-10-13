@@ -13,17 +13,26 @@ type Interfaces = NodeJS.Dict<Listed[]>
 /**
  * Interfaces that join this machine to containers and virtual machines of its own, by the names
  * each system and each such program gives them. What is on the other side of one is inside this
- * machine, and no screen on the person's network reaches it there.
+ * machine, and no screen on the person's network reaches it there. Of the switches Windows makes
+ * for its virtual machines, these are the ones that Windows, its Linux and Docker make and name
+ * themselves, which all stay inside the machine.
  */
 const BRIDGE =
-  /^(docker\d|br-[0-9a-f]{12}$|veth|virbr|vboxnet|vmnet|lxcbr|lxdbr|cni|flannel|cali|podman|bridge\d{3}|vethernet \(|virtualbox host-only|vmware network adapter)/i
+  /^(docker\d|br-[0-9a-f]{12}$|veth(?!ernet)|virbr|vboxnet|vmnet|lxcbr|lxdbr|cni|flannel|cali|podman|bridge\d{3}|vethernet \((default switch|wsl|nat|dockernat)\b|virtualbox host-only|vmware network adapter)/i
 /** Interfaces that are one end of a private tunnel. A device on the same tunnel reaches this machine by them, and a screen on the home network does not. */
 const TUNNEL = /^(tun|tap|utun|wg|tailscale|ppp|zt|ipsec|nordlynx)|vpn|wireguard|tailscale|zerotier/i
+/**
+ * Any other switch of Windows's virtual machines, under whatever name the person gave it. One
+ * that joins them to the network itself takes the address of the adapter it is made on, which
+ * is then the only address the machine has there, and one that does not is inside the machine.
+ * The name does not say which, so its addresses are given after those of any other adapter.
+ */
+const SWITCH = /^vethernet \(/i
 
 /** How likely an address is to be the one a screen on the home network can open: the lower the likelier, and nothing for one that no other device can use. */
 function rank(name: string, a: Listed): number | undefined {
   if (a.internal || BRIDGE.test(name)) return undefined
-  const tunnel = TUNNEL.test(name)
+  const tunnel = TUNNEL.test(name) || SWITCH.test(name)
   if (a.family === 'IPv4') {
     const [first = 0, second = 0] = a.address.split('.').map(Number)
     if (first === 127 || first === 0) return undefined
