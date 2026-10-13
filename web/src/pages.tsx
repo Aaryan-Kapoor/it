@@ -228,9 +228,11 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
       document.title = 'It'
     }
   }, [page])
-  // Escape goes back, from wherever on the site's own part of the screen the keyboard is
+  // Escape goes back, from wherever on the site's own part of the screen the keyboard is. With
+  // something open over the page, the notifications among them, it closes that and no more
   useEffect(() => {
-    const key = (e: KeyboardEvent) => e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.modal-overlay, .finder-overlay') && navigate('/')
+    const key = (e: KeyboardEvent) =>
+      e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.modal-overlay, .finder-overlay, .notif-panel') && navigate('/')
     document.addEventListener('keydown', key)
     return () => document.removeEventListener('keydown', key)
   }, [])

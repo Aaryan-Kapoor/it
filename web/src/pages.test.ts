@@ -569,3 +569,20 @@ describe('the line that moves under a page’s bar', () => {
     expect(host.querySelector('.page-progress')).toBeNull()
   })
 })
+
+describe('Escape on a page', () => {
+  const pressed = () => act(async () => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+  afterEach(() => history.replaceState(null, '', '/'))
+
+  test('closes the notifications where they are open and stays on the page, and goes back to the pages only when nothing is open over it', async () => {
+    history.replaceState(null, '', '/p/plan')
+    await shown()
+    await act(async () => host.querySelector<HTMLButtonElement>('.notif-btn')!.click())
+    expect(host.querySelector('.notif-panel')).not.toBeNull()
+    await pressed()
+    expect(host.querySelector('.notif-panel')).toBeNull()
+    expect(location.pathname).toBe('/p/plan')
+    await pressed()
+    expect(location.pathname).toBe('/')
+  })
+})
