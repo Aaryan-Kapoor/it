@@ -1376,6 +1376,8 @@ describe('sending', () => {
   })
   test('a batch that cannot be sent is tried five times, less and less often, and then dropped', async () => {
     told()
+    // Retry times must not depend on the real disk taking longer than the decision budget.
+    ownClock()
     let now = 0
     const tries: number[] = []
     const sender = usage.startSender({
@@ -1452,6 +1454,8 @@ describe('sending', () => {
     ['fails later', () => Promise.reject(new Error('no network'))],
   ])('a send that %s is a try that failed: five tries, and the batch is dropped', async (_how, fail) => {
     told()
+    // Retry times must not depend on the real disk taking longer than the decision budget.
+    ownClock()
     let now = 0
     const tries: number[] = []
     const sender = usage.startSender({
@@ -1466,6 +1470,46 @@ describe('sending', () => {
     for (; now <= 1_200_000; now += 1000) await expect(sender.tick()).resolves.toBeUndefined()
     sender.stop()
     expect(tries).toEqual([0, 2_000, 17_000, 77_000, 377_000])
+    expect(lines()).toEqual([])
+  })
+  test('a decision that takes too long leaves the batch untried and releases its marker for the next pass', async () => {
+    told()
+    ownClock()
+    const deciding = path.join(home, 'telemetry-sending')
+    let now = 0
+    let opened = 0
+    const tries: number[] = []
+    const sender = usage.startSender({
+      post: () => {
+        tries.push(now)
+        throw new Error('no network')
+      },
+      now: () => now,
+      everyMs: 0,
+    })
+    try {
+      for (let i = 0; i < 20; i++) published()
+      await withFiles(
+        {
+          openSync:
+            (real) =>
+            (file: fs.PathLike, ...rest: any[]) => {
+              const fd = real(file, ...rest)
+              if (String(file) === deciding && ++opened === 1) vi.advanceTimersByTime(251)
+              return fd
+            },
+        },
+        () => sender.tick(),
+      )
+      expect(opened).toBe(1)
+      expect(tries).toEqual([])
+      expect(existsSync(deciding)).toBe(false)
+      for (now = 1000; now <= 1_200_000; now += 1000) await sender.tick()
+      expect(tries).toEqual([1_000, 3_000, 18_000, 78_000, 378_000])
+      expect(existsSync(deciding)).toBe(false)
+    } finally {
+      sender.stop()
+    }
     expect(lines()).toEqual([])
   })
   test('stopping does not wait for a send that is under way', async () => {
