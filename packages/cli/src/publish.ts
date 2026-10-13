@@ -2,7 +2,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, rmSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN } from '@it/protocol'
 import { api, call, direct, doorRefusal, inHome, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
@@ -13,12 +13,36 @@ interface Gathered {
   data: Buffer
 }
 
-/** Reads one file, having checked first that it is small enough to be worth reading. */
+/**
+ * What is in an open file, and never more than `most` bytes of it, however much the file has
+ * grown since it was looked at. `size` is what it held then, which is read in one piece.
+ */
+function upTo(fd: number, most: number, size: number): Buffer {
+  const pieces: Buffer[] = []
+  let got = 0
+  while (got < most) {
+    const piece = Buffer.allocUnsafe(Math.min(most - got, got === 0 ? size + 1 : 64 * 1024))
+    const n = readSync(fd, piece, 0, piece.length, null)
+    if (n === 0) break
+    pieces.push(piece.subarray(0, n))
+    got += n
+  }
+  return pieces.length === 1 ? pieces[0]! : Buffer.concat(pieces, got)
+}
+
+/**
+ * Reads one file, having checked first that it is small enough to be worth reading. `size` is
+ * what the listing said it held, which is only a first look: a build that is still writing can
+ * have made it larger by the time it is opened, and larger again while it is read. So it is
+ * read no further than a file may be large and than is left of what a page may hold, with one
+ * byte more to tell that it went past, and what is counted against the page is what was read.
+ */
 export function read(full: string, as: string, size: number, total: { bytes: number }, inside?: string): Gathered {
   if (!isSafePath(as)) throw new Problem(`Not a usable file path: ${as}`, 'invalid')
-  if (size > LIMITS.fileBytes) throw new Problem(`${as} is larger than ${LIMITS.fileBytes / 1024 / 1024} MB.`, 'limit')
-  total.bytes += size
-  if (total.bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
+  const tooLarge = () => new Problem(`${as} is larger than ${LIMITS.fileBytes / 1024 / 1024} MB.`, 'limit')
+  const tooMuch = () => new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
+  if (size > LIMITS.fileBytes) throw tooLarge()
+  if (total.bytes + size > LIMITS.versionBytes) throw tooMuch()
   // Opened so that a link is refused by the system itself, in case one was put there after the
   // check above; and what was opened is checked again before it is read
   let fd: number
@@ -30,7 +54,7 @@ export function read(full: string, as: string, size: number, total: { bytes: num
   try {
     const stat = fstatSync(fd)
     if (!stat.isFile()) throw new Problem(`${as} is not an ordinary file.`, 'invalid')
-    if (stat.size > LIMITS.fileBytes) throw new Problem(`${as} is larger than ${LIMITS.fileBytes / 1024 / 1024} MB.`, 'limit')
+    if (stat.size > LIMITS.fileBytes) throw tooLarge()
     // A folder on the way to the file may have been swapped for a link after it was listed,
     // which the check on the file itself cannot see. So where the opened file really is gets
     // looked up, and it must be this very file, inside the folder being published.
@@ -40,7 +64,11 @@ export function read(full: string, as: string, size: number, total: { bytes: num
       if (!real.startsWith(inside + path.sep) || there.ino !== stat.ino || there.dev !== stat.dev)
         throw new Problem(`${as} is outside the folder being published.`, 'invalid')
     }
-    return one(as, readFileSync(fd))
+    const data = upTo(fd, Math.min(LIMITS.fileBytes, LIMITS.versionBytes - total.bytes) + 1, stat.size)
+    if (data.length > LIMITS.fileBytes) throw tooLarge()
+    total.bytes += data.length
+    if (total.bytes > LIMITS.versionBytes) throw tooMuch()
+    return one(as, data)
   } finally {
     closeSync(fd)
   }

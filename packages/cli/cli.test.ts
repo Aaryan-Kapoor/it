@@ -564,6 +564,77 @@ describe('gathering a folder to publish', () => {
     }
   })
 
+  test('a file that has grown since it was listed is counted by what was read of it, and is read no further than is left of what a page may hold', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'it-grown-'))
+    try {
+      // Listed when it held one byte, and two megabytes by the time it is opened
+      const grown = path.join(root, 'grown.bin')
+      writeFileSync(grown, Buffer.alloc(2 * 1024 * 1024))
+      const small = { bytes: 0 }
+      expect(read(grown, 'grown.bin', 1, small).data.length).toBe(2 * 1024 * 1024)
+      expect(small.bytes).toBe(2 * 1024 * 1024)
+      // With ten bytes left of what a page may hold, it is refused, having been read no further than that
+      const real = { readSync: fs.readSync, readFileSync: fs.readFileSync }
+      let taken = 0
+      fs.readSync = ((...args: Parameters<typeof fs.readSync>) => {
+        const n = real.readSync(...args)
+        taken += n
+        return n
+      }) as typeof fs.readSync
+      fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+        const all = real.readFileSync(...args)
+        if (typeof args[0] === 'number') taken += all.length
+        return all
+      }) as typeof fs.readFileSync
+      syncBuiltinESMExports()
+      try {
+        const nearlyFull = { bytes: 100 * 1024 * 1024 - 10 }
+        expect(() => read(grown, 'grown.bin', 1, nearlyFull)).toThrow(/at most 100 MB/)
+        expect(taken).toBeLessThanOrEqual(11)
+      } finally {
+        Object.assign(fs, real)
+        syncBuiltinESMExports()
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a file that grows after it was opened and looked at is read no further than a file may be large', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'it-growing-'))
+    const growing = path.join(root, 'growing.bin')
+    writeFileSync(growing, 'small')
+    const real = { fstatSync: fs.fstatSync, readSync: fs.readSync, readFileSync: fs.readFileSync }
+    let taken = 0
+    // Just after the open file was looked at and found small, whatever is writing it makes it forty megabytes
+    fs.fstatSync = ((...args: Parameters<typeof fs.fstatSync>) => {
+      const stat = real.fstatSync(...args)
+      const fd = openSync(growing, 'r+')
+      ftruncateSync(fd, 40 * 1024 * 1024)
+      closeSync(fd)
+      return stat
+    }) as typeof fs.fstatSync
+    fs.readSync = ((...args: Parameters<typeof fs.readSync>) => {
+      const n = real.readSync(...args)
+      taken += n
+      return n
+    }) as typeof fs.readSync
+    fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+      const all = real.readFileSync(...args)
+      if (typeof args[0] === 'number') taken += all.length
+      return all
+    }) as typeof fs.readFileSync
+    syncBuiltinESMExports()
+    try {
+      expect(() => read(growing, 'growing.bin', 5, { bytes: 0 })).toThrow(/larger than 25 MB/)
+      expect(taken).toBeLessThanOrEqual(25 * 1024 * 1024 + 1)
+    } finally {
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('a file that is too large is refused before it is read', () => {
     const big = path.join(dir, 'big.bin')
     // A sparse file: its size is what counts, and nothing this large is ever loaded
