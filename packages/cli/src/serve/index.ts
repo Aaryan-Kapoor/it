@@ -200,9 +200,16 @@ const SHORT_MS = 600_000
  * because this version's could not be put onto the data, takes only how the door stands. It is
  * told that much, so that the site and `it network` go on working, and the rest is left unsaid.
  * So is a backend that refuses everything said and then takes that much: it is told everything
- * again a while later, and whenever what there is to say has changed.
+ * again a while later, and whenever what there is to say has changed. Once the door is being
+ * stopped, which `over` says, a telling that failed is not followed by the shorter one: the
+ * backend is about to be asked to stop, and is asked nothing more first.
  */
-export function teller(tell: (said: Partial<Stands>) => Promise<unknown>, behind: boolean, clock: () => number = Date.now): (stands: Stands) => Promise<void> {
+export function teller(
+  tell: (said: Partial<Stands>) => Promise<unknown>,
+  behind: boolean,
+  clock: () => number = Date.now,
+  over: () => boolean = () => false,
+): (stands: Stands) => Promise<void> {
   let told = ''
   let shortUntil = behind ? Number.POSITIVE_INFINITY : 0
   const short = ({ on, wanted, addresses }: Stands) => ({ on, wanted, addresses })
@@ -213,7 +220,7 @@ export function teller(tell: (said: Partial<Stands>) => Promise<unknown>, behind
       await tell(said)
       told = JSON.stringify(said)
     } catch (err) {
-      if (said !== stands) throw err
+      if (said !== stands || over()) throw err
       // Whatever it was that failed is what is said of it, should the shorter word fail as well
       await tell(short(stands)).catch(() => {
         throw err
@@ -291,7 +298,12 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   /** What the settings last said, which is what was last tried. */
   let wanted = config.network
   let wantedTailnet = config.network && config.tailnet === true
-  const report = teller((said) => asAdmin(backend, 'network:report', said), backend.behind !== undefined)
+  const report = teller(
+    (said) => asAdmin(backend, 'network:report', said),
+    backend.behind !== undefined,
+    Date.now,
+    () => stopped,
+  )
   const tell = () => report(standsAs(now, wanted, config.port))
   /** Whether it has been said that the backend could not be told. Said once, until it has been told again. */
   let untold = false
@@ -301,6 +313,8 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
         untold = false
       },
       (err) => {
+        // A door that is being stopped tries nothing again, and says nothing of what it gave up
+        if (stopped) return
         // Tried again at the next look. Until it works, the site and `it network` go by what was said last
         if (!untold) say(`door: the backend could not be told how the door stands (${why(err)}); trying again`)
         untold = true
@@ -390,7 +404,10 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
         // Where the backend cannot be told, the asking stays with it as taken, and the next look goes on with it and says this again
         await fromBackend('network:answer', { asked: taken.at, to: taken.to, ok: stands, ...(stands ? {} : { why: 'cannot_listen' }) })
       }
-      await telling()
+      // Waited for only until the door is stopped, as everything else a look asks of the
+      // backend is: a telling may take a minute to be given up, and the shorter one after it
+      // another, and the door would stay open for all of that
+      await unless(telling(), halted)
     } catch (err) {
       say(`door: could not be opened again (${why(err)}); stopping`)
       stopped = true
