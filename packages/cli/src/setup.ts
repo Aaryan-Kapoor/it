@@ -580,8 +580,11 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       const env = envAt(this.profile, at)
       await run('claude', ['plugin', 'uninstall', `${PLUGIN}@${MARKET}`], 60_000, env)
       // The place it was installed from goes only once the add-on itself is seen to be gone:
-      // while it is still listed, there is something left to try removing again
-      if ((await this.present(at)) === false) await run('claude', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
+      // while it is still listed, there is something left to try removing again. The skill
+      // goes then too, and no sooner: a plugin that stayed would go on telling the agent to
+      // load a skill that was no longer there.
+      if ((await this.present(at)) !== false) return undefined
+      await run('claude', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
       return withoutSkill(settingsAt(at, 'CLAUDE_CONFIG_DIR', '.claude'), was)
     },
   },
@@ -616,8 +619,9 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       await run('codex', ['plugin', 'remove', `${PLUGIN}@${MARKET}`], 60_000, env)
       // Its marketplace is what `present` looks in. It goes only once the add-on is seen to be
       // gone from Codex (whoever removed it): otherwise a failed removal would look like a
-      // finished one.
-      if ((await this.present(at)) === false) await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
+      // finished one. The skill goes then too, and no sooner, as in Claude Code.
+      if ((await this.present(at)) !== false) return undefined
+      await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
       return withoutSkill(settingsAt(at, 'CODEX_HOME', '.codex'), was)
     },
     pending() {
@@ -1276,6 +1280,11 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   // the newer: someone who went back to an earlier It on purpose gets that It's add-on. Only a
   // connector, which was running before the newer It came, leaves the newer add-on alone.
   if (doing === 'leave to the newer program' && !forLog) doing = 'install'
+  // Connected, and at this version, with a file that this program put there seen to be gone:
+  // the skill above all, which an It from before took out when an app would not let go of its
+  // plugin. The add-on is put in again whole. A file that is there and has been changed is the
+  // person's, and is no reason to.
+  if (doing === 'nothing' && was?.files?.some((f) => reached(f.path) === 'none')) doing = 'install'
   if (doing === 'nothing') return before
   if (doing === 'leave to the newer program') {
     newer = true

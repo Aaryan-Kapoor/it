@@ -590,6 +590,50 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
     expect((await statusOf(id))!.addon).toBe('not_connected')
   })
   test.each(APPS)(
+    'the skill stays in $label for as long as the plugin does: it is not taken out while the app’s own command will not let the plugin go, or cannot say whether it has',
+    async ({ id, bin, label }) => {
+      const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+      await connect(id, () => {})
+      // The app will not take the plugin out just now: its settings are in use, say
+      failing = [`${bin} ${bin === 'claude' ? `plugin uninstall ${ID}` : `plugin remove ${ID}`}`]
+      const { said, say } = lines()
+      expect(await disconnect(id, say)).toBe(false)
+      expect(kept[bin]!.get(folderOf(bin))!.on).toBe(true)
+      expect(read(skill)).toBe(SKILL)
+      expect(said).toContain(`${label}: the add-on could not be removed, or it could not be told whether it was; it will be tried again`)
+      // Asked for again meanwhile, the add-on is whole and nothing has to be put back
+      expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+      expect(read(skill)).toBe(SKILL)
+      // Nor is it taken out while the app cannot be asked whether the plugin is still there
+      failing = [`${bin} ${bin === 'claude' ? 'plugin list --json' : 'plugin list --marketplace it'}`]
+      expect(await disconnect(id, () => {})).toBe(false)
+      expect(read(skill)).toBe(SKILL)
+      // Once the plugin is seen to be gone, the skill goes with it
+      failing = []
+      expect(await disconnect(id, () => {})).toBe(true)
+      expect(existsSync(path.dirname(skill))).toBe(false)
+      expect(existsSync(stampFile(id))).toBe(false)
+    },
+  )
+  test.each(APPS)(
+    'a skill that is gone from $label while the plugin is still there, as an It from before left it after a removal that failed, is put back when $label is connected again',
+    async ({ id, bin, label }) => {
+      const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+      await connect(id, () => {})
+      rmSync(skill)
+      const { said, say } = lines()
+      expect((await connect(id, say)).addon).toMatch(/^(connected|needs_approval)$/)
+      expect(said).toEqual([`connecting ${label}`])
+      expect(read(skill)).toBe(SKILL)
+      // A skill the person has changed is theirs, and is no reason to put anything in again
+      writeFileSync(skill, `${SKILL}\nA line of the person’s own.\n`)
+      const again = lines()
+      await connect(id, again.say)
+      expect(again.said).toEqual([])
+      expect(read(skill)).toContain('A line of the person’s own.')
+    },
+  )
+  test.each(APPS)(
     'an add-on of $label that an It from before installed, with the skill inside the plugin, is replaced by one with the skill beside it',
     async ({ id, bin }) => {
       await connect(id, () => {})
