@@ -1248,6 +1248,9 @@ function holdsIt(folder: string, program: string = process.execPath): boolean {
   }
 }
 
+/** Whether this command has taken It off the machine. Nothing is counted after that: the folder a count is kept in is gone, or holds only what taking an add-on out later needs. */
+let takenOff = false
+
 async function uninstall(a: Args) {
   const folder = home()
   const said: string[] = []
@@ -1306,12 +1309,21 @@ async function uninstall(a: Args) {
       )
     }
   }
-  // 1. The add-ons, each from where this folder put it
+  // 1. The add-ons, each from where this folder put it. One that could not be taken out is
+  // taken out by running this again, which needs the note It keeps of where it put the add-on,
+  // and the program: so those are kept, and said, with how it is run once its PATH is gone
+  const program = path.join(folder, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
+  let kept = false
   for (const id of HARNESSES) {
     if (!existsSync(stampFile(id))) continue
     const gone = await disconnect(id, say).catch(() => false)
     if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
-    else left.push(`${KNOWN[id].label} still has It’s add-on, which could not be taken out. Its own command for add-ons removes it.`)
+    else {
+      kept = true
+      left.push(
+        `${KNOWN[id].label} still has It’s add-on, which could not be taken out. What It noted of where it put the add-on is kept in ${path.join(folder, 'addons')}, with the program: once ${KNOWN[id].label} can be run from here, run \`${program} uninstall\`${process.env.IT_HOME ? `, with IT_HOME set to ${folder} as it is now` : ''}, which takes the add-on out and deletes the folder. To leave the add-on where it is, delete ${folder} yourself.`,
+      )
+    }
   }
   // 2. An `it serve` someone started by hand in this folder
   service.askToStop(folder, 30_000)
@@ -1339,15 +1351,22 @@ async function uninstall(a: Args) {
   // 5. Its folder, the program in it included. A program that is running may delete its own
   // file on every system but Windows, where it steps out of the folder first. What the service
   // held open there a moment ago may be held a moment longer, and is tried again.
-  const stepped = process.platform === 'win32' ? stepOutOf(folder) : undefined
+  // Where an add-on is still to be taken out, the folder keeps what that takes and nothing else:
+  // everything It held for the person goes all the same, and the program stays where it is.
+  const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
   if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
   else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+  const retried = process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}
+  takenOff = true
   try {
-    rmSync(folder, { recursive: true, force: true, ...(process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}) })
+    if (!kept) rmSync(folder, { recursive: true, force: true, ...retried })
+    else
+      for (const name of readdirSync(folder))
+        if (name !== 'addons' && name !== 'bin') rmSync(path.join(folder, name), { recursive: true, force: true, ...retried })
   } catch (err) {
     left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
   }
-  if (existsSync(folder) && !left.some((line) => line.startsWith(folder))) left.push(`${folder} could not be deleted whole. Delete it to finish.`)
+  if (!kept && existsSync(folder) && !left.some((line) => line.startsWith(folder))) left.push(`${folder} could not be deleted whole. Delete it to finish.`)
   if (!forPerson(a)) return out({ removed: left.length === 0, folder, ...(left.length ? { left } : {}), said })
   tell([
     left.length ? 'It is off this machine, but for this:' : 'It is off this machine.',
@@ -3261,7 +3280,7 @@ const began = Date.now()
 function counted(code?: string): void {
   try {
     const cmd = process.argv[2]
-    if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'serve') return
+    if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'serve' || takenOff) return
     const harness = sessionAsked()?.session.harness
     const by = harness
       ? (HARNESSES as readonly string[]).includes(harness)

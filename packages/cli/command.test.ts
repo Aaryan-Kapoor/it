@@ -966,6 +966,38 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     },
   )
 
+  test('`it uninstall` keeps its note of an add-on it could not take out, with the program, and takes the add-on out and deletes the folder when it is run again', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    // An It that put its add-on into Pi, on a machine where Pi cannot be run for now: nothing called `pi` is on the PATH
+    mkdirSync(path.join(m.it, 'bin'))
+    mkdirSync(path.join(m.it, 'addons', 'pi'), { recursive: true })
+    mkdirSync(path.join(m.it, 'backend'))
+    writeFileSync(path.join(m.it, 'bin', 'it'), '#!/bin/sh\n')
+    writeFileSync(path.join(m.it, 'backend', 'pages.sqlite3'), 'the pages')
+    const note = JSON.stringify({ installs: [{ version: '0.1.0', at: 1, by: '0.1.22', env: {} }] })
+    writeFileSync(path.join(m.it, 'addons', 'pi.json'), note)
+    writeFileSync(path.join(m.home, 'pi-has'), `${path.join(m.it, 'addons', 'pi')}\n`)
+    const first = await run(m, ['uninstall', '--yes'])
+    const said = printed(first)
+    expect([first.code, said.removed, said.left.length]).toEqual([0, false, 1])
+    // Everything else It kept is gone, the pages and this machine's identity among it
+    expect(readdirSync(m.it).sort()).toEqual(['addons', 'bin'])
+    expect(readFileSync(path.join(m.it, 'addons', 'pi.json'), 'utf8')).toBe(note)
+    // And it says how the add-on is taken out later, by the program's whole name, since the folder is off the PATH by now
+    expect(said.left[0]).toContain('Pi still has It’s add-on, which could not be taken out')
+    expect(said.left[0]).toContain(`\`${path.join(m.it, 'bin', 'it')} uninstall\``)
+    expect(said.left[0]).not.toContain('Its own command for add-ons removes it')
+    // Run again where Pi can be run, it takes the add-on out and the folder goes
+    const ran = pi(m)
+    const second = await run(m, ['uninstall', '--yes'])
+    expect([second.code, printed(second).removed, existsSync(m.it), existsSync(path.join(m.home, 'pi-has'))]).toEqual([0, true, false, false])
+    expect(ran().some((words) => words.startsWith('remove '))).toBe(true)
+  })
+
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
     const m = machine(true, true)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
