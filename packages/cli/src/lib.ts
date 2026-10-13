@@ -58,18 +58,6 @@ export const inHome = (...parts: string[]) => path.join(home(), ...parts)
 export const psQuote = (v: string) => `'${v.replace(/['\u2018\u2019\u201a\u201b]/g, '$&$&')}'`
 
 /**
- * The line Windows runs at the next sign-in to delete the program moved out during uninstall.
- * The path travels as encoded data for PowerShell, so percent signs in it cannot be expanded by
- * the command processor. A line longer than RunOnce accepts is left for manual deletion.
- */
-export function windowsDeletionCommand(file: string): string | undefined {
-  const encoded = Buffer.from(file, 'utf8').toString('base64')
-  const script = `Remove-Item -LiteralPath ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))) -Force`
-  const line = `powershell.exe -NoProfile -NonInteractive -Command "${script}"`
-  return line.length <= 260 ? line : undefined
-}
-
-/**
  * The line that puts a folder first on the PATH Windows keeps for this account, for a person
  * to run in PowerShell. That PATH is read and written as it is kept, with a name such as
  * %USERPROFILE% left as a name and the value left the kind it was: read the usual way, every

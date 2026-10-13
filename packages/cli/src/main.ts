@@ -82,7 +82,6 @@ import {
   translate,
   VERSION,
   why,
-  windowsDeletionCommand,
   windowsPathCommand,
   windowsPathHas,
   windowsPathRemoval,
@@ -1312,11 +1311,11 @@ function stepOutOf(folder: string): { at: string; deletedLater: boolean } | unde
     }
     let deletedLater = false
     try {
-      const line = windowsDeletionCommand(at)
-      if (line !== undefined)
-        deletedLater =
-          spawnSync('reg.exe', ['add', RUN_ONCE, '/v', `ItRemoved${process.pid}`, '/t', 'REG_SZ', '/d', line, '/f'], { windowsHide: true, timeout: 15_000 })
-            .status === 0
+      // A file's name on Windows has no quotation mark in it, so the name between two is the name
+      const line = `cmd.exe /d /c del /f /q "${at}"`
+      deletedLater =
+        spawnSync('reg.exe', ['add', RUN_ONCE, '/v', `ItRemoved${process.pid}`, '/t', 'REG_SZ', '/d', line, '/f'], { windowsHide: true, timeout: 15_000 })
+          .status === 0
     } catch {}
     return { at, deletedLater }
   }
