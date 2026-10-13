@@ -652,6 +652,35 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it tour show` publishes its page from an agent app that does not say which conversation it is in, and takes the page for none', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'artifacts:get' || fn === 'state:get') return new Refusal({ code: 'not_found', message: 'No such page.' })
+      // The backend takes a page over only for a conversation, and refuses whoever asks that of it with none
+      if (fn === 'publish:begin')
+        return args.take && !args.session
+          ? new Refusal({ code: 'invalid', message: 'Taking a page over only works from inside an agent conversation.' })
+          : { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'tour-menu', version: 1, url: 'https://site.example/p/tour-menu' }
+      if (fn === 'displays:show') return { displays: ['Desk'] }
+      return null
+    })
+    try {
+      const shown = await run(m, ['tour', 'show', 'menu'], b.env)
+      expect([shown.code, shown.err]).toEqual([0, ''])
+      expect(printed(shown)).toMatchObject({ id: 'tour-menu', shownOn: ['Desk'] })
+      const begun = b.asked.find((x) => x.path === 'publish:begin')!.args
+      expect([begun.slug, begun.session, begun.take]).toEqual(['tour-menu', undefined, undefined])
+      // In a conversation, the page is that conversation's from then on, whoever showed it last
+      b.asked.length = 0
+      expect((await run(m, ['tour', 'show', 'menu'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' })).code).toBe(0)
+      const taken = b.asked.find((x) => x.path === 'publish:begin')!.args
+      expect([taken.session, taken.take]).toEqual([{ harness: 'pi', id: 'conversation-1' }, true])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it tour show` publishes nothing over a page of the person’s own that has the tour’s id for that page', async () => {
     const m = machine()
     let theirs: { title: string; version: number | null; state: Record<string, unknown> } | null = {

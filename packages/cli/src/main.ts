@@ -593,14 +593,16 @@ async function tour(a: Args) {
       'conflict',
       `The tour shows this ${NOUN.one} under that id and no other, and would replace what is there. Show another of the tour’s pages, or tell the person which ${NOUN.one} is in the way and ask them whether it may be deleted: \`it delete ${made.slug}\` deletes it for good.`,
     )
-  // The page is this conversation's from now on, whoever showed it last
+  // The page is this conversation's from now on, whoever showed it last. An agent app that does
+  // not say which conversation it is in has none to take the page for: it publishes the page all
+  // the same, and waits for what is done on it by the page's id, as the tour tells it to
   const done = await publish({
     slug: made.slug,
     title: made.title,
     files: gather({ html: made.html }),
     agent: text(a, 'agent'),
     state: made.state,
-    take: true,
+    take: by !== undefined,
     itsOwn: true,
   })
   // Counted as a page of the tour that was shown, by its name, which is It's own
