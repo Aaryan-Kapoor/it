@@ -404,7 +404,6 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const key = displayKey()
   const display = useQuery(api.displays.mine, { key })
   const pages = useQuery(api.artifacts.list, {})
-  const heartbeat = useMutation(api.displays.heartbeat)
   const [leaving, setLeaving] = useState(false)
   const [stillIn, setStillIn] = useState(false)
   // What is typed into the search, the finder and the tour's dialog, which the bar opens and the shell shows
@@ -429,21 +428,37 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   // Presence, so a notification knows whether this display is open. The answer carries the
   // backend's clock, which is what "recent" is judged by everywhere on the site.
   useEffect(() => {
+    let live = true
+    let asking = false
     const beat = () => {
-      if (document.visibilityState !== 'visible') return
-      heartbeat({ key }).then(
-        (r) => learnClock(r.now),
-        () => {},
+      // One at a time: a tab that is hidden and shown again while the backend is slow to answer does not ask once more each time
+      if (asking || document.visibilityState !== 'visible') return
+      asking = true
+      // Trouble the backend had for a moment is got past by asking once more, a second or two
+      // on, and is then written nowhere. Left to the next beat, a minute later, the display
+      // would be taken for closed and the backend's clock go unlearned for that minute
+      askTwice(
+        convex,
+        (calls) => calls.mutation(api.displays.heartbeat, { key }),
+        () => live,
       )
+        .then(
+          (r) => learnClock(r.now),
+          () => {},
+        )
+        .finally(() => {
+          asking = false
+        })
     }
     beat()
     const t = setInterval(beat, 60_000)
     document.addEventListener('visibilitychange', beat)
     return () => {
+      live = false
       clearInterval(t)
       document.removeEventListener('visibilitychange', beat)
     }
-  }, [heartbeat, key])
+  }, [convex, key])
 
   // Clicks that were waiting to be sent go when the connection comes back: when the browser
   // says it is online again, and when the connection to the backend itself is made again,

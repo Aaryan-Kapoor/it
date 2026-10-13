@@ -601,6 +601,35 @@ describe('something that failed while the site was being shown', () => {
   })
 })
 
+describe('telling the backend that this display is open', () => {
+  const beats = () => names().filter((what) => what === 'displays:heartbeat').length
+
+  test('a telling that met trouble is made once more by itself a moment later, and the backend’s clock is learned from that one', async () => {
+    cookie = CODES.ownercode00000000001!
+    // The moment before the second asking, which is otherwise not the same for any two tabs, at its shortest
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    answers['displays:heartbeat'] = () =>
+      beats() === 1 ? Promise.reject(new Error('[CONVEX M(displays:heartbeat)] [Request ID: 0123456789abcdef] Server Error')) : { now: Date.now() - 3_600_000 }
+    await start()
+    const { serverNow } = await import('./lib')
+    expect(beats()).toBe(1)
+    expect(Date.now() - serverNow()).toBeLessThan(1000)
+    await vi.waitFor(() => expect(beats()).toBe(2), 4000)
+    await settle()
+    expect(Date.now() - serverNow()).toBeGreaterThan(3_599_000)
+    expect(errors).toEqual([])
+  }, 10_000)
+
+  test('while one telling is not yet answered no other is made, however often the tab is hidden and shown again', async () => {
+    cookie = CODES.ownercode00000000001!
+    answers['displays:heartbeat'] = () => new Promise(() => {})
+    await start()
+    expect(beats()).toBe(1)
+    for (let shown = 0; shown < 5; shown++) await act(async () => void document.dispatchEvent(new Event('visibilitychange')))
+    expect(beats()).toBe(1)
+  })
+})
+
 describe('finding a page with the keyboard', () => {
   /** Presses a key where the keyboard is, and gives back the press, which says whether the site took it for itself. */
   const key = async (to: EventTarget, named: string, more: KeyboardEventInit = {}) => {
