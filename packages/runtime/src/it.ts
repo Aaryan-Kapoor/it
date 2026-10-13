@@ -82,9 +82,32 @@ function get(obj: unknown, path: string): unknown {
 // "!path") shows or hides one.
 /** The elements a value from the state has been put into. What the page itself wrote in one, before any value came, is left as it is. */
 const filled = new WeakSet<Element>()
+const written = new WeakMap<Element, { state: unknown; value: string }>()
+const edited = new WeakSet<Element>()
+// Typing may begin before the first state arrives, when there is no value from a binding to compare it with.
+for (const event of ['input', 'change'])
+  document.addEventListener(
+    event,
+    (e) => {
+      if (e.target instanceof Element) edited.add(e.target)
+    },
+    true,
+  )
 function applyBindings(): void {
   for (const el of document.querySelectorAll<HTMLElement>('[data-it-bind]')) {
     const value = get(state, el.getAttribute('data-it-bind') ?? '')
+    if ((el instanceof HTMLInputElement && el.type !== 'checkbox') || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+      const last = written.get(el)
+      // A snapshot may change only a status or a stored value. It must not replace an edit,
+      // even when the agent also changes or removes the value this field was bound to.
+      if (last ? el.value !== last.value || Object.is(value, last.state) : edited.has(el)) continue
+      if (value === undefined && !filled.has(el)) continue
+      el.value = value === undefined ? '' : String(value)
+      written.set(el, { state: value, value: el.value })
+      if (value === undefined) filled.delete(el)
+      else filled.add(el)
+      continue
+    }
     if (value === undefined) {
       // The value it showed has been taken out of the state: it shows it no longer. Left up, a
       // status the agent had removed went on saying what it said, and an answer it had cleared stayed
@@ -94,8 +117,7 @@ function applyBindings(): void {
       else if (el instanceof HTMLInputElement) {
         if (el.type === 'checkbox') el.checked = false
         else el.value = ''
-      } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) el.value = ''
-      else if (el instanceof HTMLImageElement || el instanceof HTMLIFrameElement) el.removeAttribute('src')
+      } else if (el instanceof HTMLImageElement || el instanceof HTMLIFrameElement) el.removeAttribute('src')
       else el.textContent = ''
       continue
     }
@@ -104,11 +126,6 @@ function applyBindings(): void {
     else if (el instanceof HTMLInputElement) {
       if (el.type === 'checkbox') el.checked = Boolean(value)
       else if (el.value !== String(value)) el.value = String(value)
-    } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
-      // What a text box holds and what a dropdown has chosen is its value, as an input's is.
-      // Written as its text, a dropdown lost every option it had, and a text box that had been
-      // typed in went on showing what was typed
-      if (el.value !== String(value)) el.value = String(value)
     } else if (el instanceof HTMLImageElement || el instanceof HTMLIFrameElement) {
       if (el.getAttribute('src') !== String(value)) el.src = String(value)
     } else {

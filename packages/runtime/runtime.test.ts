@@ -233,7 +233,7 @@ describe('the script inside a page', () => {
     expect(el('w').textContent).toBe('placeholder')
   })
 
-  test('a bound dropdown has the value chosen in it and keeps its options, and a bound text box shows the value over what was typed in it', async () => {
+  test('a bound dropdown keeps its options, and an unedited text box and dropdown follow changes to their values', async () => {
     const p = load(
       '<select id="r" data-it-bind="region"><option value="">Choose</option><option value="us">United States</option><option value="eu">Europe</option></select><textarea id="t" data-it-bind="reply">as the page wrote it</textarea>',
     )
@@ -242,15 +242,54 @@ describe('the script inside a page', () => {
     const shown = () => [el('r').options.length, el('r').value, el('t').value]
     p.fromSite({ type: 'it:state', state: { region: 'eu', reply: 'first answer' }, revision: 1 })
     expect(shown()).toEqual([3, 'eu', 'first answer'])
-    // The person chooses and types, and then the agent changes both
-    el('r').value = 'us'
-    el('t').value = 'typed over the first answer'
-    p.fromSite({ type: 'it:state', state: { region: 'eu', reply: 'second answer' }, revision: 2 })
-    expect(shown()).toEqual([3, 'eu', 'second answer'])
-    // Taken out of the state, neither shows it any longer: nothing typed is left, and the dropdown is at its choice with no value
-    el('t').value = 'typed over the second answer'
+    p.fromSite({ type: 'it:state', state: { region: 'us', reply: 'second answer' }, revision: 2 })
+    expect(shown()).toEqual([3, 'us', 'second answer'])
+    // Taken out of the state, an unedited field is cleared.
     p.fromSite({ type: 'it:state', state: {}, revision: 3 })
     expect(shown()).toEqual([3, '', ''])
+  })
+
+  describe.each([
+    ['text area', '<textarea data-it-bind="reply"></textarea>'],
+    ['text input', '<input data-it-bind="reply">'],
+    ['dropdown', '<select data-it-bind="reply"><option value=""></option><option>first</option><option>edited</option><option>second</option></select>'],
+  ])('a bound %s', (_name, markup) => {
+    test('keeps an unsent edit when another key changes, its own key changes, or its value is removed', () => {
+      const p = load(markup)
+      p.answer()
+      const field = p.w.document.querySelector('[data-it-bind]')
+      const send = (state: unknown) => p.fromSite({ type: 'it:state', state, revision: 1 })
+      send({ reply: 'first', status: 'Ready' })
+      expect(field.value).toBe('first')
+      field.value = 'edited'
+      field.dispatchEvent(new p.w.Event('input', { bubbles: true }))
+      send({ reply: 'first', status: 'Working' })
+      expect(field.value).toBe('edited')
+      send({ reply: 'first', status: 'Working', _page: { draft: 'stored' } })
+      expect(field.value).toBe('edited')
+      send({ reply: 'second' })
+      expect(field.value).toBe('edited')
+      send({})
+      expect(field.value).toBe('edited')
+      // Returning to what the binding wrote lets a later change fill the field again.
+      field.value = 'first'
+      send({ reply: 'second' })
+      expect(field.value).toBe('second')
+      send({})
+      expect(field.value).toBe('')
+    })
+
+    test('keeps an edit made before the first state arrives', () => {
+      const p = load(markup)
+      p.answer()
+      const field = p.w.document.querySelector('[data-it-bind]')
+      field.value = 'edited'
+      field.dispatchEvent(new p.w.Event('change', { bubbles: true }))
+      p.fromSite({ type: 'it:state', state: { reply: 'first' }, revision: 1 })
+      expect(field.value).toBe('edited')
+      p.fromSite({ type: 'it:state', state: { reply: 'second' }, revision: 2 })
+      expect(field.value).toBe('edited')
+    })
   })
 
   test('what the page stores for itself is read back by its exact name', async () => {
