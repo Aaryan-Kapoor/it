@@ -2741,4 +2741,63 @@ describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
     },
     300_000,
   )
+
+  test.skipIf(!installed(type))(
+    'a page that says its address may be told to the sites it leads to is held to telling none of it, since its address holds its showing’s token',
+    async () => {
+      const prefix = `u/${USER}/telling/1/`
+      const ELSEWHERE = 'http://elsewhere.invalid'
+      const telling = (policy: string) => `<meta name="referrer" content="${policy}">`
+      // Each page says it in a way of its own, and then leads to another site: in a window of
+      // its own or in its own place, by a link, a form, a script, or by itself after a moment
+      const pages: Record<string, string> = {
+        'meta.html': `<html><head>${telling('unsafe-url')}</head><body><a id="go" target="_blank" href="${ELSEWHERE}/meta">go</a></body></html>`,
+        'old.html': `<html><head>${telling('no-referrer-when-downgrade')}</head><body><a id="go" href="${ELSEWHERE}/old">go</a></body></html>`,
+        'link.html': `<html><body><a id="go" target="_blank" referrerpolicy="unsafe-url" href="${ELSEWHERE}/link">go</a></body></html>`,
+        'form.html': `<html><head>${telling('unsafe-url')}</head><body><form action="${ELSEWHERE}/form"><button id="go">go</button></form></body></html>`,
+        'opened.html': `<html><head>${telling('unsafe-url')}</head><body><a id="go" onclick="window.open('${ELSEWHERE}/opened')">go</a></body></html>`,
+        // Said by the page's script, after the page was read: on the link, and then in the very moment before a window is opened
+        'later.html': `<html><body><a id="go" target="_blank" href="${ELSEWHERE}/later">go</a><script>document.getElementById('go').referrerPolicy = 'unsafe-url'</script></body></html>`,
+        'at-once.html': `<html><body><a id="go">go</a><script>document.getElementById('go').onclick = () => { document.head.insertAdjacentHTML('beforeend', '${telling('unsafe-url')}'); window.open('${ELSEWHERE}/at-once') }</script></body></html>`,
+        'refresh.html': `<html><head>${telling('unsafe-url')}<meta http-equiv="refresh" content="0;url=${ELSEWHERE}/refresh"></head><body></body></html>`,
+      }
+      await seedFiles(prefix, { 'index.html': 'nothing', ...pages })
+      const { at, token } = await open({ p: prefix, a: 'telling', s: 'telling' })
+      /** What each page said to the other site, by itself in a tab and then framed, as the site frames a page. */
+      const told: Record<string, unknown> = {}
+      for (const framed of [false, true])
+        for (const file of Object.keys(pages)) {
+          const context = await browser.newContext()
+          const asked: { url: string; said: Record<string, string> }[] = []
+          await context.route('**/*', async (route) => {
+            const url = new URL(route.request().url())
+            if (url.origin === ELSEWHERE) {
+              asked.push({ url: url.href, said: route.request().headers() })
+              return route.fulfill({ status: 200, contentType: 'text/html', body: 'elsewhere' })
+            }
+            // What stands for the site: a page on the site's port that frames the page
+            if (url.origin === `http://${HOST}:${BASE}`)
+              return route.fulfill({
+                status: 200,
+                contentType: 'text/html',
+                body: `<iframe id="page" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" referrerpolicy="no-referrer" src="${OWN}${at}/v/1/${file}"></iframe>`,
+              })
+            if (url.origin !== OWN) return route.fulfill({ status: 404, body: '' })
+            const r = await show(`${url.pathname}${url.search}`, { host: HOST, headers: route.request().headers() })
+            await route.fulfill({ status: r.status, headers: Object.fromEntries(r.headers), body: r.buf })
+          })
+          const tab = await context.newPage()
+          tab.setDefaultTimeout(120_000)
+          // A page that leaves by itself may have left before it is seen to have loaded
+          await tab.goto(framed ? `http://${HOST}:${BASE}/` : `${OWN}${at}/v/1/${file}`, { waitUntil: 'commit' })
+          if (file !== 'refresh.html') await (framed ? tab.frameLocator('#page').locator('#go') : tab.locator('#go')).click({ noWaitAfter: true })
+          const name = `${file}, ${framed ? 'framed' : 'by itself'}`
+          await expect.poll(() => [name, asked.length], { timeout: 60_000 }).toEqual([name, 1])
+          told[name] = JSON.stringify(asked).includes(token) ? 'its address, token and all' : 'nothing of its token'
+          await context.close()
+        }
+      expect(told).toEqual(Object.fromEntries(Object.keys(told).map((name) => [name, 'nothing of its token'])))
+    },
+    600_000,
+  )
 })

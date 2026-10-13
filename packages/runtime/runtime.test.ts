@@ -278,6 +278,47 @@ describe('the script inside a page', () => {
     expect(p.fetched.map((f) => f.url)).toEqual(Array(3).fill(`http://content.test${KEEP}`))
   })
 
+  test('what a page says of telling other sites its address is put back to telling nothing, when it is said and again before a window is opened', async () => {
+    // What the page had said at the moment its script opened a window
+    const saidWhenOpened: unknown[] = []
+    const p = load('', (w) => {
+      w.open = (url: string) => {
+        saidWhenOpened.push([url, w.document.querySelector('meta[name="Referrer"]')?.getAttribute('content')])
+        return null
+      }
+    })
+    const doc = p.w.document
+    const settled = () => new Promise((r) => setTimeout(r, 5))
+    // As the page's markup is read, which is after this script has run
+    doc.head.insertAdjacentHTML('beforeend', '<meta name="Referrer" content="unsafe-url"><meta name="viewport" content="width=device-width">')
+    doc.body.insertAdjacentHTML(
+      'beforeend',
+      '<p><a id="a" referrerpolicy="unsafe-url" href="https://elsewhere.invalid/">out</a></p><img id="i" referrerpolicy="origin"><a id="b">plain</a>',
+    )
+    await settled()
+    const said = () => [
+      doc.querySelector('meta[name="Referrer"]').getAttribute('content'),
+      doc.getElementById('a').getAttribute('referrerpolicy'),
+      doc.getElementById('i').getAttribute('referrerpolicy'),
+    ]
+    expect(said()).toEqual(['no-referrer', 'no-referrer', 'no-referrer'])
+    // Nothing else of the page's is touched
+    expect([doc.querySelector('meta[name="viewport"]').getAttribute('content'), doc.getElementById('b').hasAttribute('referrerpolicy')]).toEqual([
+      'width=device-width',
+      false,
+    ])
+    // Said again later by the page's script, on what is already there
+    doc.querySelector('meta[name="Referrer"]').setAttribute('content', 'no-referrer-when-downgrade')
+    doc.getElementById('a').setAttribute('referrerpolicy', 'unsafe-url')
+    doc.getElementById('b').setAttribute('referrerpolicy', 'unsafe-url')
+    await settled()
+    expect([...said(), doc.getElementById('b').getAttribute('referrerpolicy')]).toEqual(Array(4).fill('no-referrer'))
+    // And said in the very moment before a window is opened: it is put back before the window is
+    doc.querySelector('meta[name="Referrer"]').setAttribute('content', 'unsafe-url')
+    p.w.open('https://elsewhere.invalid/next')
+    expect(saidWhenOpened).toEqual([['https://elsewhere.invalid/next', 'no-referrer']])
+  })
+
   test('what the page’s own script fails with is said to the site, the first few times, and a picture that did not load is not', async () => {
     const p = load()
     const port = p.answer()

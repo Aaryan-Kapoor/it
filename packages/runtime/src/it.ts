@@ -220,6 +220,41 @@ setInterval(keep, 180_000)
 document.addEventListener('visibilitychange', keep)
 window.addEventListener('online', keep)
 
+// The address a page is shown from holds its showing's token, so nothing of it is to be told to
+// another site. Every answer from the pages' port says so, with `referrer-policy: no-referrer`,
+// but a page's own markup can say otherwise: in a <meta name="referrer">, or in a
+// `referrerpolicy` on a link. Where it does, Firefox sends the whole address, token and all, to
+// a site the page opens in a window of its own. So what a page says of it is put back to
+// telling nothing, as soon as it is in the document, and once more before the page's script
+// opens a window. This makes the leak hard to come by and does not rule it out: it is done a
+// moment after the markup is read and not before, and a document the page makes inside itself
+// is not watched.
+const TELLS_NOTHING = 'no-referrer'
+function quieten(el: Element): void {
+  if (el.localName === 'meta' && el.getAttribute('name')?.toLowerCase() === 'referrer' && el.getAttribute('content') !== TELLS_NOTHING)
+    el.setAttribute('content', TELLS_NOTHING)
+  if (el.hasAttribute('referrerpolicy') && el.getAttribute('referrerpolicy') !== TELLS_NOTHING) el.setAttribute('referrerpolicy', TELLS_NOTHING)
+}
+function quietenWithin(root: ParentNode): void {
+  for (const el of root.querySelectorAll('meta[name], [referrerpolicy]')) quieten(el)
+}
+new MutationObserver((changes) => {
+  for (const change of changes) {
+    if (change.type === 'attributes') quieten(change.target as Element)
+    else
+      for (const added of change.addedNodes) {
+        if (added.nodeType !== Node.ELEMENT_NODE) continue
+        quieten(added as Element)
+        quietenWithin(added as Element)
+      }
+  }
+}).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['name', 'content', 'referrerpolicy'] })
+const openWindow = window.open
+window.open = function (this: Window, ...given: Parameters<typeof window.open>) {
+  quietenWithin(document)
+  return openWindow.apply(this, given)
+}
+
 // What the page's own script fails with is said to the site, which says it above the page. The
 // person cannot see a script fail: they see a button that does nothing, and take it for an
 // agent that does not answer. Only the first few are said: a script that fails on every
