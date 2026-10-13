@@ -1173,6 +1173,60 @@ describe('what an event may hold', () => {
       await new Promise((resolve) => server.close(resolve))
     }
   })
+  test('the one event a command sends at once is not sent when another program turned reporting off after the command had read that it was on', async () => {
+    told()
+    const got: string[] = []
+    const server = http.createServer((req, res) => {
+      got.push(req.url ?? '')
+      req.resume().on('end', () => res.writeHead(204).end())
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    process.env.IT_TELEMETRY_URL = `http://127.0.0.1:${(server.address() as { port: number }).port}/usage`
+    try {
+      const other = await another()
+      const deciding = path.join(home, 'telemetry-sending')
+      const settings = new Set<number>()
+      let switched = false
+      let wasDeciding = false
+      /** When the other program's `it telemetry off` had returned, by the machine's own clock. */
+      let returned = 0
+      await withFiles(
+        {
+          openSync:
+            (real) =>
+            (file: fs.PathLike, ...rest: any[]) => {
+              const fd = real(file, ...rest) as number
+              if (String(file) === settingsFile()) settings.add(fd)
+              else settings.delete(fd)
+              return fd
+            },
+          readSync:
+            (real) =>
+            (fd: number, ...rest: any[]) => {
+              const n = real(fd, ...rest)
+              // The command has just read the id it would send under. The other program turns reporting off now, and runs to its end
+              if (settings.has(fd) && !switched) {
+                switched = true
+                wasDeciding = existsSync(deciding)
+                other.set(false)
+                returned = performance.now()
+              }
+              return n
+            },
+        },
+        () => usage.sendNow('installation.removed', { age: 'under 1 day' }),
+      )
+      expect(switched).toBe(true)
+      // No request began once the other had returned: the command had said that it was deciding, which is what the other waited on
+      expect(returned).toBeGreaterThan(0)
+      expect(got).toEqual([])
+      expect(wasDeciding).toBe(true)
+      expect(existsSync(deciding)).toBe(false)
+      expect(usage.status().enabled).toBe(false)
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
+  })
   test('sending one event at once never throws and never waits long, where nothing answers', async () => {
     told()
     process.env.IT_TELEMETRY_URL = 'http://127.0.0.1:9/usage'

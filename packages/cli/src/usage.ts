@@ -1080,18 +1080,35 @@ export function thisMachine(role: 'serves' | 'joined'): Properties<'machine.seen
  */
 export async function sendNow<N extends EventName>(name: N, properties: Properties<N>): Promise<void> {
   try {
-    const { off, kept } = standing()
-    const id = off ? null : identity(kept)
     const fits = allowed(name, properties)
-    if (!id || !fits) return
-    const hour = new Date()
-    hour.setUTCMinutes(0, 0, 0)
-    await fetch(url(), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'user-agent': `it/${VERSION}` },
-      body: JSON.stringify({ v: 1, installation: id.who, events: [{ id: randomUUID(), name, at: hour.toISOString(), properties: fits }] }),
-      redirect: 'error',
-      signal: AbortSignal.timeout(4000),
-    }).then((r) => void r.body?.cancel().catch(() => {}))
+    if (!fits) return
+    // Decided on in one step with beginning the request, under the file the sender makes for
+    // that step, and for the same reason: a command that turns reporting off in this moment
+    // waits for the file to go, so that no request begins once it has returned.
+    const began = performance.now()
+    let answer: Promise<Response>
+    try {
+      const mine = ordinary(decidingFile(), constants.O_WRONLY | constants.O_CREAT)
+      if (!mine) return
+      shut(mine.fd)
+      const { off, kept } = standing()
+      const id = off ? null : identity(kept)
+      if (!id) return
+      const hour = new Date()
+      hour.setUTCMinutes(0, 0, 0)
+      const body = JSON.stringify({ v: 1, installation: id.who, events: [{ id: randomUUID(), name, at: hour.toISOString(), properties: fits }] })
+      // Whoever turned reporting off in the meantime has stopped waiting for this step to end
+      if (performance.now() - began > DECIDING_MOST_MS) return
+      answer = fetch(url(), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'user-agent': `it/${VERSION}` },
+        body,
+        redirect: 'error',
+        signal: AbortSignal.timeout(4000),
+      })
+    } finally {
+      remove(decidingFile())
+    }
+    await answer.then((r) => void r.body?.cancel().catch(() => {}))
   } catch {}
 }
