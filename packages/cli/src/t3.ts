@@ -196,18 +196,23 @@ export function holds(snapshot: unknown, ids: readonly string[]): boolean {
 
 /**
  * The thread of T3 Code that a conversation is held in: its id, null where T3 Code has no
- * thread of it, and nothing where T3 Code could not be asked. `ids` are the ids the agent app
+ * thread of it, and nothing where T3 Code could not be asked, of its threads or of any one of
+ * the likeliest that did not turn out to hold it. `ids` are the ids the agent app
  * has given the conversation, of which the thread carries the one it resumes from.
  */
 export async function t3ThreadOf(t3: T3, of: { harness: string; ids: readonly string[]; cwd?: string }): Promise<string | null | undefined> {
   const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell')
   if (!shell || !Array.isArray(shell.threads)) return undefined
+  let unread = false
   for (const id of likeliest(shell, of)) {
     const snapshot = await ask<unknown>(t3, 'GET', `/api/orchestration/threads/${encodeURIComponent(id)}/bounded`)
     // One thread that cannot be read says nothing of the others
-    if (snapshot !== undefined && holds(snapshot, of.ids)) return id
+    if (snapshot === undefined) unread = true
+    else if (holds(snapshot, of.ids)) return id
   }
-  return null
+  // And nothing of itself: it may be the one. Only where every thread was read is the
+  // conversation said to be in none, which whoever asked takes as so for hours
+  return unread ? undefined : null
 }
 
 /**

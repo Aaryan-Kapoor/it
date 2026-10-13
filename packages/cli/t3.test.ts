@@ -1,11 +1,13 @@
 // What It makes of T3 Code's own account of its server and its threads: which server is asked,
 // which threads are looked into first for a conversation, and which thread is the conversation's.
 // The asking and the sending themselves need a T3 Code that is running, and are tried against one.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
-import { holds, likeliest, t3Server } from './src/t3'
+import { holds, likeliest, t3Server, t3ThreadOf } from './src/t3'
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-t3-'))
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
@@ -112,5 +114,52 @@ describe('the thread a conversation is held in', () => {
       snapshot(7),
     ])
       expect(holds(not, ['7', 'undefined', 'null'])).toBe(false)
+  })
+})
+
+// T3 Code's own command, which issues the session, and its server are stood in for: what is
+// tried is what It makes of the answers
+describe.skipIf(process.platform === 'win32')('which thread holds a conversation, asked of a server', () => {
+  /** A server that lists two threads and answers for each as it is told to: with what the thread holds, or with a status. */
+  async function server(threads: Record<string, string | number>) {
+    const folder = mkdtempSync(path.join(scratch, 'asked-'))
+    const program = path.join(folder, 't3')
+    writeFileSync(program, '#!/bin/sh\necho \'{"token":"a-session"}\'\n')
+    chmodSync(program, 0o755)
+    const answers = http.createServer((req, res) => {
+      const json = (status: number, body: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+      if (req.url === '/api/orchestration/shell') return json(200, { projects: [], threads: Object.keys(threads).map((id) => ({ id })) })
+      const said = threads[decodeURIComponent(/^\/api\/orchestration\/threads\/([^/]+)\/bounded$/.exec(req.url ?? '')?.[1] ?? '')]
+      if (typeof said === 'number') return json(said, {})
+      return json(200, { projection: { providerThreads: [{ nativeThreadRef: { nativeId: said } }] } })
+    })
+    await new Promise<void>((r) => answers.listen(0, '127.0.0.1', r))
+    return { t3: { origin: `http://127.0.0.1:${(answers.address() as AddressInfo).port}`, home: folder, program }, close: () => answers.close() }
+  }
+  const of = { harness: 'codex', ids: ['conversation-1'] }
+
+  test('is the thread that carries the conversation’s id, and none where every thread was read and none carries it', async () => {
+    const found = await server({ 'thread-a': 'another-conversation', 'thread-b': 'conversation-1' })
+    const none = await server({ 'thread-a': 'another-conversation', 'thread-b': 'a-third' })
+    try {
+      expect(await t3ThreadOf(found.t3, of)).toBe('thread-b')
+      expect(await t3ThreadOf(none.t3, of)).toBeNull()
+    } finally {
+      found.close()
+      none.close()
+    }
+  })
+
+  test('is not said to be none where a thread could not be read: it may be that one, and is asked about again', async () => {
+    const unread = await server({ 'thread-a': 'another-conversation', 'thread-b': 503 })
+    const readElsewhere = await server({ 'thread-a': 503, 'thread-b': 'conversation-1' })
+    try {
+      expect(await t3ThreadOf(unread.t3, of)).toBeUndefined()
+      // One thread that cannot be read still says nothing of the others
+      expect(await t3ThreadOf(readElsewhere.t3, of)).toBe('thread-b')
+    } finally {
+      unread.close()
+      readElsewhere.close()
+    }
   })
 })
