@@ -10,6 +10,11 @@ export function Finder({ pages, onClose }: { pages: Card[]; onClose: () => void 
   const [shown, setShown] = useState(false)
   const now = useNow()
   const list = useRef<HTMLDivElement>(null)
+  const field = useRef<HTMLInputElement>(null)
+  // Where the keyboard was when the finder was opened, noted as it is first drawn: before its field has taken the keyboard
+  const [before] = useState(() => (document.activeElement instanceof HTMLElement ? document.activeElement : null))
+  const closing = useRef(onClose)
+  closing.current = onClose
   const found = useMemo(() => {
     const q = typed.trim().toLowerCase()
     const all = [...pages].sort((a, b) => b.updatedAt - a.updatedAt)
@@ -17,8 +22,23 @@ export function Finder({ pages, onClose }: { pages: Card[]; onClose: () => void 
   }, [pages, typed])
   useEffect(() => {
     const t = requestAnimationFrame(() => setShown(true))
-    return () => cancelAnimationFrame(t)
-  }, [])
+    // The keyboard is in the finder for as long as it is open, as it is in any dialog of the
+    // site. Its field is the one place there for the keyboard to be, so Tab comes back to it
+    // and does not go on to what lies under the finder; Escape closes it from wherever the
+    // keyboard has got to; and when it closes the keyboard is back where it was
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closing.current()
+      else if (e.key === 'Tab') field.current?.focus()
+      else return
+      e.preventDefault()
+    }
+    document.addEventListener('keydown', key)
+    return () => {
+      cancelAnimationFrame(t)
+      document.removeEventListener('keydown', key)
+      if (before?.isConnected) before.focus()
+    }
+  }, [before])
   const active = Math.min(at, Math.max(0, found.length - 1))
   const open = (p: Card | undefined) => {
     if (!p) return
@@ -32,12 +52,13 @@ export function Finder({ pages, onClose }: { pages: Card[]; onClose: () => void 
     list.current?.children[next]?.scrollIntoView({ block: 'nearest' })
   }
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: Escape closes it, from the field
+    // biome-ignore lint/a11y/useKeyWithClickEvents: Escape closes it, wherever the keyboard is
     // biome-ignore lint/a11y/noStaticElementInteractions: the box itself is the dialog
     <div className={`finder-overlay${shown ? ' finder-overlay--visible' : ''}`} onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="finder-panel" role="dialog" aria-label={`Find a ${NOUN.one}`}>
         <div className="finder-input-wrap">
           <input
+            ref={field}
             className="finder-input"
             // biome-ignore lint/a11y/noAutofocus: opened by the person a moment ago, to type in
             autoFocus
@@ -51,8 +72,7 @@ export function Finder({ pages, onClose }: { pages: Card[]; onClose: () => void 
               setAt(0)
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') onClose()
-              else if (e.key === 'ArrowDown') move(active + 1)
+              if (e.key === 'ArrowDown') move(active + 1)
               else if (e.key === 'ArrowUp') move(active - 1)
               else if (e.key === 'Enter') open(found[active])
               else return

@@ -413,10 +413,12 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const [tour, setTour] = useState(false)
   const closeFinder = useCallback(() => setFinding(false), [])
   const closeTour = useCallback(() => setTour(false), [])
-  // The finder opens on its key from anywhere on the site
+  // The finder opens on its key from anywhere on the site but a dialog
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+      // Not over a dialog, which keeps the keyboard to itself: Tab in the finder would go to the dialog under it
+      if (document.querySelector('.modal-overlay')) return
       e.preventDefault()
       setFinding(true)
     }

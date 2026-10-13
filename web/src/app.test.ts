@@ -601,6 +601,53 @@ describe('something that failed while the site was being shown', () => {
   })
 })
 
+describe('finding a page with the keyboard', () => {
+  /** Presses a key where the keyboard is, and gives back the press, which says whether the site took it for itself. */
+  const key = async (to: EventTarget, named: string, more: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent('keydown', { key: named, bubbles: true, cancelable: true, ...more })
+    await act(async () => void to.dispatchEvent(event))
+    return event
+  }
+  const field = () => host.querySelector<HTMLInputElement>('.finder-input')
+  beforeEach(() => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:list'] = [
+      { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: Date.now(), agent: 'pi', machine: 'here', pending: 0, pinned: false },
+    ]
+  })
+
+  test('the keyboard stays in the finder while it is open: Tab goes nowhere else, Escape closes it wherever the keyboard is, and the keyboard is then back where it was', async () => {
+    await start()
+    const tour = button('Take the tour')!
+    tour.focus()
+    await key(document, 'k', { ctrlKey: true })
+    expect(document.activeElement).toBe(field())
+    for (const shiftKey of [false, true]) {
+      const tab = await key(field()!, 'Tab', { shiftKey })
+      expect([shiftKey, tab.defaultPrevented, document.activeElement === field()]).toEqual([shiftKey, true, true])
+    }
+    // A result that was pressed with the mouse and not let go on has the keyboard, and the field no longer does
+    const result = host.querySelector<HTMLElement>('.finder-result')!
+    result.focus()
+    expect(document.activeElement).toBe(result)
+    await key(result, 'Tab')
+    expect(document.activeElement).toBe(field())
+    result.focus()
+    await key(result, 'Escape')
+    expect(field()).toBeNull()
+    expect(document.activeElement).toBe(tour)
+  })
+
+  test('it is not opened over a dialog, which keeps the keyboard to itself', async () => {
+    await start()
+    await press('Take the tour')
+    expect(host.querySelector('.modal-panel')).not.toBeNull()
+    await key(document, 'k', { ctrlKey: true })
+    expect(field()).toBeNull()
+    expect(host.querySelector('.modal-panel')).not.toBeNull()
+  })
+})
+
 describe('erasing everything', () => {
   test('the browser that asked for it keeps nothing of It’s, and is told what was done and how It is used again', async () => {
     cookie = CODES.ownercode00000000001!
