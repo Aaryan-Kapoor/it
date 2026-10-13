@@ -132,6 +132,7 @@ class Connector:
         self.offers = {}  # session -> clicks, offered on every asking until the add-on reports them
         self.seals_with = None  # set to another token, it stands for some other program that took the port
         self.padding = 0  # above zero, each click offered is padded by this many characters, past what any real answer holds
+        self.asking = None  # set to a function, it is called with the conversation each time clicks are asked for, before the answer is given
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -171,6 +172,8 @@ class Connector:
                     return self.answer(404, {"error": "no such thing"})
                 harness, session = query.get("harness", [""])[0], query.get("session", [""])[0]
                 outer.log.append(("clicks", harness, session))
+                if outer.asking:
+                    outer.asking(session)
                 offered = list(outer.offers.get(session, []))
                 self.answer(200, {"clicks": [{**c, "title": "x" * outer.padding} for c in offered] if outer.padding else offered})
 
@@ -744,6 +747,25 @@ class InTheTuiAndTheGateway(Case):
         compressed[B] = "20261002_120000_cd56ef"
         hermes.turn("20261002_120000_cd56ef", running=False)
         self.assertTrue(until(lambda: ("session", "hermes", "20261002_120000_cd56ef", B) in self.connector.log))
+
+    def test_a_click_asked_for_before_the_chat_went_to_another_conversation_is_not_given_to_that_one(self):
+        hermes = self.named()
+        bound["HERMES_SESSION_KEY"] = self.KEY
+        went = []
+
+        def goes_elsewhere(session):
+            # /new in the same chat while the connector is answering for A: B has its first turn under the same name
+            if session == A and not went:
+                went.append(B)
+                hermes.turn(B, running=False)
+
+        self.connector.asking = goes_elsewhere
+        self.connector.offer(A, click("k1"))
+        hermes.turn(A, running=False)
+        self.assertTrue(until(lambda: ("hermes", B) in self.connector.asked()))
+        self.a_while()
+        self.assertEqual(hermes.messages, [], "a message goes by the chat's name, which is B's now")
+        self.assertEqual(self.connector.acks(), [], "the click is still A's to have")
 
     def test_nothing_is_asked_until_the_person_has_allowed_messages(self):
         hermes = self.named(allowed=False)

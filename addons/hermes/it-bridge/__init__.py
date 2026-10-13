@@ -533,7 +533,11 @@ class _Bridge:
         if not fresh or self._busy(talk):
             return
         with self._lock:
-            if talk.closed or talk.id != session:
+            # Another conversation may have taken this one's place under its name while the
+            # connector was answering (/new, /resume, /branch in the same chat). A message goes
+            # by that name, so it would reach the other one, and the click would be reported as
+            # given. It stays with the connector, for the conversation whose page it was.
+            if talk.closed or talk.id != session or self._talks.get(talk.key) is not talk:
                 return
         # The person may have gone to another conversation while the connector was answering
         if not self._reachable(talk):
