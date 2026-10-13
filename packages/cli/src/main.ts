@@ -1222,7 +1222,7 @@ async function uninstall(a: Args) {
   const since = usage.sinceBegun()
   if (since !== undefined) await usage.sendNow('installation.removed', { age: usage.ageBand(since) })
   const left: string[] = []
-  // First of all the background service, since it is the one thing that may refuse: where it
+  // First of all the background service, since stopping it may be refused: where it
   // could not be stopped, nothing else is taken away, so that It is still whole and this can
   // be run again. With the program and its folder gone and the service left, there would be
   // nothing left to run.
