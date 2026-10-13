@@ -281,7 +281,7 @@ describe('what the site keeps in this browser', () => {
       expect(written).toEqual([])
       expect(document.cookie).toBe('')
       // What it does keep is in the storage a browser holds apart for each port
-      expect(Object.keys(localStorage).sort()).toEqual(['it.cookies', 'it.display', 'it.display.session', 'it.person', 'it.session'])
+      expect(Object.keys(localStorage).sort()).toEqual(['it.cookies', 'it.display', 'it.display.session', 'it.person', 'it.pushOff', 'it.session'])
     } finally {
       Reflect.deleteProperty(document, 'cookie')
     }
