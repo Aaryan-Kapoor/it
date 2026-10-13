@@ -190,6 +190,18 @@ describe('the guide', () => {
     expect(GUIDE).toContain('**`menu`**')
   })
 
+  test('an agent that nothing arrives for by itself is told to wait for each thing in turn, with a command that ends, and never with one left in the background', () => {
+    const rule = GUIDE.split('\n').find((line) => line.startsWith('1. **Never block.**'))!
+    // A waiter left running prints what was done to nobody: in most agent apps what a command
+    // in the background prints is seen only when it is asked for, and an agent that has ended its turn asks for nothing
+    expect(rule).toContain('run `it wait --timeout 100` and act on what it prints')
+    expect(rule).toContain('`it wait --id tour-menu --timeout 100`')
+    expect(rule).toContain('do not use `--follow` or put a wait in the background')
+    // Nowhere does the guide have the agent start a waiter that goes on, or stop one
+    expect(GUIDE).not.toContain('it wait --follow')
+    expect(GUIDE).not.toMatch(/it wait [^`]*--follow/)
+  })
+
   test('every action a page sends by name is spoken of where the guide tells the agent of that page', () => {
     const parts = GUIDE.split(/^## /m)
     for (const name of NAMES) {
