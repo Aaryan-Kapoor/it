@@ -163,6 +163,27 @@ describe('the script inside a page', () => {
     expect(p.It.revision).toBe(4)
   })
 
+  test('a listener given after the state has arrived is called with it, an empty state that nothing has changed yet included', async () => {
+    const p = load()
+    p.answer()
+    const heard: unknown[] = []
+    // Before anything has arrived there is nothing to call it with
+    p.It.onState((s: unknown) => heard.push(['early', s]))
+    await new Promise((r) => setTimeout(r, 5))
+    expect(heard).toEqual([])
+    // A page made with no state is sent an empty one, at revision zero, and that is its state having arrived
+    p.fromSite({ type: 'it:state', state: {}, revision: 0 })
+    expect(heard).toEqual([['early', {}]])
+    // A script that loads later, or one that waits for something first, gives its listener only now
+    p.It.onState((s: unknown) => heard.push(['late', s]))
+    await new Promise((r) => setTimeout(r, 5))
+    expect(heard).toEqual([
+      ['early', {}],
+      ['late', {}],
+    ])
+    expect(p.It.revision).toBe(0)
+  })
+
   test('a bound element shows a value no longer once it has been taken out of the state, and what the page wrote in one itself stays until a value comes', async () => {
     const p = load(
       '<b id="s" data-it-bind="status">as the page wrote it</b><input id="i" data-it-bind="answer"><input id="c" type="checkbox" data-it-bind="agreed"><img id="p" data-it-bind="picture"><progress id="g" max="10" data-it-bind="done"></progress><em id="w" data-it-bind="never">placeholder</em>',

@@ -59,6 +59,8 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
 let port: MessagePort | null = null
 let state: Record<string, unknown> = {}
 let revision = 0
+/** Whether the state has arrived. Its revision does not say: a page made with no state is sent an empty one at revision zero. */
+let arrived = false
 const listeners: Listener[] = []
 const waiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 const unsent: PageToSite[] = []
@@ -159,6 +161,7 @@ function receive(message: SiteToPage): void {
   if (message.type === 'it:state') {
     state = (message.state ?? {}) as Record<string, unknown>
     revision = message.revision
+    arrived = true
     emit()
   } else if (message.type === 'it:result') {
     const w = waiting.get(message.requestId)
@@ -281,7 +284,7 @@ const api = {
   },
   onState(cb: Listener) {
     listeners.push(cb)
-    if (revision > 0) queueMicrotask(() => tell(cb))
+    if (arrived) queueMicrotask(() => tell(cb))
     return () => {
       const i = listeners.indexOf(cb)
       if (i !== -1) listeners.splice(i, 1)
