@@ -2108,6 +2108,41 @@ describe('With a proxy named in the environment', () => {
 })
 
 describe('What the door will wait for', () => {
+  test('An upload that is refused with none of it read is let go of once it is answered: nothing is kept waiting on it for the time an upload is given', async () => {
+    // A content service that refuses an upload as it does one with no grant: at once, and without reading it
+    const refuses: Content = { ...contentStandIn, upload: async () => new Response('{"error":"grant"}', { status: 401 }) }
+    let letGo = false
+    const arriving = () =>
+      new ReadableStream<Uint8Array>(
+        {
+          pull: (controller) => controller.enqueue(new Uint8Array(1024)),
+          cancel: () => {
+            letGo = true
+          },
+        },
+        { highWaterMark: 0 },
+      )
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const made = makeDoor(config(door.base), backend, () => {}, parts({ content: refuses }))
+      const waiting = vi.getTimerCount()
+      for (let n = 0; n < 20; n++) {
+        const answer = await made.answer({
+          method: 'PUT',
+          target: '/upload/a.bin',
+          headers: new Headers({ host: `localhost:${door.base}`, 'content-length': '65536' }),
+          body: arriving(),
+          port: door.base,
+          address: '127.0.0.1',
+        } satisfies Arrival)
+        expect(answer.status).toBe(401)
+      }
+      expect([vi.getTimerCount() - waiting, letGo]).toEqual([0, true])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test('A body longer than the door allows is refused, whether or not it says how long it is', async () => {
     const long = 'x'.repeat(70_000)
     expect((await ask(door.base, { method: 'POST', path: '/bridge/token', body: long })).status).toBe(413)
