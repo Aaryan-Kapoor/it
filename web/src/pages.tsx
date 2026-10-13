@@ -6,7 +6,7 @@ import { copy, IconBack, IconLink, IconPin, IconSay, IconSend, IconStop, IconX, 
 import { agentName, ago, api, displayKey, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
-import { onItsWayUntil, outboxChanges, unsaved, unsent, watchOutbox } from './outbox'
+import { onItsWayUntil, outboxChanges, typedOnItsWay, typedWaiting, unsaved, unsent, watchOutbox } from './outbox'
 import { Preview } from './preview'
 import { Starters, useTour, Welcome } from './welcome'
 
@@ -331,6 +331,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
         <Talk
           // Another page is another box: what was being typed to one agent is not sent to the next
           key={page.id}
+          user={user}
           artifactId={page.id as Id<'artifacts'>}
           agent={agentName(page.agent)}
           said={page.said ?? null}
@@ -387,12 +388,14 @@ export const SAID_FOR_MS = 30 * 60_000
  * word, or to read one.
  */
 function Talk({
+  user,
   artifactId,
   agent,
   said,
   open,
   onClose,
 }: {
+  user: string
   artifactId: Id<'artifacts'>
   agent: string | null
   said: { text: string; at: number } | null
@@ -421,16 +424,21 @@ function Talk({
   const send = async () => {
     const typed = text.trim()
     if (!typed || sending) return
+    // The box can be typed in while this is on its way, so what is cleared afterwards is what was sent and nothing typed since
+    const sent = text
     setSending(true)
     setError('')
+    // Nothing of it is kept in this browser: said on the page's bar until It has it, and the site is not loaded afresh over it
+    const taken = typedOnItsWay(user, artifactId)
     try {
       await convex.mutation(api.actions.message, { artifactId, displayKey: displayKey(), clientActionId: id.current, text: typed })
       id.current = fresh()
-      setText('')
+      setText((now) => (now === sent ? '' : now))
     } catch (err) {
       // Left in the box, to be sent again: nothing of it is kept anywhere else
       setError(refusal(err).message)
     } finally {
+      taken()
       setSending(false)
     }
   }
@@ -533,11 +541,18 @@ function Working({
   const now = useNow(1_000)
   useSyncExternalStore(watchOutbox, outboxChanges)
   // Something done here that this browser would not store is lost with the tab, whatever the agent is doing: said beside the rest
-  const keepOpen = unsaved(user, artifactId) > 0 && (
-    <span className="status" data-tone="wait">
-      Not sent yet. This browser could not save it, so keep this tab open
-    </span>
-  )
+  const keepOpen =
+    typedWaiting(user, artifactId) > 0 ? (
+      <span className="status" data-tone="wait">
+        Not sent yet. What you typed is only in this tab, so keep it open
+      </span>
+    ) : (
+      unsaved(user, artifactId) > 0 && (
+        <span className="status" data-tone="wait">
+          Not sent yet. This browser could not save it, so keep this tab open
+        </span>
+      )
+    )
   // That it is working is the machine's own word, and is as good as the machine is there to
   // give it: one that has gone quiet, or said it was stopping, may have ended the run or may
   // not, and cannot be told to stop until it is back. Said as that, and not as work going on.
@@ -688,6 +703,13 @@ function ActionStatus({
   // The bar speaks of the last thing that is still waiting, where anything is: that something
   // done after it was dealt with does not make it so. Otherwise of the last thing done.
   const last = stillWaiting[0] ?? recent?.[0]
+  // What was typed to the agent is never kept here, and is in this tab alone until It has it
+  if (typedWaiting(user, artifactId) > 0)
+    return (
+      <span className="status" data-tone="wait">
+        {onItsWay ? 'Sending' : 'Not sent yet'}. What you typed is only in this tab, so keep it open
+      </span>
+    )
   // Sent with no copy kept here, because this browser would not store one: closing the tab now would lose it
   if (unsaved(user, artifactId) > 0)
     return (

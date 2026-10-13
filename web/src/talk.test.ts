@@ -92,6 +92,46 @@ describe('the box a person types to a page’s agent in', () => {
     expect(box()!.value).toBe('')
   })
 
+  test('what is typed while a message is on its way is still in the box when that message has been taken', async () => {
+    await shown()
+    await act(async () => opener().click())
+    await type('first message')
+    await act(async () => send().click())
+    await type('second message, typed while waiting')
+    await act(async () => answer!.accept({ actionId: 'a1' }))
+    expect(box()!.value).toBe('second message, typed while waiting')
+    // And is a message of its own when it is sent
+    await act(async () => send().click())
+    expect(client.mutation.mock.calls.map((c) => c[1].text)).toEqual(['first message', 'second message, typed while waiting'])
+    expect(client.mutation.mock.calls[1]![1].clientActionId).not.toBe(client.mutation.mock.calls[0]![1].clientActionId)
+    await act(async () => answer!.accept({ actionId: 'a2' }))
+    expect(box()!.value).toBe('')
+  })
+
+  test('a message on its way is said to be in this tab alone, and the site is not loaded afresh over it, until It has taken it', async () => {
+    vi.useFakeTimers()
+    try {
+      await shown()
+      const outbox = await import('./outbox')
+      const status = () => host.querySelector('.status')?.textContent ?? null
+      await act(async () => opener().click())
+      await type('are you there')
+      expect(outbox.anyUnsaved()).toBe(false)
+      await act(async () => send().click())
+      expect(status()).toBe('Sending. What you typed is only in this tab, so keep it open')
+      expect(outbox.anyUnsaved()).toBe(true)
+      // A few seconds on with no answer, as when It cannot be reached, it is not said to be on its way
+      await act(async () => void (await vi.advanceTimersByTimeAsync(4100)))
+      expect(status()).toBe('Not sent yet. What you typed is only in this tab, so keep it open')
+      expect(box()!.value).toBe('are you there')
+      await act(async () => answer!.accept({ actionId: 'a1' }))
+      expect(outbox.anyUnsaved()).toBe(false)
+      expect(status()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test('keeps what was typed when it was refused, says why, and sends it again under the same id', async () => {
     await shown()
     await act(async () => opener().click())
