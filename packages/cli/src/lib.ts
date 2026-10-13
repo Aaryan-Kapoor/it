@@ -1120,13 +1120,28 @@ const wasAll = (): { at: string; id: string }[] => {
   return Array.isArray(kept) ? kept.filter((w): w is { at: string; id: string } => typeof w?.at === 'string' && typeof w?.id === 'string') : []
 }
 export const wasAt = (at: string): string | undefined => wasAll().find((w) => w.at === at)?.id
-export function forgetMachine(): void {
+/**
+ * Writes down which machine this one is at the It it joined, for when it joins that It again.
+ * Leaving begins with this, before It is told and before anything is deleted, so that a machine
+ * that cannot write it down has not left at all and can try again: one that deleted its
+ * identity all the same would join again as a stranger, and the pages its conversations made
+ * would not come along.
+ */
+export function noteWas(): void {
   const m = readJson<Machine>(machineFile())
-  if (typeof m?.at === 'string' && typeof m.id === 'string') {
-    try {
-      writePrivate(wasFile(), [...wasAll().filter((w) => w.at !== m.at), { at: m.at, id: m.id }].slice(-20))
-    } catch {}
+  if (typeof m?.at !== 'string' || typeof m.id !== 'string' || wasAt(m.at) === m.id) return
+  try {
+    writePrivate(wasFile(), [...wasAll().filter((w) => w.at !== m.at), { at: m.at, id: m.id }].slice(-20))
+  } catch (err) {
+    throw new Problem(
+      `Which machine this was at ${m.at} could not be written down in ${home()} (${(err as NodeJS.ErrnoException)?.code ?? 'an error'}), so this machine has not left, and nothing of it was deleted.`,
+      'error',
+      'Make room on the disk, or see that the folder can be written to, and run `it logout` again.',
+    )
   }
+}
+export function forgetMachine(): void {
+  noteWas()
   for (const f of ['machine.json', 'token.json']) rmSync(inHome(f), { force: true })
 }
 /**

@@ -66,6 +66,7 @@ import {
   machine,
   NOT_RUNNING,
   noteLeft,
+  noteWas,
   notKnown,
   notSetUp,
   Problem,
@@ -2947,6 +2948,9 @@ async function main(argv: string[]): Promise<void> {
       // The machine is taken off the person's machines first. If It cannot be told, the key
       // is kept: a key thrown away here would leave the machine among them with nobody able
       // to use it, and its pages with nowhere to send their clicks.
+      // What this machine was at the It it joined is written down before It is told that it
+      // leaves: where that cannot be written, nothing has been done yet, and this can be run again
+      noteWas()
       if (enrolledHere() && !a.flags.force) {
         try {
           await call('mutation', api.machines.leave)

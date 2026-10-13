@@ -44,6 +44,7 @@ import {
   siteAddress,
   textOf,
   throughDoor,
+  wasAt,
   windowsPathCommand,
   windowsPathRemoval,
   withoutTables,
@@ -736,6 +737,46 @@ describe('a machine that leaves', () => {
       forgetMachine()
       expect(readdirSync(folder)).toEqual([])
     } finally {
+      if (before === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps its identity where it could not write down which machine it was at the It it joined, and says so', () => {
+    const before = process.env.IT_HOME
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-left-'))
+    process.env.IT_HOME = folder
+    const real = { openSync: fs.openSync }
+    try {
+      const joined = { id: 'machine-7', name: 'laptop', key: { d: 'private' }, at: 'http://192.168.1.20:4700' }
+      writeFileSync(path.join(folder, 'machine.json'), JSON.stringify(joined))
+      writeFileSync(path.join(folder, 'token.json'), '{}')
+      // A disk with no room left for the note
+      fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+        if (String(args[0]).includes('was.json')) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+        return real.openSync(...args)
+      }) as typeof fs.openSync
+      syncBuiltinESMExports()
+      let said: unknown
+      try {
+        forgetMachine()
+      } catch (err) {
+        said = err
+      }
+      expect(said).toBeInstanceOf(Problem)
+      expect((said as Problem).message).toContain('could not be written down')
+      expect((said as Problem).hint).toContain('`it logout` again')
+      expect(readdirSync(folder).sort()).toEqual(['machine.json', 'token.json'])
+      // Once it can be written, the machine leaves, and what it was there is kept for joining again
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
+      forgetMachine()
+      expect(readdirSync(folder)).toEqual(['was.json'])
+      expect(wasAt(joined.at)).toBe('machine-7')
+    } finally {
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
       if (before === undefined) delete process.env.IT_HOME
       else process.env.IT_HOME = before
       rmSync(folder, { recursive: true, force: true })
