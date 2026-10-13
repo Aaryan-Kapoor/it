@@ -744,8 +744,17 @@ async function wait(a: Args) {
   if (unsure) say(JSON.stringify({ note: unsure }))
   // It is asked once before anything is waited for, as a wait on a named page asks for its page:
   // where It cannot be reached at all, that is said now, and not taken for a wait in which nothing happened
-  /** Asks It what is waiting for this, as it stands now. Throws where It cannot be asked. */
-  const waitingNow = () => (slug ? call<Listed[]>('query', api.delivery.waiting, { slug }) : call<Listed[]>('query', api.delivery.waitingFor, { session: me! }))
+  /**
+   * Asks It what is waiting for this, as it stands now. Throws where It cannot be asked. With no
+   * page named that is asked of each id the conversation is known by, the ones it had before it
+   * was cleared among them once the connector has said them: a page made under an earlier id is
+   * still recorded under it, and what is done on it waits there.
+   */
+  const waitingNow = async (ids = [me!]): Promise<Listed[]> => {
+    if (slug) return call<Listed[]>('query', api.delivery.waiting, { slug })
+    const each = await Promise.all(ids.map((session) => call<Listed[]>('query', api.delivery.waitingFor, { session })))
+    return [...new Map(each.flat().map((c) => [c.id, c])).values()].sort((x, y) => x.at - y.at)
+  }
   if (!slug) await waitingNow()
   const who = crypto.randomUUID()
   // The connector is told what this waits for: one page, or, with none named, this
@@ -955,7 +964,7 @@ async function wait(a: Args) {
       busy = true
       let there: Listed[]
       try {
-        there = (await waitingNow()).filter((c) => !printedIds.has(c.id) && mine(c))
+        there = (await waitingNow(sessions)).filter((c) => !printedIds.has(c.id) && mine(c))
       } catch (err) {
         busy = false
         if (ending || printedOne()) return

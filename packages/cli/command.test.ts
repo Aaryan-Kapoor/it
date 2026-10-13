@@ -1360,6 +1360,53 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
   }, 40_000)
 })
 
+describe.skipIf(process.platform === 'win32')('a wait whose time runs out', () => {
+  test('asks It what is waiting under every id the conversation has had, and prints an action on a page made under an earlier one', async () => {
+    const m = machine()
+    const earlier = { harness: 'pi', id: 'before-it-was-cleared' }
+    const now = { harness: 'pi', id: 'after-it-was-cleared' }
+    const action = {
+      id: 'k57',
+      artifact: 'plan',
+      title: 'Plan',
+      name: 'approve',
+      payload: '{"plan":"B"}',
+      at: 1,
+      attended: true,
+      session: earlier,
+    }
+    // The live connection is closed as soon as it is asked for, so nothing comes over it: what is waiting is learnt by asking
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'delivery:waitingFor') return (args.session as { id: string }).id === earlier.id ? [action] : []
+      if (fn === 'delivery:claim') return args.ids
+      if (fn === 'delivery:handedOff') return { already: false }
+      return null
+    })
+    // The connector, which knows the id this conversation had before it was cleared
+    const socket = path.join(m.it, 'connector.sock')
+    const connector = http.createServer((req, res) => {
+      req.resume().on('end', () => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ sessions: [now, earlier], clicks: [] })))
+    })
+    await new Promise<void>((resolve) => connector.listen(socket, resolve))
+    writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'a'.repeat(48), pid: process.pid, version: '0.0.0' }))
+    try {
+      const ran = await run(m, ['wait', '--timeout', '1'], { ...b.env, IT_HARNESS: now.harness, IT_SESSION: now.id })
+      expect([
+        ran.code,
+        ran.out
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line)),
+      ]).toEqual([0, [{ id: 'k57', page: 'plan', title: 'Plan', action: 'approve', data: { plan: 'B' }, at: 1 }]])
+      // Claimed for the conversation it was offered for, which is the one the page was made under
+      expect(b.asked.filter((x) => x.path === 'delivery:claim').map((x) => x.args)).toEqual([{ ids: ['k57'], for: earlier }])
+    } finally {
+      await new Promise((resolve) => connector.close(resolve))
+      await b.close()
+    }
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('a connector that cannot start, on a machine where it is all of It there is to run', () => {
   /** Starts `it serve` on a machine that joined an It elsewhere, and gives what it has written down once that holds a line. */
   async function served(m: { home: string; it: string; bin: string }, log: string, env: Record<string, string>) {
