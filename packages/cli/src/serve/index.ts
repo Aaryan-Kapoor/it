@@ -6,7 +6,8 @@ import net from 'node:net'
 import path from 'node:path'
 import { contentPort } from '@it/protocol'
 import { runConnector } from '../connector'
-import { elsewhere, type Machine, machine, machineFile, notSetUp, Problem, readJson, why } from '../lib'
+import { elsewhere, inHome, type Machine, machine, machineFile, notSetUp, Problem, readJson, why } from '../lib'
+import { conversationsFile } from '../publish'
 import { startsByItself, stopFile } from '../service'
 import { ageBand, begin, countBand, counting, failureOf, record, recordNoted, sinceBegun } from '../usage'
 import { asAdmin, type Backend, endOf, removeCopies, startBackend } from './backend'
@@ -232,13 +233,47 @@ export function teller(
 }
 
 /**
- * What the service does when it is told that a person has erased everything: the copies of
- * the database from before an update go too, since each holds what was erased as it was when
- * the copy was made. Where they cannot be removed, that is said with the code of what stopped
- * it, and the telling fails: the backend's deleting is then not done, and it asks again.
+ * What It notes in its folder of the person's conversations on this machine, beside the
+ * database: the folder each was held in when it published a page, which of them an add-on has
+ * been heard from in and which carried on under another id, the clicks handed to each, and
+ * which are owed the word that a turn of theirs was cut off or stopped. The first is written
+ * by the command that publishes, and the rest by the connector.
+ *
+ * The note of the turns It has reopened that are running now (`runs.json`) is not among them.
+ * It is what keeps a conversation from being reopened a second time while a process of its
+ * last turn may still live, and it empties by itself as those turns end.
+ */
+const NOTES = [conversationsFile, ...['heard.json', 'aliases.json', 'cut-off.json', 'stopped.json', 'journal.jsonl'].map((name) => () => inHome(name))]
+/** Removes those notes. Whether there was any of them to remove. */
+function removeNotes(): boolean {
+  let any = false
+  for (const file of NOTES) {
+    any ||= existsSync(file())
+    rmSync(file(), { force: true })
+  }
+  return any
+}
+/** When this service was last told that a person had erased everything, by its own measure of time passing. */
+let erasedAt: number | undefined
+
+/**
+ * What the service does when it is told that a person has erased everything. What It had noted
+ * on this machine of that person's conversations goes, a folder's name among it. And the copies
+ * of the database from before an update go too, since each holds what was erased as it was
+ * when the copy was made. Where either cannot be removed, that is said with the code of what
+ * stopped it, and the telling fails: the backend's deleting is then not done, and it asks again.
  */
 export function erasing(say: (line: string) => void): (person: string) => void {
   return (person) => {
+    erasedAt = performance.now()
+    try {
+      if (removeNotes()) say('backend: everything was erased, and what It had noted here of conversations went with it')
+    } catch (err) {
+      say(
+        `backend: everything was erased, and what It had noted here of conversations could not be removed (${why(err)}); it will be tried when the backend asks again`,
+      )
+      throw err
+    }
     let copies: number
     try {
       copies = removeCopies(person)
@@ -510,8 +545,14 @@ async function connector(say: (line: string) => void, asked: AbortSignal, heard:
     const again = setInterval(() => {
       if (asked.aborted && running) process.emit(heard())
     }, 250)
+    const began = performance.now()
     try {
       await runConnector(say)
+      // A connector that was running when everything was erased held what it had heard of
+      // conversations in memory, and writes it down as it goes and as it stops: what was
+      // removed when the service was told of the erasing may be there again. It has stopped
+      // now, and nothing holds any of it any more
+      if (erasedAt !== undefined && erasedAt >= began) removeNotes()
     } catch (err) {
       say(`connector: could not start: ${why(err)}`)
       await pause(30_000)

@@ -449,6 +449,30 @@ describe('what the service does when it is told that a person has erased everyth
   })
 })
 
+describe('what It had noted on this machine of a person’s conversations, when that person erases everything', () => {
+  test('goes with it: the folder each conversation was held in, which conversations had been heard from and which carried on as which, the clicks handed over, and who was owed a word', () => {
+    const notes = {
+      'conversations.json': JSON.stringify({ 'pi:a-conversation': { cwd: '/home/a person/clients/a client of theirs', at: 1 } }),
+      'heard.json': JSON.stringify({ 'pi:a-conversation': 1 }),
+      'aliases.json': JSON.stringify({ 'pi:a-conversation': 'pi:the-one-it-carried-on-as' }),
+      'cut-off.json': JSON.stringify(['pi:a-conversation']),
+      'stopped.json': JSON.stringify(['pi:a-conversation']),
+      'journal.jsonl': `${JSON.stringify({ t: 1, event: 'queued', id: 'a-click' })}\n`,
+    }
+    // What stays: the turns It reopened that may still be running, which is what keeps a second from being started beside one, and the settings
+    const stays = { 'runs.json': JSON.stringify({ 'pi:a-conversation': { pid: 4242 } }), 'service.json': '{}' }
+    for (const [name, holds] of Object.entries({ ...notes, ...stays })) writeFileSync(path.join(folder, name), holds)
+    const lines: string[] = []
+    erasing((line) => lines.push(line))('the person who erased everything')
+    expect(Object.keys(notes).filter((name) => existsSync(path.join(folder, name)))).toEqual([])
+    expect(Object.keys(stays).filter((name) => existsSync(path.join(folder, name)))).toEqual(Object.keys(stays))
+    expect(lines).toEqual(['backend: everything was erased, and what It had noted here of conversations went with it'])
+    // With none of it there, there is nothing to remove and nothing to say
+    erasing((line) => lines.push(line))('the person who erased everything')
+    expect(lines.length).toBe(1)
+  })
+})
+
 describe('fetching the backend program', () => {
   const name = `convex-local-backend${process.platform === 'win32' ? '.exe' : ''}`
   const made = Buffer.from(`#!/bin/sh\necho made up\n${'x'.repeat(100_000)}`)
