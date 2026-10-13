@@ -44,6 +44,8 @@ it tour show next
 
 The menu also has **That's enough for now**, which arrives as **`done`**: go to the ending.
 
+A page gives its buttons back to the person when it is still on the screen forty seconds after one was pressed, and they may press again. So `next` and `menu` carry `from`, the page they were pressed on: one that comes from a page you have since moved on from is such a second press, and is not acted on again.
+
 ## The whiteboard
 
 ```sh

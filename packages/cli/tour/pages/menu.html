@@ -165,7 +165,8 @@
       var grid = document.getElementById("grid"), status = document.getElementById("status");
       var things = [].slice.call(grid.querySelectorAll(".thing"));
       var text = document.getElementById("text"), make = document.getElementById("make"), enough = document.getElementById("enough");
-      var sent = null;
+      var sent = null, slow = 0;
+      var agent = (window.__PARAMS || {}).agent || "Your agent";
       function lock(on) {
         things.forEach((t) => { t.disabled = on; });
         text.disabled = on; make.disabled = on || !text.value.trim(); enough.disabled = on;
@@ -181,7 +182,7 @@
           grid.setAttribute("data-picked", picked);
           things.forEach((t) => t.setAttribute("data-on", t.getAttribute("data-choice") === picked ? "1" : "0"));
           // Said in a sentence, with whose doing it is: a word and a dot read as nothing happening
-          status.textContent = ((window.__PARAMS || {}).agent || "Your agent") + " is getting it ready. It takes a few seconds.";
+          status.textContent = agent + " is getting it ready. It takes a few seconds.";
           lock(true);
         } else {
           grid.removeAttribute("data-picked");
@@ -190,12 +191,26 @@
           lock(false);
         }
       }
+      // An agent that shows what was picked takes the menu off the screen, and one that comes
+      // back to it opens it again. That It took a pick is neither: where the menu is still
+      // waiting a while after, it is the person's again, with a word of why.
+      function unanswered(what) {
+        clearTimeout(slow);
+        slow = setTimeout(() => {
+          if (sent !== what) return;
+          sent = null;
+          render();
+          if (!grid.hasAttribute("data-picked")) status.textContent = agent + " has not answered. Pick again, or pick another.";
+        }, 40000);
+      }
       function pick(choice, more) {
+        clearTimeout(slow);
         sent = choice;
         render();
         var data = { choice: choice };
         if (more) data.text = more;
-        It.action("pick", data).catch(() => { sent = null; render(); status.textContent = ""; });
+        // Something of the person's own is made from nothing, which takes an agent longer than that, and is waited for
+        It.action("pick", data).then(() => { if (choice !== "other") unanswered(choice); }, () => { sent = null; render(); status.textContent = ""; });
       }
       things.forEach((t) => t.addEventListener("click", () => pick(t.getAttribute("data-choice"))));
       text.addEventListener("input", () => { make.disabled = !text.value.trim(); });
@@ -205,14 +220,15 @@
         if (said) pick("other", said);
       });
       enough.addEventListener("click", () => {
+        clearTimeout(slow);
         sent = "done";
         render();
-        status.textContent = ((window.__PARAMS || {}).agent || "Your agent") + " is wrapping up.";
-        It.action("done", {}).catch(() => { sent = null; render(); });
+        status.textContent = agent + " is wrapping up.";
+        It.action("done", {}).then(() => unanswered("done"), () => { sent = null; render(); });
       });
       It.onState(() => {
         // A menu the agent has opened again takes what was sent from it as answered
-        if ((It.state || {}).status === "open") sent = null;
+        if ((It.state || {}).status === "open") { sent = null; clearTimeout(slow); }
         render();
       });
       render();

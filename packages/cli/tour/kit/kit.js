@@ -39,7 +39,13 @@ window.Tour = (() => {
       throw new Error('not sent')
     })
   }
-  // The two buttons that go on. Each is an ordinary action: the agent is what moves the tour on.
+  // How long an agent has to show what was asked for before the buttons that asked are the
+  // person's again. The site gives an agent as long to bring the tour up.
+  var SLOW = 40000
+  // The two buttons that go on. Each is an ordinary action: the agent is what moves the tour on,
+  // and the page it shows takes this one away. That It took a press is not the agent having
+  // moved on: where this page is still here a while after, the buttons are given back with a
+  // word of why, and the person may press again or go the other way.
   function rail() {
     var more = $('t-more'),
       next = $('t-next')
@@ -47,12 +53,20 @@ window.Tour = (() => {
       if (!btn) return
       btn.addEventListener('click', () => {
         var was = btn.textContent
-        more.disabled = next.disabled = true
-        btn.textContent = waiting
-        It.action(name, { from: P.tour_id || null }).catch(() => {
+        var back = () => {
           more.disabled = next.disabled = false
           btn.textContent = was
-        })
+        }
+        more.disabled = next.disabled = true
+        btn.textContent = waiting
+        It.action(name, { from: P.tour_id || null }).then(
+          () =>
+            setTimeout(() => {
+              back()
+              plate('has not answered', false)
+            }, SLOW),
+          back,
+        )
       })
     }
     go(more, 'menu', 'One moment…')

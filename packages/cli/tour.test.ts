@@ -421,3 +421,83 @@ describe('the drum machine', () => {
     idle.close()
   })
 })
+
+describe('the ways on', () => {
+  const SLOW = 40_000
+
+  test('the two buttons of a page are the person’s again when the agent has not moved on a while after it was asked to', async () => {
+    const page = await opened('button')
+    const [more, next] = [page.$('#t-more'), page.$('#t-next')]
+    next.click()
+    expect(page.sent.at(-1)).toMatchObject({ name: 'next', data: { from: 'button' } })
+    expect([more.disabled, next.disabled, next.textContent]).toEqual([true, true, 'Coming up…'])
+    await page.sent.at(-1)!.accept()
+    // An agent that moves on takes the page away. One that is only slow is not hurried
+    await page.advance(SLOW - 1)
+    expect([more.disabled, next.disabled, next.textContent]).toEqual([true, true, 'Coming up…'])
+    await page.advance(1)
+    expect([more.disabled, next.disabled, next.textContent]).toEqual([false, false, 'Next'])
+    expect(page.$('#t-plate small').textContent).toBe('has not answered')
+    // And the other way is open, as it was
+    more.click()
+    expect(page.sent.at(-1)).toMatchObject({ name: 'menu' })
+    expect([more.disabled, next.disabled, more.textContent]).toEqual([true, true, 'One moment…'])
+    // A press that It did not take is given back at once
+    await page.sent.at(-1)!.refuse()
+    expect([more.disabled, next.disabled, more.textContent]).toEqual([false, false, 'All of them'])
+    page.close()
+    // A button that is given back may be pressed twice, so the agent is told how a second press is known
+    expect(GUIDE).toContain('`next` and `menu` carry `from`, the page they were pressed on')
+  })
+
+  test('the menu is open again when the agent has not shown what was picked a while after, unless it is something of the person’s own, which takes as long as it takes', async () => {
+    const page = await opened('menu')
+    const thing = (choice: string) => page.$(`.thing[data-choice="${choice}"]`)
+    thing('chess').click()
+    expect(page.sent.at(-1)).toMatchObject({ name: 'pick', data: { choice: 'chess' } })
+    await page.sent.at(-1)!.accept()
+    await page.advance(SLOW - 1)
+    expect([thing('chess').disabled, thing('drums').disabled, page.$('#enough').disabled]).toEqual([true, true, true])
+    await page.advance(1)
+    expect([thing('chess').disabled, thing('drums').disabled, page.$('#enough').disabled]).toEqual([false, false, false])
+    expect(page.$('#status').textContent).toBe('Your agent has not answered. Pick again, or pick another.')
+    // A menu the agent opens again in the meantime is not said to be unanswered later
+    thing('drums').click()
+    await page.sent.at(-1)!.accept()
+    await page.set({ seen: ['drums'] })
+    await page.advance(SLOW)
+    expect([thing('drums').disabled, page.$('#status').textContent]).toEqual([false, ''])
+    // "That's enough for now" is given back in the same way
+    page.$('#enough').click()
+    await page.sent.at(-1)!.accept()
+    await page.advance(SLOW)
+    expect([page.$('#enough').disabled, page.$('#status').textContent]).toEqual([false, 'Your agent has not answered. Pick again, or pick another.'])
+    // What the person names is made from nothing, which takes an agent longer than this: the menu waits for it
+    page.$('#text').value = 'a tip calculator'
+    page.$('#own').dispatchEvent(new page.w.Event('submit', { cancelable: true }))
+    expect(page.sent.at(-1)).toMatchObject({ name: 'pick', data: { choice: 'other', text: 'a tip calculator' } })
+    await page.sent.at(-1)!.accept()
+    await page.advance(SLOW * 5)
+    expect([thing('chess').disabled, page.$('#enough').disabled]).toEqual([true, true])
+    page.close()
+  })
+
+  test('the two buttons of the ending are the person’s again when the agent has not answered a while after', async () => {
+    const page = await opened('done')
+    const [finish, more] = [page.$('#finish'), page.$('#more')]
+    finish.click()
+    expect(page.sent.at(-1)).toMatchObject({ name: 'finish' })
+    await page.sent.at(-1)!.accept()
+    await page.advance(SLOW - 1)
+    expect([finish.disabled, more.disabled, page.$('#status').textContent]).toEqual([true, true, 'Wrapping up'])
+    await page.advance(1)
+    expect([finish.disabled, more.disabled, page.$('#status').textContent]).toEqual([false, false, 'Your agent has not answered. Try again.'])
+    // An ending the agent opens again in the meantime is not said to be unanswered later
+    more.click()
+    await page.sent.at(-1)!.accept()
+    await page.set({ status: 'open' })
+    await page.advance(SLOW)
+    expect([finish.disabled, more.disabled, page.$('#status').textContent]).toEqual([false, false, ''])
+    page.close()
+  })
+})
