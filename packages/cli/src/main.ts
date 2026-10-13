@@ -222,6 +222,16 @@ async function piped(): Promise<string | undefined> {
 // ---------- pages ----------
 
 async function source(a: Args) {
+  // The three say where one page is, and a command given two of them would have to choose which
+  // it meant: an agent that changed `--html` for `--file` and left the first in would publish
+  // the page it had meant to replace. So nothing is read and nothing published
+  const given = ['file', 'dir', 'html'].filter((name) => text(a, name) !== undefined).map((name) => `--${name}`)
+  if (given.length > 1)
+    throw new Problem(
+      `A ${NOUN.one} is published from one source, and this command was given ${given.slice(0, -1).join(', ')} and ${given.at(-1)}.`,
+      'invalid',
+      'Give one of --file, --dir and --html, or pipe HTML in with none of them.',
+    )
   const html = text(a, 'html') ?? (text(a, 'file') || text(a, 'dir') ? undefined : await piped())
   return gather({ html, file: text(a, 'file'), dir: text(a, 'dir') })
 }

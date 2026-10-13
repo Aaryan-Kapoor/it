@@ -367,6 +367,42 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it create` and `it update` given more than one of --file, --dir and --html publish nothing, and say which they were given', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:get' ? { title: 'Plan' } : null))
+    try {
+      writeFileSync(path.join(m.home, 'final.html'), '<p>the page that was meant</p>')
+      mkdirSync(path.join(m.home, 'site'))
+      writeFileSync(path.join(m.home, 'site', 'index.html'), '<p>a folder</p>')
+      for (const [words, which] of [
+        [['create', 'Plan', '--html', '<p>the old one</p>', '--file', 'final.html'], '--file and --html'],
+        [['create', 'Plan', '--file', 'final.html', '--dir', 'site'], '--file and --dir'],
+        [['update', 'plan', '--dir', 'site', '--html', '<p>the old one</p>'], '--dir and --html'],
+        [['update', 'plan', '--html', '<p>the old one</p>', '--dir', 'no-such-folder', '--file', 'no-such-file'], '--file, --dir and --html'],
+      ] as const) {
+        b.asked.length = 0
+        const ran = await run(m, [...words], b.env)
+        expect([words.join(' '), ran.code, ran.out, error(ran)]).toEqual([
+          words.join(' '),
+          2,
+          '',
+          {
+            code: 'invalid',
+            message: `A page is published from one source, and this command was given ${which}.`,
+            hint: 'Give one of --file, --dir and --html, or pipe HTML in with none of them.',
+          },
+        ])
+        expect(b.asked.filter((x) => x.path.startsWith('publish:'))).toEqual([])
+      }
+      // One of them alone is published as before
+      b.asked.length = 0
+      await run(m, ['create', 'Plan', '--file', 'final.html'], b.env)
+      expect(b.asked.find((x) => x.path === 'publish:begin')!.args.files).toMatchObject([{ path: 'index.html', size: 30 }])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it tour show next` shows the first thing the menu does not say has been seen, tells the menu, and shows the ending once all have been', async () => {
     const m = machine()
     let seen: string[] | null = ['whiteboard']
