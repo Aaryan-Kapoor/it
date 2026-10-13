@@ -9,6 +9,7 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -1393,15 +1394,26 @@ async function uninstall(a: Args) {
   else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
   const retried = process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}
   takenOff = true
+  // Where the folder that was named is a link to the one It is kept in, deleting it deletes
+  // the link and leaves everything It held where it was, pages and keys and all, with It said
+  // to be gone. So the folder the link leads to is deleted, which is the one that was looked at
+  // above and found to be It's and not the person's own, and then the link.
+  let linked = false
   try {
-    if (!kept) rmSync(folder, { recursive: true, force: true, ...retried })
-    else
+    linked = lstatSync(folder).isSymbolicLink()
+  } catch {}
+  try {
+    if (!kept) {
+      rmSync(linked ? real : folder, { recursive: true, force: true, ...retried })
+      if (linked) rmSync(folder, { force: true })
+    } else
       for (const name of readdirSync(folder))
         if (name !== 'addons' && name !== 'bin') rmSync(path.join(folder, name), { recursive: true, force: true, ...retried })
   } catch (err) {
     left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
   }
-  if (!kept && existsSync(folder) && !left.some((line) => line.startsWith(folder))) left.push(`${folder} could not be deleted whole. Delete it to finish.`)
+  if (!kept && (existsSync(folder) || existsSync(real)) && !left.some((line) => line.startsWith(folder)))
+    left.push(`${existsSync(real) ? real : folder} could not be deleted whole. Delete it to finish.`)
   if (!forPerson(a)) return out({ removed: left.length === 0, folder, ...(left.length ? { left } : {}), said })
   tell([
     left.length ? 'It is off this machine, but for this:' : 'It is off this machine.',

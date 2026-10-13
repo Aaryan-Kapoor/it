@@ -1135,6 +1135,25 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     expect(ran().some((words) => words.startsWith('remove '))).toBe(true)
   })
 
+  test('`it uninstall` deletes the folder It is kept in where the folder it was told of is a link to it, and the link with it', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    // It is kept on another disk, say, and the folder the person names is a link to there
+    const real = path.join(m.home, 'disk', 'it-data')
+    mkdirSync(path.dirname(real))
+    execFileSync('mv', [m.it, real])
+    mkdirSync(path.join(real, 'backend'))
+    writeFileSync(path.join(real, 'backend', 'pages.sqlite3'), 'the pages')
+    symlinkSync(real, m.it)
+    const done = await run(m, ['uninstall', '--yes'])
+    expect([done.code, printed(done).removed, existsSync(real), readdirSync(m.home).includes('.it')]).toEqual([0, true, false, false])
+    // And the folder beside it, which is the person's, is as it was
+    expect(existsSync(path.dirname(real))).toBe(true)
+  })
+
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
     const m = machine(true, true)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
