@@ -1402,7 +1402,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Still not settled, it is reopened for nothing: said below, by `carry`, as why
       /** Whether this turn is told that the one before it was cut off: decided before it begins, since its own ending may make such a note anew. */
       const toldCutOff = cutOff.has(key)
-      const sent = { click, toWaiter: false }
+      const sent: { click: Offered; toWaiter: boolean; given?: Given } = { click, toWaiter: false }
       submitting.set(click.id, sent)
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
       // hook of It's hands the agent the rest, and otherwise one short line for each click
