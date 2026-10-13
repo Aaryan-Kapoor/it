@@ -855,6 +855,17 @@ describe('bytes', () => {
     expect((await get(`${at}/v/1/missing.txt`)).status).toBe(404)
   })
 
+  test('a file whose name ends in a word every object has is served as any file of no known kind is', async () => {
+    const prefix = `u/${USER}/named/1/`
+    const names = ['asset.constructor', 'constructor', 'asset.__proto__', '__proto__', 'asset.toString', 'asset.hasOwnProperty']
+    await seedFiles(prefix, { 'index.html': INDEX, ...Object.fromEntries(names.map((name) => [name, `the bytes of ${name}`])) })
+    const named = await open({ p: prefix, a: 'named', s: 'named' })
+    for (const name of names) {
+      const r = await get(`${named.at}/v/1/${name}`)
+      expect([name, r.status, r.headers.get('content-type'), r.text]).toEqual([name, 200, 'application/octet-stream', `the bytes of ${name}`])
+    }
+  })
+
   test('a request that asks only what the answer would be is given its headers and no bytes', async () => {
     const head = (p: string, headers: Record<string, string> = {}) => get(p, headers, { method: 'HEAD' })
     const file = await head(`${at}/v/1/media.bin`)
