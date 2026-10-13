@@ -541,6 +541,25 @@ describe('the network as a switch', () => {
     expect(ways().map((w) => w.checked)).toEqual([true, false, false])
   })
 
+  test('the waiting is counted by this browser’s own clock: one that is an hour ahead of the machine It runs on is given the choice back as soon', async () => {
+    vi.useFakeTimers()
+    const { learnClock } = await import('./lib')
+    // As a heartbeat's answer teaches the site: the backend's clock is an hour behind this browser's
+    learnClock(Date.now() - 3_600_000)
+    try {
+      watched['network:get'] = stands()
+      await panel()
+      await pick(1)
+      await act(async () => void (await vi.advanceTimersByTimeAsync(UNTAKEN + 1500)))
+      expect(said()).toContain('It has not taken that yet.')
+      await act(async () => void (await vi.advanceTimersByTimeAsync(GIVEN_UP)))
+      expect(said()).toBe('It has not said what became of that. The choice shows how the network stands now.')
+      expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
+    } finally {
+      learnClock(Date.now())
+    }
+  })
+
   test('on a machine the internet reaches, turning it on is asked about first, with why, and nothing is done on a no', async () => {
     watched['network:get'] = stands({ exposed: 'has a public address (203.0.113.7)' })
     const asking = vi.fn((_: string) => false)

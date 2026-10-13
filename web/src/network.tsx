@@ -95,7 +95,11 @@ const onThatMachine = () => ['localhost', '127.0.0.1', '[::1]'].includes(locatio
 export function useNetwork() {
   const said = useQuery(api.network.get, {}) as Stands | undefined
   const asking = useMutation(api.network.ask)
-  const now = useNow(1000)
+  // Looked at again every second, for the two waits below. The time `useNow` gives is the
+  // backend's, and is not what they are counted by: an asking is timed from when this browser
+  // made it, by this browser's own clock, and one that is ahead of the backend's would
+  // otherwise wait as much longer as it is ahead
+  useNow(1000)
   /**
    * What was asked here and is not yet over: for which way, when by this browser's clock, and
    * the name the backend gave the asking, once it has. An answer is this asking's only if it
@@ -119,7 +123,7 @@ export function useNetwork() {
     else if ((said.asked && said.asked.at !== mine.id) || (answered && (answered.asked ?? 0) > mine.id)) setMine(null)
   }, [mine, said])
   // Never waited for for ever: an asking that nothing is heard of gives the choice back
-  const givenUp = mine !== null && now - mine.at > GIVEN_UP_MS && Date.now() - mine.at > GIVEN_UP_MS
+  const givenUp = mine !== null && Date.now() - mine.at > GIVEN_UP_MS
   useEffect(() => {
     if (!givenUp) return
     setMine(null)
@@ -165,7 +169,7 @@ export function useNetwork() {
     /** What is being turned to, while the service has not yet said what became of it. */
     turning: mine ? mine.to : null,
     /** It has gone unanswered for longer than the service takes to look. */
-    untaken: mine !== null && now - mine.at > UNTAKEN_MS && Date.now() - mine.at > UNTAKEN_MS,
+    untaken: mine !== null && Date.now() - mine.at > UNTAKEN_MS,
     /** Why what was asked here did not come about, in a sentence, where it did not. */
     failed,
     ask,
