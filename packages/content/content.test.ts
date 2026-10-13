@@ -1510,6 +1510,78 @@ describe('a version that was deleted', () => {
     }
   })
 
+  test.each([0, 3601])(
+    'two uploads arriving while their person is deleted leave no bytes in a recreated folder, even after waiting %i seconds',
+    async (delay) => {
+      clock.start()
+      const own = make()
+      const on = own.content
+      const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+      const pause = () => {
+        let release!: () => void
+        const promise = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return { promise, release }
+      }
+      const [firstWaiting, firstResume, secondWaiting, secondResume, secondMade, secondContinue] = Array.from({ length: 6 }, pause)
+      const uploads: ReturnType<typeof upload>[] = []
+      const found: string[] = []
+      const person = 'erased-two-uploads'
+      const prefix = `u/${person}/arriving/1/`
+      const below = path.join(own.settings.dir, 'u', person)
+      let deleted = false
+      let first = true
+      try {
+        expect((await control('stage', { prefix, files: [entry('index.html', 'private bytes')] }, undefined, { on })).status).toBe(200)
+        vi.mocked(fsp.open).mockImplementation((async (...given: Parameters<typeof real.open>) => {
+          // The first upload has checked its declaration, but has not yet written its temporary file.
+          if (first && String(given[0]).startsWith(path.join(own.settings.dir, 'tmp') + path.sep)) {
+            first = false
+            firstWaiting!.release()
+            await firstResume!.promise
+          }
+          // Opening the version folder follows the rename and precedes the upload handler's cleanup.
+          if (deleted) for (const file of filesUnder(below)) found.push(readFileSync(path.join(below, file), 'utf8'))
+          return real.open(...given)
+        }) as typeof real.open)
+        uploads.push(upload('index.html', 'private bytes', { prefix, on }))
+        await firstWaiting!.promise
+        vi.mocked(fsp.mkdir).mockImplementationOnce((async (...given: Parameters<typeof real.mkdir>) => {
+          secondWaiting!.release()
+          await secondResume!.promise
+          const made = await real.mkdir(...given)
+          secondMade!.release()
+          await secondContinue!.promise
+          return made
+        }) as typeof real.mkdir)
+        uploads.push(upload('index.html', 'private bytes', { prefix, on }))
+        await secondWaiting!.promise
+        expect((await control('delete', { prefix: `u/${person}/` }, undefined, { on })).json()).toEqual({ removed: 1, more: false })
+        deleted = true
+        // The second upload recreates the folder, then the first finishes before the second checks its declaration again.
+        secondResume!.release()
+        await secondMade!.promise
+        clock.pass(delay)
+        firstResume!.release()
+        expect((await uploads[0]!).status).toBe(403)
+        secondContinue!.release()
+        expect((await uploads[1]!).status).toBe(403)
+        expect(found).toEqual([])
+        expect(filesUnder(below)).toEqual([])
+        expect(arrivingUnder(path.join(own.settings.dir, 'tmp'))).toEqual([])
+      } finally {
+        firstResume!.release()
+        secondResume!.release()
+        secondContinue!.release()
+        vi.mocked(fsp.open).mockImplementation(real.open)
+        vi.mocked(fsp.mkdir).mockImplementation(real.mkdir)
+        await Promise.allSettled(uploads)
+        await on.close()
+      }
+    },
+  )
+
   test('deleted at the very moment one of its files is arriving: the file is not kept', async () => {
     const own = make()
     const on = own.content

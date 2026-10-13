@@ -584,7 +584,17 @@ async function upload(it: Service, request: Request): Promise<Response> {
   // The bytes are checked against the size and the checksum as they arrive, and a file is put
   // in place only when it is whole and right. Bytes that are not what was declared are the
   // caller's mistake. Anything else is the disk's trouble, and the caller is told to try again.
-  const written = await it.files.write(prefix, file, request.body, declared).catch((err) => {
+  // The deletion record and the move share the database's write lock, including with another
+  // service. A deletion either precedes the move and refuses it, or follows it and finds the
+  // file. An upload cannot put bytes back after deletion, even if another upload remade its
+  // folder. Its grant must still be good, since deletion records are eventually forgotten.
+  const allowed = (move: () => void) =>
+    it.records.together(() => {
+      if (it.records.wasDeleted(prefix) || typeof grant.exp !== 'number' || grant.exp <= now() - 5) return false
+      move()
+      return true
+    })
+  const written = await it.files.write(prefix, file, request.body, declared, allowed).catch((err) => {
     throw new Unavailable('storage', kind(err))
   })
   // If the version was deleted while this was arriving, its declaration is gone, and what was

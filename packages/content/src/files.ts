@@ -60,6 +60,8 @@ export interface Files {
     file: string,
     body: ReadableStream<Uint8Array> | null,
     declared: Declared,
+    /** Moves the file synchronously while deletion is excluded, or returns false without moving it. */
+    allowed: (move: () => void) => boolean,
   ): Promise<'ok' | 'bytes_differ' | 'size_differs' | 'cut_short' | 'no_folder'>
   remove(prefix: string, file: string): Promise<void>
   declare(prefix: string, files: ({ path: string } & Declared)[]): Promise<void>
@@ -236,9 +238,13 @@ export function createFiles(folder: string): Files {
 
   /**
    * Writes a file whole or not at all: under another name first, and then moved into place.
-   * Answers whether it was placed, was not written whole, or had no folder left to be placed in.
+   * Answers whether it was placed, was not written whole, or its version was no longer writable.
    */
-  async function place(to: string, write: (handle: FileHandle) => Promise<boolean>): Promise<'placed' | 'not_whole' | 'no_folder'> {
+  async function place(
+    to: string,
+    allowed: ((move: () => void) => boolean) | undefined,
+    write: (handle: FileHandle) => Promise<boolean>,
+  ): Promise<'placed' | 'not_whole' | 'no_folder'> {
     const temp = path.join(arriving, randomUUID())
     const handle = await open(temp, 'wx', 0o600)
     // Until the file is in its place, whatever becomes of it, what was written under the other
@@ -255,7 +261,9 @@ export function createFiles(folder: string): Files {
       }
       if (!whole) return 'not_whole'
       try {
-        await rename(temp, to)
+        if (allowed) {
+          if (!allowed(() => renameSync(temp, to))) return 'no_folder'
+        } else await rename(temp, to)
       } catch (err) {
         if (gone(err)) return 'no_folder'
         throw err
@@ -348,7 +356,7 @@ export function createFiles(folder: string): Files {
       }
     },
 
-    async write(prefix, file, body, declared) {
+    async write(prefix, file, body, declared, allowed) {
       const to = kept(prefix, file)
       // Looked at before the folder is made, so that none is made through a link, and after
       await there(path.dirname(to))
@@ -357,16 +365,14 @@ export function createFiles(folder: string): Files {
       // The folder may have been made just now for a version that is deleted already, with
       // everything of its person's: whoever sends the file read what was declared before that.
       // So what was declared is looked for once more, now that the folder is there. Without it
-      // nothing is written, and the folders just made go again. With it, a deletion that comes
-      // from here on takes the folder away before the file is put in it, or finds the file in
-      // it. Either way no file is ever placed under a version whose deleting is over, where a
-      // service that ended at that very moment would leave it for good.
+      // nothing is written, and the folders just made go again. Deletion is checked again
+      // when the file is moved into place, since another upload can recreate this folder.
       if (!(await there(manifestFolder(prefix))) || !(await isFile(path.join(manifestFolder(prefix), 'files.json')))) {
         await emptied(path.dirname(to))
         return 'no_folder'
       }
       let fault: 'bytes_differ' | 'size_differs' | 'cut_short' = 'cut_short'
-      const placed = await place(to, async (handle) => {
+      const placed = await place(to, allowed, async (handle) => {
         const hash = createHash('sha256')
         let size = 0
         const reader = body?.getReader()
@@ -394,7 +400,7 @@ export function createFiles(folder: string): Files {
         else return true
         return false
       })
-      // With no folder left to put it in, the version was deleted while the file was arriving
+      // The folder or permission to put the file in it can go while its bytes are arriving.
       return placed === 'placed' ? 'ok' : placed === 'no_folder' ? 'no_folder' : fault
     },
 
@@ -413,7 +419,7 @@ export function createFiles(folder: string): Files {
       await mkdir(path.dirname(to), { recursive: true, mode: 0o700 })
       if (!(await there(path.dirname(to)))) throw new Error('what was declared could not be kept')
       const text = JSON.stringify(files)
-      const placed = await place(to, async (handle) => {
+      const placed = await place(to, undefined, async (handle) => {
         await handle.writeFile(text)
         return true
       })
