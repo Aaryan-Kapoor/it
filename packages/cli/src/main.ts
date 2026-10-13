@@ -360,22 +360,36 @@ async function create(a: Args) {
     if (!(err instanceof Problem) || err.code !== 'anothers' || slug === undefined) throw err
     const theirs = await call<Made>('query', api.artifacts.get, { slug }).catch(() => null)
     // The same conversation, under the id its app gave it before it was cleared or carried on: the page is its own
-    if (theirs?.session && carriedOn(theirs.session)) done = await publish({ ...page, take: true })
+    if (theirs?.session && carriedOn(theirs.session, theirs.machineId)) done = await publish({ ...page, take: true })
     else throw anothers(slug, theirs)
   }
   await published(done, a, done.version === 1)
 }
 
 /** What is known of a page that a conversation meant to make and that is another's. */
-type Made = { title?: string; agent?: string | null; machine?: string | null; updatedAt?: number; session?: { harness: string; id: string } | null }
+type Made = {
+  title?: string
+  agent?: string | null
+  machine?: string | null
+  machineId?: string | null
+  updatedAt?: number
+  session?: { harness: string; id: string } | null
+}
 /**
  * Whether a conversation is the one this command runs in, under an id it had before: an agent
  * app that clears a conversation, or carries it on, gives it a new id, and the connector on
  * this machine keeps which id became which.
+ *
+ * It is asked of a page the backend has just said is another conversation's. One under the very
+ * id this conversation has is therefore on another machine, where a conversation that was
+ * copied there has the same id: it is another's, and so is any page the backend says is on
+ * another machine than this, whatever became of its id here. Taking a page from another machine
+ * is for whoever says so, with --take or `it open`.
  */
-function carriedOn(was: { harness: string; id: string }): boolean {
+function carriedOn(was: { harness: string; id: string }, onMachine?: string | null): boolean {
   const now = sessionAsked()?.session
-  if (!now || now.harness !== was.harness) return false
+  if (!now || now.harness !== was.harness || now.id === was.id) return false
+  if (typeof onMachine === 'string' && onMachine !== readJson<{ id?: string }>(inHome('machine.json'))?.id) return false
   const became = readJson<Record<string, string>>(inHome('aliases.json')) ?? {}
   let key = `${was.harness}:${was.id}`
   for (let hops = 0; hops < 10 && typeof became[key] === 'string'; hops++) key = became[key]!

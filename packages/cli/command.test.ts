@@ -1300,6 +1300,44 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
 })
 
 describe.skipIf(process.platform === 'win32')('a page another conversation made', () => {
+  test('`it create` takes nothing from a conversation on another machine that has the same id, nor from one whose id became this one’s on this machine', async () => {
+    const m = machine()
+    /** The page as the backend says it: whose it is, and on which machine. */
+    let has = { session: { harness: 'codex', id: 'codex-today' }, machineId: 'machine-2' as string | undefined }
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:get'
+        ? { title: 'Board', agent: 'codex', machine: 'the desktop', updatedAt: Date.now(), ...has }
+        : asked.path === 'publish:begin'
+          ? asked.args.own && !asked.args.take
+            ? new Refusal({ code: 'conflict', message: 'A page with that id belongs to another conversation.', anothers: true } as never)
+            : { artifactId: 'artifact-1', slug: 'board', version: 2, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+          : asked.path === 'publish:finish'
+            ? { slug: 'board', version: 2, url: 'https://site.example/p/board', took: true }
+            : null,
+    )
+    try {
+      const mine = { ...b.env, CODEX_THREAD_ID: 'codex-today' }
+      const create = () => run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], mine)
+      const taken = () => b.asked.some((x) => x.path === 'publish:begin' && x.args.take === true)
+      // A conversation that was copied to another machine has the id it had there. The backend refused it as another's, and it stays refused
+      const same = await create()
+      expect([same.code, error(same).code, taken()]).toEqual([1, 'conflict', false])
+      expect(error(same).message).toContain('on "the desktop"')
+      // So it does where the backend does not say which machine the page is on, as one from before it said so
+      has = { ...has, machineId: undefined }
+      expect([(await create()).code, taken()]).toEqual([1, false])
+      // And where the id the page was made under became this conversation's on this machine, and the page is on another
+      has = { session: { harness: 'codex', id: 'codex-yesterday' }, machineId: 'machine-2' }
+      writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ 'codex:codex-yesterday': 'codex:codex-today' }))
+      expect([(await create()).code, taken()]).toEqual([1, false])
+      // On this machine it is this conversation's own page, under the id it had before, and is made again
+      has = { ...has, machineId: 'machine-1' }
+      expect([(await create()).code, taken()]).toEqual([0, true])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it create` makes nothing under an id that is another conversation’s page and says whose it is and what can be done, takes it when told to, and `it update` leaves it where it is and says how to have it', async () => {
     const m = machine()
     /** The conversation that has the page, as the backend says it. */
