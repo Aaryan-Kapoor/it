@@ -250,19 +250,30 @@ export const waiting = query({
 })
 
 /**
- * What is waiting for one conversation, on any of the person's machines, oldest first: what
- * `it wait` with no page named takes. Read by the conversation, so that other conversations'
+ * What is waiting for one conversation that this machine may take, oldest first: what `it
+ * wait` with no page named takes. Read by the conversation, so that other conversations'
  * clicks, however many, never stand in front of it.
+ *
+ * And read by whose they are to take, each kind by itself: the ones addressed to this machine,
+ * the ones addressed to none, and the ones this machine set aside, which wait for `it wait`
+ * still. A conversation of the same name on another of the person's machines is another
+ * conversation, and its clicks are that machine's: read with these, fifty of them that were
+ * older stood in front of every click this machine could take, were asked for, were refused,
+ * and stood there again at the next asking.
  */
 export const waitingFor = query({
   args: { session },
   handler: async (ctx, { session: s }) => {
-    const { user } = await requireMachine(ctx)
-    const rows = await ctx.db
-      .query('actions')
-      .withIndex('by_user_session', (q) => q.eq('userId', user._id).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id))
-      .take(50)
-    return asClicks(ctx, rows)
+    const { user, machine } = await requireMachine(ctx)
+    const of = (machineId: Id<'machines'> | undefined, aside: Id<'machines'> | undefined) =>
+      ctx.db
+        .query('actions')
+        .withIndex('by_user_route', (q) =>
+          q.eq('userId', user._id).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id).eq('machineId', machineId).eq('parkedBy', aside),
+        )
+        .take(50)
+    const rows = [...(await of(machine._id, undefined)), ...(await of(undefined, undefined)), ...(await of(undefined, machine._id))]
+    return asClicks(ctx, rows.sort((a, b) => a.createdAt - b.createdAt || a._creationTime - b._creationTime).slice(0, 50))
   },
 })
 

@@ -4105,6 +4105,29 @@ describe('cases at the edges', () => {
     expect((await m.as.query(api.delivery.waitingFor, { session: SESSION })).map((c) => c.id)).toEqual([actionId])
   })
 
+  test('nor by any number waiting for a conversation of the same name on another of the person’s machines, which are that machine’s to take', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const desk = await machineOf(t, 'alice', 'desk')
+    const laptop = await machineOf(t, 'alice', 'laptop')
+    const theirs = await publish(desk, 'theirs', { session: SESSION })
+    const mine = await publish(laptop, 'mine', { session: SESSION })
+    const now = Date.now()
+    // Fifty that are older, on the desk's page, and the desk is asleep
+    await insertClicks(t, theirs.artifactId, 50, {}, now - 60_000)
+    const [here] = await insertClicks(t, mine.artifactId, 1, {}, now)
+    const waiting = async () => (await laptop.as.query(api.delivery.waitingFor, { session: SESSION })).map((c) => c.id)
+    expect(await waiting()).toEqual([here])
+    expect(await laptop.as.mutation(api.delivery.claim, { ids: [here as never], for: SESSION })).toEqual([here])
+    await laptop.as.mutation(api.delivery.release, { id: here as never })
+    // What this machine set aside waits for it still, and so does what is addressed to no machine: oldest first, whichever of the three it is
+    const [aside] = await insertClicks(t, mine.artifactId, 1, { machineId: undefined, parkedBy: laptop.id }, now - 2000)
+    const [loose] = await insertClicks(t, mine.artifactId, 1, { machineId: undefined }, now - 1000)
+    expect(await waiting()).toEqual([aside, loose, here])
+    // The desk's own waiter has the desk's, and no more than one asking gives
+    expect((await desk.as.query(api.delivery.waitingFor, { session: SESSION })).length).toBe(50)
+  })
+
   test('more than a batch of expired leases is put back in one go', async () => {
     const t = backend()
     await person(t, 'alice')
