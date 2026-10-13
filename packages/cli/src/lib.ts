@@ -220,6 +220,7 @@ export function changeWhole(file: string, change: (text: string) => string | nul
   const target = realpathSync(file)
   const part = `${target}.it-${process.pid}.part`
   for (let tries = 1; ; tries++) {
+    const before = statSync(target, { bigint: true })
     const text = readFileSync(target, 'utf8')
     const after = change(text)
     if (after === undefined || after === text) return false
@@ -238,7 +239,17 @@ export function changeWhole(file: string, change: (text: string) => string | nul
           closeSync(out)
         }
       }
-      if (readFileSync(target, 'utf8') === text) {
+      const unchanged = readFileSync(target, 'utf8') === text
+      const now = statSync(target, { bigint: true })
+      // A save after the content read also changes the file's identity or timestamps. Check those at the last moment.
+      if (
+        unchanged &&
+        now.dev === before.dev &&
+        now.ino === before.ino &&
+        now.size === before.size &&
+        now.mtimeNs === before.mtimeNs &&
+        now.ctimeNs === before.ctimeNs
+      ) {
         if (after === null) rmSync(target, { force: true })
         else renameSync(part, target)
         return true

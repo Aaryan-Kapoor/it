@@ -2254,6 +2254,32 @@ describe('a file that is not It’s alone, changed while another program may sav
     }
   })
 
+  test('keeps a settings save made after the last content read, before replacement or deletion', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, 'config.toml')
+    const original = fs.readFileSync
+    try {
+      for (const removing of [false, true]) {
+        writeFileSync(file, BEFORE)
+        let reads = 0
+        fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+          const text = original(...args)
+          if (args[0] === file && ++reads === 2) writeFileSync(file, SAVED)
+          return text
+        }) as typeof fs.readFileSync
+        syncBuiltinESMExports()
+        expect(changeWhole(file, removing ? (text) => (text === BEFORE ? null : undefined) : without)).toBe(!removing)
+        expect(readFileSync(file, 'utf8')).toContain('[projects."/work"]')
+        fs.readFileSync = original
+        syncBuiltinESMExports()
+      }
+    } finally {
+      fs.readFileSync = original
+      syncBuiltinESMExports()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test('is left as the last save made it where it is saved every time It is about to replace it, and that is said', () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
     const file = path.join(folder, 'config.toml')
