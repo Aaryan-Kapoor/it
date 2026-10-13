@@ -2353,10 +2353,9 @@ async function turnNetwork(
     const until = Date.now() + TAKEN_MS
     let stands = await doorStands(config)
     while (
-      (stands === undefined ||
-        stands.wanted !== setting ||
-        (!setting && stands.on) ||
-        (setting && stands.on && policy !== undefined && stands.tailnet !== policy)) &&
+      stands !== undefined &&
+      (stands.wanted !== setting ||
+        (stands.tailnet !== undefined && ((!setting && stands.on) || (setting && stands.on && policy !== undefined && stands.tailnet !== policy)))) &&
       Date.now() < until
     ) {
       await new Promise((resolve) => setTimeout(resolve, 200))
@@ -2371,10 +2370,16 @@ async function turnNetwork(
     noteNetwork(false)
     stands = await taken(false)
   }
+  const onlyWhom = running && on && config.network && (config.tailnet === true) !== tailnet
   noteNetwork(on, tailnet)
   // The service that is running takes it by itself. With none running there is nothing to wait for.
   stands = await taken(on, tailnet)
-  if (running && (stands === undefined || stands.wanted !== on || (!on && stands.on) || (on && stands.on && stands.tailnet !== tailnet)))
+  // Older backends report no applied policy. They keep the earlier wait for a change in whom the door answers.
+  if (onlyWhom && stands?.tailnet === undefined) await new Promise((resolve) => setTimeout(resolve, 2500))
+  if (
+    stands !== undefined &&
+    (stands.wanted !== on || (stands.tailnet !== undefined && ((!on && stands.on) || (on && stands.on && stands.tailnet !== tailnet))))
+  )
     throw new Problem(
       `The network is turned ${on ? 'on' : 'off'} in It’s settings, and the service that is running has not taken that.`,
       'not_taken',

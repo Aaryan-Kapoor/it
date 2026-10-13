@@ -2610,20 +2610,26 @@ describe('a network change taken by the running service', () => {
     }
   })
 
-  for (const report of ['unchanged', 'unsaid', 'unavailable'])
-    test(`says that the running service has not taken the setting where its applied policy is ${report}`, async () => {
-      const door = await changing((read) =>
-        read === 1 || report === 'unchanged'
-          ? { on: true, wanted: true, tailnet: true }
-          : report === 'unsaid'
-            ? { on: true, wanted: true }
-            : new Refusal({ code: 'unavailable', message: 'The report is not available.' }),
+  test('says that the running service has not taken a policy it still reports differently', async () => {
+    const door = await changing(() => ({ on: true, wanted: true, tailnet: true }))
+    try {
+      const ran = await door.run()
+      expect([ran.code, ran.out, error(ran).code]).toEqual([1, '', 'not_taken'])
+      expect(door.reads()).toBeGreaterThan(2)
+    } finally {
+      await door.close()
+    }
+  })
+
+  for (const report of ['unsaid', 'unavailable'])
+    test(`keeps the earlier network behavior where the applied policy is ${report}`, async () => {
+      const door = await changing(() =>
+        report === 'unsaid' ? { on: true, wanted: true } : new Refusal({ code: 'unavailable', message: 'The report is not available.' }),
       )
       try {
         const ran = await door.run()
-        expect(ran.code).toBe(1)
-        expect([ran.code, ran.out, error(ran).code]).toEqual([1, '', 'not_taken'])
-        expect(door.reads()).toBeGreaterThan(2)
+        expect([ran.code, printed(ran).network, door.settings().network]).toEqual([0, true, true])
+        expect(door.reads()).toBe(2)
       } finally {
         await door.close()
       }
