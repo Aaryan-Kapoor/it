@@ -310,14 +310,24 @@ export function taker(
   /** The id under which what waits at the backend was noted. Nothing until all that waited at the start has been thrown away, and while reporting is off. */
   let notedAs: unknown
   return async (on) => {
-    const as = on ? sentAs() : undefined
-    const keep = as !== undefined && as === notedAs
-    for (let pass = 0, more = true; more && pass < 5; pass++) {
+    for (let pass = 0; pass < 5; pass++) {
+      const as = on ? sentAs() : undefined
+      const keep = as !== undefined && as === notedAs
       const got = await take(keep)
+      if ((on ? sentAs() : undefined) !== as) {
+        // The reply was made before the reset. Even its word that nothing more waited is
+        // from before, so another taking must drain what arrived while it was on its way.
+        notedAs = undefined
+        continue
+      }
+      // Recording is synchronous, so the sender cannot refresh its identity between this
+      // check and the notes being given to it.
       if (keep) for (const note of got.notes ?? []) counted(note)
-      more = got.more === true
       // Only once nothing more waits is what is noted next known to be this id's
-      if (!more) notedAs = as
+      if (got.more !== true) {
+        notedAs = as
+        return
+      }
     }
   }
 }
@@ -517,7 +527,7 @@ async function keptDoor(
   const take = taker(
     (keep) => asAdmin(backend, 'counted:take', { keep }) as Promise<{ notes?: Noted[]; more?: boolean }>,
     // The id counts are sent under, as usage reporting keeps it in It's folder
-    () => readJson<{ installation?: unknown }>(inHome('telemetry.json'))?.installation,
+    () => (counting() ? readJson<{ installation?: unknown }>(inHome('telemetry.json'))?.installation : undefined),
     (note) => recordNoted(note.name, note.properties),
   )
   const collect = async () => {

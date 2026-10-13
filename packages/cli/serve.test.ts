@@ -48,7 +48,7 @@ const closed = (server: net.Server | http.Server) => new Promise<void>((resolve)
  * the system hands out by itself to whatever asks for one, and each held from when a test takes
  * it until the test is over, so that no other run of the tests on this machine has the same one.
  */
-const ports = bases(14_000, 40)
+const ports = bases(24_000, 40)
 
 const KEPT = ['IT_HOME', 'IT_PORT', 'IT_BACKEND_BIN', 'IT_URL', 'IT_SITE_URL'] as const
 let before: Record<string, string | undefined>
@@ -464,6 +464,94 @@ describe('what the service takes of the notes the backend made for the counts of
       },
     }
   }
+
+  test('a reply delayed past a reporting reset is discarded before the sender can count it under the new identity', async () => {
+    usage.begin()
+    const id = () => (usage.counting() ? JSON.parse(readFileSync(path.join(folder, 'telemetry.json'), 'utf8')).installation : undefined)
+    const first = id()
+    const posts: string[] = []
+    let now = 0
+    const sender = usage.startSender({
+      everyMs: 0,
+      now: () => now,
+      post: async (_url, body) => {
+        posts.push(body)
+        return true
+      },
+    })
+    const page = { name: 'page.shown', properties: JSON.stringify({ screen: 'computer', by: 'person' }) }
+    const asked: boolean[] = []
+    const empty = { notes: [] as (typeof page)[], more: false }
+    let reply: () => Promise<typeof empty> = async () => empty
+    const take = taker(
+      async (keep) => {
+        asked.push(keep)
+        return reply()
+      },
+      id,
+      (note) => usage.recordNoted(note.name, note.properties),
+    )
+    try {
+      await take(true)
+      let release: (answer: typeof empty) => void = () => {}
+      const delayed = new Promise<typeof empty>((resolve) => {
+        release = resolve
+      })
+      reply = () => delayed
+      const taking = take(true)
+      usage.set(false)
+      usage.set(true)
+      expect(id()).not.toBe(first)
+      await sender.tick()
+      // More notes may arrive after the backend made its delayed reply, even though that reply said it was empty.
+      reply = async () => ({ notes: [page], more: false })
+      release({ notes: [page], more: false })
+      await taking
+      await sender.tick()
+      now = 31_000
+      await sender.tick()
+      expect(posts).toEqual([])
+      expect(asked).toEqual([false, true, false])
+      // Once a stable drain is complete, only newly collected notes are sent.
+      await take(true)
+      await sender.tick()
+      now += 31_000
+      await sender.tick()
+      expect(posts).toHaveLength(1)
+      expect(JSON.parse(posts[0]!).events).toHaveLength(1)
+    } finally {
+      sender.stop()
+    }
+  })
+
+  test('reporting turned off during a reply discards it and drains the remaining old notes across later collections', async () => {
+    const backend = backendWith([] as string[], false)
+    let id: string | undefined = 'first'
+    const counted: string[] = []
+    let delayed = false
+    const take = taker(
+      async (keep) => {
+        const answer = await backend.take(keep)
+        if (delayed) {
+          id = undefined
+          delayed = false
+        }
+        return answer
+      },
+      () => id,
+      (note) => counted.push(note.name),
+    )
+    await take(true)
+    backend.held.push(...Array.from({ length: 15 }, (_, i) => `old-${i}`))
+    delayed = true
+    await take(true)
+    expect(counted).toEqual([])
+    id = 'second'
+    await take(true)
+    expect(counted).toEqual([])
+    expect(backend.held).toEqual([])
+    expect(backend.asked.slice(2).every((keep) => !keep)).toBe(true)
+  })
 
   test('nothing that was noted before this service started is counted, since reporting may have been turned off and on again while it was stopped', async () => {
     for (const knowsKeep of [true, false]) {
