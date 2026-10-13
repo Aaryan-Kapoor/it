@@ -2,6 +2,7 @@
 // run is held to the pages there are, what it tells the agent to expect of a page is held to
 // what the page sends, and what a page is filled in with is held to its place in the page,
 // since some of it is the agent's own words.
+import { LIMITS } from '@it/protocol'
 import { describe, expect, test } from 'vitest'
 import { END, GUIDE, MENU, NAMES, STEPS, TOUR_PREFIX, tourPage } from './src/tour'
 
@@ -205,11 +206,102 @@ describe('the guide', () => {
       expect(Object.keys(JSON.parse(tourPage(name).state)), `${name} starts with ${key}`).toContain(key)
     }
   })
+})
 
-  test('a drawing is sent small enough for an action to hold', () => {
-    // An action holds 32 KB. The picture is left out where it alone is larger than this, and the strokes are thinned to what is left
-    expect(tourPage('whiteboard').html).toContain('png.length > 14000')
-    expect(tourPage('whiteboard').html).toContain('budget = 30000 - (png ? png.length : 0)')
+describe('the whiteboard', () => {
+  type Page = Awaited<ReturnType<typeof opened>>
+  /** A board 900 by 600, whose picture is the text given: the stand-in draws nothing, and has no picture of its own to give. */
+  const board = (picture: string | null) => (w: any) => {
+    const ink = new Proxy({}, { get: () => () => {}, set: () => true })
+    w.ResizeObserver = class {
+      observe() {}
+    }
+    w.HTMLCanvasElement.prototype.getContext = () => ink
+    w.HTMLCanvasElement.prototype.toDataURL = () => picture
+    w.Element.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, width: 900, height: 600 })
+    w.Element.prototype.setPointerCapture = () => {}
+  }
+  /** One line drawn with the pen, through the points given as parts of the board. */
+  const drawn = (page: Page, points: [number, number][]) => {
+    const canvas = page.$('#c')
+    points.forEach(([x, y], i) => {
+      canvas.dispatchEvent(new page.w.PointerEvent(i ? 'pointermove' : 'pointerdown', { clientX: x * 900, clientY: y * 600, pointerId: 1, bubbles: true }))
+    })
+    canvas.dispatchEvent(new page.w.PointerEvent('pointerup', { pointerId: 1, bubbles: true }))
+  }
+  /** Many lines of so many points each, no two alike, as a hand draws them. */
+  const scribbled = (page: Page, lines: number, points: number) => {
+    for (let l = 0; l < lines; l++)
+      drawn(
+        page,
+        Array.from({ length: points }, (_, i) => [((l * 37 + i * 11) % 899) / 899 + 0.0004, ((l * 53 + i * 7) % 599) / 599 + 0.0004] as [number, number]),
+      )
+  }
+  const bytes = (data: unknown) => new TextEncoder().encode(JSON.stringify(data)).length
+  const PICTURE = `data:image/png;base64,${'A'.repeat(9000)}`
+
+  test('a drawing is sent small enough for an action to hold, with fewer points along its lines where it must be, and without its picture where that is not enough', async () => {
+    // A short drawing goes whole, with its picture
+    const short = await opened('whiteboard', board(PICTURE))
+    scribbled(short, 3, 20)
+    short.$('#send').click()
+    expect(short.sent.at(-1)).toMatchObject({ name: 'snapshot', data: { png: PICTURE } })
+    expect(short.sent.at(-1)!.data.strokes.map((s: any) => s.points.length)).toEqual([20, 20, 20])
+    short.close()
+    // Many short lines, which is where most of what is sent is not points at all: each line keeps its two ends and loses what is between
+    for (const [lines, points, picture] of [
+      [70, 30, null],
+      [180, 10, null],
+      [180, 10, PICTURE],
+      [300, 12, PICTURE],
+    ] as const) {
+      const page = await opened('whiteboard', board(picture))
+      scribbled(page, lines, points)
+      page.$('#send').click()
+      const { name, data } = page.sent.at(-1)!
+      expect(name).toBe('snapshot')
+      expect(bytes(data), `${lines} lines of ${points}`).toBeLessThanOrEqual(LIMITS.actionPayloadBytes)
+      expect(data.strokes.length).toBe(lines)
+      for (const s of data.strokes) expect(s.points.length).toBeGreaterThanOrEqual(2)
+      page.close()
+    }
+    // One long line is thinned, and still begins and ends where it did
+    const long = await opened('whiteboard', board(null))
+    scribbled(long, 1, 4000)
+    long.$('#send').click()
+    const [line] = long.sent.at(-1)!.data.strokes
+    expect(bytes(long.sent.at(-1)!.data)).toBeLessThanOrEqual(LIMITS.actionPayloadBytes)
+    expect(line.points.length).toBeGreaterThan(1000)
+    expect([line.points[0], line.points.at(-1)]).toEqual([
+      [0, 0],
+      [0.931, 0.733],
+    ])
+    long.close()
+  })
+
+  test('a drawing of more lines than an action holds goes as its picture alone, and where that does not fit either the person is told what to do, and not to send the same again', async () => {
+    const page = await opened('whiteboard', board(PICTURE))
+    scribbled(page, 600, 1)
+    page.$('#send').click()
+    expect(page.sent.at(-1)).toMatchObject({ name: 'snapshot', data: { png: PICTURE, strokes: [] } })
+    page.close()
+    // No picture to be had, or one that is too large by itself: nothing is sent, since it would only be refused
+    for (const picture of [null, `data:image/png;base64,${'A'.repeat(40_000)}`]) {
+      const stuck = await opened('whiteboard', board(picture))
+      scribbled(stuck, 600, 1)
+      stuck.$('#send').click()
+      expect(stuck.sent).toEqual([])
+      expect(stuck.$('#t-you b').textContent).toBe('That is too many lines to send at once. Undo some, or clear the board, and send it again.')
+      // Sending is theirs again once the drawing is another
+      expect(stuck.$('#send').disabled).toBe(true)
+      for (let i = 0; i < 300; i++) stuck.$('#undo').click()
+      expect(stuck.$('#send').disabled).toBe(false)
+      stuck.$('#send').click()
+      expect(stuck.sent.at(-1)).toMatchObject({ name: 'snapshot', data: { png: null } })
+      expect(stuck.sent.at(-1)!.data.strokes.length).toBe(300)
+      expect(bytes(stuck.sent.at(-1)!.data)).toBeLessThanOrEqual(LIMITS.actionPayloadBytes)
+      stuck.close()
+    }
   })
 })
 
