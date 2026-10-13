@@ -1476,6 +1476,40 @@ describe('a version that was deleted', () => {
     }
   })
 
+  test('deleted with everything of its person’s while one of its files is arriving: at no moment is the file on the disk, for a service that ended just then to leave there for good', async () => {
+    const own = make()
+    const on = own.content
+    began = lines.length
+    const real = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).open
+    try {
+      const person = 'erased-late'
+      const prefix = `u/${person}/arriving/1/`
+      expect((await control('stage', { prefix, files: [entry('index.html', 'hello')] }, undefined, { on })).status).toBe(200)
+      // The upload has read what was declared, and found its file there. Before it writes anything, everything of the person's is deleted,
+      // and the backend is told so: from then it asks for nothing of theirs to be deleted again
+      const held = await atTheNextFolder()
+      const uploading = upload('index.html', 'hello', { prefix, on })
+      await held.reached
+      expect((await control('delete', { prefix: `u/${person}/` }, undefined, { on })).json()).toEqual({ removed: 1, more: false })
+      // Whatever the service opens from here on, it is looked at whether a file of the person's lies under the folder at that moment
+      let lay = false
+      vi.mocked(fsp.open).mockImplementation((async (...given: Parameters<typeof real>) => {
+        if (filesUnder(path.join(own.settings.dir, 'u')).length > 0) lay = true
+        return real(...given)
+      }) as typeof real)
+      held.goOn()
+      const uploaded = await uploading
+      expect([uploaded.status, uploaded.buf.length]).toEqual([403, 0])
+      expect(lay).toBe(false)
+      expect(filesUnder(path.join(own.settings.dir, 'u'))).toEqual([])
+      expect(existsSync(path.join(own.settings.dir, 'u', person))).toBe(false)
+      expect(arrivingUnder(path.join(own.settings.dir, 'tmp'))).toEqual([])
+    } finally {
+      vi.mocked(fsp.open).mockImplementation(real)
+      await on.close()
+    }
+  })
+
   test('deleted at the very moment one of its files is arriving: the file is not kept', async () => {
     const own = make()
     const on = own.content

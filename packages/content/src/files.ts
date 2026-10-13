@@ -320,6 +320,17 @@ export function createFiles(folder: string): Files {
     )
   }
 
+  /** Removes a version's folder and the folders it is in, as far up as they are empty. */
+  async function emptied(from: string): Promise<void> {
+    for (let dir = from; dir.startsWith(path.join(root, 'u') + path.sep); dir = path.dirname(dir)) {
+      const went = await rmdir(dir).then(
+        () => true,
+        () => false,
+      )
+      if (!went) break
+    }
+  }
+
   return {
     async open(prefix, file) {
       const handle = await opened(versionFolder(prefix), nameOf(file))
@@ -343,6 +354,17 @@ export function createFiles(folder: string): Files {
       await there(path.dirname(to))
       await mkdir(path.dirname(to), { recursive: true, mode: 0o700 })
       if (!(await there(path.dirname(to)))) return 'no_folder'
+      // The folder may have been made just now for a version that is deleted already, with
+      // everything of its person's: whoever sends the file read what was declared before that.
+      // So what was declared is looked for once more, now that the folder is there. Without it
+      // nothing is written, and the folders just made go again. With it, a deletion that comes
+      // from here on takes the folder away before the file is put in it, or finds the file in
+      // it. Either way no file is ever placed under a version whose deleting is over, where a
+      // service that ended at that very moment would leave it for good.
+      if (!(await there(manifestFolder(prefix))) || !(await isFile(path.join(manifestFolder(prefix), 'files.json')))) {
+        await emptied(path.dirname(to))
+        return 'no_folder'
+      }
       let fault: 'bytes_differ' | 'size_differs' | 'cut_short' = 'cut_short'
       const placed = await place(to, async (handle) => {
         const hash = createHash('sha256')
@@ -382,14 +404,7 @@ export function createFiles(folder: string): Files {
       await unlink(at).catch((err) => {
         if (!gone(err)) throw err
       })
-      // And the folders it was in, as far up as they are now empty
-      for (let dir = path.dirname(at); dir.startsWith(path.join(root, 'u') + path.sep); dir = path.dirname(dir)) {
-        const emptied = await rmdir(dir).then(
-          () => true,
-          () => false,
-        )
-        if (!emptied) break
-      }
+      await emptied(path.dirname(at))
     },
 
     async declare(prefix, files) {
