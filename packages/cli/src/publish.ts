@@ -199,7 +199,7 @@ export function noteConversation(session: { harness: string; id: string }, cwd =
  * known is not reopened. The lock is a file beside the note, made by whoever has it and removed
  * when they are done. One that was left behind by a command that was ended is taken over after
  * ten seconds, far longer than a write takes. Where it cannot be had in three, the note is
- * written all the same, as it was before there was a lock: publishing never waits on it longer.
+ * skipped: publishing never waits on it longer, and another writer's record is not replaced.
  */
 function toItself(run: () => void): void {
   const lock = `${conversationsFile()}.lock`
@@ -218,10 +218,11 @@ function toItself(run: () => void): void {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5 + Math.random() * 20)
     }
   }
+  if (!held) return
   try {
     run()
   } finally {
-    if (held) rmSync(lock, { force: true })
+    rmSync(lock, { force: true })
   }
 }
 /** The folder a conversation was last known to be working in, if it is still there. */

@@ -21,6 +21,16 @@ afterEach(() => {
 })
 
 describe('the conversation folders It remembers', () => {
+  test('leaves the record untouched when a live writer holds its lock beyond the acquisition budget', () => {
+    const record = { 'pi:holder': { cwd: scratch, at: Date.now() } }
+    writeFileSync(conversationsFile(), JSON.stringify(record))
+    const lock = `${conversationsFile()}.lock`
+    writeFileSync(lock, String(process.pid))
+    noteConversation({ harness: 'pi', id: 'contender' }, scratch)
+    expect(JSON.parse(readFileSync(conversationsFile(), 'utf8'))).toEqual(record)
+    expect(readFileSync(lock, 'utf8')).toBe(String(process.pid))
+  })
+
   test('keeps a conversation used again in the same folder when the oldest unused one is forgotten', () => {
     const used = { harness: 'pi', id: 'used-again' }
     const kept = Object.fromEntries(Array.from({ length: 299 }, (_, n) => [`pi:other-${n}`, { cwd: scratch, at: n + 2 }]))
