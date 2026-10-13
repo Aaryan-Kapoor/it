@@ -3401,6 +3401,31 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       await b.close()
     }
   })
+
+  test('an app whose add-on is held back, or one It does not know, named to `--only` on a machine that is not set up, is refused before anything is begun there', async () => {
+    // As the install script leaves a machine. A first run asks for the backend program before
+    // anything else, and here there is none to be had: a setup that got that far would end saying so
+    const m = machine(false)
+    const first = { IT_BACKEND_BIN: path.join(m.home, 'no-such-program'), IT_PORT: String(SITE_PORT + 500) }
+    const begun = () => ['service.json', 'machine.json', 'backend'].filter((name) => existsSync(path.join(m.it, name)))
+    const held = await run(m, ['setup', '--only', 'openclaw', '--no-service'], first)
+    expect([held.code, error(held).code]).toEqual([2, 'invalid'])
+    expect(error(held).message).toMatch(/has not yet been tried in a chat channel.*run `IT_EXPERIMENTAL=openclaw it setup` once\.$/)
+    const unknown = await run(m, ['setup', '--only', 'pi,no-such-app', '--no-service'], first)
+    expect([unknown.code, error(unknown).message]).toEqual([2, 'Not an agent app It knows: no-such-app'])
+    expect(begun()).toEqual([])
+    // Asked for by a person at a terminal, who is led step by step, it is refused before the first step
+    if (python) {
+      const led = await atTerminal(m, ['setup', '--only', 'openclaw', '--no-service'], first)
+      expect(led.code).toBe(2)
+      expect(led.shown).toContain('run `IT_EXPERIMENTAL=openclaw it setup` once')
+      expect(led.shown).not.toContain('Backend program')
+      expect(begun()).toEqual([])
+    }
+    // Asked for by name with the variable, it is not refused, and the setup goes on to its first step
+    const asked = await run(m, ['setup', '--only', 'openclaw', '--no-service'], { ...first, IT_EXPERIMENTAL: 'openclaw' })
+    expect([asked.code, error(asked).code]).toEqual([1, 'backend_program'])
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent will find `it`', () => {
