@@ -20,7 +20,7 @@ const AFTER_SETUP =
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
-import { bases } from './test-ports'
+import { bases, holdBase } from './test-ports'
 
 // Every test here starts the program, and some start it a dozen times over. Each is given the
 // time that takes on a machine that is busy with other things as well.
@@ -2167,6 +2167,40 @@ describe.skipIf(process.platform === 'win32')('an It that is not running, under 
       },
       40_000,
     )
+})
+
+describe.skipIf(process.platform === 'win32')('an It that is running and slow to answer', () => {
+  test('a command that has to ask for a token and is given none in time says that It did not answer in time, and not that It is stopped', async () => {
+    const m = machine(true, true)
+    // A base of this test's own, with something where the backend program listens that takes the asking and never answers it
+    const held = await holdBase(24_000, 10)
+    const taken: net.Socket[] = []
+    const silent = net.createServer((socket) => void taken.push(socket.on('error', () => {})))
+    await new Promise<void>((resolve) => silent.listen(held.base + PORTS.backendSite, '127.0.0.1', resolve))
+    try {
+      const key = await exportJWK((await generateKeyPair('ES256', { extractable: true })).privateKey)
+      writeFileSync(path.join(m.it, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'the desk', key }))
+      writeFileSync(path.join(m.it, 'service.json'), JSON.stringify({ port: held.base }))
+      // Asked together: each waits out the whole time a token is given
+      const [asking, far] = await Promise.all([run(m, ['list']), run(m, ['list'], { IT_URL: `http://127.0.0.1:${held.base + PORTS.backendSite}` })])
+      expect([asking.code, asking.out, error(asking)]).toEqual([
+        1,
+        '',
+        {
+          code: 'timeout',
+          message: 'It did not answer in time on this machine.',
+          hint: 'Something took the connection where It listens, so It is most likely running and busy: try again in a moment. If it goes on, `it service logs` says what It met.',
+        },
+      ])
+      expect(taken.length).toBeGreaterThan(0)
+      // An It on another machine that takes the connection and says nothing is named by its address, and is not said to be out of reach
+      expect(error(far)).toMatchObject({ code: 'timeout', message: `The It at http://127.0.0.1:${held.base + PORTS.backendSite} did not answer in time.` })
+    } finally {
+      for (const socket of taken) socket.destroy()
+      await new Promise((resolve) => silent.close(resolve))
+      await held.release()
+    }
+  }, 60_000)
 })
 
 describe.skipIf(process.platform === 'win32')('a machine that It gives no token, under each runtime the program runs under', () => {

@@ -342,6 +342,24 @@ export const unreachable = (where: string) =>
       )
 
 /**
+ * What is said when It took the connection and then gave no answer in the time it had. That is
+ * not It being stopped: on the machine It runs on, something listens where It does, and a
+ * person told to start It would start a second one beside the first.
+ */
+export const silent = (where: string) =>
+  !process.env.IT_URL && basePort() !== undefined
+    ? new Problem(
+        'It did not answer in time on this machine.',
+        'timeout',
+        'Something took the connection where It listens, so It is most likely running and busy: try again in a moment. If it goes on, `it service logs` says what It met.',
+      )
+    : new Problem(
+        `The It at ${where} did not answer in time.`,
+        'timeout',
+        'Try again in a moment. If it goes on, check that It is running on the machine it runs on, and that this machine can reach that address.',
+      )
+
+/**
  * What is said when the system would not let this command open a connection at all. An agent
  * app that runs commands with the network closed to them does that, and the command then
  * cannot tell whether It is running: it is not said to be stopped, and nobody is told to start
@@ -1120,6 +1138,8 @@ export async function token(
     signal: within(15_000, ending),
   }).catch(async (err) => {
     ending?.throwIfAborted()
+    // Given up on after waiting, which a connection that was refused never is: something took it and did not answer
+    if ((err as Error)?.name === 'TimeoutError') throw silent(b.site)
     throw (await keptFromIt(err)) ? shutIn() : unreachable(b.site)
   })
   if (r.status === 401) {
