@@ -5,7 +5,92 @@
 import { describe, expect, test } from 'vitest'
 import { END, GUIDE, MENU, NAMES, STEPS, TOUR_PREFIX, tourPage } from './src/tour'
 
+// The stand-in for a browser comes with no types of its own, so it is asked for by a name the type check does not follow
+const { JSDOM } = (await import('jsdom' as string)) as any
+
 const params = (html: string) => JSON.parse(/window\.__PARAMS = (\{.*\})<\/script>/.exec(html)![1]!)
+
+/** Something a page sent, which the test accepts or refuses as It would. */
+interface Sent {
+  name: string
+  data: any
+  accept: () => Promise<void>
+  refuse: () => Promise<void>
+}
+/**
+ * A page of the tour as it is published, run in a stand-in for a browser. It is stood in for by
+ * hand: what the page sends is kept until the test accepts or refuses it, the state is what the
+ * test sets as the page's agent would, and the clock is moved by the test. `before` is done to
+ * the window first, for what a page needs of a browser that the stand-in has not got.
+ */
+async function opened(name: string, before: (w: any) => void = () => {}) {
+  const page = tourPage(name)
+  const sent: Sent[] = []
+  const listeners: (() => void)[] = []
+  const settled = () => new Promise<void>((done) => setImmediate(done))
+  let now = 0
+  let timers: { id: number; at: number; fn: () => void }[] = []
+  const It = {
+    state: JSON.parse(page.state) as Record<string, unknown>,
+    revision: 1,
+    onState: (fn: () => void) => {
+      listeners.push(fn)
+      return () => {}
+    },
+    action: (name: string, data: unknown) =>
+      new Promise((resolve, reject) => {
+        sent.push({
+          name,
+          data,
+          accept: () => {
+            resolve({ ok: true })
+            return settled()
+          },
+          refuse: () => {
+            reject(new Error('refused'))
+            return settled()
+          },
+        })
+      }),
+  }
+  const dom = new JSDOM(page.html, {
+    runScripts: 'dangerously',
+    pretendToBeVisual: true,
+    beforeParse(w: any) {
+      w.It = It
+      // Nothing moves on the page, so nothing is asked of the stand-in that it cannot draw
+      w.matchMedia = () => ({ matches: true })
+      w.setTimeout = (fn: () => void, ms = 0) => timers.push({ id: timers.length + 1, at: now + ms, fn })
+      w.clearTimeout = (id: number) => {
+        timers = timers.filter((t) => t.id !== id)
+      }
+      before(w)
+    },
+  })
+  const w = dom.window
+  if (w.document.readyState !== 'complete') await new Promise((done) => w.addEventListener('load', done))
+  return {
+    w,
+    sent,
+    $: (selector: string) => w.document.querySelector(selector),
+    /** The agent sets something in the page's state. */
+    async set(patch: Record<string, unknown>) {
+      It.state = { ...It.state, ...patch }
+      It.revision++
+      for (const fn of listeners) fn()
+      await settled()
+    },
+    /** Moves the clock on, running whatever comes due. */
+    async advance(ms: number) {
+      now += ms
+      const due = timers.filter((t) => t.at <= now)
+      timers = timers.filter((t) => t.at > now)
+      for (const t of due) t.fn()
+      await settled()
+    },
+    close: () => w.close(),
+  }
+}
 
 describe('the pages of the tour', () => {
   test('are a menu, the things it offers in the order the tour goes on through them, and an ending', () => {
@@ -125,5 +210,57 @@ describe('the guide', () => {
     // An action holds 32 KB. The picture is left out where it alone is larger than this, and the strokes are thinned to what is left
     expect(tourPage('whiteboard').html).toContain('png.length > 14000')
     expect(tourPage('whiteboard').html).toContain('budget = 30000 - (png ? png.length : 0)')
+  })
+})
+
+describe('the chessboard', () => {
+  /** The board with the person's move made on it: one square tapped, then the other. */
+  const moved = (page: Awaited<ReturnType<typeof opened>>, from: string, to: string) => {
+    page.$(`[data-sq="${from}"]`).click()
+    page.$(`[data-sq="${to}"]`).click()
+    return page.sent.at(-1)!
+  }
+  const piece = (page: Awaited<ReturnType<typeof opened>>, at: string) => page.$(`[data-sq="${at}"] .pc`)?.textContent ?? ''
+  const waits = (page: Awaited<ReturnType<typeof opened>>) => page.$('.t-card').getAttribute('data-wait') === '1'
+
+  test('plays the agent’s answer when it is heard after the move is known to have gone, and when it is heard before', async () => {
+    const after = await opened('chess')
+    const first = moved(after, 'e2', 'e4')
+    expect(first).toMatchObject({ name: 'move', data: { move: 'e2e4' } })
+    await first.accept()
+    await after.set({ reply: 'e7e5' })
+    expect([piece(after, 'e7'), piece(after, 'e5') !== '', waits(after)]).toEqual(['', true, false])
+    after.close()
+    // A connection that dropped brings the two back in the other order: the answer is kept
+    // for the move it was heard after, and played when that move is known to have reached the agent
+    const before = await opened('chess')
+    const move = moved(before, 'e2', 'e4')
+    await before.set({ reply: 'e7e5' })
+    expect([piece(before, 'e5'), waits(before)]).toEqual(['', true])
+    await move.accept()
+    expect([piece(before, 'e7'), piece(before, 'e5') !== '', waits(before)]).toEqual(['', true, false])
+    // And the board is the person's again
+    expect(moved(before, 'g1', 'f3')).toMatchObject({ name: 'move', data: { move: 'g1f3' } })
+    before.close()
+  })
+
+  test('an answer that was heard early is not played in a new game, nor after a move that did not go', async () => {
+    const page = await opened('chess')
+    moved(page, 'e2', 'e4')
+    await page.set({ reply: 'e7e5' })
+    page.$('#new').click()
+    const again = moved(page, 'd2', 'd4')
+    await again.accept()
+    expect([piece(page, 'e7') !== '', piece(page, 'e5'), waits(page)]).toEqual([true, '', true])
+    page.close()
+    const other = await opened('chess')
+    const lost = moved(other, 'e2', 'e4')
+    await other.set({ reply: 'e7e5' })
+    await lost.refuse()
+    // The move was taken back, and what was set for it is not an answer to the one made in its place
+    expect([piece(other, 'e2') !== '', waits(other)]).toEqual([true, false])
+    await moved(other, 'd2', 'd4').accept()
+    expect([piece(other, 'e7') !== '', piece(other, 'e5'), waits(other)]).toEqual([true, '', true])
+    other.close()
   })
 })
