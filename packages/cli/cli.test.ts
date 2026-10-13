@@ -851,6 +851,43 @@ describe('a file It keeps for this person alone', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ id: 'machine-1', key: { d: 'the key it had' } })
     expect(readdirSync(path.dirname(file))).toEqual(['machine.json'])
   })
+
+  test.skipIf(process.platform === 'win32')(
+    'is not said to be kept when the disk fails as its folder is flushed, and is when the system only has no way to flush a folder',
+    () => {
+      const dir = path.join(folder, 'lasting')
+      const file = path.join(dir, 'machine.json')
+      writePrivate(file, { id: 'machine-1' })
+      /** Writes the file with the flushing of its folder ending as the system would end it. */
+      const flushedAs = (code: string): unknown => {
+        const real = { openSync: fs.openSync, fsyncSync: fs.fsyncSync }
+        const folders = new Set<number>()
+        fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+          const fd = real.openSync(...args)
+          if (args[0] === dir) folders.add(fd)
+          return fd
+        }) as typeof fs.openSync
+        fs.fsyncSync = (fd: number) => {
+          if (folders.has(fd)) throw Object.assign(new Error(`${code}: fsync`), { code })
+          real.fsyncSync(fd)
+        }
+        syncBuiltinESMExports()
+        try {
+          writePrivate(file, { id: 'machine-2' })
+          return undefined
+        } catch (err) {
+          return err
+        } finally {
+          Object.assign(fs, real)
+          syncBuiltinESMExports()
+        }
+      }
+      // The disk failing: whoever asked is told, and goes on with nothing that rests on the file
+      expect(flushedAs('EIO')).toMatchObject({ code: 'EIO' })
+      // A system or a disk that keeps the names in a folder in its own way says so in a few words, which is no failure
+      for (const code of ['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM']) expect([code, flushedAs(code)]).toEqual([code, undefined])
+    },
+  )
 })
 
 describe('which conversation a command is run in', () => {

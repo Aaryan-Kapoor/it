@@ -262,6 +262,11 @@ export function writePrivate(file: string, data: unknown): void {
     throw err
   }
   chmodSync(file, 0o600)
+  // A system that does not let a folder be opened or flushed (Windows, and some disks that are
+  // shared over a network) keeps its names in its own way, and says so in one of a few ways
+  // that mean exactly that. Anything else is the disk failing as the name was made to last,
+  // and is not passed over: whoever asked would go on as though the record were kept, and
+  // throw away what it could have fallen back on.
   try {
     const folder = openSync(path.dirname(file), 'r')
     try {
@@ -269,7 +274,9 @@ export function writePrivate(file: string, data: unknown): void {
     } finally {
       closeSync(folder)
     }
-  } catch {}
+  } catch (err) {
+    if (!['EISDIR', 'EPERM', 'EACCES', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'EBADF'].includes((err as NodeJS.ErrnoException)?.code ?? '')) throw err
+  }
 }
 // ---------- what may be written down ----------
 
