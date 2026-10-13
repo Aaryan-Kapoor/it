@@ -729,14 +729,20 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
 })
 
 describe.skipIf(process.platform === 'win32' || process.platform !== 'linux')('an account that stays after logout because It asked', () => {
-  /** A machine whose system answers, notes every asking, and says whether the account stays after logout as the test has it. */
-  const withSystem = (stays: boolean) => {
+  /**
+   * A machine whose system answers, notes every asking, and says whether the account stays after
+   * logout as the test has it. `unsaid` is a system that fails to say, and `refused` one that
+   * says it does not stay and will not have it turned on.
+   */
+  const withSystem = (stays: boolean | 'unsaid' | 'refused') => {
     const m = machine(true, true)
     const asked = path.join(m.home, 'asked.txt')
+    const says = stays === 'unsaid' ? 'exit 1' : `echo Linger=${stays === true ? 'yes' : 'no'}`
+    const turnsOn = stays === 'refused' ? '*" enable-linger "*) exit 1 ;; ' : ''
     for (const name of ['systemctl', 'loginctl']) {
       writeFileSync(
         path.join(m.bin, name),
-        `#!/bin/sh\necho "${name} $*" >> ${JSON.stringify(asked)}\ncase " $* " in *" show-user "*) echo Linger=${stays ? 'yes' : 'no'} ;; ${SAYS_IT_RUNS} esac\nexit 0\n`,
+        `#!/bin/sh\necho "${name} $*" >> ${JSON.stringify(asked)}\ncase " $* " in *" show-user "*) ${says} ;; ${turnsOn}${SAYS_IT_RUNS} esac\nexit 0\n`,
       )
       chmodSync(path.join(m.bin, name), 0o755)
     }
@@ -754,6 +760,21 @@ describe.skipIf(process.platform === 'win32' || process.platform !== 'linux')('a
     expect((await run(theirs.m, ['service', 'install'])).code).toBe(0)
     expect((await run(theirs.m, ['service', 'uninstall'])).code).toBe(0)
     expect(theirs.asked()).not.toMatch(/disable-linger/)
+  })
+  test('is taken for It’s doing only where the system said that it did not stay before and then let It turn that on', async () => {
+    // The system would not say whether it stayed, as one that is slow to answer does not: it may have, for the person’s own services
+    const unsaid = withSystem('unsaid')
+    expect((await run(unsaid.m, ['service', 'install'])).code).toBe(0)
+    expect(unsaid.asked()).toMatch(/loginctl enable-linger/)
+    expect(existsSync(path.join(unsaid.m.it, 'linger-by-it'))).toBe(false)
+    expect((await run(unsaid.m, ['service', 'uninstall'])).code).toBe(0)
+    expect(unsaid.asked()).not.toMatch(/disable-linger/)
+    // It did not stay, and It was not let turn that on: whoever turns it on later did so themselves
+    const refused = withSystem('refused')
+    expect((await run(refused.m, ['service', 'install'])).code).toBe(0)
+    expect(existsSync(path.join(refused.m.it, 'linger-by-it'))).toBe(false)
+    expect((await run(refused.m, ['service', 'uninstall'])).code).toBe(0)
+    expect(refused.asked()).not.toMatch(/disable-linger/)
   })
 })
 

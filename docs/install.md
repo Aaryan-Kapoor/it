@@ -104,7 +104,9 @@ A newer It may bring a newer backend program, which it fetches the first time it
 
 ## Stopping and removing It
 
-`it service uninstall` stops the background service and takes its registration away, so that It does not start again with the computer. It takes away only the service that this folder registered: one that runs It from another folder is left as it is, and it says so. `it service install` registers and starts it again. An It that you started yourself with `it serve` stops when you press Ctrl-C.
+`it service uninstall` stops the background service and takes its registration away, so that It does not start again with the computer. It takes away only the service that this folder registered: one that runs It from another folder is left as it is, and it says so. `it service install` registers and starts it again.
+
+On Linux, where `it setup` was what had your services kept running while you are logged out, taking the service away turns that off again, with `loginctl disable-linger`, and `it uninstall` does the same. That setting is your account's and not It's alone: any other service of yours that has come to count on it since then stops when you log out, and `loginctl enable-linger` turns it back on for them. Where the setting was on before It came, or the system would not say whether it was, It leaves it as it is. An It that you started yourself with `it serve` stops when you press Ctrl-C.
 
 However it is stopped, It is asked to stop and waited for. It stops its connector and closes its ports, and then it stops the backend program.
 

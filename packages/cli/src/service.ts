@@ -473,18 +473,22 @@ export function install(): ServiceStatus {
       throw err
     }
     // Without this the service stops when the person logs out, which on a server is always.
-    // Whether the account already stayed after logout is noted first: where It is what
+    // Whether the account already stayed after logout is asked first: where It is what
     // turned that on, taking It off the machine turns it off again, and where the person
-    // had it so for reasons of their own, it is left as they had it.
-    const stayed = /^Linger=yes$/m.test(run('loginctl', ['show-user', os.userInfo().username, '--property=Linger'], ASKED_MS).out ?? '')
-    try {
-      if (!stayed && !existsSync(lingerNote())) writeFileSync(lingerNote(), '', { mode: 0o600 })
-    } catch {}
+    // had it so for reasons of their own, it is left as they had it. It is It's doing only
+    // where the system said that the account did not stay, and then let It turn that on. A
+    // system that would not say may have had it on for the person's other services, and one
+    // that refused It has it on, if ever, by someone else's hand.
+    const asked = run('loginctl', ['show-user', os.userInfo().username, '--property=Linger'], ASKED_MS)
+    const stayedNot = asked.ok && /^Linger=no$/m.test(asked.out)
     if (!run('loginctl', ['enable-linger', os.userInfo().username]).ok)
       return {
         ...status(),
         note: 'It will stop when you log out of this machine: `loginctl enable-linger` was refused. Ask whoever runs the machine to allow it.',
       }
+    try {
+      if (stayedNot && !existsSync(lingerNote())) writeFileSync(lingerNote(), '', { mode: 0o600 })
+    } catch {}
   } else if (process.platform === 'darwin') {
     mkdirSync(path.dirname(plistPath()), { recursive: true })
     run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`])
