@@ -61,7 +61,8 @@ function load(html = '', before: (w: any) => void = () => {}) {
     },
     /** The site answers the hello, as mount.tsx does: from the window that framed the page. */
     answer(origin = APP, source: unknown = w.parent) {
-      const port: Port = { sent: [], postMessage: (m) => port.sent.push(m), onmessage: null, close: () => {} }
+      // A port sends a copy of what it is given, and refuses what cannot be copied: the stand-in does as a real one does
+      const port: Port = { sent: [], postMessage: (m) => port.sent.push(structuredClone(m)), onmessage: null, close: () => {} }
       page.port = port
       w.dispatchEvent(Object.assign(new w.Event('message'), { origin, source, data: { type: 'it:port' }, ports: [port] }))
       return port
@@ -111,6 +112,26 @@ describe('the script inside a page', () => {
     p.fromSite({ type: 'it:result', requestId: port.sent[1].requestId, ok: false, error: 'Too many requests.' })
     await expect(refused).rejects.toThrow('Too many requests.')
     await expect(p.It.action('')).rejects.toThrow()
+  })
+
+  test('something that cannot be sent is refused by itself, and what was asked beside it is still sent', async () => {
+    const p = load()
+    // Asked before the site has answered, and so held: one that holds a function, which no port can send, between two that can be sent
+    const first = p.It.action('first', { n: 1 })
+    const bad = p.It.action('bad', { fn() {} })
+    const stored = p.It.store.set('draft', 'kept')
+    const port = p.answer()
+    expect(port.sent.map((m) => m.envelope?.name ?? m.key)).toEqual(['first', 'draft'])
+    await expect(bad).rejects.toThrow(/could not be sent/)
+    // The two that were sent are answered as any are
+    p.fromSite({ type: 'it:result', requestId: port.sent[0].requestId, ok: true, actionId: 'a1' })
+    p.fromSite({ type: 'it:result', requestId: port.sent[1].requestId, ok: true })
+    await expect(first).resolves.toEqual({ ok: true, id: 'a1' })
+    await expect(stored).resolves.toMatchObject({ ok: true })
+    // Asked once the port is there, it is refused in the same way, and the next thing asked goes
+    await expect(p.It.action('bad again', { fn() {} })).rejects.toThrow(/could not be sent/)
+    void p.It.action('after', {})
+    expect(port.sent.map((m) => m.envelope?.name ?? m.key)).toEqual(['first', 'draft', 'after'])
   })
 
   test('a commit sends what was staged, and clears only that: choices made while it was on its way stay', async () => {

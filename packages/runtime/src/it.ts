@@ -151,8 +151,25 @@ function emit(): void {
   for (const l of [...listeners]) tell(l)
 }
 
+/**
+ * Hands one message to the site. A port sends a copy, and what cannot be copied (a function, an
+ * element of the page) it refuses by throwing. Whoever asked is told so, as of any refusal, and
+ * nothing else is held up by it: thrown on from here, it ended the sending of everything that
+ * had been held for the port, and what came after it was never sent or answered.
+ */
+function post(to: MessagePort, message: PageToSite): void {
+  try {
+    to.postMessage(message)
+  } catch {
+    if (!('requestId' in message)) return
+    const w = waiting.get(message.requestId)
+    waiting.delete(message.requestId)
+    w?.reject(new Error('That could not be sent: what an action or a stored value carries is plain data, with no function or element in it.'))
+  }
+}
+
 function send(message: PageToSite): void {
-  if (port) port.postMessage(message)
+  if (port) post(port, message)
   else unsent.push(message)
 }
 
@@ -184,7 +201,7 @@ window.addEventListener('message', (e) => {
   if (e.source !== window.parent || e.origin !== config.app || e.data?.type !== 'it:port' || !e.ports[0] || port) return
   port = e.ports[0]
   port.onmessage = (m) => receive(m.data as SiteToPage)
-  for (const m of unsent.splice(0)) port.postMessage(m)
+  for (const m of unsent.splice(0)) post(port, m)
 })
 // This document's own name. The site answers each document once, however often it asks.
 const doc = id()
