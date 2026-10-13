@@ -290,6 +290,20 @@ describe('the lock one connector holds for a folder', () => {
     return failed ? { code: failed.code, message: failed.message } : 'running'
   }
 
+  test.skipIf(process.platform === 'win32')(
+    'a connector that cannot write down where it listens closes what it opened, and leaves no socket behind',
+    async () => {
+      folder()
+      // Where the note goes there is a folder with something in it, which nothing can be written in place of
+      mkdirSync(path.join(home, 'connector.json', 'in-the-way'), { recursive: true })
+      const started = await starting()
+      expect(started).not.toBe('running')
+      expect(existsSync(path.join(home, 'connector.sock'))).toBe(false)
+      // And the lock is let go, for the next try
+      expect(existsSync(lock())).toBe(false)
+    },
+  )
+
   test('names its holder for as long as the connector runs, is let go when it stops, and leaves nothing beside it', async () => {
     await start()
     expect(kept().pid).toBe(process.pid)

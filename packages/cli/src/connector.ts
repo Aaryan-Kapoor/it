@@ -2321,7 +2321,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (info.socket) rmSync(info.socket, { force: true })
     throw lockLost()
   }
-  writePrivate(infoFile(), info)
+  try {
+    writePrivate(infoFile(), info)
+  } catch (err) {
+    // Where the note cannot be written, on a disk that is full say, nothing can find this
+    // connector. What it opened is closed, so that the next try, half a minute on, does not
+    // leave one more listener open behind it each time
+    server.close()
+    if (info.socket) rmSync(info.socket, { force: true })
+    throw err
+  }
   // Where it listens is said by kind: the socket's own address would name the person's home folder
   say(`connector ${VERSION} started (pid ${process.pid}); connector listening on ${info.socket ? 'its socket' : `127.0.0.1:${info.port}`}`)
   // Usage counts are sent from here, in the background, for every command on this machine.
