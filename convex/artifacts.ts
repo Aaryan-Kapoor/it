@@ -169,6 +169,11 @@ export const take = mutation({
   args: { ...ref, session, agent: v.optional(v.string()) },
   handler: async (ctx, { session: mine, agent, ...which }) => {
     const { user, machine } = await requireMachine(ctx)
+    // A conversation is named here in as many characters as publishing takes one in. A longer
+    // name is kept whole on the page and cut short where the machine says the conversation is
+    // running, so the page would never be seen to run and could not be stopped; and it is read
+    // with every page of the person's, each time they are listed.
+    if (mine.harness.length > 40 || mine.id.length > 200) fail('invalid', 'That is not a session.')
     const a = await resolve(ctx, user._id, which)
     if (a.machineId === machine._id && a.session?.harness === mine.harness && a.session?.id === mine.id) return { took: false }
     await rateLimit(ctx, 'take', user._id)

@@ -1260,6 +1260,23 @@ describe('publishing', () => {
     expect(await code(theirs.as.mutation(api.artifacts.take, { slug: 'board', session: today }))).toBe('not_found')
   })
 
+  test('a page is not taken for a conversation whose name is longer than one that publishes may have, and stays with the one it had', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice', 'laptop')
+    const p = await publish(laptop, 'board', { session: SESSION })
+    const take = (session: { harness: string; id: string }) => code(laptop.as.mutation(api.artifacts.take, { slug: 'board', session }))
+    expect(await take({ harness: 'claude-code', id: 's'.repeat(201) })).toBe('invalid')
+    expect(await take({ harness: 'h'.repeat(41), id: 'sess-2' })).toBe('invalid')
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'board' })).session).toEqual(SESSION)
+    // One as long as publishing takes is taken
+    expect(await take({ harness: 'h'.repeat(40), id: 's'.repeat(200) })).toBe('ok')
+    // A run of that conversation is the page's run, so the page says it is running and can be stopped
+    await laptop.as.mutation(api.machines.runBegan, { for: { harness: 'h'.repeat(40), id: 's'.repeat(200) } })
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'board' })).run).not.toBeNull()
+    expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+  })
+
   test('a publish that cannot be prepared leaves nothing behind, and says it may be tried again', async () => {
     const t = backend()
     await person(t, 'alice')
