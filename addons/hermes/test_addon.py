@@ -767,6 +767,24 @@ class InTheTuiAndTheGateway(Case):
         self.assertEqual(hermes.messages, [], "a message goes by the chat's name, which is B's now")
         self.assertEqual(self.connector.acks(), [], "the click is still A's to have")
 
+    def test_as_many_conversations_are_asked_about_as_the_connector_listens_for_and_past_that_the_one_heard_from_longest_ago_gives_way(self):
+        # The number is the connector's own, read from where It keeps it
+        protocol = (HERE.parent.parent / "packages" / "protocol" / "src" / "index.ts").read_text(encoding="utf-8")
+        most = int(re.search(r"^export const LISTENING_MOST = (\d+)$", protocol, re.MULTILINE).group(1))
+        hermes = self.named()
+        ids = ["20261002_10%04d_ab12cd" % i for i in range(most + 1)]
+        for i, session in enumerate(ids[:most]):
+            bound["HERMES_SESSION_KEY"] = "chat-%d" % i
+            hermes.turn(session, running=False)
+        self.assertTrue(until(lambda: set(self.connector.asked()) == {("hermes", session) for session in ids[:most]}))
+        # One more than the connector listens for: the first, which has had no turn since, is the one not asked about
+        bound["HERMES_SESSION_KEY"] = "chat-%d" % most
+        hermes.turn(ids[most], running=False)
+        self.assertTrue(until(lambda: ("hermes", ids[most]) in self.connector.asked()))
+        del self.connector.log[:]
+        self.a_while()
+        self.assertEqual(set(self.connector.asked()), {("hermes", session) for session in ids[1:]})
+
     def test_nothing_is_asked_until_the_person_has_allowed_messages(self):
         hermes = self.named(allowed=False)
         bound["HERMES_SESSION_KEY"] = self.KEY

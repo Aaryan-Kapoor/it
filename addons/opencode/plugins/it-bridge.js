@@ -42,7 +42,7 @@ const MOST_BYTES = 256 * 1024 // an answer longer than this is not read to its e
 const PROMPT_MS = 5000 // how long OpenCode is given to say that it will take a message
 const SHOWN_MS = 30_000 // how long it is then given to show that message in the conversation
 const AGAIN_MS = [1000, 5000, 30_000, 180_000] // how long to wait before trying a refused click again
-const MOST = 20 // how many conversations are asked about at once; the least recently active go first
+const MOST = 40 // how many conversations are asked about at once, which is as many as the connector watches; the least recently active go first
 
 /** Gives up on a call that takes too long, so that nothing here can hold OpenCode up. */
 function within(ms, promise) {

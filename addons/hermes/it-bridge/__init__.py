@@ -42,7 +42,7 @@ SETTLE_SECONDS = 1.0  # how long a turn must have been over before a click is ha
 REFUSED_SECONDS = 60.0  # how long a conversation is left alone after Hermes would not take a message for it
 REFUSED_TIMES = 3  # after this many refusals in a row it is forgotten, until it has another turn
 REMEMBERED = 2000  # how many handed-over clicks are remembered
-MOST_TALKS = 20  # how many conversations one Hermes process is asked for at once (a gateway may hold hundreds)
+MOST_TALKS = 40  # how many conversations one Hermes process is asked for at once, which is as many as the connector watches (a gateway may hold hundreds)
 _CANNOT_TELL = object()
 
 

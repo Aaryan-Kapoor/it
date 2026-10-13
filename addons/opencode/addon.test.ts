@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { describeClick, WHEN } from '@it/protocol'
+import { describeClick, LISTENING_MOST, WHEN } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as addon from './plugins/it-bridge.js'
 
@@ -399,6 +399,24 @@ describe('the OpenCode add-on', () => {
     await settled()
     expect(c.polls().length).toBe(1)
     expect(c.polls().every((a) => a.session === 'ses_parent')).toBe(true)
+  })
+
+  it('asks about as many conversations at once as the connector listens for, and past that the one used longest ago gives way', async () => {
+    standIn()
+    const c = await connector()
+    const { hooks } = await load()
+    const open = Array.from({ length: LISTENING_MOST }, (_, i) => `ses_${i + 1}`)
+    for (const id of open) await begin(hooks, id)
+    await settled()
+    c.state.asked.length = 0
+    await seconds(1)
+    expect(c.polls().map((a) => a.session)).toEqual(open)
+    // One more than the connector listens for: the first, which has said nothing since, is the one not asked about
+    await begin(hooks, 'ses_one_more')
+    await settled()
+    c.state.asked.length = 0
+    await seconds(1)
+    expect(c.polls().map((a) => a.session)).toEqual([...open.slice(1), 'ses_one_more'])
   })
 
   it('gives a subagent no conversation at all when the one that started it cannot be told for sure', async () => {
