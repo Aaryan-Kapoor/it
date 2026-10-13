@@ -507,6 +507,60 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(existsSync(stampFile('opencode'))).toBe(false)
   })
 
+  test('an install that is stopped the moment a file is in its place, before anything more can be written down, has a note of that file all the same, and it is taken out with the rest', async () => {
+    const folder = folderOf('opencode')
+    const skill = path.join(folder, 'skills/it/SKILL.md')
+    // The program is stopped once the skill is where OpenCode finds it: nothing it would have
+    // put in place after that, a note or a file, is put in place
+    const real = fs.renameSync
+    let stopped = false
+    fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
+      if (stopped) throw new Error('the program was stopped before this')
+      real(from, to)
+      if (path.resolve(String(to)) === skill) stopped = true
+    }) as typeof fs.renameSync
+    syncBuiltinESMExports()
+    try {
+      await connect('opencode', () => {}).catch(() => {})
+    } finally {
+      fs.renameSync = real
+      syncBuiltinESMExports()
+    }
+    expect(stopped).toBe(true)
+    expect(read(skill)).toBe(SKILL)
+    expect(noted('opencode').installs[0]!.version).toBe('installing')
+    // A program started afresh is asked to take the add-on out, and leaves nothing of it for an agent to find
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(under(folder)).toEqual([])
+    expect(existsSync(stampFile('opencode'))).toBe(false)
+  })
+
+  test('a file of the person’s own that stood where an install was stopped before it reached that file is still theirs, and stays when the add-on is taken out', async () => {
+    const folder = folderOf('opencode')
+    const plugin = path.join(folder, 'plugins/it-bridge.js')
+    const skill = path.join(folder, 'skills/it/SKILL.md')
+    put(skill, 'a skill of the person’s own')
+    // Stopped once the plugin is in its place, with the skill not yet come to
+    const real = fs.renameSync
+    let stopped = false
+    fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
+      if (stopped) throw new Error('the program was stopped before this')
+      real(from, to)
+      if (path.resolve(String(to)) === plugin) stopped = true
+    }) as typeof fs.renameSync
+    syncBuiltinESMExports()
+    try {
+      await connect('opencode', () => {}).catch(() => {})
+    } finally {
+      fs.renameSync = real
+      syncBuiltinESMExports()
+    }
+    expect(stopped).toBe(true)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(under(folder)).toEqual(['skills/it/SKILL.md'])
+    expect(read(skill)).toBe('a skill of the person’s own')
+  })
+
   test('the note of an installation says where it was made and names every file written, with a checksum of each, and is the person’s alone to read', async () => {
     vi.stubEnv('XDG_CONFIG_HOME', path.join(tmp, 'settings'))
     const folder = folderOf('opencode')
@@ -785,7 +839,7 @@ describe('what It writes and removes in an app’s folder', () => {
   })
 
   test.skipIf(!permissionsHold)(
-    'is noted only once it has been written: an install that stops at its first file has a note of none, and its removal takes nothing away',
+    'is not left noted when it could not be written: an install that stops at its first file has a note of none, and its removal takes nothing away',
     async () => {
       const folder = folderOf('opencode')
       const skill = path.join(folder, 'skills/it/SKILL.md')

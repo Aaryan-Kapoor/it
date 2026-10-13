@@ -688,9 +688,10 @@ interface Wanted {
  * that is still as it left it, is written over. Whatever else stands in a file's place is the
  * person's, though it hold the very same words, and is kept beside the new one under another
  * name. `wanted` is asked for here, so that a file of the add-on that cannot be read is a
- * failure like any other. `wrote` is told, each time a file has been written, every file that is
- * this program's now. What is returned says the same at the end, with what was set aside, and
- * with why it stopped where it did not finish.
+ * failure like any other. `wrote` is told, each time a file is about to be put in a place that was
+ * empty and each time one has been written, every file that is this program's now. What is
+ * returned says the same at the end, with what was set aside, and with why it stopped where it
+ * did not finish.
  */
 function putFiles(
   root: string,
@@ -727,7 +728,23 @@ function putFiles(
         mine.delete(f.to)
         kept.push(name)
       }
-      putInPlace(f.data, f.to)
+      // A file that is new to its place is noted before it is put there, with the checksum it
+      // is about to have. A program that is stopped between the two then still has a note of
+      // it, and it is taken out with the rest: noted only afterwards, it would be left where
+      // the harness finds it, with nothing to say that it is this program's. Nothing stands in
+      // its place at this moment, and a file is only ever taken out for holding what its note
+      // says, so one that is noted and never written costs nothing.
+      if (!own) {
+        mine.set(f.to, f.sha256)
+        wrote(noted())
+      }
+      try {
+        putInPlace(f.data, f.to)
+      } catch (err) {
+        // It could not be put there, and so is not there: the note of it is taken back
+        if (!own) mine.delete(f.to)
+        throw err
+      }
       mine.set(f.to, f.sha256)
       wrote(noted())
     }
@@ -1313,8 +1330,9 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   const others = all.filter((i) => i !== was)
   const noted = (version: string, files?: Put[]): Installation[] => [...others, { version, at: Date.now(), by: VERSION, env: at.env, dir: at.dir, files }]
   keep(id, noted('installing', was?.files))
-  // Each file is noted once it has been written: a file that an install never got as far as
-  // writing is not this program's, whatever was there under its name
+  // Each file is noted as it is written, from the moment before it is put into an empty place:
+  // a file that an install never got as far as is not this program's, whatever was there under
+  // its name
   const r = await adapter.install(dir, at, was, (files) => keep(id, noted('installing', files)))
   if (r.aside?.length) {
     const one = r.aside.length === 1
