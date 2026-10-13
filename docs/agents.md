@@ -49,7 +49,7 @@ Join only computers that you would trust with everything It holds: [every machin
 
 ## Revoking a machine
 
-The Machines page says of each machine whether it is online, and marks the one It runs on. A machine is online while its connector goes on saying so, every half minute. It is off from the moment It is stopped there, and otherwise once it has not been heard from for a minute and a half.
+The Machines page says of each machine whether it is online, and marks the one It runs on. A machine is online while its connector goes on saying so, every half minute. It is off from the moment It is stopped there, and otherwise once it has not been heard from for a hundred seconds.
 
 The Machines page revokes a machine, which ends everything its agents can do at once. Everything that came from that machine goes with it: the browsers that were paired with a code it asked for, the screens those browsers added, and the machines that joined with a code from any of them. The site says how many of each before you confirm.
 
