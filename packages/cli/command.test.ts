@@ -443,11 +443,11 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       // What is different for an agent that has just installed It comes first, and then the tour as `it tour` prints it
       expect(given.out).toMatch(/^The person pressed "Take the tour" on It's site a moment ago/)
       expect(given.out).toContain('# The It tour')
-      // The tour's first rule is another for such an agent, in the place of the one that sends it to a waiter in the background
+      // The tour's first rule is another for such an agent, in the place of the one that has an agent wait only where nothing arrives by itself
       expect(given.out).toContain('1. **Wait for each thing they do.**')
       expect(given.out).toContain('run `it wait --timeout 100` and act on what it prints')
       expect(given.out).not.toContain('1. **Never block.**')
-      expect(given.out).not.toContain('start `it wait --follow` once, in the background')
+      expect(given.out).not.toContain('Where what they do does arrive by itself, do not wait at all')
       // And the tour as anyone else is given it still has the rule that is replaced here
       expect((await run(m, ['tour'], env)).out).toContain('1. **Never block.**')
       // It said so twice, as the agent app it was run from, and did not say it had given up
