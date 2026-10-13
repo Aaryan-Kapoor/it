@@ -3201,6 +3201,19 @@ describe('notifications', () => {
     expect((await inbox(m)).map((c) => [c.name, c.attended])).toEqual([['yes', true]])
   })
 
+  test('a notification is not sent with a button named as what a person types above a page is, which pressing it could never send', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan', { session: SESSION })
+    const send = (action: string) => code(m.as.mutation(api.notifications.send, { text: 'Reply?', slug: 'plan', buttons: [{ label: 'Reply', action }] }))
+    expect(await send('it:message')).toBe('invalid')
+    expect(await alice.browser.query(api.notifications.list, { key: displayKey('alice') })).toEqual([])
+    expect(await t.run((ctx) => ctx.db.query('notifications').collect())).toEqual([])
+    // A name that only begins as that one does is a page's own
+    expect(await send('it:message.read')).toBe('ok')
+  })
+
   test('opening or clearing the tray on one display leaves alone what is addressed to another', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

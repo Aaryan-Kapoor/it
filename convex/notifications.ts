@@ -1,7 +1,7 @@
 // A notification is the agent speaking to the person outside any one page. It is stored, so it
 // survives a reload; it shows as a toast and in a tray; and when the display it is meant for
 // does not have the site open, it goes out as a web push (push.ts).
-import { LIMITS } from '@it/protocol'
+import { LIMITS, MESSAGE } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
@@ -36,9 +36,13 @@ export const send = mutation({
       // A button's press comes back as a click on a page, so it needs a page to belong to
       if (!artifact) fail('invalid', 'Buttons need a page for the answer to come back on. Pass its id.')
       if (buttons.length > LIMITS.notificationButtons) fail('limit', `At most ${LIMITS.notificationButtons} buttons.`)
-      for (const b of buttons)
+      for (const b of buttons) {
         if (!b.label.trim() || b.label.length > 40 || !/^[A-Za-z0-9_.:-]{1,64}$/.test(b.action))
           fail('invalid', 'A button is a short label and an action name.')
+        // Pressing a button records an action of its name, and this name is kept for what a
+        // person types above a page: a press would be refused, with the button still offered
+        if (b.action === MESSAGE) fail('invalid', `A button may not send an action named ${MESSAGE}, which is what a person types above a page.`)
+      }
     }
     let displayId: Id<'displays'> | undefined
     if (display) {
