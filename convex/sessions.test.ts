@@ -930,6 +930,32 @@ describe('what ending a paired browser takes with it', () => {
     expect(await h.desk.browser.query(api.sessions.leftBehind, {})).toEqual([])
   })
 
+  test.each(['owner', 'screen'] as const)('a display paired again as a %s keeps what every earlier pairing let in', async (role) => {
+    const h = await household()
+    const key = 'the-laptop-display-key-01'
+    const display = await register(h.laptop, key)
+    await endOf(h.t, h.laptop)
+    const back = role === 'owner' ? await ownerOf(h.t, h.machine) : h.kitchen
+    expect((await register(back, key)).id).toBe(display.id)
+    const listed = (await h.desk.browser.query(api.sessions.list, {})).find((s) => s.id === back.session)!
+    expect([...listed.along.machines].sort()).toEqual([h.second.id, h.third.id].sort())
+    expect(listed.along.browsers).not.toContain(back.session)
+    await endOf(h.t, back)
+    const left = (await h.desk.browser.query(api.sessions.leftBehind, {})).find((d) => d.display === display.id)!
+    expect([...left.along.machines].sort()).toEqual([h.second.id, h.third.id].sort())
+    const again = await ownerOf(h.t, h.machine)
+    await register(again, key)
+    const added = await joined(h.t, again.browser, 'new machine')
+    const before = (await h.desk.browser.query(api.sessions.list, {})).find((s) => s.id === again.session)!
+    expect([...before.along.machines].sort()).toEqual([h.second.id, h.third.id, added.id].sort())
+    await h.desk.browser.mutation(api.displays.forget, { displayId: display.id })
+    await settle(h.t)
+    expect(await living(h)).toEqual(['desk', 'hall'])
+    expect(await alive(again)).toBe(false)
+    expect(await alive(added.as)).toBe(false)
+    expect(await alive(h.machine)).toBe(true)
+  })
+
   test('and so it does a day later, when the record of that browser has been cleaned away', async () => {
     const h = await household()
     const laptops = await register(h.laptop, 'the-laptop-display-key-01')

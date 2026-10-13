@@ -105,6 +105,8 @@ export default defineSchema({
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
+    /** Earlier pairings of this display, whose invitations are ended when it is forgotten. */
+    previousSessions: v.optional(v.array(v.id('sessions'))),
     /** What kind of screen it is, as its browser's own name for itself said when it registered, whether it reached It at this machine's own address, and when it last said that it had the site open. For the counts of how It is used, and nothing else. */
     screen: v.optional(v.union(v.literal('phone'), v.literal('tablet'), v.literal('computer'), v.literal('tv'))),
     local: v.optional(v.boolean()),

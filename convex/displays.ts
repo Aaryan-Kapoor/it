@@ -69,11 +69,11 @@ export const register = mutation({
         // The key only selects. While the session the display is with has not ended, the display
         // is that browser's, and to anyone else who names its key there is no such display. Once
         // that session has ended, the display goes with the session its browser has now, which
-        // is the caller's own and never one the browser names: that is the session forgetting
-        // the display will end.
+        // is the caller's own and never one the browser names. Earlier pairings stay with the
+        // display so that forgetting it also ends what those pairings let in.
         const holder = await ctx.db.get(existing.sessionId)
         if (holder && holder.endedAt === undefined) fail('not_found', 'This display is not registered.')
-        await ctx.db.patch(existing._id, { sessionId: session._id })
+        await ctx.db.patch(existing._id, { sessionId: session._id, previousSessions: [...(existing.previousSessions ?? []), existing.sessionId] })
       }
       return view(existing)
     }
@@ -356,7 +356,7 @@ export const forget = mutation({
     await ctx.db.insert('forgotten', { userId: user._id, key: d.key, at: Date.now() })
     await ctx.db.delete(d._id)
     // Whatever else that same browser had registered as is signed out as its session ends
-    await endSession(ctx, d.sessionId, 'forgotten')
+    for (const id of [d.sessionId, ...(d.previousSessions ?? [])]) await endSession(ctx, id, 'forgotten')
     log('display.forgotten', { userId: user._id, displayId: d._id, sessionId: d.sessionId })
     return null
   },

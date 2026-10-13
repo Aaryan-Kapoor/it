@@ -187,6 +187,15 @@ export async function endSession(ctx: MutationCtx, sessionId: Id<'sessions'>, by
   const ends = session !== null && session.endedAt === undefined
   if (!ends && !TAKES_ALONG.has(by)) return false
   const now = Date.now()
+  if (TAKES_ALONG.has(by)) {
+    const displays = await ctx.db
+      .query('displays')
+      .withIndex('by_session', (q) => q.eq('sessionId', sessionId))
+      .take(QUOTA.displays + 1)
+    for (const d of displays) {
+      for (const earlier of d.previousSessions ?? []) await endSession(ctx, earlier, by, but)
+    }
+  }
   if (ends) {
     await ctx.db.patch(sessionId, { endedAt: now })
     const displays = await ctx.db
@@ -338,7 +347,7 @@ export const list = query({
           : typeof machine === 'string'
             ? { kind: 'machine' as const, name: machine }
             : null,
-        along: alongOf(s._id, paired, machines),
+        along: alongOf([s._id, ...displays.filter((d) => d.sessionId === s._id).flatMap((d) => d.previousSessions ?? [])], paired, machines, s._id),
       })
     }
     return out.sort((a, b) => Number(b.mine) - Number(a.mine) || b.lastSeenAt - a.lastSeenAt || b.pairedAt - a.pairedAt)
@@ -349,13 +358,15 @@ export const list = query({
  * What a browser let in, of all that is paired still: the machines it added, with all that
  * descend from them, and the browsers that it or any of those let in.
  */
-function alongOf(id: Id<'sessions'>, paired: Doc<'sessions'>[], machines: Doc<'machines'>[]) {
+function alongOf(ids: Id<'sessions'>[], paired: Doc<'sessions'>[], machines: Doc<'machines'>[], own?: Id<'sessions'>) {
   const line = lineOf(
     machines,
-    machines.filter((m) => m.bySession === id).map((m) => m._id),
+    machines.filter((m) => m.bySession !== undefined && ids.includes(m.bySession)).map((m) => m._id),
   )
   return {
-    browsers: paired.filter((x) => x.bySession === id || (x.byMachine !== undefined && line.has(x.byMachine))).map((x) => x._id),
+    browsers: paired
+      .filter((x) => x._id !== own && ((x.bySession !== undefined && ids.includes(x.bySession)) || (x.byMachine !== undefined && line.has(x.byMachine))))
+      .map((x) => x._id),
     machines: [...line],
   }
 }
@@ -383,7 +394,7 @@ export const leftBehind = query({
     const out = []
     for (const d of displays) {
       if (paired.some((s) => s._id === d.sessionId)) continue
-      const along = alongOf(d.sessionId, paired, machines)
+      const along = alongOf([d.sessionId, ...(d.previousSessions ?? [])], paired, machines)
       if (along.browsers.length || along.machines.length) out.push({ display: d._id, along })
     }
     return out
