@@ -697,6 +697,50 @@ describe('finding a page with the keyboard', () => {
     expect(document.activeElement).toBe(tour)
   })
 
+  test('the result the arrows choose is the field’s to say, to whoever cannot see it, and that nothing matches is said too', async () => {
+    watched['artifacts:list'] = [
+      { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: Date.now(), agent: 'pi', machine: 'here', pending: 0, pinned: false },
+      {
+        id: 'page-2',
+        slug: 'packing',
+        title: 'Packing list',
+        version: 1,
+        updatedAt: Date.now() - 60_000,
+        agent: 'pi',
+        machine: 'here',
+        pending: 0,
+        pinned: false,
+      },
+    ]
+    await start()
+    await key(document, 'k', { ctrlKey: true })
+    const list = host.querySelector('.finder-results')!
+    /** The result the field says is chosen, by the name it points at. */
+    const chosen = () => document.getElementById(field()!.getAttribute('aria-activedescendant') ?? '')
+    expect([field()!.getAttribute('role'), field()!.getAttribute('aria-expanded'), field()!.getAttribute('aria-controls')]).toEqual([
+      'combobox',
+      'true',
+      list.id,
+    ])
+    expect(list.id).not.toBe('')
+    expect(host.querySelector('.finder-panel [role="status"]')!.textContent).toBe('')
+    expect([chosen()?.getAttribute('role'), chosen()?.getAttribute('aria-selected'), chosen()?.querySelector('.finder-result-title')?.textContent]).toEqual([
+      'option',
+      'true',
+      'Plan',
+    ])
+    await key(field()!, 'ArrowDown')
+    expect(document.activeElement).toBe(field())
+    expect([chosen()?.getAttribute('aria-selected'), chosen()?.querySelector('.finder-result-title')?.textContent]).toEqual(['true', 'Packing list'])
+    // Nothing matches: the field points at no result, and the sentence that says so is said aloud
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field()!, 'zebra')
+      field()!.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(field()!.hasAttribute('aria-activedescendant')).toBe(false)
+    expect(host.querySelector('.finder-panel [role="status"]')!.textContent).toBe('No pages match “zebra”')
+  })
+
   test('it is not opened over a dialog, which keeps the keyboard to itself', async () => {
     await start()
     await press('Take the tour')

@@ -1,6 +1,6 @@
 // Finding a page by its name, from anywhere on the site, with the keyboard.
 import { NOUN } from '@it/protocol'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { ago, navigate, useNow } from './lib'
 import { agentName, type Card } from './pages'
 
@@ -10,6 +10,11 @@ export function Finder({ pages, onClose }: { pages: Card[]; onClose: () => void 
   const [shown, setShown] = useState(false)
   const now = useNow()
   const list = useRef<HTMLDivElement>(null)
+  // The keyboard stays in the field while the arrows choose a result, so which result is chosen
+  // is the field's to say, to whoever cannot see the list: it names the list as its own, and the
+  // chosen result in it, by these
+  const id = useId()
+  const named = (p: Card) => `${id}-${p.id}`
   const field = useRef<HTMLInputElement>(null)
   // Where the keyboard was when the finder was opened, noted as it is first drawn: before its field has taken the keyboard
   const [before] = useState(() => (document.activeElement instanceof HTMLElement ? document.activeElement : null))
@@ -64,6 +69,11 @@ export function Finder({ pages, onClose }: { pages: Card[]; onClose: () => void 
             autoFocus
             placeholder={`Find a ${NOUN.one}…`}
             aria-label={`Find a ${NOUN.one}`}
+            role="combobox"
+            aria-expanded="true"
+            aria-controls={`${id}-list`}
+            aria-autocomplete="list"
+            aria-activedescendant={found[active] ? named(found[active]) : undefined}
             autoComplete="off"
             spellCheck={false}
             value={typed}
@@ -80,12 +90,17 @@ export function Finder({ pages, onClose }: { pages: Card[]; onClose: () => void 
             }}
           />
         </div>
-        <div className="finder-results" role="listbox" ref={list}>
-          {found.length === 0 && <div className="finder-empty">{`No ${NOUN.many} match “${typed.trim()}”`}</div>}
+        {/* That nothing matches is said aloud too. Kept here empty while something does: what is put in place with its words already in it is not always said */}
+        <span className="sr-only" role="status">
+          {found.length === 0 ? `No ${NOUN.many} match “${typed.trim()}”` : ''}
+        </span>
+        <div className="finder-results" role="listbox" id={`${id}-list`} aria-label={NOUN.Many} ref={list}>
+          {found.length === 0 && <div className="finder-empty" aria-hidden="true">{`No ${NOUN.many} match “${typed.trim()}”`}</div>}
           {found.map((p, i) => (
             // biome-ignore lint/a11y/useKeyWithClickEvents: the field takes the keys for the whole list
             <div
               key={p.id}
+              id={named(p)}
               className={`finder-result${i === active ? ' finder-result--active' : ''}`}
               role="option"
               tabIndex={-1}
