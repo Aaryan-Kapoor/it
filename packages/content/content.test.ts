@@ -666,8 +666,8 @@ describe('bytes', () => {
     const r = await get(`${at}/v/1/index.html`, DOCUMENT)
     expect(r.status).toBe(200)
     expect(r.text).toContain('<h1>Private page</h1>')
-    // Inside <html>, ahead of everything else, the page's own script included
-    const html = r.text.indexOf('<html>'),
+    // Inside <head>, ahead of everything else, the page's own script included
+    const html = r.text.indexOf('<head>'),
       it = r.text.indexOf('window.__IT__='),
       own = r.text.indexOf('<script src="asset.js">')
     expect(it).toBeGreaterThan(html)
@@ -719,7 +719,7 @@ describe('bytes', () => {
     // Each page as it is sent, with a mark where It is. What a browser does not count as an
     // element (a doctype, comments of every shape, a closing tag, a stray "<") is passed over
     const sent: Record<string, string> = {
-      'doctype.html': '<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en">@<head><script>1</script></head></html>',
+      'doctype.html': '<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en"><head>@<script>1</script></head></html>',
       'quoted.html': `<html data-a="x>y" data-b='<head>' data-c=u/v>@<body><script>1</script></body></html>`,
       'head.html': '<!---><!----><!--a--!><HEAD >@<title>t</title></HEAD>',
       'slash.html': '<html/>@<p>x</p>',
@@ -727,7 +727,7 @@ describe('bytes', () => {
       'closing.html': `</a=b='>@<script>1</script>'><script>2</script>`,
       'named-like.html': '@<htmlx><head></head></htmlx>',
       // A file is read 64 KB at a time: here the first element's tag lies across the end of one piece
-      'across.html': `<!--${'-'.repeat(65_536 - 16)}--><html data-across="${'a>'.repeat(40)}">@<head></head></html>`,
+      'across.html': `<!--${'-'.repeat(65_536 - 16)}--><html data-across="${'a>'.repeat(40)}"><head>@</head></html>`,
       'late.html': `${'words '.repeat(40_000)}@<p>after a quarter of a megabyte</p>`,
       // A tag the page ends in the middle of is thrown away by a browser: It goes before it
       'unclosed-tag.html': 'words @<html lang="en',
