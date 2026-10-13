@@ -5,7 +5,21 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { alone } from './src/serve/backend'
-import { againWith, askToStop, command, environment, given, kept, launchdPlist, runningFor, stopFile, systemdUnit, windowsLauncher } from './src/service'
+import {
+  againWith,
+  askToStop,
+  command,
+  environment,
+  given,
+  kept,
+  launchdPlist,
+  runningFor,
+  stopFile,
+  systemdUnit,
+  windowsLauncher,
+  windowsRemoval,
+  windowsScript,
+} from './src/service'
 
 describe('what a service is given of the shell that registered it', () => {
   test('that the person’s shell is not to be asked is said to the service, which is what would ask it', () => {
@@ -80,6 +94,23 @@ describe('what a registered service was given, read back from its definition', (
       }
     },
   )
+})
+
+describe('taking the task away on Windows', () => {
+  test('only a task that is started in this folder is stopped and taken away: another account’s It, or something else of the person’s that is called `it`, is left as it is', () => {
+    const script = windowsRemoval("C:\\Users\\O'Neil\\.it\\bin\\")
+    // The task is asked for once, and everything that changes it comes after the look at where it is started, inside it
+    const [look, ...rest] = script.split(' { ')
+    expect(look).toBe(
+      "$task = Get-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue; if ($task -and (([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq 'C:\\Users\\O''Neil\\.it\\bin'))",
+    )
+    expect(rest.join(' { ')).toBe(
+      "Stop-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName 'it' -Confirm:$false -ErrorAction SilentlyContinue; if (Get-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue) { 'Windows still has the task'; exit 3 } }",
+    )
+    // However the folder was spelled when it was named here, it is the folder the task was registered with
+    expect(windowsRemoval('C:/Users/Ada/.it/bin')).toContain("-ieq 'C:\\Users\\Ada\\.it\\bin'))")
+    expect(windowsScript('C:\\Users\\Ada\\.it\\bin', 'it-service.cmd')).toContain("-WorkingDirectory 'C:\\Users\\Ada\\.it\\bin'")
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('whether a service is running for a folder', () => {

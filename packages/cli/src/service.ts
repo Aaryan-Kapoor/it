@@ -283,6 +283,19 @@ export function windowsScript(folder: string, launcher: string): string {
   ].join('\n')
 }
 /**
+ * What takes the task away on Windows. A machine has one task of this name, whoever made it:
+ * it may be the It of another account of the machine, or something else of the person's that
+ * happens to be called `it`. Only the task that is started in this folder's `bin`, which is how
+ * `windowsScript` registers It's, is this folder's to stop and take away, and any other is
+ * left exactly as it is. The folder is told from the task's own by its name, whichever way its
+ * slashes lean and whatever the case of its letters, as Windows itself tells folders apart.
+ * Where the task is still there after it was asked to go, that is said, and by how this ends.
+ */
+export function windowsRemoval(folder: string): string {
+  const started = ps(folder.replace(/\//g, '\\').replace(/\\+$/, ''))
+  return `$task = Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue; if ($task -and (([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq ${started})) { Stop-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName ${ps(NAME)} -Confirm:$false -ErrorAction SilentlyContinue; if (Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue) { 'Windows still has the task'; exit 3 } }`
+}
+/**
  * What every script given to PowerShell begins with. PowerShell says how far it has got with
  * what it is doing ("Preparing modules for first use", the first time a person's account runs
  * it) as a block of XML among what it prints, where it has no window to draw that in. Told
@@ -623,12 +636,11 @@ export function uninstall(patience = STOP_MS): void {
   } else if (process.platform === 'win32') {
     // The service is asked to stop and waited for first, as before its task is replaced
     askToStop(home(), patience)
-    // A task that is not there is none to take away, and says nothing. One that is still there
-    // after it was asked to go, which is what a refusal leaves, is said as that: and so is a
-    // Windows that could not be asked at all
-    const out = powershell(
-      `Stop-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName ${ps(NAME)} -Confirm:$false -ErrorAction SilentlyContinue; if (Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue) { 'Windows still has the task'; exit 3 }`,
-    )
+    // A task that is not there is none to take away, and says nothing, and neither does one
+    // that is not this folder's, which is left alone. One that is still there after it was
+    // asked to go, which is what a refusal leaves, is said as that: and so is a Windows that
+    // could not be asked at all
+    const out = powershell(windowsRemoval(path.dirname(windowsLauncherFile())))
     // What it starts stays where it is then: taken away, the task that is still there would start nothing at the next sign-in, with no word of why
     if (!out.ok)
       throw new Error(`the background task could not be taken away${out.out ? ` (${out.out.split('\n')[0]})` : ''}, so what it starts was left where it is`)

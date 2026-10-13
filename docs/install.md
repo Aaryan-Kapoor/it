@@ -58,7 +58,7 @@ From the first run on, It starts by itself, and you do not start it again. The b
 
 - On Linux it is a systemd user unit, `it.service`. `it setup` also asks the system to keep your services running while you are logged out, so that It starts when the computer starts and not only when you log in. Where the system refuses that, It stops when you log out, and `it setup` says so.
 - On macOS it is a launchd agent, `dev.it`, which starts when you log in. It is registered with your login at the Mac's own screen. On a Mac that is reached only over SSH there is no such login to register it with, and `it setup` says that it could not be registered.
-- On Windows it is a scheduled task named `it`, which starts when you log on.
+- On Windows it is a scheduled task named `it`, which starts when you log on. Windows keeps its tasks by name for the whole computer, and It registers its own under that one name, so only one account of a computer can have It start by itself this way. A second account sets It up with `--no-service` and starts `it serve` itself. When It is taken off, only a task that is started in that It's own folder is stopped and removed, and any other task of the name is left as it is.
 
 There is one background service for each user of a computer, under that one name, whatever folder It lives in. Setting It up in a second folder, named with `IT_HOME`, registers the service for that folder in place of the first, unless `--no-service` is given.
 
