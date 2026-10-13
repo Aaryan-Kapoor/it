@@ -560,6 +560,19 @@ async function fateOf(file: string, seen: Seen, opts: { watching?: () => void; s
 }
 
 /**
+ * Whether the process a lock names is running on this machine at this moment: the very one, by
+ * its number and when it was started, for whoever only has to know and takes no lock. On Linux
+ * a lock from before the machine was last started names nothing that runs now. On the other
+ * systems a lock that says another place is gone by its number alone, since what stands for
+ * the place there is the machine's name, which may have been changed while its holder ran.
+ */
+export function holderRuns(lock: Pick<Lock, 'pid' | 'started' | 'where'>): boolean {
+  if (lock.where !== where()) return process.platform !== 'linux' && alive(lock.pid)
+  const started = startOf(lock.pid)
+  return started === undefined || started === lock.started || (started !== null && lock.started === '')
+}
+
+/**
  * Takes a lock: a file only one program can make. Where there is none, making it is all there
  * is to it. One whose holder is gone is never removed, since two programs that both found it
  * left would each remove what the other had just put there. It is replaced, and only by the

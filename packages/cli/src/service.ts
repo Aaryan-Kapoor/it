@@ -13,6 +13,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, write
 import os from 'node:os'
 import path from 'node:path'
 import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
+import { holderRuns } from './serve/backend'
 import { watch, watched } from './upgrade'
 
 const NAME = 'it'
@@ -51,9 +52,29 @@ const alive = (pid: unknown): pid is number => {
     return false
   }
 }
-/** Whether a service is running for an It folder, by what a running one keeps there: the backend's lock, or, on a machine that only joined an It, the connector's note. */
-export const runningFor = (folder: string): boolean =>
-  alive(readJson<{ pid?: unknown }>(path.join(folder, 'backend', 'lock'))?.pid) || alive(readJson<{ pid?: unknown }>(path.join(folder, 'connector.json'))?.pid)
+/**
+ * Whether the process a lock names is running. A number alone does not say so for long: once
+ * the service has died, the number is given to another process, which is then waited for and
+ * never stops. So the lock is asked which process it meant, where it says when that one was
+ * started, as every lock It writes does.
+ */
+const held = (lock: { pid?: unknown; started?: unknown; where?: unknown } | null | undefined): boolean => {
+  const pid = lock?.pid
+  if (!alive(pid)) return false
+  return typeof lock?.started !== 'string' || typeof lock.where !== 'string' || holderRuns({ pid, started: lock.started, where: lock.where })
+}
+/**
+ * Whether a service is running for an It folder, by what a running one keeps there: the
+ * backend's lock, or, on a machine that only joined an It, the connector's note. The note has
+ * the connector's number and nothing else of the process, so the connector's own lock beside
+ * it is what says which process that number was.
+ */
+export const runningFor = (folder: string): boolean => {
+  if (held(readJson(path.join(folder, 'backend', 'lock')))) return true
+  const noted = readJson<{ pid?: unknown }>(path.join(folder, 'connector.json'))?.pid
+  const lock = readJson<{ pid?: unknown }>(path.join(folder, 'connector.lock'))
+  return lock?.pid === noted ? held(lock) : alive(noted)
+}
 const sleep = (ms: number) => void Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 /** How long a service that was asked to stop is waited for before that is said. It is never made to stop. */
 const STOP_MS = 5 * 60_000

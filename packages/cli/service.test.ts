@@ -1,10 +1,11 @@
 // What the background service is given when it is registered, and what is kept of it when it
 // is registered again: checked on the definitions themselves, with no system asked to take one.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { againWith, command, environment, given, kept, launchdPlist, systemdUnit, windowsLauncher } from './src/service'
+import { alone } from './src/serve/backend'
+import { againWith, askToStop, command, environment, given, kept, launchdPlist, runningFor, stopFile, systemdUnit, windowsLauncher } from './src/service'
 
 describe('what a service is given of the shell that registered it', () => {
   test('that the person’s shell is not to be asked is said to the service, which is what would ask it', () => {
@@ -79,4 +80,52 @@ describe('what a registered service was given, read back from its definition', (
       }
     },
   )
+})
+
+describe.skipIf(process.platform === 'win32')('whether a service is running for a folder', () => {
+  test('is told by the very process its lock names, and a number that has come to be another process’s is not waited for', async () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-running-'))
+    const before = process.env.IT_HOME
+    try {
+      process.env.IT_HOME = folder
+      // A lock as It writes one, which says of this very process when it was started and where
+      let mine = { pid: 0, started: '', where: '', holder: '' }
+      await alone('connector', async () => {
+        mine = JSON.parse(readFileSync(path.join(folder, 'connector.lock'), 'utf8'))
+      })
+      expect([mine.pid, typeof mine.started, typeof mine.where]).toEqual([process.pid, 'string', 'string'])
+      mkdirSync(path.join(folder, 'backend'))
+      const [backend, connector, note] = [path.join(folder, 'backend', 'lock'), path.join(folder, 'connector.lock'), path.join(folder, 'connector.json')]
+      // A process that was started at another time under the same number, as one is after the service has died and its number was given out again
+      const another = { ...mine, started: `${mine.started} and later` }
+      for (const [lock, held] of [
+        [mine, true],
+        [another, false],
+      ] as const) {
+        // The service of a machine that runs It, by the backend's lock
+        writeFileSync(backend, JSON.stringify(lock))
+        expect(runningFor(folder)).toBe(held)
+        rmSync(backend)
+        // And of one that only joined an It, by the connector's note, whose lock says which process the note's number was
+        writeFileSync(note, JSON.stringify({ pid: lock.pid, token: 'x', version: 'x', startedAt: 0 }))
+        writeFileSync(connector, JSON.stringify(lock))
+        expect(runningFor(folder)).toBe(held)
+        rmSync(note)
+        rmSync(connector)
+      }
+      // What is left of a service that is gone is not asked to stop, and nothing is waited for
+      writeFileSync(backend, JSON.stringify(another))
+      writeFileSync(note, JSON.stringify({ pid: another.pid, token: 'x', version: 'x', startedAt: 0 }))
+      writeFileSync(connector, JSON.stringify(another))
+      askToStop(folder, 50)
+      expect(existsSync(stopFile(folder))).toBe(false)
+      // A note with no lock beside it to say which process it meant is gone by as it always was: by its number alone
+      rmSync(connector)
+      expect(runningFor(folder)).toBe(true)
+    } finally {
+      if (before === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
 })
