@@ -1,9 +1,9 @@
 // What the background service is given when it is registered, and what is kept of it when it
 // is registered again: checked on the definitions themselves, with no system asked to take one.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { alone } from './src/serve/backend'
 import {
   againWith,
@@ -11,6 +11,7 @@ import {
   command,
   environment,
   given,
+  install,
   kept,
   launchdPlist,
   runningFor,
@@ -94,6 +95,48 @@ describe('what a registered service was given, read back from its definition', (
       }
     },
   )
+})
+
+describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('registering the service again on a Mac', () => {
+  test('where the new definition cannot be written, the service that is running is left running: launchd is told nothing until the definition is there', () => {
+    const user = mkdtempSync(path.join(os.tmpdir(), 'it-launchd-'))
+    const before = { home: process.env.IT_HOME, PATH: process.env.PATH, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(user)
+    const agents = path.join(user, 'Library', 'LaunchAgents')
+    try {
+      // What stands in for launchd's own command notes each thing it is asked
+      const commands = path.join(user, 'commands')
+      const asked = path.join(user, 'launchctl-was-asked')
+      mkdirSync(commands)
+      writeFileSync(path.join(commands, 'launchctl'), `#!/bin/sh\necho "$1" >> '${asked}'\n`, { mode: 0o755 })
+      const told = () => (existsSync(asked) ? readFileSync(asked, 'utf8').trim().split('\n') : [])
+      process.env.IT_HOME = path.join(user, '.it')
+      process.env.PATH = `${commands}:/usr/bin:/bin`
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+      // A service is registered, and running
+      mkdirSync(agents, { recursive: true })
+      const definition = path.join(agents, 'dev.it.plist')
+      writeFileSync(definition, launchdPlist(command(), { PATH: '/an/earlier/path' }))
+      // The folder its definition is in takes no new file, as a disk that is full takes none
+      chmodSync(agents, 0o555)
+      expect(() => install()).toThrow(/EACCES|EPERM/)
+      expect(told()).toEqual([])
+      expect(readFileSync(definition, 'utf8')).toContain('/an/earlier/path')
+      // Once it can be written, the old one is taken out of launchd and the new one given to it, in that order
+      chmodSync(agents, 0o755)
+      install()
+      expect(told().slice(0, 2)).toEqual(['bootout', 'bootstrap'])
+      expect(readFileSync(definition, 'utf8')).not.toContain('/an/earlier/path')
+    } finally {
+      chmodSync(agents, 0o755)
+      homedir.mockRestore()
+      Object.defineProperty(process, 'platform', before.platform)
+      process.env.PATH = before.PATH
+      if (before.home === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before.home
+      rmSync(user, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('taking the task away on Windows', () => {

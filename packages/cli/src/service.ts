@@ -582,8 +582,12 @@ export function install(): ServiceStatus {
     } catch {}
   } else if (process.platform === 'darwin') {
     mkdirSync(path.dirname(plistPath()), { recursive: true })
-    run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`])
+    // The definition is written before the service that is running is taken out of launchd.
+    // launchd reads a definition only when it is given one, so writing it changes nothing of
+    // what runs, and where it cannot be written, as on a disk that is full, the service that
+    // was running goes on running under the definition that is still there
     writeDefinition(plistPath(), launchdPlist(cmd, env))
+    run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`])
     must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'loading the agent')
   } else if (process.platform === 'win32') {
     // Windows ends a task's programs outright, with no word to the service that it is to
