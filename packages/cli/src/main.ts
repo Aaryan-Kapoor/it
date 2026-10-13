@@ -89,7 +89,7 @@ import {
   withoutTables,
   written,
 } from './lib'
-import { login, runsItsOwn } from './login'
+import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { gather, noteConversation, publish } from './publish'
 import { alone, asAdmin, standing, startBackend } from './serve/backend'
@@ -2094,6 +2094,7 @@ async function joinedInstead(a: Args): Promise<boolean> {
         const done = await login(asked)
         flow.line()
         flow.line(`${flow.green('✓')} ${'Joined'.padEnd(20)} ${flow.dim(`as “${done.name}”`)}`)
+        if (done.waitsFor !== undefined) flow.line(flow.dim(joinedBefore(done.waitsFor)))
         return true
       } catch (err) {
         if (!(err instanceof Problem)) throw err
@@ -2993,6 +2994,7 @@ async function main(argv: string[]): Promise<void> {
         return login(asked)
       }).catch(said)
       say(`\nThis machine has joined as "${done.name}".`)
+      if (done.waitsFor !== undefined) say(joinedBefore(done.waitsFor))
       // The key just made is in It's folder. In a person's own profile that is theirs alone. A
       // folder they named instead is as private as they made it, on Windows, where a file has
       // its folder's permissions and this program cannot give it others.

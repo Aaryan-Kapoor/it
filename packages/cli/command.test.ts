@@ -3459,6 +3459,31 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
     }
   })
 
+  test('`it login` says after joining which earlier machine still holds the pages only when the answer names one', async () => {
+    for (const waitsFor of [undefined, 'the earlier laptop']) {
+      const m = machine(false)
+      const b = await backend(
+        m,
+        () => null,
+        () => [200, { machine: 'machine-2', ...(waitsFor === undefined ? {} : { waitsFor }) }],
+      )
+      try {
+        const ran = await run(m, ['login', '--url', b.url, '--code', 'Ab3dEf6hIj9kLm2nOp5q', '--name', 'this laptop', '--no-setup'])
+        expect([ran.code, printed(ran)]).toEqual([0, { machine: 'machine-2', name: 'this laptop' }])
+        expect(ran.err.trim().split('\n')).toEqual([
+          'This machine has joined as "this laptop".',
+          ...(waitsFor === undefined
+            ? []
+            : [
+                'This computer joined before as "the earlier laptop", which is still among your machines, and the pages it made then stay with that one. Revoke "the earlier laptop" on the site\'s Machines page and they come to this computer.',
+              ]),
+        ])
+      } finally {
+        await b.close()
+      }
+    }
+  })
+
   test('`it login` joins nothing where that It and this program speak different versions of how machines talk to It, and says which of the two to update', async () => {
     // What stands for an It of another version: it says so where a machine first asks it anything
     const versions = async (protocol: number) => {
