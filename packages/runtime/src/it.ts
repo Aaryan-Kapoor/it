@@ -187,12 +187,17 @@ function hello(attempt = 0): void {
 
 // A page that sits still asks for nothing, and its showing would run out. Asking this keeps it,
 // and a refusal means it is over: the site is told, and shows the page again.
+// The address is given as a path, and it holds the showing's token. It is made whole here, from
+// where this document was shown from, before anything of the page's own has been read: a page
+// may name another site in a <base>, and a path asked for after that would be asked of that
+// site, token and all.
+const keepAt = new URL(config.keep, window.location.href).href
 let lapsed = false
 function keep(): void {
   // Asked whether or not the tab is showing: a tab the person has switched away from for a
   // while should still be as they left it when they come back
   if (lapsed) return
-  fetch(config.keep, { cache: 'no-store' }).then(
+  fetch(keepAt, { cache: 'no-store' }).then(
     (r) => {
       if (r.status !== 401 || lapsed) return
       lapsed = true

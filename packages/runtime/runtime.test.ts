@@ -33,7 +33,8 @@ function load(html = '', before: (w: any) => void = () => {}) {
   w.__IT__ = { app: APP, id: 'plan', version: 3, keep: KEEP }
   w.parent.postMessage = (m: unknown, origin: string) => origin === APP && hellos.push(m)
   w.fetch = async (url: string, init: unknown) => {
-    fetched.push({ url, init })
+    // Written down as the address a browser would ask at: what it is given, read against what the page says its addresses begin with
+    fetched.push({ url: new w.URL(url, w.document.baseURI).href, init })
     return { status: page.keepStatus }
   }
   before(w)
@@ -218,12 +219,22 @@ describe('the script inside a page', () => {
     Object.defineProperty(p.w.document, 'visibilityState', { configurable: true, get: () => 'hidden' })
     await p.advance(180_000)
     // At the address it was told, which holds its showing's token, and with nothing of the browser's sent along
-    expect(p.fetched).toEqual([{ url: KEEP, init: { cache: 'no-store' } }])
+    expect(p.fetched).toEqual([{ url: `http://content.test${KEEP}`, init: { cache: 'no-store' } }])
     expect(port.sent).toEqual([])
     p.page.keepStatus = 401
     await p.advance(180_000)
     await p.advance(180_000)
     expect(port.sent).toEqual([{ type: 'it:lapsed' }])
+  })
+
+  test('a page that names another site as where its addresses begin still asks at its own, where its showing is', async () => {
+    // The address it asks at holds the showing's token, which is for the service that showed the page and for nobody else
+    const p = load('<base href="https://elsewhere.invalid/assets/">')
+    expect(p.w.document.baseURI).toBe('https://elsewhere.invalid/assets/')
+    p.w.document.dispatchEvent(new p.w.Event('visibilitychange'))
+    p.w.dispatchEvent(new p.w.Event('online'))
+    await p.advance(180_000)
+    expect(p.fetched.map((f) => f.url)).toEqual(Array(3).fill(`http://content.test${KEEP}`))
   })
 
   test('what the page’s own script fails with is said to the site, the first few times, and a picture that did not load is not', async () => {

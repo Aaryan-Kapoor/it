@@ -1,7 +1,7 @@
-// The content service's tests, with no browser: what a stranger, a script, or a confused client
-// would send. The service is called as the door calls it, with each request, the port it came
-// in on and the address it came from. The backend is stood in for by a key pair whose public
-// half is served the way the backend serves it.
+// The content service's tests, with no browser but in the last group: what a stranger, a
+// script, or a confused client would send. The service is called as the door calls it, with
+// each request, the port it came in on and the address it came from. The backend is stood in
+// for by a key pair whose public half is served the way the backend serves it.
 
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -13,6 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pipeline, Readable } from 'node:stream'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
+import { type Browser, type BrowserType, chromium, firefox } from 'playwright'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { type Asked, type ContentSettings, createContent, pagePolicy } from './src/index'
 import { limit } from './src/limits'
@@ -2663,4 +2664,81 @@ describe('behind a real server', () => {
     await dropped.body!.cancel()
     expect((await fetch(`${at}/v/1/film.mp4`, { headers: { range: 'bytes=0-0' } })).status).toBe(206)
   })
+})
+
+// The one group that has a browser in it. What a page is sent is what the service sends, and
+// what the browser asks for in return is handed to the service, or, when it is for anywhere
+// else, written down and answered with nothing: no request leaves the browser. The browsers
+// are run where Playwright has them installed, and under Node, which is what Playwright runs under.
+const installed = (type: BrowserType) => {
+  try {
+    return !('Bun' in globalThis) && existsSync(type.executablePath())
+  } catch {
+    return false
+  }
+}
+const BROWSERS = [
+  ['Chromium', chromium],
+  ['Firefox', firefox],
+] as const
+for (const [name, type] of BROWSERS) {
+  const why = 'Bun' in globalThis ? 'Playwright, which runs the browser, does not run under Bun' : `Playwright has no ${name} installed on this machine`
+  if (!installed(type)) console.log(`  skip  the tests of where a page in ${name} sends its showing’s token: ${why}`)
+}
+describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
+  ownService()
+  /** The name the pages' port is reached by here, which is no machine's. */
+  const HOST = 'pages.invalid'
+  const OWN = `http://${HOST}:${PAGES}`
+  let browser: Browser
+  // A browser is slow to start on a machine that is busy
+  beforeAll(async () => {
+    if (installed(type)) browser = await type.launch({ timeout: 0 })
+  }, 300_000)
+  afterAll(() => browser?.close())
+
+  test.skipIf(!installed(type))(
+    'a page that takes its addresses from another site still keeps its showing at its own, and that site is asked for nothing that holds the showing’s token',
+    async () => {
+      const prefix = `u/${USER}/based/1/`
+      // A page that takes what it is made of from another site, as a page may: every address in
+      // it is read from there, and what it links to is opened in a window of its own
+      await seedFiles(prefix, {
+        'index.html':
+          '<!doctype html><html><head><base href="http://elsewhere.invalid/assets/" target="_blank"><script src="app.js"></script></head>' +
+          '<body><img src="logo.png"><a id="out" href="next.html">next</a><form id="ask"><input name="q" value="x"></form></body></html>',
+      })
+      const { at, token } = await open({ p: prefix, a: 'based', s: 'based' })
+      const context = await browser.newContext()
+      /** Everything the browser asked for: where, and what it said with it. */
+      const asked: { url: string; said: Record<string, string> }[] = []
+      await context.route('**/*', async (route) => {
+        const url = new URL(route.request().url())
+        asked.push({ url: url.href, said: route.request().headers() })
+        if (url.origin !== OWN) return route.fulfill({ status: 404, body: '' })
+        const r = await show(`${url.pathname}${url.search}`, { host: HOST, headers: route.request().headers() })
+        await route.fulfill({ status: r.status, headers: Object.fromEntries(r.headers), body: r.buf })
+      })
+      const tab = await context.newPage()
+      tab.setDefaultTimeout(120_000)
+      await tab.goto(`${OWN}${at}/v/1/index.html`, { waitUntil: 'load' })
+      const urls = () => asked.map((a) => a.url)
+      // The page's own addresses are read from the other site, as it said
+      expect(urls()).toEqual(expect.arrayContaining(['http://elsewhere.invalid/assets/app.js', 'http://elsewhere.invalid/assets/logo.png']))
+      // It asks to keep its showing where it was shown from, which is the one place the token is for
+      await tab.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+      await expect.poll(() => urls().filter((url) => url.endsWith('/__it/keep')), { timeout: 60_000 }).toEqual([`${OWN}${at}/__it/keep`])
+      // A link, which opens in a window of its own, and a form that names nowhere to go, which goes to the page's own address
+      await Promise.all([context.waitForEvent('page'), tab.click('#out')])
+      await expect.poll(urls, { timeout: 60_000 }).toContain('http://elsewhere.invalid/assets/next.html')
+      await Promise.all([context.waitForEvent('page'), tab.evaluate(() => (document.getElementById('ask') as HTMLFormElement).submit())])
+      await expect.poll(urls, { timeout: 60_000 }).toContain(`${OWN}${at}/v/1/index.html?q=x`)
+      // Of everything asked of anywhere else, nothing holds the token: not the address, and not what was said with it
+      const elsewhere = asked.filter((a) => !a.url.startsWith(`${OWN}/`))
+      expect(elsewhere.length).toBeGreaterThanOrEqual(3)
+      expect(elsewhere.filter((a) => JSON.stringify(a).includes(token))).toEqual([])
+      await context.close()
+    },
+    300_000,
+  )
 })
