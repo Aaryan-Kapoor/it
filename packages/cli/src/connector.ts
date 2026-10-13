@@ -638,6 +638,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       markTimers.add(timer)
     }
     const line = (tried: number) => {
+      // Not into an app the person has disconnected since: what the mark stood for stays as it is, for a hook of the app once it is connected again
+      if (!chosen(harness)) return
       void again()
         .catch(() => 'it could not be sent')
         .then((refused) => {
@@ -654,6 +656,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     const wait = () =>
       after(MARK_ASKED_MS, () => {
+        if (!chosen(harness)) return
         unmarked.add(key)
         say(`${who} was given a mark and none of its hooks said it had what the mark stood for; it is given the short line now, and from here on`)
         line(0)
@@ -1893,6 +1896,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
         else marked.delete(key)
         return [200, { ok: true }]
       }
+      // A hook of an app the person has disconnected is handed nothing, as its add-on is given
+      // no clicks, and nor is any hook by a machine that hands nothing over. What the marks
+      // stood for is kept as it is.
+      if (!chosen(harness) || unfitting || closing) return [200, { ok: true, marks: [], texts: [] }]
       // For a turn the person started with a message of their own, only what has waited past
       // its time is handed over: a mark's own turn is still to come, and has first claim
       const due = (marked.get(key) ?? []).filter((m) => body.own !== true || Date.now() - m.at > MARK_ASKED_MS)

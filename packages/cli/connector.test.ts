@@ -1934,6 +1934,30 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.t3.sent[2]).toEqual({ thread: 't3-thread-k', text: '[It] "A page" (page-11): approve, with details [action click-11-next]' })
   })
 
+  test('once the person has disconnected the app, no hook of it is handed what a mark stood for, and no short line follows the mark', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-13', 't3-thread-m')
+    standIn(true)
+    await start()
+    await heard(13)
+    offered(click(13))
+    for (let i = 0; i < 5 && stand.t3.sent.length < 1; i++) await pass()
+    expect(stand.t3.sent).toEqual([{ thread: 't3-thread-m', text: MARK }])
+    await until(() => called('delivery:handedOff').includes('click-13'))
+    offered()
+    expect(await behindMarks(13)).toEqual([inFull(13)])
+    // The person disconnects Codex before any hook has said that it has it
+    stand.watching.get('machines:me')!({ wanted: [] })
+    await settled()
+    expect(await behindMarks(13)).toEqual([])
+    await pass(25)
+    expect(stand.t3.sent.length).toBe(1)
+    // Connected again, the next hook of the conversation is handed it after all
+    stand.watching.get('machines:me')!({ wanted: ['codex'] })
+    await settled()
+    expect(await behindMarks(13)).toEqual([inFull(13)])
+  })
+
   test('where the short line is not taken either, it is tried again, and what the mark stood for is kept for a hook all the while', async () => {
     withT3Code()
     stand.t3.threads.set('thread-12', 't3-thread-l')
