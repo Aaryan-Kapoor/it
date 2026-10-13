@@ -1482,6 +1482,19 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     expect((await clicksFor('pi', 5))?.clicks.map((c) => c.id)).toEqual(['click-5'])
   })
 
+  test('a click an add-on was given and has not said it has is given to it again at once under the id its conversation carries on with', async () => {
+    await start()
+    await session('pi', 6)
+    offered(click('pi', 6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    // Given, and waiting to go in with a command's result when the person clears the conversation
+    expect((await clicksFor('pi', 6))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+    expect(await session('pi', 60, { was: 'conversation-6' })).toEqual({ ok: true })
+    // It asks under the new id, and is not kept waiting until the hold under the old one has run out
+    expect((await clicksFor('pi', 60))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+    expect(called('delivery:release')).toEqual([])
+  })
+
   test('a click held for an add-on goes back to waiting when the person disconnects its app, and Codex’s command is not run for one that stood in line', async () => {
     await start()
     await session('pi', 6)

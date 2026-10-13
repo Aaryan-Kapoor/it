@@ -2004,6 +2004,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // Whatever led to the old id leads straight to the new one, so no chain grows
         for (const [from, to] of aliases) if (to === was) aliases.set(from, key)
         aliases.set(was, key)
+        // And whatever is kept here for the conversation under its old id is kept for it under
+        // the new one: a click it was given and has not said it has, which it now asks for
+        // by the new id and would not be given again until its hold ran out; and what a mark
+        // put into it stands for
+        for (const h of held.values()) if (h.key === was) h.key = key
+        for (const b of behindTurn.values()) if (b.key === was) b.key = key
+        const kept = marked.get(was)
+        if (kept) {
+          marked.delete(was)
+          marked.set(key, [...(marked.get(key) ?? []), ...kept])
+        }
         while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
         changed = true
       }
