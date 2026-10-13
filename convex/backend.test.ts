@@ -738,6 +738,34 @@ describe('what a paired screen may do, and what it may not', () => {
     expect(await s.query(api.displays.signOutConfirmed, { job })).toBe(false)
   })
 
+  test('a screen that registers where there are as many displays as there may be makes room only by letting go of a display of its own', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    await vi.advanceTimersByTimeAsync(7000)
+    const screen = await paired(t, 'alice', 'screen', key)
+    for (let i = 3; i <= QUOTA.displays; i++) {
+      await vi.advanceTimersByTimeAsync(7000)
+      await alice.browser.mutation(api.displays.register, { key: `alice-extra-key-${String(i).padStart(4, '0')}`, userAgent: 'x' })
+    }
+    // None of them has been open for ten minutes, and nobody named any or turned notifications on for it: each is one that would be let go
+    await vi.advanceTimersByTimeAsync(11 * 60_000)
+    const displays = async () => (await alice.browser.query(api.displays.list, {})).map((d) => d.id)
+    const before = await displays()
+    expect(before.length).toBe(QUOTA.displays)
+    // A screen with no display of its own has none to let go, and is refused as it would be were every display in use
+    const another = await browserOf(t, 'alice', 'screen')
+    expect(await code(another.browser.mutation(api.displays.register, { key: 'alice-screen-key-002', userAgent: 'x' }))).toBe('limit')
+    await settle(t)
+    expect(await displays()).toEqual(before)
+    expect(content.calls.filter((c) => c.op === 'revoke')).toEqual([])
+    // One that has a display lets go of that one, though the owner's own has gone longer unopened
+    expect(await code(screen.browser.mutation(api.displays.register, { key: 'alice-screen-key-003', userAgent: 'x' }))).toBe('ok')
+    await settle(t)
+    const after = await displays()
+    expect([after.length, after.includes(alice.display.id), after.includes(screen.display.id)]).toEqual([QUOTA.displays, true, false])
+    expect(content.calls.filter((c) => c.op === 'revoke').map((c) => c.body.displayId)).toEqual([screen.display.id])
+  })
+
   test('a screen is refused whatever changes what the person has, or says what else they have, and nothing comes of its asking', async () => {
     const { t, alice, m, p, screen, s } = await household()
     const before = await t.run(async (ctx) =>

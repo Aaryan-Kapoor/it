@@ -57,7 +57,8 @@ const view = (d: Doc<'displays'>) => ({
 export const register = mutation({
   args: { key: v.string(), userAgent: v.string() },
   handler: async (ctx, { key, userAgent }) => {
-    const { user, session } = await requireBrowser(ctx)
+    const c = await requireBrowser(ctx)
+    const { user, session } = c
     if (!KEY.test(key)) fail('invalid', 'That is not a display key.')
     const existing = await ctx.db
       .query('displays')
@@ -105,10 +106,14 @@ export const register = mutation({
       // gave a name or turned notifications on for and that is not open now (it has not been
       // for ten minutes), and failing that any display that has not been open for a month.
       // Such a browser loses nothing: if it comes back still paired, it is simply registered again.
+      // The one to go is one the caller may act for, which for a screen is a display of its own
+      // and no other: letting a display go signs it out, and a screen that could make room among
+      // all of them would sign out the owner's by registering itself anew.
       const leastRecent = (of: typeof mine) => of.reduce((a, b) => (a.lastSeenAt <= b.lastSeenAt ? a : b))
-      const passing = mine.filter((d) => !d.name && !d.push && now - d.lastSeenAt > 600_000)
-      const oldest = leastRecent(mine)
-      const going = passing.length ? leastRecent(passing) : now - oldest.lastSeenAt >= 30 * 86_400_000 ? oldest : null
+      const itsOwn = mine.filter((d) => speaksFor(c, d))
+      const passing = itsOwn.filter((d) => !d.name && !d.push && now - d.lastSeenAt > 600_000)
+      const oldest = itsOwn.length ? leastRecent(itsOwn) : null
+      const going = passing.length ? leastRecent(passing) : oldest && now - oldest.lastSeenAt >= 30 * 86_400_000 ? oldest : null
       if (!going) quota(mine.length, QUOTA.displays, 'displays', user._id)
       else {
         await signOutDisplay(ctx, going)
