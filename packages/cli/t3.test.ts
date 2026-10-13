@@ -1,7 +1,8 @@
 // What It makes of T3 Code's own account of its server and its threads: which server is asked,
 // which threads are looked into first for a conversation, and which thread is the conversation's.
 // The asking and the sending themselves need a T3 Code that is running, and are tried against one.
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
@@ -147,6 +148,78 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     } finally {
       found.close()
       none.close()
+    }
+  })
+
+  test('is asked of the server itself, though the environment names a proxy for everything', async () => {
+    const found = await server({ 'thread-a': 'conversation-1' })
+    // A proxy that would see the session and every answer, were anything sent its way
+    let through = 0
+    const proxy = http.createServer((_req, res) => {
+      through++
+      res.writeHead(502).end()
+    })
+    proxy.on('connect', (_req, socket) => {
+      through++
+      socket.destroy()
+    })
+    await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r))
+    const named = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'NO_PROXY', 'no_proxy']
+    const before = Object.fromEntries(named.map((name) => [name, process.env[name]]))
+    for (const name of named.slice(0, 5)) process.env[name] = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`
+    delete process.env.NO_PROXY
+    delete process.env.no_proxy
+    try {
+      expect(await t3ThreadOf(found.t3, of)).toBe('thread-a')
+      expect(through).toBe(0)
+    } finally {
+      for (const name of named) {
+        if (before[name] === undefined) delete process.env[name]
+        else process.env[name] = before[name]
+      }
+      proxy.close()
+      found.close()
+    }
+  })
+
+  // Bun is what the standalone program runs under, and takes a proxy named as it starts for
+  // every request it makes by itself, one to this machine included. So the same is asked by a
+  // program started under Bun with a proxy named, where Bun is here to start one.
+  const bun =
+    'Bun' in globalThis
+      ? process.execPath
+      : (process.env.PATH ?? '')
+          .split(path.delimiter)
+          .map((folder) => path.join(folder, 'bun'))
+          .find((file) => existsSync(file))
+  test.skipIf(!bun)('and so it is by the standalone program’s runtime, with a proxy named as it starts', async () => {
+    const found = await server({ 'thread-a': 'conversation-1' })
+    let through = 0
+    const proxy = http.createServer((_req, res) => {
+      through++
+      res.writeHead(502).end()
+    })
+    await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r))
+    const named = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`
+    const asks = path.join(scratch, 'asks.ts')
+    writeFileSync(
+      asks,
+      `import { t3ThreadOf } from ${JSON.stringify(path.join(__dirname, 'src', 't3.ts'))}
+       console.log(JSON.stringify(await t3ThreadOf(${JSON.stringify(found.t3)}, ${JSON.stringify(of)})))`,
+    )
+    try {
+      const said = await new Promise<string>((resolve) =>
+        execFile(
+          bun!,
+          [asks],
+          { env: { PATH: process.env.PATH, HOME: scratch, HTTP_PROXY: named, http_proxy: named, ALL_PROXY: named }, timeout: 30_000 },
+          (_err, out) => resolve(String(out).trim()),
+        ),
+      )
+      expect([said, through]).toEqual(['"thread-a"', 0])
+    } finally {
+      proxy.close()
+      found.close()
     }
   })
 

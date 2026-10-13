@@ -46,7 +46,7 @@ The door answers only to the machine's own names and addresses. A request that n
 
 ### What It asks of itself goes to itself
 
-The `it` command, the connector and the service ask It's own backend and its own door for everything they do. None of those requests goes through a proxy that the environment names, with `HTTP_PROXY`, `HTTPS_PROXY` or a variable like them, so a key or a token that It sends to itself is never handed to a proxy. The one request It does send through such a proxy is the download of the backend program.
+The `it` command, the connector and the service ask It's own backend and its own door for everything they do. None of those requests goes through a proxy that the environment names, with `HTTP_PROXY`, `HTTPS_PROXY` or a variable like them, so a key or a token that It sends to itself is never handed to a proxy. The same holds for what the connector asks of T3 Code on the same machine, where a click is put to a thread there. The one request It does send through such a proxy is the download of the backend program.
 
 ### What is on the disk is yours alone
 

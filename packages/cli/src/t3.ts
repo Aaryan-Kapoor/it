@@ -25,7 +25,7 @@ import { randomUUID } from 'node:crypto'
 import { readlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { readJson } from './lib'
+import { direct, directWebSocket, readJson } from './lib'
 
 /** The version of T3 Code's own protocol that this speaks. A server that speaks another refuses, and the click goes the way it went before. */
 const PROTOCOL = '2'
@@ -114,13 +114,18 @@ function issued(t3: T3): Promise<string | undefined> {
   })
 }
 
-/** Asks the server one thing over HTTP, as It's session. Nothing where it could not be asked or refused. */
+/**
+ * Asks the server one thing over HTTP, as It's session. Nothing where it could not be asked or
+ * refused. Asked on a connection of this program's own, as It's own backend is: the server is
+ * on this machine, and a proxy named in the environment would otherwise be handed the session
+ * and everything said under it.
+ */
 async function ask<T>(t3: T3, method: 'GET' | 'POST', pathname: string): Promise<T | undefined> {
   for (let tried = 0; tried < 2; tried++) {
     const token = await issued(t3)
     if (!token) return undefined
     try {
-      const answer = await fetch(`${t3.origin}${pathname}`, {
+      const answer = await direct(`${t3.origin}${pathname}`, {
         method,
         headers: { authorization: `Bearer ${token}`, 'x-t3-orchestration-protocol': PROTOCOL },
         signal: AbortSignal.timeout(ANSWER_MS),
@@ -240,7 +245,8 @@ export async function t3Send(t3: T3, thread: string, text: string): Promise<stri
     }
     const timer = setTimeout(() => end('T3 Code did not answer in time'), ANSWER_MS)
     try {
-      socket = new WebSocket(at)
+      // Opened to the server itself, whatever proxy the environment names: it carries the message
+      socket = new (directWebSocket())(at)
     } catch {
       return end('T3 Code could not be reached')
     }
