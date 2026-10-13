@@ -1,15 +1,17 @@
 // A newer It: learning that one is out, and putting it in place of the one that is here. A
 // stand-in for the place releases are kept is on this machine, laid out as a release is, and
 // what stands for the program is a script that says its version as the program does.
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { newer } from '@it/protocol'
+import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { type Problem, VERSION } from './src/lib'
-import { alone } from './src/serve/backend'
+import { aloneAt } from './src/serve/backend'
 import { fetchNewer, keepBase, LOOKS_EVERY_MS, latest, programName, releases, watch, watched, watching } from './src/upgrade'
 
 describe('which version is newer', () => {
@@ -188,8 +190,8 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
       program: here(),
       say: (line) => {
         if (!line.startsWith('Downloaded')) return
-        // Another update has the folder to itself at this moment, and takes a while to put 9.9.9 in place
-        other = alone('upgrade', async () => {
+        // Another update has this program to itself at this moment, and takes a while to put 9.9.9 in place.
+        other = aloneAt(`${here()}.upgrade.lock`, async () => {
           await new Promise((resolve) => setTimeout(resolve, 700))
           writeFileSync(here(), says('9.9.9'), { mode: 0o755 })
           finished = true
@@ -200,6 +202,91 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     await other
     expect(done).toMatchObject({ to: '9.9.9' })
     expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
+  })
+
+  test.each(['its own path', 'a linked folder'])('two data folders share one update lock for a program reached through %s', async (through) => {
+    const homes = ['newer-home', 'older-home'].map((name) => path.join(folder, name))
+    for (const home of homes) mkdirSync(home)
+    const linked = path.join(folder, 'linked-bin')
+    symlinkSync(path.dirname(here()), linked, 'dir')
+    const otherProgram = through === 'a linked folder' ? path.join(linked, 'it') : here()
+    const worker = path.join(folder, 'updater.mjs')
+    await build({
+      stdin: {
+        contents: `
+          import child from 'node:child_process'
+          import { writeFileSync } from 'node:fs'
+          import { syncBuiltinESMExports } from 'node:module'
+          import path from 'node:path'
+          const execFile = child.execFile
+          child.execFile = (file, args, options, done) => {
+            const candidate = path.basename(file).startsWith('.it-upgrade-')
+            if (!candidate) writeFileSync(path.join(process.env.IT_HOME, 'attempted'), '')
+            return execFile(file, args, options, (...answer) => {
+              done(...answer)
+              if (candidate) setImmediate(() => writeFileSync(path.join(process.env.IT_HOME, 'validated'), ''))
+            })
+          }
+          syncBuiltinESMExports()
+          const { fetchNewer } = await import('./src/upgrade')
+          console.log(JSON.stringify(await fetchNewer({ program: process.argv[2] })))
+        `,
+        resolveDir: __dirname,
+        loader: 'ts',
+      },
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      target: 'node22',
+      outfile: worker,
+      banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
+      loader: { '.md': 'text', '.txt': 'text' },
+      logLevel: 'silent',
+    })
+    const runs: Promise<{ code: number | null; out: string; err: string }>[] = []
+    const run = (home: string, program: string) => {
+      const child = spawn(process.execPath, [worker, program], {
+        env: { ...process.env, IT_HOME: home },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let out = ''
+      let err = ''
+      child.stdout.on('data', (bytes) => (out += bytes))
+      child.stderr.on('data', (bytes) => (err += bytes))
+      const ended = new Promise<{ code: number | null; out: string; err: string }>((resolve, reject) => {
+        child.once('error', reject)
+        child.once('close', (code) => resolve({ code, out, err }))
+      })
+      runs.push(ended)
+      return ended
+    }
+    const until = async (file: string) => {
+      for (const end = Date.now() + 10_000; !existsSync(file); ) {
+        if (Date.now() >= end) throw new Error(`the updater did not reach ${path.basename(file)}`)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+    }
+    writeFileSync(here(), `${says(VERSION)}: > "$IT_HOME/probing"\nwhile [ ! -f "$IT_HOME/release" ]; do sleep 0.02; done\n`)
+    try {
+      const newer = run(homes[0]!, here())
+      await until(path.join(homes[0]!, 'probing'))
+      release('9.9.8')
+      const older = run(homes[1]!, otherProgram)
+      // The candidate's callback has run and its continuations have had their turn. An updater
+      // with a separate lock has started its destination probe by then, and is held there too.
+      await until(path.join(homes[1]!, 'validated'))
+      const bothProbed = existsSync(path.join(homes[1]!, 'attempted'))
+      if (bothProbed) await until(path.join(homes[1]!, 'probing'))
+      writeFileSync(path.join(homes[0]!, 'release'), '')
+      const first = await newer
+      writeFileSync(path.join(homes[1]!, 'release'), '')
+      const second = await older
+      expect([first.code, first.err, second.code, second.err]).toEqual([0, '', 0, ''])
+      expect([bothProbed, JSON.parse(first.out).to, JSON.parse(second.out).to, readFileSync(here(), 'utf8')]).toEqual([false, '9.9.9', '9.9.9', says('9.9.9')])
+    } finally {
+      for (const home of homes) writeFileSync(path.join(home, 'release'), '')
+      await Promise.allSettled(runs)
+    }
   })
 
   test('is not fetched at all where this is the newest there is', async () => {

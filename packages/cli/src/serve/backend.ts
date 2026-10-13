@@ -694,12 +694,17 @@ async function takeLock(
  * and taken as the backend's is.
  */
 export async function alone<T>(what: string, run: () => Promise<T>, forMs = 120_000): Promise<T> {
+  return aloneAt(inHome(`${what}.lock`), run, forMs)
+}
+
+/** Does one thing at a time under a lock whose location follows what is being changed. */
+export async function aloneAt<T>(file: string, run: () => Promise<T>, forMs = 120_000): Promise<T> {
   const until = Date.now() + forMs
   let held: Held
   for (;;) {
     try {
-      held = await takeLock(inHome(`${what}.lock`), {
-        taken: () => new Problem('Another `it` command is doing the same thing for this folder, and has not finished.', 'busy', 'Try again in a moment.'),
+      held = await takeLock(file, {
+        taken: () => new Problem('Another `it` command is doing the same thing, and has not finished.', 'busy', 'Try again in a moment.'),
       })
       break
     } catch (err) {

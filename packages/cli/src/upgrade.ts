@@ -15,11 +15,11 @@
 // matches its checksum, that starts on this system, and that says of itself that it is newer.
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, realpathSync, renameSync, rmSync, writeSync } from 'node:fs'
 import path from 'node:path'
 import { INSTALL, newer } from '@it/protocol'
 import { ask, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
-import { alone } from './serve/backend'
+import { aloneAt } from './serve/backend'
 
 /** No program is anywhere near this large, and nothing else of a release is near the second. */
 const PROGRAM_MOST = 400 * 1024 * 1024
@@ -248,13 +248,16 @@ export async function fetchNewer(
   } = {},
 ): Promise<Upgraded | null> {
   const say = opts.say ?? (() => {})
-  const program = opts.program ?? standalone()
-  if (!program)
+  const selected = opts.program ?? standalone()
+  if (!selected)
     throw new Problem(
       'This It does not run as the program an install puts in place, so it is not upgraded this way.',
       'invalid',
       'Update it the way it was put here: from its source, or with the package it came in.',
     )
+  // Both replacement and its lock follow the program itself, even through a linked folder
+  // and when commands with different data folders share this one installation.
+  const program = realpathSync(selected)
   const name = programName()
   if (!name) throw new Problem(`There is no program of It for this system (${process.platform} ${process.arch}).`, 'invalid')
   const to = await latest(opts.signal)
@@ -318,7 +321,7 @@ export async function fetchNewer(
     // runs as itself, and by now another may have put a newer one still where this one goes.
     // So the program that is there is asked what it is, once no other update can change it,
     // and is left as it is unless what was fetched is newer than that too.
-    return await alone('upgrade', async () => {
+    return await aloneAt(`${program}.upgrade.lock`, async () => {
       const there = await saysItIs(program)
       if (there && !newer(is, there)) {
         say(`It ${there} was put in place by another update meanwhile, and is left as it is.`)
