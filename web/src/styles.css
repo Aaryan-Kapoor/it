@@ -3323,6 +3323,10 @@ form.row-main {
 }
 
 /* What a notification says once one of its buttons was pressed */
+/* Only there to be read out: what is in it is laid out as if it were not */
+.note-said {
+  display: contents;
+}
 .note-answered {
   display: block;
   margin-top: 6px;

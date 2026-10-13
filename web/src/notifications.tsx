@@ -89,16 +89,25 @@ function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast'
           ))}
         </div>
       )}
-      {/* Answered: said in words, since a dimmed button alone does not say that the answer went */}
-      {n.answer !== null && n.buttons.length > 0 && (
-        <span className="note-answered">Sent to your agent: {n.buttons.find((b) => b.action === n.answer)?.label ?? n.answer}</span>
-      )}
-      {sending !== null && n.answer === null && (
-        <span className="note-answered" role="status">
-          Sending “{n.buttons.find((b) => b.action === sending)?.label ?? sending}”… Keep this tab open until it says it was sent
+      {/* What became of an answer is said aloud as well, to whoever cannot see it change. Where
+          it is said is there before there is anything to say: what is put in place with its
+          words already in it is not always said */}
+      <span className="note-said" role="status">
+        {/* Answered: said in words, since a dimmed button alone does not say that the answer went */}
+        {n.answer !== null && n.buttons.length > 0 && (
+          <span className="note-answered">Sent to your agent: {n.buttons.find((b) => b.action === n.answer)?.label ?? n.answer}</span>
+        )}
+        {sending !== null && n.answer === null && (
+          <span className="note-answered">
+            Sending “{n.buttons.find((b) => b.action === sending)?.label ?? sending}”… Keep this tab open until it says it was sent
+          </span>
+        )}
+      </span>
+      {error && (
+        <span className="error" role="alert">
+          {error}
         </span>
       )}
-      {error && <span className="error">{error}</span>}
     </>
   )
 }
