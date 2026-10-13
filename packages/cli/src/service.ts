@@ -349,6 +349,53 @@ export function installedHere(): boolean {
 }
 
 /**
+ * The settings a definition gives the service, read back out of it as its writer put them in.
+ * Each of the three writes some characters as more than themselves, and what each did is undone
+ * here. Nothing for a system It registers no service with.
+ */
+export function given(definition: string, platform: NodeJS.Platform = process.platform): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (platform === 'linux')
+    for (const [, said] of definition.matchAll(/^Environment="(.*)"$/gm)) {
+      const setting = said!.replace(/%%/g, '%').replace(/\\(.)/g, '$1')
+      if (setting.indexOf('=') > 0) out[setting.slice(0, setting.indexOf('='))] = setting.slice(setting.indexOf('=') + 1)
+    }
+  else if (platform === 'darwin') {
+    const plain = (v: string) => v.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    const settings = /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/.exec(definition)?.[1] ?? ''
+    for (const [, name, value] of settings.matchAll(/^\s*<key>(.+?)<\/key><string>(.*)<\/string>$/gm)) out[plain(name!)] = plain(value!)
+  } else if (platform === 'win32')
+    for (const [, name, value] of definition.matchAll(/^set ([^=\r\n]+)=(.*?)\r?$/gm)) out[name!] = value!.replace(/%%/g, '%').replace(/\^(.)/g, '$1')
+  return out
+}
+
+/**
+ * What the service that is registered for this folder was given when it was registered, less
+ * its PATH, which is each shell's own to give. Nothing where no service is registered for this
+ * folder, or its definition cannot be read.
+ */
+export function kept(): Record<string, string> {
+  const file =
+    process.platform === 'linux' ? unitPath() : process.platform === 'darwin' ? plistPath() : process.platform === 'win32' ? windowsLauncherFile() : null
+  if (!file || !installedHere()) return {}
+  try {
+    const { PATH: _path, ...rest } = given(readFileSync(file, 'utf8'))
+    return rest
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * The environment for a setup that registers this folder's service again without a person
+ * having asked for it to be set up anew, as the one an upgrade runs does. A setting that only
+ * the shell of the day it was first registered named, such as another port, is in the
+ * definition and nowhere else: left out here, the definition written next would lack it, and
+ * the service would come back at another address. What this shell names itself is what it says.
+ */
+export const againWith = (own: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({ ...kept(), ...own })
+
+/**
  * Whose the service is that this machine has a definition of: this folder's, another folder's,
  * or nobody's where there is no definition. That is one thing, and whether the system starts
  * the service by itself is another: a definition the system has not taken, or has been told

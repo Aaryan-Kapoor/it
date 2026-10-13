@@ -2670,15 +2670,20 @@ async function main(argv: string[]): Promise<void> {
       if (!done) return forPerson(a) ? tell([`This is the newest It there is (${VERSION}).`]) : out({ version: VERSION, upgraded: false })
       // The program is in place. What runs is still the one that was started: the service is
       // started again by the new program, which also writes the service's definition as its
-      // version has it and brings the add-ons in the agent apps up to it. Where nothing starts
-      // It by itself, whoever started it does so again.
+      // version has it and brings the add-ons in the agent apps up to it. It is given what the
+      // definition that is there gives the service, so that a setting this terminal does not
+      // name is in the one written next. Where nothing starts It by itself, whoever started it
+      // does so again.
       let started: 'again' | 'by hand' | 'failed' = 'by hand'
       let why: string | undefined
       if (service.installedHere()) {
         say('Starting It again as the new version…')
         const ran = await new Promise<{ ok: boolean; said: string; failed: string }>((resolve) =>
-          execFile(done.program, ['setup'], { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) =>
-            resolve({ ok: !err, said: String(stdout), failed: String(stderr) }),
+          execFile(
+            done.program,
+            ['setup'],
+            { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true, env: service.againWith() },
+            (err, stdout, stderr) => resolve({ ok: !err, said: String(stdout), failed: String(stderr) }),
           ),
         )
         started = ran.ok ? 'again' : 'failed'
