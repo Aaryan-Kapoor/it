@@ -8,6 +8,7 @@ import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
+import { inbox as inboxQuery } from './delivery'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -2040,6 +2041,109 @@ describe('clicks and their delivery', () => {
     await settle(t)
     expect((await totals(t)).waiting).toBe(40)
     expect((await alice.browser.query(api.artifacts.list, {})).map((x) => [x.slug, x.pending])).toEqual([['other', 40]])
+  })
+
+  test('the inbox reads less than the backend lets a query read, though forty conversations listen and five queues hold more of the largest clicks than that', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const queues = ['codex', 'claude-code', 'pi', 'opencode', 'hermes']
+    const listening = Array.from({ length: 40 }, (_, i) => ({ harness: 'claude-code', id: `z-listener-${String(i).padStart(2, '0')}` }))
+    const now = Date.now()
+    // Each carries as much as an action may
+    const payload = JSON.stringify({ text: 'x'.repeat(LIMITS.actionPayloadBytes - 11) })
+    await t.run(async (ctx) => {
+      const machine = (await ctx.db.get(m.id as never)) as { _id: never; userId: never }
+      await ctx.db.patch(machine._id, { wakes: queues.map((harness) => ({ harness, since: now - 10_000 })) })
+      let pages = 0
+      const put = async (of: { harness: string; id: string }, n: number, at: number, addressed = true) => {
+        const artifactId = await ctx.db.insert('artifacts', {
+          userId: machine.userId,
+          slug: `page-${++pages}`,
+          title: 'Page',
+          currentVersion: 1,
+          lastVersion: 1,
+          bytes: 1,
+          createdAt: now,
+          updatedAt: now,
+          machineId: machine._id,
+          session: of,
+          waiting: n,
+        })
+        for (let i = 0; i < n; i++)
+          await ctx.db.insert('actions', {
+            userId: machine.userId,
+            title: 'Page',
+            artifactId,
+            clientActionId: `click-${pages}-${String(i).padStart(3, '0')}`,
+            name: 'press',
+            payload,
+            contentVersion: 1,
+            createdAt: at + i,
+            delivery: 'pending',
+            ...(addressed ? { machineId: machine._id } : {}),
+            harness: of.harness,
+            sessionId: of.id,
+          })
+      }
+      for (const s of listening) {
+        await put(s, 2, now - 500)
+        // And two that are addressed to no machine, as a click is whose page was made on a machine that is gone
+        await put(s, 2, now - 400, false)
+      }
+      for (const harness of queues) {
+        // One conversation that has waited longest, one that was used last, and twelve more by their names
+        await put({ harness, id: 'b-old' }, 40, now - 3000)
+        await put({ harness, id: 'c-new' }, 20, now - 100)
+        for (let n = 0; n < 12; n++) await put({ harness, id: `a-head${String(n).padStart(2, '0')}` }, 1, now - 1500)
+      }
+    })
+    // The query itself, asked as the machine asks it, with everything it reads of a click counted: also what it reads twice
+    const asked = await t.run(async (ctx) => {
+      let read = 0
+      const counted = (got: unknown) => {
+        for (const row of Array.isArray(got) ? got : [got]) if (typeof row?.payload === 'string') read += new TextEncoder().encode(row.payload).length
+        return got
+      }
+      const watching = (query: any): any =>
+        new Proxy(query, {
+          get(target, name) {
+            const value = target[name]
+            if (typeof value !== 'function') return value
+            return (...args: unknown[]) => {
+              const out = value.apply(target, args)
+              return ['take', 'first', 'unique', 'collect'].includes(String(name)) ? Promise.resolve(out).then(counted) : watching(out)
+            }
+          },
+        })
+      const db = new Proxy(ctx.db, {
+        get(target: any, name) {
+          if (name === 'get') return async (id: never) => counted(await target.get(id))
+          if (name === 'query') return (table: never) => watching(target.query(table))
+          const value = target[name]
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      const identity = { issuer: SITE, subject: m.id, kind: 'machine' }
+      const clicks: { id: string; at: number; session: { harness: string; id: string } }[] = await (inboxQuery as any)._handler(
+        { ...ctx, db, auth: { getUserIdentity: async () => identity } },
+        { listening, queues },
+      )
+      return { read, clicks }
+    })
+    // The backend lets a query read 16 MB, and refuses it whole past that. Five hundred and
+    // twenty clicks wait here, of 32 KB each, and reading them as they were once read came to more
+    expect(asked.read).toBeLessThanOrEqual(12 * 1024 * 1024)
+    const of = (harness: string, id: string) => asked.clicks.filter((c) => c.session.harness === harness && c.session.id === id)
+    // Every conversation that listens has its two oldest, and every queue the oldest of the conversation that has waited longest in it
+    for (const s of listening) expect(of(s.harness, s.id).map((c) => c.at)).toEqual([now - 500, now - 499])
+    for (const harness of queues) {
+      const oldest = of(harness, 'b-old').map((c) => c.at)
+      expect(oldest.length).toBeGreaterThan(0)
+      expect(oldest).toEqual(oldest.map((_, i) => now - 3000 + i))
+    }
+    expect(asked.clicks.length).toBeLessThanOrEqual(150)
+    expect(new Set(asked.clicks.map((c) => c.id)).size).toBe(asked.clicks.length)
   })
 
   test('a reopened conversation is said to be running for as long as its machine says so, and anyone who can use the page can stop it: what was waiting by then goes with the stop', async () => {
