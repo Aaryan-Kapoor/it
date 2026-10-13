@@ -403,6 +403,31 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('a publish that It refuses to finish is given up on in so many words, so that it stops counting against what may be under way', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 3, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return new Refusal({ code: 'unavailable', message: 'The upload could not be checked just now. Try again in a moment.' })
+      return null
+    })
+    try {
+      const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], b.env)
+      // What is said is why it was not finished, whatever became of giving it up
+      expect([ran.code, ran.out, error(ran)]).toEqual([
+        1,
+        '',
+        { code: 'unavailable', message: 'The upload could not be checked just now. Try again in a moment.' },
+      ])
+      expect(b.asked.filter((x) => x.path.startsWith('publish:')).map((x) => [x.path, x.args.artifactId, x.args.version])).toEqual([
+        ['publish:begin', undefined, undefined],
+        ['publish:finish', 'artifact-1', 3],
+        ['publish:abandon', 'artifact-1', 3],
+      ])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it tour show next` shows the first thing the menu does not say has been seen, tells the menu, and shows the ending once all have been', async () => {
     const m = machine()
     let seen: string[] | null = ['whiteboard']

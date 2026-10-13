@@ -313,6 +313,13 @@ export async function publish(input: {
   const done = await call<{ slug: string; version: number; url: string; elsewhere?: boolean; took?: boolean }>('action', api.publish.finish, {
     artifactId: begun.artifactId,
     version: begun.version,
+  }).catch(async (err) => {
+    // Not finished, and this command will not try it again: It is told here too, or what was
+    // uploaded goes on counting against what may be under way until it is cleared as stale, and
+    // a few tries in a row leave no room for the next. A publish that was finished after all,
+    // with only its answer lost on the way, is no longer one that can be given up, and stays
+    await call('mutation', api.publish.abandon, { artifactId: begun.artifactId, version: begun.version }).catch(() => {})
+    throw err
   })
   // Counted: which agent app, new or not, how large and of how many files in a few bands, and
   // four things that are each so or not: whether it was given a state to start with, whether it
