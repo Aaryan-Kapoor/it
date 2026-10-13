@@ -264,13 +264,18 @@ window.addEventListener('online', keep)
 // moment after the markup is read and not before, and a document the page makes inside itself
 // is not watched.
 const TELLS_NOTHING = 'no-referrer'
+// A link's auditing request carries this address in its own headers, whatever its referrer policy says.
+function stopAuditing(el: Element): void {
+  if ((el.localName === 'a' || el.localName === 'area') && el.hasAttribute('ping')) el.removeAttribute('ping')
+}
 function quieten(el: Element): void {
+  stopAuditing(el)
   if (el.localName === 'meta' && el.getAttribute('name')?.toLowerCase() === 'referrer' && el.getAttribute('content') !== TELLS_NOTHING)
     el.setAttribute('content', TELLS_NOTHING)
   if (el.hasAttribute('referrerpolicy') && el.getAttribute('referrerpolicy') !== TELLS_NOTHING) el.setAttribute('referrerpolicy', TELLS_NOTHING)
 }
 function quietenWithin(root: ParentNode): void {
-  for (const el of root.querySelectorAll('meta[name], [referrerpolicy]')) quieten(el)
+  for (const el of root.querySelectorAll('meta[name], [referrerpolicy], a[ping], area[ping]')) quieten(el)
 }
 new MutationObserver((changes) => {
   for (const change of changes) {
@@ -282,7 +287,19 @@ new MutationObserver((changes) => {
         quietenWithin(added as Element)
       }
   }
-}).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['name', 'content', 'referrerpolicy'] })
+}).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['name', 'content', 'referrerpolicy', 'ping'] })
+quietenWithin(document)
+// A script can activate a link before the observer runs. Check it on the way to its handlers
+// and again after them, including a link followed with the middle button.
+for (const event of ['click', 'auxclick'])
+  for (const capture of [true, false])
+    window.addEventListener(
+      event,
+      (e) => {
+        for (const el of e.composedPath()) if (el instanceof Element) stopAuditing(el)
+      },
+      capture,
+    )
 const openWindow = window.open
 window.open = function (this: Window, ...given: Parameters<typeof window.open>) {
   quietenWithin(document)

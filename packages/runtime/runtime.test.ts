@@ -338,6 +338,19 @@ describe('the script inside a page', () => {
     expect(p.fetched.map((f) => f.url)).toEqual(Array(3).fill(`http://content.test${KEEP}`))
   })
 
+  test('a link has its auditing attribute removed, whether it is already there, added later, or changed later', async () => {
+    const p = load('<a ping="https://elsewhere.invalid/ping" href="#end">go</a><map><area ping="https://elsewhere.invalid/ping" href="#end"></map>')
+    const doc = p.w.document
+    expect(doc.querySelectorAll('[ping]').length).toBe(0)
+    doc.body.insertAdjacentHTML('beforeend', '<div><a ping="https://elsewhere.invalid/ping" href="#end">later</a></div>')
+    await new Promise((r) => setTimeout(r, 5))
+    expect(doc.querySelectorAll('[ping]').length).toBe(0)
+    for (const link of doc.querySelectorAll('a, area')) link.setAttribute('ping', 'https://elsewhere.invalid/ping')
+    await new Promise((r) => setTimeout(r, 5))
+    expect(doc.querySelectorAll('[ping]').length).toBe(0)
+    expect([...doc.querySelectorAll('a, area')].map((link: any) => link.getAttribute('href'))).toEqual(['#end', '#end', '#end'])
+  })
+
   test('what a page says of telling other sites its address is put back to telling nothing, when it is said and again before a window is opened', async () => {
     // What the page had said at the moment its script opened a window
     const saidWhenOpened: unknown[] = []

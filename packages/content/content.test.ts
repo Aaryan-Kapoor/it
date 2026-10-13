@@ -52,7 +52,7 @@ async function atTheNextFolder(): Promise<{ reached: Promise<void>; goOn(): void
 
 // The port the site would be on. Nothing listens on it or on the one after it: a request is
 // handed to the service with the port it is said to have come in on.
-const BASE = 7300
+const BASE = 27300
 /** The port pages are shown from. */
 const PAGES = BASE + 1
 const SITE = `http://localhost:${BASE}`
@@ -2749,6 +2749,86 @@ describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
       expect(elsewhere.length).toBeGreaterThanOrEqual(3)
       expect(elsewhere.filter((a) => JSON.stringify(a).includes(token))).toEqual([])
       await context.close()
+    },
+    300_000,
+  )
+
+  test.skipIf(!installed(type))(
+    'a link still leads where it names without auditing the click or telling another site the showing address',
+    async () => {
+      const prefix = `u/${USER}/auditing/1/`
+      const ELSEWHERE = 'http://elsewhere.invalid:27302'
+      const link = `<a id="go" href="${ELSEWHERE}/target" target="_blank" rel="noreferrer" referrerpolicy="no-referrer" ping="${ELSEWHERE}/ping"><span>go</span></a>`
+      const pages: Record<string, string> = {
+        'external.html': link,
+        'fragment.html': `${link.replace(`${ELSEWHERE}/target`, '#end').replace('target="_blank"', '')}<p id="end">end</p>`,
+        'area.html': `<img width="40" height="40" usemap="#map" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"><map name="map"><area id="go" shape="rect" coords="0,0,40,40" href="${ELSEWHERE}/target" target="_blank" ping="${ELSEWHERE}/ping"></map>`,
+        'later.html': `<script>addEventListener('load', () => document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(`<div>${link}</div>`)}))</script>`,
+        'at-once.html': link,
+        'middle.html': link,
+        'plain.html': link.replace(` ping="${ELSEWHERE}/ping"`, ''),
+      }
+      await seedFiles(
+        prefix,
+        Object.fromEntries(
+          Object.entries(pages).map(([file, body]) => [file, `<html><head><meta name="referrer" content="no-referrer"></head><body>${body}</body></html>`]),
+        ),
+      )
+      const { at, token } = await open({ p: prefix, a: 'auditing', s: 'auditing' })
+      const results: unknown[] = []
+      for (const framed of [false, true])
+        for (const file of Object.keys(pages)) {
+          const context = await browser.newContext()
+          try {
+            const asked: { url: string; method: string; said: Record<string, string> }[] = []
+            await context.route('**/*', async (route) => {
+              const request = route.request()
+              const url = new URL(request.url())
+              const headers = await request.allHeaders()
+              if (url.origin === ELSEWHERE) {
+                asked.push({ url: url.href, method: request.method(), said: headers })
+                return route.fulfill({ status: 200, contentType: 'text/html', body: 'elsewhere' })
+              }
+              if (url.origin === `http://${HOST}:${BASE}`)
+                return route.fulfill({
+                  status: 200,
+                  contentType: 'text/html',
+                  body: `<iframe id="page" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" referrerpolicy="no-referrer" src="${OWN}${at}/v/1/${file}"></iframe>`,
+                })
+              if (url.origin !== OWN) return route.fulfill({ status: 404, body: '' })
+              const r = await show(`${url.pathname}${url.search}`, { host: HOST, headers })
+              await route.fulfill({ status: r.status, headers: Object.fromEntries(r.headers), body: r.buf })
+            })
+            const tab = await context.newPage()
+            tab.setDefaultTimeout(120_000)
+            await tab.goto(framed ? `http://${HOST}:${BASE}/` : `${OWN}${at}/v/1/${file}`, { waitUntil: 'load' })
+            const page = framed ? tab.frames().find((frame) => frame.url().startsWith(OWN))! : tab.mainFrame()
+            if (file === 'at-once.html')
+              await page.evaluate((ping) => {
+                const link = document.getElementById('go') as HTMLAnchorElement
+                link.ping = ping
+                link.onclick = () => {
+                  link.ping = ping
+                }
+                ;(link.firstElementChild as HTMLElement).click()
+              }, `${ELSEWHERE}/ping`)
+            else if (file === 'area.html') await page.locator('img').click({ position: { x: 10, y: 10 } })
+            else await page.locator('#go').click({ button: file === 'middle.html' ? 'middle' : 'left', noWaitAfter: true })
+            if (file === 'fragment.html') await expect.poll(() => page.url(), { timeout: 60_000 }).toContain('#end')
+            else await expect.poll(() => asked.some((r) => r.url.endsWith('/target') && r.method === 'GET'), { timeout: 60_000 }).toBe(true)
+            // An audit is sent separately from the navigation. Give either request time to reach the route.
+            await tab.waitForTimeout(100)
+            results.push([
+              file,
+              framed,
+              asked.some((r) => r.method === 'POST' || 'ping-from' in r.said || 'ping-to' in r.said),
+              JSON.stringify(asked).includes(token),
+            ])
+          } finally {
+            await context.close()
+          }
+        }
+      expect(results).toEqual([false, true].flatMap((framed) => Object.keys(pages).map((file) => [file, framed, false, false])))
     },
     300_000,
   )

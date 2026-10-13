@@ -8,7 +8,7 @@ A page is shown in a sandbox, as a document that shares nothing with the site, w
 - **A worker starts only from a `blob:` address.** `new Worker('worker.js')` fails. Fetch the script and start the worker from a `Blob` of it.
 - **It cannot frame its own files.** An `<iframe>`, `<embed>` or `<object>` that names another file of the page, a PDF included, stays empty. Link to the file, or draw what it holds in the page itself. Its scripts, styles, pictures, fonts and what it fetches from its own files all load as usual.
 - **Whatever it opens is held to the same.** A window or a link it opens is sandboxed as the page is, and the page cannot move the tab it is shown in.
-- **It tells no other site its address.** That address holds what opens this showing's files. A `<meta name="referrer">` or a `referrerpolicy` in the page that says otherwise is put back to `no-referrer`.
+- **It limits how markup sends the showing's address.** That address holds what opens this showing's files. In the main document, a `<meta name="referrer">` or a `referrerpolicy` is put back to `no-referrer`, and links lose their `ping` attributes. This is a mitigation, not a guarantee: shadow roots and `srcdoc` documents are not watched, and page scripts can still send the address. Do not put policies that disclose the address or links with `ping` in embedded content.
 - **Its own address is not one to keep.** What a page's script reads as `location` is where the files of this one showing are, and it stops answering when the showing ends. Do not show it, send it or store it. The address to give the user is the `url` that `it create` printed.
 
 ## Keeping something with the page
