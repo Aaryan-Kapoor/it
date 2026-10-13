@@ -1753,7 +1753,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const listening = !codex && s !== undefined && now - s.seen < LIVE_MS
         // A Codex turn that is running will reach a hook: after its next command, or when it stops
         const inTurn = codex && turnRunning(key, now)
-        const forAddOn = listening || (inTurn && now - click.at < FRESH_MS)
+        // Codex's queue may hold an earlier click of the conversation behind this very turn, or
+        // be taking one this moment. Given to the turn's next hook, this one would be read
+        // before it: so it follows the earlier one, and is handed over after it.
+        const queuedBefore =
+          inTurn && ([...behindTurn.values()].some((b) => b.key === key) || [...submitting.values()].some((sent) => sent.click.session && follow(keyOf(sent.click.session.harness, sent.click.session.id)) === key))
+        const forAddOn = listening || (inTurn && now - click.at < FRESH_MS && !queuedBefore)
         // Which of the other ways it goes, asked only where the first does not take it
         const way = forAddOn
           ? undefined

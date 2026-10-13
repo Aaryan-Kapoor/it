@@ -1270,6 +1270,19 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:handedOff')).toEqual(['click-6'])
   })
 
+  test('a click made while Codex’s queue holds an earlier one behind the running turn follows it into the queue, and is not given to the turn’s next hook ahead of it', async () => {
+    await start()
+    expect(await turn(6, true)).toEqual({ ok: true })
+    await takenByTheQueue(6)
+    const commands = stand.codex.length
+    // Made this moment, which by itself would have it kept for the turn's next hook
+    offered({ ...click(6), id: 'click-6-later', at: Date.now() })
+    await until(() => stand.codex.length === commands + 1)
+    expect(called('delivery:claim')).toContain('click-6-later')
+    // The hook that comes next is handed nothing: the earlier click is read first, when the turn is done, and this one after it
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-6'))?.clicks).toEqual([])
+  })
+
   test('a waiter that an answer never reached is given the click again when it next asks, and no more once it says that it has it', async () => {
     await start()
     expect(await turn(6, true)).toEqual({ ok: true })
