@@ -159,8 +159,10 @@ export const inbox = query({
       const found: string[] = []
       // How many clicks this queue may read now, of the `n` wanted, each taken to be as large as a click can be
       const until = left - left / (asked.length - nth)
-      const may = (n: number) => Math.max(0, Math.min(n, Math.floor((left - until) / CLICK_MOST)))
-      const first = may(40)
+      const may = (n: number, reserved = 0) => Math.max(0, Math.min(n, Math.floor((left - until) / CLICK_MOST) - reserved))
+      // Discovery leaves room for the other ways of finding a conversation and for reading
+      // its oldest click. Newest rows alone cannot be delivered without skipping earlier ones.
+      const first = Math.min(40, Math.floor(may(80) / 2))
       const oldest = first
         ? read(
             await ctx.db
@@ -173,7 +175,7 @@ export const inbox = query({
       const all = first > 0 && oldest.length < first
       for (const x of oldest) if (x.sessionId && !found.includes(x.sessionId) && found.length < 10) found.push(x.sessionId)
       // And the ones pressed most recently: a conversation somebody is using now
-      const last = may(20)
+      const last = Math.min(20, Math.floor(may(40, found.length) / 2))
       const newest = last
         ? read(
             await ctx.db
@@ -185,7 +187,7 @@ export const inbox = query({
         : []
       for (const x of newest) if (x.sessionId && !found.includes(x.sessionId) && found.length < 16) found.push(x.sessionId)
       let after = ''
-      for (let named = 0; named < 12 && may(1); named++) {
+      for (let named = 0; named < 12 && may(1, found.length + 1); named++) {
         const head = await ctx.db
           .query('actions')
           .withIndex('by_route', (q) => q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).gt('sessionId', after))
@@ -195,7 +197,7 @@ export const inbox = query({
         after = head.sessionId
         if (!found.includes(after)) found.push(after)
       }
-      for (const sessionId of found) {
+      for (const [foundAt, sessionId] of found.entries()) {
         if (rows.length >= BUDGET) break
         const want = Math.min(each, BUDGET - rows.length)
         const since = Math.max(from - 1, stoppedAt(sessionId))
@@ -210,7 +212,9 @@ export const inbox = query({
         // Where fewer may be read than are wanted, the oldest that may be are offered, or the
         // ones known already where those are more: the first of what is waiting for the
         // conversation either way, and the rest of it at a later asking
-        const now = may(want)
+        // Every remaining conversation keeps room for its oldest eligible click, even when
+        // an earlier conversation has enough waiting to use the rest of this queue's share.
+        const now = may(want, found.length - foundAt - 1)
         if (now <= known.length) {
           rows.push(...known)
           continue

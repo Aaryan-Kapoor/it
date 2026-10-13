@@ -4132,6 +4132,40 @@ describe('cases at the edges', () => {
       return ids
     })
 
+  test('a queue with large old clicks still offers a recent conversation in its original order on every asking', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const queues = ['codex', 'claude-code', 'pi', 'opencode', 'hermes']
+    const now = Date.now()
+    const payload = JSON.stringify({ text: 'x'.repeat(LIMITS.actionPayloadBytes - 11) })
+    expect(new TextEncoder().encode(payload).length).toBe(LIMITS.actionPayloadBytes)
+    await t.run(async (ctx) => {
+      await ctx.db.patch(m.id, { wakes: queues.slice(1).map((harness) => ({ harness, since: now - 10_000 })), wakesOff: ['codex'] })
+    })
+    const put = async (id: string, count: number, at: number) => {
+      const p = await publish(m, id, { session: { harness: 'codex', id } })
+      return insertClicks(t, p.artifactId, count, { payload }, at)
+    }
+    await put('b-closed', 40, now - 3000)
+    const recent = await put('c-deliverable', 20, now - 100)
+    for (let i = 0; i < 12; i++) await put(`a-middle-${i}`, 1, now - 1500)
+    const ask = () => inbox(m, [], queues)
+    const first = await ask()
+    expect(first.filter((c) => c.session?.id === 'c-deliverable').map((c) => c.id)).toEqual(recent.slice(0, 2))
+    expect((await ask()).map((c) => c.id)).toEqual(first.map((c) => c.id))
+    const pending = await t.run((ctx) => ctx.db.query('actions').collect())
+    for (const id of new Set(first.map((c) => c.session?.id))) {
+      const returned = first.filter((c) => c.session?.id === id)
+      expect(returned.map((c) => c.id)).toEqual(
+        pending
+          .filter((c) => c.sessionId === id)
+          .slice(0, returned.length)
+          .map((c) => c._id),
+      )
+    }
+  })
+
   test('every conversation a connector may name is looked at, not only the first twenty', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
