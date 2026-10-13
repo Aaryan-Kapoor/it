@@ -101,8 +101,9 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
   // An app makes its settings folder when it is first asked to keep something there
   mkdirSync(folder, { recursive: true })
   kept[bin] ??= new Map()
-  if (!kept[bin].has(folder)) kept[bin].set(folder, {})
-  const has = kept[bin].get(folder)!
+  const key = bin === 'openclaw' ? realpathSync.native(folder) : folder
+  if (!kept[bin].has(key)) kept[bin].set(key, {})
+  const has = kept[bin].get(key)!
   if (bin === 'claude') {
     // Claude Code keeps a copy of the plugin, and says where
     const copy = path.join(folder, 'plugins/cache/it/it-bridge/0.1.0')
@@ -1118,6 +1119,62 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
     expect((await connect('openclaw', () => {})).addon).toBe('connected')
     expect(noted('openclaw').installs.map((i) => i.env)).toEqual([{ OPENCLAW_STATE_DIR: second }])
   })
+
+  test.each(['a trailing slash', 'a link', 'another spelling'])(
+    'a cleanup retried after a partial upgrade keeps the add-on when the older place names the retained folder by %s',
+    async (spelling) => {
+      const folder = path.join(tmp, 'profile')
+      vi.stubEnv('OPENCLAW_STATE_DIR', folder)
+      await connect('openclaw', () => {})
+      const [current] = noted('openclaw').installs
+      const alias = spelling === 'a trailing slash' ? `${folder}/` : spelling === 'a link' ? path.join(tmp, 'profile-link') : `${folder}/../profile`
+      if (spelling === 'a link') symlinkSync(folder, alias, 'junction')
+      // The older record survived a failed removal, and the retained record has the upgraded payload.
+      const retained = { ...current, at: 2000, env: { OPENCLAW_STATE_DIR: alias } }
+      put(stampFile('openclaw'), JSON.stringify({ installs: [{ ...current, version: 'older', at: 1000 }, retained] }))
+      vi.stubEnv('OPENCLAW_STATE_DIR', alias)
+      ran = []
+      expect((await connect('openclaw', () => {}, true)).addon).toBe('connected')
+      expect(commands('openclaw').filter((words) => /uninstall|install|enable/.test(words))).toEqual([])
+      expect(existsSync(root(folder))).toBe(true)
+      expect(noted('openclaw').installs).toEqual([retained])
+      expect((await statusOf('openclaw'))!.addon).toBe('connected')
+      vi.stubEnv('OPENCLAW_STATE_DIR', folder)
+      expect((await connect('openclaw', () => {})).addon).toBe('connected')
+      expect(noted('openclaw').installs).toEqual([retained])
+    },
+  )
+
+  test.each(['the app cannot be asked', 'the folder cannot be resolved'])(
+    'no add-on is removed when two recorded places cannot be compared because %s',
+    async (closed) => {
+      const first = path.join(tmp, 'first')
+      const second = path.join(tmp, 'second')
+      vi.stubEnv('OPENCLAW_STATE_DIR', first)
+      await connect('openclaw', () => {})
+      const [one] = noted('openclaw').installs
+      rmSync(stampFile('openclaw'))
+      vi.stubEnv('OPENCLAW_STATE_DIR', second)
+      await connect('openclaw', () => {})
+      const [two] = noted('openclaw').installs
+      const installs = [
+        { ...one, at: 1000 },
+        { ...two, at: 2000 },
+      ]
+      put(stampFile('openclaw'), JSON.stringify({ installs }))
+      if (closed === 'the app cannot be asked') failing = ['openclaw plugins inspect it-bridge --json']
+      else
+        vi.spyOn(fs.realpathSync, 'native').mockImplementation(() => {
+          throw Object.assign(new Error('the folder cannot be looked at'), { code: 'EACCES' })
+        })
+      ran = []
+      await connect('openclaw', () => {}, true)
+      expect(commands('openclaw').filter((words) => /uninstall|install|enable/.test(words))).toEqual([])
+      expect(existsSync(root(first))).toBe(true)
+      expect(existsSync(root(second))).toBe(true)
+      expect(noted('openclaw').installs).toEqual(installs)
+    },
+  )
 
   test('a folder it was connected in that has been deleted since does not stand in the way of another', async () => {
     const first = path.join(tmp, 'first')
