@@ -2,7 +2,9 @@
 // (`lib/counted.ts`): the notes themselves, which it takes away, and once a day how much this
 // It holds, as numbers that it turns into bands before anything is sent.
 import { v } from 'convex/values'
+import { internal } from './_generated/api'
 import { internalMutation, internalQuery } from './_generated/server'
+import { forgetNoted } from './lib/counted'
 
 /** The most notes given at one asking. */
 const AT_ONCE = 200
@@ -20,6 +22,15 @@ export const take = internalMutation({
     const rows = await ctx.db.query('counted').order('asc').take(AT_ONCE)
     for (const row of rows) await ctx.db.delete(row._id)
     return { notes: keep === false ? [] : rows.map((row) => ({ name: row.name, properties: row.properties, at: row.at })), more: rows.length === AT_ONCE }
+  },
+})
+
+/** The rest of what was noted before counts stopped being sent, a step at a time: nothing noted after `upTo`, which is when they stopped. */
+export const forget = internalMutation({
+  args: { upTo: v.number() },
+  handler: async (ctx, { upTo }) => {
+    if (await forgetNoted(ctx, upTo)) await ctx.scheduler.runAfter(0, internal.counted.forget, { upTo })
+    return null
   },
 })
 
