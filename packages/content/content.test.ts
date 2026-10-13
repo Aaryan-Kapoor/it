@@ -1626,6 +1626,24 @@ describe('uploads', () => {
     expect((await upload('index.html', 'hello', { prefix, grant: await sign('it-upload', '../../x/1/', { p: '../../x/1/' }) })).status).toBe(401)
   })
 
+  test('a version declared where files of an earlier publish of that number still lie has the files it declares and no others, and is found whole', async () => {
+    const prefix = `u/${USER}/put-back/2/`
+    await seedFiles(prefix, { 'index.html': 'the page as it was', 'old-asset.js': 'old()', 'kept.css': 'body{}' })
+    // The database was put back from a copy made before that publish, which the files are no part of: the next publish is given the same number
+    const files = [entry('index.html', 'the page as it is now'), entry('kept.css', 'body{}')]
+    expect((await stage(prefix, files)).status).toBe(200)
+    // What is declared again as it was is there still, and what is declared anew is written over what lay under its name
+    expect((await upload('index.html', 'the page as it is now', { prefix })).status).toBe(200)
+    expect((await control('verify', { prefix, files })).json()).toEqual({ ok: true, missing: [] })
+    // That a file was found there and removed is written down, by how many
+    expect(wrote((e) => e.event === 'control.stage' && e.prefix === prefix && e.left === 1)).toBeTruthy()
+    const { at } = await open({ p: prefix, v: '2' })
+    expect((await show(`${at}/v/2/index.html`)).text).toBe('the page as it is now')
+    expect((await show(`${at}/v/2/kept.css`)).text).toBe('body{}')
+    expect((await show(`${at}/v/2/old-asset.js`)).status).toBe(404)
+    expect((await control('delete', { prefix })).json()).toEqual({ removed: 3, more: false })
+  })
+
   test('a grant allows exactly the files that were declared: that path, that size, those bytes', async () => {
     const prefix = `u/${USER}/exact/1/`
     await stage(prefix, [entry('index.html', 'hello'), entry('app.js', 'let a = 1')])

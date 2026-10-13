@@ -69,6 +69,8 @@ export interface Files {
   stored(prefix: string): Promise<Map<string, number>>
   /** The SHA-256 of a stored file as it is on disk now, by the name it is kept under. */
   checksum(prefix: string, name: string): Promise<string | null>
+  /** Removes every file stored under a version but the ones kept under these names, and says how many it removed. */
+  only(prefix: string, names: Set<string>): Promise<number>
   /** Removes what was declared under a prefix and then what was stored, at most `most` files of them. `more` says whether any are left. */
   clear(prefix: string, most: number): Promise<{ removed: number; more: boolean }>
   /** Lets go of the folder: what was still arriving here is cleared away. */
@@ -446,6 +448,28 @@ export function createFiles(folder: string): Files {
         hash.update(value)
       }
       return hash.digest('hex')
+    },
+
+    async only(prefix, names) {
+      const dir = versionFolder(prefix)
+      if (!(await there(dir))) return 0
+      let found: string[]
+      try {
+        found = await readdir(dir)
+      } catch (err) {
+        if (gone(err)) return 0
+        throw err
+      }
+      let removed = 0
+      for (const name of found) {
+        // What counts as stored is a file, as `stored` has it: nothing else there is looked for when a version is checked
+        if (names.has(name) || !(await isFile(path.join(dir, name)))) continue
+        await unlink(path.join(dir, name)).catch((err) => {
+          if (!gone(err)) throw err
+        })
+        removed += 1
+      }
+      return removed
     },
 
     async clear(prefix, most) {

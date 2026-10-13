@@ -657,7 +657,13 @@ async function control(it: Service, request: Request, asked: Asked): Promise<Res
       await it.files.clear(prefix, REMOVED_AT_ONCE)
       return refuse(409, 'version_deleted')
     }
-    it.log.log('control.stage', { prefix, files: clean.length })
+    // A version is declared once, before anything of it is uploaded, so a file that lies under
+    // it now and is not among those declared is no part of it. One can be there where the
+    // backend's database was put back from an earlier copy, which the files are no part of: the
+    // next publish is then given a number that was used before. Left there, such a file would
+    // make the version fail its check, though every file of it had arrived whole.
+    const left = await it.files.only(prefix, new Set(clean.map((f) => nameOf(f.path))))
+    it.log.log('control.stage', { prefix, files: clean.length, ...(left ? { left } : {}) })
     return json(200, { ok: true })
   }
 
