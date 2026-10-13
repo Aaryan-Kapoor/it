@@ -1812,6 +1812,26 @@ iframe.page-frame.is-loaded {
     width: min(56vw, 240px);
     padding-right: 12px;
   }
+  /* Opened, the search has a row of its own under the bar's. In the bar's row there is no
+     room for it beside the links to the other sections: it lay over them, and they could be
+     neither seen nor pressed for as long as anything was typed in it. */
+  .grid-header:has(.grid-search:focus, .grid-search:not(:placeholder-shown)) {
+    flex-wrap: wrap;
+    row-gap: 0;
+    height: auto;
+    padding-bottom: 10px;
+  }
+  .grid-header:has(.grid-search:focus, .grid-search:not(:placeholder-shown)) .grid-brand {
+    min-height: calc(var(--header-h) - 1px);
+  }
+  .grid-header:has(.grid-search:focus, .grid-search:not(:placeholder-shown)) .grid-search-wrap {
+    order: 1;
+    flex: none;
+    width: 100%;
+  }
+  .grid-header:has(.grid-search:focus, .grid-search:not(:placeholder-shown)) .grid-search {
+    width: 100%;
+  }
 
   .grid-search::placeholder {
     color: transparent;
