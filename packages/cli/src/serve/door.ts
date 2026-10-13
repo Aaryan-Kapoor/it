@@ -226,7 +226,10 @@ function placeOf(address: string): { name: string; port: number; rest: string } 
  * address it has on its networks, its host name, and that name as a home network looks it up.
  * A machine's addresses change as it moves between networks, so they are read again when the
  * last reading is a few seconds old. Kept to the tailnet, the names are the machine's addresses
- * there, its host name, and its name on the tailnet.
+ * there, its host name, and its name on the tailnet. That name is one of the machine's with
+ * the network on for everyone too, where the machine is on a tailnet: it is the address a
+ * screen was given while the door was kept to the tailnet, and a door opened wider since still
+ * answers to it. Who may ask is another matter, held to by the caller's address.
  */
 function knownNames(network: boolean, tailnet = false): (name: string) => boolean {
   const own = new Set(['localhost', '127.0.0.1', '[::1]'])
@@ -247,8 +250,9 @@ function knownNames(network: boolean, tailnet = false): (name: string) => boolea
       const host = os.hostname().toLowerCase()
       if (host) others.add(host)
       if (host && !host.includes('.') && !tailnet) others.add(`${host}.local`)
-      // And to the name it has on the tailnet, where Tailscale says what that is
-      const there = tailnet ? tailnetName() : undefined
+      // And to the name it has on the tailnet, where Tailscale says what that is. A machine that
+      // has no address on one has no name there, and Tailscale is not asked for one
+      const there = tailnet || [...others].some(inTailnet) ? tailnetName() : undefined
       if (there) others.add(there)
     }
     return others.has(name)

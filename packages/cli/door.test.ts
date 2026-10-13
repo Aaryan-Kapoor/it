@@ -17,11 +17,12 @@ import { fileURLToPath } from 'node:url'
 import { AUDIENCE, contentPort, LIMITS, SANDBOX } from '@it/protocol'
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { Problem } from './src/lib'
 import { doorKey } from './src/serve/config'
 import { type Arrival, type DoorParts, makeContent, makeDoor, startDoor } from './src/serve/door'
 import { answerSite, type Site } from './src/serve/site'
+import { forgetTailnetName, tailnetName } from './src/serve/tailnet'
 
 type ServiceConfig = Parameters<typeof startDoor>[0]
 type Backend = Parameters<typeof startDoor>[1]
@@ -3290,6 +3291,47 @@ describe('Kept to the tailnet', () => {
   test('Open to every network, the same callers are answered', async () => {
     const open = config(door.base, true)
     for (const anyone of ['192.168.1.50', '100.101.42.17', '2001:db8:100:c690::4f1a']) expect(await asked(open, anyone), anyone).not.toBe(421)
+  })
+
+  test('Opened to every network after it was kept to the tailnet, the door still answers to the name the machine has there, which is the address its screens were given', async () => {
+    // A machine that is on a tailnet, where Tailscale says its name
+    const interfaces = vi.spyOn(os, 'networkInterfaces').mockReturnValue({
+      eth0: [{ address: '192.168.1.20', family: 'IPv4', internal: false, netmask: '255.255.255.0', mac: '00:00:00:00:00:01', cidr: '192.168.1.20/24' }],
+      tailscale0: [
+        { address: '100.101.42.17', family: 'IPv4', internal: false, netmask: '255.255.255.255', mac: '00:00:00:00:00:00', cidr: '100.101.42.17/32' },
+      ],
+    })
+    forgetTailnetName()
+    tailnetName(() => JSON.stringify({ Self: { DNSName: 'studio.tail1234.ts.net.' } }))
+    try {
+      /** What a door answers a screen on the tailnet that asks by a name, on the site's port and on the pages'. */
+      const byName = async (kept: ServiceConfig, name: string) => {
+        const answers: number[] = []
+        for (const port of [door.base, contentPort(door.base)])
+          answers.push(
+            (
+              await makeDoor(kept, backend, () => {}, parts()).answer({
+                method: 'GET',
+                target: '/',
+                headers: new Headers({ host: `${name}:${port}` }),
+                body: null,
+                port,
+                address: '100.101.42.17',
+              } satisfies Arrival)
+            ).status,
+          )
+        return answers.map((status) => status === 421)
+      }
+      const [tailnet, open] = [{ ...config(door.base, true), tailnet: true }, config(door.base, true)]
+      expect(await byName(tailnet, 'studio.tail1234.ts.net')).toEqual([false, false])
+      expect(await byName(open, 'studio.tail1234.ts.net')).toEqual([false, false])
+      // Still no name but the machine's own, and with the network off not that one either
+      expect(await byName(open, 'other.tail1234.ts.net')).toEqual([true, true])
+      expect(await byName(config(door.base, false), 'studio.tail1234.ts.net')).toEqual([true, true])
+    } finally {
+      interfaces.mockRestore()
+      forgetTailnetName()
+    }
   })
 })
 
