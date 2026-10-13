@@ -74,8 +74,11 @@ export async function turnOnPush(convex: ConvexReactClient): Promise<string> {
     return 'Signed out'
   }
   try {
+    // Permission that already stands is not asked for again: a browser may answer no to an
+    // asking that nothing the person pressed led to, as Safari does, and a subscription that
+    // is being put back by itself would be taken for one the person had refused
+    if (Notification.permission !== 'granted' && (await Notification.requestPermission()) !== 'granted') return 'Not allowed'
     // Asked after every wait, before the next thing is done: a wait may last as long as the person takes to answer the browser
-    if ((await Notification.requestPermission()) !== 'granted') return 'Not allowed'
     if (overtaken()) return stopped()
     const before = await navigator.serviceWorker.getRegistration()
     if (overtaken()) return stopped()

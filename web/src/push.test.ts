@@ -543,6 +543,19 @@ describe('putting back a subscription the browser has lost, where the backend st
     expect([s.registration.pushManager.subscribe.mock.calls.length, s.calls]).toEqual([1, ['push:subscribe']])
   })
 
+  test('permission that still stands is not asked for again: a browser that answers no to an asking nobody pressed anything for, as Safari does, is subscribed again all the same', async () => {
+    const s = lost()
+    const asked = vi.fn(async () => 'denied')
+    vi.stubGlobal('Notification', { permission: 'granted', requestPermission: asked })
+    localStorage.setItem('it.pushAsked', 'yes')
+    const mending = mendPush(s.client)
+    s.first.settle(s.registration)
+    await mending
+    expect(asked).not.toHaveBeenCalled()
+    expect([s.registration.pushManager.subscribe.mock.calls.length, s.calls]).toEqual([1, ['push:subscribe']])
+    expect(localStorage.getItem('it.pushAsked')).toBe('yes')
+  })
+
   test('notifications the person turned off while it waited on the browser stay off: it subscribes to nothing and tells the backend nothing', async () => {
     const s = lost()
     const mending = mendPush(s.client)
