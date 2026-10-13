@@ -519,7 +519,8 @@
     // what is set meanwhile is kept for that move, and played when the move is known to have gone.
     function answer(reply, fresh) {
       if (!waiting || now.over || pos.turn !== "b" || !reply.trim()) return;
-      if (!sent) { early = { reply: reply, fresh: fresh }; return; }
+      // Hearing the same answer twice before the move was accepted must keep its request for a correction.
+      if (!sent) { early = { reply: reply, fresh: fresh || !!(early && early.reply === reply && early.fresh) }; return; }
       var m = C.find(now.legal, reply);
       if (m) theirs(m);
       // Not a move it may make: the agent is told so, once for what it set, and the person is shown nothing of it
