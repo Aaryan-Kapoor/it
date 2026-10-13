@@ -21,7 +21,7 @@
 // file as a plugin and refuses the file if one of them is not a function.
 import { createHmac, randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import http from 'node:http'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -61,6 +61,100 @@ const itHome = () => process.env.IT_HOME || (typeof IT_HOME_AT_SETUP === 'string
 
 /** Whether a piece of text in a conversation carries a click: the connector's words for it, or the name those words end with. */
 const carries = (text, click) => text.includes(click.text) || text.includes(`[action ${click.id}]`)
+
+/**
+ * The answer in what the connector sent before it closed the connection: its status, its
+ * headers by their names in small letters, and its body as text. Null when what was sent is
+ * not a whole answer.
+ */
+function answerIn(raw) {
+  const end = raw.indexOf('\r\n\r\n')
+  if (end < 0) return null
+  const [first, ...lines] = raw.toString('latin1', 0, end).split('\r\n')
+  const status = /^HTTP\/1\.[01] (\d{3})(?: |$)/.exec(first)?.[1]
+  if (!status) return null
+  const headers = {}
+  for (const line of lines) {
+    const colon = line.indexOf(':')
+    if (colon > 0) headers[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim()
+  }
+  let body = raw.subarray(end + 4)
+  if (/\bchunked\b/i.test(headers['transfer-encoding'] ?? '')) {
+    // Sent in pieces, each behind a line that says how long it is, with a piece of no length last
+    const pieces = []
+    for (let at = 0; ; ) {
+      const line = body.indexOf('\r\n', at)
+      const length = line < 0 ? Number.NaN : Number.parseInt(body.toString('latin1', at, line), 16)
+      if (!(length >= 0) || line + 2 + length > body.length) return null
+      if (length === 0) break
+      pieces.push(body.subarray(line + 2, line + 2 + length))
+      at = line + 2 + length + 2
+    }
+    body = Buffer.concat(pieces)
+  } else if (headers['content-length'] !== undefined) {
+    const length = Number(headers['content-length'])
+    if (!Number.isInteger(length) || length < 0 || length > body.length) return null
+    body = body.subarray(0, length)
+  }
+  return { status: Number(status), headers, text: body.toString('utf8') }
+}
+
+/**
+ * Puts one question to the connector on a connection of this add-on's own, opened to the socket
+ * in It's folder or to the port on this machine and to nothing else, with the question written
+ * out as plain HTTP. Neither `node:http` nor `fetch` is used for it. Node, told to use the
+ * environment's proxy, sends what they ask through it, and Bun does whenever a proxy is named
+ * there, though the question is for this very machine: the proxy would be shown which
+ * conversation is asked about, and what was done on its pages. Null when there was no answer:
+ * none at all, one that took too long or was too long, or one that is not an answer.
+ */
+function exchange(c, method, route, headers, text) {
+  return new Promise((resolve) => {
+    const pieces = []
+    let size = 0
+    let over = false
+    let socket
+    const answer = (value) => {
+      if (over) return
+      over = true
+      clearTimeout(deadline)
+      socket?.destroy()
+      resolve(value)
+    }
+    // Counted from the start and not put off by bytes that keep arriving, so that an answer
+    // sent a little at a time cannot hold a check up for ever
+    const deadline = setTimeout(() => answer(null), DEADLINE_MS)
+    deadline.unref?.()
+    try {
+      socket = c.socket ? net.connect({ path: c.socket }) : net.connect({ host: '127.0.0.1', port: c.port })
+      socket.setTimeout(ANSWER_MS, () => answer(null))
+      // Whatever goes wrong, the connection ends by closing, and a second answer to a promise is ignored
+      socket.on('error', () => answer(null))
+      socket.on('close', () => answer(null))
+      socket.on('connect', () => {
+        const head = [
+          `${method} ${route} HTTP/1.1`,
+          `host: ${c.socket ? 'it' : `127.0.0.1:${c.port}`}`,
+          // The connector closes the connection once it has answered, so the answer is whole when the connection ends
+          'connection: close',
+          ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
+          ...(text ? [`content-length: ${Buffer.byteLength(text)}`] : []),
+        ]
+        socket.write(`${head.join('\r\n')}\r\n\r\n${text ?? ''}`)
+      })
+      // An answer that grows past the limit is dropped there and then, before its seal is
+      // looked at and before any of it is read as JSON. The next question starts afresh.
+      socket.on('data', (piece) => {
+        size += piece.length
+        if (size > MOST_BYTES) answer(null)
+        else pieces.push(piece)
+      })
+      socket.on('end', () => answer(answerIn(Buffer.concat(pieces))))
+    } catch {
+      answer(null)
+    }
+  })
+}
 
 export const ItBridge = async ({ client }) => {
   let connector = null // { socket | port, token }, read from the connector's own file
@@ -109,69 +203,16 @@ export const ItBridge = async ({ client }) => {
     // connector's port after a crash learns nothing, and nothing it answers is believed.
     const nonce = randomBytes(16).toString('hex')
     const proof = c.socket ? { 'x-it-token': c.token } : { 'x-it-nonce': nonce, 'x-it-mac': seal(c.token, nonce, `${method}\n${pathname}\n${text ?? ''}`) }
-    return new Promise((resolve) => {
-      let over = false
-      let req
-      let deadline
-      const answer = (value) => {
-        if (over) return
-        over = true
-        clearTimeout(deadline)
-        resolve(value)
-      }
-      const giveUp = () => {
-        answer(null)
-        req?.destroy()
-      }
-      // Counted from the start and not put off by bytes that keep arriving, so that an answer
-      // sent a little at a time cannot hold a round up for ever
-      deadline = setTimeout(giveUp, DEADLINE_MS)
-      deadline.unref?.()
-      try {
-        req = http.request(
-          {
-            ...(c.socket ? { socketPath: c.socket } : { host: '127.0.0.1', port: c.port }),
-            path: pathname,
-            method,
-            headers: { ...proof, 'content-type': 'application/json', ...(text === undefined ? {} : { 'content-length': Buffer.byteLength(text) }) },
-            timeout: ANSWER_MS,
-          },
-          (res) => {
-            const pieces = []
-            let size = 0
-            // An answer that grows past the limit is dropped there and then, before its seal is
-            // looked at and before any of it is read as JSON. The next question starts afresh.
-            res.on('data', (piece) => {
-              size += piece.length
-              if (size > MOST_BYTES) giveUp()
-              else pieces.push(piece)
-            })
-            res.on('end', () => {
-              if (over) return
-              const got = Buffer.concat(pieces).toString('utf8')
-              if (res.statusCode === 401) lookedAt = 0 // the connector restarted: read its file again
-              if (res.statusCode !== 200) return answer(null)
-              if (!c.socket && res.headers['x-it-mac'] !== seal(c.token, nonce, `200\n${got}`)) return answer(null)
-              try {
-                answer(JSON.parse(got))
-              } catch {
-                answer(null)
-              }
-            })
-            res.on('error', giveUp)
-            res.on('close', giveUp)
-          },
-        )
-        req.on('timeout', giveUp)
-        req.on('error', () => {
-          lookedAt = 0
-          giveUp()
-        })
-        req.end(text)
-      } catch {
-        giveUp()
-      }
-    })
+    const got = await exchange(c, method, pathname, { ...proof, 'content-type': 'application/json' }, text)
+    // No answer, or an answer that says the word is wrong: the connector restarted, so its file is read again
+    if (!got || got.status === 401) lookedAt = 0
+    if (got?.status !== 200) return null
+    if (!c.socket && got.headers['x-it-mac'] !== seal(c.token, nonce, `200\n${got.text}`)) return null
+    try {
+      return JSON.parse(got.text)
+    } catch {
+      return null
+    }
   }
 
   /**

@@ -1,9 +1,11 @@
 // The Pi add-on, run against a stand-in for Pi's extension API and a stand-in connector: a
 // small web server on a socket in a temporary folder, as the real connector is on Linux and
 // macOS. Nothing here needs Pi itself, an account or the network.
+import { spawn } from 'node:child_process'
 import { createHmac } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -174,18 +176,19 @@ const turn = () => new Promise((r) => reallyNext(r))
  * is waited for the add-on has acted on every answer.
  */
 let questions = { put: 0, waiting: 0 }
-const request = http.request
+const connecting = net.connect
 function watchQuestions() {
   // Each test counts for itself: a question an earlier test left unanswered ends in that test's count
   const seen = { put: 0, waiting: 0 }
   questions = seen
-  http.request = ((...given: unknown[]) => {
+  // The add-on opens a connection of its own for each question, and closes it with the answer
+  net.connect = ((...given: unknown[]) => {
     seen.put++
     seen.waiting++
-    const req = (request as (...given: unknown[]) => http.ClientRequest)(...given)
-    req.once('close', () => seen.waiting--)
-    return req
-  }) as typeof http.request
+    const socket = (connecting as (...given: unknown[]) => net.Socket)(...given)
+    socket.once('close', () => seen.waiting--)
+    return socket
+  }) as typeof net.connect
 }
 /**
  * The add-on waits on nothing outside itself: every question it had put to the connector is
@@ -225,7 +228,7 @@ beforeEach(() => {
 })
 afterEach(async () => {
   for (const stop of stops) stop()
-  http.request = request
+  net.connect = connecting
   vi.useRealTimers()
   if (server) {
     server.closeAllConnections()
@@ -639,4 +642,118 @@ describe('the Pi add-on', () => {
     expect(asked).toEqual([])
     expect(p.sent).toEqual([])
   })
+})
+
+// The connector is on this machine, and what is asked of it names a conversation and brings
+// back what a person did on a page. A proxy named in the environment is for the internet, and
+// must be shown none of it. Pi is run under Node, and its standalone program under Bun, which
+// sends whatever `node:http` asks through a proxy that is named when it starts. So the add-on
+// is run in a process of its own that was started with one named.
+describe.skipIf(process.platform === 'win32')('the Pi add-on, in a Pi started with a proxy named in its environment', () => {
+  /** Something that takes whatever is sent to it as a proxy would, notes the first line of each thing asked, and passes nothing on. */
+  async function collecting() {
+    const seen: string[] = []
+    const proxy = net.createServer((socket) => {
+      socket.on('error', () => {})
+      let got = ''
+      socket.on('data', (piece: Buffer) => {
+        const first = !got.includes('\r\n')
+        got += piece.toString('latin1')
+        if (!first || !got.includes('\r\n')) return
+        seen.push(got.split('\r\n')[0]!)
+        socket.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+      })
+    })
+    await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r))
+    const at = `http://127.0.0.1:${(proxy.address() as net.AddressInfo).port}`
+    return {
+      seen,
+      // Named in every variable either runtime reads, with nothing left out of its reach
+      env: { HTTP_PROXY: at, http_proxy: at, HTTPS_PROXY: at, https_proxy: at, ALL_PROXY: at, all_proxy: at, NO_PROXY: '', no_proxy: '' },
+      close: () => new Promise<void>((r) => void proxy.close(() => r())),
+    }
+  }
+  const bun = (process.env.PATH ?? '')
+    .split(path.delimiter)
+    .map((dir) => path.join(dir, 'bun'))
+    .find((file) => existsSync(file))
+  /** A Pi cut down to what the add-on asks of one: an idle conversation, which takes a message and shows it. */
+  const PI = `
+    import addon from ${JSON.stringify(pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), 'extensions/it.js')).href)}
+    const handlers = new Map()
+    const ctx = {
+      mode: 'tui',
+      model: { id: 'stand-in' },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      sessionManager: { getSessionId: () => 'the-persons-own-session', getSessionFile: () => '/sessions/the-persons-own.jsonl' },
+    }
+    const emit = (name, event = {}) => {
+      for (const handler of handlers.get(name) ?? []) handler({ type: name, ...event }, ctx)
+    }
+    addon({
+      on(name, handler) {
+        handlers.set(name, [...(handlers.get(name) ?? []), handler])
+        return () => {}
+      },
+      sendUserMessage(text) {
+        console.log(text)
+        const message = { role: 'user', content: [{ type: 'text', text }], timestamp: Date.now() }
+        emit('message_start', { message })
+        emit('message_end', { message })
+      },
+    })
+    emit('session_start', { reason: 'startup' })
+    setTimeout(() => process.exit(0), 20000)
+  `
+
+  for (const [name, runtime, told] of [
+    ['Node told to use the environment’s proxy', process.execPath, { NODE_USE_ENV_PROXY: '1' }],
+    ['Bun', bun, {}],
+  ] as const)
+    it.skipIf(!runtime)(
+      `under ${name}, a click is asked for, taken and reported over the connector’s port on this machine, and the proxy is sent nothing`,
+      async () => {
+        const proxy = await collecting()
+        const c = click('approve')
+        const seen: string[] = []
+        // The connector as it answers on a port: only what is sealed with the token is believed, either way
+        server = http.createServer((req, res) => {
+          let sent = ''
+          req
+            .on('data', (piece) => (sent += piece))
+            .on('end', () => {
+              const nonce = String(req.headers['x-it-nonce'])
+              const genuine = req.headers['x-it-mac'] === createHmac('sha256', TOKEN).update(`${nonce}\n${req.method}\n${req.url}\n${sent}`).digest('hex')
+              seen.push(`${req.method} ${req.url} ${genuine}`)
+              const answer = JSON.stringify(req.url === '/ack' ? { ok: true } : { clicks: seen.some((s) => s.startsWith('POST /ack')) ? [] : [c] })
+              res.writeHead(200, {
+                'content-type': 'application/json',
+                'x-it-mac': createHmac('sha256', TOKEN).update(`${nonce}\n200\n${answer}`).digest('hex'),
+              })
+              res.end(answer)
+            })
+        })
+        await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+        writeFileSync(path.join(home, 'connector.json'), JSON.stringify({ port: (server.address() as { port: number }).port, token: TOKEN }))
+        const program = path.join(home, 'pi.mjs')
+        writeFileSync(program, PI)
+        const child = spawn(runtime!, [program], { env: { PATH: process.env.PATH, IT_HOME: home, ...proxy.env, ...told }, stdio: ['ignore', 'pipe', 'ignore'] })
+        let handed = ''
+        child.stdout.on('data', (piece) => (handed += piece))
+        try {
+          // Either the connector hears that the agent has the click, or the proxy was asked something
+          const end = performance.now() + 15_000
+          while (!seen.some((s) => s.startsWith('POST /ack')) && !proxy.seen.length && performance.now() < end) await new Promise((r) => really(r, 20))
+          expect(proxy.seen).toEqual([])
+          expect(seen[0]).toBe('GET /clicks?harness=pi&session=the-persons-own-session true')
+          expect(handed.trim()).toBe(c.text)
+          expect(seen).toContain('POST /ack true')
+        } finally {
+          child.kill('SIGKILL')
+          await proxy.close()
+        }
+      },
+      30_000,
+    )
 })

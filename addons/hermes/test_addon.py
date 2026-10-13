@@ -827,6 +827,34 @@ class OverAPort(Case):
         self.assertEqual(self.connector.refused, 0, "the connector believed every request")
         self.assertEqual(self.connector.token_shown, 0)
 
+    def test_a_proxy_named_in_the_environment_is_sent_nothing_of_what_is_asked_of_the_connector(self):
+        # Something that takes whatever is sent to it as a proxy would, and notes the first line of each thing asked
+        seen = []
+
+        class Proxy(socketserver.StreamRequestHandler):
+            def handle(self):
+                seen.append(self.rfile.readline().decode("latin-1").strip())
+                self.wfile.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+
+        proxy = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Proxy)
+        proxy.daemon_threads = True
+        threading.Thread(target=proxy.serve_forever, daemon=True).start()
+        self.addCleanup(lambda: (proxy.shutdown(), proxy.server_close()))
+        # Named in every variable Python reads one from, with nothing left out of its reach.
+        # Python looks them up when something is asked, so named now is named from the start.
+        names = ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy")
+        before = {name: os.environ.get(name) for name in names}
+        self.addCleanup(lambda: [os.environ.pop(name, None) if value is None else os.environ.__setitem__(name, value) for name, value in before.items()])
+        for name in names:
+            os.environ[name] = "" if name.lower() == "no_proxy" else "http://127.0.0.1:%d" % proxy.server_address[1]
+        hermes = self.terminal()
+        hermes.turn(A, running=False)
+        self.connector.offer(A, click("k1"))
+        self.assertTrue(until(lambda: self.connector.acks() or seen))
+        self.assertEqual(seen, [], "the connector is on this machine, and is asked on a connection of the add-on's own")
+        self.assertEqual(hermes.messages, [(TEXT, "user", None)])
+        self.assertEqual(self.connector.acks(), [("k1",)])
+
     def test_an_answer_from_something_else_on_the_port_is_not_believed(self):
         self.connector.seals_with = "f" * 48
         hermes = self.terminal()
