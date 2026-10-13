@@ -117,4 +117,64 @@ describe('a tour that is over', () => {
     await browser.mutation(api.tour.done, {})
     expect((await browser.query(api.tour.get, {})).doneAt).toBe(first! + 1000)
   })
+
+  test('an agent that was waiting when the person said they want none is said to wait no longer, and is told so when it next asks', async () => {
+    const { browser, agent } = await household()
+    await agent.mutation(api.tour.wait, { harness: 'codex' })
+    vi.advanceTimersByTime(2500)
+    await agent.mutation(api.tour.wait, { harness: 'codex' })
+    vi.advanceTimersByTime(1000)
+    await browser.mutation(api.tour.done, {})
+    const skipped = Date.now()
+    expect(await browser.query(api.tour.get, {})).toMatchObject({ waitingUntil: null, doneAt: skipped })
+    // It asks again every few seconds, and each asking before what it last said has run out is refused, with nothing written
+    for (let n = 0; n < 3; n++) {
+      vi.advanceTimersByTime(2500)
+      await expect(agent.mutation(api.tour.wait, { harness: 'codex' })).rejects.toThrow(/The person said on the site that they want no tour/)
+      expect(await browser.query(api.tour.get, {})).toMatchObject({ waitingUntil: null, doneAt: skipped })
+    }
+    // Nor would the button reach it, were it pressed
+    expect(await browser.mutation(api.tour.ask, {})).toEqual({ waiting: false, by: 'codex' })
+  })
+
+  test('an asking the person made before they said they want none is not taken up after it', async () => {
+    const { browser, agent } = await household()
+    await agent.mutation(api.tour.wait, { harness: 'codex' })
+    expect(await browser.mutation(api.tour.ask, {})).toEqual({ waiting: true, by: 'codex' })
+    vi.advanceTimersByTime(1000)
+    await browser.mutation(api.tour.done, {})
+    vi.advanceTimersByTime(1500)
+    await expect(agent.mutation(api.tour.wait, { harness: 'codex' })).rejects.toThrow(/want no tour/)
+    // And an agent that comes to wait once that one has gone hears of nothing
+    vi.advanceTimersByTime(WAITING_MS)
+    expect(await agent.mutation(api.tour.wait, { harness: 'codex' })).toEqual({ asked: false })
+    // Nor is an asking that a tour has since answered, where no agent was waiting to take it up
+    await browser.mutation(api.tour.ask, {})
+    vi.advanceTimersByTime(60_000)
+    await agent.mutation(api.tour.done, {})
+    expect(await agent.mutation(api.tour.wait, { harness: 'codex' })).toEqual({ asked: false })
+  })
+
+  test('an agent that comes to wait after that is said to wait, and hears of an asking, as before there was a tour', async () => {
+    const { browser, agent } = await household()
+    await agent.mutation(api.tour.wait, { harness: 'pi' })
+    vi.advanceTimersByTime(1000)
+    await browser.mutation(api.tour.done, {})
+    // What the one that was turned away last said has run out: whoever waits now began after the person said so
+    vi.advanceTimersByTime(WAITING_MS)
+    expect(await agent.mutation(api.tour.wait, { harness: 'pi' })).toEqual({ asked: false })
+    expect(await browser.query(api.tour.get, {})).toMatchObject({ waitingUntil: Date.now() + WAITING_MS, by: 'pi' })
+    vi.advanceTimersByTime(WAITING_MS / 2 + 2500)
+    expect(await agent.mutation(api.tour.wait, { harness: 'pi' })).toEqual({ asked: false })
+    expect(await browser.query(api.tour.get, {})).toMatchObject({ waitingUntil: Date.now() + WAITING_MS })
+    expect(await browser.mutation(api.tour.ask, {})).toEqual({ waiting: true, by: 'pi' })
+    expect(await agent.mutation(api.tour.wait, { harness: 'pi' })).toEqual({ asked: true })
+    // An agent that ends a tour of its own turns nobody away: one that waits meanwhile goes on waiting
+    await agent.mutation(api.tour.wait, { harness: 'pi' })
+    vi.advanceTimersByTime(1000)
+    await agent.mutation(api.tour.done, {})
+    vi.advanceTimersByTime(1500)
+    expect(await agent.mutation(api.tour.wait, { harness: 'pi' })).toEqual({ asked: false })
+    expect(await browser.query(api.tour.get, {})).toMatchObject({ waitingUntil: Date.now() + WAITING_MS })
+  })
 })

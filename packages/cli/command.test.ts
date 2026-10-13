@@ -415,6 +415,23 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it tour --wait` ends when the backend turns it away, as it does once the person has said they want no tour, and says why', async () => {
+    const m = machine()
+    const NONE = 'The person said on the site that they want no tour, so there is nothing to wait for. Give the tour when they ask you for it.'
+    let waits = 0
+    const b = await backend(m, (asked) =>
+      asked.path !== 'tour:wait' ? null : ++waits < 2 ? { asked: false } : new Refusal({ code: 'conflict', message: NONE }),
+    )
+    try {
+      const turnedAway = await run(m, ['tour', '--wait'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' })
+      expect([turnedAway.code, turnedAway.out, error(turnedAway)]).toEqual([1, '', { code: 'conflict', message: NONE }])
+      // It asked no more after that, and had nothing to take back: the backend no longer says that it waits
+      expect(b.asked.map((x) => x.path)).toEqual(['tour:wait', 'tour:wait'])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it tour --wait` says it is waiting until the person asks for the tour on the site, prints the tour then, and says when nobody asked', async () => {
     const m = machine()
     let waits = 0
