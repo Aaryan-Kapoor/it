@@ -181,6 +181,19 @@ describe('what a page’s agent said above the page', () => {
     expect(line()).toBe('And centred.')
   })
 
+  test('one that was dismissed is not brought back by opening the box, nor by drawing the page again in that tab', async () => {
+    page = { ...page, said: { text: 'Bigger now.', at: NOW - 60_000 } }
+    await shown()
+    await act(async () => host.querySelector<HTMLButtonElement>('.page-talk-x')!.click())
+    await act(async () => opener().click())
+    expect(box()).not.toBeNull()
+    expect(line()).toBeNull()
+    await act(async () => root.unmount())
+    host.remove()
+    await shown()
+    expect(host.querySelector('.page-talk')).toBeNull()
+  })
+
   test('is not brought up by itself long after, and is there for whoever opens the box', async () => {
     page = { ...page, said: { text: 'Yesterday’s answer.', at: NOW - 24 * 3_600_000 } }
     await shown()
