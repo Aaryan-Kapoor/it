@@ -910,6 +910,49 @@ describe('what ending a paired browser takes with it', () => {
     expect(await waitingStill(h)).toEqual([401, 401])
   })
 
+  test('forgetting the display of a browser that signed itself out ends what that browser let in, which the owner is told before', async () => {
+    const h = await household()
+    const laptops = await register(h.laptop, 'the-laptop-display-key-01')
+    expect(await h.desk.browser.query(api.sessions.leftBehind, {})).toEqual([])
+    await endOf(h.t, h.laptop)
+    // Signing out ended only the laptop: the display it was is still listed, as not paired
+    expect(await living(h)).toEqual(['kitchen', 'second', 'agent', 'agentsScreen', 'third', 'desk', 'hall'])
+    const left = await h.desk.browser.query(api.sessions.leftBehind, {})
+    expect(left.map((l) => [l.display, [...l.along.browsers].sort(), [...l.along.machines].sort()])).toEqual([
+      [laptops.id, [h.kitchen.session, h.agent.session, h.agentsScreen.session].sort(), [h.second.id, h.third.id].sort()],
+    ])
+    // It is the owner's to be told, as the paired browsers are
+    expect(await code(h.hall.browser.query(api.sessions.leftBehind, {}))).toBe('forbidden')
+    expect(await code(h.machine.query(api.sessions.leftBehind, {}))).toBe('forbidden')
+    await h.desk.browser.mutation(api.displays.forget, { displayId: laptops.id })
+    expect(await living(h)).toEqual(['desk', 'hall'])
+    expect(await waitingStill(h)).toEqual([401, 401])
+    expect(await h.desk.browser.query(api.sessions.leftBehind, {})).toEqual([])
+  })
+
+  test('and so it does a day later, when the record of that browser has been cleaned away', async () => {
+    const h = await household()
+    const laptops = await register(h.laptop, 'the-laptop-display-key-01')
+    await endOf(h.t, h.laptop)
+    await vi.advanceTimersByTimeAsync(25 * 3_600_000)
+    await h.t.mutation(internal.retention.sweepRecords, {})
+    expect(await h.t.run((ctx) => ctx.db.get(h.laptop.session as never))).toBeNull()
+    expect((await h.desk.browser.query(api.sessions.leftBehind, {})).map((l) => [l.display, l.along.browsers.length, l.along.machines.length])).toEqual([
+      [laptops.id, 3, 2],
+    ])
+    await h.desk.browser.mutation(api.displays.forget, { displayId: laptops.id })
+    expect(await living(h)).toEqual(['desk', 'hall'])
+  })
+
+  test('a display whose browser signed out having let nothing in is forgotten alone', async () => {
+    const h = await household()
+    const halls = await register(h.hall, 'the-hall-display-key-0001')
+    await endOf(h.t, h.hall)
+    expect(await h.desk.browser.query(api.sessions.leftBehind, {})).toEqual([])
+    await h.desk.browser.mutation(api.displays.forget, { displayId: halls.id })
+    expect(await living(h)).toEqual(['laptop', 'kitchen', 'second', 'agent', 'agentsScreen', 'third', 'desk'])
+  })
+
   test('what a browser let in is ended with it though a browser between them signed out and its record was cleaned away', async () => {
     const h = await household()
     // The agent's own browser signs out, and a day later its record is gone: its screen and the third machine name a browser that is no more

@@ -173,7 +173,10 @@ const TAKES_ALONG: ReadonlySet<EndedBy> = new Set(['owner', 'forgotten', 'browse
  *
  * Where the session is ended by the owner, or with the display it is, what it let in is ended
  * with it: the screens paired with its codes, and the machines that joined with them, each
- * with everything that descends from it.
+ * with everything that descends from it. That is so though the session itself was over before
+ * then, and though its record has been cleaned away since: a browser that signs itself out
+ * ends only itself, and what it let in is still there to be ended when the owner forgets the
+ * display that browser was. Otherwise signing out first would keep all of it.
  *
  * `but` is a session that none of this ends, wherever among them it comes: the one the owner
  * asks from when they end every other.
@@ -181,21 +184,24 @@ const TAKES_ALONG: ReadonlySet<EndedBy> = new Set(['owner', 'forgotten', 'browse
 export async function endSession(ctx: MutationCtx, sessionId: Id<'sessions'>, by: EndedBy, but?: Id<'sessions'>): Promise<boolean> {
   if (sessionId === but) return false
   const session = await ctx.db.get(sessionId)
-  if (!session || session.endedAt !== undefined) return false
+  const ends = session !== null && session.endedAt === undefined
+  if (!ends && !TAKES_ALONG.has(by)) return false
   const now = Date.now()
-  await ctx.db.patch(sessionId, { endedAt: now })
-  const displays = await ctx.db
-    .query('displays')
-    .withIndex('by_session', (q) => q.eq('sessionId', sessionId))
-    .take(QUOTA.displays + 1)
-  for (const d of displays) await signOutDisplay(ctx, d)
-  const waiting = await ctx.db
-    .query('invites')
-    .withIndex('by_session', (q) => q.eq('bySession', sessionId).gt('expiresAt', now))
-    .take(WAITING)
-  for (const i of waiting) if (i.usedAt === undefined) await ctx.db.delete(i._id)
-  log('session.ended', { userId: session.userId, sessionId, by, displays: displays.length })
-  if (!TAKES_ALONG.has(by)) return true
+  if (ends) {
+    await ctx.db.patch(sessionId, { endedAt: now })
+    const displays = await ctx.db
+      .query('displays')
+      .withIndex('by_session', (q) => q.eq('sessionId', sessionId))
+      .take(QUOTA.displays + 1)
+    for (const d of displays) await signOutDisplay(ctx, d)
+    const waiting = await ctx.db
+      .query('invites')
+      .withIndex('by_session', (q) => q.eq('bySession', sessionId).gt('expiresAt', now))
+      .take(WAITING)
+    for (const i of waiting) if (i.usedAt === undefined) await ctx.db.delete(i._id)
+    log('session.ended', { userId: session.userId, sessionId, by, displays: displays.length })
+    if (!TAKES_ALONG.has(by)) return true
+  }
   const screens = await ctx.db
     .query('sessions')
     .withIndex('by_session', (q) => q.eq('bySession', sessionId).eq('endedAt', undefined))
@@ -206,7 +212,7 @@ export async function endSession(ctx: MutationCtx, sessionId: Id<'sessions'>, by
     .withIndex('by_session', (q) => q.eq('bySession', sessionId).eq('revoked', false))
     .take(QUOTA.machines)
   for (const m of machines) await revokeMachine(ctx, m, 'browser_ended', but)
-  return true
+  return ends
 }
 
 /**
@@ -303,11 +309,6 @@ export const list = query({
     const out = []
     for (const s of paired) {
       const machine = s.byMachine && !s.bySession ? (machines.find((m) => m._id === s.byMachine)?.name ?? null) : null
-      // The machines it added, with all that descend from them, and the browsers that it or any of those let in
-      const line = lineOf(
-        machines,
-        machines.filter((m) => m.bySession === s._id).map((m) => m._id),
-      )
       out.push({
         id: s._id,
         role: s.role,
@@ -322,13 +323,55 @@ export const list = query({
           : typeof machine === 'string'
             ? { kind: 'machine' as const, name: machine }
             : null,
-        along: {
-          browsers: paired.filter((x) => x.bySession === s._id || (x.byMachine !== undefined && line.has(x.byMachine))).map((x) => x._id),
-          machines: [...line],
-        },
+        along: alongOf(s._id, paired, machines),
       })
     }
     return out.sort((a, b) => Number(b.mine) - Number(a.mine) || b.lastSeenAt - a.lastSeenAt || b.pairedAt - a.pairedAt)
+  },
+})
+
+/**
+ * What a browser let in, of all that is paired still: the machines it added, with all that
+ * descend from them, and the browsers that it or any of those let in.
+ */
+function alongOf(id: Id<'sessions'>, paired: Doc<'sessions'>[], machines: Doc<'machines'>[]) {
+  const line = lineOf(
+    machines,
+    machines.filter((m) => m.bySession === id).map((m) => m._id),
+  )
+  return {
+    browsers: paired.filter((x) => x.bySession === id || (x.byMachine !== undefined && line.has(x.byMachine))).map((x) => x._id),
+    machines: [...line],
+  }
+}
+
+/**
+ * What forgetting a display would end though the pairing of its browser is over: that browser
+ * ended only itself when it signed out, and what it let in before then goes when the display
+ * is forgotten. For the owner's browser to say before the person confirms. Each display whose
+ * browser is not paired and let something in that is, with what that is, as `list` gives it
+ * for a browser that is paired.
+ */
+export const leftBehind = query({
+  args: {},
+  handler: async (ctx) => {
+    const { user } = await requireOwner(ctx)
+    const displays = await ctx.db
+      .query('displays')
+      .withIndex('by_user', (q) => q.eq('userId', user._id))
+      .take(QUOTA.displays + 1)
+    const machines = await ctx.db
+      .query('machines')
+      .withIndex('by_user', (q) => q.eq('userId', user._id).eq('revoked', false))
+      .take(QUOTA.machines)
+    const paired = await pairedOf(ctx, user._id)
+    const out = []
+    for (const d of displays) {
+      if (paired.some((s) => s._id === d.sessionId)) continue
+      const along = alongOf(d.sessionId, paired, machines)
+      if (along.browsers.length || along.machines.length) out.push({ display: d._id, along })
+    }
+    return out
   },
 })
 

@@ -26,7 +26,7 @@ A browser paired with `it site` may do everything. A screen paired from the Disp
 
 Each code, and the browser or the machine that comes of it, records what asked for it. The Displays page lists every browser that is paired, whether or not it ever showed a display, with what asked for its code and when it was last used. Any of them can be ended there, and all but the one you are reading on can be ended at once.
 
-Ending a paired browser on the Displays page, forgetting a display and revoking a machine each end everything that came from what you end: the screens that were paired with its codes, the machines that joined with them, and theirs in turn. The site says how many go before you confirm. A browser that signs itself out ends only itself. At most fifty browsers are paired at once, and one more makes room by ending the one that has gone longest unused.
+Ending a paired browser on the Displays page, forgetting a display and revoking a machine each end everything that came from what you end: the screens that were paired with its codes, the machines that joined with them, and theirs in turn. The site says how many go before you confirm. A browser that signs itself out ends only itself, and what it let in goes when you forget the display that browser was. At most fifty browsers are paired at once, and one more makes room by ending the one that has gone longest unused.
 
 ### A page cannot reach the site, or another page
 

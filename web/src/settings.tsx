@@ -160,7 +160,10 @@ export function Displays({ thisDisplay }: { thisDisplay?: string }) {
   // Forgetting a display ends the pairing of the browser that is that display, and with it what that browser let in
   const paired = useQuery(api.sessions.list, {}) as Paired[] | undefined
   const me = paired?.find((s) => s.mine)?.id
-  const alongWith = (display: string) => goesAlong(paired?.find((s) => s.displays.some((d) => d.id === display))?.along, me)
+  // And so does forgetting one whose browser signed itself out: what that browser let in stayed then, and goes now
+  const left = useQuery(api.sessions.leftBehind, {}) as { display: string; along: Paired['along'] }[] | undefined
+  const alongWith = (display: string) =>
+    goesAlong(paired?.find((s) => s.displays.some((d) => d.id === display))?.along ?? left?.find((l) => l.display === display)?.along, me)
   const now = useNow()
   const [error, act] = useAct()
   const [adding, setAdding] = useState(false)

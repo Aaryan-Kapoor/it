@@ -132,6 +132,38 @@ describe('what each kind of session is offered', () => {
     expect(calls).toEqual([])
   })
 
+  test('and what a browser that signed itself out let in, which goes when the display it was is forgotten', async () => {
+    const asked: string[] = []
+    vi.stubGlobal('confirm', (text: string) => {
+      asked.push(text)
+      return false
+    })
+    watched['displays:list'] = [
+      { ...DISPLAYS[0]!, paired: true },
+      { ...DISPLAYS[1]!, paired: false, push: false },
+    ]
+    watched['sessions:list'] = [
+      {
+        role: 'owner',
+        pairedAt: 0,
+        lastSeenAt: 0,
+        invitedBy: null,
+        id: 'session-1',
+        mine: true,
+        displays: [{ id: 'display-1', name: 'Chrome on Linux' }],
+        along: { browsers: [], machines: [] },
+      },
+    ]
+    watched['sessions:leftBehind'] = [{ display: 'display-2', along: { browsers: ['session-3'], machines: ['machine-2'] } }]
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    await act(async () => [...host.querySelectorAll('ul.rows')[0]!.querySelectorAll('li')][1]!.querySelectorAll('button')[1]!.click())
+    expect(asked).toEqual([
+      'Forget “Kitchen TV”? It is signed out, and pages open on it stop working, usually at once. It has to be paired again before it can be used. 1 paired browser and 1 machine came from it, and are ended with it.',
+    ])
+    expect(calls).toEqual([])
+  })
+
   test('a screen may name itself and sign itself out, and is offered nothing of the owner’s', async () => {
     const onSignOut = vi.fn()
     const { Settings } = await import('./settings')
