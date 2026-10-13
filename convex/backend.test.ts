@@ -4273,6 +4273,38 @@ describe('cases at the edges', () => {
     expect((await t.run((ctx) => ctx.db.query('actions').collect())).length).toBe(0)
   })
 
+  test.each([60, 450])('deleting a page clears its %s notices so an older live notice can be shown and dismissed', async (count) => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const live = await publish(m, 'live')
+    const dead = await publish(m, 'dead')
+    const kept = await m.as.mutation(api.notifications.send, { text: 'Still useful', slug: 'live' })
+    await t.run(async (ctx) => {
+      const page = (await ctx.db.get(dead.artifactId))!
+      for (let i = 0; i < count; i++) {
+        await ctx.db.insert('notifications', { userId: page.userId, artifactId: dead.artifactId, text: 'Gone', sticky: false, createdAt: Date.now() + i + 1 })
+      }
+      for (let i = 0; i < 300; i++) {
+        await ctx.db.insert('notifications', {
+          userId: page.userId,
+          text: 'Dismissed',
+          sticky: false,
+          createdAt: Date.now() + count + i + 1,
+          dismissedAt: Date.now(),
+        })
+      }
+    })
+    await alice.browser.mutation(api.artifacts.remove, { artifactId: dead.artifactId })
+    await settle(t)
+    const listed = await alice.browser.query(api.notifications.list, { key: displayKey('alice') })
+    expect(listed.map((n) => n.id)).toEqual([kept.id])
+    expect(await t.run(async (ctx) => (await ctx.db.query('notifications').collect()).filter((n) => n.artifactId === dead.artifactId))).toEqual([])
+    expect(await t.run((ctx) => ctx.db.get(live.artifactId))).not.toBeNull()
+    await alice.browser.mutation(api.notifications.dismiss, { key: displayKey('alice'), ids: [kept.id] })
+    expect(await alice.browser.query(api.notifications.list, { key: displayKey('alice') })).toEqual([])
+  })
+
   test('a tray holds what is for its display, however much is addressed elsewhere or was dismissed since', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

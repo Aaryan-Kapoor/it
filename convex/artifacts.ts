@@ -169,11 +169,10 @@ export const remove = mutation({
     if (a.waiting) await bump(ctx, user._id, { waiting: -a.waiting })
     // What was sent to the bell about the page goes from the bell with it. Left there, it
     // offers a button for a page that is gone: the tour's last notice outlived the tour so.
-    // The newest few hundred are looked through, which is more than a tray ever holds.
+    // The rest go in the bounded cleanup of this page, however old they are.
     const told = await ctx.db
       .query('notifications')
-      .withIndex('by_user', (q) => q.eq('userId', user._id))
-      .order('desc')
+      .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
       .take(300)
     for (const n of told) if (n.artifactId === a._id && !n.dismissedAt) await ctx.db.patch(n._id, { dismissedAt: Date.now() })
     await ctx.db.delete(a._id)

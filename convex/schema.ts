@@ -354,6 +354,7 @@ export default defineSchema({
     pushedTo: v.optional(v.array(v.id('displays'))),
   })
     .index('by_user', ['userId', 'createdAt'])
+    .index('by_artifact', ['artifactId'])
     // What one display's tray holds: what is addressed to it (or to every display) and not dismissed
     .index('by_user_target', ['userId', 'displayId', 'dismissedAt', 'createdAt'])
     .index('by_created', ['createdAt']),
