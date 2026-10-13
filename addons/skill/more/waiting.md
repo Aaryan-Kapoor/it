@@ -6,7 +6,7 @@ Both are needed, and neither is proof that a message will reach this conversatio
 
 It also listens for at most 40 conversations on one machine at a time, the ones it heard from most recently. Where the user has more than that open, a message for one of the others does not arrive by itself until that conversation is among the 40 again.
 
-If it will not arrive by itself, or you cannot tell, wait for it: `it wait --id deploy-plan` blocks until the user acts on that page, prints the action and exits. Where several things were waiting they are all printed, one JSON object on a line each: read every line.
+If it will not arrive by itself, or you cannot tell, wait for it: `it wait --id deploy-plan` blocks until the user acts on that page, prints the action and exits. Where several things were waiting they are printed together, one JSON object on a line each and at most 50 at once: read every line, and where 50 came, run it again, since more may be waiting.
 
 - **Without `--id`** it waits for an action on any page this conversation made. That needs your harness to tell `it` which conversation this is. Where it does not, the command is refused, and you must name the page with `--id`.
 - **`--timeout <seconds>`** is for a harness that stops a command after a couple of minutes: `it wait --id deploy-plan --timeout 100`. When the time is up it prints `{"timedOut": true}` and exits with status 0. Nothing was lost and nothing has happened yet: run it again. Where It could not be reached to say so, the command ends with an error and a status other than 0 instead: that is not a wait in which nothing happened, so check `it status` before you wait again.

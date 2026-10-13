@@ -342,6 +342,16 @@ describe('the agent skill', () => {
     expect(early.stored()).toEqual(['typed before the state came'])
   })
 
+  test('says how much of what is waiting one `it wait` or one `it actions` prints, in the number the program keeps, and to run it again past that', () => {
+    // Each of the three lists a command reads from is cut at the same number
+    const read = source('../../convex/delivery.ts')
+    for (const list of ['waiting', 'waitingFor', 'allWaiting'])
+      expect(read, list).toMatch(new RegExp(`export const ${list} = query\\(\\{[\\s\\S]{0,600}?\\.take\\(50\\)\\s+return asClicks`))
+    expect(more.waiting).toContain('at most 50 at once: read every line, and where 50 came, run it again, since more may be waiting.')
+    expect(more.actions).toContain('only lists what is waiting, 50 at most: where it lists 50, run it again once you have run `it ack` for those')
+    expect(skill).not.toContain('they are all printed')
+  })
+
   test('its first lines are read the same by every app, the strictest of them included', () => {
     // An app reads the lines between the dashes as YAML. Pi reads them strictly: a colon followed by a space
     // inside the description begins a mapping there, the whole skill is refused ("Nested mappings are not
