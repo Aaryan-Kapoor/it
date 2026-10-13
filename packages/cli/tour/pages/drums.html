@@ -319,9 +319,9 @@
       mine[r][c] = !mine[r][c];
       if (mine[r][c] && a) VOICE[r](a.currentTime, out);
       paint();
-      // The beat goes to the agent once the person has left it alone for a moment
+      // The beat goes to the agent once the person has left it alone for a moment, however few hits are in it
       clearTimeout(sendTimer);
-      if (count(mine) >= 2) sendTimer = setTimeout(send, 1500);
+      sendTimer = setTimeout(send, 1500);
     }
     padsEl.addEventListener("click", (e) => {
       var b = e.target.closest(".pad");
@@ -356,9 +356,19 @@
     // ── What goes to the agent, and what comes back ──
     function send() {
       var n = count(mine), pattern = mine.map((row) => row.map((on) => (on ? "x" : ".")).join("")), k = pattern.join("/");
-      if (n < 2 || k === sentKey) return;
+      if (k === sentKey) return;
+      // With the last hit taken off there is no beat to play between. An agent that was told of
+      // one is told that the pads are empty, as the button that empties them tells it
+      if (!n) {
+        if (sentKey === null) return;
+        sentKey = k; waiting = false;
+        clearTimeout(quietTimer);
+        Tour.say("you", "took the last hit off");
+        Tour.act("cleared", {}).then(() => Tour.plate("", false), () => { if (sentKey === k) sentKey = null; });
+        return;
+      }
       sentKey = k; asked = true; waiting = true; sentAt = turn();
-      Tour.say("you", "put down " + n + " hits");
+      Tour.say("you", "put down " + n + (n === 1 ? " hit" : " hits"));
       clearTimeout(quietTimer);
       // An agent that never answers is not left looking busy
       quietTimer = setTimeout(() => Tour.plate(count(theirs) ? "played between yours" : "", false), 60000);

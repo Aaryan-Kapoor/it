@@ -367,3 +367,57 @@ describe('the chessboard', () => {
     other.close()
   })
 })
+
+describe('the drum machine', () => {
+  type Page = Awaited<ReturnType<typeof opened>>
+  /** A page that makes no sound and keeps no time of its own: what is asked here is only what it tells the agent. */
+  const silent = (w: any) => {
+    w.setInterval = () => 0
+    w.clearInterval = () => {}
+    w.requestAnimationFrame = () => 0
+    w.cancelAnimationFrame = () => {}
+  }
+  /** One pad tapped: the drum, from the top, and the step. */
+  const tapped = (page: Page, drum: number, step: number) => page.$(`.pad[data-r="${drum}"][data-c="${step}"]`).click()
+  const told = (page: Page) => page.sent.map((s) => [s.name, s.data.pattern?.join('/')])
+
+  test('a beat of a single hit goes to the agent a moment after the person leaves it alone, as any beat does', async () => {
+    const page = await opened('drums', silent)
+    tapped(page, 3, 0)
+    await page.advance(1400)
+    expect(page.sent).toEqual([])
+    await page.advance(100)
+    expect(told(page)).toEqual([['beat', '......../......../......../x.......']])
+    expect(page.$('#t-you b').textContent).toBe('put down 1 hit')
+    page.close()
+  })
+
+  test('a beat the person takes hits off goes again as it is left, and the agent is told when the last hit is off', async () => {
+    const page = await opened('drums', silent)
+    tapped(page, 3, 0)
+    tapped(page, 2, 4)
+    await page.advance(1500)
+    await page.sent[0]!.accept()
+    tapped(page, 2, 4)
+    await page.advance(1500)
+    tapped(page, 3, 0)
+    await page.advance(1500)
+    expect(told(page)).toEqual([
+      ['beat', '......../......../....x.../x.......'],
+      ['beat', '......../......../......../x.......'],
+      ['cleared', undefined],
+    ])
+    expect(page.$('#t-you b').textContent).toBe('took the last hit off')
+    // Left empty, nothing more is said of it
+    await page.advance(5000)
+    expect(page.sent.length).toBe(3)
+    page.close()
+    // Pads that were emptied before the agent heard of any beat are nothing to tell it
+    const idle = await opened('drums', silent)
+    tapped(idle, 0, 1)
+    tapped(idle, 0, 1)
+    await idle.advance(5000)
+    expect(idle.sent).toEqual([])
+    idle.close()
+  })
+})
