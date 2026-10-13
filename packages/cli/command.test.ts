@@ -778,6 +778,26 @@ describe.skipIf(process.platform === 'win32' || process.platform !== 'linux')('a
   })
 })
 
+describe.skipIf(process.platform !== 'linux')('a service registered where IT_UPDATE_CHECK says not to look for a newer version', () => {
+  test('does not look, since that is written down for it as `it updates off` writes it, until `it updates on` is run', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'loginctl']) {
+      writeFileSync(path.join(m.bin, name), `#!/bin/sh\ncase " $* " in ${SAYS_IT_RUNS} esac\nexit 0\n`)
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    // Registered without the variable, nothing is written down
+    expect((await run(m, ['service', 'install'])).code).toBe(0)
+    expect(printed(await run(m, ['updates']))).toEqual({ on: true })
+    // The service is started by the system, with none of what this shell has: so what the shell said is kept in It's folder
+    expect((await run(m, ['service', 'install'], { IT_UPDATE_CHECK: 'false' })).code).toBe(0)
+    expect(existsSync(path.join(m.it, 'updates-off'))).toBe(true)
+    expect(printed(await run(m, ['updates']))).toEqual({ on: false, because: 'it updates off' })
+    // And is the person's to turn back on, which a copy of the variable in the service's definition would not be
+    expect(readFileSync(path.join(m.home, '.config/systemd/user/it.service'), 'utf8')).not.toContain('IT_UPDATE_CHECK')
+    expect(printed(await run(m, ['updates', 'on']))).toEqual({ on: true })
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
   test('`it uninstall` leaves what is another It folder’s in the agent apps, and leaves a profile it cannot replace whole exactly as it was, and says so', async () => {
     const m = machine(true, true)

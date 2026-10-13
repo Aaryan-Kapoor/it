@@ -13,6 +13,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, write
 import os from 'node:os'
 import path from 'node:path'
 import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
+import { watch, watched } from './upgrade'
 
 const NAME = 'it'
 const LABEL = 'dev.it'
@@ -94,13 +95,17 @@ function must(cmd: string, args: string[], what: string): void {
 // It counts from, which backend program it runs or where it fetches one from, and which backend
 // it talks to, when the shell that installed it said, which harnesses the service may touch at
 // all (it reconciles add-ons by itself, and must leave alone what the shell that installed it
-// was told to leave alone), where usage is reported to, and where the person keeps each
+// was told to leave alone), where usage is reported to, whether the person's shell may be asked
+// what it gives a program, which only the service ever asks, and where the person keeps each
 // harness's settings when that is not the usual place, so that the connector looks where the
 // shell that ran `it setup` looked.
 //
 // Whether usage is reported at all is not in the list. That is kept in a file in It's folder,
 // which the service reads. A copy of the off switch saved in a service's definition would turn
 // reporting off again every time the service started, after the person had turned it back on.
+// Nor, for the same reason, is whether It looks for a newer version: where the shell that
+// registers the service says that it is not to, that is written into the same file as
+// `it updates off` writes (see `install`).
 export function environment(from: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = { PATH: from.PATH ?? from.Path ?? '' }
   for (const k of [
@@ -114,6 +119,7 @@ export function environment(from: NodeJS.ProcessEnv = process.env): Record<strin
     'IT_HARNESSES',
     'IT_EXPERIMENTAL',
     'IT_TELEMETRY_URL',
+    'IT_SHELL_ENV',
     ...PROFILE_VARS,
   ])
     if (from[k]) out[k] = from[k]!
@@ -447,6 +453,10 @@ export function install(): ServiceStatus {
   mkdirSync(path.dirname(logFile()), { recursive: true, mode: 0o700 })
   const cmd = command()
   const env = environment()
+  // The service is started by the system, with nothing of this shell: a shell that says It is
+  // not to look for a newer version says so to the service by the file `it updates off` makes,
+  // which `it updates on` takes away again
+  if (watched().because === 'IT_UPDATE_CHECK') watch(false)
   if (process.platform === 'linux') {
     // Where systemd keeps no services for this person (a container, some remote logins), that
     // is said in words, before anything is written: nothing It could put on the disk would

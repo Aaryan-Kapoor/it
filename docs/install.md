@@ -94,7 +94,7 @@ It looks every half hour for a newer version of itself, and says so when one is 
 
 Where several machines share one It, the machine It runs on is updated first, and the site says so on the others until it is. Each machine is updated by itself.
 
-`it updates off` stops It looking, and `it updates on` has it look again. Setting `IT_UPDATE_CHECK=false` where It is started stops it too, whatever `it updates` says, until that is taken away and It is started again. Asking sends nothing about your installation: [what It fetches](network-and-privacy.md#what-it-fetches-from-the-internet) says what the request is. An It that was installed from another place than the usual one, with `IT_INSTALL_BASE`, looks there, and is updated from there.
+`it updates off` stops It looking, and `it updates on` has it look again. Setting `IT_UPDATE_CHECK=false` where It is started stops it too, whatever `it updates` says, until that is taken away and It is started again. The background service is started by your system, with none of what a terminal has set, so where `it setup` or `it service install` is run with that variable set, it is written down as `it updates off` writes it, and `it updates on` has It look again. Asking sends nothing about your installation: [what It fetches](network-and-privacy.md#what-it-fetches-from-the-internet) says what the request is. An It that was installed from another place than the usual one, with `IT_INSTALL_BASE`, looks there, and is updated from there.
 
 What an upgrade trusts is what an install trusts: the place it downloads from, over https, and the checksums published there. It is not a signature.
 
