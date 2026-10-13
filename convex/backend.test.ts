@@ -1412,6 +1412,29 @@ describe('state', () => {
     expect(await shown()).toEqual([other.id, none.id].sort())
   })
 
+  test('and so it does however much has been sent to the bell since', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    await publish(m, 'other')
+    const key = displayKey('alice')
+    const about = await m.as.mutation(api.notifications.send, { text: 'Deploy?', slug: 'plan', buttons: [{ label: 'Approve', action: 'approve' }] })
+    const kept = await m.as.mutation(api.notifications.send, { text: 'Read this.', slug: 'other', buttons: [{ label: 'Read', action: 'read' }] })
+    // Three hundred more since, each of them put away by now
+    await t.run(async (ctx) => {
+      const now = Date.now()
+      for (let i = 1; i <= 300; i++)
+        await ctx.db.insert('notifications', { userId: alice.user as never, text: `Note ${i}`, sticky: false, createdAt: now + i, dismissedAt: now + i })
+    })
+    const shown = async () => (await alice.browser.query(api.notifications.list, { key })).map((n) => n.id).sort()
+    expect(await shown()).toEqual([about.id, kept.id].sort())
+    await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    // Left there, it would offer a button that can only answer that the page is gone
+    expect(await shown()).toEqual([kept.id])
+    expect(await code(alice.browser.mutation(api.notifications.answer, { id: about.id, action: 'approve', displayKey: key }))).toBe('not_found')
+  })
+
   test('when the page’s agent last changed the page is said, and what the page stores for itself does not count as that', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

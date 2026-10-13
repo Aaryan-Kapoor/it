@@ -92,6 +92,10 @@ export const list = query({
     for (const n of recent) {
       if (out.length >= TRAY) break
       if (n.artifactId && !slugs.has(n.artifactId)) slugs.set(n.artifactId, (await ctx.db.get(n.artifactId))?.slug ?? null)
+      // What was sent about a page that has since been deleted is shown no more. Deleting the
+      // page puts away what it finds of it among the newest sent, and one that is older than
+      // those, or was not found then, would stay here with a button that can answer nothing.
+      if (n.artifactId && slugs.get(n.artifactId) === null) continue
       out.push({
         id: n._id,
         text: n.text,
