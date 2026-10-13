@@ -295,8 +295,9 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               machineGone={page.machineGone === true}
               machinePaused={page.machinePaused ?? null}
               pending={page.pending}
-              // Only the owner may switch reopening on, and only for an agent app It can reopen
-              wakes={owner ? page.wake : null}
+              // Whether a closed conversation is reopened is said to every browser alike. Only the owner may switch it on
+              wakes={page.wake}
+              mayWake={owner}
               agent={agentName(page.agent)}
               stoppedAt={page.stoppedAt}
               wakeFailed={page.wakeFailed}
@@ -638,6 +639,7 @@ function ActionStatus({
   machinePaused,
   pending,
   wakes,
+  mayWake,
   agent,
   stoppedAt,
   wakeFailed,
@@ -655,6 +657,8 @@ function ActionStatus({
   pending: number
   /** Where the page's agent app can have a closed conversation reopened: the machine that would, and whether that is switched on there. */
   wakes: { machineId: string; harness: string; on: boolean } | null
+  /** Whether this browser may switch that on: one paired as the person's own. */
+  mayWake: boolean
   agent: string | null
   /** When a person last stopped the page's agent, if they have. */
   stoppedAt: number | null
@@ -817,7 +821,7 @@ function ActionStatus({
   // A conversation is reopened only for what was done in the last day. For anything older the
   // switch would change nothing, so it is not offered, and the bar says what would bring it
   const tooOld = now - last.at > WAKE_BACK_MS
-  const offer = wakes && !wakes.on && slow && !busy && !tooOld
+  const offer = mayWake && wakes && !wakes.on && slow && !busy && !tooOld
   // Tried, and it could not be reopened: said as that, with why where it is asked for
   if (wakeFailed && wakeFailed.at >= last.at)
     return (

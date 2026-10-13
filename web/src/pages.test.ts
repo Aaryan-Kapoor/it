@@ -354,6 +354,42 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { wake: null, pending: 0 })
   })
 
+  test('a paired screen says of a click not yet taken what the owner’s browser says, with Auto-wake on or off, and is not offered the switch', async () => {
+    const { PageView } = await import('./pages')
+    const outbox = await import('./outbox')
+    outbox.outboxBelongsTo('user-1', 'session-1')
+    /** What the bar says to the owner and to a screen, and whether each is offered to wake the agent. */
+    const each = async () => {
+      const seen: [string | null, boolean][] = []
+      for (const owner of [true, false]) {
+        host = document.body.appendChild(document.createElement('div'))
+        root = createRoot(host)
+        await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner })))
+        seen.push([said(), [...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')])
+        if (owner) {
+          await act(async () => root.unmount())
+          host.remove()
+        }
+      }
+      return seen
+    }
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    // On: It is reopening the conversation, or it waits its turn among those being reopened
+    Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: true }, pending: 1 })
+    expect(await each()).toEqual([
+      ['Sent. Waiting for your agent', false],
+      ['Sent. Waiting for your agent', false],
+    ])
+    await act(async () => root.unmount())
+    host.remove()
+    Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: false } })
+    expect(await each()).toEqual([
+      ['Sent. Claude Code is not listening: its conversation looks closed', true],
+      ['Sent. Claude Code is not listening: its conversation looks closed', false],
+    ])
+    Object.assign(PAGE, { wake: null, pending: 0 })
+  })
+
   test('what the agent had already done is not said to have been stopped by a stop that came after it', async () => {
     // Done a minute ago, and the conversation was stopped since, from another of its pages
     recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'succeeded', route: 'addon', handedAt: NOW - 59_000 }]
