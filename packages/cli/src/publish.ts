@@ -178,7 +178,6 @@ export function noteConversation(session: { harness: string; id: string }, cwd =
   try {
     const key = `${session.harness}:${session.id}`
     const read = () => readJson<Record<string, { cwd: string; at: number }>>(conversationsFile()) ?? {}
-    if (read()[key]?.cwd === cwd) return
     // Read afresh once the note is this command's alone: what another wrote meanwhile is kept
     toItself(() => {
       const kept = read()
