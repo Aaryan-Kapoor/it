@@ -3284,8 +3284,8 @@ form.row-main {
   }
   /* What the bar says of a page is often a sentence, and a screen this narrow has no room for
      one beside the buttons: kept to one line, it pushed Stop and the buttons after it off the
-     screen. Here it comes after them. It stays in the row while it fits there, and otherwise
-     goes under the row, where it wraps. */
+     screen. Here it comes after them, and so does the word that the agent is working. It stays
+     in the row while it fits there, and otherwise goes under the row, where it wraps. */
   .page-nav {
     flex-wrap: wrap;
     row-gap: 0;
@@ -3295,7 +3295,8 @@ form.row-main {
   .page-nav-actions {
     min-height: var(--nav-h);
   }
-  .page-nav .status {
+  .page-nav .status,
+  .page-nav .working {
     order: 1;
     max-width: 100%;
     padding: 6px 0;
