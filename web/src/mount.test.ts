@@ -254,6 +254,35 @@ describe('where a page is shown', () => {
     expect(asked('mounts:create').length).toBe(2)
   })
 
+  test('a showing that is over again soon after the page was framed again is not left as it is: the page is framed once more when that while has passed', async () => {
+    await renderHeld()
+    /** The frame the site is showing now, once the page in it has said hello and has its channel. */
+    const greeted = async () => {
+      const page = framed()
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'it:hello', doc: 'doc-1' }, origin: 'null', source: page.frame.contentWindow }))
+        await vi.advanceTimersByTimeAsync(20)
+      })
+      return page
+    }
+    const page = await greeted()
+    page.ports()[0]!.postMessage({ type: 'it:lapsed' })
+    await arrived(() => host.querySelector('iframe')?.src === `${PAGES}/open/ticket-for-mount-2`)
+    // The content service is started again a second later, and the page framed just now finds its showing over as well
+    await act(() => vi.advanceTimersByTimeAsync(1000))
+    const again = await greeted()
+    const waiting = vi.getTimerCount()
+    again.ports()[0]!.postMessage({ type: 'it:lapsed' })
+    await arrived(() => vi.getTimerCount() > waiting)
+    // Not at once, which is what keeps a page that cannot be shown from being asked for in a loop
+    expect(asked('mounts:create').length).toBe(2)
+    await act(() => vi.advanceTimersByTimeAsync(10_000))
+    await arrived(() => host.querySelector('iframe')?.src === `${PAGES}/open/ticket-for-mount-3`)
+    // And once: nothing more is asked for while the page that is framed now says nothing
+    await act(() => vi.advanceTimersByTimeAsync(15_000))
+    expect(asked('mounts:create').length).toBe(3)
+  })
+
   test('a frame whose page never says hello is given up on, and the site tries again by itself with a new mount', async () => {
     vi.useFakeTimers()
     const { Mount } = await import('./mount')
