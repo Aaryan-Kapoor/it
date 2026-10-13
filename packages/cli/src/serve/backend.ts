@@ -1219,10 +1219,14 @@ async function noneLeft(config: ServiceConfig, say: (line: string) => void, sign
  * It is asked to stop as the service that starts next would ask it, with the folder taken for
  * as long as that lasts, and what that throws is thrown here: that a service has the folder
  * after all, or that a program did not go, or cannot be told to be the backend program. Nothing
- * is done where It was never set up to run a backend here.
+ * is done where It was never set up to run a backend here, nor where its settings cannot be
+ * read: they are what says which backend program is this folder's.
  */
 export async function nothingLeft(say: (line: string) => void): Promise<void> {
-  const config = readConfig()
+  let config: ServiceConfig | null = null
+  try {
+    config = readConfig()
+  } catch {}
   if (!config || !existsSync(backendFolder())) return
   const lock = await takeLock(lockFile(), {
     taken: (by) => new Problem(`It is already running for this folder${by ? ` (pid ${by.pid})` : ''}.`, 'already_running'),
