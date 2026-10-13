@@ -155,6 +155,25 @@ async function chosen(wanted: string[]): Promise<string[]> {
   return said?.wakes ?? []
 }
 /**
+ * The apps It reopens closed conversations of on this machine as things stand, asked before a
+ * setup chooses anything. Null where It cannot be asked.
+ */
+const wokenNow = (): Promise<Set<string> | null> =>
+  call<{ wakes?: { harness: string }[] } | null>('query', api.machines.me).then(
+    (me) => new Set((me?.wakes ?? []).map((w) => w.harness)),
+    () => null,
+  )
+/**
+ * Of the apps that It reopens closed conversations of once a setup has chosen, those it does
+ * so for because of this setup: it did not before, by It's own word. That is what the person
+ * is told of, and not whether the app's add-on was installed already: a machine that was
+ * enrolled anew in the place of the one it was has its add-ons as they were, and reopening
+ * comes on for it with the choice all the same. Where It could not be asked how things stood,
+ * it is taken to have come on for the apps that were not connected before.
+ */
+const cameOn = (woken: string[], before: Set<string> | null, connected: Set<Harness>): string[] =>
+  woken.filter((id) => (before ? !before.has(id) : !connected.has(id as Harness)))
+/**
  * What setup says, once, of the apps it has just connected that It reopens closed
  * conversations of: reopening is on from the start, and it runs an agent with nobody
  * watching, so the person is told that it is, what it does and where to turn it off.
@@ -1863,6 +1882,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
     const apps = flow.step('Agent apps', found.length ? 'connecting' : '')
     const connectedBefore = new Set(found.filter((h) => h.addon === 'connected').map((h) => h.id))
     // The backend is told of the choice before anything is changed on this machine, as in `settingUp`
+    // Asked only where an app is chosen: with none, reopening comes on for none
+    const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
     await reconcile(wanted, quiet)
     woken ??= await chosen(wanted)
@@ -1882,8 +1903,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // What decides whether Codex's first page appears at all is said by itself, and first
     const shut = codexShut(after)
     if (shut) left.push(shut)
-    // That reopening is on for what was just connected, said once: not again each time setup is run
-    const waking = wakesSaid(woken.filter((id) => !connectedBefore.has(id as Harness) && on.some((h) => h.id === id)))
+    // That reopening came on with this setup, said once: not again each time setup is run
+    const waking = wakesSaid(cameOn(woken, wokenBefore, connectedBefore).filter((id) => on.some((h) => h.id === id)))
     if (waking) left.push(waking)
     for (const h of after) {
       if (h.addon === 'needs_approval' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
@@ -2153,6 +2174,8 @@ async function settingUp(a: Args, joined: boolean) {
     // would otherwise take out again, by the choice from before, what is being connected here.
     // Where the backend cannot be reached, what is on this machine is put right all the same,
     // so that an add-on the person chose to remove is removed, and the failure is said after
+    // Asked only where an app is chosen: with none, reopening comes on for none
+    const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
     await reconcile(wanted, say)
     woken ??= await chosen(wanted)
@@ -2195,9 +2218,9 @@ async function settingUp(a: Args, joined: boolean) {
     // What decides whether Codex's first page appears at all is said by itself, and first.
     const shut = codexShut(after)
     if (shut) say(`\n${shut}`)
-    // That reopening is on for what was just connected, said once: not again each time setup is run
+    // That reopening came on with this setup, said once: not again each time setup is run
     const waking = wakesSaid(
-      woken.filter((id) => !before.has(id as Harness) && after.some((h) => h.id === id && (h.addon === 'connected' || h.addon === 'needs_approval'))),
+      cameOn(woken, wokenBefore, before).filter((id) => after.some((h) => h.id === id && (h.addon === 'connected' || h.addon === 'needs_approval'))),
     )
     if (waking) say(`\n${waking}`)
     for (const h of after) {

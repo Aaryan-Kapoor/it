@@ -3975,10 +3975,14 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       'Auto-wake is on for Pi: when you use a page whose conversation is closed, It reopens the conversation and runs the agent on this machine with nobody watching.'
     const m = machine()
     pi(m)
-    // It answers the choice with the apps it reopens closed conversations of on this machine
-    const b = await backend(m, (asked) =>
-      asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : asked.path === 'machines:choose' ? { wakes: ['pi'] } : null,
-    )
+    // It says which apps it reopens closed conversations of on this machine: as things stand when it is asked, and with its answer to the choice
+    let wakes: { harness: string; since: number }[] | undefined
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'machines:me') return { id: 'machine-1', name: 'test', wanted: [], ...(wakes ? { wakes } : {}) }
+      if (asked.path !== 'machines:choose') return null
+      wakes = [{ harness: 'pi', since: 1 }]
+      return { wakes: ['pi'] }
+    })
     try {
       const first = await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)
       expect(first.code).toBe(0)
@@ -3989,6 +3993,12 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       // Run again, as every update runs it, with Pi connected already: not said a second time
       const again = await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)
       expect([again.code, again.err.includes('Auto-wake')]).toEqual([0, false])
+      // The machine was enrolled anew in the place of the one it was, and to It nothing is reopened on it yet. Pi's add-on is
+      // in Pi as it was, and setup switches reopening on with the choice: said, since it is on from here on and was not before
+      wakes = undefined
+      const replaced = await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)
+      expect(replaced.code).toBe(0)
+      expect(replaced.err).toContain(SAID)
     } finally {
       await b.close()
     }
