@@ -1270,6 +1270,33 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:handedOff')).toEqual(['click-6'])
   })
 
+  test('a connector started anew gives back what the one before it had claimed, before it takes anything that was done after', async () => {
+    // The connector before this one claimed a click and ended before it had handed it over: It
+    // holds that click back until its lease runs out, and offers the next one meanwhile
+    await start('socket', {}, (folder) =>
+      writeFileSync(
+        path.join(folder, 'journal.jsonl'),
+        [
+          { t: Date.now() - 5000, event: 'claimed', id: 'click-done' },
+          { t: Date.now() - 4000, event: 'acked', id: 'click-done' },
+          { t: Date.now() - 2000, event: 'claimed', id: 'click-left' },
+        ]
+          .map((e) => `${JSON.stringify(e)}\n`)
+          .join(''),
+      ),
+    )
+    offered(click(6))
+    await until(() => called('delivery:release').includes('click-left'))
+    expect(called('delivery:release')).toEqual(['click-left'])
+    expect(called('delivery:claim')).toEqual([])
+    // It offers the earlier one again, and they go in the order they were made
+    offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')[0]).toBe('click-left')
+    const names = stand.calls.map((c) => c.name)
+    expect(names.indexOf('delivery:release')).toBeLessThan(names.indexOf('delivery:claim'))
+  })
+
   test('a click made while Codex’s queue holds an earlier one behind the running turn follows it into the queue, and is not given to the turn’s next hook ahead of it', async () => {
     await start()
     expect(await turn(6, true)).toEqual({ ok: true })

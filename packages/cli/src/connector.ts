@@ -184,6 +184,24 @@ function queuedButUnconfirmed(): Set<string> {
 }
 
 /**
+ * Clicks the journal says this machine claimed, with nothing after to say what became of them.
+ * A connector that ended in the middle left them leased, which is to say out of what It offers
+ * until the lease runs out, while what was done after them is offered at once.
+ */
+function claimedAndLeft(): string[] {
+  const out = new Set<string>()
+  try {
+    for (const line of readFileSync(journalFile(), 'utf8').split('\n')) {
+      if (!line) continue
+      const e = JSON.parse(line) as { event: string; id: string }
+      if (e.event === 'claimed' || e.event === 'queueing' || e.event === 'served') out.add(e.id)
+      else out.delete(e.id)
+    }
+  } catch {}
+  return [...out]
+}
+
+/**
  * The words that start Codex with no shell in between. Elsewhere that is just `codex`. On
  * Windows, Codex installed through npm is a .cmd file, which only a shell can start, and a
  * shell would read a page's title as part of the command. So the program behind the .cmd file
@@ -666,6 +684,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
   const queues = new Map<string, Promise<void>>()
   const unconfirmed = queuedButUnconfirmed()
+  /**
+   * What the connector before this one left claimed. Given back before anything is taken, and
+   * what It offers is not acted on until a moment after, when it offers these again: taken
+   * first, a click made after one of them would reach its conversation before it.
+   */
+  let leftClaimed = claimedAndLeft()
+  let settledAt = 0
+  /** How long after giving those back what It offers is left alone, for it to offer them again. */
+  const GIVEN_BACK_MS = 1500
   let inbox: Offered[] = []
   let routing = false
   let stopping: ((code: number) => void) | null = null
@@ -1648,6 +1675,24 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (routing || closing || unfitting) return
     routing = true
     try {
+      if (leftClaimed.length) {
+        const ids = leftClaimed
+        leftClaimed = []
+        // One that It will not give back (it has gone elsewhere since, or is no click of this person's) is nothing to wait for
+        await Promise.all(
+          ids.map((id) =>
+            call('mutation', api.delivery.release, { id }).then(
+              () => journal('released', id),
+              () => {},
+            ),
+          ),
+        )
+        settledAt = steady() + GIVEN_BACK_MS
+      }
+      if (steady() < settledAt) {
+        soon(settledAt - steady() + 10)
+        return
+      }
       const now = Date.now()
       // Telling It what was handed over is done beside this, never ahead of it: a slow answer
       // there must not hold up renewing leases or taking new clicks
