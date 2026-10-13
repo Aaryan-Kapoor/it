@@ -92,7 +92,7 @@ import {
 import { login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { gather, noteConversation, publish } from './publish'
-import { alone, asAdmin, standing, startBackend } from './serve/backend'
+import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
@@ -1251,6 +1251,20 @@ async function uninstall(a: Args) {
   // 2. An `it serve` someone started by hand in this folder
   service.askToStop(folder, 30_000)
   if (service.runningFor(folder)) left.push('It is still running, and was asked to stop: end the `it serve` you started, in its terminal.')
+  else {
+    // A service that died leaves its backend program running, and that is no service to ask:
+    // it is asked to stop as the service that starts next would ask it, while the folder its
+    // database is in is still there. One that does not go is said, by its number.
+    const heard: string[] = []
+    try {
+      await nothingLeft((line) => heard.push(line))
+      if (heard.length) say('The backend program that an It which had died left running here is stopped.')
+    } catch (err) {
+      left.push(
+        `${err instanceof Problem ? err.message : 'A backend program that It left running in this folder could not be asked to stop.'} End it yourself to finish.`,
+      )
+    }
+  }
   // 3. Its line in the shell's profile, with the comment above it
   const bin = path.join(folder, 'bin')
   const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)

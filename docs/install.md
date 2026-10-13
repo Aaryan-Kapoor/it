@@ -116,7 +116,7 @@ However it is stopped, It is asked to stop and waited for. It stops its connecto
 To remove It altogether, run `it uninstall`. It asks first, because every page It holds on the machine goes with it, and then does these four things in order. Each can also be done by hand:
 
 1. It takes It's add-on out of every agent app, as `it setup --none` does.
-2. It stops the background service and takes its registration away, as `it service uninstall` does, and asks an `it serve` you started yourself in that folder to stop.
+2. It stops the background service and takes its registration away, as `it service uninstall` does, and asks an `it serve` you started yourself in that folder to stop, and with it a backend program that an It which died had left running there.
 3. It takes `~/.it/bin` off your PATH. The install script added it with a comment, `# It`, and one line in your shell's profile, and those lines are removed; a profile that held nothing else was made by the installer and is removed too. On Windows the folder is on the PATH that Windows keeps for your account, and it is taken off there, with every other entry left as it was kept.
 4. It deletes `~/.it`. Everything It kept goes with it, the program included. On Windows, where a program that is running cannot delete its own file, the program first moves itself out of the folder to where Windows keeps temporary files, says where, and leaves Windows one line to run the next time you sign in, which deletes it there. You can delete it yourself before then.
 

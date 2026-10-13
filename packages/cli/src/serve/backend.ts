@@ -41,6 +41,7 @@ import {
   noteLoaded,
   programFile,
   RELEASE,
+  readConfig,
   rename,
   type ServiceConfig,
   unread,
@@ -1208,6 +1209,29 @@ async function noneLeft(config: ServiceConfig, say: (line: string) => void, sign
         'still_running',
         'End it with an interrupt, as Ctrl-C at a terminal would, then start It again. It is the program named convex-local-backend that was started with this folder’s database.',
       )
+  }
+}
+
+/**
+ * Makes sure that no backend program is left on this folder, for whoever is about to take the
+ * folder away. A service that died leaves its backend program running, and whoever looks only
+ * for a service finds none: the program would go on with its database deleted from under it.
+ * It is asked to stop as the service that starts next would ask it, with the folder taken for
+ * as long as that lasts, and what that throws is thrown here: that a service has the folder
+ * after all, or that a program did not go, or cannot be told to be the backend program. Nothing
+ * is done where It was never set up to run a backend here.
+ */
+export async function nothingLeft(say: (line: string) => void): Promise<void> {
+  const config = readConfig()
+  if (!config || !existsSync(backendFolder())) return
+  const lock = await takeLock(lockFile(), {
+    taken: (by) => new Problem(`It is already running for this folder${by ? ` (pid ${by.pid})` : ''}.`, 'already_running'),
+    left: (left) => noneLeft(config, say, undefined, left),
+  })
+  try {
+    await noneLeft(config, say)
+  } finally {
+    lock.release()
   }
 }
 

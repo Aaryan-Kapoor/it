@@ -42,6 +42,7 @@ import {
   asAdmin,
   program as fetched,
   fetchProgram,
+  nothingLeft,
   programsHere,
   type Running,
   removeCopies,
@@ -54,6 +55,7 @@ import {
 import { doorKey, instanceName, makeConfig, programFile, RELEASE, readConfig, type ServiceConfig } from './src/serve/config'
 import { startDoor } from './src/serve/door'
 import { begin } from './src/serve/firstrun'
+import { runningFor } from './src/service'
 import { bases } from './test-ports'
 
 const windows = process.platform === 'win32'
@@ -1016,6 +1018,45 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     expect(startOf(left)).toBeNull()
     expect(await healthy(second.base)).toBe(true)
     expect(programsOn(folder)).toEqual([lock()!.program])
+  }, 300_000)
+
+  test('a backend program that outlived its service is asked to stop before its folder is taken away, and one whose service still runs is left to that service', async () => {
+    makeConfig()
+    const left = await orphan()
+    // Nothing that looks only for a service finds anything here: the service is gone, and its program is not
+    expect([runningFor(folder), programsOn(folder)]).toEqual([false, [left]])
+    const heard: string[] = []
+    await nothingLeft((line) => heard.push(line))
+    expect(heard).toEqual([`backend: one left running by a service that is gone is asked to stop (pid ${left})`])
+    expect([startOf(left), programsOn(folder), existsSync(inBackend('lock'))]).toEqual([null, [], false])
+    // With nothing left there is nothing to ask, and nothing is said
+    await nothingLeft((line) => heard.push(line))
+    expect(heard.length).toBe(1)
+    // A service that runs has the folder, and its program is its own to stop
+    const backend = await start(readConfig()!)
+    expect(await refusal(nothingLeft(() => {}))).toBe('already_running')
+    expect(programsOn(folder)).toEqual([lock()!.program])
+    await backend.stop()
+  }, 300_000)
+
+  test('`it uninstall` asks a backend program that outlived its service to stop, and only then deletes the folder its database is in', async () => {
+    makeConfig()
+    const left = await orphan()
+    // The whole program, run as a person runs it, with a home of its own that holds nothing
+    await bundled('it.mjs', "import './src/main'")
+    const person = mkdtempSync(path.join(scratch, 'person-'))
+    try {
+      const ran = spawnSync(process.execPath, [path.join(scratch, 'it.mjs'), 'uninstall', '--yes'], {
+        env: { PATH: person, HOME: person, IT_HOME: folder, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage' },
+        encoding: 'utf8',
+        timeout: 120_000,
+      })
+      const told = JSON.parse(ran.stdout) as { removed: boolean; said: string[] }
+      expect([told.removed, told.said]).toEqual([true, ['The backend program that an It which had died left running here is stopped.']])
+      expect([startOf(left), existsSync(folder)]).toEqual([null, false])
+    } finally {
+      if (startOf(left) !== null) process.kill(left, 'SIGKILL')
+    }
   }, 300_000)
 
   test('a backend program on the folder is found in the system’s own list of what runs, whatever the lock says of it and where there is no lock at all, and is asked to stop before another is started', async () => {
