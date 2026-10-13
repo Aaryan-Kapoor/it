@@ -207,10 +207,14 @@ export function Starters({ owner }: { owner: boolean }) {
   )
 }
 
-export function Welcome({ owner }: { owner: boolean }) {
+/**
+ * The first screen. How things stand with the tour is given to it by whoever chose to show it:
+ * that the person asked for the tour here is known in this tab alone, and what chooses between
+ * this screen and the one for when a tour is over has to know it too.
+ */
+export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<typeof useTour> }) {
   const apps = useApps(owner)
   const connected = apps?.connected
-  const tour = useTour()
   const panel = useRef<HTMLDivElement>(null)
   const stage = useRef<HTMLDivElement>(null)
   const first = useRef<HTMLSpanElement>(null)

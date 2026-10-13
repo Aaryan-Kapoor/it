@@ -196,7 +196,7 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
 function Empty({ owner }: { owner: boolean }) {
   const tour = useTour()
   if (!tour.known) return <main className="grid-view" role="status" />
-  return tour.done && !tour.waiting && !tour.coming ? <Starters owner={owner} /> : <Welcome owner={owner} />
+  return tour.done && !tour.waiting && !tour.coming ? <Starters owner={owner} /> : <Welcome owner={owner} tour={tour} />
 }
 
 /**

@@ -132,6 +132,19 @@ describe('once the tour is over, or the person wanted none', () => {
     expect(host.querySelector('.starters')).toBeNull()
   })
 
+  test('the tour asked for again there is said to be on its way until it comes, though the agent that took the asking waits no longer', async () => {
+    tour = { ...NOBODY, doneAt: NOW - 1000, waitingUntil: NOW + 10_000, by: 'claude-code' }
+    await shown()
+    await act(async () => button('Take the tour')!.click())
+    expect(host.textContent).toContain('Claude Code is starting the tour. It comes up here by itself.')
+    // The agent heard the asking, which is taken up once: it is not said to be waiting from then on
+    tour = { ...tour, waitingUntil: null, askedAt: NOW, takenAt: NOW }
+    const { Grid } = await import('./pages')
+    await act(async () => root.render(createElement(Grid, { pages: [], owner: true, query: '', onQuery: () => {} })))
+    expect(host.textContent).toContain('Claude Code is starting the tour. It comes up here by itself.')
+    expect(host.querySelector('.starters')).toBeNull()
+  })
+
   test('nothing is shown until the backend has said how things stand, so that neither screen flashes before the other', async () => {
     tour = undefined
     await shown()
