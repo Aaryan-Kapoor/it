@@ -581,14 +581,29 @@ export function install(): ServiceStatus {
       if (stayedNot && !existsSync(lingerNote())) writeFileSync(lingerNote(), '', { mode: 0o600 })
     } catch {}
   } else if (process.platform === 'darwin') {
+    const before = existsSync(plistPath()) ? readFileSync(plistPath(), 'utf8') : null
     mkdirSync(path.dirname(plistPath()), { recursive: true })
     // The definition is written before the service that is running is taken out of launchd.
     // launchd reads a definition only when it is given one, so writing it changes nothing of
     // what runs, and where it cannot be written, as on a disk that is full, the service that
     // was running goes on running under the definition that is still there
     writeDefinition(plistPath(), launchdPlist(cmd, env))
-    run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`])
-    must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'loading the agent')
+    const unloaded = run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`]).ok
+    try {
+      must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'loading the agent')
+    } catch (err) {
+      // A failed replacement gives the earlier definition back to launchd. Where no agent
+      // was loaded, as over SSH, the definition is only kept for the next login.
+      if (before !== null) {
+        try {
+          writeDefinition(plistPath(), before)
+          if (unloaded) must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'restoring the earlier agent')
+        } catch (recovery) {
+          throw new Error(`${(err as Error).message}; ${(recovery as Error).message}`)
+        }
+      }
+      throw err
+    }
   } else if (process.platform === 'win32') {
     // Windows ends a task's programs outright, with no word to the service that it is to
     // close its door and stop its backend program in its turn. So the service that is running

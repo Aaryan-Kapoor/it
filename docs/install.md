@@ -62,6 +62,8 @@ From the first run on, It starts by itself, and you do not start it again. The b
 
 There is one background service for each user of a computer, under that one name, whatever folder It lives in. Setting It up in a second folder, named with `IT_HOME`, registers the service for that folder in place of the first, unless `--no-service` is given.
 
+On macOS, if loading a replacement service fails, It restores the earlier definition and asks launchd to load it again if it had been loaded. If that fails too, It says both failures and leaves the earlier definition for a retry.
+
 If It fails it is started again. `it service status` says whether It is running, whether it is registered to start by itself, and whether it is ready to hand what is done on a page to the conversations on this machine. `it service logs` prints the end of what it wrote down. `it serve` runs the same service in a terminal, until you press Ctrl-C, for a machine where you would sooner start it yourself.
 
 ## How things stand

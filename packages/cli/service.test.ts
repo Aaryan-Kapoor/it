@@ -98,6 +98,56 @@ describe('what a registered service was given, read back from its definition', (
 })
 
 describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('registering the service again on a Mac', () => {
+  test.each([false, true])(
+    'restores the earlier definition after loading fails, and says separately whether loading it again failed too (%s)',
+    (recoveryFails) => {
+      const user = mkdtempSync(path.join(os.tmpdir(), 'it-launchd-'))
+      const before = { home: process.env.IT_HOME, PATH: process.env.PATH, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+      const homedir = vi.spyOn(os, 'homedir').mockReturnValue(user)
+      try {
+        const commands = path.join(user, 'commands')
+        const loaded = path.join(user, 'loaded')
+        const asked = path.join(user, 'asked')
+        mkdirSync(commands)
+        writeFileSync(
+          path.join(commands, 'launchctl'),
+          `#!/bin/sh
+echo "$1" >> '${asked}'
+case "$1" in
+  bootout) rm -f '${loaded}' ;;
+  bootstrap)
+    if grep -q '/an/earlier/path' "$3"; then
+      ${recoveryFails ? 'echo recovery refused; exit 1' : `touch '${loaded}'`}
+    else
+      echo replacement refused; exit 1
+    fi ;;
+esac
+`,
+          { mode: 0o755 },
+        )
+        process.env.IT_HOME = path.join(user, '.it')
+        process.env.PATH = `${commands}:/usr/bin:/bin`
+        Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+        const definition = path.join(user, 'Library', 'LaunchAgents', 'dev.it.plist')
+        mkdirSync(path.dirname(definition), { recursive: true })
+        const earlier = launchdPlist(command(), { PATH: '/an/earlier/path' })
+        writeFileSync(definition, earlier)
+        writeFileSync(loaded, '')
+        expect(() => install()).toThrow(recoveryFails ? /replacement refused.*restoring the earlier agent failed: recovery refused/ : /replacement refused/)
+        expect(readFileSync(definition, 'utf8')).toBe(earlier)
+        expect(readFileSync(asked, 'utf8').trim().split('\n')).toEqual(['bootout', 'bootstrap', 'bootstrap'])
+        expect(existsSync(loaded)).toBe(!recoveryFails)
+      } finally {
+        homedir.mockRestore()
+        Object.defineProperty(process, 'platform', before.platform)
+        process.env.PATH = before.PATH
+        if (before.home === undefined) delete process.env.IT_HOME
+        else process.env.IT_HOME = before.home
+        rmSync(user, { recursive: true, force: true })
+      }
+    },
+  )
+
   test('where the new definition cannot be written, the service that is running is left running: launchd is told nothing until the definition is there', () => {
     const user = mkdtempSync(path.join(os.tmpdir(), 'it-launchd-'))
     const before = { home: process.env.IT_HOME, PATH: process.env.PATH, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
