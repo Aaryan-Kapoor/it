@@ -998,7 +998,16 @@ async function wait(a: Args) {
       await emit({ timedOut: true })
       void finish(0)
     }
-    setTimeout(() => void timeUp(), seconds * 1000)
+    // A timer of the runtime counts no further than some twenty-four days, and one given more
+    // rings at once: a wait told to go on for a month would say in its first moment that nothing
+    // had happened. So the time is waited out a day at most at a time, until it is up
+    const until = Date.now() + seconds * 1000
+    const later = (): void => {
+      const left = until - Date.now()
+      if (left <= 0) return void timeUp()
+      setTimeout(later, Math.min(left, 86_400_000))
+    }
+    later()
   }
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => void finish(130))
   await new Promise(() => {})

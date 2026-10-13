@@ -1405,6 +1405,30 @@ describe.skipIf(process.platform === 'win32')('a wait whose time runs out', () =
       await b.close()
     }
   })
+
+  test('given more seconds than a timer can count, it goes on waiting for as long as it was told, and does not say at once that nothing happened', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:get' ? { title: 'Plan' } : asked.path === 'delivery:waiting' ? [] : null))
+    try {
+      // Thirty days, which is more milliseconds than a timer of the runtime takes: given that many, it rings at once
+      const child = spawn(process.execPath, [program, 'wait', '--id', 'plan', '--follow', '--timeout', '2592000'], {
+        cwd: m.home,
+        env: { PATH: m.bin, HOME: m.home, IT_HOME: m.it, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', ...b.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let out = ''
+      let err = ''
+      child.stdout.on('data', (piece) => (out += piece))
+      child.stderr.on('data', (piece) => (err += piece))
+      const ended = new Promise<number | null>((resolve) => child.once('close', resolve))
+      const still = await Promise.race([ended.then(() => false), new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 2500))])
+      child.kill('SIGTERM')
+      await ended
+      expect([still, out, err.includes('TimeoutOverflowWarning')]).toEqual([true, '', false])
+    } finally {
+      await b.close()
+    }
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('a connector that cannot start, on a machine where it is all of It there is to run', () => {
