@@ -218,6 +218,10 @@ export function Starters({ owner }: { owner: boolean }) {
   )
 }
 
+/** What a browser is asked, to learn that the person's system asks for less motion. */
+const LESS_MOTION = '(prefers-reduced-motion: reduce)'
+const lessMotion = () => typeof matchMedia === 'function' && matchMedia(LESS_MOTION)?.matches === true
+
 /**
  * The first screen. How things stand with the tour is given to it by whoever chose to show it:
  * that the person asked for the tour here is known in this tab alone, and what chooses between
@@ -236,6 +240,14 @@ export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<type
   /** The things the film has, once it is playing, and which of them is up. Until then the screen stands still. */
   const [things, setThings] = useState<typeof THINGS>([])
   const [at, setAt] = useState(-1)
+  // Whether the film stands still. It does from the start for someone who has asked their
+  // system for less motion, where a thing is shown whole and nothing moves: the stylesheet
+  // stills what it animates, and cannot still what is drawn here. And it does when the person
+  // stops it, with the button under it, which is the one way to stop it from the keyboard
+  const [still, setStill] = useState(lessMotion)
+  const stillNow = useRef(still)
+  stillNow.current = still
+  useEffect(() => playing.current?.still(still), [still])
 
   useEffect(() => {
     // Where there is nothing to draw with, the screen says what it has to say in words and shows no picture
@@ -250,13 +262,11 @@ export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<type
       void line.offsetWidth
       line.classList.add('in')
     }
-    // Someone who has asked their system for less motion is shown a thing whole, and nothing
-    // moves: the stylesheet stills what it animates, and cannot still what is drawn here. It is
-    // asked when the film begins, and again whenever the answer changes while this screen is up
-    const less = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null
-    const begunStill = less?.matches === true
-    const changed = (e: { matches: boolean }) => playing.current?.still(e.matches)
+    // What the person's system asks is followed as it changes while this screen is up
+    const less = typeof matchMedia === 'function' ? matchMedia(LESS_MOTION) : null
+    const changed = (e: { matches: boolean }) => setStill(e.matches)
     less?.addEventListener?.('change', changed)
+    const begunStill = stillNow.current
     void import('./film/play')
       .then(({ play }) =>
         play(
@@ -278,8 +288,8 @@ export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<type
       .then((started) => {
         if (over) return started.stop()
         playing.current = started
-        // The answer may have changed while the film's typefaces were being fetched
-        if ((less?.matches === true) !== begunStill) started.still(!begunStill)
+        // It may have changed while the film's typefaces were being fetched
+        if (stillNow.current !== begunStill) started.still(stillNow.current)
         // Only what the film has is offered, in its order, under the names given here
         setThings(started.cards.flatMap((card) => THINGS.filter((t) => t.key === card.key)))
       })
@@ -374,6 +384,11 @@ export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<type
               {thing.name}
             </button>
           ))}
+          {things.length > 0 && (
+            <button type="button" className="hello-thing" aria-label={still ? 'Play the film' : 'Pause the film'} onClick={() => setStill(!still)}>
+              {still ? 'Play' : 'Pause'}
+            </button>
+          )}
         </fieldset>
       </div>
     </main>

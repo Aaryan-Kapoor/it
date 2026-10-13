@@ -222,6 +222,25 @@ describe('the film on the first screen', () => {
     expect(film.told).toEqual([])
   })
 
+  test('has a button that stops it and starts it again, which the keyboard reaches, and says which of the two it would do', async () => {
+    await shown()
+    await act(async () => {})
+    const stops = () => host.querySelector<HTMLButtonElement>('.hello-things button[aria-label$="the film"]')!
+    expect([stops().textContent, stops().getAttribute('aria-label'), stops().tabIndex]).toEqual(['Pause', 'Pause the film', 0])
+    await act(async () => stops().click())
+    expect(film.told).toEqual([true])
+    expect([stops().textContent, stops().getAttribute('aria-label')]).toEqual(['Play', 'Play the film'])
+    await act(async () => stops().click())
+    expect(film.told).toEqual([true, false])
+    // Begun standing still, for less motion, it is the way to have it played all the same
+    await act(async () => root.unmount())
+    host.remove()
+    less = true
+    await shown()
+    await act(async () => {})
+    expect(stops().textContent).toBe('Play')
+  })
+
   test('is told to stand still, or to play again, when the person changes that in their system while the screen is up', async () => {
     await shown()
     await act(async () => {})
