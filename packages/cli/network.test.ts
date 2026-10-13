@@ -163,6 +163,23 @@ describe('the addresses another device can open the site at', () => {
     expect(publicAddress({ 'vEthernet (Default Switch)': [four('203.0.113.9')] })).toBeUndefined()
   })
 
+  test('every address is written with its port, port 80 too, which is how the backend takes an address and keeps it for the pairing screen', () => {
+    // The backend keeps only what is written as it expects an address to be, and drops the rest without a word
+    const written = /^const ADDRESS = \/(.+)\/$/m.exec(readFileSync(path.join(__dirname, '../../convex/network.ts'), 'utf8'))?.[1]
+    expect(written).toEqual(expect.any(String))
+    const kept = new RegExp(written!)
+    const here = { en0: [four('192.168.1.20'), six('fd00::20'), six('FD00:0:0:0:0:0:0:21')] }
+    for (const port of [80, 81, 4700]) {
+      const listed = reachable(port, here)
+      expect(listed).toEqual([`http://192.168.1.20:${port}`, `http://[fd00::20]:${port}`, `http://[fd00::21]:${port}`])
+      expect(listed.filter((address) => kept.test(address))).toEqual(listed)
+    }
+    expect(reachable(80, { tailscale0: [four('100.101.42.17')] }, true, () => 'studio.tail1234.ts.net').filter((address) => kept.test(address))).toEqual([
+      'http://studio.tail1234.ts.net:80',
+      'http://100.101.42.17:80',
+    ])
+  })
+
   test('an address a machine gave itself comes after every other under IPv4, a public one after the home network’s, and each address is given once', () => {
     const listed = reachable(39500, {
       eth0: [four('169.254.10.20'), four('203.0.113.9'), four('192.168.1.20'), four('192.168.1.20')],

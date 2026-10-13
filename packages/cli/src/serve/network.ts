@@ -167,9 +167,12 @@ export function reachable(
       // Kept to the tailnet, only its addresses there are ones another device can use
       const ranked = tailnet ? (a.internal || !inTailnet(a.address) ? undefined : a.family === 'IPv4' ? 0 : 1) : rank(name, a)
       if (ranked === undefined) continue
+      // The address as a browser writes it, and always with its port. A browser leaves port 80
+      // out of an address, and the backend keeps for the pairing screen only an address that
+      // has its port, so one written without it would be dropped there without a word
       let at: string
       try {
-        at = new URL(`http://${a.family === 'IPv6' ? `[${a.address.split('%')[0]}]` : a.address}:${port}`).origin
+        at = `http://${new URL(`http://${a.family === 'IPv6' ? `[${a.address.split('%')[0]}]` : a.address}:${port}`).hostname}:${port}`
       } catch {
         continue
       }
