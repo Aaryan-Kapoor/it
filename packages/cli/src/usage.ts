@@ -544,6 +544,26 @@ function discard(): void {
 // there, which is to say that none begins. A command that turns reporting on waits in the same
 // way once it has written the new id down, so that none begins under the old one either.
 const decidingFile = () => inHome('telemetry-sending')
+/** Takes the decision marker exclusively, and removes only the file this sender made. */
+function decision(): (() => void) | null {
+  const file = decidingFile()
+  const mine = ordinary(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL)
+  if (!mine) return null
+  try {
+    const opened = fstatSync(mine.fd, { bigint: true })
+    return () => {
+      try {
+        if (isNamed(file, opened)) remove(file)
+      } catch {
+      } finally {
+        shut(mine.fd)
+      }
+    }
+  } catch {
+    shut(mine.fd)
+    return null
+  }
+}
 /** The longest the step may take. A sender that stood still for longer does not send on what it saw, and looks again at its next pass. */
 const DECIDING_MOST_MS = 250
 /** How long a command that turns reporting off waits for a sender that is deciding: longer than the step may take. */
@@ -920,11 +940,10 @@ export function startSender(
         const began = performance.now()
         let t: Seen
         let answer: Promise<boolean>
+        const release = decision()
+        // A sender that cannot say it is deciding does not send: nobody turning reporting off could wait for it.
+        if (!release) return
         try {
-          const mine = ordinary(decidingFile(), constants.O_WRONLY | constants.O_CREAT)
-          // A sender that cannot say it is deciding does not send: nobody turning reporting off could wait for it
-          if (!mine) return
-          shut(mine.fd)
           t = look()
           if (t.off) return
           if (!t.who || !t.tag) return forget()
@@ -942,7 +961,7 @@ export function startSender(
             answer = Promise.resolve(false)
           }
         } finally {
-          remove(decidingFile())
+          release()
         }
         let ok = false
         try {
@@ -1087,10 +1106,9 @@ export async function sendNow<N extends EventName>(name: N, properties: Properti
     // waits for the file to go, so that no request begins once it has returned.
     const began = performance.now()
     let answer: Promise<Response>
+    const release = decision()
+    if (!release) return
     try {
-      const mine = ordinary(decidingFile(), constants.O_WRONLY | constants.O_CREAT)
-      if (!mine) return
-      shut(mine.fd)
       const { off, kept } = standing()
       const id = off ? null : identity(kept)
       if (!id) return
@@ -1107,7 +1125,7 @@ export async function sendNow<N extends EventName>(name: N, properties: Properti
         signal: AbortSignal.timeout(4000),
       })
     } finally {
-      remove(decidingFile())
+      release()
     }
     await answer.then((r) => void r.body?.cancel().catch(() => {}))
   } catch {}

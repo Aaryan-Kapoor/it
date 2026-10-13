@@ -1227,6 +1227,69 @@ describe('what an event may hold', () => {
       await new Promise((resolve) => server.close(resolve))
     }
   })
+  test('another telemetry sender cannot remove the marker of a sender that is still deciding', async () => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const settings = new Set<number>()
+    const requests: boolean[] = []
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      requests.push(usage.status().enabled)
+      return new Response(null, { status: 204 })
+    })
+    let interleaved = false
+    let marked = false
+    let other: Promise<void> | undefined
+    try {
+      await withFiles(
+        {
+          openSync:
+            (real) =>
+            (file: fs.PathLike, ...rest: any[]) => {
+              const fd = real(file, ...rest) as number
+              if (String(file) === settingsFile()) settings.add(fd)
+              else settings.delete(fd)
+              return fd
+            },
+          readSync:
+            (real) =>
+            (fd: number, ...rest: any[]) => {
+              const n = real(fd, ...rest)
+              if (settings.has(fd) && !interleaved) {
+                interleaved = true
+                other = usage.sendNow('installation.removed', { age: 'under 1 day' })
+                marked = existsSync(deciding)
+                usage.set(false)
+              }
+              return n
+            },
+        },
+        () => usage.sendNow('installation.removed', { age: 'under 1 day' }),
+      )
+      await other
+      expect(marked).toBe(true)
+      expect(requests).toEqual([])
+      expect(existsSync(deciding)).toBe(false)
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('a sender leaves another sender’s replacement marker when its request has begun', async () => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      rmSync(deciding)
+      writeFileSync(deciding, 'another sender')
+      return new Response(null, { status: 204 })
+    })
+    try {
+      await usage.sendNow('installation.removed', { age: 'under 1 day' })
+      expect(readFileSync(deciding, 'utf8')).toBe('another sender')
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
   test('sending one event at once never throws and never waits long, where nothing answers', async () => {
     told()
     process.env.IT_TELEMETRY_URL = 'http://127.0.0.1:9/usage'
