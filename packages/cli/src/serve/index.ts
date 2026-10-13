@@ -287,6 +287,41 @@ export function erasing(say: (line: string) => void): (person: string) => void {
   }
 }
 
+/** Something the backend noted for the counts of how It is used: a name, and its properties as JSON text. */
+type Noted = { name: string; properties: string }
+/**
+ * Something that takes from the backend what it noted for the counts, a few askings at a time,
+ * and hands on what is to be counted. The backend removes what it gives, and with `keep` false
+ * removes it and gives nothing.
+ *
+ * A note is counted under the id that reporting has when the note is taken, and turning
+ * reporting off and on again gives another id, so that nothing from before is sent after. What
+ * the backend noted before that is from before too, and it does not know: so nothing is kept
+ * that waited there when this service started, since reporting may have been turned off and on
+ * while it was stopped, and nothing that waited when the id was found to be another than at
+ * the last taking. Such notes are asked to be thrown away, and are not counted if the backend
+ * gives them all the same, as one would that did not know `keep`.
+ */
+export function taker(
+  take: (keep: boolean) => Promise<{ notes?: Noted[]; more?: boolean }>,
+  sentAs: () => unknown,
+  counted: (note: Noted) => void,
+): (on: boolean) => Promise<void> {
+  /** The id under which what waits at the backend was noted. Nothing until all that waited at the start has been thrown away, and while reporting is off. */
+  let notedAs: unknown
+  return async (on) => {
+    const as = on ? sentAs() : undefined
+    const keep = as !== undefined && as === notedAs
+    for (let pass = 0, more = true; more && pass < 5; pass++) {
+      const got = await take(keep)
+      if (keep) for (const note of got.notes ?? []) counted(note)
+      more = got.more === true
+      // Only once nothing more waits is what is noted next known to be this id's
+      if (!more) notedAs = as
+    }
+  }
+}
+
 /**
  * The door, kept as the settings say it should be for as long as the service runs. `it network
  * on` and `it network off` write the settings, and the service looks there every second: when
@@ -460,16 +495,18 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   // wrong in this stops nothing, and is tried again at the next pass.
   let collecting = false
   let picturedAt = 0
+  const take = taker(
+    (keep) => asAdmin(backend, 'counted:take', { keep }) as Promise<{ notes?: Noted[]; more?: boolean }>,
+    // The id counts are sent under, as usage reporting keeps it in It's folder
+    () => readJson<{ installation?: unknown }>(inHome('telemetry.json'))?.installation,
+    (note) => recordNoted(note.name, note.properties),
+  )
   const collect = async () => {
     if (collecting || stopped || backend.behind !== undefined) return
     collecting = true
     try {
       const on = counting()
-      for (let pass = 0, more = true; more && pass < 5; pass++) {
-        const got = (await asAdmin(backend, 'counted:take', { keep: on })) as { notes?: { name: string; properties: string }[]; more?: boolean }
-        for (const note of got.notes ?? []) recordNoted(note.name, note.properties)
-        more = got.more === true
-      }
+      await take(on)
       if (on && Date.now() - picturedAt > 86_400_000) {
         const holds = (await asAdmin(backend, 'counted:picture', {})) as {
           pages: number

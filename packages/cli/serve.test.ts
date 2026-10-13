@@ -20,7 +20,7 @@ import { ask, backendAt, Problem, VERSION } from './src/lib'
 import { asAdmin, endOf, fetchProgram, type Running, startBackend } from './src/serve/backend'
 import { cannotRunHere, doorKey, instanceName, makeConfig, noteLoaded, programFile, RELEASE, readConfig, type ServiceConfig } from './src/serve/config'
 import { startDoor } from './src/serve/door'
-import { erasing, opensAnew, standsAs, teller, unless } from './src/serve/index'
+import { erasing, opensAnew, standsAs, taker, teller, unless } from './src/serve/index'
 import { environment, launchdPlist, logFile, systemdUnit } from './src/service'
 import * as usage from './src/usage'
 import { bases } from './test-ports'
@@ -446,6 +446,80 @@ describe('what the service does when it is told that a person has erased everyth
     // Neither the file's name nor a word of what went wrong is in the line
     expect(lines.join('\n')).not.toContain(folder)
     expect(lines.join('\n')).not.toContain('erased.json')
+  })
+})
+
+describe('what the service takes of the notes the backend made for the counts of how It is used', () => {
+  const note = (name: string) => ({ name, properties: '{}' })
+  /** A backend that holds notes and gives the oldest two at an asking, removing them, as the real one gives two hundred. One that does not know `keep` gives them whatever it is asked. */
+  const backendWith = (held: string[], knowsKeep = true) => {
+    const asked: boolean[] = []
+    return {
+      asked,
+      held,
+      take: async (keep: boolean) => {
+        asked.push(keep)
+        const given = held.splice(0, 2)
+        return { notes: keep || !knowsKeep ? given.map(note) : [], more: given.length === 2 }
+      },
+    }
+  }
+
+  test('nothing that was noted before this service started is counted, since reporting may have been turned off and on again while it was stopped', async () => {
+    for (const knowsKeep of [true, false]) {
+      const backend = backendWith(['a', 'b', 'c', 'd', 'e'], knowsKeep)
+      const counted: string[] = []
+      const take = taker(
+        backend.take,
+        () => 'one-id',
+        (noted) => counted.push(noted.name),
+      )
+      // The first taking throws away everything there is, however many askings that is, and counts none of it
+      await take(true)
+      expect([backend.asked, backend.held, counted]).toEqual([[false, false, false], [], []])
+      // What is noted from then on is counted
+      backend.held.push('f', 'g', 'h')
+      await take(true)
+      expect([backend.asked.slice(3), counted]).toEqual([
+        [true, true],
+        ['f', 'g', 'h'],
+      ])
+    }
+  })
+
+  test('nor is what was noted under another id, as it was where reporting was turned off and on again between two takings, nor anything while it is off', async () => {
+    const backend = backendWith([])
+    const counted: string[] = []
+    let id: string | undefined = 'one-id'
+    const take = taker(
+      backend.take,
+      () => id,
+      (noted) => counted.push(noted.name),
+    )
+    await take(true)
+    // Off and on again before the service looked: the id is another, and what waits was noted under the one before
+    backend.held.push('before-off')
+    id = 'another-id'
+    await take(true)
+    expect([backend.asked.at(-1), counted]).toEqual([false, []])
+    backend.held.push('after-on')
+    await take(true)
+    expect([backend.asked.at(-1), counted]).toEqual([true, ['after-on']])
+    // Off: thrown away, as it always was. And on again: what waits then is from before, whatever the id
+    backend.held.push('while-off')
+    await take(false)
+    backend.held.push('noted-as-it-was-turned-on')
+    await take(true)
+    expect([backend.asked.slice(-2), counted]).toEqual([[false, false], ['after-on']])
+    // A taking that fails changes nothing of this: the next one goes on from where it was
+    const failing = taker(
+      async () => {
+        throw new Error('busy')
+      },
+      () => 'one-id',
+      () => {},
+    )
+    await expect(failing(true)).rejects.toThrow('busy')
   })
 })
 
