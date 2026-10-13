@@ -614,6 +614,53 @@ describe('the OpenClaw add-on', () => {
     expect(acks()).toEqual(['click-1'])
   })
 
+  test('a click OpenClaw took in line behind a turn that goes on running commands for longer than ten minutes is not sent a second time', async () => {
+    const host = await start()
+    host.runsCommand(MAIN)
+    offered[MAIN] = [{ id: 'click-1', text: 'one' }]
+    await tick()
+    // As a real gateway answers for a conversation busy with a turn that something else began
+    host.turns[0]!.finish({ dispatched: true, admission: { kind: 'dispatch' }, dispatchResult: { queuedFinal: false, deferredToActiveRun: 'followup' } })
+    await settle()
+    // The turn in front of it runs for twenty-five minutes more, and its agent runs a command every five
+    for (let i = 0; i < 5; i++) {
+      vi.setSystemTime(Date.now() + 5 * 60 * 1000)
+      host.runsCommand(MAIN)
+      await tick(2)
+    }
+    expect(host.turns.length).toBe(1)
+    expect(host.warnings).toEqual([])
+    expect(acks()).toEqual([])
+    // It ends, and OpenClaw starts the turn that carries the click, which is the only message there has been for it
+    host.turns[0]!.begin()
+    await settle()
+    expect(acks()).toEqual(['click-1'])
+    await tick(8)
+    expect(host.turns.length).toBe(1)
+  })
+
+  test('and one whose conversation then runs no command for ten minutes, with no turn started for it, is tried again as a hand-over with no word is', async () => {
+    const host = await start()
+    host.runsCommand(MAIN)
+    offered[MAIN] = [{ id: 'click-1', text: 'one' }]
+    await tick()
+    host.turns[0]!.finish({ dispatched: true, admission: { kind: 'dispatch' }, dispatchResult: { queuedFinal: false, deferredToActiveRun: 'followup' } })
+    await settle()
+    vi.setSystemTime(Date.now() + 6 * 60 * 1000)
+    host.runsCommand(MAIN)
+    await tick()
+    // Ten minutes from the last command, and not from the hand-over
+    vi.setSystemTime(Date.now() + 9 * 60 * 1000)
+    await tick(2)
+    expect(host.warnings).toEqual([])
+    vi.setSystemTime(Date.now() + 60 * 1000)
+    await tick()
+    expect(host.warnings.length).toBe(1)
+    expect(host.warnings[0]).toMatch(/ and will be tried again: no_word$/)
+    await tick(6)
+    expect(host.turns.length).toBe(2)
+  })
+
   test('and after those ten minutes it does not keep a conversation that has been quiet for a month from being forgotten', async () => {
     const host = await start()
     host.runsCommand(MAIN)

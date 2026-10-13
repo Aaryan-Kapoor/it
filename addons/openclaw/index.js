@@ -150,7 +150,8 @@ const unattended = (key) =>
 function make(api) {
   /**
    * Conversations to ask about: key -> { agent, seen, handing, tries, notBefore, leftUntil, lefts }. `handing` is
-   * null, or says since when a click has been on its way to the agent and how to stop waiting for it.
+   * null, or says since when a click has been on its way to the agent, how to stop waiting for it,
+   * and whether OpenClaw has said that it took the message.
    */
   const sessions = new Map()
   const given = new Set() // clicks the agent already has, which must never be handed over a second time
@@ -339,7 +340,8 @@ function make(api) {
       sessions.delete(key)
       unsaved = true
     }
-    s.handing = { since: Date.now(), giveUp: () => refused('no_word') }
+    const waiting = { since: Date.now(), taken: false, giveUp: () => refused('no_word') }
+    s.handing = waiting
     let turn
     try {
       turn = deliver(rt, key, s, clicks, accepted)
@@ -362,6 +364,9 @@ function make(api) {
     // way, nothing more is handed to this conversation until its turn starts, and it is given up
     // on, and tried again, only if OpenClaw says nothing of a turn for as long as HANDING_MS.
     // Were it tried again sooner, the agent would be sent the same click once for each try.
+    // A message OpenClaw took is in line behind a turn that may itself run for longer than
+    // that, so for one of those the time is counted from the last command the conversation
+    // ran: while its agent goes on running them, the turn in front is still at work (see `check`).
     Promise.resolve(turn).then(
       (result) => {
         if (result?.dispatched === false) return refused('not_taken')
@@ -371,6 +376,7 @@ function make(api) {
         // the message was steered into the running turn is the proof here. Left waiting for a
         // start that never comes, the conversation would be handed nothing more for ten minutes.
         if (result?.dispatchResult?.deferredToActiveRun === 'steer') accepted()
+        else if (state === 'open') waiting.taken = true
       },
       () => refused('dispatch_failed'),
     )
@@ -395,7 +401,11 @@ function make(api) {
       const now = Date.now()
       // OpenClaw has had long enough to say what became of a click. From here on it counts as
       // refused: the conversation is treated like any other again, and the click is tried again.
-      for (const s of sessions.values()) if (s.handing && now - s.handing.since > HANDING_MS) s.handing.giveUp()
+      // One that OpenClaw took waits behind a running turn, and is given that long from the
+      // conversation's last command: tried again while the turn was still at work, it would
+      // be a second message in line behind it, and the agent would be given the click twice.
+      for (const s of sessions.values())
+        if (s.handing && now - (s.handing.taken ? Math.max(s.handing.since, s.seen) : s.handing.since) > HANDING_MS) s.handing.giveUp()
       for (const [key, s] of sessions) {
         if (s.handing || now - s.seen <= QUIET_MS) continue
         sessions.delete(key)
