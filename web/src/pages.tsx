@@ -706,6 +706,11 @@ function ActionStatus({
   // where more wait than the last few show
   const stillWaiting = recent?.filter((a) => a.delivery !== 'handed_off') ?? []
   const waiting = Math.max(stillWaiting.length, recent ? pending || 0 : 0)
+  // Whether the page's agent app is connected on its machine, which is the person's choice
+  // under Machines. The owner's browser is told of the machines and a paired screen is not, so
+  // it is known only there, and it is asked only while something waits
+  const machines = useQuery(api.machines.list, mayWake && wakes && stillWaiting.length > 0 ? {} : 'skip') as { id: string; wanted: string[] }[] | undefined
+  const chosen = wakes && machines ? machines.find((m) => m.id === wakes.machineId)?.wanted.includes(wakes.harness) : undefined
   // The bar speaks of the last thing that is still waiting, where anything is: that something
   // done after it was dealt with does not make it so. Otherwise of the last thing done.
   const last = stillWaiting[0] ?? recent?.[0]
@@ -822,6 +827,15 @@ function ActionStatus({
   // switch would change nothing, so it is not offered, and the bar says what would bring it
   const tooOld = now - last.at > WAKE_BACK_MS
   const offer = mayWake && wakes && !wakes.on && slow && !busy && !tooOld
+  // Its app is not connected on that machine. The machine hands nothing to such an app and
+  // reopens no conversation of it, whatever Auto-wake is set to, so opening the conversation
+  // brings nothing and neither would waking it: said as that, with where it is put right
+  if (chosen === false && slow)
+    return (
+      <span className="status" data-tone="wait">
+        {`Sent${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Its agent app'} is not connected on ${machine ?? 'its machine'}, and gets it once it is connected there, under Machines`}
+      </span>
+    )
   // Tried, and it could not be reopened: said as that, with why where it is asked for
   if (wakeFailed && wakeFailed.at >= last.at)
     return (

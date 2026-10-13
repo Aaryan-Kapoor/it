@@ -11,6 +11,8 @@ const NOW = Date.now()
 const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, agent: 'claude-code', machine: 'the laptop', machineSeenAt: NOW }
 /** What the backend last said of the page's clicks, newest first. */
 let recent: { at: number; delivery: string; outcome?: string | null; route?: string | null; handedAt?: number | null }[]
+/** The person's machines as the backend gives them to the owner's browser, with the agent apps chosen on each. */
+let machines: { id: string; wanted: string[] }[] | undefined
 /** Whether there is a connection to the backend, and what was asked to be told when that changes. */
 let connected: boolean
 const told = new Set<() => void>()
@@ -35,7 +37,8 @@ const askedToStop = () => new Promise<{ stopping: boolean }>((answer, refuse) =>
 vi.mock('convex/react', () => ({
   useConvex: () => client,
   useMutation: (fn: unknown) => (getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : async () => null),
-  useQuery: (fn: unknown) => ({ 'artifacts:get': PAGE, 'actions:forArtifact': recent })[getFunctionName(fn as never)],
+  useQuery: (fn: unknown, args: unknown) =>
+    args === 'skip' ? undefined : { 'artifacts:get': PAGE, 'actions:forArtifact': recent, 'machines:list': machines }[getFunctionName(fn as never)],
 }))
 // The frame a page is shown in has tests of its own
 vi.mock('./mount', () => ({ Mount: () => null }))
@@ -72,6 +75,7 @@ beforeEach(() => {
   localStorage.clear()
   localStorage.setItem('it.display', 'a-display-key-000001')
   recent = [{ at: NOW - 5000, delivery: 'handed_off', outcome: 'succeeded' }]
+  machines = [{ id: 'machine-1', wanted: ['claude-code', 'pi'] }]
   connected = true
   told.clear()
   answers.length = 0
@@ -388,6 +392,29 @@ describe('what the page’s bar says of the last thing the person did', () => {
       ['Sent. Claude Code is not listening: its conversation looks closed', false],
     ])
     Object.assign(PAGE, { wake: null, pending: 0 })
+  })
+
+  test('a click for an agent app that is not connected on its machine is said to wait for that, and to wake it is not offered: reopening its conversation would not hand the click over', async () => {
+    Object.assign(PAGE, { agent: 'pi', wake: { machineId: 'machine-1', harness: 'pi', on: false }, pending: 1 })
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    machines = [{ id: 'machine-1', wanted: ['claude-code'] }]
+    try {
+      await shown()
+      expect(said()).toBe('Sent. Pi is not connected on the laptop, and gets it once it is connected there, under Machines')
+      expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+      // The same with Auto-wake left on from when the app was connected: nothing is reopened for an app that is not
+      Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'pi', on: true } })
+      await drawnAgain()
+      expect(said()).toBe('Sent. Pi is not connected on the laptop, and gets it once it is connected there, under Machines')
+      // Connected again, it is as any click nobody has taken
+      machines = [{ id: 'machine-1', wanted: ['claude-code', 'pi'] }]
+      Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'pi', on: false } })
+      await drawnAgain()
+      expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+      expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(true)
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', wake: null, pending: 0 })
+    }
   })
 
   test('what the agent had already done is not said to have been stopped by a stop that came after it', async () => {
