@@ -1322,7 +1322,14 @@ function holdsIt(folder: string, program: string = process.execPath): boolean {
   if (typeof machine?.id === 'string' && typeof machine.key === 'object' && machine.key !== null) return true
   if (HARNESSES.some((id) => Array.isArray(read('addons', `${id}.json`)?.installs))) return true
   try {
-    return realpathSync(path.join(folder, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')) === realpathSync(program)
+    const bin = path.join(folder, 'bin')
+    const executable = path.join(bin, process.platform === 'win32' ? 'it.exe' : 'it')
+    return (
+      lstatSync(executable).isFile() &&
+      realpathSync(bin) === path.join(realpathSync(folder), 'bin') &&
+      path.dirname(realpathSync(executable)) === realpathSync(bin) &&
+      realpathSync(executable) === realpathSync(program)
+    )
   } catch {
     return false
   }

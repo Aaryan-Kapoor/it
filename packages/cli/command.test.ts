@@ -1175,6 +1175,27 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     expect(existsSync(path.dirname(real))).toBe(true)
   })
 
+  test('`it uninstall` leaves a project whose bin only links to the running program elsewhere', async () => {
+    const m = machine(false)
+    for (const linkedBin of [false, true]) {
+      const project = path.join(m.home, linkedBin ? 'linked-bin' : 'linked-program')
+      mkdirSync(project)
+      writeFileSync(path.join(project, 'unrelated.txt'), 'Keep this project.')
+      if (linkedBin) {
+        const external = path.join(m.home, 'external-bin')
+        mkdirSync(external)
+        symlinkSync(process.execPath, path.join(external, process.platform === 'win32' ? 'it.exe' : 'it'))
+        symlinkSync(external, path.join(project, 'bin'), 'dir')
+      } else {
+        mkdirSync(path.join(project, 'bin'))
+        symlinkSync(process.execPath, path.join(project, 'bin', process.platform === 'win32' ? 'it.exe' : 'it'))
+      }
+      const ran = await run(m, ['uninstall', '--yes'], { IT_HOME: project })
+      expect([ran.code, existsSync(path.join(project, 'unrelated.txt'))]).toEqual([2, true])
+      expect(error(ran).code).toBe('invalid')
+    }
+  })
+
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
     const m = machine(true, true)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
