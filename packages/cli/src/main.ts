@@ -1235,7 +1235,7 @@ async function uninstall(a: Args) {
       if (was) say('The background service is stopped, and no longer starts by itself.')
     } catch (err) {
       throw new Problem(
-        `It was not taken off this machine: ${why(err)}.`,
+        `It was not taken off this machine: ${err instanceof Error && err.message.trim() ? err.message.replace(/\.$/, '') : 'the background service could not be stopped or removed'}.`,
         'error',
         'Nothing else was changed, and It is as it was. Run `it uninstall` again once the service can be stopped.',
       )

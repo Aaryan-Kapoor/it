@@ -293,7 +293,10 @@ export function windowsScript(folder: string, launcher: string): string {
  */
 export function windowsRemoval(folder: string): string {
   const started = ps(folder.replace(/\//g, '\\').replace(/\\+$/, ''))
-  return `$task = Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue; if ($task -and (([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq ${started})) { Stop-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName ${ps(NAME)} -Confirm:$false -ErrorAction SilentlyContinue; if (Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue) { 'Windows still has the task'; exit 3 } }`
+  // Asking for a missing task is a failed cmdlet even when its error is silenced. Listing
+  // tasks instead tells absence apart from a scheduler that cannot be asked at all.
+  const task = `Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq ${ps(NAME)} }`
+  return `$task = ${task}; if ($task -and (([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq ${started})) { Stop-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName ${ps(NAME)} -Confirm:$false -ErrorAction SilentlyContinue; if (${task}) { 'Windows still has the task'; exit 3 } }; exit 0`
 }
 /**
  * What every script given to PowerShell begins with. PowerShell says how far it has got with

@@ -9,6 +9,7 @@ import {
   againWith,
   askToStop,
   command,
+  definedFor,
   environment,
   given,
   install,
@@ -17,6 +18,7 @@ import {
   runningFor,
   stopFile,
   systemdUnit,
+  uninstall,
   windowsLauncher,
   windowsRemoval,
   windowsScript,
@@ -190,15 +192,59 @@ esac
 })
 
 describe('taking the task away on Windows', () => {
+  test.skipIf(process.platform === 'win32')('with no task and no lock, taking It away succeeds even when asking for a missing task would fail silently', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-no-task-'))
+    const before = { home: process.env.IT_HOME, PATH: process.env.PATH, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+    try {
+      const commands = path.join(folder, 'commands')
+      const asked = path.join(folder, 'asked')
+      const launcher = path.join(folder, 'bin', 'it-service.cmd')
+      mkdirSync(commands)
+      mkdirSync(path.dirname(launcher))
+      writeFileSync(launcher, '@echo off\r\n')
+      // A failed cmdlet leaves PowerShell's success flag false, even when its error was silenced.
+      writeFileSync(
+        path.join(commands, 'powershell.exe'),
+        `#!${process.execPath}
+const fs = require('node:fs')
+const script = Buffer.from(process.argv.at(-1), 'base64').toString('utf16le')
+fs.appendFileSync(${JSON.stringify(asked)}, JSON.stringify(script) + '\\n')
+const missing = script.includes("Get-ScheduledTask -TaskName 'it'")
+process.exit(/exit 0\\s*$/.test(script) ? 0 : missing ? 1 : 0)
+`,
+        { mode: 0o755 },
+      )
+      process.env.IT_HOME = folder
+      process.env.PATH = commands
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect([definedFor(), runningFor(folder)]).toEqual(['none', false])
+      askToStop(folder, 50)
+      expect(existsSync(stopFile(folder))).toBe(false)
+      expect(() => uninstall(50)).not.toThrow()
+      expect(existsSync(launcher)).toBe(false)
+      const scripts = readFileSync(asked, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as string)
+      expect(scripts).toHaveLength(2)
+      expect(scripts[1]).toContain(".Replace('/', '\\').TrimEnd('\\')")
+      expect(scripts[1]).toMatch(/; exit 0$/)
+      expect(scripts[1]).not.toContain("Get-ScheduledTask -TaskName 'it'")
+    } finally {
+      Object.defineProperty(process, 'platform', before.platform)
+      process.env.PATH = before.PATH
+      if (before.home === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before.home
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test('only a task that is started in this folder is stopped and taken away: another account’s It, or something else of the person’s that is called `it`, is left as it is', () => {
     const script = windowsRemoval("C:\\Users\\O'Neil\\.it\\bin\\")
     // The task is asked for once, and everything that changes it comes after the look at where it is started, inside it
-    const [look, ...rest] = script.split(' { ')
-    expect(look).toBe(
-      "$task = Get-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue; if ($task -and (([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq 'C:\\Users\\O''Neil\\.it\\bin'))",
-    )
-    expect(rest.join(' { ')).toBe(
-      "Stop-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName 'it' -Confirm:$false -ErrorAction SilentlyContinue; if (Get-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue) { 'Windows still has the task'; exit 3 } }",
+    const task = "Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq 'it' }"
+    expect(script).toBe(
+      `$task = ${task}; if ($task -and (([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq 'C:\\Users\\O''Neil\\.it\\bin')) { Stop-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName 'it' -Confirm:$false -ErrorAction SilentlyContinue; if (${task}) { 'Windows still has the task'; exit 3 } }; exit 0`,
     )
     // However the folder was spelled when it was named here, it is the folder the task was registered with
     expect(windowsRemoval('C:/Users/Ada/.it/bin')).toContain("-ieq 'C:\\Users\\Ada\\.it\\bin'))")

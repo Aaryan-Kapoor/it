@@ -800,6 +800,52 @@ describe.skipIf(process.platform !== 'linux')('a service registered where IT_UPD
 })
 
 describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
+  test.each(['no task', 'refused', 'silent refusal', 'unavailable', 'an empty error'])(
+    'on Windows, uninstall with no service or lock handles a scheduler that says %s in words',
+    async (answer) => {
+      const m = machine()
+      const preload = path.join(m.home, 'windows.cjs')
+      writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })\n")
+      if (answer === 'an empty error')
+        writeFileSync(
+          preload,
+          `Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+const child = require('node:child_process')
+const spawnSync = child.spawnSync
+child.spawnSync = (file, args, opts) => {
+  if (file === 'powershell.exe' && Buffer.from(args.at(-1), 'base64').toString('utf16le').includes('Stop-ScheduledTask')) throw new Error()
+  return spawnSync(file, args, opts)
+}
+require('node:module').syncBuiltinESMExports()
+`,
+        )
+      if (answer !== 'unavailable')
+        writeFileSync(
+          path.join(m.bin, 'powershell.exe'),
+          `#!${process.execPath}
+const script = Buffer.from(process.argv.at(-1), 'base64').toString('utf16le')
+if (script.includes('[Microsoft.Win32.Registry]')) { console.log('absent'); process.exit(0) }
+if (!script.includes('Stop-ScheduledTask')) process.exit(1)
+const answer = ${JSON.stringify(answer)}
+if (answer === 'refused') console.error('The scheduler refused access')
+process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
+`,
+          { mode: 0o755 },
+        )
+      const done = await run(m, ['uninstall', '--yes'], {}, process.execPath, ['--require', preload])
+      if (answer === 'no task') {
+        expect([done.code, printed(done).removed, existsSync(m.it)]).toEqual([0, true, false])
+      } else {
+        expect(done.code).not.toBe(0)
+        expect(error(done).message).toContain(
+          answer === 'an empty error' ? 'the background service could not be stopped or removed' : 'the background task could not be taken away',
+        )
+        if (answer === 'refused') expect(error(done).message).toContain('The scheduler refused access')
+        expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)
+      }
+    },
+  )
+
   test.each([false, true])('preserves its database and profile when an orphan cannot be identified or its settings cannot be read (%s)', async (unreadable) => {
     const m = machine()
     const port = await ports.next()
