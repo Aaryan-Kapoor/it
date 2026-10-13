@@ -798,10 +798,14 @@ async function wait(a: Args) {
   /** Prints what the connector handed back and has not been printed yet, and tells It of it. */
   const printHandedBack = async () => {
     for (const c of handedBack.splice(0)) {
-      // Said to the connector as printed either way: what it gave again is what this already had
-      taken.add(c.id)
-      if (printedIds.has(c.id)) continue
+      // What the connector gave again is what this already had, and is said to it as printed.
+      // Anything else only once it is: the connector lets go of its copy at that word
+      if (printedIds.has(c.id)) {
+        taken.add(c.id)
+        continue
+      }
       await emit(printed(c))
+      taken.add(c.id)
       printedIds.add(c.id)
       if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
       unreported.add(c.id)

@@ -494,7 +494,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * An agent that begins to wait for such a click is given it as well (see `/waiting`), and
    * that is noted here, so that a refusal by the command is then no failure.
    */
-  const submitting = new Map<string, { click: Offered; toWaiter: boolean; given?: Given }>()
+  const submitting = new Map<string, { click: Offered; toWaiter: boolean; given?: Given; printed?: boolean }>()
   /**
    * Taken by Codex's queue, or by T3 Code for a thread of Codex, while the conversation's turn
    * was running. Either hands such a click over only when that turn is done, so an agent that
@@ -656,11 +656,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const noteMark = (key: string, harness: string, texts: string[], again: () => Promise<unknown>) => {
     const entry = { id: randomBytes(8).toString('hex'), texts, at: Date.now() }
     marked.set(key, [...(marked.get(key) ?? []), entry])
-    const kept = () => (marked.get(key) ?? []).includes(entry)
+    // Looked for wherever it is kept by now: a conversation that carries on under a new id takes its marks along
+    const where = () => [...marked].find(([, kept]) => kept.includes(entry))?.[0]
+    const kept = () => where() !== undefined
     const takeAway = () => {
-      const left = (marked.get(key) ?? []).filter((m) => m !== entry)
-      if (left.length) marked.set(key, left)
-      else marked.delete(key)
+      const under = where()
+      if (under === undefined) return
+      const left = marked.get(under)!.filter((m) => m !== entry)
+      if (left.length) marked.set(under, left)
+      else marked.delete(under)
     }
     const who = `${a(agentOf(harness))} conversation (${short(threadOf(key))})`
     const after = (ms: number, what: () => void) => {
@@ -673,6 +677,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const line = (tried: number) => {
       // Not into an app the person has disconnected since: what the mark stood for stays as it is, for a hook of the app once it is connected again
       if (!chosen(harness)) return
+      // And not while this machine hands nothing over: looked at again later, when it may
+      if (unfitting) return after(MARK_ASKED_MS, () => line(tried))
       void again()
         .catch(() => 'it could not be sent')
         .then((refused) => {
@@ -687,10 +693,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
           after(next, () => line(tried + 1))
         })
     }
-    const wait = () =>
+    const wait = (): void =>
       after(MARK_ASKED_MS, () => {
         if (!chosen(harness)) return
-        unmarked.add(key)
+        if (unfitting) return wait()
+        unmarked.add(where() ?? key)
         say(`${who} was given a mark and none of its hooks said it had what the mark stood for; it is given the short line now, and from here on`)
         line(0)
       })
@@ -700,14 +707,22 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const queues = new Map<string, Promise<void>>()
   const unconfirmed = queuedButUnconfirmed()
   /**
-   * What the connector before this one left claimed. Given back before anything is taken, and
-   * what It offers is not acted on until a moment after, when it offers these again: taken
-   * first, a click made after one of them would reach its conversation before it.
+   * What the connector before this one left claimed is given back before anything is taken,
+   * and nothing is taken until It has offered it again: taken first, a click made after one of
+   * those would reach its conversation before it. It is asked for all that this machine holds,
+   * since a claim may have been made that this machine never heard the answer to. An It from
+   * before it could be asked that is asked for each click the journal names instead.
    */
-  let leftClaimed = claimedAndLeft()
-  let settledAt = 0
-  /** How long after giving those back what It offers is left alone, for it to offer them again. */
-  const GIVEN_BACK_MS = 1500
+  let givingBack: 'due' | 'asked' | 'done' = 'due'
+  /** What was given back and has not been offered again yet, and until when that is waited for. */
+  let comingBack = new Set<string>()
+  let backBy = 0
+  /** When this connector first looked at what was waiting, by the clock that is never set back. */
+  let began = 0
+  /** For how long it is tried where It cannot be asked. Past it, the leases have run out by themselves. */
+  const BACK_TRY_MS = LEASE_MS + 5000
+  /** For how long the offer of what was given back is waited for. One whose conversation is not listened for here is never offered. */
+  const BACK_SEEN_MS = 3000
   let inbox: Offered[] = []
   let routing = false
   let stopping: ((code: number) => void) | null = null
@@ -1444,7 +1459,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Still not settled, it is reopened for nothing: said below, by `carry`, as why
       /** Whether this turn is told that the one before it was cut off: decided before it begins, since its own ending may make such a note anew. */
       const toldCutOff = cutOff.has(key)
-      const sent: { click: Offered; toWaiter: boolean; given?: Given } = { click, toWaiter: false }
+      const sent: { click: Offered; toWaiter: boolean; given?: Given; printed?: boolean } = { click, toWaiter: false }
       submitting.set(click.id, sent)
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
       // hook of It's hands the agent the rest, and otherwise one short line for each click
@@ -1555,8 +1570,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // message: an agent that waits in that turn for one of those would wait for a message
         // that stands behind its own turn. A reopening never does: nothing was running
         if (!reopening && turnRunning(key, Date.now())) {
-          // One that a waiter was given while the command was still to answer is kept as given to it, until it says that it has it
-          for (const c of [click, ...withIt]) behindTurn.set(c.id, { click: c, key, ...(c === click && sent.given ? { given: sent.given } : {}) })
+          // One that a waiter was given while the command was still to answer is kept as given
+          // to it, until it says that it has it. Where it has said so already, it is not kept
+          for (const c of [click, ...withIt]) {
+            if (c === click && sent.printed) continue
+            behindTurn.set(c.id, { click: c, key, ...(c === click && sent.given ? { given: sent.given } : {}) })
+          }
         }
         await confirmAll()
       } else {
@@ -1690,23 +1709,47 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (routing || closing || unfitting) return
     routing = true
     try {
-      if (leftClaimed.length) {
-        const ids = leftClaimed
-        leftClaimed = []
-        // One that It will not give back (it has gone elsewhere since, or is no click of this person's) is nothing to wait for
-        await Promise.all(
-          ids.map((id) =>
-            call('mutation', api.delivery.release, { id }).then(
-              () => journal('released', id),
-              () => {},
-            ),
-          ),
+      if (!began) began = steady()
+      if (givingBack === 'due') {
+        const asked = await call<string[]>('mutation', api.delivery.giveBack, {}).then(
+          (back) => (Array.isArray(back) ? back : []),
+          async (err: unknown) => {
+            // An It that cannot be asked this yet: each click the journal names is given back by itself
+            if (!/could not find/i.test(String((err as Error)?.message ?? err))) return null
+            const named = claimedAndLeft()
+            const gone = await Promise.all(
+              named.map((id) =>
+                call('mutation', api.delivery.release, { id }).then(
+                  () => id,
+                  () => null,
+                ),
+              ),
+            )
+            return gone.filter((id): id is string => id !== null)
+          },
         )
-        settledAt = steady() + GIVEN_BACK_MS
+        if (asked === null) {
+          // It could not be asked. Nothing is taken meanwhile, for as long as a lease of the
+          // connector before this one can still stand
+          if (steady() - began < BACK_TRY_MS) {
+            soon(1000)
+            return
+          }
+          givingBack = 'done'
+        } else {
+          for (const id of asked) journal('released', id)
+          comingBack = new Set(asked)
+          backBy = steady() + BACK_SEEN_MS
+          givingBack = 'asked'
+        }
       }
-      if (steady() < settledAt) {
-        soon(settledAt - steady() + 10)
-        return
+      if (givingBack === 'asked') {
+        for (const c of inbox) comingBack.delete(c.id)
+        if (comingBack.size && steady() < backBy) {
+          soon(100)
+          return
+        }
+        givingBack = 'done'
       }
       const now = Date.now()
       // Telling It what was handed over is done beside this, never ahead of it: a slow answer
@@ -1817,12 +1860,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // A Codex turn that is running will reach a hook: after its next command, or when it stops
         const inTurn = codex && turnRunning(key, now)
         // Codex's queue may hold an earlier click of the conversation behind this very turn, or
-        // be taking one this moment. Given to the turn's next hook, this one would be read
-        // before it: so it follows the earlier one, and is handed over after it.
-        const queuedBefore =
-          inTurn &&
-          ([...behindTurn.values()].some((b) => b.key === key) ||
-            [...submitting.values()].some((sent) => sent.click.session && follow(keyOf(sent.click.session.harness, sent.click.session.id)) === key))
+        // one may have its place in line for the queue, from the moment it was given that place
+        // and before anything was asked for it. Given to the turn's next hook, this one would
+        // be read before it: so it follows the earlier one, and is handed over after it.
+        const queuedBefore = inTurn && (queues.has(key) || [...behindTurn.values()].some((b) => b.key === key))
         const forAddOn = listening || (inTurn && now - click.at < FRESH_MS && !queuedBefore)
         // Which of the other ways it goes, asked only where the first does not take it
         const way = forAddOn
@@ -1843,7 +1884,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
             journal('released', click.id)
             await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
           } else if (got) {
-            held.set(click.id, { click, key, claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
+            // Under the id the conversation has by now: it may have carried on under another while the claim was being asked for
+            held.set(click.id, { click, key: follow(key), claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
             journal('claimed', click.id)
           }
         } else if (way === 't3') {
@@ -2133,7 +2175,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!who) return [400, { error: 'say who is waiting' }]
       // What the waiter says it has printed, of what was kept for a turn that waits, is let go of
       for (const got of Array.isArray(body.got) ? body.got.slice(0, 1000) : []) {
-        if (typeof got === 'string' && behindTurn.get(got)?.given?.who === who) behindTurn.delete(got)
+        if (typeof got !== 'string') continue
+        if (behindTurn.get(got)?.given?.who === who) behindTurn.delete(got)
+        // One that Codex's command has not yet answered for is noted as printed, so that no copy of it is kept once it has
+        const sent = submitting.get(got)
+        if (sent?.given?.who === who) sent.printed = true
       }
       if (body.done) {
         // Kept, as one that has ended: see `waiters`
@@ -2195,7 +2241,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // Once: an agent that took it, dealt with it and waits again is not given it a second
           // time. Unless it never had it: the same waiter asking again with no word of it was
           // sent an answer that did not arrive
-          if ((sent.toWaiter && sent.given?.who !== who) || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
+          if (sent.printed || (sent.toWaiter && sent.given?.who !== who) || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
           sent.toWaiter = true
           sent.given = { who, at: Date.now() }
           handedBack.push(sent.click)
