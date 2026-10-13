@@ -15,20 +15,21 @@ A page is shown in a sandbox, as a document that shares nothing with the site, w
 
 `It.store.set(key, value)` and `It.store.get(key)` keep small things for the page itself. What is kept there is kept with the page, so it is there the next time the page is opened, on any display. It arrives with the page's state, which is empty until it arrives, a moment after the page opens. It is not there yet when the page's scripts first run: `It.store.get` waits for nothing and answers from what has arrived, so as the page starts it returns `undefined` even for something that was saved. Read what was saved in `It.onState`, as below.
 
-A draft is put back once, when the state first arrives, and never again over what is being typed. It is saved a moment after the typing stops, and not at every letter, which would be more than a page may send:
+A draft is put back once, when the state first arrives, and never over what is being typed: not when the state changes later, and not when the user began typing before it arrived. It is saved a moment after the typing stops, and not at every letter, which would be more than a page may send:
 
 ```html
 <textarea id="draft"></textarea>
 <script>
   const box = document.getElementById('draft')
-  let restored = false
+  let settled = false
   It.onState(() => {
-    if (restored) return
-    restored = true
+    if (settled) return
+    settled = true
     box.value = It.store.get('draft') ?? ''
   })
   let later
   box.addEventListener('input', () => {
+    settled = true
     clearTimeout(later)
     later = setTimeout(() => It.store.set('draft', box.value).catch(() => {}), 800)
   })

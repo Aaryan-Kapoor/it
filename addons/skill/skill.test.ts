@@ -2,7 +2,9 @@
 // it to the program it describes: a command, a flag or a field that the skill names is one the
 // `it` command and the in-page script really have.
 import { readdirSync, readFileSync } from 'node:fs'
+import { JSDOM } from 'jsdom'
 import { describe, expect, test } from 'vitest'
+import { RUNTIME } from '../../packages/content/src/runtime.generated'
 import { LIMITS, QUOTA } from '../../packages/protocol/src/index'
 
 const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8')
@@ -276,10 +278,68 @@ describe('the agent skill', () => {
     expect(runtime).toMatch(/if \(message\.type === 'it:state'\) \{[\s\S]{0,160}emit\(\)/)
     expect(skill).toContain("It is not there yet when the page's scripts first run")
     expect(skill).toContain('so as the page starts it returns `undefined` even for something that was saved')
-    // The example reads what was saved where the state arrives, once, and saves no faster than a page may send
+    // The example reads what was saved where the state arrives, and saves no faster than a page may send
     const example = /```html\n<textarea id="draft">[\s\S]*?```/.exec(skill)![0]
-    expect(example).toMatch(/It\.onState\(\(\) => \{\s+if \(restored\) return\s+restored = true\s+box\.value = It\.store\.get\('draft'\) \?\? ''/)
+    expect(example).toMatch(/It\.onState\(\(\) => \{[\s\S]{0,80}box\.value = It\.store\.get\('draft'\) \?\? ''/)
     expect(example).toMatch(/setTimeout\(\(\) => It\.store\.set\('draft', box\.value\)/)
+  })
+
+  test('its example of a draft, run as it is written, puts back what was saved once and never over what was typed, before the state came or after', () => {
+    const example = /```html\n(<textarea id="draft">[\s\S]*?)```/.exec(skill)![1]!
+    const script = /<script>([\s\S]*?)<\/script>/.exec(example)![1]!
+    /** The example in a page of its own, with the in-page script as it is served, and the site stood in for by hand. */
+    const page = () => {
+      const w = new JSDOM(`<!doctype html><body>${example.replace(/<script>[\s\S]*?<\/script>/, '')}</body>`, {
+        url: 'http://content.test/s/a-token/v/1/index.html',
+        runScripts: 'outside-only',
+      }).window as any
+      /** What the page has asked to be done later, and not yet. */
+      let later: (() => void)[] = []
+      w.setTimeout = (fn: () => void) => later.push(fn)
+      w.clearTimeout = (n: number) => {
+        later[n - 1] = () => {}
+      }
+      w.setInterval = () => 0
+      w.__IT__ = { app: 'http://app.test', id: 'notes', version: 1, keep: '/s/a-token/__it/keep' }
+      w.parent.postMessage = () => {}
+      w.eval(RUNTIME)
+      w.eval(script)
+      const sent: any[] = []
+      const port = { postMessage: (m: unknown) => sent.push(m), onmessage: null as ((e: { data: unknown }) => void) | null }
+      w.dispatchEvent(Object.assign(new w.Event('message'), { origin: 'http://app.test', source: w.parent, data: { type: 'it:port' }, ports: [port] }))
+      const box = w.document.getElementById('draft')
+      return {
+        box,
+        types(text: string) {
+          box.value = text
+          box.dispatchEvent(new w.Event('input'))
+        },
+        arrives: (state: unknown, revision: number) => port.onmessage!({ data: { type: 'it:state', state, revision } }),
+        /** The moment after the typing stopped. */
+        aMomentLater() {
+          const due = later
+          later = []
+          for (const fn of due) fn()
+        },
+        stored: () => sent.filter((m) => m.type === 'it:store').map((m) => m.value),
+      }
+    }
+    // Opened with nothing typed: what was saved is put back, and what is typed after it stays through every later change of the state
+    const opened = page()
+    opened.arrives({ _page: { draft: 'what was saved' } }, 3)
+    expect(opened.box.value).toBe('what was saved')
+    opened.types('what was saved, and more')
+    opened.arrives({ _page: { draft: 'what was saved' }, status: 'Working' }, 4)
+    expect(opened.box.value).toBe('what was saved, and more')
+    opened.aMomentLater()
+    expect(opened.stored()).toEqual(['what was saved, and more'])
+    // Typed into before the state came, which takes a moment: what was typed stays, and it is what is saved
+    const early = page()
+    early.types('typed before the state came')
+    early.arrives({ _page: { draft: 'what was saved' } }, 3)
+    expect(early.box.value).toBe('typed before the state came')
+    early.aMomentLater()
+    expect(early.stored()).toEqual(['typed before the state came'])
   })
 
   test('its first lines are read the same by every app, the strictest of them included', () => {
