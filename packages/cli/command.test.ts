@@ -627,6 +627,37 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('a command that did part of what it was asked and ended badly is counted as that, and a wait that ended is counted too', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'plan', version: 1, url: 'https://site.example/p/plan' }
+      if (fn === 'displays:show') return new Refusal({ code: 'rate_limited', message: 'Too many of those at once. Try again shortly.' })
+      if (fn === 'artifacts:get') return { title: 'Plan' }
+      if (fn === 'delivery:waiting') return []
+      return null
+    })
+    try {
+      // The page is published and could not be shown: the command says so and ends with 1
+      const made = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--open'], b.env)
+      expect([made.code, printed(made).notShown.code]).toEqual([1, 'rate_limited'])
+      // A wait in which nothing happened ends well
+      const waited = await run(m, ['wait', '--id', 'plan', '--timeout', '0.2'], b.env)
+      expect([waited.code, printed(waited)]).toEqual([0, { timedOut: true }])
+      const commands = readFileSync(path.join(m.it, 'usage.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { name: string; properties: Record<string, string> })
+        .filter((c) => c.name === 'command.run')
+      expect(commands.map((c) => [c.properties.command, c.properties.result])).toEqual([
+        ['create', 'error'],
+        ['wait', 'ok'],
+      ])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it tour clear` removes the tour’s own pages and no other, also one whose id only begins as theirs do', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>

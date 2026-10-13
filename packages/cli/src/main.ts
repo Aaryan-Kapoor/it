@@ -827,7 +827,11 @@ async function wait(a: Args) {
     await local('/waiting', { method: 'POST', body: { id: who, done: true } })
     await client.close().catch(() => {})
     // A wait that was given something has its answer, whatever went wrong beside it
-    await end(code === 1 && printedIds.size > 0 && !follow ? 0 : code)
+    const last = code === 1 && printedIds.size > 0 && !follow ? 0 : code
+    // Counted here, where a wait ends: it never comes back to where the other commands are
+    // counted. One that was ended by a signal, as a wait that follows is, ended as it was meant to
+    counted(last === 0 || last === 130 ? undefined : 'error')
+    await end(last)
   }
   const report = async () => {
     for (const id of unreported) {
@@ -3342,7 +3346,9 @@ function counted(code?: string): void {
 main(process.argv.slice(2)).then(
   () => {
     clearInterval(whileItRuns)
-    counted()
+    // A command that did a part of what it was asked, said which part it did not, and set how it
+    // ends has not ended well: it is counted by how it ends, and not by its having come back
+    counted(process.exitCode ? (process.exitCode === 2 ? 'invalid' : 'error') : undefined)
     if (!['wait', 'serve'].includes(process.argv[2] ?? '')) process.exitCode ??= 0
     return left()
   },
