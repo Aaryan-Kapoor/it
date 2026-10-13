@@ -8,6 +8,7 @@ import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
+import { get as pageQuery } from './artifacts'
 import { inbox as inboxQuery } from './delivery'
 import schema from './schema'
 
@@ -110,6 +111,38 @@ afterEach(async () => {
   vi.useRealTimers()
   process.env.IT_PORT = '39000'
 })
+
+/**
+ * A database that notes every record read through it, for a function run by hand on it: the
+ * stand-in backend counts nothing, and the real one refuses a function that reads too much.
+ */
+function watched(real: any): { db: any; read: any[] } {
+  const read: any[] = []
+  const noted = (got: unknown) => {
+    for (const row of Array.isArray(got) ? got : [got]) if (row && typeof row === 'object') read.push(row)
+    return got
+  }
+  const watching = (query: any): any =>
+    new Proxy(query, {
+      get(target, name) {
+        const value = target[name]
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          const out = value.apply(target, args)
+          return ['take', 'first', 'unique', 'collect'].includes(String(name)) ? Promise.resolve(out).then(noted) : watching(out)
+        }
+      },
+    })
+  const db = new Proxy(real, {
+    get(target: any, name) {
+      if (name === 'get') return async (id: never) => noted(await target.get(id))
+      if (name === 'query') return (table: never) => watching(target.query(table))
+      const value = target[name]
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  return { db, read }
+}
 
 const subjectOf = (who: string) => `user_${who}`
 /**
@@ -1171,18 +1204,20 @@ describe('publishing', () => {
     expect(listed.filter((x) => x.status === 'staging').length).toBeLessThanOrEqual(2)
     // And each of them can be gone back to
     expect((await m.as.mutation(api.artifacts.rollback, { slug: 'plan', version: 1 })).version).toBe(1)
-    expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).versions.filter((x) => x.status !== 'staging').map((x) => [x.n, x.status])).toEqual([
-      [10, 'retired'],
-      [9, 'retired'],
-      [8, 'retired'],
-      [7, 'retired'],
-      [6, 'retired'],
-      [5, 'retired'],
-      [4, 'retired'],
-      [3, 'retired'],
-      [2, 'retired'],
-      [1, 'live'],
-    ])
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).versions.filter((x) => x.status !== 'staging').map((x) => [x.n, x.status])).toEqual(
+      [
+        [10, 'retired'],
+        [9, 'retired'],
+        [8, 'retired'],
+        [7, 'retired'],
+        [6, 'retired'],
+        [5, 'retired'],
+        [4, 'retired'],
+        [3, 'retired'],
+        [2, 'retired'],
+        [1, 'live'],
+      ],
+    )
   })
 
   test('the conversation that made a page keeps it, unless its machine is revoked or another says it is taking the page', async () => {
@@ -1491,6 +1526,47 @@ describe('state', () => {
     vi.setSystemTime(Date.now() + 5000)
     await publish(m, 'plan')
     expect(await answered()).toBe(Date.now())
+  })
+
+  test('a page asked for without its history, as a screen that shows it asks, is told how its state stands without the state or any version’s list of files being read', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan', { state: '{"count":0}' })
+    await publish(m, 'plan')
+    vi.setSystemTime(Date.now() + 5000)
+    await m.as.mutation(api.state.patch, { slug: 'plan', patch: '{"count":1}' })
+    const changed = Date.now()
+    vi.setSystemTime(Date.now() + 5000)
+    // The page keeps something for itself afterwards, which is no answer of its agent's
+    const p = await alice.browser.query(api.artifacts.get, { slug: 'plan' })
+    await alice.browser.mutation(api.state.storeSet, { artifactId: p.id, key: 'draft', value: '"kept"' })
+    const asked = (args: Record<string, unknown>) =>
+      t.run(async (ctx) => {
+        const { db, read } = watched(ctx.db)
+        const identity = { issuer: SITE, subject: alice.user, kind: 'browser', sid: alice.session }
+        const got = await (pageQuery as any)._handler({ ...ctx, db, auth: { getUserIdentity: async () => identity } }, args)
+        return { got, states: read.filter((row) => typeof row.json === 'string').length, lists: read.filter((row) => Array.isArray(row.files)).length }
+      })
+    const light = await asked({ slug: 'plan', history: false })
+    expect([light.states, light.lists]).toEqual([0, 0])
+    expect(light.got).toMatchObject({ version: 2, stateRevision: 3, answeredAt: changed, versions: [] })
+    // Asked for whole, as `it read` asks, it comes with its versions, and says the same of its state
+    const whole = await asked({ slug: 'plan' })
+    expect(whole.got.versions.map((x: { n: number }) => x.n)).toEqual([2, 1])
+    expect(whole.got).toMatchObject({ stateRevision: 3, answeredAt: changed })
+    expect(whole.states).toBe(0)
+    // A page whose state was last written before that time was kept beside its revision has it read from the state, until it is written again
+    await t.run(async (ctx) => {
+      for (const r of await ctx.db.query('revisions').collect()) await ctx.db.replace(r._id, { artifactId: r.artifactId, revision: r.revision })
+    })
+    const older = await asked({ slug: 'plan', history: false })
+    expect(older.got).toMatchObject({ stateRevision: 3, answeredAt: changed })
+    expect(older.states).toBe(1)
+    await m.as.mutation(api.state.patch, { slug: 'plan', patch: '{"count":2}' })
+    const again = await asked({ slug: 'plan', history: false })
+    expect(again.got).toMatchObject({ stateRevision: 4, answeredAt: Date.now() })
+    expect(again.states).toBe(0)
   })
 
   test('a page can only write under its own key, and what it stores under a name replaces what was there', async () => {
@@ -2135,36 +2211,14 @@ describe('clicks and their delivery', () => {
     })
     // The query itself, asked as the machine asks it, with everything it reads of a click counted: also what it reads twice
     const asked = await t.run(async (ctx) => {
-      let read = 0
-      const counted = (got: unknown) => {
-        for (const row of Array.isArray(got) ? got : [got]) if (typeof row?.payload === 'string') read += new TextEncoder().encode(row.payload).length
-        return got
-      }
-      const watching = (query: any): any =>
-        new Proxy(query, {
-          get(target, name) {
-            const value = target[name]
-            if (typeof value !== 'function') return value
-            return (...args: unknown[]) => {
-              const out = value.apply(target, args)
-              return ['take', 'first', 'unique', 'collect'].includes(String(name)) ? Promise.resolve(out).then(counted) : watching(out)
-            }
-          },
-        })
-      const db = new Proxy(ctx.db, {
-        get(target: any, name) {
-          if (name === 'get') return async (id: never) => counted(await target.get(id))
-          if (name === 'query') return (table: never) => watching(target.query(table))
-          const value = target[name]
-          return typeof value === 'function' ? value.bind(target) : value
-        },
-      })
+      const { db, read } = watched(ctx.db)
       const identity = { issuer: SITE, subject: m.id, kind: 'machine' }
       const clicks: { id: string; at: number; session: { harness: string; id: string } }[] = await (inboxQuery as any)._handler(
         { ...ctx, db, auth: { getUserIdentity: async () => identity } },
         { listening, queues },
       )
-      return { read, clicks }
+      const carried = read.filter((row) => typeof row.payload === 'string').map((row) => new TextEncoder().encode(row.payload).length)
+      return { read: carried.reduce((sum, n) => sum + n, 0), clicks }
     })
     // The backend lets a query read 16 MB, and refuses it whole past that. Five hundred and
     // twenty clicks wait here, of 32 KB each, and reading them as they were once read came to more

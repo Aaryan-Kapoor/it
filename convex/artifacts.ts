@@ -54,9 +54,16 @@ export const list = query({
   },
 })
 
+/**
+ * A page, as the site shows it and as `it read` prints it. A screen that shows the page asks
+ * this again after every change to it, to its state and to its machine's record, and a machine
+ * says it is alive every half minute: so no more is read here than is told. With `history`
+ * false the versions are not read at all, each of which holds the list of its files, and how
+ * the state stands is read from the small record of its revision, never from the state.
+ */
 export const get = query({
-  args: ref,
-  handler: async (ctx, args) => {
+  args: { ...ref, history: v.optional(v.boolean()) },
+  handler: async (ctx, { history, ...args }) => {
     const { user } = await requireCaller(ctx)
     const a = await resolve(ctx, user._id, args)
     // The versions that can be gone back to are read by themselves: the one that is shown and
@@ -69,13 +76,23 @@ export const get = query({
         .withIndex('by_artifact_status', (q) => q.eq('artifactId', a._id).eq('status', status))
         .order('desc')
         .take(most)
-    const versions = [...(await ofStatus('live', 1)), ...(await ofStatus('retired', LIMITS.versionsKept)), ...(await ofStatus('staging', 2))].sort(
-      (x, y) => y.n - x.n,
-    )
-    const state = await ctx.db
-      .query('states')
+    const versions =
+      history === false
+        ? []
+        : [...(await ofStatus('live', 1)), ...(await ofStatus('retired', LIMITS.versionsKept)), ...(await ofStatus('staging', 2))].sort((x, y) => y.n - x.n)
+    const noted = await ctx.db
+      .query('revisions')
       .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
       .unique()
+    // A record of the revision from before it kept when the agent last wrote, or none at all,
+    // says nothing of that: the state is read for it then, until it is next written
+    const state =
+      noted?.agentAt !== undefined
+        ? { revision: noted.revision, agentAt: noted.agentAt }
+        : await ctx.db
+            .query('states')
+            .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
+            .unique()
     const machine = a.machineId ? await ctx.db.get(a.machineId) : null
     return {
       ...card(a, a.waiting ?? 0, machine?.name ?? null),

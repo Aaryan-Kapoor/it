@@ -262,8 +262,10 @@ export default defineSchema({
     .index('by_artifact', ['artifactId']),
 
   // Which revision each page's state is at, by itself: a state can be half a megabyte, and
-  // whoever only needs to know whether it has changed should not have to read it.
-  revisions: defineTable({ artifactId: v.id('artifacts'), revision: v.number() }).index('by_artifact', ['artifactId']),
+  // whoever only needs to know whether it has changed should not have to read it. With it,
+  // when the page's agent last changed the state, which is nothing where it never did. A
+  // record from before that was kept here does not say, and the state is read for it.
+  revisions: defineTable({ artifactId: v.id('artifacts'), revision: v.number(), agentAt: v.optional(v.number()) }).index('by_artifact', ['artifactId']),
 
   // Something a person did on a page. Stored before anything tries to deliver it.
   actions: defineTable({

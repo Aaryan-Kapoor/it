@@ -368,7 +368,7 @@ export const _finish = internalMutation({
         .unique()
       if (!state) {
         await ctx.db.insert('states', { artifactId: a._id, userId: user._id, json: start, revision: 1 })
-        await noteRevision(ctx, a._id, 1)
+        await noteRevision(ctx, a._id, 1, 0)
       } else {
         // A state that holds only what the page stored for itself is no state of the agent's:
         // the starting state goes in beside it, and what the page stored stays
@@ -382,7 +382,7 @@ export const _finish = internalMutation({
           if (new TextEncoder().encode(json).length > LIMITS.stateBytes)
             fail('limit', `The starting state and what the page has stored for itself are together more than ${LIMITS.stateBytes / 1024} KB.`)
           await ctx.db.patch(state._id, { json, revision: state.revision + 1 })
-          await noteRevision(ctx, a._id, state.revision + 1)
+          await noteRevision(ctx, a._id, state.revision + 1, state.agentAt ?? 0)
         }
       }
     }
