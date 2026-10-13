@@ -54,7 +54,7 @@ export function Finder({ pages, onClose }: { pages: Card[]; onClose: () => void 
     if (!found.length) return
     const next = (to + found.length) % found.length
     setAt(next)
-    list.current?.children[next]?.scrollIntoView({ block: 'nearest' })
+    list.current?.children[next]?.scrollIntoView?.({ block: 'nearest' })
   }
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: Escape closes it, wherever the keyboard is
