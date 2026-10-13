@@ -1525,6 +1525,27 @@ describe('clicks and their delivery', () => {
     expect(await m.as.mutation(api.delivery.claim, { ids: [actionId] })).toEqual([actionId])
   })
 
+  test('a connector that starts is given back what its machine still holds, at once and in the order it was made, and nothing another machine holds', async () => {
+    const { t, m, click } = await setup()
+    const other = await machineOf(t, 'alice', 'server')
+    const first = (await click('click-0001')).actionId
+    const second = (await click('click-0002')).actionId
+    const borrowed = (await click('click-0003')).actionId
+    // The connector claimed the first and ended before it had handed it over. Another machine holds one of its own
+    expect(await m.as.mutation(api.delivery.claim, { ids: [first] })).toEqual([first])
+    expect(await other.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([borrowed])
+    // Until the lease runs out, the one made after it is all that is offered
+    expect((await inbox(m)).map((c) => c.id)).toEqual([second])
+    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([first])
+    expect((await inbox(m)).map((c) => c.id)).toEqual([first, second])
+    // The other machine's is still its own, and a second asking gives back nothing more
+    expect(await m.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([])
+    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([])
+    // It is a machine's to ask, and nobody else's
+    const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
+    expect(await code(browser.mutation(api.delivery.giveBack, {}))).not.toBe('ok')
+  })
+
   test('a connector keeps a click it is still delivering by renewing, and cannot renew what it has lost', async () => {
     const { t, m: laptop, click } = await setup()
     const { actionId: id } = await click('click-0001')

@@ -415,6 +415,36 @@ export const release = mutation({
 })
 
 /**
+ * A connector that starts gives back whatever this machine still holds. The one before it may
+ * have ended in the middle, and what it had claimed and not handed over would be out of what
+ * It offers until its lease ran out, while what was done after it is offered at once: taken
+ * first, that would reach its conversation ahead of what was done before it. The answer names
+ * what went back, so that the connector takes nothing newer until it is offered these again.
+ */
+export const giveBack = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const { machine } = await requireMachine(ctx)
+    // Few are ever held at once: a connector holds a click for seconds, and for one conversation at a time
+    const leased = await ctx.db
+      .query('actions')
+      .withIndex('by_delivery_lease', (q) => q.eq('delivery', 'leased'))
+      .take(500)
+    const back: Id<'actions'>[] = []
+    for (const x of leased) {
+      if (x.leaseMachineId !== machine._id) continue
+      if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
+      else {
+        await ctx.db.patch(x._id, await backToWaiting(ctx, x))
+        back.push(x._id)
+      }
+    }
+    if (back.length) log('lease.given_back', { machineId: machine._id, count: back.length })
+    return back
+  },
+})
+
+/**
  * A click this machine cannot deliver by itself (its conversation's own queue keeps refusing
  * it) is taken out of the machine's inbox, so it does not stand in the way of clicks that can
  * be delivered. It is still waiting, and still listed for the person and for `it wait`.
