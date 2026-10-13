@@ -1436,6 +1436,33 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
   }, 40_000)
 })
 
+describe.skipIf(process.platform === 'win32')('the note of which folder each conversation works in', () => {
+  test('keeps every conversation that commands running at the same moment note, and none of them writes over another’s', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:take' ? { took: false } : asked.path === 'displays:show' ? { displays: ['Desk'] } : null))
+    try {
+      // Each conversation opens a page, which notes its folder, and all of them do so together, three times over,
+      // under each runtime the program runs under that is on this machine
+      const runtimes = RUNTIMES.map(([, runtime]) => runtime).filter((runtime): runtime is string => runtime !== undefined)
+      const all: string[] = []
+      for (let round = 0; round < 3; round++) {
+        const ids = Array.from({ length: 10 }, (_, n) => `conversation-${round}-${n}`)
+        all.push(...ids)
+        const ran = await Promise.all(
+          ids.map((id, n) => run(m, ['open', 'board'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: id }, runtimes[n % runtimes.length])),
+        )
+        expect(ran.map((one) => one.code)).toEqual(ids.map(() => 0))
+      }
+      const noted = JSON.parse(readFileSync(path.join(m.it, 'conversations.json'), 'utf8')) as Record<string, { cwd: string }>
+      expect(Object.keys(noted).sort()).toEqual(all.map((id) => `pi:${id}`).sort())
+      // Nothing is left of the having it to itself, nor of a file half written
+      expect(readdirSync(m.it).filter((name) => name.startsWith('conversations.json.'))).toEqual([])
+    } finally {
+      await b.close()
+    }
+  }, 90_000)
+})
+
 describe.skipIf(process.platform === 'win32')('a wait whose time runs out', () => {
   test('asks It what is waiting under every id the conversation has had, and prints an action on a page made under an earlier one', async () => {
     const m = machine()

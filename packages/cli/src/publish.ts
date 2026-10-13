@@ -2,7 +2,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN } from '@it/protocol'
 import { api, call, direct, doorRefusal, inHome, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
@@ -146,17 +146,53 @@ const CONVERSATIONS = 300
  */
 export function noteConversation(session: { harness: string; id: string }, cwd = process.cwd()): void {
   try {
-    const kept = readJson<Record<string, { cwd: string; at: number }>>(conversationsFile()) ?? {}
     const key = `${session.harness}:${session.id}`
-    if (kept[key]?.cwd === cwd) return
-    kept[key] = { cwd, at: Date.now() }
-    const newest = Object.entries(kept)
-      .filter(([, noted]) => typeof noted?.cwd === 'string' && typeof noted.at === 'number')
-      .sort((a, b) => b[1].at - a[1].at)
-      .slice(0, CONVERSATIONS)
-    writePrivate(conversationsFile(), Object.fromEntries(newest))
+    const read = () => readJson<Record<string, { cwd: string; at: number }>>(conversationsFile()) ?? {}
+    if (read()[key]?.cwd === cwd) return
+    // Read afresh once the note is this command's alone: what another wrote meanwhile is kept
+    toItself(() => {
+      const kept = read()
+      kept[key] = { cwd, at: Date.now() }
+      const newest = Object.entries(kept)
+        .filter(([, noted]) => typeof noted?.cwd === 'string' && typeof noted.at === 'number')
+        .sort((a, b) => b[1].at - a[1].at)
+        .slice(0, CONVERSATIONS)
+      writePrivate(conversationsFile(), Object.fromEntries(newest))
+    })
   } catch {
     // A note that cannot be kept keeps nothing from being published
+  }
+}
+/**
+ * Has the note of the conversations to itself while it is read, added to and written. The file
+ * is replaced whole, so of two commands that read it in the same moment the one that wrote
+ * last kept its own conversation and lost the other's, and a conversation whose folder is not
+ * known is not reopened. The lock is a file beside the note, made by whoever has it and removed
+ * when they are done. One that was left behind by a command that was ended is taken over after
+ * ten seconds, far longer than a write takes. Where it cannot be had in three, the note is
+ * written all the same, as it was before there was a lock: publishing never waits on it longer.
+ */
+function toItself(run: () => void): void {
+  const lock = `${conversationsFile()}.lock`
+  const until = Date.now() + 3000
+  let held = false
+  while (!held) {
+    try {
+      closeSync(openSync(lock, 'wx', 0o600))
+      held = true
+    } catch (err) {
+      // Anything but another having it (no folder yet, a disk that takes nothing) is not waited for
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST' || Date.now() >= until) break
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 10_000) rmSync(lock, { force: true })
+      } catch {}
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5 + Math.random() * 20)
+    }
+  }
+  try {
+    run()
+  } finally {
+    if (held) rmSync(lock, { force: true })
   }
 }
 /** The folder a conversation was last known to be working in, if it is still there. */
