@@ -1888,6 +1888,10 @@ async function settingUpLed(a: Args, begunAlready = false) {
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !connectedBefore.has(h.id)) left.push(`${KNOWN[h.id].label}: ${AFTER[h.id]}`)
       // An app that was found and whose add-on is held back is named, with how to ask for it: left unsaid, its user is told that no app was found
       else if (h.addon === 'unavailable' && h.detail && whyHeldBack(h.id)) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
+      // And one that is too old for It is named with the version It needs and what to do. The
+      // list to choose from says as much of it, and is not shown where no app can be connected:
+      // someone whose only agent app is too old was told that none was found that It can connect, and no more
+      else if (h.addon === 'too_old' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
     }
 
     // Registered is not yet running. The connector itself is asked, and given a little while to answer

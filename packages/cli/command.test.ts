@@ -2866,6 +2866,85 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
   })
 })
 
+describe.skipIf(process.platform !== 'linux' || !python)('a setup that leads a person through, on the machine It runs on', () => {
+  /**
+   * A machine that It is set up on, with something answering where It's door and its backend
+   * program listen, as they do while It runs: how it is, what its administrator asks, and what
+   * the machine asks. No systemd is there for the person, so the service cannot be registered,
+   * and the setup ends by saying what is left to do without asking how It is to be reached.
+   */
+  async function setUpHere(answer: (asked: Asked) => unknown = () => null) {
+    const m = machine(false)
+    const held = await holdBase(24_000, 10)
+    const asked: Asked[] = []
+    const answering = (port: number) =>
+      new Promise<http.Server>((resolve) => {
+        const server = http.createServer((req, res) => {
+          const chunks: Buffer[] = []
+          req
+            .on('data', (c: Buffer) => chunks.push(c))
+            .on('end', () => {
+              const json = (value: unknown) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+              if (req.method === 'GET') return req.url === '/health' ? json({ ok: true, it: true }) : res.writeHead(404).end()
+              const call = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as { path: string; args: [Record<string, unknown>] }
+              const one = { path: call.path, args: call.args?.[0] ?? {} }
+              asked.push(one)
+              // The administrator asks whether this machine is still one of the person's, and it is
+              json({ status: 'success', value: one.path === 'bridge:machine' ? { revoked: false } : (answer(one) ?? null), logLines: [] })
+            })
+        })
+        server.listen(port, '127.0.0.1', () => resolve(server))
+      })
+    const servers = await Promise.all([held.base, held.base + PORTS.backendApi, held.base + PORTS.backendSite].map(answering))
+    const key = await exportJWK((await generateKeyPair('ES256', { extractable: true })).privateKey)
+    writeFileSync(path.join(m.it, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'the desk', key }))
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify({ port: held.base, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'it-000000000000|made-up', sessionSecret: 'made-up' }),
+    )
+    writeFileSync(
+      path.join(m.it, 'token.json'),
+      JSON.stringify({
+        token: 'a-token',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        machine: 'machine-1',
+        site: `http://127.0.0.1:${held.base + PORTS.backendSite}`,
+      }),
+    )
+    // The backend program is asked for by name before anything else, and is there
+    writeFileSync(path.join(m.home, 'backend-program'), '#!/bin/sh\nexit 0\n')
+    chmodSync(path.join(m.home, 'backend-program'), 0o755)
+    return {
+      m,
+      asked,
+      env: { IT_BACKEND_BIN: path.join(m.home, 'backend-program'), NO_COLOR: '1' },
+      close: async () => {
+        for (const server of servers) {
+          server.closeAllConnections()
+          await new Promise((resolve) => server.close(resolve))
+        }
+        await held.release()
+      },
+    }
+  }
+
+  test('says of an agent app that is too old which version It needs and to update it, though it is the only app there is and nothing was offered to choose from', async () => {
+    const here = await setUpHere((asked) => (asked.path === 'machines:choose' ? { wakes: [] } : null))
+    try {
+      // The one agent app on the machine is a Pi from before the version It can connect
+      writeFileSync(path.join(here.m.bin, 'pi'), '#!/bin/sh\necho 0.81.0\n')
+      chmodSync(path.join(here.m.bin, 'pi'), 0o755)
+      const ran = await atTerminal(here.m, ['setup'], here.env)
+      const shown = ran.shown.split('\n').map((line) => line.trim())
+      expect(shown.filter((line) => line.includes('Agent apps'))).toEqual([expect.stringContaining('none found that It can connect yet')])
+      expect(shown).toContain('Left for you')
+      expect(shown).toContain('! Pi: It needs Pi 0.82.0 or newer, and this one is 0.81.0. Update Pi, then run `it setup` again.')
+    } finally {
+      await here.close()
+    }
+  }, 60_000)
+})
+
 describe.skipIf(process.platform === 'win32')('what a command printed, when the command ends', () => {
   /** Starts a program with its output going into pipes that nobody reads for a moment, as a reader with other things to do leaves them, and gives all of it once the program has ended. */
   const readSlowly = (runtime: string, args: string[], env: Record<string, string> = {}) =>
