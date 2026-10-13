@@ -417,6 +417,7 @@ function Talk({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const box = useRef<HTMLInputElement>(null)
+  const edits = useRef(0)
   // One id for what is in the box until it has been taken, so that sending it twice over a
   // connection that dropped is one message. Not `randomUUID`, which a browser offers only to a
   // site it reached securely
@@ -433,8 +434,9 @@ function Talk({
   const send = async () => {
     const typed = text.trim()
     if (!typed || sending) return
-    // The box can be typed in while this is on its way, so what is cleared afterwards is what was sent and nothing typed since
-    const sent = text
+    // The box can be typed in while this is on its way. An edit back to the same words is still
+    // a draft of its own, so it is cleared only where nothing has been typed since.
+    const sent = edits.current
     setSending(true)
     setError('')
     // Nothing of it is kept in this browser: said on the page's bar until It has it, and the site is not loaded afresh over it
@@ -442,7 +444,7 @@ function Talk({
     try {
       await convex.mutation(api.actions.message, { artifactId, displayKey: displayKey(), clientActionId: id.current, text: typed })
       id.current = fresh()
-      setText((now) => (now === sent ? '' : now))
+      if (edits.current === sent) setText('')
     } catch (err) {
       // Left in the box, to be sent again: nothing of it is kept anywhere else
       setError(refusal(err).message)
@@ -488,7 +490,10 @@ function Talk({
             autoComplete="off"
             maxLength={LIMITS.messageText}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              edits.current++
+              setText(e.target.value)
+            }}
             onKeyDown={(e) => {
               // Escape closes the box, and does not leave the page as it does anywhere else on the bar
               if (e.key !== 'Escape') return

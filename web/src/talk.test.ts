@@ -108,6 +108,23 @@ describe('the box a person types to a page’s agent in', () => {
     expect(box()!.value).toBe('')
   })
 
+  test('a draft edited away and back to the words on their way stays in the box and is sent as a message of its own', async () => {
+    await shown()
+    await act(async () => opener().click())
+    await type('please try again')
+    await act(async () => send().click())
+    await type('another draft')
+    await type('please try again')
+    await act(async () => answer!.accept({ actionId: 'a1' }))
+    expect(client.mutation.mock.calls.map((c) => c[1].text)).toEqual(['please try again'])
+    expect(box()!.value).toBe('please try again')
+    await act(async () => send().click())
+    expect(client.mutation.mock.calls.map((c) => c[1].text)).toEqual(['please try again', 'please try again'])
+    expect(client.mutation.mock.calls[1]![1].clientActionId).not.toBe(client.mutation.mock.calls[0]![1].clientActionId)
+    await act(async () => answer!.accept({ actionId: 'a2' }))
+    expect(box()!.value).toBe('')
+  })
+
   test('a message on its way is said to be in this tab alone, and the site is not loaded afresh over it, until It has taken it', async () => {
     vi.useFakeTimers()
     try {
