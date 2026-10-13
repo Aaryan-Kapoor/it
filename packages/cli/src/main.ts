@@ -80,6 +80,7 @@ import {
   shutIn,
   siteAddress,
   textOf,
+  translate,
   VERSION,
   why,
   windowsPathCommand,
@@ -934,8 +935,13 @@ async function wait(a: Args) {
         void onClicks(latest)
       },
       (err) => {
-        say(`wait: ${err.message}`)
-        void finish(1)
+        // What It refuses here (a page that was deleted while it was waited on, say) is said
+        // as every command says a refusal: in JSON, with its code, so that whatever reads this
+        // can tell one from another as it can before a wait has begun
+        void translate(err).catch((p: Problem) => {
+          say(JSON.stringify({ error: { code: p.code, message: p.message, ...(p.hint ? { hint: p.hint } : {}) } }))
+          void finish(1)
+        })
       },
     )
   if (slug) watch('page', api.delivery.waiting, { slug })

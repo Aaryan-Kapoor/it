@@ -4,7 +4,7 @@
 // background service or the person's own folders: the program is given a home, a PATH and an
 // It folder that hold only what the test put there.
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
@@ -1488,8 +1488,8 @@ describe.skipIf(process.platform === 'win32')('the note of which folder each con
   }, 90_000)
 })
 
-describe.skipIf(process.platform === 'win32')('a wait whose time runs out', () => {
-  test('asks It what is waiting under every id the conversation has had, and prints an action on a page made under an earlier one', async () => {
+describe.skipIf(process.platform === 'win32')('a wait', () => {
+  test('whose time runs out asks It what is waiting under every id the conversation has had, and prints an action on a page made under an earlier one', async () => {
     const m = machine()
     const earlier = { harness: 'pi', id: 'before-it-was-cleared' }
     const now = { harness: 'pi', id: 'after-it-was-cleared' }
@@ -1534,7 +1534,97 @@ describe.skipIf(process.platform === 'win32')('a wait whose time runs out', () =
     }
   })
 
-  test('given more seconds than a timer can count, it goes on waiting for as long as it was told, and does not say at once that nothing happened', async () => {
+  test('on a page that is deleted meanwhile ends with an error as every command says one, with its code', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:get' ? { title: 'Plan' } : asked.path === 'delivery:waiting' ? [] : null))
+    // The live connection, answered as It answers one: the page was there when the wait began, and by the time it is watched it is gone
+    const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+    const zero = Buffer.alloc(8).toString('base64')
+    const sockets: net.Socket[] = []
+    const live = http.createServer((_req, res) => res.writeHead(404).end())
+    live.on('upgrade', (req, socket: net.Socket) => {
+      sockets.push(socket.on('error', () => {}))
+      const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}${GUID}`).digest('base64')
+      socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
+      const send = (message: unknown) => {
+        const text = Buffer.from(JSON.stringify(message))
+        const head = text.length < 126 ? Buffer.from([0x81, text.length]) : Buffer.from([0x81, 126, text.length >> 8, text.length & 255])
+        socket.write(Buffer.concat([head, text]))
+      }
+      let got = Buffer.alloc(0)
+      let identity = 0
+      socket.on('data', (piece: Buffer) => {
+        got = Buffer.concat([got, piece])
+        // One frame at a time, as a browser sends them: masked, with its length in one byte or in the two after it
+        for (;;) {
+          if (got.length < 2) return
+          const short = got[1]! & 127
+          const at = short === 126 ? 4 : 2
+          if (got.length < at) return
+          const length = short === 126 ? got.readUInt16BE(2) : short
+          if (got.length < at + 4 + length) return
+          const mask = got.subarray(at, at + 4)
+          const text = Buffer.from(got.subarray(at + 4, at + 4 + length).map((byte, i) => byte ^ mask[i % 4]!)).toString('utf8')
+          const opcode = got[0]! & 15
+          got = got.subarray(at + 4 + length)
+          // Asked to close, it closes, as the other end waits for it to
+          if (opcode === 8) return void socket.end(Buffer.from([0x88, 0]))
+          if (opcode !== 1) continue
+          const said = JSON.parse(text) as { type: string; newVersion?: number }
+          if (said.type === 'Authenticate') identity++
+          if (said.type === 'ModifyQuerySet')
+            // Answered a moment later, once the machine has said who it is as well, whichever of the two it said first
+            setTimeout(
+              () =>
+                send({
+                  type: 'Transition',
+                  startVersion: { querySet: 0, identity: 0, ts: zero },
+                  endVersion: { querySet: said.newVersion, identity, ts: zero },
+                  modifications: [
+                    {
+                      type: 'QueryFailed',
+                      queryId: 0,
+                      errorMessage: 'Uncaught ConvexError',
+                      logLines: [],
+                      errorData: { code: 'not_found', message: 'No such page.' },
+                      journal: null,
+                    },
+                  ],
+                }),
+              300,
+            )
+        }
+      })
+    })
+    await new Promise<void>((resolve) => live.listen(0, '127.0.0.1', resolve))
+    const api = `http://127.0.0.1:${(live.address() as { port: number }).port}`
+    // What is asked once goes to the stand-in backend, through the stand-in for the live connection, which is where the program is pointed
+    live.removeAllListeners('request')
+    live.on('request', (req, res) => {
+      const chunks: Buffer[] = []
+      req
+        .on('data', (c: Buffer) => chunks.push(c))
+        .on('end', async () => {
+          const answer = await fetch(`${b.url}${req.url}`, { method: req.method, headers: { 'content-type': 'application/json' }, body: Buffer.concat(chunks) })
+          res.writeHead(answer.status, { 'content-type': 'application/json' }).end(await answer.text())
+        })
+    })
+    writeFileSync(
+      path.join(m.it, 'token.json'),
+      JSON.stringify({ token: 'a-token', exp: Math.floor(Date.now() / 1000) + 3600, machine: 'machine-1', site: api }),
+    )
+    try {
+      const ran = await run(m, ['wait', '--id', 'plan', '--follow', '--timeout', '20'], { IT_URL: api, IT_SITE_URL: api })
+      expect([ran.code, ran.out, error(ran)]).toEqual([1, '', { code: 'not_found', message: 'No such page.' }])
+    } finally {
+      for (const socket of sockets) socket.destroy()
+      live.closeAllConnections()
+      await new Promise((resolve) => live.close(resolve))
+      await b.close()
+    }
+  })
+
+  test('given more seconds than a timer can count goes on waiting for as long as it was told, and does not say at once that nothing happened', async () => {
     const m = machine()
     const b = await backend(m, (asked) => (asked.path === 'artifacts:get' ? { title: 'Plan' } : asked.path === 'delivery:waiting' ? [] : null))
     try {

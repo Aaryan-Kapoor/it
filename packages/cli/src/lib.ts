@@ -1205,7 +1205,7 @@ export async function token(
 }
 
 /** Turns a refusal from the backend into a Problem with its code. */
-async function translate(err: unknown): Promise<never> {
+export async function translate(err: unknown): Promise<never> {
   if (err instanceof Problem) throw err
   if (err instanceof ConvexError) {
     const data = (typeof err.data === 'string' ? JSON.parse(err.data) : err.data) as {
