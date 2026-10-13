@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { MARK, PROTOCOL_VERSION } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { conversationFolder, noteConversation } from './src/publish'
 
 const stand = vi.hoisted(() => ({
@@ -463,11 +463,18 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     session: { harness: 'codex', id: `thread-${n}` },
   })
   const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inbox')!(clicks)
-  const waitingFor = (n: number) =>
-    local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
+  /** What each waiter has been given, which it says with its next asking, as `it wait` does once it has printed it. */
+  const printed = new Map<number, string[]>()
+  beforeEach(() => printed.clear())
+  /** A waiter asks. `lost` is an answer that never reached it: it has printed nothing of it, and says nothing of it next time. */
+  const waitingFor = async (n: number, lost = false) => {
+    const answer = await local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
       method: 'POST',
-      body: { id: `waiter-${n}`, session: { harness: 'codex', id: `thread-${n}` } },
+      body: { id: `waiter-${n}`, session: { harness: 'codex', id: `thread-${n}` }, ...(printed.has(n) ? { got: printed.get(n) } : {}) },
     })
+    if (!lost && answer?.clicks?.length) printed.set(n, [...(printed.get(n) ?? []), ...answer.clicks.map((c) => c.id)])
+    return answer
+  }
   const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
 
   test('one that stood in line for a place is left for the waiter once its place comes', async () => {
@@ -1263,6 +1270,35 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:handedOff')).toEqual(['click-6'])
   })
 
+  test('a waiter that an answer never reached is given the click again when it next asks, and no more once it says that it has it', async () => {
+    await start()
+    expect(await turn(6, true)).toEqual({ ok: true })
+    await takenByTheQueue(6)
+    // The answer that carried the click is lost on its way. The wait has printed nothing, and asks again two seconds on
+    expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    // It has printed it now, and says so with its next asking
+    expect((await waitingFor(6))?.clicks).toBeUndefined()
+    expect(called('delivery:handedOff')).toEqual(['click-6'])
+  })
+
+  test('a waiter that went away without saying it had the click leaves it for the next wait of that turn, though not at once', async () => {
+    await start()
+    expect(await turn(6, true)).toEqual({ ok: true })
+    await takenByTheQueue(6)
+    const next = () =>
+      local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
+        method: 'POST',
+        body: { id: 'waiter-6-next', session: { harness: 'codex', id: 'thread-6' } },
+      })
+    expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    // The first may be printing it this moment, so another wait is not given it yet
+    expect((await next())?.clicks).toBeUndefined()
+    // Ten seconds on the first has not said that it has it: it never did, or is gone
+    await new Promise((r) => setTimeout(r, 10_200))
+    expect((await next())?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+  }, 30_000)
+
   test('one that Codex’s queue took is not given to a waiter once the turn has ended or another has begun, nor when no turn was running', async () => {
     await start()
     // The turn ends: Codex now starts one with the click, and the agent has it from Codex
@@ -1750,11 +1786,22 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       return undefined
     }
   }
-  const waitingFor = (n: number, page?: number) =>
-    local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
+  /** What each waiter has been given, which it says with its next asking, as `it wait` does once it has printed it. */
+  const printed = new Map<number, string[]>()
+  beforeEach(() => printed.clear())
+  const waitingFor = async (n: number, page?: number) => {
+    const answer = await local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
       method: 'POST',
-      body: { id: `waiter-${n}`, session: { harness: 'codex', id: `thread-${n}` }, ...(page === undefined ? {} : { slug: `page-${page}` }) },
+      body: {
+        id: `waiter-${n}`,
+        session: { harness: 'codex', id: `thread-${n}` },
+        ...(page === undefined ? {} : { slug: `page-${page}` }),
+        ...(printed.has(n) ? { got: printed.get(n) } : {}),
+      },
     })
+    if (answer?.clicks?.length) printed.set(n, [...(printed.get(n) ?? []), ...answer.clicks.map((c) => c.id)])
+    return answer
+  }
 
   test('one whose conversation is held in a thread is put to the thread, though some Codex has the conversation open, and Codex’s queue is not used', async () => {
     withT3Code()

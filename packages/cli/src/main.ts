@@ -696,10 +696,17 @@ async function wait(a: Args) {
   const who = crypto.randomUUID()
   // The connector is told what this waits for: one page, or, with none named, this
   // conversation's clicks only. Everyone else's go on being delivered as usual.
+  /**
+   * What the connector handed back and this has printed. The connector keeps its copy of such
+   * a click until it is told so, and gives it again to a wait that has not said it: an answer
+   * of its that never arrived would otherwise be the last of that click.
+   */
+  const taken = new Set<string>()
+  const got = () => (taken.size ? { got: [...taken].slice(-500) } : {})
   const announce = () =>
     local<{ sessions?: { harness: string; id: string }[]; clicks?: Listed[] }>('/waiting', {
       method: 'POST',
-      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }) },
+      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }), ...got() },
     })
   // The connector knows the ids this conversation had before it was last cleared: pages made
   // then are still recorded under them
@@ -761,7 +768,7 @@ async function wait(a: Args) {
     // wait after the first, with the other two taken from the connector and never said
     while (busy) await new Promise((resolve) => setTimeout(resolve, 20))
     if (!over) await printHandedBack().catch(() => {})
-    await local('/waiting', { method: 'POST', body: { id: who, done: true } })
+    await local('/waiting', { method: 'POST', body: { id: who, done: true, ...got() } })
     await client.close().catch(() => {})
     // A wait that was given something has its answer, whatever went wrong beside it
     await end(code === 1 && printedIds.size > 0 && !follow ? 0 : code)
@@ -791,6 +798,8 @@ async function wait(a: Args) {
   /** Prints what the connector handed back and has not been printed yet, and tells It of it. */
   const printHandedBack = async () => {
     for (const c of handedBack.splice(0)) {
+      // Said to the connector as printed either way: what it gave again is what this already had
+      taken.add(c.id)
       if (printedIds.has(c.id)) continue
       await emit(printed(c))
       printedIds.add(c.id)

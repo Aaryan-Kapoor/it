@@ -461,7 +461,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * An agent that begins to wait for such a click is given it as well (see `/waiting`), and
    * that is noted here, so that a refusal by the command is then no failure.
    */
-  const submitting = new Map<string, { click: Offered; toWaiter: boolean }>()
+  const submitting = new Map<string, { click: Offered; toWaiter: boolean; given?: Given }>()
   /**
    * Taken by Codex's queue, or by T3 Code for a thread of Codex, while the conversation's turn
    * was running. Either hands such a click over only when that turn is done, so an agent that
@@ -469,8 +469,20 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * turn. It is given the click as well (see `/waiting`). Kept, by the conversation it is for,
    * until the conversation is heard to end the turn or begin another, which is when the click
    * is handed over.
+   *
+   * One that was given to a waiter is kept until that waiter says it has printed it. It has
+   * been reported to It as handed over, so nothing else would bring it back: were it let go of
+   * as it is given, an answer that never reached the waiter would leave the turn waiting for a
+   * message that stands behind it.
    */
-  const behindTurn = new Map<string, { click: Offered; key: string }>()
+  const behindTurn = new Map<string, { click: Offered; key: string; given?: Given }>()
+  /** Which waiter such a click was given to, and when. */
+  type Given = { who: string; at: number }
+  /**
+   * For how long a click given to one waiter is not given to another. The first is printing it
+   * and says so in a moment. One that has not said so by then never had it, or is gone.
+   */
+  const GIVEN_MS = 10_000
   /** How many of them are kept at once. */
   const BEHIND_MOST = 200
   const turnRunning = (key: string, now: number) => {
@@ -1498,7 +1510,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // message: an agent that waits in that turn for one of those would wait for a message
         // that stands behind its own turn. A reopening never does: nothing was running
         if (!reopening && turnRunning(key, Date.now())) {
-          for (const c of [click, ...withIt]) if (c !== click || !sent.toWaiter) behindTurn.set(c.id, { click: c, key })
+          // One that a waiter was given while the command was still to answer is kept as given to it, until it says that it has it
+          for (const c of [click, ...withIt]) behindTurn.set(c.id, { click: c, key, ...(c === click && sent.given ? { given: sent.given } : {}) })
         }
         await confirmAll()
       } else {
@@ -2033,6 +2046,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (req.method === 'POST' && url.pathname === '/waiting') {
       const who = String(body.id ?? '')
       if (!who) return [400, { error: 'say who is waiting' }]
+      // What the waiter says it has printed, of what was kept for a turn that waits, is let go of
+      for (const got of Array.isArray(body.got) ? body.got.slice(0, 1000) : []) {
+        if (typeof got === 'string' && behindTurn.get(got)?.given?.who === who) behindTurn.delete(got)
+      }
       if (body.done) {
         // Kept, as one that has ended: see `waiters`
         const ended = waiters.get(who)
@@ -2090,20 +2107,26 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // after the turn that is now waiting. So the waiter is given it too, still held for
         // this machine. Should Codex hand it over as well, its id shows it is the same click.
         for (const sent of submitting.values()) {
-          // Once: an agent that took it, dealt with it and waits again is not given it a second time
-          if (sent.toWaiter || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
+          // Once: an agent that took it, dealt with it and waits again is not given it a second
+          // time. Unless it never had it: the same waiter asking again with no word of it was
+          // sent an answer that did not arrive
+          if ((sent.toWaiter && sent.given?.who !== who) || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
           sent.toWaiter = true
+          sent.given = { who, at: Date.now() }
           handedBack.push(sent.click)
         }
         // And a click that Codex's queue has taken, and holds until the turn now running is
-        // done: the waiter is that turn, so it is given the click too, and given it once
+        // done: the waiter is that turn, so it is given the click too. Given once to a waiter
+        // that says it has it. One that asks again and has not said so was sent an answer that
+        // never arrived, and is given it again; and one that went quiet without saying so
+        // leaves it for the next waiter of the turn.
+        const now = Date.now()
         for (const [clickId, b] of behindTurn) {
-          if (!turnRunning(b.key, Date.now())) behindTurn.delete(clickId)
-          // Given in this answer already, as one is that Codex's command has only just answered
-          // for: its second copy is let go of, and is not left to be given to the next waiter
-          else if (handedBack.some((c) => c.id === clickId)) behindTurn.delete(clickId)
-          else if (waitedFor(waiter, b.click) && fits(b.click)) {
-            behindTurn.delete(clickId)
+          if (!turnRunning(b.key, now)) behindTurn.delete(clickId)
+          // Given in this answer already, as one is that Codex's command has only just answered for
+          else if (handedBack.some((c) => c.id === clickId)) b.given = { who, at: now }
+          else if (waitedFor(waiter, b.click) && (!b.given || b.given.who === who || now - b.given.at > GIVEN_MS) && fits(b.click)) {
+            b.given = { who, at: now }
             handedBack.push(b.click)
           }
         }
