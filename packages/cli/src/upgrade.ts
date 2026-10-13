@@ -248,16 +248,17 @@ export async function fetchNewer(
   } = {},
 ): Promise<Upgraded | null> {
   const say = opts.say ?? (() => {})
-  const selected = opts.program ?? standalone()
-  if (!selected)
+  const program = opts.program ?? standalone()
+  if (!program)
     throw new Problem(
       'This It does not run as the program an install puts in place, so it is not upgraded this way.',
       'invalid',
       'Update it the way it was put here: from its source, or with the package it came in.',
     )
-  // Both replacement and its lock follow the program itself, even through a linked folder
-  // and when commands with different data folders share this one installation.
-  const program = realpathSync(selected)
+  // The lock follows the program itself, even through a linked folder and when commands
+  // with different data folders share this installation. What is reported keeps the path
+  // the caller named, as the program to run from now on.
+  const lock = `${realpathSync(program)}.upgrade.lock`
   const name = programName()
   if (!name) throw new Problem(`There is no program of It for this system (${process.platform} ${process.arch}).`, 'invalid')
   const to = await latest(opts.signal)
@@ -321,7 +322,7 @@ export async function fetchNewer(
     // runs as itself, and by now another may have put a newer one still where this one goes.
     // So the program that is there is asked what it is, once no other update can change it,
     // and is left as it is unless what was fetched is newer than that too.
-    return await aloneAt(`${program}.upgrade.lock`, async () => {
+    return await aloneAt(lock, async () => {
       const there = await saysItIs(program)
       if (there && !newer(is, there)) {
         say(`It ${there} was put in place by another update meanwhile, and is left as it is.`)

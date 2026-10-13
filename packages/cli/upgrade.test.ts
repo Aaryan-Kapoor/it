@@ -140,47 +140,59 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
   })
 
-  test('is put in place of the program that is here, with its terms and notices, once it matches its checksum, starts, and says it is newer', async () => {
-    const said: string[] = []
-    const done = await fetchNewer({ program: here(), say: (line) => said.push(line) })
-    expect(done).toEqual({ from: VERSION, to: '9.9.9', program: here() })
-    expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
-    expect(statSync(here()).mode & 0o111).not.toBe(0)
-    expect(readFileSync(path.join(folder, 'LICENSE.md'), 'utf8')).toBe('the terms of 9.9.9\n')
-    expect(readFileSync(path.join(folder, 'THIRD_PARTY_NOTICES.md'), 'utf8')).toBe('the notices of 9.9.9\n')
-    expect(said).toEqual([
-      `It 9.9.9 is out, and this is ${VERSION}.`,
-      'Downloaded, and checked against its checksum.',
-      `Installed in ${path.join(folder, 'bin')}.`,
-    ])
-    // Nothing of the fetching is left beside it
-    expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(false)
-  })
+  test.each([false, true])(
+    'is put in place of the program that is here, with its terms and notices, once it matches its checksum, starts, and says it is newer, through a linked folder too (%s)',
+    async (linked) => {
+      const named = path.join(folder, 'linked')
+      if (linked) symlinkSync(folder, named, 'dir')
+      const program = linked ? path.join(named, 'bin', 'it') : here()
+      const said: string[] = []
+      const done = await fetchNewer({ program, say: (line) => said.push(line) })
+      expect(done).toEqual({ from: VERSION, to: '9.9.9', program })
+      expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
+      expect(statSync(here()).mode & 0o111).not.toBe(0)
+      expect(readFileSync(path.join(folder, 'LICENSE.md'), 'utf8')).toBe('the terms of 9.9.9\n')
+      expect(readFileSync(path.join(folder, 'THIRD_PARTY_NOTICES.md'), 'utf8')).toBe('the notices of 9.9.9\n')
+      expect(said).toEqual([
+        `It 9.9.9 is out, and this is ${VERSION}.`,
+        'Downloaded, and checked against its checksum.',
+        `Installed in ${path.dirname(program)}.`,
+      ])
+      // Nothing of the fetching is left beside it
+      expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(false)
+    },
+  )
 
-  test('is not put over a newer one that another update put in place while this one was being fetched', async () => {
-    release('9.9.8')
-    const said: string[] = []
-    const done = await fetchNewer({
-      program: here(),
-      say: (line) => {
-        said.push(line)
-        // While this update has 9.9.8 in hand, another, asked for elsewhere, puts 9.9.9 in place
-        if (line.startsWith('Downloaded')) {
-          writeFileSync(here(), says('9.9.9'), { mode: 0o755 })
-          writeFileSync(path.join(folder, 'LICENSE.md'), 'the terms of 9.9.9\n')
-        }
-      },
-    })
-    // What is there stays, with its terms, and it is what this update says is there now
-    expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
-    expect(readFileSync(path.join(folder, 'LICENSE.md'), 'utf8')).toBe('the terms of 9.9.9\n')
-    expect(done).toEqual({ from: VERSION, to: '9.9.9', program: here() })
-    expect(said.at(-1)).toBe('It 9.9.9 was put in place by another update meanwhile, and is left as it is.')
-    expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(false)
-    // One that put the very same version there is left as it is too
-    release('9.9.9')
-    expect(await fetchNewer({ program: here() })).toEqual({ from: VERSION, to: '9.9.9', program: here() })
-  })
+  test.each([false, true])(
+    'is not put over a newer one that another update put in place while this one was being fetched, through a linked folder too (%s)',
+    async (linked) => {
+      const named = path.join(folder, 'linked')
+      if (linked) symlinkSync(folder, named, 'dir')
+      const program = linked ? path.join(named, 'bin', 'it') : here()
+      release('9.9.8')
+      const said: string[] = []
+      const done = await fetchNewer({
+        program,
+        say: (line) => {
+          said.push(line)
+          // While this update has 9.9.8 in hand, another, asked for elsewhere, puts 9.9.9 in place
+          if (line.startsWith('Downloaded')) {
+            writeFileSync(here(), says('9.9.9'), { mode: 0o755 })
+            writeFileSync(path.join(folder, 'LICENSE.md'), 'the terms of 9.9.9\n')
+          }
+        },
+      })
+      // What is there stays, with its terms, and it is what this update says is there now
+      expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
+      expect(readFileSync(path.join(folder, 'LICENSE.md'), 'utf8')).toBe('the terms of 9.9.9\n')
+      expect(done).toEqual({ from: VERSION, to: '9.9.9', program })
+      expect(said.at(-1)).toBe('It 9.9.9 was put in place by another update meanwhile, and is left as it is.')
+      expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(false)
+      // One that put the very same version there is left as it is too
+      release('9.9.9')
+      expect(await fetchNewer({ program })).toEqual({ from: VERSION, to: '9.9.9', program })
+    },
+  )
 
   test('is put in place by one update at a time: an update waits for another that is putting its program in place, and then looks at what that one left', async () => {
     release('9.9.8')
