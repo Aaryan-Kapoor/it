@@ -425,13 +425,14 @@ export const giveBack = mutation({
   args: {},
   handler: async (ctx) => {
     const { machine } = await requireMachine(ctx)
-    // Few are ever held at once: a connector holds a click for seconds, and for one conversation at a time
-    const leased = await ctx.db
-      .query('actions')
-      .withIndex('by_delivery_lease', (q) => q.eq('delivery', 'leased'))
-      .take(500)
+    // Few are ever held at once: a connector holds a click for seconds, and one that is held
+    // past its lease is given back within the minute. Every one of them is looked at, whichever
+    // machine holds it, so that this machine's are found however many another holds; only so
+    // many are given back in one asking, which is far more than a connector ever held
     const back: Id<'actions'>[] = []
-    for (const x of leased) {
+    let seen = 0
+    for await (const x of ctx.db.query('actions').withIndex('by_delivery_lease', (q) => q.eq('delivery', 'leased'))) {
+      if (++seen > 4000 || back.length >= 500) break
       if (x.leaseMachineId !== machine._id) continue
       if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
       else {
