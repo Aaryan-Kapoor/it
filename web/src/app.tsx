@@ -599,6 +599,9 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     if (!showing || showing.at <= shownAt.current) return
     shownAt.current = showing.at
     sessionStorage.setItem(shownKey, String(showing.at))
+    // The tour's dialog is the way to ask an agent for the tour, and what an agent brings up
+    // after it is most often that tour: left open, it would lie over the page it asked for
+    setTour(false)
     navigate(`/p/${encodeURIComponent(showing.slug)}`)
   }, [display, shownKey])
 

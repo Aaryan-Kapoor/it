@@ -601,6 +601,36 @@ describe('something that failed while the site was being shown', () => {
   })
 })
 
+describe('a page an agent brings up on this display', () => {
+  test('is shown with the tour’s dialog closed, which is what asked for it: the tour does not come up under the dialog', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:get'] = {
+      id: 'page-1',
+      slug: 'tour-menu',
+      title: 'The It tour',
+      version: 1,
+      updatedAt: Date.now(),
+      agent: 'pi',
+      machine: 'here',
+      run: null,
+      pending: 0,
+    }
+    await start()
+    await press('Take the tour')
+    expect(host.querySelector('.modal-panel')!.textContent).toContain('Give me the It tour.')
+    // The agent was given the sentence, and shows the tour's first page here
+    watched['displays:mine'] = { ...DISPLAY, showing: { slug: 'tour-menu', at: 5 } }
+    const react = await import('react')
+    const { App } = await import('./app')
+    await act(async () => {
+      root.render(react.createElement(App))
+      await tick()
+    })
+    expect(location.pathname).toBe('/p/tour-menu')
+    expect(host.querySelector('.modal-panel')).toBeNull()
+  })
+})
+
 describe('telling the backend that this display is open', () => {
   const beats = () => names().filter((what) => what === 'displays:heartbeat').length
 
