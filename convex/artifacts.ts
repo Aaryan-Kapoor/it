@@ -59,11 +59,19 @@ export const get = query({
   handler: async (ctx, args) => {
     const { user } = await requireCaller(ctx)
     const a = await resolve(ctx, user._id, args)
-    const versions = await ctx.db
-      .query('versions')
-      .withIndex('by_artifact_n', (q) => q.eq('artifactId', a._id))
-      .order('desc')
-      .take(LIMITS.versionsKept + 2)
+    // The versions that can be gone back to are read by themselves: the one that is shown and
+    // the ones kept from before it, which are never more than may be kept. Read together with
+    // the publishes that were begun and not finished, a few of those hid them, and a dozen hid
+    // every one. Of the unfinished, the newest two are listed with them.
+    const ofStatus = (status: Doc<'versions'>['status'], most: number) =>
+      ctx.db
+        .query('versions')
+        .withIndex('by_artifact_status', (q) => q.eq('artifactId', a._id).eq('status', status))
+        .order('desc')
+        .take(most)
+    const versions = [...(await ofStatus('live', 1)), ...(await ofStatus('retired', LIMITS.versionsKept)), ...(await ofStatus('staging', 2))].sort(
+      (x, y) => y.n - x.n,
+    )
     const state = await ctx.db
       .query('states')
       .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))

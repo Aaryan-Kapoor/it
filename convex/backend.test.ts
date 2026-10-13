@@ -1150,6 +1150,41 @@ describe('publishing', () => {
     expect(await code(m.as.mutation(api.artifacts.rollback, { slug: 'plan', version: 1 }))).toBe('not_found')
   })
 
+  test('every version that can still be gone back to is listed, however many publishes were begun since and never finished', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    for (let i = 0; i < LIMITS.versionsKept; i++) {
+      await publish(m, 'plan')
+      await vi.advanceTimersByTimeAsync(5000)
+    }
+    // Twelve more are begun and left, which is as many as the list once held of every kind together
+    for (let i = 0; i < 12; i++) {
+      await m.as.action(api.publish.begin, { slug: 'plan', title: 'abandoned', files: page })
+      await vi.advanceTimersByTimeAsync(5000)
+    }
+    const listed = (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).versions
+    const finished = listed.filter((x) => x.status !== 'staging').map((x) => x.n)
+    expect(finished).toEqual([10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
+    // Newest first, with the newest few of the unfinished ones among them
+    expect(listed.map((x) => x.n)).toEqual([...listed.map((x) => x.n)].sort((a, b) => b - a))
+    expect(listed.filter((x) => x.status === 'staging').length).toBeLessThanOrEqual(2)
+    // And each of them can be gone back to
+    expect((await m.as.mutation(api.artifacts.rollback, { slug: 'plan', version: 1 })).version).toBe(1)
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).versions.filter((x) => x.status !== 'staging').map((x) => [x.n, x.status])).toEqual([
+      [10, 'retired'],
+      [9, 'retired'],
+      [8, 'retired'],
+      [7, 'retired'],
+      [6, 'retired'],
+      [5, 'retired'],
+      [4, 'retired'],
+      [3, 'retired'],
+      [2, 'retired'],
+      [1, 'live'],
+    ])
+  })
+
   test('the conversation that made a page keeps it, unless its machine is revoked or another says it is taking the page', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
