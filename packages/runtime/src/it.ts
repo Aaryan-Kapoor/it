@@ -94,7 +94,8 @@ function applyBindings(): void {
       else if (el instanceof HTMLInputElement) {
         if (el.type === 'checkbox') el.checked = false
         else el.value = ''
-      } else if (el instanceof HTMLImageElement || el instanceof HTMLIFrameElement) el.removeAttribute('src')
+      } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) el.value = ''
+      else if (el instanceof HTMLImageElement || el instanceof HTMLIFrameElement) el.removeAttribute('src')
       else el.textContent = ''
       continue
     }
@@ -103,6 +104,11 @@ function applyBindings(): void {
     else if (el instanceof HTMLInputElement) {
       if (el.type === 'checkbox') el.checked = Boolean(value)
       else if (el.value !== String(value)) el.value = String(value)
+    } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+      // What a text box holds and what a dropdown has chosen is its value, as an input's is.
+      // Written as its text, a dropdown lost every option it had, and a text box that had been
+      // typed in went on showing what was typed
+      if (el.value !== String(value)) el.value = String(value)
     } else if (el instanceof HTMLImageElement || el instanceof HTMLIFrameElement) {
       if (el.getAttribute('src') !== String(value)) el.src = String(value)
     } else {

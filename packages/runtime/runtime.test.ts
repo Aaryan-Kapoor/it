@@ -212,6 +212,26 @@ describe('the script inside a page', () => {
     expect(el('w').textContent).toBe('placeholder')
   })
 
+  test('a bound dropdown has the value chosen in it and keeps its options, and a bound text box shows the value over what was typed in it', async () => {
+    const p = load(
+      '<select id="r" data-it-bind="region"><option value="">Choose</option><option value="us">United States</option><option value="eu">Europe</option></select><textarea id="t" data-it-bind="reply">as the page wrote it</textarea>',
+    )
+    p.answer()
+    const el = (id: string) => p.w.document.getElementById(id)
+    const shown = () => [el('r').options.length, el('r').value, el('t').value]
+    p.fromSite({ type: 'it:state', state: { region: 'eu', reply: 'first answer' }, revision: 1 })
+    expect(shown()).toEqual([3, 'eu', 'first answer'])
+    // The person chooses and types, and then the agent changes both
+    el('r').value = 'us'
+    el('t').value = 'typed over the first answer'
+    p.fromSite({ type: 'it:state', state: { region: 'eu', reply: 'second answer' }, revision: 2 })
+    expect(shown()).toEqual([3, 'eu', 'second answer'])
+    // Taken out of the state, neither shows it any longer: nothing typed is left, and the dropdown is at its choice with no value
+    el('t').value = 'typed over the second answer'
+    p.fromSite({ type: 'it:state', state: {}, revision: 3 })
+    expect(shown()).toEqual([3, '', ''])
+  })
+
   test('what the page stores for itself is read back by its exact name', async () => {
     const p = load()
     const port = p.answer()
