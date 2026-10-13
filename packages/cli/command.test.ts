@@ -788,6 +788,51 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it open` says that the page is this conversation’s now, and does not end well, where it was taken from another and could then not be shown', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:take'
+        ? { took: true }
+        : asked.path === 'displays:show'
+          ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
+          : asked.path === 'displays:list'
+            ? [{ name: 'Kitchen' }]
+            : null,
+    )
+    try {
+      const opened = await run(m, ['open', 'board', '--on', 'Kichen'], { ...b.env, CODEX_THREAD_ID: 'codex-today' })
+      expect([opened.code, opened.err, printed(opened)]).toEqual([
+        1,
+        '',
+        {
+          id: 'board',
+          shownOn: [],
+          notShown: { code: 'not_found', message: 'No display is called "Kichen".', hint: 'Displays: "Kitchen"' },
+          note: 'This page was another conversation’s, and is this one’s now: what is done on it comes here.',
+          hint: 'The page was not shown, and `notShown` says why. It was made this conversation’s before that, and stays so. Run `it open board` again to show it.',
+        },
+      ])
+      // Where nothing was taken, a page that could not be shown is said as it always was, and nothing is printed
+      const own = await backend(m, (asked) =>
+        asked.path === 'artifacts:take'
+          ? { took: false }
+          : asked.path === 'displays:show'
+            ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
+            : asked.path === 'displays:list'
+              ? [{ name: 'Kitchen' }]
+              : null,
+      )
+      try {
+        const again = await run(m, ['open', 'board', '--on', 'Kichen'], { ...own.env, CODEX_THREAD_ID: 'codex-today' })
+        expect([again.code, again.out, error(again).code]).toEqual([1, '', 'not_found'])
+      } finally {
+        await own.close()
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it patch --replace=false` merges, and only a switch that is on replaces the whole state', async () => {
     const m = machine()
     const b = await backend(m, () => ({ revision: 2 }))

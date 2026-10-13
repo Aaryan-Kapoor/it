@@ -3166,7 +3166,25 @@ async function main(argv: string[]): Promise<void> {
           },
         )
       }
-      const shown = shownAs(await show(slug, a))
+      const taken = `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
+      let shown: ReturnType<typeof shownAs>
+      try {
+        shown = shownAs(await show(slug, a))
+      } catch (err) {
+        if (!took || !(err instanceof Problem)) throw err
+        // The page was made this conversation's a moment ago, and that stands whatever became of
+        // showing it. Told only that there is no such display, an agent takes it that nothing was
+        // changed, while what is done on the page, where it is still up, now comes to it
+        process.exitCode = 1
+        return out({
+          id: slug,
+          shownOn: [],
+          notShown: { code: err.code, message: err.message, ...(err.hint ? { hint: err.hint } : {}) },
+          note: taken,
+          hint: `The ${NOUN.one} was not shown, and \`notShown\` says why. It was made this conversation’s before that, and stays so. Run \`it open ${slug}\` again to show it.`,
+          ...(guessed ? { session: guessed } : {}),
+        })
+      }
       if (notTaken) {
         process.exitCode = 1
         return out({
@@ -3180,7 +3198,7 @@ async function main(argv: string[]): Promise<void> {
       return out({
         id: slug,
         ...shown,
-        ...(took ? { note: `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.` } : {}),
+        ...(took ? { note: taken } : {}),
         ...(guessed ? { session: guessed } : {}),
       })
     }
