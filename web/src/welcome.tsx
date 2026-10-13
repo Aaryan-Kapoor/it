@@ -250,22 +250,36 @@ export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<type
       void line.offsetWidth
       line.classList.add('in')
     }
+    // Someone who has asked their system for less motion is shown a thing whole, and nothing
+    // moves: the stylesheet stills what it animates, and cannot still what is drawn here. It is
+    // asked when the film begins, and again whenever the answer changes while this screen is up
+    const less = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null
+    const begunStill = less?.matches === true
+    const changed = (e: { matches: boolean }) => playing.current?.still(e.matches)
+    less?.addEventListener?.('change', changed)
     void import('./film/play')
       .then(({ play }) =>
-        play(panel.current!, stage.current!, {
-          headline(text) {
-            const [a, b = ''] = text.split('\n')
-            if (first.current) first.current.textContent = a ?? ''
-            if (second.current) second.current.textContent = b
+        play(
+          panel.current!,
+          stage.current!,
+          {
+            headline(text) {
+              const [a, b = ''] = text.split('\n')
+              if (first.current) first.current.textContent = a ?? ''
+              if (second.current) second.current.textContent = b
+            },
+            thing: (index) => setAt(index),
+            you: (text) => say(you.current, text),
+            did: (text, by) => say(did.current, text, by),
           },
-          thing: (index) => setAt(index),
-          you: (text) => say(you.current, text),
-          did: (text, by) => say(did.current, text, by),
-        }),
+          begunStill,
+        ),
       )
       .then((started) => {
         if (over) return started.stop()
         playing.current = started
+        // The answer may have changed while the film's typefaces were being fetched
+        if ((less?.matches === true) !== begunStill) started.still(!begunStill)
         // Only what the film has is offered, in its order, under the names given here
         setThings(started.cards.flatMap((card) => THINGS.filter((t) => t.key === card.key)))
       })
@@ -273,6 +287,7 @@ export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<type
       .catch(() => {})
     return () => {
       over = true
+      less?.removeEventListener?.('change', changed)
       playing.current?.stop()
       playing.current = null
     }

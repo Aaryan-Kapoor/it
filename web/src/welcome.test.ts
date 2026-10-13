@@ -23,6 +23,14 @@ vi.mock('convex/react', () => ({
   useQuery: (fn: unknown, args: unknown) => (args === 'skip' ? undefined : { 'tour:get': tour, 'machines:list': machines }[getFunctionName(fn as never)]),
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+/** What the film on the first screen was last told: whether to stand still when it was begun, and each time since. */
+const film: { begun: boolean[]; told: boolean[] } = { begun: [], told: [] }
+vi.mock('./film/play', () => ({
+  play: async (_panel: unknown, _stage: unknown, _told: unknown, still: boolean) => {
+    film.begun.push(still)
+    return { cards: [{ key: 'whiteboard' }, { key: 'map' }], show: () => {}, hold: () => {}, still: (on: boolean) => void film.told.push(on), stop: () => {} }
+  },
+}))
 
 let root: Root
 let host: HTMLElement
@@ -167,5 +175,58 @@ describe('once the tour is over, or the person wanted none', () => {
     tour = undefined
     await shown()
     expect(host.querySelector('.hello, .starters')).toBeNull()
+  })
+})
+
+describe('the film on the first screen', () => {
+  /** Whether the person's system asks for less motion, and what the site asked to be told when that changes. */
+  let less: boolean
+  const hearers = new Set<(e: { matches: boolean }) => void>()
+  const changes = (to: boolean) =>
+    act(async () => {
+      less = to
+      for (const hear of hearers) hear({ matches: to })
+    })
+  beforeEach(() => {
+    less = false
+    hearers.clear()
+    film.begun.length = 0
+    film.told.length = 0
+    // What a browser has that this stand-in does not, and the film is not played without
+    vi.stubGlobal('FontFace', class {})
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    )
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('prefers-reduced-motion') && less,
+      addEventListener: (_kind: string, hear: (e: { matches: boolean }) => void) => void hearers.add(hear),
+      removeEventListener: (_kind: string, hear: (e: { matches: boolean }) => void) => void hearers.delete(hear),
+    }))
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  test('plays for someone whose system asks for nothing else, and stands still from the start for someone whose system asks for less motion', async () => {
+    await shown()
+    await act(async () => {})
+    expect(film.begun).toEqual([false])
+    await act(async () => root.unmount())
+    host.remove()
+    less = true
+    await shown()
+    await act(async () => {})
+    expect(film.begun).toEqual([false, true])
+    expect(film.told).toEqual([])
+  })
+
+  test('is told to stand still, or to play again, when the person changes that in their system while the screen is up', async () => {
+    await shown()
+    await act(async () => {})
+    await changes(true)
+    await changes(false)
+    expect(film.told).toEqual([true, false])
   })
 })
