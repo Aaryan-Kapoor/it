@@ -635,6 +635,34 @@ describe('gathering a folder to publish', () => {
     }
   })
 
+  test.skipIf(process.platform === 'win32')(
+    'a file swapped for a pipe after it was listed is refused, and does not hold the command until something writes to the pipe',
+    () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), 'it-pipe-'))
+      const file = path.join(root, 'app.js')
+      writeFileSync(file, 'x')
+      const real = { openSync: fs.openSync }
+      // Just as the file is about to be opened, after it was listed as an ordinary file, it is made a pipe that nothing writes to
+      fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+        if (args[0] === file) {
+          // Opened as it was before, this would never come back: said here, where a test can still say anything
+          if (typeof args[1] !== 'number' || !(args[1] & fs.constants.O_NONBLOCK)) throw new Error('opened in a way that waits for a pipe to be written to')
+          rmSync(file)
+          execFileSync('mkfifo', [file])
+        }
+        return real.openSync(...args)
+      }) as typeof fs.openSync
+      syncBuiltinESMExports()
+      try {
+        expect(() => read(file, 'app.js', 1, { bytes: 0 })).toThrow('app.js is not an ordinary file.')
+      } finally {
+        Object.assign(fs, real)
+        syncBuiltinESMExports()
+        rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
+
   test('a file that is too large is refused before it is read', () => {
     const big = path.join(dir, 'big.bin')
     // A sparse file: its size is what counts, and nothing this large is ever loaded

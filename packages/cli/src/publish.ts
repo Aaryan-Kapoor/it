@@ -44,10 +44,12 @@ export function read(full: string, as: string, size: number, total: { bytes: num
   if (size > LIMITS.fileBytes) throw tooLarge()
   if (total.bytes + size > LIMITS.versionBytes) throw tooMuch()
   // Opened so that a link is refused by the system itself, in case one was put there after the
-  // check above; and what was opened is checked again before it is read
+  // check above; and what was opened is checked again before it is read. And opened so that it
+  // is never waited for: a pipe put there in the same moment would otherwise hold this command
+  // until something wrote to it, with nothing said and no way for a time limit to end it
   let fd: number
   try {
-    fd = openSync(full, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    fd = openSync(full, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
   } catch {
     throw new Problem(`${as} could not be read, or is a link.`, 'invalid')
   }
