@@ -198,15 +198,22 @@ whenLetGo((person, whole) => {
 export async function mendPush(convex: ConvexReactClient): Promise<void> {
   try {
     if (pushSupport() === 'unsupported' || pushSupport() === 'needs-install') return
-    const registration = await navigator.serviceWorker?.getRegistration()
-    if (await registration?.pushManager.getSubscription()) return
+    // What stands when this begins, before the browser is waited on at all: the person may turn
+    // notifications off or on themselves, or the browser be signed out, during either wait, and
+    // a count taken after them would take that for something done before this began
     const started = generation
+    const begun = attempt
+    const person = keptFor()
+    const registration = await navigator.serviceWorker?.getRegistration()
+    if (generation !== started || attempt !== begun || keptFor() !== person) return
+    const there = await registration?.pushManager.getSubscription()
+    if (there || generation !== started || attempt !== begun || keptFor() !== person) return
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       const mine = attempt + 1
       if ((await turnOnPush(convex)) === 'on') return
       // Overtaken by the person turning notifications on or off themselves, or by signing out:
       // what is there now is theirs, and nothing is cleaned up
-      if (generation !== started || attempt !== mine) return
+      if (generation !== started || attempt !== mine || keptFor() !== person) return
     }
     await convex.mutation(api.push.unsubscribe, { key: displayKey() })
     localStorage.removeItem('it.pushAsked')
