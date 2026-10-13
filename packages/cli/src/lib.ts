@@ -1,6 +1,20 @@
 // What every command shares: where things are kept on this machine, how the machine proves who
 // it is, and how to reach the backend.
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fchmodSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeSync,
+} from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -171,6 +185,56 @@ export function writeFlushed(file: string, text: string): void {
   } catch (err) {
     rmSync(file, { force: true })
     throw err
+  }
+}
+
+/**
+ * Changes a file that is not It's alone: Codex's settings, which Codex saves itself, or a
+ * shell's profile, which the person may have open in an editor. `change` is given what the
+ * file holds and gives what it is to hold: nothing where it is to stay as it is, and null where
+ * nothing of it is left and it is to be taken away. True where the file was changed.
+ *
+ * The new text is written beside the file with every byte on the disk, under the file's own
+ * permissions, and is given the file's name only where the file still holds, the moment before,
+ * what the change was made from. A file that is a link is written where the link leads. Where
+ * the file holds something else by then, another program saved it while this was at work, and
+ * the change is made anew to what it holds now: given its name all the same, the first result
+ * would take that save back with nothing said, and a project the person had just trusted in
+ * Codex would be untrusted again. Between that last look and the giving of the name an instant
+ * is left that only the other program could close, by holding a lock that both keep to. A file
+ * that is saved again every time is left as its last save made it, and that is an error.
+ */
+export function changeWhole(file: string, change: (text: string) => string | null | undefined): boolean {
+  const target = realpathSync(file)
+  const part = `${target}.it-${process.pid}.part`
+  for (let tries = 1; ; tries++) {
+    const text = readFileSync(target, 'utf8')
+    const after = change(text)
+    if (after === undefined || after === text) return false
+    const mode = statSync(target).mode & 0o777
+    try {
+      if (after !== null) {
+        const out = openSync(part, 'w', mode)
+        try {
+          // Every byte, or an error: a disk that is nearly full takes a part of what it is given
+          // and says so without failing, and a part is not what is given the file's name
+          writeAll(out, Buffer.from(after))
+          // The permissions the file had, whatever this program's own mask would have left of them
+          fchmodSync(out, mode)
+          fsyncSync(out)
+        } finally {
+          closeSync(out)
+        }
+      }
+      if (readFileSync(target, 'utf8') === text) {
+        if (after === null) rmSync(target, { force: true })
+        else renameSync(part, target)
+        return true
+      }
+    } finally {
+      rmSync(part, { force: true })
+    }
+    if (tries >= 5) throw new Error(`${file} was saved by another program each time It was about to change it, and was left as it is`)
   }
 }
 

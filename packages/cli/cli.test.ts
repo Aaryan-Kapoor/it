@@ -30,6 +30,7 @@ import { loose, nested, parse } from './src/args'
 import { codexCommand, codexQueue, local, mac } from './src/connector'
 import {
   backend,
+  changeWhole,
   clashed,
   currentSession,
   forgetMachine,
@@ -2111,6 +2112,86 @@ describe('what It wrote into another program’s TOML file', () => {
     expect(withoutTables(between.replaceAll('\n', '\r\n'), owned)).toBe(left.replaceAll('\n', '\r\n'))
     // Nothing of It's in it: not a byte is changed
     expect(withoutTables(`${theirs}# end`, owned)).toBe(`${theirs}# end`)
+  })
+})
+
+describe('a file that is not It’s alone, changed while another program may save it', () => {
+  const HOOKS = /^\[hooks\.state\."it-bridge@it:[^"]*"\]/
+  const without = (text: string) => withoutTables(text, (header) => HOOKS.test(header))
+  const BEFORE = 'model = "gpt-6"\n\n[hooks.state."it-bridge@it:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:aa"\n'
+  // What Codex saves when the person trusts a project and the hooks of another plugin, with It's table still in it
+  const SAVED = `${BEFORE}\n[projects."/work"]\ntrust_level = "trusted"\n\n[hooks.state."other@market:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:bb"\n`
+  /** Runs something with another program saving the file each time It has its own copy written and on the disk, which is while It is at work. */
+  function withASave(file: string, saves: () => string | undefined, run: () => void): void {
+    const real = { fsyncSync: fs.fsyncSync }
+    fs.fsyncSync = (fd: number) => {
+      real.fsyncSync(fd)
+      const text = saves()
+      if (text !== undefined) writeFileSync(file, text)
+    }
+    syncBuiltinESMExports()
+    try {
+      run()
+    } finally {
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
+    }
+  }
+
+  test('is changed from what it holds when it is replaced: what was saved while It was at work stays, and It’s change is made to that', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, 'config.toml')
+    try {
+      writeFileSync(file, BEFORE)
+      const saves = [SAVED]
+      withASave(
+        file,
+        () => saves.shift(),
+        () => expect(changeWhole(file, without)).toBe(true),
+      )
+      const after = readFileSync(file, 'utf8')
+      expect(after).toContain('[projects."/work"]\ntrust_level = "trusted"')
+      expect(after).toContain('[hooks.state."other@market:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:bb"')
+      expect(after).not.toContain('it-bridge@it')
+      expect(readdirSync(folder)).toEqual(['config.toml'])
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('is left as the last save made it where it is saved every time It is about to replace it, and that is said', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, 'config.toml')
+    try {
+      writeFileSync(file, BEFORE)
+      let saves = 0
+      withASave(
+        file,
+        () => `${SAVED}# saved ${++saves} times\n`,
+        () => expect(() => changeWhole(file, without)).toThrow(/was saved by another program each time/),
+      )
+      expect(readFileSync(file, 'utf8')).toBe(`${SAVED}# saved ${saves} times\n`)
+      expect(readdirSync(folder)).toEqual(['config.toml'])
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('is not written where nothing is to change, and is taken away only where it still holds what it was read to hold', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, '.profile')
+    try {
+      writeFileSync(file, 'export EDITOR=vi\n')
+      const before = statSync(file, { bigint: true }).ino
+      expect(changeWhole(file, (text) => text)).toBe(false)
+      expect(changeWhole(file, () => undefined)).toBe(false)
+      expect(statSync(file, { bigint: true }).ino).toBe(before)
+      // Taken away, where the change says that nothing of it is left
+      expect(changeWhole(file, () => null)).toBe(true)
+      expect(existsSync(file)).toBe(false)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
   })
 })
 

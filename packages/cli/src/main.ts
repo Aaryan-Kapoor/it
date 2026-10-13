@@ -8,12 +8,8 @@ import { execFile, spawn, spawnSync } from 'node:child_process'
 import {
   appendFileSync,
   chmodSync,
-  closeSync,
   existsSync,
-  fchmodSync,
-  fsyncSync,
   mkdirSync,
-  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -53,6 +49,7 @@ import {
   backendAt,
   basePort,
   call,
+  changeWhole,
   direct,
   doorRefusal,
   elsewhere,
@@ -87,7 +84,6 @@ import {
   windowsPathHas,
   windowsPathRemoval,
   withoutTables,
-  writeAll,
   written,
 } from './lib'
 import { login, runsItsOwn } from './login'
@@ -1420,35 +1416,6 @@ async function uninstall(a: Args) {
  * and the blank line it wrote above it, and says which files it was in. A profile that held
  * nothing else was made by the installer, and goes too.
  */
-/**
- * Puts new text in the place of a file's, whole or not at all: written beside the file with
- * every byte on the disk, under the file's own permissions, and only then given its name. A
- * file that is a link is written where the link leads. These are the person's own files, with
- * their own settings in them beside It's line, and a disk that fills or a program that is ended
- * half way must leave them as they were.
- */
-function replaceWhole(file: string, text: string): void {
-  const target = realpathSync(file)
-  const part = `${target}.it-${process.pid}.part`
-  const mode = statSync(target).mode & 0o777
-  try {
-    const out = openSync(part, 'w', mode)
-    try {
-      // Every byte, or an error: a disk that is nearly full takes a part of what it is given
-      // and says so without failing, and a part is not what is given the file's name
-      writeAll(out, Buffer.from(text))
-      // The permissions the file had, whatever this program's own mask would have left of them
-      fchmodSync(out, mode)
-      fsyncSync(out)
-    } finally {
-      closeSync(out)
-    }
-    renameSync(part, target)
-  } finally {
-    rmSync(part, { force: true })
-  }
-}
-
 /** The files a shell reads when it starts, each with the line the install script writes into it to put a folder on the PATH. */
 function profileLines(bin: string): Map<string, string> {
   const dirs = [process.env.ZDOTDIR, os.homedir()].filter((d): d is string => typeof d === 'string' && d !== '')
@@ -1486,31 +1453,32 @@ function unlisted(bin: string): { changed: string[]; failed: { file: string; why
   const changed: string[] = []
   const failed: { file: string; why: string }[] = []
   for (const [file, line] of files) {
-    let text: string
+    /** The profile without the line, nothing where the line is not in it, and null where nothing else is. */
+    const without = (text: string): string | null | undefined => {
+      const kept: string[] = []
+      let found = false
+      for (const l of text.split('\n')) {
+        if (l !== line) {
+          kept.push(l)
+          continue
+        }
+        found = true
+        // The comment the installer wrote above it, and the blank line above that
+        if (kept.at(-1) === '# It') kept.pop()
+        if (kept.at(-1) === '') kept.pop()
+      }
+      if (!found) return undefined
+      const after = kept.join('\n')
+      return after.trim() === '' ? null : after.endsWith('\n') || !text.endsWith('\n') ? after : `${after}\n`
+    }
+    // A profile that is not there, or cannot be read, is not known to hold the line
     try {
-      text = readFileSync(file, 'utf8')
+      readFileSync(file, 'utf8')
     } catch {
       continue
     }
-    const lines = text.split('\n')
-    const kept: string[] = []
-    let found = false
-    for (const l of lines) {
-      if (l !== line) {
-        kept.push(l)
-        continue
-      }
-      found = true
-      // The comment the installer wrote above it, and the blank line above that
-      if (kept.at(-1) === '# It') kept.pop()
-      if (kept.at(-1) === '') kept.pop()
-    }
-    if (!found) continue
-    const after = kept.join('\n')
     try {
-      if (after.trim() === '') rmSync(file, { force: true })
-      else replaceWhole(file, after.endsWith('\n') || !text.endsWith('\n') ? after : `${after}\n`)
-      changed.push(file)
+      if (changeWhole(file, without)) changed.push(file)
     } catch (err) {
       failed.push({ file, why: (err as NodeJS.ErrnoException).code ?? 'an error' })
     }
@@ -1565,11 +1533,14 @@ function crumbs(folder: string): void {
     } catch {}
   if (anothers(path.join(codexHome, 'plugins', 'cache', 'it'))) return
   try {
-    const file = path.join(codexHome, 'config.toml')
-    const text = readFileSync(file, 'utf8')
-    // A table of its own for each hook, holding the one line that says it was trusted
-    const without = withoutTables(text, (header) => /^\[hooks\.state\."it-bridge@it:[^"]*"\]/.test(header)).replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
-    if (without !== text) replaceWhole(file, without.replace(/\n{3,}/g, '\n\n'))
+    // Codex saves this file itself, when the person trusts a project or a plugin's hooks, and
+    // may do so while this is at work: the change is made to what the file holds at the moment
+    // it is replaced, so that nothing Codex saved meanwhile is taken back
+    changeWhole(path.join(codexHome, 'config.toml'), (text) => {
+      // A table of its own for each hook, holding the one line that says it was trusted
+      const without = withoutTables(text, (header) => /^\[hooks\.state\."it-bridge@it:[^"]*"\]/.test(header)).replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
+      return without === text ? undefined : without.replace(/\n{3,}/g, '\n\n')
+    })
   } catch {}
   try {
     rmSync(path.join(codexHome, 'plugins', 'cache', 'it'), { recursive: true, force: true })
