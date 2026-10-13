@@ -356,6 +356,25 @@ describe('what is said of an agent app on a machine', () => {
   })
 })
 
+describe('giving a machine another name', () => {
+  test('however the field is left, by Escape, by Cancel or by saving, the keyboard is back on Rename', async () => {
+    watched['machines:list'] = [
+      { id: 'machine-1', name: 'the desk', lastSeenAt: Date.now(), connectorVersion: '0.1.0', system: 'linux', harnesses: [], wanted: [], wakes: [] },
+    ]
+    const { Machines } = await import('./machines')
+    await show(createElement(Machines))
+    const field = () => host.querySelector<HTMLInputElement>('input[aria-label="Machine name"]')
+    for (const leave of ['Escape', 'Cancel', 'Save']) {
+      await press('Rename')
+      expect([leave, document.activeElement === field()]).toEqual([leave, true])
+      if (leave === 'Escape') await act(async () => void field()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+      else await press(leave)
+      expect([leave, field(), document.activeElement?.textContent]).toEqual([leave, null, 'Rename'])
+    }
+    expect(calls.filter((fn) => fn === 'machines:rename').length).toBe(1)
+  })
+})
+
 describe('revoking a machine', () => {
   test('the owner is asked first, and told how a machine that joined is used again: by leaving and being added again', async () => {
     const asked: string[] = []

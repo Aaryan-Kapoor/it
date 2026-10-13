@@ -215,8 +215,9 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
   }, [page, slug])
   /** What the page's own script last failed with, and which version of the page that was. */
   const [fault, setFault] = useState<{ of: string; message: string; agentTold: boolean } | null>(null)
-  /** Whether the box to type to the page's agent in is open. */
+  /** Whether the box to type to the page's agent in is open, and the button that opens it. */
   const [talking, setTalking] = useState(false)
+  const talkButton = useRef<HTMLButtonElement>(null)
   // Whether something done here is with the page's agent, or on its way to it, and not yet
   // answered: shown as a line that moves under the bar, which is seen where the few words
   // beside the title are not
@@ -308,6 +309,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
         <div className="page-nav-actions">
           {page.version !== null && (
             <button
+              ref={talkButton}
               type="button"
               className="nav-action"
               aria-pressed={talking}
@@ -339,7 +341,11 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
           agent={agentName(page.agent)}
           said={page.said ?? null}
           open={talking}
-          onClose={() => setTalking(false)}
+          // Closed from the box, with Escape: the keyboard goes back to the button that opened it
+          onClose={() => {
+            setTalking(false)
+            talkButton.current?.focus()
+          }}
         />
       )}
       {page.version === null ? (

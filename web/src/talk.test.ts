@@ -160,6 +160,15 @@ describe('the box a person types to a page’s agent in', () => {
     expect(location.pathname).toBe('/p/plan')
   })
 
+  test('closed with Escape, it leaves the keyboard on the button that opened it', async () => {
+    await shown()
+    await act(async () => opener().click())
+    expect(document.activeElement).toBe(box())
+    await act(async () => void box()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+    expect(box()).toBeNull()
+    expect(document.activeElement).toBe(opener())
+  })
+
   test('is not offered on a page that has nothing published', async () => {
     page = { ...page, version: null }
     await shown()

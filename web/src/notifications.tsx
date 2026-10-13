@@ -190,12 +190,18 @@ export function Bell({ compact = false }: { compact?: boolean }) {
   useEffect(() => {
     if (open && unseenIds) void seen({ key: displayKey(), ids: unseenIds.split(',') as Id<'notifications'>[] }).catch(() => {})
   }, [open, unseenIds, seen])
-  // A click anywhere else closes it, and so does Escape
+  // A click anywhere else closes it, and so does Escape. Closed with the keyboard in it, the
+  // keyboard goes to the bell: what it was on is gone, and it would otherwise be left nowhere
   const box = useRef<HTMLDivElement>(null)
+  const opener = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     if (!open) return
     const away = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false)
-    const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (box.current?.contains(document.activeElement)) opener.current?.focus()
+      setOpen(false)
+    }
     document.addEventListener('mousedown', away)
     document.addEventListener('keydown', key)
     return () => {
@@ -206,6 +212,7 @@ export function Bell({ compact = false }: { compact?: boolean }) {
   return (
     <div className="menu" ref={box}>
       <button
+        ref={opener}
         type="button"
         className={`icon bell notif-btn ${compact ? 'nav-action' : 'grid-icon-btn'}`}
         aria-haspopup="dialog"

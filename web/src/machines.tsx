@@ -5,7 +5,7 @@ import { ALIVE, HARNESSES, INSTALL, newer, noWakeHere, UPGRADE_MS, WAKES, wakesO
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
-import { ago, api, type Id, refusal, serverNow, useNow } from './lib'
+import { ago, api, type Id, refusal, serverNow, useNow, useOpener } from './lib'
 import { NoAddress, OtherAddresses, useWhere } from './network'
 import { RevokeMachine } from './paired'
 
@@ -255,6 +255,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
   const rename = useMutation(api.machines.rename)
   const [error, setError] = useState('')
   const [name, setName] = useState<string | null>(null)
+  const renaming = useOpener<HTMLButtonElement>(name !== null)
   const online = !m.off && now - m.lastSeenAt < ALIVE.onlineMs && m.connectorVersion !== null
   const act = (p: Promise<unknown>) =>
     p.then(
@@ -301,7 +302,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
         {m.runsIt && <span className="status">It runs on this machine</span>}
         <span className="grow" />
         {name === null && (
-          <button type="button" className="link" onClick={() => setName(m.name)}>
+          <button ref={renaming} type="button" className="link" onClick={() => setName(m.name)}>
             Rename
           </button>
         )}

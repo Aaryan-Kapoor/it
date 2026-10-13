@@ -85,3 +85,23 @@ test('what became of an answer given in the tray is said aloud: that it is on it
   expect(host.querySelector('.notif-item [role="status"]')).toBe(where)
   expect(where.textContent).toBe('Sent to your agent: Fine')
 })
+
+test('Escape from inside the tray closes it and leaves the keyboard on the bell, and from anywhere else it closes it and leaves the keyboard where it is', async () => {
+  await drawn()
+  const other = document.body.appendChild(document.createElement('button'))
+  const pressed = (from: Element) => act(async () => void from.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+  try {
+    await act(async () => bell().click())
+    button('Dismiss').focus()
+    await pressed(button('Dismiss'))
+    expect(host.querySelector('.notif-panel')).toBeNull()
+    expect(document.activeElement).toBe(bell())
+    await act(async () => bell().click())
+    other.focus()
+    await pressed(other)
+    expect(host.querySelector('.notif-panel')).toBeNull()
+    expect(document.activeElement).toBe(other)
+  } finally {
+    other.remove()
+  }
+})

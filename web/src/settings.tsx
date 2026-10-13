@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { version } from '../package.json'
 import { About } from './about'
 import { Dialog } from './dialog'
-import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow } from './lib'
+import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow, useOpener } from './lib'
 import { NetworkSwitch, NoAddress, OtherAddresses, useNetwork, useWhere } from './network'
 import { thisPairing } from './outbox'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
@@ -48,6 +48,7 @@ function DisplayItem({
   const rename = useMutation(api.displays.rename)
   const forget = useMutation(api.displays.forget)
   const [name, setName] = useState<string | null>(null)
+  const renaming = useOpener<HTMLButtonElement>(name !== null)
   const support = pushSupport()
   return (
     <li className="row">
@@ -114,7 +115,7 @@ function DisplayItem({
           </label>
         )}
         {(owner || here) && name === null && (
-          <button type="button" className="link" onClick={() => setName(d.named ? d.name : '')}>
+          <button ref={renaming} type="button" className="link" onClick={() => setName(d.named ? d.name : '')}>
             Rename
           </button>
         )}

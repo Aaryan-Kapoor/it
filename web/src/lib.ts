@@ -1,7 +1,7 @@
 // Small things the whole site shares: the backend's functions, this browser's display key,
 // where a page is shown, the address bar, and how a refusal from the backend reads.
 import { ConvexError } from 'convex/values'
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 export { api } from '../../convex/_generated/api'
 export type { Id } from '../../convex/_generated/dataModel'
@@ -391,6 +391,21 @@ export function useNow(everyMs = 30_000): number {
     return () => clearInterval(t)
   }, [everyMs])
   return now
+}
+
+/**
+ * For the button that opens something in its own place, as Rename opens the field a name is
+ * changed in. The button is not drawn while that is open, and is drawn again when it closes:
+ * the keyboard, which was in what closed, is then put on the button, and is not left nowhere.
+ */
+export function useOpener<T extends HTMLElement>(open: boolean) {
+  const opener = useRef<T>(null)
+  const was = useRef(open)
+  useEffect(() => {
+    if (was.current && !open) opener.current?.focus()
+    was.current = open
+  }, [open])
+  return opener
 }
 
 /** A value kept in this browser, such as a reminder that was dismissed. */

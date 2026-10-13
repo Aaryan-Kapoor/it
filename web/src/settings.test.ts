@@ -82,6 +82,22 @@ describe('what each kind of session is offered', () => {
     expect(calls).toEqual([{ fn: 'displays:forget', args: { displayId: 'display-2' } }])
   })
 
+  test('however the field for a display’s name is left, by Escape, by Cancel or by saving, the keyboard is back on Rename', async () => {
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    const row = () => [...host.querySelectorAll('li')][1]!
+    const field = () => row().querySelector<HTMLInputElement>('input[aria-label="Display name"]')
+    const inRow = (label: string) => [...row().querySelectorAll('button')].find((b) => b.textContent === label)!
+    for (const leave of ['Escape', 'Cancel', 'Save']) {
+      await act(async () => inRow('Rename').click())
+      expect([leave, document.activeElement === field()]).toEqual([leave, true])
+      if (leave === 'Escape') await act(async () => void field()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+      else await act(async () => inRow(leave).click())
+      expect([leave, field(), document.activeElement === inRow('Rename')]).toEqual([leave, null, true])
+    }
+    expect(calls.map((c) => c.fn)).toEqual(['displays:rename'])
+  })
+
   test('a display whose browser’s pairing has ended is said to be not paired, and not when it was last open', async () => {
     watched['displays:list'] = [
       { ...DISPLAYS[0]!, paired: true },
