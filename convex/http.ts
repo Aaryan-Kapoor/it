@@ -137,7 +137,8 @@ http.route({
           : made.error === 'limit'
             ? json(429, { error: 'It has as many machines as it can have. Revoke one on the site.' })
             : json(403, { error: 'Everything It holds is being erased, and no machine is enrolled until that is done.' })
-      return json(200, { machine: made.machineId })
+      // With the name of the machine whose place it asked for and does not have yet, where there is one (see `record` in bridge.ts)
+      return json(200, { machine: made.machineId, ...('waitsFor' in made && made.waitsFor ? { waitsFor: made.waitsFor } : {}) })
     } catch (err) {
       return refusal(err, 'enroll')
     }

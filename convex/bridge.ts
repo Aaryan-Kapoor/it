@@ -53,14 +53,31 @@ async function record(
   // waiting on them, go to its new identity. Only from an identity of this same person that
   // has been given up or revoked, so nothing live is ever taken this way.
   const before = m.replaces ? ctx.db.normalizeId('machines', m.replaces) : null
-  const old = before ? await ctx.db.get(before) : null
-  const inherits = Boolean(old && old.userId === user._id && old.revoked)
+  const named = before ? await ctx.db.get(before) : null
+  const given = named && named.userId === user._id && named.revoked ? named : null
+  // The identity it names may have been replaced already, and that one in its turn: a computer
+  // whose folder was put back from a copy names the identity it had when the copy was made.
+  // What it takes the place of is the identity that stands at the end of those, which is where
+  // the pages are. Taken from the one it named, they would have stayed where they were, and
+  // the word of who replaced the named one would have been written over.
+  let old = given
+  for (let on = 0; old?.revoked && old.replacedBy && on < 100; on++) {
+    const next: Doc<'machines'> | null = await ctx.db.get(old.replacedBy)
+    if (!next || next.userId !== user._id) break
+    old = next
+  }
+  const inherits = Boolean(old?.revoked)
+  // And where that one is one of the person's machines still, nothing is taken from it: no
+  // more shows that it is out of use than that another computer says it was the same one once.
+  // This identity is noted as asking for its place, and has it, with its pages, when the
+  // person revokes that one (`revokeMachine`).
+  const waitsFor = old && !old.revoked && old._id !== machineId ? old : null
+  // With the pages comes what the person switched off there: an app whose closed conversations
+  // they said are not to be reopened on this computer is not one that reopening comes on for
+  // when setup connects it anew. Without it the new identity would know of no such word, and
+  // bringing a computer back would have switched on again what only the person switches on.
+  if (old && (inherits || waitsFor)) await ctx.db.patch(machineId, { replaces: old._id, ...(old.wakesOff?.length ? { wakesOff: old.wakesOff } : {}) })
   if (old && inherits) {
-    // With the pages comes what the person switched off there: an app whose closed conversations
-    // they said are not to be reopened on this computer is not one that reopening comes on for
-    // when setup connects it anew. Without it the new identity would know of no such word, and
-    // bringing a computer back would have switched on again what only the person switches on.
-    await ctx.db.patch(machineId, { replaces: old._id, ...(old.wakesOff?.length ? { wakesOff: old.wakesOff } : {}) })
     // The old identity is told who took its place: a hand-over still on its way to it, from
     // an identity before it, then goes on to this one
     await ctx.db.patch(old._id, { replacedBy: machineId })
@@ -74,8 +91,13 @@ async function record(
     }
   }
   // An identity named as the one this replaces, that is not this person's or was never given up, is passed over
-  log('machine.enrolled', { userId: user._id, machineId, ...(inherits && old ? { replaces: old._id } : m.replaces ? { replacesIgnored: true } : {}) })
-  return { machineId }
+  log('machine.enrolled', {
+    userId: user._id,
+    machineId,
+    ...(inherits && old ? { replaces: old._id } : waitsFor ? { waitsFor: waitsFor._id } : m.replaces ? { replacesIgnored: true } : {}),
+  })
+  // The name of the machine whose place it waits for is given back, for whoever enrolled it to say so to the person
+  return { machineId, ...(waitsFor ? { waitsFor: waitsFor.name } : {}) }
 }
 
 /**

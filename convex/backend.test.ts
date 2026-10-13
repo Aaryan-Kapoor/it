@@ -4628,6 +4628,59 @@ describe('cases at the edges', () => {
     void other
   })
 
+  test('a computer that enrols again as an identity that has already been replaced takes nothing from the identity that stands in its place, until the person revokes that one', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const first = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(first, 'plan', { session: thread })
+    const submit = (id: string) =>
+      alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })
+    const machine = (id: string) => t.run((ctx) => ctx.db.get(id as never) as Promise<{ replaces?: string; replacedBy?: string; revoked: boolean } | null>)
+    const pageIsWith = async () => (await t.run((ctx) => ctx.db.get(p.artifactId)))?.machineId
+    // It left and joined again, and its pages went to the identity it has now
+    await first.as.mutation(api.machines.leave, {})
+    const second = await machineOf(t, 'alice', 'laptop', first.id)
+    await second.as.mutation(api.machines.choose, { harnesses: ['codex'], system: 'linux' })
+    await alice.browser.mutation(api.machines.wake, { machineId: second.id, harness: 'codex', on: false })
+    await settle(t)
+    expect(await pageIsWith()).toBe(second.id)
+    // A copy of its folder from before then is put back, which holds the first identity and not the key of the second: it joins as the first once more
+    const third = await machineOf(t, 'alice', 'laptop', first.id)
+    await settle(t)
+    // The second is still one of the person's machines, and nothing shows that it is not in use: its pages are its own, and its place is not given away
+    expect(await pageIsWith()).toBe(second.id)
+    expect((await machine(first.id))?.replacedBy).toBe(second.id)
+    expect((await machine(second.id))?.revoked).toBe(false)
+    const early = await submit('click-0001')
+    expect((await inbox(third, [], ['codex'])).map((c) => c.id)).toEqual([])
+    // What the person switched off for that computer is off for this identity of it too
+    expect(await third.as.mutation(api.machines.choose, { harnesses: ['codex'], system: 'linux' })).toEqual({ wakes: [] })
+    // The person revokes the one whose key is lost, and the computer that asked for its place has it, with its pages and what waits on them
+    await alice.browser.mutation(api.machines.revoke, { machineId: second.id })
+    await settle(t)
+    expect(await pageIsWith()).toBe(third.id)
+    expect((await machine(second.id))?.replacedBy).toBe(third.id)
+    const late = await submit('click-0002')
+    expect((await inbox(third, [], ['codex'])).map((c) => c.id)).toEqual([early.actionId, late.actionId])
+    // Whoever enrols a machine that has to wait so is told the name of the machine it waits for, to say so to the person
+    const waiting = await t.mutation(internal.bridge.enroll, {
+      subject: subjectOf('alice'),
+      name: 'laptop',
+      publicKey: { ...KEY, x: 'put-back' },
+      replaces: first.id,
+    })
+    expect(waiting).toMatchObject({ waitsFor: 'laptop' })
+    expect(await pageIsWith()).toBe(third.id)
+    // And where the identity that stands in its place was given up too, the one that names the first has that one's place at once
+    await alice.browser.mutation(api.machines.revoke, { machineId: 'machineId' in waiting ? waiting.machineId : third.id })
+    await third.as.mutation(api.machines.leave, {})
+    const fifth = await machineOf(t, 'alice', 'laptop', first.id)
+    await settle(t)
+    expect(await pageIsWith()).toBe(fifth.id)
+    expect((await machine(third.id))?.replacedBy).toBe(fifth.id)
+  })
+
   test('clicks waiting for a machine that was revoked can be taken by a conversation listening on another of the person’s machines', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

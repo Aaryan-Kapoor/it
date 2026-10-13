@@ -253,6 +253,21 @@ export async function revokeMachine(
     .take(QUOTA.machines)
   log('machine.revoked', { userId: m.userId, machineId: m._id, by, browsers: sessions.length, machines: machines.length })
   for (const x of machines) await revokeMachine(ctx, x, 'machine_revoked', but)
+  // A computer may have asked for this machine's place while the machine was still one of the
+  // person's: it enrolled as an identity that this one had replaced (see `record` in
+  // bridge.ts), and was given nothing then. The machine is given up now, so that computer has
+  // its place, and the pages with it: the last to ask, where more than one did.
+  if (!m.replacedBy) {
+    const live = await ctx.db
+      .query('machines')
+      .withIndex('by_user', (q) => q.eq('userId', m.userId).eq('revoked', false))
+      .take(QUOTA.machines)
+    const heir = live.filter((x) => x.replaces === m._id).sort((a, b) => b.createdAt - a.createdAt || b._creationTime - a._creationTime)[0]
+    if (heir) {
+      await ctx.db.patch(m._id, { replacedBy: heir._id })
+      await ctx.scheduler.runAfter(0, internal.machines.inherit, { from: m._id, to: heir._id })
+    }
+  }
 }
 
 /**
