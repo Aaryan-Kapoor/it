@@ -1911,8 +1911,8 @@ describe('clicks and their delivery', () => {
     // come to is given to nobody meanwhile, by any way: asked for, it is not given, and one
     // that a machine had in hand and says it handed over counts as stopped all the same
     const yetToDrop = await t.run(async (ctx) => (await ctx.db.query('actions').collect()).filter((x) => x.route !== 'stopped'))
-    // One step drops a hundred of each kind by where they are addressed, and a hundred of each kind more by the page
-    expect(yetToDrop.length).toBe(120)
+    // One step drops a hundred, of every way a click can be waiting taken together
+    expect(yetToDrop.length).toBe(420)
     const waitingStill = yetToDrop.find((x) => x.delivery === 'pending')!
     const inHand = yetToDrop.find((x) => x.delivery === 'leased')!
     expect(await m.as.mutation(api.delivery.claim, { ids: [waitingStill._id], for: SESSION })).toEqual([])
@@ -1943,6 +1943,55 @@ describe('clicks and their delivery', () => {
     expect(all.filter((x) => x.route === 'stopped').length).toBe(520)
     expect(all.filter((x) => x.delivery === 'pending' || x.delivery === 'leased').map((x) => x._id)).toEqual([after.actionId])
     expect((await t.run((ctx) => ctx.db.get(p.artifactId)))?.waiting).toBe(1)
+  })
+
+  test('a stop takes a hundred of what is waiting in its own step, however it is waiting and on however many pages, and the rest in steps that follow', async () => {
+    const { t, alice, m, p } = await setup()
+    // Two earlier pages of the same conversation, and on each of the three as much as one step may take of each way a click can be waiting
+    const oldest = await publish(m, 'oldest', { session: SESSION })
+    const older = await publish(m, 'older', { session: SESSION })
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    const made = Date.now()
+    // Each carries as much as an action may
+    const payload = JSON.stringify({ text: 'x'.repeat(LIMITS.actionPayloadBytes - 11) })
+    expect(new TextEncoder().encode(payload).length).toBe(LIMITS.actionPayloadBytes)
+    await t.run(async (ctx) => {
+      const put = async (artifactId: string, from: number, setAside: boolean) => {
+        const a = (await ctx.db.get(artifactId as never)) as { _id: never; userId: never; title: string }
+        for (let i = 0; i < 200; i++)
+          await ctx.db.insert('actions', {
+            userId: a.userId,
+            title: a.title,
+            artifactId: a._id,
+            clientActionId: `waiting-${from}-${String(i).padStart(4, '0')}`,
+            name: 'press',
+            payload,
+            contentVersion: 1,
+            createdAt: made + from + i,
+            delivery: i % 2 ? 'leased' : 'pending',
+            ...(i % 2 ? { leaseMachineId: m.id as never, leaseExpiresAt: made + 600_000 } : {}),
+            ...(setAside ? { parkedBy: m.id as never } : { machineId: m.id as never }),
+            harness: SESSION.harness,
+            sessionId: SESSION.id,
+          })
+        await ctx.db.patch(a._id, { waiting: 200 })
+      }
+      await put(oldest.artifactId, 0, true)
+      await put(older.artifactId, 1000, false)
+      await put(p.artifactId, 2000, false)
+    })
+    await vi.advanceTimersByTimeAsync(5000)
+    const stopped = async () => (await t.run((ctx) => ctx.db.query('actions').collect())).filter((x) => x.route === 'stopped').length
+    expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+    // The step that tells the machine to stop is the one that must be kept: it reads and writes
+    // a hundred actions and no more, where six hundred of this size are more than the backend
+    // lets one step read, and it would have been refused with the stop in it
+    expect(await stopped()).toBe(100)
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).run).toMatchObject({ stopping: true })
+    await settle(t)
+    expect(await stopped()).toBe(600)
+    expect((await alice.browser.query(api.artifacts.list, {})).map((x) => x.pending)).toEqual([0, 0, 0])
   })
 
   test('a reopened conversation is said to be running for as long as its machine says so, and anyone who can use the page can stop it: what was waiting by then goes with the stop', async () => {

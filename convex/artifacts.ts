@@ -257,7 +257,13 @@ export const stop = mutation({
   },
 })
 
-/** How many waiting clicks one step drops, of each of the two ways a click can be waiting. */
+/**
+ * How many waiting clicks one step drops, of every way a click can be waiting taken together.
+ * A click carries up to 32 KB, and the backend counts it once when it is read and once more
+ * when it is changed, against the 16 MB it lets one step read: a hundred of the largest are
+ * well within that. A hundred of each way, which is what a step once took, came to six hundred,
+ * and the backend refused the step whole, the word to the machine to stop with it.
+ */
 const DROP_AT_ONCE = 100
 
 /**
@@ -285,6 +291,12 @@ async function dropWaiting(
       [machineId, undefined],
       [undefined, machineId],
     ] as const) {
+      // What this step may take has been taken: whatever waits in the ways not yet looked at is the next step's
+      const room = DROP_AT_ONCE - count
+      if (room <= 0) {
+        more = true
+        break
+      }
       const batch = await ctx.db
         .query('actions')
         .withIndex('by_user_route', (q) =>
@@ -298,8 +310,8 @@ async function dropWaiting(
             // Made after the stop: the person did that knowing the agent was stopped, and it is kept
             .lte('createdAt', at),
         )
-        .take(DROP_AT_ONCE)
-      if (batch.length === DROP_AT_ONCE) more = true
+        .take(room)
+      if (batch.length === room) more = true
       for (const x of batch) {
         await ctx.db.patch(x._id, {
           delivery: 'handed_off',
@@ -321,11 +333,16 @@ async function dropWaiting(
   // stands in front of it.
   if (artifactId)
     for (const delivery of ['pending', 'leased'] as const) {
+      const room = DROP_AT_ONCE - count
+      if (room <= 0) {
+        more = true
+        break
+      }
       const batch = await ctx.db
         .query('actions')
         .withIndex('by_artifact_delivery', (q) => q.eq('artifactId', artifactId).eq('delivery', delivery).lte('createdAt', at))
-        .take(DROP_AT_ONCE)
-      if (batch.length === DROP_AT_ONCE) more = true
+        .take(room)
+      if (batch.length === room) more = true
       for (const x of batch) {
         await ctx.db.patch(x._id, {
           delivery: 'handed_off',
