@@ -1177,6 +1177,23 @@ describe('the agent apps a command was started from', () => {
     expect(agentApp(table.get(701)!)).toBe('pi')
   })
 
+  test('a runtime whose script cannot be read from the joined words of `ps` leaves the conversation unsettled, even when an outer app is known', () => {
+    const table = psTable([' 101 1 /opt/homebrew/bin/node', ' 102 101 /bin/zsh', ' 103 102 /opt/homebrew/bin/node', ' 104 103 /bin/sh'].join('\n'))
+    psWords(table, ['101 /opt/homebrew/bin/node /opt/homebrew/bin/claude', '103 /opt/homebrew/bin/node /Volumes/Work Drive/npm/bin/pi --print'].join('\n'))
+    const environment = { IT_HARNESS: 'claude-code', IT_SESSION: 'outer-claude', CLAUDE_CODE_SESSION_ID: 'outer-claude', PI_SESSION_ID: 'inner-pi' }
+    expect(sessionAsked(environment, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({
+      session: { harness: 'claude-code', id: 'outer-claude' },
+      unsettled: ['pi'],
+    })
+    expect(appsFrom(104, (pid) => table.get(pid))).toEqual([])
+    // With the script's actual boundary preserved, the inner app is known.
+    table.set(103, { parent: 102, argv: ['/opt/homebrew/bin/node', '/Volumes/Work Drive/npm/bin/pi', '--print'] })
+    expect(sessionAsked(environment, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({
+      session: { harness: 'pi', id: 'inner-pi' },
+      unsettled: [],
+    })
+  })
+
   test.skipIf(process.platform === 'win32' || !existsSync('/bin/ps'))(
     'the real `ps` of this system gives a table that holds this process and what started it',
     () => {
