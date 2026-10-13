@@ -117,9 +117,9 @@ However it is stopped, It is asked to stop and waited for. It stops its connecto
 
 To remove It altogether, run `it uninstall`. It asks first, because every page It holds on the machine goes with it, and then does these five things in order. Each can also be done by hand:
 
-1. It stops the background service and takes its registration away, as `it service uninstall` does. That comes first because it is the one thing that can be refused: where the service cannot be stopped, `it uninstall` ends there and says so, with nothing else changed, so that It is still whole and the command can be run again.
-2. It takes It's add-on out of every agent app, as `it setup --none` does.
-3. It asks an `it serve` you started yourself in that folder to stop, and with it a backend program that an It which died had left running there.
+1. It stops the background service and takes its registration away, as `it service uninstall` does. That comes first because it can be refused: where the service cannot be stopped, `it uninstall` ends there and says so, with nothing else changed, so that It is still whole and the command can be run again.
+2. It asks an `it serve` you started yourself in that folder to stop, and with it a backend program that an It which died had left running there. If It cannot establish that the backend is gone, including when a backend folder has unreadable settings, uninstall ends and keeps the folder and add-ons for a retry. Another service cannot start in the folder while it is being removed.
+3. It takes It's add-on out of every agent app, as `it setup --none` does.
 4. It takes `~/.it/bin` off your PATH. The install script added it with a comment, `# It`, and one line in your shell's profile, and those lines are removed; a profile that held nothing else was made by the installer and is removed too. On Windows the folder is on the PATH that Windows keeps for your account, and it is taken off there, with every other entry left as it was kept.
 5. It deletes `~/.it`. Everything It kept goes with it, the program included. On Windows, where a program that is running cannot delete its own file, the program first moves itself out of the folder to where Windows keeps temporary files, says where, and leaves Windows one line to run the next time you sign in, which deletes it there. You can delete it yourself before then.
 

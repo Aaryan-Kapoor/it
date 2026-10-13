@@ -20,6 +20,7 @@ const AFTER_SETUP =
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
+import { instanceName } from './src/serve/config'
 import { bases } from './test-ports'
 
 // Every test here starts the program, and some start it a dozen times over. Each is given the
@@ -57,7 +58,7 @@ const RUNS = process.platform === 'linux' ? 'active' : 'running'
 /** The answers of a stand-in for the system's commands that has the service registered and running: systemd's to `is-active` and `is-enabled`, and launchd's to `print`. */
 const SAYS_IT_RUNS = '*" is-active "*) echo active ;; *" is-enabled "*) echo enabled ;; *" print "*) echo "state = running" ;;'
 /** The base ports a test here takes when it has something listen where It would: each from a block of this file's own, and held until the test gives it back. */
-const ports = bases(16_000, 20)
+const ports = bases(26_000, 20)
 /** The port the site is said to be at, on a machine that has It's settings. Nothing listens there. */
 const SITE_PORT = 21000
 const SITE = `http://localhost:${SITE_PORT}`
@@ -799,6 +800,35 @@ describe.skipIf(process.platform !== 'linux')('a service registered where IT_UPD
 })
 
 describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
+  test.each([false, true])('preserves its database and profile when an orphan cannot be identified or its settings cannot be read (%s)', async (unreadable) => {
+    const m = machine()
+    const port = await ports.next()
+    const secret = 'ab'.repeat(32)
+    for (const name of ['systemctl', 'launchctl', 'loginctl']) writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    mkdirSync(path.join(m.it, 'backend'))
+    const database = path.join(m.it, 'backend', 'db.sqlite3')
+    const profile = path.join(m.home, '.profile')
+    writeFileSync(database, 'the database is still here')
+    writeFileSync(profile, `# It\nexport PATH="${m.it}/bin:$PATH"\n`)
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify(unreadable ? { port } : { port, network: false, instanceSecret: secret, adminKey: 'test', sessionSecret: 'test' }),
+    )
+    const server = http.createServer((_req, res) => res.end(instanceName(secret)))
+    await new Promise<void>((resolve) => server.listen(port + PORTS.backendApi, '127.0.0.1', resolve))
+    try {
+      const done = await run(m, ['uninstall', '--yes'], { PATH: `${m.bin}:/usr/bin:/bin` })
+      expect(done.code).not.toBe(0)
+      expect(error(done).message).toMatch(/could not make sure that no backend program/)
+      expect(error(done).message).toMatch(unreadable ? /settings.*not as It wrote/ : /answers for this folder.*does not know which process/)
+      expect(readFileSync(database, 'utf8')).toBe('the database is still here')
+      expect(readFileSync(profile, 'utf8')).toBe(`# It\nexport PATH="${m.it}/bin:$PATH"\n`)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await ports.release()
+    }
+  })
+
   test('`it uninstall` leaves what is another It folder’s in the agent apps, and leaves a profile it cannot replace whole exactly as it was, and says so', async () => {
     const m = machine(true, true)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {

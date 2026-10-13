@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test, vi } from 'vitest'
-import { alone } from './src/serve/backend'
+import { alone, nothingLeft, startBackend } from './src/serve/backend'
 import {
   againWith,
   askToStop,
@@ -204,6 +204,34 @@ describe('taking the task away on Windows', () => {
     expect(windowsRemoval('C:/Users/Ada/.it/bin')).toContain("-ieq 'C:\\Users\\Ada\\.it\\bin'))")
     expect(windowsScript('C:\\Users\\Ada\\.it\\bin', 'it-service.cmd')).toContain("-WorkingDirectory 'C:\\Users\\Ada\\.it\\bin'")
   })
+})
+
+test('a backend cannot start while uninstall removes its folder, even after the inner lock has gone', async () => {
+  const user = mkdtempSync(path.join(os.tmpdir(), 'it-removing-'))
+  const folder = path.join(user, 'it')
+  const before = process.env.IT_HOME
+  const config = { port: 29000, network: false, instanceSecret: 'ab'.repeat(32), adminKey: 'test', sessionSecret: 'test' }
+  try {
+    mkdirSync(folder)
+    process.env.IT_HOME = folder
+    writeFileSync(path.join(folder, 'service.json'), JSON.stringify(config))
+    await nothingLeft(
+      () => {},
+      async () => {
+        await expect(startBackend(config, () => {})).rejects.toMatchObject({ code: 'already_running' })
+        // The settings go before deletion can reach the inner lock, while the database is still there.
+        rmSync(path.join(folder, 'service.json'))
+        rmSync(path.join(folder, 'backend', 'lock'))
+        await expect(startBackend(config, () => {})).rejects.toMatchObject({ code: 'settings' })
+        rmSync(folder, { recursive: true })
+      },
+    )
+    expect(existsSync(folder)).toBe(false)
+  } finally {
+    if (before === undefined) delete process.env.IT_HOME
+    else process.env.IT_HOME = before
+    rmSync(user, { recursive: true, force: true })
+  }
 })
 
 describe.skipIf(process.platform === 'win32')('whether a service is running for a folder', () => {

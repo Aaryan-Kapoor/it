@@ -1037,9 +1037,9 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     expect(await refusal(nothingLeft(() => {}))).toBe('already_running')
     expect(programsOn(folder)).toEqual([lock()!.program])
     await backend.stop()
-    // Settings that cannot be read say nothing of which backend program is this folder's: nothing is looked for, and nothing is refused
+    // Settings that cannot be read cannot establish that no backend program has the folder.
     writeFileSync(path.join(folder, 'service.json'), JSON.stringify({ port: 1 }))
-    expect(await refusal(nothingLeft(() => {}))).toBeUndefined()
+    expect(await refusal(nothingLeft(() => {}))).toBe('settings')
   }, 300_000)
 
   test('`it uninstall` asks a backend program that outlived its service to stop, and only then deletes the folder its database is in', async () => {

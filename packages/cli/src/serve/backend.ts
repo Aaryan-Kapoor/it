@@ -1217,23 +1217,31 @@ async function noneLeft(config: ServiceConfig, say: (line: string) => void, sign
  * folder away. A service that died leaves its backend program running, and whoever looks only
  * for a service finds none: the program would go on with its database deleted from under it.
  * It is asked to stop as the service that starts next would ask it, with the folder taken for
- * as long as that lasts, and what that throws is thrown here: that a service has the folder
- * after all, or that a program did not go, or cannot be told to be the backend program. Nothing
- * is done where It was never set up to run a backend here, nor where its settings cannot be
- * read: they are what says which backend program is this folder's.
+ * as long as that lasts and through `remove`. A refusal stops removal too, whether a service
+ * has the folder after all or an orphan could not be stopped or identified. Without settings
+ * or a backend folder there is nothing to look for. Where that folder exists, readable
+ * settings are needed to say which backend program is this folder's.
  */
-export async function nothingLeft(say: (line: string) => void): Promise<void> {
-  let config: ServiceConfig | null = null
+export async function nothingLeft(say: (line: string) => void, remove: () => Promise<void> = async () => {}): Promise<void> {
+  let config: ServiceConfig | null
   try {
     config = readConfig()
-  } catch {}
-  if (!config || !existsSync(backendFolder())) return
+  } catch (err) {
+    if (existsSync(backendFolder())) throw err
+    return await remove()
+  }
+  if (!config) {
+    if (existsSync(backendFolder()))
+      throw new Problem('The backend folder is still here, but its settings are missing.', 'settings', 'Put service.json back before removing It.')
+    return await remove()
+  }
   const lock = await takeLock(lockFile(), {
     taken: (by) => new Problem(`It is already running for this folder${by ? ` (pid ${by.pid})` : ''}.`, 'already_running'),
     left: (left) => noneLeft(config, say, undefined, left),
   })
   try {
     await noneLeft(config, say)
+    await remove()
   } finally {
     lock.release()
   }
@@ -2260,7 +2268,6 @@ async function loaded(site: string): Promise<boolean> {
  * version of It those came with, which may be run on it again.
  */
 export async function startBackend(config: ServiceConfig, say: (line: string) => void, signal?: AbortSignal): Promise<Running> {
-  const file = await program(say, signal)
   const lock = await takeLock(lockFile(), {
     taken: (by) => new Problem(`It is already running for this folder${by ? ` (pid ${by.pid})` : ''}.`, 'already_running'),
     left: (left) => noneLeft(config, say, signal, left),
@@ -2272,6 +2279,10 @@ export async function startBackend(config: ServiceConfig, say: (line: string) =>
   let child: Child | undefined
   let behind: Behind | undefined
   try {
+    // Uninstall removes the settings before the lock's folder. A start that had read them
+    // earlier must not recreate a backend once removal has reached that lock.
+    if (!readConfig()) throw new Problem('It’s settings were removed before the service could start.', 'settings')
+    const file = await program(say, signal)
     await noneLeft(config, say, signal)
     // A copy that holds what was erased goes first where its time is over, and whether a copy
     // made now would hold such is what is kept of the erasings to say

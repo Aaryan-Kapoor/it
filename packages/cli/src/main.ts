@@ -1241,62 +1241,68 @@ async function uninstall(a: Args) {
       )
     }
   }
-  // 1. The add-ons, each from where this folder put it
-  for (const id of HARNESSES) {
-    if (!existsSync(stampFile(id))) continue
-    const gone = await disconnect(id, say).catch(() => false)
-    if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
-    else left.push(`${KNOWN[id].label} still has It’s add-on, which could not be taken out. Its own command for add-ons removes it.`)
-  }
-  // 2. An `it serve` someone started by hand in this folder
+  // A service started by hand and an orphaned backend must stop before anything else goes.
   service.askToStop(folder, 30_000)
-  if (service.runningFor(folder)) left.push('It is still running, and was asked to stop: end the `it serve` you started, in its terminal.')
-  else {
-    // A service that died leaves its backend program running, and that is no service to ask:
-    // it is asked to stop as the service that starts next would ask it, while the folder its
-    // database is in is still there. One that does not go is said, by its number.
-    const heard: string[] = []
-    try {
-      await nothingLeft((line) => heard.push(line))
-      if (heard.length) say('The backend program that an It which had died left running here is stopped.')
-    } catch (err) {
-      left.push(
-        `It could not make sure that no backend program is left running on this folder’s database${err instanceof Problem ? `: ${err.message}` : '.'} If one is, end it to finish.`,
-      )
-    }
-  }
-  // 3. Its line in the shell's profile, with the comment above it
-  const bin = path.join(folder, 'bin')
-  const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
-  for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
-  for (const { file, why: reason } of profiles.failed)
-    left.push(`${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`)
-  // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
-  if (process.platform === 'win32') {
-    const taken = offWindowsPath(bin)
-    if (taken === 'off') say(`${bin} is off your PATH.`)
-    else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
-  }
-  // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
-  crumbs(folder)
-  // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
-  // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
-  if (codexRuleLetsItOut())
-    say(
-      `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
-    )
-  // 5. Its folder, the program in it included. A program that is running may delete its own
-  // file on every system but Windows, where it steps out of the folder first. What the service
-  // held open there a moment ago may be held a moment longer, and is tried again.
-  const stepped = process.platform === 'win32' ? stepOutOf(folder) : undefined
-  if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
-  else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+  if (service.runningFor(folder)) throw new Problem('It is still running for this folder, so nothing else was removed.', 'still_running')
+  const heard: string[] = []
+  let removing = false
   try {
-    rmSync(folder, { recursive: true, force: true, ...(process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}) })
+    await nothingLeft(
+      (line) => heard.push(line),
+      async () => {
+        removing = true
+        if (heard.length) say('The backend program that an It which had died left running here is stopped.')
+        // The add-ons go only after no backend program has the folder.
+        for (const id of HARNESSES) {
+          if (!existsSync(stampFile(id))) continue
+          const gone = await disconnect(id, say).catch(() => false)
+          if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
+          else left.push(`${KNOWN[id].label} still has It’s add-on, which could not be taken out. Its own command for add-ons removes it.`)
+        }
+        // 3. Its line in the shell's profile, with the comment above it
+        const bin = path.join(folder, 'bin')
+        const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
+        for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
+        for (const { file, why: reason } of profiles.failed)
+          left.push(`${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`)
+        // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
+        if (process.platform === 'win32') {
+          const taken = offWindowsPath(bin)
+          if (taken === 'off') say(`${bin} is off your PATH.`)
+          else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
+        }
+        // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
+        crumbs(folder)
+        // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
+        // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
+        if (codexRuleLetsItOut())
+          say(
+            `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
+          )
+        // 5. Its folder, the program in it included. A program that is running may delete its own
+        // file on every system but Windows, where it steps out of the folder first. What the service
+        // held open there a moment ago may be held a moment longer, and is tried again.
+        const stepped = process.platform === 'win32' ? stepOutOf(folder) : undefined
+        if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
+        else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+        try {
+          // A start that read these settings before uninstall must refuse once the inner lock goes.
+          rmSync(path.join(folder, 'service.json'), { force: true })
+          rmSync(folder, { recursive: true, force: true, ...(process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}) })
+        } catch (err) {
+          left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
+        }
+        if (existsSync(folder) && !left.some((line) => line.startsWith(folder))) left.push(`${folder} could not be deleted whole. Delete it to finish.`)
+      },
+    )
   } catch (err) {
-    left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
+    if (removing) throw err
+    throw new Problem(
+      `It could not make sure that no backend program is left running on this folder’s database: ${err instanceof Problem ? err.message : why(err)}.`,
+      'still_running',
+      'The folder and add-ons were kept. Resolve the running program or unreadable settings, then run `it uninstall` again.',
+    )
   }
-  if (existsSync(folder) && !left.some((line) => line.startsWith(folder))) left.push(`${folder} could not be deleted whole. Delete it to finish.`)
   if (!forPerson(a)) return out({ removed: left.length === 0, folder, ...(left.length ? { left } : {}), said })
   tell([
     left.length ? 'It is off this machine, but for this:' : 'It is off this machine.',
