@@ -503,10 +503,22 @@ describe('putting back a subscription the browser has lost, where the backend st
   /** A browser that may be notified and has lost its subscription, whose first answer to which script is there comes when the test gives it. */
   function lost() {
     const first = late<unknown>()
+    let there: typeof made | null = null
+    const made = {
+      endpoint: 'https://push.example/made',
+      getKey: () => new ArrayBuffer(4),
+      unsubscribe: vi.fn(async () => {
+        there = null
+        return true
+      }),
+    }
     const registration = {
       pushManager: {
-        getSubscription: async () => null,
-        subscribe: vi.fn(async () => ({ endpoint: 'https://push.example/made', getKey: () => new ArrayBuffer(4), unsubscribe: async () => true })),
+        getSubscription: async () => there,
+        subscribe: vi.fn(async () => {
+          there = made
+          return made
+        }),
       },
     }
     let asked = 0
@@ -526,7 +538,7 @@ describe('putting back a subscription the browser has lost, where the backend st
       action: async () => 'AAAA',
       mutation: vi.fn(async (fn: never) => void calls.push(getFunctionName(fn))),
     } as never
-    return { first, registration, calls, client }
+    return { first, registration, calls, client, made, subscribed: () => there !== null }
   }
 
   beforeEach(() => {
@@ -565,4 +577,46 @@ describe('putting back a subscription the browser has lost, where the backend st
     await mending
     expect([s.registration.pushManager.subscribe.mock.calls.length, s.calls]).toEqual([0, ['push:unsubscribe']])
   })
+
+  test.each(['the first lookup', 'the key', 'the new subscription'] as const)(
+    'notifications turned off in another tab while a repair waits for %s stay off when that repair resumes',
+    async (wait) => {
+      const s = lost()
+      const reached = late<void>()
+      const reply = late<void>()
+      const held = async () => {
+        reached.settle()
+        await reply.promise
+      }
+      if (wait === 'the key') {
+        ;(s.client as { action: unknown }).action = async () => {
+          await held()
+          return 'AAAA'
+        }
+      } else if (wait === 'the new subscription') {
+        const subscribe = s.registration.pushManager.subscribe.getMockImplementation()!
+        s.registration.pushManager.subscribe.mockImplementation(async () => {
+          await held()
+          return subscribe()
+        })
+      }
+      // This tab has its own module counters and the same browser storage and subscription.
+      vi.resetModules()
+      const other = await import('./push')
+      expect(other.turnOffPush).not.toBe(turnOffPush)
+      const mending = mendPush(s.client)
+      if (wait !== 'the first lookup') {
+        s.first.settle(s.registration)
+        await reached.promise
+      }
+      await other.turnOffPush(s.client)
+      expect([s.calls, s.subscribed()]).toEqual([['push:unsubscribe'], false])
+      s.first.settle(s.registration)
+      reply.settle()
+      await mending
+      expect([s.calls, s.subscribed()]).toEqual([['push:unsubscribe'], false])
+      expect(s.registration.pushManager.subscribe).toHaveBeenCalledTimes(wait === 'the new subscription' ? 1 : 0)
+      expect(s.made.unsubscribe).toHaveBeenCalledTimes(wait === 'the new subscription' ? 1 : 0)
+    },
+  )
 })
