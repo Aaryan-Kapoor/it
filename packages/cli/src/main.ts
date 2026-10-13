@@ -409,7 +409,7 @@ type Made = {
 function carriedOn(was: { harness: string; id: string }, onMachine?: string | null): boolean {
   const now = sessionAsked()?.session
   if (!now || now.harness !== was.harness || now.id === was.id) return false
-  if (typeof onMachine === 'string' && onMachine !== readJson<{ id?: string }>(inHome('machine.json'))?.id) return false
+  if (typeof onMachine !== 'string' || onMachine !== readJson<{ id?: string }>(inHome('machine.json'))?.id) return false
   const became = readJson<Record<string, string>>(inHome('aliases.json')) ?? {}
   let key = `${was.harness}:${was.id}`
   for (let hops = 0; hops < 10 && typeof became[key] === 'string'; hops++) key = became[key]!

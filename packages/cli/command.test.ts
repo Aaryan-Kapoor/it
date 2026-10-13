@@ -1351,6 +1351,9 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
       has = { session: { harness: 'codex', id: 'codex-yesterday' }, machineId: 'machine-2' }
       writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ 'codex:codex-yesterday': 'codex:codex-today' }))
       expect([(await create()).code, taken()]).toEqual([1, false])
+      // An alias also proves nothing about the machine where the backend leaves that unsaid
+      has = { ...has, machineId: undefined }
+      expect([(await create()).code, taken()]).toEqual([1, false])
       // On this machine it is this conversation's own page, under the id it had before, and is made again
       has = { ...has, machineId: 'machine-1' }
       expect([(await create()).code, taken()]).toEqual([0, true])
@@ -1365,7 +1368,7 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
     let has = { harness: 'claude-code', id: 'yesterday' }
     const b = await backend(m, (asked) =>
       asked.path === 'artifacts:get'
-        ? { title: 'Board', agent: has.harness, machine: 'the laptop', updatedAt: Date.now() - 3 * 60_000, session: has }
+        ? { title: 'Board', agent: has.harness, machine: 'the laptop', machineId: 'machine-1', updatedAt: Date.now() - 3 * 60_000, session: has }
         : asked.path === 'publish:begin'
           ? // Made as a conversation's own under an id that is another's page, it is refused before anything is begun
             asked.args.own && !asked.args.take
