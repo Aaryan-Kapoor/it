@@ -1959,6 +1959,8 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       /^ {2}it version \| it help$/m,
       /^ {2}it update <id> .*\[--title "<title>"\]/m,
       /\[--agent <name>\]/,
+      // The label is the page's from when it was made: an update by the conversation that has the page does not change it, and the help does not say that it does
+      /\[--agent <name>\], a label for who made it,\s+which a page keeps until another conversation has it/,
       /\[--take\]/,
     ])
       expect(ran.out).toMatch(line)

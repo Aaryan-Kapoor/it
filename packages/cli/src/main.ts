@@ -2622,9 +2622,10 @@ const HELP = `it ${VERSION}: put a live ${NOUN.one} on any display you own, and 
 Pages
   it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open] [--on "<display>"]
   it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open] [--on "<display>"]
-                                 Both take [--agent <name>], a label for who made it, and
+                                 Both take [--agent <name>], a label for who made it,
+                                 which a ${NOUN.one} keeps until another conversation has it, and
                                  [--take], which gives the ${NOUN.one} to this conversation.
-                                 Without it, create makes nothing under an id that is
+                                 Without --take, create makes nothing under an id that is
                                  another conversation's ${NOUN.one}, and says whose it is.
   it list | it read <id> | it delete <id> | it rollback <id> <version>
 
