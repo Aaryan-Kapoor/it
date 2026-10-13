@@ -19,6 +19,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, ren
 import path from 'node:path'
 import { INSTALL, newer } from '@it/protocol'
 import { ask, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
+import { alone } from './serve/backend'
 
 /** No program is anywhere near this large, and nothing else of a release is near the second. */
 const PROGRAM_MOST = 400 * 1024 * 1024
@@ -312,38 +313,50 @@ export async function fetchNewer(
           : 'The program that was fetched does not start on this system, so the one that is here stays.',
         'upgrade_program',
       )
-    // Windows does not let a program that is running be written over, and does let it be given
-    // another name: the one that is running goes on under that name until it ends
-    if (process.platform === 'win32') {
-      // One that is still running cannot be removed, and is left for the next time
-      for (const old of readdirSync(dir).filter((f) => /^it\.old\.\d+\.exe$/.test(f)))
+    // One update at a time puts its program in place, of however many were asked for at once,
+    // at a terminal and on the site. Each took what it fetched to be newer than the version it
+    // runs as itself, and by now another may have put a newer one still where this one goes.
+    // So the program that is there is asked what it is, once no other update can change it,
+    // and is left as it is unless what was fetched is newer than that too.
+    return await alone('upgrade', async () => {
+      const there = await saysItIs(program)
+      if (there && !newer(is, there)) {
+        say(`It ${there} was put in place by another update meanwhile, and is left as it is.`)
+        return { from: VERSION, to: there, program }
+      }
+      // Windows does not let a program that is running be written over, and does let it be given
+      // another name: the one that is running goes on under that name until it ends
+      if (process.platform === 'win32') {
+        // One that is still running cannot be removed, and is left for the next time
+        for (const old of readdirSync(dir).filter((f) => /^it\.old\.\d+\.exe$/.test(f)))
+          try {
+            rmSync(path.join(dir, old), { force: true })
+          } catch {}
+        const aside = path.join(dir, `it.old.${Date.now()}.exe`)
+        renameSync(program, aside)
         try {
-          rmSync(path.join(dir, old), { force: true })
-        } catch {}
-      const aside = path.join(dir, `it.old.${Date.now()}.exe`)
-      renameSync(program, aside)
-      try {
-        renameSync(fresh, program)
-      } catch (err) {
-        // Put back under its own name, so that a failure leaves the program that was there
-        renameSync(aside, program)
-        throw err
+          renameSync(fresh, program)
+        } catch (err) {
+          // Put back under its own name, so that a failure leaves the program that was there
+          renameSync(aside, program)
+          throw err
+        }
+      } else renameSync(fresh, program)
+      // The terms it comes under and the notices of what it includes are this version's too
+      for (const [as, bytes] of [
+        ['LICENSE.md', license],
+        ['THIRD_PARTY_NOTICES.md', notices],
+      ] as const) {
+        try {
+          put(inHome(as), bytes, 0o644)
+        } catch {
+          // The program is in place, and is what matters: this is said, and is no reason to call the upgrade failed
+          say(`${as} could not be written beside it, and is still the one of the version before.`)
+        }
       }
-    } else renameSync(fresh, program)
-    // The terms it comes under and the notices of what it includes are this version's too
-    for (const [as, bytes] of [
-      ['LICENSE.md', license],
-      ['THIRD_PARTY_NOTICES.md', notices],
-    ] as const) {
-      try {
-        put(inHome(as), bytes, 0o644)
-      } catch {
-        // The program is in place, and is what matters: this is said, and is no reason to call the upgrade failed
-        say(`${as} could not be written beside it, and is still the one of the version before.`)
-      }
-    }
-    say(`Installed in ${dir}.`)
-    return { from: VERSION, to: is, program }
+      say(`Installed in ${dir}.`)
+      return { from: VERSION, to: is, program }
+    })
   } finally {
     rmSync(fresh, { force: true })
   }

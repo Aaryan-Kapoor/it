@@ -9,6 +9,7 @@ import path from 'node:path'
 import { newer } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { type Problem, VERSION } from './src/lib'
+import { alone } from './src/serve/backend'
 import { fetchNewer, keepBase, LOOKS_EVERY_MS, latest, programName, releases, watch, watched, watching } from './src/upgrade'
 
 describe('which version is newer', () => {
@@ -152,6 +153,53 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     ])
     // Nothing of the fetching is left beside it
     expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(false)
+  })
+
+  test('is not put over a newer one that another update put in place while this one was being fetched', async () => {
+    release('9.9.8')
+    const said: string[] = []
+    const done = await fetchNewer({
+      program: here(),
+      say: (line) => {
+        said.push(line)
+        // While this update has 9.9.8 in hand, another, asked for elsewhere, puts 9.9.9 in place
+        if (line.startsWith('Downloaded')) {
+          writeFileSync(here(), says('9.9.9'), { mode: 0o755 })
+          writeFileSync(path.join(folder, 'LICENSE.md'), 'the terms of 9.9.9\n')
+        }
+      },
+    })
+    // What is there stays, with its terms, and it is what this update says is there now
+    expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
+    expect(readFileSync(path.join(folder, 'LICENSE.md'), 'utf8')).toBe('the terms of 9.9.9\n')
+    expect(done).toEqual({ from: VERSION, to: '9.9.9', program: here() })
+    expect(said.at(-1)).toBe('It 9.9.9 was put in place by another update meanwhile, and is left as it is.')
+    expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(false)
+    // One that put the very same version there is left as it is too
+    release('9.9.9')
+    expect(await fetchNewer({ program: here() })).toEqual({ from: VERSION, to: '9.9.9', program: here() })
+  })
+
+  test('is put in place by one update at a time: an update waits for another that is putting its program in place, and then looks at what that one left', async () => {
+    release('9.9.8')
+    let other: Promise<void> | undefined
+    let finished = false
+    const done = await fetchNewer({
+      program: here(),
+      say: (line) => {
+        if (!line.startsWith('Downloaded')) return
+        // Another update has the folder to itself at this moment, and takes a while to put 9.9.9 in place
+        other = alone('upgrade', async () => {
+          await new Promise((resolve) => setTimeout(resolve, 700))
+          writeFileSync(here(), says('9.9.9'), { mode: 0o755 })
+          finished = true
+        })
+      },
+    })
+    expect(finished).toBe(true)
+    await other
+    expect(done).toMatchObject({ to: '9.9.9' })
+    expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
   })
 
   test('is not fetched at all where this is the newest there is', async () => {
