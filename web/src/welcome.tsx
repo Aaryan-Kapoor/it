@@ -1,6 +1,7 @@
 // What a display shows while there is nothing on it: the things It can be, played one after
 // another as the launch film draws them, and beside them the sentence that gets a person
 // started, to give to their agent.
+import { ALIVE } from '@it/protocol'
 import { useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -140,18 +141,28 @@ export function TourDialog({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * The agent apps on the person's machines, for the owner: those that are connected, and those
- * that were found there and could be. Unknown until the backend has said.
+ * The agent apps on the person's machines, for the owner: those that are connected, those of
+ * them that are listening now, and those that were found there and could be connected. Unknown
+ * until the backend has said.
  */
-function useApps(owner: boolean): { connected: string[]; more: string[] } | undefined {
-  const machines = useQuery(api.machines.list, owner ? {} : 'skip') as { harnesses: { id: string; addon: string }[] }[] | undefined
+function useApps(owner: boolean): { connected: string[]; listening: string[]; more: string[] } | undefined {
+  const machines = useQuery(api.machines.list, owner ? {} : 'skip') as
+    | { harnesses: { id: string; addon: string }[]; lastSeenAt: number; connectorVersion: string | null; off?: boolean; paused?: string | null }[]
+    | undefined
+  const now = useNow()
   if (!owner || !machines) return undefined
   const named = (ids: string[]) => [...new Set(ids)].map((id) => agentName(id) ?? id)
   const all = machines.flatMap((m) => m.harnesses)
-  const on = all.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval').map((h) => h.id)
+  const connected = (h: { addon: string }) => h.addon === 'connected' || h.addon === 'needs_approval'
+  const on = all.filter(connected).map((h) => h.id)
+  // That an app is connected is what was put in place on its machine, and is kept while the
+  // machine is stopped. It is listening only where the machine is there, as the Machines screen
+  // judges it, and hands what is done on a page to its agents
+  const there = machines.filter((m) => !m.off && !m.paused && m.connectorVersion !== null && now - m.lastSeenAt < ALIVE.onlineMs)
+  const listening = there.flatMap((m) => m.harnesses.filter(connected).map((h) => h.id))
   // Found and not connected, and nothing stands in the way of connecting it: not one that is too old, or that It cannot connect yet
   const off = all.filter((h) => !on.includes(h.id) && h.addon !== 'unavailable' && h.addon !== 'too_old').map((h) => h.id)
-  return { connected: named(on), more: named(off) }
+  return { connected: named(on), listening: named(listening), more: named(off) }
 }
 
 /** A list of names as a person says it: "Claude Code", "Claude Code and Codex", "Claude Code, Codex and Pi". */
@@ -214,7 +225,7 @@ export function Starters({ owner }: { owner: boolean }) {
  */
 export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<typeof useTour> }) {
   const apps = useApps(owner)
-  const connected = apps?.connected
+  const listening = apps?.listening
   const panel = useRef<HTMLDivElement>(null)
   const stage = useRef<HTMLDivElement>(null)
   const first = useRef<HTMLSpanElement>(null)
@@ -272,7 +283,7 @@ export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<type
   return (
     <main className="hello" data-playing={things.length ? '' : undefined}>
       <div className="hello-text">
-        <div className="hello-eyebrow">{connected?.length ? `${listed(connected)} ${connected.length > 1 ? 'are' : 'is'} listening` : 'It is listening'}</div>
+        <div className="hello-eyebrow">{listening?.length ? `${listed(listening)} ${listening.length > 1 ? 'are' : 'is'} listening` : 'It is listening'}</div>
         {/* What is typed here is read out once, whole: letter by letter it would be read as noise */}
         <h2 className="hello-h" aria-label="It can be anything your agent needs">
           <span aria-hidden="true">

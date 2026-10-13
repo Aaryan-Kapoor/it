@@ -10,7 +10,7 @@ const NOW = Date.now()
 const NOBODY = { waitingUntil: null, by: null, askedAt: null, takenAt: null, doneAt: null }
 /** What the backend says of the tour and of the machines, which each test sets before the screen is drawn. */
 let tour: Record<string, unknown> | undefined
-let machines: { harnesses: { id: string; addon: string }[] }[]
+let machines: { harnesses: { id: string; addon: string }[]; lastSeenAt?: number; connectorVersion?: string | null; off?: boolean; paused?: string | null }[]
 /** What the backend was asked to do, and what it answers an asking for the tour with. */
 const asked: string[] = []
 let waitingWhenAsked = true
@@ -37,7 +37,7 @@ async function shown(owner = true) {
 beforeEach(() => {
   vi.resetModules()
   tour = { ...NOBODY }
-  machines = [{ harnesses: [{ id: 'claude-code', addon: 'connected' }] }]
+  machines = [{ harnesses: [{ id: 'claude-code', addon: 'connected' }], lastSeenAt: NOW, connectorVersion: '0.1.22' }]
   asked.length = 0
   waitingWhenAsked = true
 })
@@ -79,6 +79,24 @@ describe('the way into the tour, for someone with no pages', () => {
     await shown()
     expect(button('Take the tour')).toBeUndefined()
     expect(host.textContent).toContain('Say this to your agent')
+  })
+
+  test('an agent app is said to be listening only while its machine is there and hands things to it: not one whose machine has stopped, gone quiet or is paused', async () => {
+    await shown()
+    const { Grid } = await import('./pages')
+    /** What the first screen says is listening, of a machine as the backend then gives it. */
+    const said = async (machine: Partial<(typeof machines)[number]>) => {
+      machines = [{ harnesses: [{ id: 'claude-code', addon: 'connected' }], lastSeenAt: NOW, connectorVersion: '0.1.22', ...machine }]
+      await act(async () => root.render(createElement(Grid, { pages: [], owner: true, query: '', onQuery: () => {} })))
+      // Its app is connected all the same, and is not said to want connecting
+      expect(host.textContent).not.toContain('No agent app is connected yet')
+      return host.querySelector('.hello-eyebrow')!.textContent
+    }
+    expect(await said({})).toBe('Claude Code is listening')
+    expect(await said({ off: true })).toBe('It is listening')
+    expect(await said({ lastSeenAt: NOW - 10 * 60_000 })).toBe('It is listening')
+    expect(await said({ connectorVersion: null })).toBe('It is listening')
+    expect(await said({ paused: 'versions' })).toBe('It is listening')
   })
 
   test('says what a setup at a terminal would have asked: the other agent apps found, and another screen', async () => {
