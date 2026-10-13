@@ -67,6 +67,14 @@ export const useSession = (): Session => useSyncExternalStore(subscribe, current
  * a connection that hangs would otherwise leave it so for as long as the connection did.
  */
 const ANSWER_MS = 20_000
+/**
+ * How long a code that was put to the backend is waited for. A connection lost on the way would
+ * otherwise leave the browser pairing for as long as it hung, with the code already gone from
+ * its address. Longer than the thirty seconds the door gives the backend, and so longer than
+ * any answer of the door's takes: a code is good once, and one given up on while the backend
+ * was still taking it would be put again and refused as used.
+ */
+const REDEEM_MS = 35_000
 
 /**
  * Every request about the session says that it comes from the site, in a header that a page on
@@ -478,7 +486,7 @@ export async function pairAsScreen(): Promise<void> {
  */
 async function redeem(code: string): Promise<'paired' | 'refused' | 'trouble' | 'owner' | Wait> {
   try {
-    const r = await post('/session/redeem', { code })
+    const r = await post('/session/redeem', { code }, REDEEM_MS)
     if (r.ok) return 'paired'
     if (r.status === 409) {
       const said = (await r.json().catch(() => null)) as { code?: unknown } | null
