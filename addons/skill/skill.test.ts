@@ -352,6 +352,18 @@ describe('the agent skill', () => {
     expect(skill).not.toContain('they are all printed')
   })
 
+  test('says that a page is a conversation’s to keep or to take only where the harness names the conversation, and what to do where it does not', () => {
+    // With no conversation named, the command does not ask for the page as its own, nothing is taken by opening it, and taking it is refused
+    expect(source('../../packages/cli/src/publish.ts')).toContain('...(input.own && !input.take && session ? { own: true } : {})')
+    expect(main).toMatch(/const mine = asked\?\.session[\s\S]{0,900}if \(mine\) \{[\s\S]{0,900}api\.artifacts\.take/)
+    expect(source('../../convex/publish.ts')).toMatch(/if \(args\.take && !args\.session\) fail\('invalid'/)
+    expect(short).toContain('None of that holds where your harness does not tell `it` which conversation this is: read `it help actions`')
+    expect(more.actions).toContain('publishes over its page and answers no `conflict`, `it open` brings a page up without making it yours, `--take` is refused')
+    // What it is told to do instead is there to be done: a page that is not there is said so
+    expect(source('../../convex/artifacts.ts')).toMatch(/artifactBySlug\(ctx, userId, ref\.slug\)\) \?\? fail\('not_found'/)
+    expect(more.actions).toContain('use the id only if that answers `not_found`')
+  })
+
   test('its first lines are read the same by every app, the strictest of them included', () => {
     // An app reads the lines between the dashes as YAML. Pi reads them strictly: a colon followed by a space
     // inside the description begins a mapping there, the whole skill is refused ("Nested mappings are not
