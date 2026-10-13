@@ -1261,7 +1261,7 @@ async function uninstall(a: Args) {
       if (heard.length) say('The backend program that an It which had died left running here is stopped.')
     } catch (err) {
       left.push(
-        `${err instanceof Problem ? err.message : 'A backend program that It left running in this folder could not be asked to stop.'} End it yourself to finish.`,
+        `It could not make sure that no backend program is left running on this folder’s database${err instanceof Problem ? `: ${err.message}` : '.'} If one is, end it to finish.`,
       )
     }
   }
