@@ -1180,6 +1180,30 @@ function stepOutOf(folder: string): { at: string; deletedLater: boolean } | unde
   return undefined
 }
 
+/**
+ * Whether a folder is It's own, which is asked before the whole of it is deleted. A name proves
+ * nothing: many a project has a folder called `addons`, or a `service.json`. So it is told by
+ * what It alone writes, read and found to be that: its settings, the identity this machine was
+ * given, or the note it keeps of an add-on it put into an agent app. Or by the program asking
+ * being the one in the folder's own `bin`, which is all an install that stopped early leaves.
+ */
+function holdsIt(folder: string, program: string = process.execPath): boolean {
+  const read = (...at: string[]) => {
+    const kept = readJson<Record<string, unknown>>(path.join(folder, ...at))
+    return kept && typeof kept === 'object' && !Array.isArray(kept) ? kept : undefined
+  }
+  const settings = read('service.json')
+  if (typeof settings?.instanceSecret === 'string' && typeof settings.adminKey === 'string') return true
+  const machine = read('machine.json')
+  if (typeof machine?.id === 'string' && typeof machine.key === 'object' && machine.key !== null) return true
+  if (HARNESSES.some((id) => Array.isArray(read('addons', `${id}.json`)?.installs))) return true
+  try {
+    return realpathSync(path.join(folder, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')) === realpathSync(program)
+  } catch {
+    return false
+  }
+}
+
 async function uninstall(a: Args) {
   const folder = home()
   const said: string[] = []
@@ -1188,10 +1212,7 @@ async function uninstall(a: Args) {
     if (forPerson(a)) tell([line])
   }
   // Only a folder that is It's is ever removed: one a variable names by mistake is left alone
-  const its = ['service.json', 'machine.json', 'addons', path.join('bin', process.platform === 'win32' ? 'it.exe' : 'it')].some((name) =>
-    existsSync(path.join(folder, name)),
-  )
-  if (!its) throw new Problem(`${folder} does not hold It, so there is nothing here to take off this machine.`, 'invalid')
+  if (!holdsIt(folder)) throw new Problem(`${folder} does not hold It, so there is nothing here to take off this machine.`, 'invalid')
   // Never the person's own folder, and never the whole disk, however the path to either is
   // spelled: asked of the folders themselves, since a link somewhere along the way makes the
   // same folder read as another. Where that cannot be asked, nothing is removed.
