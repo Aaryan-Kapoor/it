@@ -8,7 +8,7 @@ import type { Doc } from './_generated/dataModel'
 import { internalMutation, internalQuery, type MutationCtx } from './_generated/server'
 import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
-import { invitedBy, inviteFor } from './sessions'
+import { invitedBy, inviteFor, lineOf } from './sessions'
 
 const publicKey = v.object({ kty: v.literal('EC'), crv: v.literal('P-256'), x: v.string(), y: v.string() })
 type Key = Doc<'machines'>['publicKey']
@@ -39,16 +39,6 @@ async function record(
     log('enroll.refused', { userId: user._id, reason: 'machine_quota', have: active.length }, 'warn')
     return { error: 'limit' as const }
   }
-  const now = Date.now()
-  const machineId = await ctx.db.insert('machines', {
-    userId: user._id,
-    name: m.name.trim().slice(0, LIMITS.machineName) || 'machine',
-    publicKey: m.publicKey,
-    revoked: false,
-    createdAt: now,
-    lastSeenAt: now,
-    ...by,
-  })
   // The same computer enrolling again: the pages its conversations made, and the clicks
   // waiting on them, go to its new identity. Only from an identity of this same person that
   // has been given up or revoked, so nothing live is ever taken this way.
@@ -71,7 +61,20 @@ async function record(
   // more shows that it is out of use than that another computer says it was the same one once.
   // This identity is noted as asking for its place, and has it, with its pages, when the
   // person revokes that one (`revokeMachine`).
-  const waitsFor = old && !old.revoked && old._id !== machineId ? old : null
+  const waitsFor = old && !old.revoked ? old : null
+  // A replacement invited through its predecessor would be revoked along with it, before
+  // it could inherit. Its code must come from outside that machine's invitation ancestry.
+  if (waitsFor && by.byMachine && lineOf(active, [waitsFor._id]).has(by.byMachine)) return { error: 'dependent' as const }
+  const now = Date.now()
+  const machineId = await ctx.db.insert('machines', {
+    userId: user._id,
+    name: m.name.trim().slice(0, LIMITS.machineName) || 'machine',
+    publicKey: m.publicKey,
+    revoked: false,
+    createdAt: now,
+    lastSeenAt: now,
+    ...by,
+  })
   // With the pages comes what the person switched off there: an app whose closed conversations
   // they said are not to be reopened on this computer is not one that reopening comes on for
   // when setup connects it anew. Without it the new identity would know of no such word, and

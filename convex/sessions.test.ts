@@ -809,6 +809,44 @@ describe('what ending a paired browser takes with it', () => {
   const alongOf = async (as: { browser: Asks }) =>
     Object.fromEntries((await as.browser.query(api.sessions.list, {})).map((x) => [x.id, [x.along.browsers.length, x.along.machines.length]]))
 
+  test.each([false, true])(
+    'a waiting replacement needs a code independent of the machine it replaces, including through another machine: %s',
+    async (indirect) => {
+      const { t, machine } = await installed()
+      const owner = await ownerOf(t, machine)
+      const first = await joined(t, owner.browser, 'laptop')
+      await first.as.mutation(api.machines.leave, {})
+      const enrollAgain = async (by: Asks) => {
+        const invite = await by.mutation(api.sessions.inviteMachine, {})
+        return t.fetch('/bridge/enroll', {
+          method: 'POST',
+          body: JSON.stringify({ code: invite.code, name: 'laptop', publicKey: await aPublicKey(), replaces: first.id }),
+        })
+      }
+      const secondReply = await enrollAgain(owner.browser)
+      expect(secondReply.status).toBe(200)
+      const second = (await secondReply.json()) as { machine: string }
+      const secondAs = t.withIdentity({ issuer: SITE, subject: second.machine, kind: 'machine' })
+      const source = indirect ? (await joined(t, secondAs, 'another machine')).as : secondAs
+      const retained = await ownerOf(t, source)
+      const before = await t.run((ctx) => ctx.db.query('machines').collect())
+      const refused = await enrollAgain(retained.browser)
+      expect(refused.status).toBe(409)
+      expect((await refused.json()).error).toContain('independent')
+      expect(await t.run((ctx) => ctx.db.query('machines').collect())).toEqual(before)
+      await vi.advanceTimersByTimeAsync(60_000)
+      const accepted = await enrollAgain(owner.browser)
+      expect(accepted.status).toBe(200)
+      const heir = (await accepted.json()) as { machine: string; waitsFor: string }
+      expect(heir.waitsFor).toBe('laptop')
+      await owner.browser.mutation(api.machines.revoke, { machineId: second.machine as never })
+      await settle(t)
+      expect(await alive(t.withIdentity({ issuer: SITE, subject: heir.machine, kind: 'machine' }))).toBe(true)
+      expect(await alive(retained)).toBe(false)
+      expect(await alive(owner)).toBe(true)
+    },
+  )
+
   test('the owner ending a browser ends the screens it paired, the machines it added, what came from those in their turn, and every code of theirs still waiting', async () => {
     const h = await household()
     const lines: string[] = []
