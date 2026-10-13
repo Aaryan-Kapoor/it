@@ -407,6 +407,8 @@ export default defineSchema({
     addresses: v.array(v.string()),
     background: v.optional(v.boolean()),
     usage: v.optional(v.boolean()),
+    /** Raised when reporting stops, so earlier notes cannot be collected while their deletion waits. */
+    usageGeneration: v.optional(v.number()),
     /** Whether the door, being open to the network, answers the person's tailnet and nothing else. */
     tailnet: v.optional(v.boolean()),
     /** Whether the machine It runs on is on a tailnet, so that It can be kept to one. */
@@ -436,5 +438,7 @@ export default defineSchema({
   // used and kept only until the service takes them (see lib/counted.ts): a name, properties
   // that are each one of a fixed set of words, as JSON text, and when. Nothing of a page, a
   // display's name or the person is in one, and none is made while counts are not being sent.
-  counted: defineTable({ name: v.string(), properties: v.string(), at: v.number() }).index('by_at', ['at']),
+  counted: defineTable({ name: v.string(), properties: v.string(), at: v.number(), generation: v.optional(v.number()) })
+    .index('by_at', ['at'])
+    .index('by_generation', ['generation']),
 })

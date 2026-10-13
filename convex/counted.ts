@@ -19,17 +19,24 @@ export const KEPT_MS = 7 * 86_400_000
 export const take = internalMutation({
   args: { keep: v.optional(v.boolean()) },
   handler: async (ctx, { keep }) => {
+    const generation = (await ctx.db.query('network').first())?.usageGeneration ?? 0
     const rows = await ctx.db.query('counted').order('asc').take(AT_ONCE)
     for (const row of rows) await ctx.db.delete(row._id)
-    return { notes: keep === false ? [] : rows.map((row) => ({ name: row.name, properties: row.properties, at: row.at })), more: rows.length === AT_ONCE }
+    return {
+      notes:
+        keep === false
+          ? []
+          : rows.filter((row) => (row.generation ?? 0) === generation).map((row) => ({ name: row.name, properties: row.properties, at: row.at })),
+      more: rows.length === AT_ONCE,
+    }
   },
 })
 
-/** The rest of what was noted before counts stopped being sent, a step at a time: nothing noted after `upTo`, which is when they stopped. */
+/** Removes earlier reporting generations a step at a time. The timestamp also accepts tasks scheduled before generations were recorded. */
 export const forget = internalMutation({
-  args: { upTo: v.number() },
-  handler: async (ctx, { upTo }) => {
-    if (await forgetNoted(ctx, upTo)) await ctx.scheduler.runAfter(0, internal.counted.forget, { upTo })
+  args: { upTo: v.number(), generation: v.optional(v.number()) },
+  handler: async (ctx, { upTo, generation }) => {
+    if (await forgetNoted(ctx, upTo, generation)) await ctx.scheduler.runAfter(0, internal.counted.forget, { upTo, generation })
     return null
   },
 })

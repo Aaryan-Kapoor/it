@@ -181,6 +181,27 @@ describe('what the service takes', () => {
     expect((await notes()).map((n) => n.name)).toEqual(['display.paired', 'screen.connected'])
   })
 
+  test.each([0, -300_000])('old notes cannot be collected before the purge finishes, even with a clock change of %s milliseconds', async (clockChange) => {
+    const { browser, counting, t } = await household()
+    await counting(true)
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1100; i++) await ctx.db.insert('counted', { name: 'page.shown', properties: '{}', at: Date.now() })
+    })
+    vi.setSystemTime(Date.now() + clockChange)
+    await counting(false)
+    await counting(true)
+    try {
+      expect((await t.mutation(internal.counted.take, { keep: true })).notes).toEqual([])
+      const phone = await browser('phone')
+      await phone.mutation(api.displays.register, { key: key('phone'), userAgent: PHONE })
+      await phone.mutation(api.displays.reached, { key: key('phone'), local: false })
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect((await t.mutation(internal.counted.take, { keep: true })).notes.map((n) => n.name)).toEqual(['display.paired', 'screen.connected'])
+    } finally {
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+    }
+  })
+
   test('a note nobody came for is removed after a week', async () => {
     const { browser, counting, t } = await household()
     await counting(true)

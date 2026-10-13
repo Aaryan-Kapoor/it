@@ -22,8 +22,9 @@ export function screenOf(userAgent: string): Screen {
 /** Notes one thing that happened, where counts are being sent. Whatever goes wrong here, what was being done is done all the same. */
 export async function counted(ctx: MutationCtx, name: string, properties: Record<string, string | boolean>): Promise<void> {
   try {
-    if ((await ctx.db.query('network').first())?.usage !== true) return
-    await ctx.db.insert('counted', { name, properties: JSON.stringify(properties), at: Date.now() })
+    const network = await ctx.db.query('network').first()
+    if (network?.usage !== true) return
+    await ctx.db.insert('counted', { name, properties: JSON.stringify(properties), at: Date.now(), generation: network.usageGeneration ?? 0 })
   } catch {}
 }
 
@@ -33,13 +34,14 @@ const FORGOTTEN_AT_ONCE = 500
 /**
  * Removes what was noted up to a moment, as far as one step goes, and says whether there may
  * be more. For when the service says that counts are no longer being sent: what was noted
- * while they were is not kept for it to come for.
+ * while they were is not kept for it to come for. New purges use the reporting generation;
+ * the timestamp is kept for tasks scheduled before generations were recorded.
  */
-export async function forgetNoted(ctx: MutationCtx, upTo: number): Promise<boolean> {
-  const rows = await ctx.db
-    .query('counted')
-    .withIndex('by_at', (q) => q.lte('at', upTo))
-    .take(FORGOTTEN_AT_ONCE)
+export async function forgetNoted(ctx: MutationCtx, upTo: number, generation?: number): Promise<boolean> {
+  const rows = await (generation === undefined
+    ? ctx.db.query('counted').withIndex('by_at', (q) => q.lte('at', upTo))
+    : ctx.db.query('counted').withIndex('by_generation', (q) => q.lt('generation', generation))
+  ).take(FORGOTTEN_AT_ONCE)
   for (const row of rows) await ctx.db.delete(row._id)
   return rows.length === FORGOTTEN_AT_ONCE
 }

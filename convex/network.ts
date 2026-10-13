@@ -70,15 +70,17 @@ export const report = internalMutation({
       JSON.stringify(row.addresses) === JSON.stringify(kept)
     )
       return null
-    const stands = { on, wanted, addresses: kept, background, usage, tailnet, canTailnet, exposed: why }
+    const stopped = row?.usage === true && usage !== true
+    const usageGeneration = (row?.usageGeneration ?? 0) + (stopped ? 1 : 0)
+    const stands = { on, wanted, addresses: kept, background, usage, usageGeneration, tailnet, canTailnet, exposed: why }
     if (row) await ctx.db.patch(row._id, stands)
     else await ctx.db.insert('network', stands)
     // Counts were being sent and are no more. What was noted for them goes now, and is not left
     // until the service next comes for it: by then the person may have turned the counts on
     // again, and what was noted before they turned them off would be sent under the new id.
-    if (row?.usage === true && usage !== true) {
+    if (stopped) {
       const upTo = Date.now()
-      if (await forgetNoted(ctx, upTo)) await ctx.scheduler.runAfter(0, internal.counted.forget, { upTo })
+      if (await forgetNoted(ctx, upTo, usageGeneration)) await ctx.scheduler.runAfter(0, internal.counted.forget, { upTo, generation: usageGeneration })
     }
     // How many, and never which: an address is the person's own
     log('network.reported', { on, wanted, addresses: kept.length, background, usage })
