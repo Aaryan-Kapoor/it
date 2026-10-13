@@ -1760,7 +1760,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // be taking one this moment. Given to the turn's next hook, this one would be read
         // before it: so it follows the earlier one, and is handed over after it.
         const queuedBefore =
-          inTurn && ([...behindTurn.values()].some((b) => b.key === key) || [...submitting.values()].some((sent) => sent.click.session && follow(keyOf(sent.click.session.harness, sent.click.session.id)) === key))
+          inTurn &&
+          ([...behindTurn.values()].some((b) => b.key === key) ||
+            [...submitting.values()].some((sent) => sent.click.session && follow(keyOf(sent.click.session.harness, sent.click.session.id)) === key))
         const forAddOn = listening || (inTurn && now - click.at < FRESH_MS && !queuedBefore)
         // Which of the other ways it goes, asked only where the first does not take it
         const way = forAddOn
