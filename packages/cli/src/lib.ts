@@ -229,14 +229,16 @@ export function changeWhole(file: string, change: (text: string) => string | nul
       }
       const unchanged = readFileSync(target, 'utf8') === text
       const now = statSync(target, { bigint: true })
-      // A save after the content read also changes the file's identity or timestamps. Check those at the last moment.
+      // Identity and times can expose a save after the read, but same-size writes can share them.
+      // Check the content again when those agree, rather than trusting their precision.
       if (
         unchanged &&
         now.dev === before.dev &&
         now.ino === before.ino &&
         now.size === before.size &&
         now.mtimeNs === before.mtimeNs &&
-        now.ctimeNs === before.ctimeNs
+        now.ctimeNs === before.ctimeNs &&
+        readFileSync(target, 'utf8') === text
       ) {
         if (after === null) rmSync(target, { force: true })
         else renameSync(part, target)

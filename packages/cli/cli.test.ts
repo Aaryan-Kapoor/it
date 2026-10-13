@@ -2269,7 +2269,7 @@ describe('a file that is not It’s alone, changed while another program may sav
 
   test('keeps a settings save made after the last content read, before replacement or deletion', () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
-    const file = path.join(folder, 'config.toml')
+    const file = path.join(realpathSync(folder), 'config.toml')
     const original = fs.readFileSync
     try {
       for (const removing of [false, true]) {
@@ -2288,6 +2288,43 @@ describe('a file that is not It’s alone, changed while another program may sav
       }
     } finally {
       fs.readFileSync = original
+      syncBuiltinESMExports()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps a same-size save after the content read even when the file’s identity and times do not change', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(realpathSync(folder), 'config.toml')
+    const original = { readFileSync: fs.readFileSync, statSync: fs.statSync }
+    const before = `${BEFORE}#${' '.repeat(SAVED.length - BEFORE.length - 2)}\n`
+    try {
+      for (const removing of [false, true]) {
+        writeFileSync(file, before)
+        const identity = statSync(file, { bigint: true })
+        let reads = 0
+        fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+          const text = original.readFileSync(...args)
+          if (args[0] === file && ++reads === 2) writeFileSync(file, SAVED)
+          return text
+        }) as typeof fs.readFileSync
+        // A same-size in-place save keeps its inode, and timestamp precision is not a change counter.
+        Object.assign(fs, {
+          statSync: ((...args: Parameters<typeof fs.statSync>) => {
+            const stat = original.statSync(...args)
+            return args[0] === file && typeof stat?.size === 'bigint' ? identity : stat
+          }) as typeof fs.statSync,
+        })
+        syncBuiltinESMExports()
+        expect(Buffer.byteLength(before)).toBe(Buffer.byteLength(SAVED))
+        expect(changeWhole(file, removing ? (text) => (text === before ? null : undefined) : without)).toBe(!removing)
+        expect(readFileSync(file, 'utf8')).toContain('[projects."/work"]')
+        expect(reads).toBeGreaterThan(2)
+        Object.assign(fs, original)
+        syncBuiltinESMExports()
+      }
+    } finally {
+      Object.assign(fs, original)
       syncBuiltinESMExports()
       rmSync(folder, { recursive: true, force: true })
     }
