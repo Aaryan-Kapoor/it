@@ -187,15 +187,6 @@ export async function endSession(ctx: MutationCtx, sessionId: Id<'sessions'>, by
   const ends = session !== null && session.endedAt === undefined
   if (!ends && !TAKES_ALONG.has(by)) return false
   const now = Date.now()
-  if (TAKES_ALONG.has(by)) {
-    const displays = await ctx.db
-      .query('displays')
-      .withIndex('by_session', (q) => q.eq('sessionId', sessionId))
-      .take(QUOTA.displays + 1)
-    for (const d of displays) {
-      for (const earlier of d.previousSessions ?? []) await endSession(ctx, earlier, by, but)
-    }
-  }
   if (ends) {
     await ctx.db.patch(sessionId, { endedAt: now })
     const displays = await ctx.db
@@ -210,6 +201,17 @@ export async function endSession(ctx: MutationCtx, sessionId: Id<'sessions'>, by
     for (const i of waiting) if (i.usedAt === undefined) await ctx.db.delete(i._id)
     log('session.ended', { userId: session.userId, sessionId, by, displays: displays.length })
     if (!TAKES_ALONG.has(by)) return true
+  }
+  // End this pairing before following its display's earlier pairings: one of those may
+  // have invited this browser, and must not reach it again while it is still paired.
+  if (TAKES_ALONG.has(by)) {
+    const displays = await ctx.db
+      .query('displays')
+      .withIndex('by_session', (q) => q.eq('sessionId', sessionId))
+      .take(QUOTA.displays + 1)
+    for (const d of displays) {
+      for (const earlier of d.previousSessions ?? []) await endSession(ctx, earlier, by, but)
+    }
   }
   const screens = await ctx.db
     .query('sessions')

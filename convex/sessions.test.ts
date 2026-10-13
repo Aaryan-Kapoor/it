@@ -994,6 +994,17 @@ describe('what ending a paired browser takes with it', () => {
     expect(await alive(h.machine)).toBe(true)
   })
 
+  test("ending a screen that reclaimed its inviter's display ends each pairing once", async () => {
+    const h = await household()
+    const key = 'the-laptop-display-key-01'
+    await register(h.laptop, key)
+    await endOf(h.t, h.laptop)
+    await register(h.kitchen, key)
+    await h.desk.browser.mutation(api.sessions.end, { session: h.kitchen.session as never })
+    expect(await living(h)).toEqual(['desk', 'hall'])
+    expect(await alive(h.machine)).toBe(true)
+  })
+
   test('and so it does a day later, when the record of that browser has been cleaned away', async () => {
     const h = await household()
     const laptops = await register(h.laptop, 'the-laptop-display-key-01')
