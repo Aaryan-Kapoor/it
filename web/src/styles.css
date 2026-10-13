@@ -3360,7 +3360,9 @@ form.row-main {
   gap: clamp(28px, 5vw, 84px);
   padding: calc(var(--header-h) + 18px) clamp(24px, 5vw, 72px) 26px;
   background: var(--bg);
-  overflow: hidden;
+  /* In a window too short for the words, they are scrolled to: cut off, the way to skip the
+     tour and what is said of usage data could not be reached with a mouse */
+  overflow: hidden auto;
 }
 
 .hello-text {
