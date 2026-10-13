@@ -15,6 +15,8 @@ const stand = vi.hoisted(() => ({
   /** How often it was told. */
   tellings: 0,
   doorClosed: false,
+  contentClosed: false,
+  backendStopped: false,
 }))
 vi.mock('./src/serve/config', async (original) => ({
   ...(await original<typeof import('./src/serve/config')>()),
@@ -22,7 +24,15 @@ vi.mock('./src/serve/config', async (original) => ({
 }))
 vi.mock('./src/serve/backend', async (original) => ({
   ...(await original<typeof import('./src/serve/backend')>()),
-  startBackend: async () => ({ api: 'http://127.0.0.1:1', site: 'http://127.0.0.1:1', adminKey: 'x', stop: async () => {}, ended: new Promise(() => {}) }),
+  startBackend: async () => ({
+    api: 'http://127.0.0.1:1',
+    site: 'http://127.0.0.1:1',
+    adminKey: 'x',
+    stop: async () => {
+      stand.backendStopped = true
+    },
+    ended: new Promise(() => {}),
+  }),
   asAdmin: async (_backend: unknown, name: string) => {
     if (name !== 'network:report') return null
     stand.tellings++
@@ -30,7 +40,11 @@ vi.mock('./src/serve/backend', async (original) => ({
   },
 }))
 vi.mock('./src/serve/door', () => ({
-  makeContent: () => ({ close: async () => {} }),
+  makeContent: () => ({
+    close: async () => {
+      stand.contentClosed = true
+    },
+  }),
   startDoor: async () => ({
     stop: async () => {
       stand.doorClosed = true
@@ -58,6 +72,8 @@ describe.skipIf(process.platform === 'win32')('a service that is asked to stop w
     stand.told = []
     stand.tellings = 0
     stand.doorClosed = false
+    stand.contentClosed = false
+    stand.backendStopped = false
   })
   afterEach(async () => {
     for (const name of KEPT)
@@ -101,4 +117,33 @@ describe.skipIf(process.platform === 'win32')('a service that is asked to stop w
     expect(stand.tellings).toBe(3)
     expect(said.filter((line) => line.includes('could not be told'))).toHaveLength(1)
   }, 60_000)
+
+  test('closes its door and content service and stops the backend when stopping interrupts the first status report', async () => {
+    let fail: (err: Error) => void = () => {}
+    stand.told = [
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = reject
+        }),
+    ]
+    const said: string[] = []
+    let ended = false
+    const serving = serve((line) => said.push(line)).then(() => {
+      ended = true
+    })
+    try {
+      for (const until = Date.now() + 10_000; stand.tellings < 1 && Date.now() < until; ) await pause(25)
+      expect(stand.tellings).toBe(1)
+      writeFileSync(stopFile(folder), '')
+      for (const until = Date.now() + 3000; !ended && Date.now() < until; ) await pause(25)
+      expect([ended, stand.doorClosed, stand.contentClosed, stand.backendStopped]).toEqual([true, true, true, true])
+    } finally {
+      fail(new Error('the first report timed out'))
+      await serving
+    }
+    await pause(100)
+    expect(stand.tellings).toBe(1)
+    expect(said.some((line) => line.includes('could not be told'))).toBe(false)
+    expect(said.at(-1)).toBe('service stopped')
+  })
 })

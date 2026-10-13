@@ -127,7 +127,7 @@ async function here(config: ServiceConfig, say: (line: string) => void, asked: A
     })
     const door = asked.signal.aborted
       ? null
-      : await keptDoor(config, backend, say, () => {
+      : await keptDoor(config, backend, say, asked.signal, () => {
           record('service.failed', { what: 'door' })
           failed = true
           asked.abort()
@@ -341,7 +341,13 @@ export function taker(
  * it has, when the door is closed and opened anew. It is closed when the service ends: after
  * the last door, through which it was asked, and before the backend program is stopped.
  */
-async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: string) => void, lost: () => void): Promise<{ stop(): Promise<void> }> {
+async function keptDoor(
+  config: ServiceConfig,
+  backend: Backend,
+  say: (line: string) => void,
+  signal: AbortSignal,
+  lost: () => void,
+): Promise<{ stop(): Promise<void> }> {
   const erased = erasing(say)
   const content = makeContent(config, backend, say, erased)
   const open = async (network: boolean, tailnet: boolean) => {
@@ -402,6 +408,12 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   const halted = new Promise<undefined>((resolve) => {
     halt = () => resolve(undefined)
   })
+  const askedToStop = () => {
+    stopped = true
+    halt()
+  }
+  signal.addEventListener('abort', askedToStop, { once: true })
+  if (signal.aborted) askedToStop()
   /** What the backend answers, or nothing where it has not answered by the time the door is stopped, or cannot be asked. */
   const fromBackend = (name: string, args: Record<string, unknown>): Promise<unknown> => unless(asAdmin(backend, name, args, ASKED_MS), halted)
   /** The asking last written into the log, by its name: one that is gone on with at a later look is written there once. */
@@ -486,7 +498,14 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
       looking = false
     }
   }
-  await telling()
+  // The service may be asked to stop before startup has returned this door's stop method.
+  if (!stopped) await unless(telling(), halted)
+  if (stopped) {
+    signal.removeEventListener('abort', askedToStop)
+    await now.door.stop().catch(() => {})
+    await content.close().catch(() => {})
+    throw new Problem('The service was asked to stop while its door was starting.', 'stopped')
+  }
   const timer = setInterval(() => void look(), LOOK_MS)
   // What happened between a screen and the backend is noted there, and taken from it here a few
   // times a minute, where what is sent is sent from (see `convex/lib/counted.ts`). Once a day
@@ -537,8 +556,8 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   void collect()
   return {
     async stop() {
-      stopped = true
-      halt()
+      signal.removeEventListener('abort', askedToStop)
+      askedToStop()
       clearInterval(timer)
       clearInterval(collector)
       // A door that is being opened anew at this moment is waited for, and then closed
