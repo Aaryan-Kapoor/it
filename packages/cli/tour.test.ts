@@ -2,7 +2,9 @@
 // run is held to the pages there are, what it tells the agent to expect of a page is held to
 // what the page sends, and what a page is filled in with is held to its place in the page,
 // since some of it is the agent's own words.
+import { existsSync } from 'node:fs'
 import { LIMITS } from '@it/protocol'
+import { chromium } from 'playwright'
 import { describe, expect, test } from 'vitest'
 import { END, GUIDE, MENU, NAMES, STEPS, TOUR_PREFIX, tourPage } from './src/tour'
 
@@ -511,5 +513,31 @@ describe('the ways on', () => {
     await page.advance(SLOW)
     expect([finish.disabled, more.disabled, page.$('#status').textContent]).toEqual([false, false, ''])
     page.close()
+  })
+})
+
+// How a page is laid out is only known in a browser, so this is run in one, where one is installed
+describe.skipIf('Bun' in globalThis || !existsSync(chromium.executablePath()))('the menu on a phone', () => {
+  test('keeps the words of its last button on one line, inside the button, while it says beside it what the agent is doing', async () => {
+    const browser = await chromium.launch({ timeout: 0 })
+    try {
+      const tab = await browser.newPage({ viewport: { width: 390, height: 844 } })
+      // It takes whatever the page sends, and never answers
+      await tab.addInitScript('window.It = { state: {}, onState: () => () => {}, action: () => Promise.resolve({ ok: true }) }')
+      await tab.setContent(tourPage('menu').html)
+      const enough = () =>
+        tab.locator('#enough').evaluate((el) => ({ shows: el.clientHeight, holds: el.scrollHeight, tall: el.getBoundingClientRect().height }))
+      const alone = await enough()
+      expect(alone.holds).toBeLessThanOrEqual(alone.shows)
+      await tab.locator('.thing[data-choice="chess"]').click()
+      expect(await tab.locator('#status').textContent()).toBe('Your agent is getting it ready. It takes a few seconds.')
+      // The words beside it take the lines they need, and the button is as it was
+      expect(await enough()).toEqual(alone)
+      // And the light before those words is as round as it was made
+      const light = await tab.locator('#status').evaluate((el) => getComputedStyle(el, '::before').width)
+      expect(light).toBe('8px')
+    } finally {
+      await browser.close()
+    }
   })
 })

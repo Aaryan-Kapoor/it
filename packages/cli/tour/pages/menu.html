@@ -61,10 +61,11 @@
   .own button:disabled { opacity: .35; cursor: default; }
   .foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 40px; }
   .status { display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--muted); }
-  .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: beat .9s ease-in-out infinite; }
+  .status::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: beat .9s ease-in-out infinite; }
   .status:empty::before { display: none; }
   @keyframes beat { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.55); opacity: .55; } }
-  .enough { height: 40px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 14px; font-weight: 600; cursor: pointer; }
+  /* Beside what the menu says of the agent the button keeps its width, and the words beside it take the lines they need */
+  .enough { flex: none; height: 40px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 14px; font-weight: 600; cursor: pointer; }
   .enough:hover { color: #fff; border-color: rgba(255, 255, 255, .4); }
   .enough:disabled { opacity: .4; cursor: default; }
   @media (max-width: 860px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
