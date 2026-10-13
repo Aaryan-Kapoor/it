@@ -498,6 +498,18 @@ async function tourWhenAsked(a: Args) {
 }
 
 /**
+ * Whether a page that has one of the tour's ids is the tour's own, which is asked before it is
+ * written over and before it is deleted. The id proves nothing: a person may have a page of
+ * their own called `tour-chess`. So it is told by what the tour gives its page of that name,
+ * taken together: the title, and a state that keeps each thing the tour's page keeps.
+ */
+function isTours(name: string, title: unknown, state: unknown): boolean {
+  const its = tourPage(name)
+  const keeps = typeof state === 'object' && state !== null && !Array.isArray(state) ? state : {}
+  return title === its.title && Object.keys(JSON.parse(its.state) as Record<string, unknown>).every((key) => Object.hasOwn(keeps, key))
+}
+
+/**
  * The tour an agent gives of It. With nothing after it, the guide is printed for the agent to
  * follow. `show` publishes one of the tour's pages and brings it up, starting afresh each time,
  * and `clear` removes every page of the tour and nothing else.
@@ -521,13 +533,23 @@ async function tour(a: Args) {
         return Array.isArray(said) ? [...new Set(said.filter((name): name is string => typeof name === 'string' && TOUR_STEPS.includes(name)))] : []
       })
       .catch(() => [])
+  // What a page keeps as its state, or nothing where that cannot be read
+  const keptBy = (slug: string): Promise<unknown> =>
+    call<{ json: string }>('query', api.state.get, { slug }).then(
+      (s) => parseJson(s.json),
+      () => undefined,
+    )
   if (what === 'clear') {
-    const pages = await call<{ slug: string }[]>('query', api.artifacts.list)
+    const pages = await call<{ slug: string; title?: string }[]>('query', api.artifacts.list)
     const gone: string[] = []
-    // The tour's own pages, each by its whole id, and no other page whose id only begins as theirs do
+    // The tour's own pages, each by its whole id, and no other page whose id only begins as theirs do.
+    // Nor one that has such an id and is not the tour's by what is in it: that is the person's own, and stays
     const its = new Set(NAMES.map((name) => `${TOUR_PREFIX}${name}`))
-    const had = pages.some((p) => its.has(p.slug)) ? await seenSoFar() : undefined
-    for (const { slug } of pages.filter((p) => its.has(p.slug))) {
+    const tours: string[] = []
+    const kept: string[] = []
+    for (const p of pages.filter((p) => its.has(p.slug))) (isTours(p.slug.slice(TOUR_PREFIX.length), p.title, await keptBy(p.slug)) ? tours : kept).push(p.slug)
+    const had = tours.length ? await seenSoFar() : undefined
+    for (const slug of tours) {
       await call('mutation', api.artifacts.remove, { slug })
       gone.push(slug)
     }
@@ -536,7 +558,15 @@ async function tour(a: Args) {
     // And It is told that a tour is over, so that the site no longer leads someone with no pages
     // into one. An It from before it kept that refuses this, which changes nothing
     if (had) await call('mutation', api.tour.done, {}).catch(() => {})
-    return out({ deleted: gone })
+    return out({
+      deleted: gone,
+      ...(kept.length
+        ? {
+            kept,
+            hint: `${kept.join(', ')} ${kept.length === 1 ? 'has the id of a page of the tour and is not a page' : 'have the ids of pages of the tour and are not pages'} the tour made, so ${kept.length === 1 ? 'it was' : 'they were'} left as ${kept.length === 1 ? 'it is' : 'they are'}.`,
+          }
+        : {}),
+    })
   }
   if (what !== 'show') throw new Problem(`It does not know what to do with "${what}".`, 'invalid', `Usage: it ${USAGE}`)
   const asked = need(a._[1], `which page of the tour (${NAMES.join(', ')}, or next)`, USAGE)
@@ -551,6 +581,18 @@ async function tour(a: Args) {
   // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
+  // A page that has this id already and is not the tour's by what is in it is the person's own:
+  // nothing is published over it. An id that was only begun under holds no page yet
+  const there = await call<{ title?: string; version?: number | null } | null>('query', api.artifacts.get, { slug: made.slug }).catch((err) => {
+    if (err instanceof Problem && err.code === 'not_found') return null
+    throw err
+  })
+  if (there && typeof there.version === 'number' && !isTours(name, there.title, await keptBy(made.slug)))
+    throw new Problem(
+      `There is already a ${NOUN.one} with the id ${made.slug}${there.title ? `, ${named(there.title)}` : ''}, and it is not one the tour made. Nothing was published.`,
+      'conflict',
+      `The tour shows this ${NOUN.one} under that id and no other, and would replace what is there. Show another of the tour’s pages, or tell the person which ${NOUN.one} is in the way and ask them whether it may be deleted: \`it delete ${made.slug}\` deletes it for good.`,
+    )
   // The page is this conversation's from now on, whoever showed it last
   const done = await publish({
     slug: made.slug,

@@ -557,7 +557,11 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
   test('each command is counted by its own name, who ran it and how it ended, and never by what was typed after it', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>
-      asked.path === 'artifacts:list' ? [{ slug: 'tour-menu' }] : asked.path === 'state:get' ? { json: '{"seen":["chess","drums"]}' } : null,
+      asked.path === 'artifacts:list'
+        ? [{ slug: 'tour-menu', title: 'The It tour' }]
+        : asked.path === 'state:get'
+          ? { json: '{"status":"open","picked":"","seen":["chess","drums"]}' }
+          : null,
     )
     try {
       await run(m, ['list'], b.env)
@@ -591,13 +595,104 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     const m = machine()
     const b = await backend(m, (asked) =>
       asked.path === 'artifacts:list'
-        ? [{ slug: 'tour-menu' }, { slug: 'tour-of-my-project' }, { slug: 'plan' }, { slug: 'tour-whiteboard' }, { slug: 'tour-' }]
-        : null,
+        ? [
+            { slug: 'tour-menu', title: 'The It tour' },
+            { slug: 'tour-of-my-project', title: 'The It tour' },
+            { slug: 'plan', title: 'A plan' },
+            { slug: 'tour-whiteboard', title: 'A whiteboard' },
+            { slug: 'tour-', title: 'The It tour' },
+          ]
+        : asked.path === 'state:get'
+          ? { json: asked.args.slug === 'tour-menu' ? '{"status":"done","picked":"chess","seen":["chess"]}' : '{"agent_strokes":[],"note":"a house"}' }
+          : null,
     )
     try {
       const cleared = await run(m, ['tour', 'clear'], b.env)
       expect([cleared.code, printed(cleared)]).toEqual([0, { deleted: ['tour-menu', 'tour-whiteboard'] }])
       expect(b.asked.filter((x) => x.path === 'artifacts:remove').map((x) => x.args.slug)).toEqual(['tour-menu', 'tour-whiteboard'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it tour clear` leaves a page of the person’s own that has the id of one of the tour’s, and says that it did', async () => {
+    const m = machine()
+    // A person's own pages: one with nothing of the tour's but the id, one with the tour's title and a state of its own, and one with the tour's state and a title of its own
+    const pages = [
+      { slug: 'tour-chess', title: 'Openings I am learning', state: { moves: ['e4', 'e5'] } },
+      { slug: 'tour-button', title: 'A big red button', state: { presses: 3 } },
+      { slug: 'tour-drums', title: 'Sunday’s beat', state: { theirs: [], note: '' } },
+      { slug: 'tour-checklist', title: 'A checklist', state: { added: [{ text: 'Umbrella' }], note: 'the rain', extra: true } },
+    ]
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:list'
+        ? pages.map(({ slug, title }) => ({ slug, title }))
+        : asked.path === 'state:get'
+          ? pages.some((p) => p.slug === asked.args.slug)
+            ? { json: JSON.stringify(pages.find((p) => p.slug === asked.args.slug)!.state) }
+            : new Refusal({ code: 'not_found', message: 'No such page.' })
+          : null,
+    )
+    try {
+      const cleared = await run(m, ['tour', 'clear'], b.env)
+      expect([cleared.code, cleared.err]).toEqual([0, ''])
+      // Only the one that is the tour's by what is in it goes: its title, and a state that keeps what the tour's page keeps
+      expect(b.asked.filter((x) => x.path === 'artifacts:remove').map((x) => x.args.slug)).toEqual(['tour-checklist'])
+      const said = printed(cleared)
+      expect([said.deleted, said.kept]).toEqual([['tour-checklist'], ['tour-chess', 'tour-button', 'tour-drums']])
+      expect(said.hint).toContain('not pages the tour made')
+      // With none of the tour's among them, nothing is removed, no tour is said to have ended, and It is not told that one is over
+      pages.pop()
+      b.asked.length = 0
+      expect(printed(await run(m, ['tour', 'clear'], b.env)).deleted).toEqual([])
+      expect(b.asked.map((x) => x.path).filter((fn) => fn === 'artifacts:remove' || fn === 'tour:done')).toEqual([])
+      expect(readFileSync(path.join(m.it, 'usage.jsonl'), 'utf8').split('"tour.ended"').length - 1).toBe(1)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it tour show` publishes nothing over a page of the person’s own that has the tour’s id for that page', async () => {
+    const m = machine()
+    let theirs: { title: string; version: number | null; state: Record<string, unknown> } | null = {
+      title: 'Openings I am learning',
+      version: 4,
+      state: { moves: ['e4'] },
+    }
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'artifacts:get')
+        return args.slug === 'tour-chess' && theirs
+          ? { slug: 'tour-chess', title: theirs.title, version: theirs.version }
+          : new Refusal({ code: 'not_found', message: 'No such page.' })
+      if (fn === 'state:get')
+        return args.slug === 'tour-chess' && theirs ? { json: JSON.stringify(theirs.state) } : new Refusal({ code: 'not_found', message: 'No such page.' })
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: args.slug ?? 'tour-chess', version: 5, url: 'https://site.example/p/tour-chess' }
+      if (fn === 'displays:show') return { displays: ['Desk'] }
+      return null
+    })
+    const env = { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' }
+    // What was written of the page itself: the menu is told too that the thing was seen, which is another page's
+    const written = () =>
+      b.asked
+        .filter((x) => x.path.startsWith('publish:') || (x.path === 'state:patch' && x.args.slug === 'tour-chess') || x.path === 'displays:show')
+        .map((x) => x.path)
+    try {
+      const refused = await run(m, ['tour', 'show', 'chess'], env)
+      expect([refused.code, refused.out, error(refused).code]).toEqual([1, '', 'conflict'])
+      expect(inWords(error(refused))).toContain('"Openings I am learning"')
+      expect(inWords(error(refused))).toContain('Nothing was published')
+      expect(written()).toEqual([])
+      // A page of the tour's from a tour before, with what the agent then wrote into it, is the tour's and is started afresh
+      theirs = { title: 'A chessboard', version: 2, state: { reply: 'e7e5', note: 'the Sicilian' } }
+      expect((await run(m, ['tour', 'show', 'chess'], env)).code).toBe(0)
+      expect(written()).toEqual(['publish:begin', 'publish:finish', 'state:patch', 'displays:show'])
+      expect(JSON.parse(b.asked.find((x) => x.path === 'state:patch')!.args.patch as string)).toEqual({ reply: '', note: '' })
+      // And an id that was begun under and never published holds nobody's page
+      theirs = { title: 'Openings I am learning', version: null, state: {} }
+      b.asked.length = 0
+      expect((await run(m, ['tour', 'show', 'chess'], env)).code).toBe(0)
+      expect(written()).toEqual(['publish:begin', 'publish:finish', 'state:patch', 'displays:show'])
     } finally {
       await b.close()
     }
