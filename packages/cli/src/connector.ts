@@ -160,7 +160,7 @@ const stoppedFile = () => inHome('stopped.json')
 const a = (word: string) => `${/^[aeiou]/i.test(word) ? 'an' : 'a'} ${word}`
 const lockFile = () => inHome('connector.lock')
 
-function journal(event: string, id: string): void {
+function journalWrite(event: string, id: string): void {
   try {
     // Cut down to its last records once it is large, into a file beside it that then takes its
     // place: cut down where it lies, a disk that filled in the middle left it with nothing
@@ -626,7 +626,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     heardBefore.add(key)
     while (heardBefore.size > HEARD_MOST) heardBefore.delete(heardBefore.values().next().value!)
     try {
-      writePrivate(heardFile(), Object.fromEntries([...heardBefore].map((k) => [k, 1])))
+      if (!over) writePrivate(heardFile(), Object.fromEntries([...heardBefore].map((k) => [k, 1])))
     } catch {
       // Not kept: it is heard from again soon enough
     }
@@ -849,6 +849,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** Whether this connector is stopping: what it reopened is then ended with it, and is not taken for something a person stopped. */
   let closing = false
   /**
+   * Whether this connector has stopped. Something it began may still be on its way then: a
+   * turn it was ending, whose answer comes seconds later. What that then does is written
+   * nowhere, since the notes are no longer this connector's to keep: the service may have
+   * cleared them for an erase, or another connector may have them by now.
+   */
+  let over = false
+  const journal = (event: string, id: string): void => {
+    if (!over) journalWrite(event, id)
+  }
+  /**
    * Why this machine and the It it joined do not fit, while they do not: the two speak
    * different versions of how machines talk to It, and what one of them means by a request is
    * not what the other takes it for. Nothing is handed to an agent meanwhile, and nothing is
@@ -869,6 +879,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const keepCutOff = () => {
     try {
       while (cutOff.size > 200) cutOff.delete(cutOff.values().next().value!)
+      if (over) return
       if (cutOff.size) writePrivate(cutOffFile(), [...cutOff])
       else rmSync(cutOffFile(), { force: true })
       cutOffKept = true
@@ -906,6 +917,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     try {
       const all = { ...Object.fromEntries(unsettled), ...Object.fromEntries(running) }
+      if (over) {
+        if (must) throw new Error('this connector has stopped')
+        return
+      }
       if (Object.keys(all).length) writePrivate(runsFile(), all)
       else rmSync(runsFile(), { force: true })
     } catch (err) {
@@ -1063,6 +1078,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const stoppedByPerson = new Set<string>(readJson<string[]>(stoppedFile()) ?? [])
   const keepStopped = () => {
     try {
+      if (over) return
       if (stoppedByPerson.size) writePrivate(stoppedFile(), [...stoppedByPerson])
       else rmSync(stoppedFile(), { force: true })
     } catch {}
@@ -2075,7 +2091,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
         changed = true
       }
-      if (changed) writePrivate(aliasFile(), Object.fromEntries(aliases))
+      if (changed && !over) writePrivate(aliasFile(), Object.fromEntries(aliases))
       // The harness as It knows it, and never as whoever asked spelled it
       if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
       if (changed && typeof body.was === 'string') say(`${a(agentOf(harness))} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
@@ -2809,6 +2825,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     rmSync(infoFile(), { force: true })
     if (info.socket) rmSync(info.socket, { force: true })
   }
+  over = true
   say('stopped')
   process.exitCode = code
 }

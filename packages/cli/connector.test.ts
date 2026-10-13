@@ -1579,6 +1579,25 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     expect(called('delivery:release')).toEqual([])
   })
 
+  test('what a connector that has stopped was still in the middle of is written down nowhere: its notes are no longer its own', async () => {
+    await start()
+    await session('pi', 6)
+    // The claim of a click is on its way to It when the connector is stopped
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    offered(click('pi', 6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    const folder = home
+    await stop?.()
+    stop = null
+    // The service clears what the connector had noted, as it does when everything is erased
+    rmSync(path.join(folder, 'journal.jsonl'), { force: true })
+    // The answer comes after all, and what the connector does with it then leaves no note behind
+    answerClaim(['click-6'])
+    await new Promise((r) => setTimeout(r, 300))
+    expect(existsSync(path.join(folder, 'journal.jsonl'))).toBe(false)
+  })
+
   test('a click held for an add-on goes back to waiting when the person disconnects its app, and Codex’s command is not run for one that stood in line', async () => {
     await start()
     await session('pi', 6)
