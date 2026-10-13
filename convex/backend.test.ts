@@ -3042,6 +3042,35 @@ describe('displays and machines', () => {
     expect((await unknown.as.query(api.machines.me, {})).wakes.map((w) => w.harness)).toEqual(['claude-code'])
   })
 
+  test('a computer that is enrolled again keeps reopening switched off for the apps the person switched it off for there, and setup connecting them does not switch it on', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const first = await machineOf(t, 'alice')
+    expect(await first.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex'], system: 'linux' })).toEqual({ wakes: ['claude-code', 'codex'] })
+    await alice.browser.mutation(api.machines.wake, { machineId: first.id, harness: 'claude-code', on: false })
+    // The person revokes the machine and sets it up again, which is how the computer It runs on is brought back
+    await alice.browser.mutation(api.machines.revoke, { machineId: first.id })
+    await settle(t)
+    const again = await machineOf(t, 'alice', 'laptop', first.id)
+    // Setup finds both apps there and connects them: what was switched off stays off, and setup is told so
+    expect(await again.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex'], system: 'linux' })).toEqual({ wakes: ['codex'] })
+    expect((await again.as.query(api.machines.me, {})).wakes.map((w) => w.harness)).toEqual(['codex'])
+    // And so it does for the identity that takes that one's place in its turn
+    await alice.browser.mutation(api.machines.revoke, { machineId: again.id })
+    await settle(t)
+    const third = await machineOf(t, 'alice', 'laptop', again.id)
+    expect(await third.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex'], system: 'linux' })).toEqual({ wakes: ['codex'] })
+    // Only the person switches it on again
+    await alice.browser.mutation(api.machines.wake, { machineId: third.id, harness: 'claude-code', on: true })
+    expect((await third.as.query(api.machines.me, {})).wakes.map((w) => w.harness).sort()).toEqual(['claude-code', 'codex'])
+    // A machine that names an identity that is not given up takes nothing from it
+    const other = await machineOf(t, 'alice', 'desk')
+    await other.as.mutation(api.machines.choose, { harnesses: ['claude-code'], system: 'linux' })
+    await alice.browser.mutation(api.machines.wake, { machineId: other.id, harness: 'claude-code', on: false })
+    const stranger = await machineOf(t, 'alice', 'server', other.id)
+    expect(await stranger.as.mutation(api.machines.choose, { harnesses: ['claude-code'], system: 'linux' })).toEqual({ wakes: ['claude-code'] })
+  })
+
   test('reopening a closed conversation is switched by the owner alone, for one agent app on one machine, and what a machine is told to connect leaves their switches as they set them', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

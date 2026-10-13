@@ -56,7 +56,11 @@ async function record(
   const old = before ? await ctx.db.get(before) : null
   const inherits = Boolean(old && old.userId === user._id && old.revoked)
   if (old && inherits) {
-    await ctx.db.patch(machineId, { replaces: old._id })
+    // With the pages comes what the person switched off there: an app whose closed conversations
+    // they said are not to be reopened on this computer is not one that reopening comes on for
+    // when setup connects it anew. Without it the new identity would know of no such word, and
+    // bringing a computer back would have switched on again what only the person switches on.
+    await ctx.db.patch(machineId, { replaces: old._id, ...(old.wakesOff?.length ? { wakesOff: old.wakesOff } : {}) })
     // The old identity is told who took its place: a hand-over still on its way to it, from
     // an identity before it, then goes on to this one
     await ctx.db.patch(old._id, { replacedBy: machineId })
