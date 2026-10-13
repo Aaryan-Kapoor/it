@@ -1827,7 +1827,11 @@ async function settingUpLed(a: Args, begunAlready = false) {
     flow.step('This machine').done(me.name)
 
     // ---------- the agent apps
-    const found = await detectAll()
+    // Said for as long as they are looked for: each app is asked which version it is and what
+    // it has installed, and one that is slow to answer is waited for, up to a minute for each
+    // thing asked. With nothing drawn meanwhile, the screen stood still under a step that was done
+    const looking = flow.step('Agent apps', 'looking for them on this machine')
+    const found = await detectAll().finally(() => looking.clear())
     const usable = found.filter((h) => supported(h.id) && h.addon !== 'too_old')
     let wanted: Harness[]
     const only = text(a, 'only')

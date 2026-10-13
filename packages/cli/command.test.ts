@@ -2943,6 +2943,26 @@ describe.skipIf(process.platform !== 'linux' || !python)('a setup that leads a p
       await here.close()
     }
   }, 60_000)
+
+  test('says that it is looking for the agent apps for as long as it asks each of them, and leaves no line of that behind', async () => {
+    const here = await setUpHere((asked) => (asked.path === 'machines:choose' ? { wakes: [] } : null))
+    try {
+      // An agent app that takes a while to say which version it is, as one that is slow to start does
+      writeFileSync(path.join(here.m.bin, 'pi'), '#!/bin/sh\nPATH=/bin:/usr/bin\nsleep 1\necho 0.81.0\n')
+      chmodSync(path.join(here.m.bin, 'pi'), 0o755)
+      const { shown } = await atTerminal(here.m, ['setup'], here.env)
+      // Drawn, in the place a step is drawn, once this machine has been named and before anything is said of the apps
+      const looking = shown.indexOf('Agent apps           looking for them on this machine')
+      expect(looking).toBeGreaterThan(shown.indexOf('This machine         the desk'))
+      expect(looking).toBeLessThan(shown.indexOf('none found that It can connect yet'))
+      // Each line as it stands once everything drawn in its place has been: none of them says it any more
+      const stands = shown.split('\n').map((line) => line.slice(line.lastIndexOf('\x1b[2K') + 1).trim())
+      expect(stands.filter((line) => line.includes('looking for them'))).toEqual([])
+      expect(stands.filter((line) => line.includes('Agent apps'))).toHaveLength(1)
+    } finally {
+      await here.close()
+    }
+  }, 60_000)
 })
 
 describe.skipIf(process.platform === 'win32')('what a command printed, when the command ends', () => {
