@@ -18,7 +18,7 @@ A display stays on the Displays page when the pairing of its browser is ended, a
 
 Someone with no pages is shown what It is for, and the way into the tour, which an agent gives on that screen in a couple of minutes. The way in is one of two things. Where an agent is waiting to give the tour, as one is that has just installed It for you and run `it tour --wait`, it is a button, "Take the tour": pressing it tells that agent, and the tour comes up by itself. Where none is waiting, it is the sentence to say to your agent, "Give me the It tour.", to copy into its chat. The same choice is behind the question mark in the bar at the top. Under it the first screen says what a setup at a terminal would have asked and an agent's setup does not: the other agent apps that were found on your machines, with the way to connect them, and the way to add your phone or another screen. "Skip the tour" takes this screen away and ends an agent's waiting with a line saying that you skipped it.
 
-When a tour is over its agent takes the tour's pages away, and the screen goes back to your pages. From then on, with no pages, it shows a few things to ask an agent for, each to copy, and the way back into the tour.
+The tour checks a page's title and state before changing its state or clearing it. A personal page with a tour page's id is left as it is. Those checks and changes are separate backend requests, so another writer can still replace a page between them. When a tour is over its agent takes the tour's pages away, and the screen goes back to your pages. From then on, with no pages, it shows a few things to ask an agent for, each to copy, and the way back into the tour.
 
 ## Typing to a page's agent, and what it says back
 

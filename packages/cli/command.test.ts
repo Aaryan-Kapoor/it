@@ -431,10 +431,25 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
   test('`it tour show next` shows the first thing the menu does not say has been seen, tells the menu, and shows the ending once all have been', async () => {
     const m = machine()
     let seen: string[] | null = ['whiteboard']
+    const pages = new Map<string, { title: unknown; state: unknown }>()
     const b = await backend(m, ({ path: fn, args }) => {
-      if (fn === 'state:get')
-        return seen ? { json: JSON.stringify({ status: 'open', picked: '', seen }), revision: 1 } : new Refusal({ code: 'not_found', message: 'No such page.' })
-      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'artifacts:get') {
+        if (args.slug === 'tour-menu') return seen ? { title: 'The It tour', version: 1 } : new Refusal({ code: 'not_found', message: 'No such page.' })
+        const page = pages.get(args.slug as string)
+        return page ? { title: page.title, version: 1 } : new Refusal({ code: 'not_found', message: 'No such page.' })
+      }
+      if (fn === 'state:get') {
+        if (args.slug === 'tour-menu')
+          return seen
+            ? { json: JSON.stringify({ status: 'open', picked: '', seen }), revision: 1 }
+            : new Refusal({ code: 'not_found', message: 'No such page.' })
+        const page = pages.get(args.slug as string)
+        return page ? { json: JSON.stringify(page.state) } : new Refusal({ code: 'not_found', message: 'No such page.' })
+      }
+      if (fn === 'publish:begin') {
+        pages.set(args.slug as string, { title: args.title, state: JSON.parse(args.state as string) })
+        return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      }
       if (fn === 'publish:finish') return { slug: 'shown', version: 1, url: 'https://site.example/p/shown' }
       if (fn === 'displays:show') return { displays: ['Desk'] }
       return null
@@ -641,9 +656,11 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     const b = await backend(m, (asked) =>
       asked.path === 'artifacts:list'
         ? [{ slug: 'tour-menu', title: 'The It tour' }]
-        : asked.path === 'state:get'
-          ? { json: '{"status":"open","picked":"","seen":["chess","drums"]}' }
-          : null,
+        : asked.path === 'artifacts:get'
+          ? { title: 'The It tour', version: 1 }
+          : asked.path === 'state:get'
+            ? { json: '{"status":"open","picked":"","seen":["chess","drums"]}' }
+            : null,
     )
     try {
       await run(m, ['list'], b.env)
@@ -715,9 +732,11 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
             { slug: 'tour-whiteboard', title: 'A whiteboard' },
             { slug: 'tour-', title: 'The It tour' },
           ]
-        : asked.path === 'state:get'
-          ? { json: asked.args.slug === 'tour-menu' ? '{"status":"done","picked":"chess","seen":["chess"]}' : '{"agent_strokes":[],"note":"a house"}' }
-          : null,
+        : asked.path === 'artifacts:get'
+          ? { title: asked.args.slug === 'tour-menu' ? 'The It tour' : 'A whiteboard', version: 1 }
+          : asked.path === 'state:get'
+            ? { json: asked.args.slug === 'tour-menu' ? '{"status":"done","picked":"chess","seen":["chess"]}' : '{"agent_strokes":[],"note":"a house"}' }
+            : null,
     )
     try {
       const cleared = await run(m, ['tour', 'clear'], b.env)
@@ -740,11 +759,13 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     const b = await backend(m, (asked) =>
       asked.path === 'artifacts:list'
         ? pages.map(({ slug, title }) => ({ slug, title }))
-        : asked.path === 'state:get'
-          ? pages.some((p) => p.slug === asked.args.slug)
-            ? { json: JSON.stringify(pages.find((p) => p.slug === asked.args.slug)!.state) }
-            : new Refusal({ code: 'not_found', message: 'No such page.' })
-          : null,
+        : asked.path === 'artifacts:get'
+          ? (pages.find((p) => p.slug === asked.args.slug) ?? null)
+          : asked.path === 'state:get'
+            ? pages.some((p) => p.slug === asked.args.slug)
+              ? { json: JSON.stringify(pages.find((p) => p.slug === asked.args.slug)!.state) }
+              : new Refusal({ code: 'not_found', message: 'No such page.' })
+            : null,
     )
     try {
       const cleared = await run(m, ['tour', 'clear'], b.env)
@@ -760,6 +781,57 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(printed(await run(m, ['tour', 'clear'], b.env)).deleted).toEqual([])
       expect(b.asked.map((x) => x.path).filter((fn) => fn === 'artifacts:remove' || fn === 'tour:done')).toEqual([])
       expect(readFileSync(path.join(m.it, 'usage.jsonl'), 'utf8').split('"tour.ended"').length - 1).toBe(1)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a tour step leaves a personal menu and a page reauthored after publication untouched', async () => {
+    const m = machine()
+    let published = false
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'artifacts:get') {
+        if (args.slug === 'tour-menu') return { title: 'Trips already seen', version: 1 }
+        return published ? { title: 'My lesson notes', version: 2 } : new Refusal({ code: 'not_found', message: 'No such page.' })
+      }
+      if (fn === 'state:get')
+        return { json: JSON.stringify(args.slug === 'tour-menu' ? { seen: ['Kyoto', 'Lima'], note: 'keep my list' } : { reply: '', note: '' }) }
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') {
+        published = true
+        return { slug: 'tour-chess', version: 1, url: 'https://site.example/p/tour-chess' }
+      }
+      if (fn === 'displays:show') return { displays: ['Desk'] }
+      return null
+    })
+    try {
+      const shown = await run(m, ['tour', 'show', 'chess'], b.env)
+      expect(shown.code).toBe(0)
+      expect(b.asked.filter((x) => x.path === 'state:patch')).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('tour cleanup leaves a page reauthored while the menu progress was being read', async () => {
+    const m = machine()
+    let changed = false
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'artifacts:list') return [{ slug: 'tour-chess', title: 'A chessboard' }]
+      if (fn === 'artifacts:get') return { title: args.slug === 'tour-menu' ? 'The It tour' : changed ? 'My lesson notes' : 'A chessboard', version: 1 }
+      if (fn === 'state:get') {
+        if (args.slug === 'tour-menu') {
+          changed = true
+          return { json: '{"status":"open","picked":"","seen":[]}' }
+        }
+        return { json: '{"reply":"","note":""}' }
+      }
+      return null
+    })
+    try {
+      const cleared = await run(m, ['tour', 'clear'], b.env)
+      expect([cleared.code, printed(cleared).deleted, printed(cleared).kept]).toEqual([0, [], ['tour-chess']])
+      expect(b.asked.filter((x) => x.path === 'artifacts:remove')).toEqual([])
     } finally {
       await b.close()
     }
@@ -809,7 +881,10 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       if (fn === 'state:get')
         return args.slug === 'tour-chess' && theirs ? { json: JSON.stringify(theirs.state) } : new Refusal({ code: 'not_found', message: 'No such page.' })
       if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
-      if (fn === 'publish:finish') return { slug: args.slug ?? 'tour-chess', version: 5, url: 'https://site.example/p/tour-chess' }
+      if (fn === 'publish:finish') {
+        theirs = { title: 'A chessboard', version: 5, state: { reply: '', note: '' } }
+        return { slug: args.slug ?? 'tour-chess', version: 5, url: 'https://site.example/p/tour-chess' }
+      }
       if (fn === 'displays:show') return { displays: ['Desk'] }
       return null
     })

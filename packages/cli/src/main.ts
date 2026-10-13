@@ -578,15 +578,20 @@ async function tour(a: Args) {
   if (a.flags.wait === true && what === undefined) return tourWhenAsked(a)
   if (what === undefined) return written(process.stdout, GUIDE)
   const menu = `${TOUR_PREFIX}${TOUR_MENU}`
-  // What the menu holds of what has been seen. Nothing where there is no menu yet, or it says nothing of it
-  const seenSoFar = (): Promise<string[]> =>
-    call<{ json: string }>('query', api.state.get, { slug: menu })
-      .then((s) => {
-        const said = (JSON.parse(s.json) as { seen?: unknown }).seen
-        return Array.isArray(said) ? [...new Set(said.filter((name): name is string => typeof name === 'string' && TOUR_STEPS.includes(name)))] : []
-      })
-      .catch(() => [])
-  // What a page keeps as its state, or nothing where that cannot be read
+  // The title and state are read together just before a change. The backend has no conditional tour mutation.
+  const tourState = async (slug: string): Promise<Record<string, unknown> | undefined> => {
+    const [page, state] = await Promise.all([call<{ title?: string } | null>('query', api.artifacts.get, { slug }).catch(() => null), keptBy(slug)])
+    if (!page) return undefined
+    if (isTours(slug.slice(TOUR_PREFIX.length), page.title, state)) return state as Record<string, unknown>
+    await written(process.stderr, `${slug} is not a page the tour made, so it was left as it is.\n`)
+    return undefined
+  }
+  const seenIn = (state: Record<string, unknown> | undefined): string[] => {
+    const said = state?.seen
+    return Array.isArray(said) ? [...new Set(said.filter((name): name is string => typeof name === 'string' && TOUR_STEPS.includes(name)))] : []
+  }
+  const seenSoFar = async (): Promise<string[]> => seenIn(await tourState(menu))
+  // What a page keeps as its state, or nothing where that cannot be read.
   const keptBy = (slug: string): Promise<unknown> =>
     call<{ json: string }>('query', api.state.get, { slug }).then(
       (s) => parseJson(s.json),
@@ -603,6 +608,10 @@ async function tour(a: Args) {
     for (const p of pages.filter((p) => its.has(p.slug))) (isTours(p.slug.slice(TOUR_PREFIX.length), p.title, await keptBy(p.slug)) ? tours : kept).push(p.slug)
     const had = tours.length ? await seenSoFar() : undefined
     for (const slug of tours) {
+      if ((await tourState(slug)) === undefined) {
+        kept.push(slug)
+        continue
+      }
       await call('mutation', api.artifacts.remove, { slug })
       gone.push(slug)
     }
@@ -663,11 +672,21 @@ async function tour(a: Args) {
   // And it starts as it was first made, whatever a tour before this one left in it. The menu
   // alone keeps something: which things have been seen
   const fresh = JSON.parse(made.state) as Record<string, unknown>
-  await call('mutation', api.state.patch, { slug: made.slug, patch: JSON.stringify(name === TOUR_MENU ? { ...fresh, seen } : fresh), replace: true })
+  const current = await tourState(made.slug)
+  if (current !== undefined)
+    await call('mutation', api.state.patch, {
+      slug: made.slug,
+      patch: JSON.stringify(name === TOUR_MENU ? { ...fresh, seen: seenIn(current) } : fresh),
+      replace: true,
+    })
   // A thing that is shown has been seen from now on, which the menu is told where there is one:
   // it is there unless the agent began somewhere else, and then nothing is kept
-  if (TOUR_STEPS.includes(name) && !seen.includes(name))
-    await call('mutation', api.state.patch, { slug: menu, patch: JSON.stringify({ seen: [...seen, name] }) }).catch(() => {})
+  if (TOUR_STEPS.includes(name)) {
+    const current = await tourState(menu)
+    const latest = seenIn(current)
+    if (current !== undefined && !latest.includes(name))
+      await call('mutation', api.state.patch, { slug: menu, patch: JSON.stringify({ seen: [...latest, name] }) }).catch(() => {})
+  }
   a.flags.open = true
   await published(done, a)
 }
