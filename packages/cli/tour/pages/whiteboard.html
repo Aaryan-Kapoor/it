@@ -190,17 +190,23 @@
     // mostly what is not a point.
     function fitted() {
       var whole = picture(), longest = mine.reduce((n, s) => Math.max(n, s.points.length), 0);
-      // Where the picture alone would fill the action, the lines go without it
-      var png = whole && whole.length <= 14000 ? whole : null;
-      for (;;) {
-        // A long drawing is sent with fewer points along each line, until it fits. A line keeps
-        // its two ends, so past the length of the longest there is nothing more to leave out
-        for (var every = 1; every === 1 || every < longest; every++) {
-          var data = snapshot(png, every);
-          if (fits(data)) return data;
+      // If even the ends do not fit, sampling the lines again cannot make them small enough.
+      var ends = snapshot(null, Math.max(1, longest));
+      if (fits(ends)) {
+        // Where the picture alone would fill the action, the lines go without it
+        var png = whole && whole.length <= 14000 ? whole : null;
+        for (;;) {
+          // Each trial keeps half as many points, so a long line takes only a few trials.
+          for (var every = 1; every < longest; every *= 2) {
+            var data = snapshot(png, every);
+            if (fits(data)) return data;
+          }
+          if (!png) return ends;
+          ends.png = png;
+          if (fits(ends)) return ends;
+          ends.png = null;
+          png = null;
         }
-        if (!png) break;
-        png = null;
       }
       // More lines than fit even as their ends: the picture goes by itself, where it does
       var alone = { png: whole, strokes: [] };
