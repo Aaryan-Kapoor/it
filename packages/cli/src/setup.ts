@@ -427,6 +427,11 @@ interface Adapter {
    * add-on was installed is noted with it, and its removal is done with the same.
    */
   profile: readonly string[]
+  /**
+   * Set for a harness that gives a conversation the same name in every folder it keeps its
+   * settings in. Its add-on is then in one of those folders at most: see `staying`.
+   */
+  single?: boolean
   /** For an add-on whose files this program copies in itself: the harness's folder they go into, as things stand now. */
   folder?(): Promise<string>
   /** Whether our add-on is installed in the harness right now, and switched on. `was` is what this program noted when it installed one there. */
@@ -887,6 +892,9 @@ Object.assign(ADAPTERS, {
   // the change by itself; one that is stopped picks it up when it next starts.
   openclaw: {
     profile: OPENCLAW_VARS,
+    // OpenClaw names a conversation by a key such as `agent:main:main`, which is the same in
+    // every profile, and the add-on asks the connector for a conversation's clicks by that key
+    single: true,
     async installed(at) {
       const ours = await openclawHas(at)
       return ours?.enabled === true && ours.status !== 'error'
@@ -1091,6 +1099,25 @@ function onRecord(from: string, id: Harness, at: Place): boolean {
 const elsewhere = (id: Harness, from: string | null, at: Place): Other | null =>
   from && real(from) !== thisHome() ? { home: from, kept: onRecord(from, id, at) } : null
 
+/** Whether every folder an installation was made in is seen to be gone, and the add-on with it. One that cannot be looked at is not known to be. */
+const folderGone = (i: Installation) => {
+  const folders = [...Object.values(i.env ?? {}), ...(i.dir ? [i.dir] : [])].map(reached)
+  return folders.length > 0 && folders.every((seen) => seen === 'none')
+}
+/**
+ * Of the installations on record for a harness that is connected in one folder only, the one
+ * that stays: the one made last. Every add-on of such a harness asks the one connector of this
+ * It folder for a conversation's clicks by the conversation's name, and the name is the same in
+ * each of the harness's folders. Two of them would each be handed what was done on the other's
+ * pages, and whichever asked first would put it into a conversation of its own. So a second is
+ * never installed, and where an It from before installed two, all but this one are taken out.
+ */
+const staying = (all: Installation[]): Installation | undefined =>
+  all.filter((i) => !folderGone(i)).reduce<Installation | undefined>((latest, i) => (latest && latest.at >= i.at ? latest : i), undefined)
+/** What a person is told when such a harness is asked for in a second folder. It may be shown on the site, and names no folder. */
+const oneOnly = (label: string) =>
+  `It’s add-on is already in another folder that ${label} keeps its settings in, and it is connected in one only: ${label} gives a conversation the same name in each, so what is done on a page made in one could reach a conversation in the other. To have it here instead, untick ${label} in \`it setup\`, which takes the add-on out of that folder, and then run \`it setup\` again from here.`
+
 /** What is found out about a harness in one look: its status, and what the status rests on. */
 interface Seen {
   status: HarnessStatus
@@ -1123,6 +1150,10 @@ async function look(id: Harness): Promise<Seen | HarnessStatus | null> {
   const at = await whereNow(adapter)
   const all = installations(id)
   const was = all.find((i) => samePlace(placed(i) ?? at, at))
+  // Connected in one folder only, and that folder is another than this one
+  const stays = adapter.single ? staying(all) : undefined
+  if (stays && !samePlace(placed(stays) ?? at, at))
+    return { adapter, at, all, was, from: null, other: null, status: { id, version, addon: 'unavailable', detail: oneOnly(KNOWN[id].label) } }
   // An add-on that another It folder installed brings clicks to that folder's connector, not to
   // this one's. While that folder still has it on record it stays that folder's, and It is not
   // connected here. One that no folder has on record is nobody's, and is replaced when asked for.
@@ -1209,7 +1240,28 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   const seen = await look(id)
   if (!seen) return { id, addon: 'error', detail: `${label} was not found on this machine.` }
   if (!('status' in seen)) return seen
-  const { status: before, adapter, at, all, was, from, other } = seen
+  const { status: before, adapter, at, from, other } = seen
+  let { all, was } = seen
+  // A harness that is connected in one folder only. Which folder that is goes by what is on
+  // record and not by where this command was run from, so that a setup in a terminal and the
+  // background service, which may each find the harness pointed somewhere else, agree on it
+  // and neither moves the add-on away from under the other.
+  const stays = adapter.single ? staying(all) : undefined
+  if (stays) {
+    const where = (i: Installation) => placed(i) ?? at
+    if (all.some((i) => i !== stays && !folderGone(i))) {
+      say(
+        `${label}: It’s add-on was in more than one of the folders ${label} keeps its settings in, where each could be handed what was done on the other’s pages. It is taken out of all but the one it was put into last`,
+      )
+      await disconnect(id, say, { only: (i) => !samePlace(where(i), where(stays)) }, forLog)
+      all = installations(id)
+      was = all.find((i) => samePlace(where(i), at))
+    }
+    if (!samePlace(where(stays), at)) {
+      say(forLog ? `${label}: its add-on is in another of its settings folders already, and was not put into this one` : `${label}: ${oneOnly(label)}`)
+      return { id, version: before.version, addon: 'unavailable', detail: oneOnly(label) }
+    }
+  }
   if (other?.kept) {
     say(
       forLog
@@ -1276,8 +1328,9 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
 export async function disconnect(
   id: Harness,
   say: (line: string) => void,
-  // What does the removing, and whether the harness can be run at all: given by the tests
-  how: { adapter?: Pick<Adapter, 'remove' | 'present' | 'note'>; runnable?: () => Promise<boolean> } = {},
+  // What does the removing, and whether the harness can be run at all: given by the tests. And
+  // which installations are to go, where it is not all of them: the rest stay on record
+  how: { adapter?: Pick<Adapter, 'remove' | 'present' | 'note'>; runnable?: () => Promise<boolean>; only?: (was: Installation) => boolean } = {},
   forLog = false,
 ): Promise<boolean> {
   const label = KNOWN[id].label
@@ -1292,8 +1345,9 @@ export async function disconnect(
     say(`${label} could not be run from here, so its add-on was left as it is`)
     return false
   }
-  say(`disconnecting ${label}`)
+  if (!how.only) say(`disconnecting ${label}`)
   for (const was of left) {
+    if (how.only && !how.only(was)) continue
     const at = placed(was) ?? (await whereNow(ADAPTERS[id]))
     // A settings folder the person has deleted since took the add-on with it. The harness is
     // not asked about such a folder: asking would only make it anew.

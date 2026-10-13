@@ -984,6 +984,88 @@ describe('where an add-on was installed', () => {
   })
 })
 
+// OpenClaw names a conversation `agent:main:main` in every folder it keeps its settings in, and
+// the add-on in each asks the one connector by that name alone. Connected in two, each would be
+// handed what was done on the other's pages.
+describe('OpenClaw, which gives a conversation the same name in every folder it keeps its settings in', () => {
+  const root = (folder: string) => path.join(folder, 'extensions/it-bridge')
+
+  test('is connected in one of them only: asked for in a second, it is refused with how to move it, and nothing is put there', async () => {
+    const first = path.join(tmp, 'first')
+    const second = path.join(tmp, 'second')
+    vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    vi.stubEnv('OPENCLAW_STATE_DIR', second)
+    const found = (await statusOf('openclaw'))!
+    expect(found.addon).toBe('unavailable')
+    // What is said of it may be shown on the site, and names no folder
+    expect(found.detail).toMatch(/^It’s add-on is already in another folder that OpenClaw keeps its settings in, and it is connected in one only/)
+    expect(found.detail).toMatch(/untick OpenClaw in `it setup`, which takes the add-on out of that folder, and then run `it setup` again from here\.$/)
+    expect(found.detail).not.toContain(tmp)
+    ran = []
+    const { said, say } = lines()
+    expect(await connect('openclaw', say)).toEqual(found)
+    expect(said).toEqual([`OpenClaw: ${found.detail}`])
+    expect(commands('openclaw').filter((words) => /install|enable/.test(words))).toEqual([])
+    expect(existsSync(root(second))).toBe(false)
+    expect(noted('openclaw').installs.map((i) => i.env)).toEqual([{ OPENCLAW_STATE_DIR: first }])
+    // The first is as it was, and the connector's log is told the same without the folder being named
+    expect(existsSync(root(first))).toBe(true)
+    const log = lines()
+    await connect('openclaw', log.say, true)
+    expect(log.said).toEqual(['OpenClaw: its add-on is in another of its settings folders already, and was not put into this one'])
+    // Taken out, which is done from wherever OpenClaw is pointed now, it is connected in the second
+    expect(await disconnect('openclaw', () => {})).toBe(true)
+    expect(existsSync(root(first))).toBe(false)
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    expect(noted('openclaw').installs.map((i) => i.env)).toEqual([{ OPENCLAW_STATE_DIR: second }])
+  })
+
+  test('a folder it was connected in that has been deleted since does not stand in the way of another', async () => {
+    const first = path.join(tmp, 'first')
+    vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    await connect('openclaw', () => {})
+    rmSync(first, { recursive: true })
+    vi.stubEnv('OPENCLAW_STATE_DIR', path.join(tmp, 'second'))
+    expect((await statusOf('openclaw'))!.addon).toBe('not_connected')
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+  })
+
+  test('where an It from before connected it in two, it is taken out of all but the one it was put into last, wherever setup is run from', async () => {
+    const first = path.join(tmp, 'first')
+    const second = path.join(tmp, 'second')
+    // As an It from before left things: the add-on in both folders, and a note of each
+    vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    await connect('openclaw', () => {})
+    const [one] = noted('openclaw').installs
+    rmSync(stampFile('openclaw'))
+    vi.stubEnv('OPENCLAW_STATE_DIR', second)
+    await connect('openclaw', () => {})
+    const [two] = noted('openclaw').installs
+    const installs = [
+      { ...two, at: 2000 },
+      { ...one, at: 1000 },
+    ]
+    put(stampFile('openclaw'), JSON.stringify({ installs }))
+
+    // Run where OpenClaw is pointed at the first folder, which is the one that gives way
+    vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    const { said, say } = lines()
+    expect((await connect('openclaw', say)).addon).toBe('unavailable')
+    expect(said[0]).toBe(
+      'OpenClaw: It’s add-on was in more than one of the folders OpenClaw keeps its settings in, where each could be handed what was done on the other’s pages. It is taken out of all but the one it was put into last',
+    )
+    expect(existsSync(root(first))).toBe(false)
+    expect(existsSync(root(second))).toBe(true)
+    expect(noted('openclaw').installs.map((i) => i.env)).toEqual([{ OPENCLAW_STATE_DIR: second }])
+    // And where it is pointed at the second, it is connected as before, with nothing put in again
+    vi.stubEnv('OPENCLAW_STATE_DIR', second)
+    ran = []
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    expect(commands('openclaw').filter((words) => /install|enable/.test(words))).toEqual([])
+  })
+})
+
 describe('two It folders connected to one app', () => {
   test.each(SHARED)(
     'an add-on carries a note of the It folder that installed it, and the other folder neither replaces nor removes it ($id)',
