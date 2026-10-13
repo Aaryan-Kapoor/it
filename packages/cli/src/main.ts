@@ -514,7 +514,7 @@ async function tourWhenAsked(a: Args) {
   const seconds = text(a, 'timeout') === undefined ? 100 : Number(text(a, 'timeout'))
   if (!Number.isFinite(seconds) || seconds <= 0) throw new Problem('--timeout is a number of seconds.', 'invalid')
   const harness = sessionAsked()?.session.harness
-  const until = Date.now() + seconds * 1000
+  const until = performance.now() + seconds * 1000
   for (;;) {
     const answer = await call<{ asked: boolean }>('mutation', api.tour.wait, harness ? { harness } : {}).catch((err) => {
       if (
@@ -539,7 +539,7 @@ async function tourWhenAsked(a: Args) {
       }
       return written(process.stdout, tourForOneThatWaited(GUIDE))
     }
-    const left = until - Date.now()
+    const left = until - performance.now()
     if (left <= 0) break
     await new Promise((r) => setTimeout(r, Math.min(TOUR_ASK_EVERY_MS, left)))
   }
@@ -1072,9 +1072,9 @@ async function wait(a: Args) {
     // A timer of the runtime counts no further than some twenty-four days, and one given more
     // rings at once: a wait told to go on for a month would say in its first moment that nothing
     // had happened. So the time is waited out a day at most at a time, until it is up
-    const until = Date.now() + seconds * 1000
+    const until = performance.now() + seconds * 1000
     const later = (): void => {
-      const left = until - Date.now()
+      const left = until - performance.now()
       if (left <= 0) return void timeUp()
       setTimeout(later, Math.min(left, 86_400_000))
     }

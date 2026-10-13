@@ -1801,6 +1801,26 @@ describe.skipIf(process.platform === 'win32')('a wait', () => {
     }
   })
 
+  test('a chunked wait counts elapsed time through clock corrections in either direction', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:get' ? { title: 'Plan' } : asked.path === 'delivery:waiting' ? [] : null))
+    const clock = path.join(m.home, 'wait-clock.mjs')
+    const delays = path.join(m.home, 'delays.json')
+    try {
+      for (const correction of [-60_000, 60_000]) {
+        writeFileSync(
+          clock,
+          `import { writeFileSync } from 'node:fs'; let elapsed = 0, wall = 0; const delays = []; const now = Date.now; Date.now = () => now() + wall; Object.defineProperty(performance, 'now', { value: () => elapsed }); const later = setTimeout; globalThis.setTimeout = (run, ms, ...args) => { if (run.name !== 'later') return later(run, ms, ...args); delays.push(ms); writeFileSync(${JSON.stringify(delays)}, JSON.stringify(delays)); if (delays.length > 3) throw Error('The wait followed the corrected clock.'); return later(() => { elapsed += ms; wall += ${correction}; run(...args) }, 1); };`,
+        )
+        const ran = await run(m, ['wait', '--id', 'plan', '--follow', '--timeout', '86401'], b.env, process.execPath, ['--import', pathToFileURL(clock).href])
+        expect([ran.code, printed(ran).timedOut]).toEqual([0, true])
+        expect(JSON.parse(readFileSync(delays, 'utf8'))).toEqual([86_400_000, 1000])
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
   test('given more seconds than a timer can count goes on waiting for as long as it was told, and does not say at once that nothing happened', async () => {
     const m = machine()
     const b = await backend(m, (asked) => (asked.path === 'artifacts:get' ? { title: 'Plan' } : asked.path === 'delivery:waiting' ? [] : null))
