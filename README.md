@@ -1,4 +1,8 @@
-![An agent's pages on a screen: a whiteboard, a map, a chessboard and a checklist, each with its agent's name on it and each answered by touching it](docs/assets/it.gif)
+<p align="center"><a href="https://itcan.do"><img src="docs/assets/it.gif" alt="It at work, in a fast cut: an agent asks and you tap; Claude and you arrange a floor plan; models in Pi turn a sketch into a page, run a dashboard you act on and train a model live; some of the many things It can be; every screen you own, a car among them; and Install itcan.do"></a></p>
+
+<h3 align="center"><a href="https://itcan.do">itcan.do</a></h3>
+
+<p align="center"><a href="#install">Install</a> · <a href="#read-more">Read more</a></p>
 
 # It
 
@@ -10,7 +14,7 @@
 
 Come back hours later and use the page, and It picks the conversation up where you left it.
 
-It runs on your own computer.
+It runs on your own computer. See what else it can be, and how to start, at **[itcan.do](https://itcan.do)**.
 
 ## Install
 
