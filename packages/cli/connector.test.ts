@@ -1471,6 +1471,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     offered(click(6))
     await until(() => stand.codex.length === 1)
     expect(called('delivery:claim')).toEqual(['click-6'])
+    expect(recoveryClaims().returning).not.toContain('disconnected')
+    expect(recoveryClaims().targets.some(([id]) => id === 'disconnected')).toBe(false)
   })
 
   test('an accepted queue receipt still prevents resubmission after its backend confirmation was lost', async () => {

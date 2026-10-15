@@ -1916,7 +1916,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
           recovery.change(() => {
             for (const c of seen) {
               comingBack.delete(c.id)
-              recovery.targets.set(c.id, c.session ? keyOf(c.session.harness, c.session.id) : '')
+              recovery.returning.delete(c.id)
+              recovery.targets.delete(c.id)
             }
           })
         if (comingBack.size) {
@@ -1941,10 +1942,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
             recovery.change(() => {
               for (const row of rows) {
                 comingBack.delete(row.id)
-                if (!row.click) {
-                  recovery.returning.delete(row.id)
-                  recovery.targets.delete(row.id)
-                }
+                recovery.returning.delete(row.id)
+                recovery.targets.delete(row.id)
               }
             })
             for (const row of rows) if (row.click) recoveredClicks.set(row.id, row.click)
