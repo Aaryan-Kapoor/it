@@ -58,7 +58,9 @@ const portsFrom = (port: number) => [port, port + PORTS.content, port + PORTS.ba
 
 /** How another first port is named for one command, in the words of the shell this system's terminals speak. */
 const naming = (port: number | undefined): string =>
-  process.platform === 'win32' ? `\`$env:IT_PORT='${port ?? '<port>'}'; it setup\`` : `\`IT_PORT=${port ?? '<port>'} it setup\``
+  process.platform === 'win32'
+    ? `\`$env:IT_PORT='${port ?? '<port>'}'; it setup --none --no-service\``
+    : `\`IT_PORT=${port ?? '<port>'} it setup --none --no-service\``
 
 /**
  * Before a first run writes anything, whether the ports It would use are free. Another It may
@@ -87,7 +89,7 @@ async function roomAt(port: number): Promise<void> {
       ? `Another It is already running on this machine at port ${port}, which this one would use too: another person’s here, or one set up in another folder.`
       : `Port ${inTheWay} is in use on this machine, and It would use it: it counts its ports from ${port}.`,
     'port_taken',
-    `Nothing was set up. Give this It ports of its own by naming another first port: ${naming(free)}. The port is written into its settings, so it is named this once.`,
+    `Nothing was set up. To run a second It by hand, keep IT_HOME set to this folder and use ${naming(free)}, then \`it serve\`. The port is written into its settings, so it is named this once. There is only one background service per account: setup without --no-service replaces its registration with this folder.`,
   )
 }
 

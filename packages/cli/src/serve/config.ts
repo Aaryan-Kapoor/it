@@ -3,7 +3,7 @@
 // with. Whoever can read the file can do anything to It's data, so it is this person's alone.
 import { spawnSync } from 'node:child_process'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
-import { existsSync, linkSync, mkdirSync, rmSync } from 'node:fs'
+import { accessSync, constants, existsSync, linkSync, mkdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { PORTS } from '@it/protocol'
 import { asPort, home, inHome, Problem, portAsked, readJson, settingsFile, writeFlushed, writePrivate as writeWhole } from '../lib'
@@ -98,7 +98,21 @@ export function readConfig(): ServiceConfig | null {
  * from its secret. So the program has to be on this machine before the settings can be made.
  */
 function adminKey(instanceSecret: string): string {
+  // Key generation uses no project files. A deleted or inaccessible caller folder must not
+  // stop a working backend program from starting, or be mistaken for a missing loader.
+  const cwd = backendFolder()
+  try {
+    mkdirSync(cwd, { recursive: true, mode: 0o700 })
+    accessSync(cwd, constants.R_OK | constants.X_OK)
+  } catch {
+    throw new Problem(
+      `It cannot enter its backend folder at ${cwd}.`,
+      'backend_program',
+      'Make that folder accessible to your user, then run `it setup` again.',
+    )
+  }
   const ran = spawnSync(programFile(), ['keygen', 'admin-key', '--instance-name', instanceName(instanceSecret), '--instance-secret', instanceSecret], {
+    cwd,
     encoding: 'utf8',
     windowsHide: true,
     timeout: 60_000,
@@ -107,6 +121,12 @@ function adminKey(instanceSecret: string): string {
   if (!key.startsWith(`${instanceName(instanceSecret)}|`)) {
     const system = cannotRunHere(ran.stderr ?? '', (ran.error as NodeJS.ErrnoException | undefined)?.code, existsSync(programFile()))
     if (system) throw new Problem(`It cannot run on this system: ${system}`, 'backend_program', '`it login` can still join an It that runs on another machine.')
+    if (ran.error)
+      throw new Problem(
+        'The backend program could not be started to make its key.',
+        'backend_program',
+        `Check that the program at ${programFile()} can be run by your user.`,
+      )
     throw new Problem('The backend program could not make the key It runs it with.', 'backend_program', `It is the program at ${programFile()}.`)
   }
   return key

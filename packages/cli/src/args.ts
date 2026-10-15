@@ -47,6 +47,80 @@ export interface Args {
   flags: Record<string, string | boolean>
   many: Record<string, string[]>
 }
+/** The options each command can honour. JSON and help apply to every public command. */
+export const OPTIONS: Record<string, readonly string[]> = {
+  create: ['id', 'file', 'dir', 'html', 'state', 'agent', 'open', 'on', 'take'],
+  update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'take'],
+  list: [],
+  read: [],
+  delete: [],
+  rollback: [],
+  set: ['if-revision'],
+  patch: ['replace', 'if-revision'],
+  state: [],
+  say: [],
+  open: ['on'],
+  notify: ['id', 'on', 'sticky', 'button'],
+  displays: [],
+  wait: ['id', 'follow', 'timeout'],
+  actions: ['id'],
+  action: ['save'],
+  ack: ['failed'],
+  setup: ['all', 'only', 'none', 'name', 'no-service', 'yes'],
+  login: ['url', 'code', 'name', 'no-setup', 'all', 'only', 'none', 'no-service', 'yes'],
+  logout: ['force'],
+  uninstall: ['yes'],
+  site: ['no-open'],
+  network: [],
+  status: [],
+  whoami: [],
+  serve: ['log', 'supervised'],
+  service: [],
+  skill: [],
+  tour: ['wait', 'timeout'],
+  'tour show': ['agent', 'param', 'on'],
+  'tour clear': [],
+  telemetry: [],
+  upgrade: ['check'],
+  runs: [],
+  'runs clear': ['yes'],
+  updates: [],
+  version: [],
+  '--version': [],
+  '-v': [],
+  help: [],
+  '--help': [],
+  '-h': [],
+}
+
+/** Refuses unused options before a command reads input, contacts It or changes a file. */
+export function optionsFor(cmd: string | undefined, a: Args): void {
+  const sub = `${cmd} ${a._[0]}`
+  const name = Object.hasOwn(OPTIONS, sub) ? sub : (cmd ?? 'help')
+  const allowed = new Set(['json', 'help', ...(Object.hasOwn(OPTIONS, name) ? OPTIONS[name]! : [])])
+  for (const flag of Object.keys(a.flags))
+    if (!allowed.has(flag)) throw new Problem(`\`it ${name}\` does not take --${flag}.`, 'invalid', '`it help` lists what each command takes.')
+  if (cmd === 'tour' && a._.length === 0 && a.flags.timeout !== undefined && a.flags.wait !== true)
+    throw new Problem('--timeout needs --wait with `it tour`.', 'invalid', 'Usage: it tour --wait [--timeout <seconds>]')
+  if (cmd === 'login' && a.flags['no-setup'] === true) {
+    const unused = ['all', 'only', 'none', 'no-service', 'yes'].find((flag) => a.flags[flag] !== undefined)
+    if (unused) throw new Problem(`--${unused} cannot be used with --no-setup.`, 'invalid', 'Leave out --no-setup to connect agent apps after joining.')
+  }
+}
+
+/** Finds the output preference even when another option prevents the rest from parsing. */
+export function outputArgs(argv: string[]): Args {
+  const a: Args = { _: [], flags: {}, many: {} }
+  for (const word of argv) {
+    if (word === '--') break
+    if (word === '--json') a.flags.json = true
+    else if (word.startsWith('--json=')) {
+      // An invalid value is an argument error. Keep that error machine-readable when JSON was requested.
+      a.flags.json = !['false', '0', 'no'].includes(word.slice(7).toLowerCase())
+    }
+  }
+  return a
+}
 /** What a switch given as `--name=value` is set to. Anything that is neither a yes nor a no is refused, since guessing could switch on what the person meant to leave off. */
 function onOrOff(name: string, value: string): boolean {
   const said = value.toLowerCase()

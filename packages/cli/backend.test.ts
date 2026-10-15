@@ -2092,7 +2092,7 @@ describe.skipIf(!program || windows)('enrolling this machine', () => {
     }
     const refused = async () => (await begin({ background: false, say: () => {}, name: 'the desk' }).catch((err) => err)) as Problem
     const HINT =
-      /^Nothing was set up\. Give this It ports of its own by naming another first port: `IT_PORT=(\d+) it setup`\. The port is written into its settings, so it is named this once\.$/
+      /^Nothing was set up\. To run a second It by hand, keep IT_HOME set to this folder and use `IT_PORT=(\d+) it setup --none --no-service`, then `it serve`\. The port is written into its settings, so it is named this once\. There is only one background service per account: setup without --no-service replaces its registration with this folder\.$/
     // Another program has one of the backend program's two
     let close = await listening(port + PORTS.backendApi, '{}')
     try {

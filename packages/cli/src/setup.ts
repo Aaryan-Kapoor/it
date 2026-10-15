@@ -3,6 +3,7 @@
 // It is a plugin to each harness and nothing more: an add-on is installed with the harness's
 // own plugin commands, from files this program carries, and removed the same way. Nothing in
 // a harness is patched, wrapped or replaced.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import {
@@ -71,6 +72,8 @@ const UNSAFE: Ran = {
   out: '',
   err: 'A path on this machine has a character that cannot be passed safely to a command on Windows, so the command was not run and nothing was changed.',
 }
+/** Read-only discovery shares answers, including failures, only until that pass ends. */
+const detection = new AsyncLocalStorage<Map<string, Promise<Ran>>>()
 /**
  * Runs a harness's own command, outside any agent session this program may itself be inside.
  * `env` is given when the command is for an add-on installed where the harness kept its
@@ -80,11 +83,27 @@ function run(bin: string, args: string[], timeoutMs = 60_000, env: NodeJS.Proces
   const windows = process.platform === 'win32'
   if (unsafe(args)) return Promise.resolve(UNSAFE)
   const words = windows ? args.map((a) => `"${a}"`) : args
-  return new Promise((resolve) =>
-    execFile(bin, words, { env, timeout: timeoutMs, shell: windows, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, out, stderr) =>
-      resolve({ ok: !err, out: String(out).trim(), err: String(stderr).trim() || (err ? err.message : '') }),
+  const pass = detection.getStore()
+  const key = JSON.stringify([bin, args, env])
+  const previous = pass?.get(key)
+  if (previous) return previous
+  const result = new Promise<Ran>((resolve) =>
+    execFile(
+      bin,
+      words,
+      {
+        env,
+        timeout: pass ? Math.min(timeoutMs, 15_000) : timeoutMs,
+        ...(pass ? { killSignal: 'SIGKILL' as const } : {}),
+        shell: windows,
+        windowsHide: true,
+        maxBuffer: 8 * 1024 * 1024,
+      },
+      (err, out, stderr) => resolve({ ok: !err, out: String(out).trim(), err: String(stderr).trim() || (err ? err.message : '') }),
     ),
   )
+  pass?.set(key, result)
+  return result
 }
 
 const semver = (s: string) => /(\d+)\.(\d+)\.(\d+)/.exec(s)?.slice(1).map(Number)
@@ -1153,7 +1172,9 @@ export async function detectAll(): Promise<HarnessStatus[]> {
   // IT_HARNESSES limits which harnesses are looked for at all: for tests, and for a machine
   // where one of them should be left entirely alone
   const only = process.env.IT_HARNESSES?.split(',').map((x) => x.trim())
-  const found = await Promise.all(HARNESSES.filter((id) => !only || only.includes(id)).map((id) => statusOf(id).catch(() => null)))
+  const found = await detection.run(new Map(), () =>
+    Promise.all(HARNESSES.filter((id) => !only || only.includes(id)).map((id) => statusOf(id).catch(() => null))),
+  )
   return found.filter((s): s is HarnessStatus => s !== null)
 }
 
