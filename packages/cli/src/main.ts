@@ -1393,6 +1393,14 @@ async function uninstall(a: Args) {
       )
     }
   }
+  // 2. An `it serve` someone started by hand in this folder
+  service.askToStop(folder, 30_000)
+  if (service.runningFor(folder))
+    throw new Problem(
+      'It is still running, and no data was removed.',
+      'still_running',
+      'End the `it serve` you started in its terminal, then run `it uninstall` again.',
+    )
   // 1. The add-ons, each from where this folder put it. One that could not be taken out is
   // taken out by running this again, which needs the note It keeps of where it put the add-on,
   // and the program: so those are kept, and said, with how it is run once its PATH is gone
@@ -1409,14 +1417,6 @@ async function uninstall(a: Args) {
       )
     }
   }
-  // 2. An `it serve` someone started by hand in this folder
-  service.askToStop(folder, 30_000)
-  if (service.runningFor(folder))
-    throw new Problem(
-      'It is still running, and no data was removed.',
-      'still_running',
-      'End the `it serve` you started in its terminal, then run `it uninstall` again.',
-    )
   // 3. Its line in the shell's profile, with the comment above it
   const bin = path.join(folder, 'bin')
   const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)

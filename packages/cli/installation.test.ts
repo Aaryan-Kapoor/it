@@ -1,16 +1,17 @@
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { LICENSE } from './src/addons.generated'
+import { ADDONS, LICENSE } from './src/addons.generated'
 import { INSTALLATION, INSTALLATION_FILE, installationHome, legacyInstallation, markedInstallation, markInstallation } from './src/installation'
 import { home } from './src/lib'
+import { unpack } from './src/setup'
 import { finishInstallationRemoval, removeInstallationFiles } from './src/uninstall-files'
 
 const folders: string[] = []
 const folder = () => {
-  const at = mkdtempSync(path.join(os.tmpdir(), 'it-owner-'))
+  const at = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-owner-')))
   folders.push(at)
   return at
 }
@@ -119,6 +120,9 @@ describe('installation ownership', () => {
       'push.json',
       'conversations.json',
       'conversation-notes-erasing',
+      'heard.json',
+      'addons/asked-for.json',
+      'bin/it.old.1780000000000.exe',
       'backend/db.sqlite3',
       'backend/db.sqlite3-wal',
       'backend/data.json',
@@ -142,6 +146,7 @@ describe('installation ownership', () => {
       `content/${prefix}/notes.txt`,
       'addons/pi/notes.txt',
       'bin/other',
+      'bin/it.old.notes.exe',
     ]
     for (const file of kept) put(at, file, 'mine')
     expect(removeInstallationFiles(at, false)).toEqual(expect.arrayContaining(['project.txt', 'backend', 'content']))
@@ -152,6 +157,9 @@ describe('installation ownership', () => {
       'push.json',
       'conversations.json',
       'conversation-notes-erasing',
+      'heard.json',
+      'addons/asked-for.json',
+      'bin/it.old.1780000000000.exe',
       'backend/db.sqlite3',
       `${backup}/db.sqlite3`,
       `content/${prefix}/${name}`,
@@ -174,6 +182,22 @@ describe('installation ownership', () => {
     put(clean, 'bin/it')
     expect(removeInstallationFiles(clean, false)).toEqual([])
     expect(existsSync(clean)).toBe(false)
+  })
+
+  test('cleanup recognizes the exact add-on sources and hook addresses generated for a custom home', () => {
+    const at = folder()
+    vi.stubEnv('IT_HOME', at)
+    markInstallation(at)
+    for (const id of ['pi', 'claude-code', 'codex', 'hermes', 'opencode', 'openclaw'] as const) unpack(id)
+    expect(removeInstallationFiles(at, false)).toEqual([])
+    expect(existsSync(at)).toBe(false)
+    const changed = folder()
+    vi.stubEnv('IT_HOME', changed)
+    markInstallation(changed)
+    const actual = path.join(unpack('pi'), Object.keys(ADDONS.pi!.files).find((name) => name.endsWith('.js'))!)
+    writeFileSync(actual, 'the person changed this file')
+    expect(removeInstallationFiles(changed, false)).toContain('addons')
+    expect(readFileSync(actual, 'utf8')).toBe('the person changed this file')
   })
 
   test('cleanup keeps a held shutdown lock and removes only empty folders after its owner releases it', () => {

@@ -4,6 +4,8 @@ import path from 'node:path'
 import { HARNESSES } from '@it/protocol'
 import { ADDONS } from './addons.generated'
 import { INSTALLATION_FILE } from './installation'
+import { home } from './lib'
+import { addonHookCommand, itHomeWritten } from './setup'
 
 /** These are individual files It reserves in a marked home. No directory is removed recursively. */
 const ROOT_FILES = [
@@ -18,6 +20,7 @@ const ROOT_FILES = [
   'releases.json',
   'connector.json',
   'connector.sock',
+  'heard.json',
   'journal.jsonl',
   'delivery-recovery.json',
   'conversations.json',
@@ -144,6 +147,9 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
   remove('logs/it.log.1')
   if (!keepAddons) {
     for (const name of ['it', 'it.exe', 'it.cmd', 'it-here', 'it-here.cmd', 'it-service.cmd']) remove(`bin/${name}`)
+    for (const name of children('bin')) if (/^it\.old\.\d+\.exe$/.test(name)) remove(`bin/${name}`)
+    remove('addons/asked-for.json')
+    const homes = [...new Set([folder, path.resolve(home())])]
     for (const id of HARNESSES) {
       const stamp = json(`addons/${id}.json`)
       if (Array.isArray(stamp?.installs) && stamp.installs.length === 0) remove(`addons/${id}.json`)
@@ -152,8 +158,21 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
         const file = installationFile(folder, relative)
         if (!file) continue
         const text = readFileSync(file, 'utf8')
-        // The packed home note is filled in at setup. Its ownership statement must still agree.
-        if (text === expected || (name.endsWith('it-home.json') && json(relative)?.home === folder && json(relative)?.about === JSON.parse(expected).about)) {
+        const sourceMatches = homes.some((at) => text === itHomeWritten(expected, at))
+        const hookMatches =
+          name.endsWith('hooks.json') &&
+          homes.some((at) =>
+            ['it', 'it.exe', 'it.cmd', 'it-here', 'it-here.cmd'].some(
+              (bin) => text === expected.replaceAll(JSON.stringify(`it hook ${id}`), JSON.stringify(addonHookCommand(id, path.join(at, 'bin', bin)))),
+            ),
+          )
+        // Setup fills in the home and hook addresses. Recognize only those exact transformations.
+        if (
+          text === expected ||
+          sourceMatches ||
+          hookMatches ||
+          (name.endsWith('it-home.json') && homes.includes(json(relative)?.home) && json(relative)?.about === JSON.parse(expected).about)
+        ) {
           remove(relative)
           prune(relative)
         }

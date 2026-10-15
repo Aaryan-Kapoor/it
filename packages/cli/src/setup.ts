@@ -375,6 +375,19 @@ export function itHomeWritten(text: string, elsewhere = process.env.IT_HOME ? pa
     .replace(/^IT_HOME_AT_SETUP = None$/m, () => `IT_HOME_AT_SETUP = ${JSON.stringify(elsewhere)}`)
 }
 
+/** Formats the fixed launcher address exactly as the host reads it. */
+export function addonHookCommand(id: Harness, it: string): string {
+  // The launcher's address, written so that a shell reads it as one word whatever is in it:
+  // a space, an apostrophe, a dollar sign. On Windows a harness may hand a hook to cmd or to
+  // PowerShell, and the two read an address in quotes differently: PowerShell takes it for a
+  // piece of text, not for a command to run. An address with nothing in it that needs quotes
+  // is written without them, which both read alike. One that needs them is written as cmd reads it.
+  const windows = process.platform === 'win32'
+  const plain = windows ? /^[A-Za-z0-9_:.~\\/-]+$/ : /^[A-Za-z0-9_@%+=:,./-]+$/
+  const quoted = plain.test(it) ? it : windows ? `"${it}"` : `'${it.replace(/'/g, `'\\''`)}'`
+  return `${quoted} hook ${id}`
+}
+
 /** Writes an add-on's files where the harness will install them from. */
 export function unpack(id: Harness): string {
   const addon = ADDONS[id]
@@ -389,15 +402,7 @@ export function unpack(id: Harness): string {
     writeFileSync(inHome('LICENSE.md'), LICENSE)
   }
   const it = shim()
-  // The launcher's address, written so that a shell reads it as one word whatever is in it:
-  // a space, an apostrophe, a dollar sign. On Windows a harness may hand a hook to cmd or to
-  // PowerShell, and the two read an address in quotes differently: PowerShell takes it for a
-  // piece of text, not for a command to run. An address with nothing in it that needs quotes
-  // is written without them, which both read alike. One that needs them is written as cmd reads it.
-  const windows = process.platform === 'win32'
-  const plain = windows ? /^[A-Za-z0-9_:.~\\/-]+$/ : /^[A-Za-z0-9_@%+=:,./-]+$/
-  const quoted = plain.test(it) ? it : windows ? `"${it}"` : `'${it.replace(/'/g, `'\\''`)}'`
-  const command = `${quoted} hook ${id}`
+  const command = addonHookCommand(id, it)
   for (const [rel, text] of Object.entries(addon.files)) {
     const file = path.join(dir, ...rel.split('/'))
     mkdirSync(path.dirname(file), { recursive: true })

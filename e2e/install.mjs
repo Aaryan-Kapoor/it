@@ -20,6 +20,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -1471,7 +1472,7 @@ try {
       check(
         `${legacy ? 'a legacy' : 'a marked'} custom installation uninstalls from a fresh terminal and keeps unknown files and the default home`,
         off.status === 0 &&
-          result?.folder === installed.folder &&
+          result?.folder === realpathSync(installed.folder) &&
           result?.removed === false &&
           !existsSync(path.join(installed.folder, 'backend', 'db.sqlite3')) &&
           readFileSync(path.join(installed.folder, 'keep.txt'), 'utf8') === 'mine' &&

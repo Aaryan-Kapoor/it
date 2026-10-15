@@ -1348,6 +1348,33 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     expect(readFileSync(path.join(m.it, 'backend', 'notes.txt'), 'utf8')).toBe('mine')
   })
 
+  test('`it uninstall` keeps add-ons intact when a manually started service has not stopped', async () => {
+    const m = machine(true)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    }
+    writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.2.27\n', { mode: 0o755 })
+    const plugin = path.join(m.home, '.config', 'opencode', 'plugins', 'it.js')
+    mkdirSync(path.dirname(plugin), { recursive: true })
+    writeFileSync(plugin, 'owned add-on')
+    const record = JSON.stringify({
+      installs: [{ version: '0.1.0', at: 1, env: {}, files: [{ path: plugin, sha256: createHash('sha256').update('owned add-on').digest('hex') }] }],
+    })
+    mkdirSync(path.join(m.it, 'addons'))
+    writeFileSync(path.join(m.it, 'addons', 'opencode.json'), record)
+    writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ pid: process.pid }))
+    // The live test process stands for the manual service. Only the command's clock advances,
+    // so the stop deadline is exercised without waiting thirty seconds or signalling it.
+    const clock = path.join(m.home, 'clock.mjs')
+    writeFileSync(clock, 'let now = Date.now(); Date.now = () => (now += 31000);')
+    const refused = await run(m, ['uninstall', '--yes'], {}, process.execPath, ['--import', pathToFileURL(clock).href])
+    expect(refused.code).toBe(1)
+    expect(refused.err).toContain('still stopping')
+    expect(readFileSync(plugin, 'utf8')).toBe('owned add-on')
+    expect(readFileSync(path.join(m.it, 'addons', 'opencode.json'), 'utf8')).toBe(record)
+    expect(existsSync(path.join(m.it, INSTALLATION_FILE))).toBe(true)
+  })
+
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
     const m = machine(true, true)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
