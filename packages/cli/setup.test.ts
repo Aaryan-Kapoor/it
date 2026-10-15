@@ -1309,6 +1309,34 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
     },
   )
 
+  test.each(['older', 'newer'])('retires a confirmed absent %s profile without removing the remaining add-on', async (absent) => {
+    const first = path.join(tmp, 'first')
+    const second = path.join(tmp, 'second')
+    vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    await connect('openclaw', () => {})
+    const [one] = noted('openclaw').installs
+    rmSync(stampFile('openclaw'))
+    vi.stubEnv('OPENCLAW_STATE_DIR', second)
+    await connect('openclaw', () => {})
+    const [two] = noted('openclaw').installs
+    const installs = [
+      { ...one, at: 1000 },
+      { ...two, at: 2000 },
+    ]
+    put(stampFile('openclaw'), JSON.stringify({ installs }))
+    const gone = absent === 'older' ? first : second
+    const retained = absent === 'older' ? second : first
+    rmSync(root(gone), { recursive: true })
+    expect(existsSync(gone)).toBe(true)
+    vi.stubEnv('OPENCLAW_STATE_DIR', retained)
+    ran = []
+    expect((await connect('openclaw', () => {}, true)).addon).toBe('connected')
+    expect(noted('openclaw').installs).toEqual([installs[absent === 'older' ? 1 : 0]])
+    expect(commands('openclaw').filter((words) => /uninstall|install|enable/.test(words))).toEqual([])
+    expect(existsSync(root(retained))).toBe(true)
+    expect((await statusOf('openclaw'))!.addon).toBe('connected')
+  })
+
   test('a folder it was connected in that has been deleted since does not stand in the way of another', async () => {
     const first = path.join(tmp, 'first')
     vi.stubEnv('OPENCLAW_STATE_DIR', first)
