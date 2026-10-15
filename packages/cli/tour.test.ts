@@ -591,6 +591,7 @@ describe.skipIf('Bun' in globalThis || !existsSync(chromium.executablePath()))('
           '<head><script>window.It = { state: {}, onState: () => () => {}, action: () => Promise.resolve({ ok: true }) }</script>',
         ),
       )
+      await tab.addStyleTag({ content: 'body { font-family: monospace; }' })
       const enough = () =>
         tab.locator('#enough').evaluate((el) => ({ shows: el.clientHeight, holds: el.scrollHeight, tall: el.getBoundingClientRect().height }))
       const alone = await enough()
