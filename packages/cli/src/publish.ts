@@ -223,7 +223,14 @@ function toItself(run: () => void): void {
   const whole = `${lock}.${me.holder}.tmp`
   const make = (file: string): boolean => {
     writeFlushed(whole, JSON.stringify(me))
-    return makeOnce(whole, file)
+    try {
+      return makeOnce(whole, file)
+    } catch (err) {
+      // Publication may have succeeded before temporary cleanup failed.
+      if (conversationLock(file)?.holder === me.holder) rmSync(file, { force: true })
+      rmSync(whole, { force: true })
+      throw err
+    }
   }
   let held = false
   while (performance.now() < until) {
