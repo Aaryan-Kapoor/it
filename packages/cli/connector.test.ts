@@ -115,7 +115,7 @@ vi.mock('./src/lib', async (original) => {
 })
 
 import { type ConnectorInfo, infoFile, local, mac, runConnector, wayOf } from './src/connector'
-import { eraseDeliveryRecovery } from './src/delivery-recovery'
+import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
 import { identity, SINCE_TOLD, WAS_STOPPED } from './src/wake'
@@ -495,7 +495,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
 
   const recoveryClaims = () => readJson<{ returning: string[]; targets: [string, string][] }>(path.join(home, 'delivery-recovery.json'))!
 
-  test('acknowledged releases and parks retire durable claims while uncertain outcomes keep them', async () => {
+  test.each([false, true])('acknowledged releases and parks retire durable claims, with recovery write failure %s', async (diskFails) => {
     standIn()
     await start()
     let now = Date.now()
@@ -526,6 +526,18 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
         if (n < 4) expect(recoveryClaims().targets).toEqual([])
       }
       parkFails = false
+      if (diskFails) {
+        const saving = vi.spyOn(DeliveryRecovery.prototype, 'change').mockImplementation(() => {
+          throw new Error('disk unavailable')
+        })
+        try {
+          await pass()
+          await settled()
+          expect(recoveryClaims().returning).toEqual(['click-1'])
+        } finally {
+          saving.mockRestore()
+        }
+      }
       await pass()
       await until(() => recoveryClaims().returning.length === 0)
       expect(recoveryClaims().targets).toEqual([])

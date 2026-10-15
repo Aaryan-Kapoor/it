@@ -908,7 +908,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
           },
         )
         if (!done) continue
-        retireClaim(id, attempt)
+        try {
+          retireClaim(id, attempt)
+        } catch (err) {
+          seldom('recovery', `could not keep the parked delivery receipt (${why(err)}); trying again`)
+          continue
+        }
         if (toPark.get(id) !== pending) continue
         toPark.delete(id)
         parked.add(which)
