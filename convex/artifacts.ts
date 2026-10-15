@@ -160,7 +160,7 @@ export const say = mutation({
   },
 })
 
-/** Deletes a page: its record at once, and everything that hung off it, bytes included, soon after. */
+/** Requests deletion and returns its receipt. Completion waits for the records and files to be removed. */
 export const remove = mutation({
   args: ref,
   handler: async (ctx, args) => {
@@ -178,11 +178,12 @@ export const remove = mutation({
       .order('desc')
       .take(300)
     for (const n of told) if (n.artifactId === a._id && !n.dismissedAt) await ctx.db.patch(n._id, { dismissedAt: Date.now() })
+    const job = await ctx.db.insert('deletions', { userId: user._id, artifactId: a._id, slug: a.slug, title: a.title, requestedAt: Date.now(), attempts: 0 })
     await ctx.db.delete(a._id)
-    await ctx.scheduler.runAfter(0, internal.retention.purgeArtifact, { artifactId: a._id })
+    await ctx.scheduler.runAfter(0, internal.retention.purgeArtifact, { artifactId: a._id, deletionId: job })
     // A publish of this page may be under way, with a grant that is still good
-    await removeLater(ctx, prefixOf(user._id, a._id), { grantMayBeLive: true })
-    return null
+    await removeLater(ctx, prefixOf(user._id, a._id), { grantMayBeLive: true, deletionId: job })
+    return { job }
   },
 })
 

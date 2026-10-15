@@ -4145,6 +4145,81 @@ describe('leaving', () => {
     ).toEqual([0, 0, 0])
   })
 
+  test('deletion receipts distinguish requested, failed and confirmed cleanup without treating a missing receipt as success', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const bob = await person(t, 'bob')
+    const screen = await browserOf(t, 'alice', 'screen')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    content.failNext = 1
+    const { job } = await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'pending', completedAt: null })
+    expect(await code(screen.browser.query(api.deletions.get, { job }))).toBe('forbidden')
+    expect(await code(screen.browser.query(api.deletions.list, {}))).toBe('forbidden')
+    expect(await code(bob.browser.query(api.deletions.get, { job }))).toBe('not_found')
+    for (let i = 0; i < 4; i++) await runWhatIsDue(t)
+    expect(await alice.browser.query(api.deletions.get, { job })).toMatchObject({
+      state: 'retrying',
+      attempts: 1,
+      nextAt: Date.now() + 5000,
+      completedAt: null,
+    })
+    // A restart loses an action in progress. Its durable job is restarted by the periodic sweep.
+    vi.clearAllTimers()
+    vi.setSystemTime(Date.now() + 3 * 60_000)
+    expect(await t.mutation(internal.content.kick, {})).toBe(1)
+    for (let i = 0; i < 4; i++) await runWhatIsDue(t)
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'completed', completedAt: Date.now() })
+    expect(await alice.browser.query(api.deletions.list, {})).toHaveLength(1)
+    // Reusing a page name neither completes nor deletes a new incarnation of that page.
+    await publish(m, 'plan')
+    expect(await m.as.query(api.deletions.get, { slug: 'plan' })).toMatchObject({ job, state: 'completed' })
+    expect(await m.as.query(api.artifacts.get, { slug: 'plan' })).toMatchObject({ slug: 'plan' })
+    await t.run((ctx) => ctx.db.delete(job))
+    expect(await code(m.as.query(api.deletions.get, { job }))).toBe('not_found')
+  })
+
+  test('content confirmation alone does not complete a deletion whose records remain', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    const { job } = await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    vi.clearAllTimers()
+    const contentJob = await t.run((ctx) =>
+      ctx.db
+        .query('contentJobs')
+        .filter((q) => q.eq(q.field('deletionId'), job))
+        .first(),
+    )
+    await t.action(internal.content.run, { jobId: contentJob!._id })
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'pending', completedAt: null })
+    const receipt = await t.run((ctx) => ctx.db.get(job))
+    await t.mutation(internal.retention.purgeArtifact, { artifactId: receipt!.artifactId, deletionId: job })
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'completed' })
+  })
+
+  test('completed deletion receipts expire after a week, while unfinished ones stay until erasure', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'finished')
+    const done = await m.as.mutation(api.artifacts.remove, { slug: 'finished' })
+    await settle(t)
+    await publish(m, 'waiting')
+    const pending = await m.as.mutation(api.artifacts.remove, { slug: 'waiting' })
+    vi.clearAllTimers()
+    vi.setSystemTime(Date.now() + 8 * 86_400_000)
+    await t.mutation(internal.retention.sweepRecords, {})
+    expect(await t.run((ctx) => ctx.db.get(done.job))).toBeNull()
+    expect(await t.run((ctx) => ctx.db.get(pending.job))).not.toBeNull()
+    await t.run((ctx) => ctx.db.patch(alice.user as never, { deletedAt: Date.now() }))
+    await t.mutation(internal.retention.purgeErased, {})
+    await settle(t)
+    expect(await t.run((ctx) => ctx.db.query('deletions').collect())).toEqual([])
+  })
+
   test('an answer from the content service that cannot be read is not taken for "done"', async () => {
     const t = backend()
     await person(t, 'alice')

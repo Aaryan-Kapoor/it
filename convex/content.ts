@@ -13,6 +13,7 @@ import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { type ActionCtx, internalAction, internalMutation, internalQuery, type MutationCtx } from './_generated/server'
 import { door } from './config'
+import { confirmed } from './deletions'
 import { overClashes } from './lib/clash'
 import { kind, log } from './lib/log'
 import { mint } from './lib/signing'
@@ -70,7 +71,7 @@ async function enqueue(
   /** Whose display or files it is about. */
   userId: Id<'users'>,
   body: unknown,
-  opts: { thenDeleteUser?: Id<'users'>; inMs?: number } = {},
+  opts: { thenDeleteUser?: Id<'users'>; inMs?: number; deletionId?: Id<'deletions'> } = {},
 ): Promise<Id<'contentJobs'>> {
   const now = Date.now()
   const wait = opts.inMs ?? 0
@@ -82,6 +83,7 @@ async function enqueue(
     createdAt: now,
     userId,
     thenDeleteUser: opts.thenDeleteUser,
+    deletionId: opts.deletionId,
   })
   await ctx.scheduler.runAfter(wait, internal.content.run, { jobId })
   return jobId
@@ -96,10 +98,14 @@ const GRANT_TAIL_MS = 20 * 60_000
  * may still be good, the deletion is done a second time once that grant has run out, so that
  * an upload which was already on its way leaves nothing behind.
  */
-export async function removeLater(ctx: MutationCtx, prefix: string, opts: { thenDeleteUser?: Id<'users'>; grantMayBeLive?: boolean } = {}): Promise<void> {
+export async function removeLater(
+  ctx: MutationCtx,
+  prefix: string,
+  opts: { thenDeleteUser?: Id<'users'>; grantMayBeLive?: boolean; deletionId?: Id<'deletions'> } = {},
+): Promise<void> {
   const person = ctx.db.normalizeId('users', prefix.split('/')[1] ?? '')
   if (!person) throw new Error('a prefix to delete under names nobody')
-  await enqueue(ctx, 'delete', person, { prefix }, { thenDeleteUser: opts.thenDeleteUser })
+  await enqueue(ctx, 'delete', person, { prefix }, { thenDeleteUser: opts.thenDeleteUser, deletionId: opts.deletionId })
   if (opts.grantMayBeLive) await enqueue(ctx, 'delete', person, { prefix }, { inMs: GRANT_TAIL_MS })
 }
 
@@ -111,6 +117,7 @@ export const _settle = internalMutation({
     const job = await ctx.db.get(jobId)
     if (!job) return null
     if (outcome === 'done') {
+      if (job.deletionId) await confirmed(ctx, job.deletionId, 'contentAt')
       const person = job.thenDeleteUser
       if (person) {
         // Everything the content service had of the person's is gone, so whatever else was still
@@ -149,7 +156,12 @@ export const _settle = internalMutation({
     }
     if (attempts > MAX_ATTEMPTS && attempts % 24 === 0) log('content_job.still_failing', { jobId, op: job.op, tries: attempts }, 'error')
     const wait = outcome === 'more' ? 0 : backoff(Math.min(job.attempts, MAX_ATTEMPTS))
-    await ctx.db.patch(jobId, { attempts, nextAt: Date.now() + wait })
+    const nextAt = Date.now() + wait
+    await ctx.db.patch(jobId, { attempts, nextAt })
+    if (job.deletionId) {
+      const d = await ctx.db.get(job.deletionId)
+      if (d && d.contentAt === undefined) await ctx.db.patch(d._id, { attempts, nextAt, failedAt: outcome === 'failed' ? Date.now() : undefined })
+    }
     await ctx.scheduler.runAfter(wait, internal.content.run, { jobId })
     return null
   },

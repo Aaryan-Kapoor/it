@@ -43,6 +43,7 @@ import {
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, parse, text } from './args'
 import { local } from './connector'
+import { deletePage } from './delete'
 import * as flow from './flow'
 import { hook } from './hooks'
 import {
@@ -302,7 +303,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   update: [1, 'update <id> (--file f | --dir d | --html "<…>" | pipe)'],
   list: [0, 'list'],
   read: [1, 'read <id>'],
-  delete: [1, 'delete <id>'],
+  delete: [1, 'delete <id> [--status]'],
   rollback: [2, 'rollback <id> <version>'],
   patch: [2, "patch <id> '<json>' [--replace] [--if-revision <n>]"],
   state: [1, 'state <id>'],
@@ -524,19 +525,21 @@ async function tour(a: Args) {
   if (what === 'clear') {
     const pages = await call<{ slug: string }[]>('query', api.artifacts.list)
     const gone: string[] = []
+    const pending: Awaited<ReturnType<typeof deletePage>>[] = []
     // The tour's own pages, each by its whole id, and no other page whose id only begins as theirs do
     const its = new Set(NAMES.map((name) => `${TOUR_PREFIX}${name}`))
     const had = pages.some((p) => its.has(p.slug)) ? await seenSoFar() : undefined
     for (const { slug } of pages.filter((p) => its.has(p.slug))) {
-      await call('mutation', api.artifacts.remove, { slug })
-      gone.push(slug)
+      const result = await deletePage(slug)
+      if (result.state === 'completed') gone.push(slug)
+      else pending.push(result)
     }
     // Counted where there was a tour to end: how many of its things had been looked at, and never which
     if (had) usage.record('tour.ended', { seen: String(Math.min(had.length, 5)) as '0' | '1' | '2' | '3' | '4' | '5' })
     // And It is told that a tour is over, so that the site no longer leads someone with no pages
     // into one. An It from before it kept that refuses this, which changes nothing
     if (had) await call('mutation', api.tour.done, {}).catch(() => {})
-    return out({ deleted: gone })
+    return out({ deleted: gone, ...(pending.length ? { pending } : {}) })
   }
   if (what !== 'show') throw new Problem(`It does not know what to do with "${what}".`, 'invalid', `Usage: it ${USAGE}`)
   const asked = need(a._[1], `which page of the tour (${NAMES.join(', ')}, or next)`, USAGE)
@@ -2532,7 +2535,8 @@ Pages
                                  [--take], which gives the ${NOUN.one} to this conversation.
                                  Without it, create makes nothing under an id that is
                                  another conversation's ${NOUN.one}, and says whose it is.
-  it list | it read <id> | it delete <id> | it rollback <id> <version>
+  it list | it read <id> | it rollback <id> <version>
+  it delete <id> [--status]      Delete a page, or check its last deletion.
 
 State
   it set <id> <key> <value>      A key may be dotted, and a value that parses as JSON is JSON.
@@ -2976,9 +2980,8 @@ async function main(argv: string[]): Promise<void> {
       })
     }
     case 'delete': {
-      const slug = need(a._[0], `which ${NOUN.one}`, 'delete <id>')
-      await call('mutation', api.artifacts.remove, { slug })
-      return out({ deleted: slug })
+      const slug = need(a._[0], `which ${NOUN.one}`, 'delete <id> [--status]')
+      return out(await deletePage(slug, a.flags.status === true))
     }
     case 'rollback': {
       const slug = need(a._[0], `which ${NOUN.one}`, 'rollback <id> <version>')

@@ -10,6 +10,7 @@ import { internalMutation, type MutationCtx } from './_generated/server'
 import { noLongerWaiting } from './actions'
 import { prefixOf } from './artifacts'
 import { removeLater } from './content'
+import { confirmed } from './deletions'
 import { forgetCounts } from './lib/limits'
 import { log } from './lib/log'
 import { dropStaging, STAGING_MS } from './publish'
@@ -69,9 +70,10 @@ async function removeHangers(ctx: MutationCtx, artifactId: Id<'artifacts'>): Pro
 
 /** After a page is deleted: its state, versions and clicks. Its bytes are removed by the content service. */
 export const purgeArtifact = internalMutation({
-  args: { artifactId: v.id('artifacts') },
-  handler: async (ctx, { artifactId }) => {
-    if (await removeHangers(ctx, artifactId)) await ctx.scheduler.runAfter(0, internal.retention.purgeArtifact, { artifactId })
+  args: { artifactId: v.id('artifacts'), deletionId: v.optional(v.id('deletions')) },
+  handler: async (ctx, { artifactId, deletionId }) => {
+    if (await removeHangers(ctx, artifactId)) await ctx.scheduler.runAfter(0, internal.retention.purgeArtifact, { artifactId, deletionId })
+    else if (deletionId) await confirmed(ctx, deletionId, 'recordsAt')
     return null
   },
 })
@@ -99,7 +101,7 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
   // With each record goes what was kept under its id to hold it to a pace, and, for a machine,
   // the proofs it has used: none of it is left for the hourly cleaning to come to. A showing's
   // record is among what goes here, though its display and its page are gone already.
-  for (const table of ['displays', 'machines', 'sessions', 'invites', 'mounts'] as const) {
+  for (const table of ['displays', 'machines', 'sessions', 'invites', 'mounts', 'deletions'] as const) {
     const rows = await ctx.db
       .query(table)
       .withIndex('by_user', (q: any) => q.eq('userId', userId))
@@ -253,6 +255,12 @@ export const sweepRecords = internalMutation({
       if (rows.length === LIGHT) full = true
       removed += rows.length
     }
+    await drop(
+      await ctx.db
+        .query('deletions')
+        .withIndex('by_completed', (q) => q.gt('completedAt', 0).lt('completedAt', now - 7 * DAY))
+        .take(LIGHT),
+    )
     await drop(
       await ctx.db
         .query('mounts')

@@ -592,12 +592,50 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     const b = await backend(m, (asked) =>
       asked.path === 'artifacts:list'
         ? [{ slug: 'tour-menu' }, { slug: 'tour-of-my-project' }, { slug: 'plan' }, { slug: 'tour-whiteboard' }, { slug: 'tour-' }]
-        : null,
+        : asked.path === 'artifacts:remove'
+          ? { job: asked.args.slug }
+          : asked.path === 'deletions:get'
+            ? { job: asked.args.job, state: 'completed' }
+            : null,
     )
     try {
       const cleared = await run(m, ['tour', 'clear'], b.env)
       expect([cleared.code, printed(cleared)]).toEqual([0, { deleted: ['tour-menu', 'tour-whiteboard'] }])
       expect(b.asked.filter((x) => x.path === 'artifacts:remove').map((x) => x.args.slug)).toEqual(['tour-menu', 'tour-whiteboard'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('deleting a page prints success only after content cleanup is confirmed, and status only queries', async () => {
+    const m = machine()
+    let state = 'retrying'
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:remove'
+        ? { job: 'delete-1' }
+        : { job: 'delete-1', state, attempts: 1, nextAt: 5000, completedAt: state === 'completed' ? 6000 : null },
+    )
+    try {
+      const waiting = printed(await run(m, ['delete', 'plan'], b.env))
+      expect(waiting).toMatchObject({ requested: 'plan', job: 'delete-1', state: 'retrying' })
+      expect(waiting).not.toHaveProperty('deleted')
+      state = 'completed'
+      const done = printed(await run(m, ['delete', 'plan', '--status'], b.env))
+      expect(done).toMatchObject({ deleted: 'plan', state: 'completed' })
+      expect(b.asked.filter((x) => x.path === 'artifacts:remove')).toHaveLength(1)
+      expect(b.asked.filter((x) => x.path === 'deletions:get').map((x) => x.args)).toEqual([{ job: 'delete-1' }, { slug: 'plan' }])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('an earlier backend that gives no deletion receipt cannot be reported as completed', async () => {
+    const m = machine()
+    const b = await backend(m, () => null)
+    try {
+      const result = printed(await run(m, ['delete', 'plan'], b.env))
+      expect(result).toMatchObject({ requested: 'plan', state: 'pending' })
+      expect(result).not.toHaveProperty('deleted')
     } finally {
       await b.close()
     }
