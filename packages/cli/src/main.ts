@@ -1511,7 +1511,18 @@ function unlisted(bin: string): { changed: string[]; failed: { file: string; why
       const kept: string[] = []
       let found = false
       for (const l of text.split('\n')) {
-        if (l !== line) {
+        const sameBin = () => {
+          const posix = /^export PATH='(.*)':"\$PATH"$/.exec(l)
+          const fish = /^contains -- '((?:\\.|[^'])*)' \$PATH; or set -gx PATH /.exec(l)
+          const named = posix ? posix[1]!.replaceAll("'\\''", "'") : fish?.[1]?.replace(/\\([\\'])/g, '$1')
+          if (!named || !path.isAbsolute(named) || profileLines(named).get(file) !== l) return false
+          try {
+            return realpathSync(named) === realpathSync(bin)
+          } catch {
+            return false
+          }
+        }
+        if (l !== line && !sameBin()) {
           kept.push(l)
           continue
         }
@@ -2991,10 +3002,12 @@ async function main(argv: string[]): Promise<void> {
       // The folder is this command's alone while it joins, as it is a setup's while that sets It
       // up here. What the folder is, is looked at again once it is: a setup that was at work in
       // the meantime has made it the folder of an It that runs on this machine
-      const done = await oneAtATime(() => {
+      const done = await oneAtATime(async () => {
         refused()
+        markedInstallation(home())
+        const joined = await login(asked)
         markInstallation(home())
-        return login(asked)
+        return joined
       }).catch(said)
       say(`\nThis machine has joined as "${done.name}".`)
       if (done.waitsFor !== undefined) say(joinedBefore(done.waitsFor))

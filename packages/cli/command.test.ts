@@ -1375,6 +1375,55 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     expect(existsSync(path.join(m.it, INSTALLATION_FILE))).toBe(true)
   })
 
+  test.each(['invalid', 'offline'])('a %s login does not claim an unrelated folder', async (failure) => {
+    const m = machine(false)
+    writeFileSync(path.join(m.it, 'unknown.txt'), 'personal')
+    const result = await run(m, ['login', '--url', failure === 'invalid' ? 'not-an-address' : 'http://127.0.0.1:1', '--code', 'wrong', '--no-setup'])
+    expect(result.code).not.toBe(0)
+    expect(existsSync(path.join(m.it, INSTALLATION_FILE))).toBe(false)
+    expect(readFileSync(path.join(m.it, 'unknown.txt'), 'utf8')).toBe('personal')
+  })
+
+  test('a refused invite keeps its pending key without claiming an unrelated folder', async () => {
+    const m = machine(false)
+    const server = await backend(
+      m,
+      () => null,
+      () => [401, {}],
+    )
+    try {
+      const result = await run(m, ['login', '--url', server.url, '--code', 'wrong', '--no-setup'])
+      expect(error(result).code).toBe('unauthenticated')
+      expect(existsSync(path.join(m.it, 'machine.pending.json'))).toBe(true)
+      expect(existsSync(path.join(m.it, INSTALLATION_FILE))).toBe(false)
+    } finally {
+      await server.close()
+    }
+  })
+
+  test.skipIf(process.platform === 'win32')('uninstall recognizes installer PATH lines through an alias of its real home', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    mkdirSync(path.join(m.it, 'bin'))
+    const alias = path.join(m.home, "linked It's folder")
+    symlinkSync(m.it, alias)
+    const bin = path.join(alias, 'bin')
+    const posix = `export PATH='${bin.replaceAll("'", `'\\''`)}':"$PATH"`
+    const word = `'${bin.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`
+    const fish = `contains -- ${word} $PATH; or set -gx PATH ${word} $PATH`
+    const fishFile = path.join(m.home, '.config/fish/conf.d/it.fish')
+    mkdirSync(path.dirname(fishFile), { recursive: true })
+    writeFileSync(path.join(m.home, '.bashrc'), `keep-this\n\n# It\n${posix}\n`)
+    writeFileSync(fishFile, `# It\n${fish}\n`)
+    const result = await run(m, ['uninstall', '--yes'])
+    expect(result.code).toBe(0)
+    expect(readFileSync(path.join(m.home, '.bashrc'), 'utf8')).toBe('keep-this\n')
+    expect(existsSync(fishFile)).toBe(false)
+  })
+
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
     const m = machine(true, true)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
