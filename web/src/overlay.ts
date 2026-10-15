@@ -41,7 +41,11 @@ export function useDialogKeys(panel: RefObject<HTMLElement | null>, close: () =>
       const top = layers.at(-1) === box
       layers.splice(layers.indexOf(box), 1)
       document.removeEventListener('keydown', key, true)
-      const target = opener?.current ?? before
+      const previous = opener?.current ?? before
+      const beneath = layers.at(-1)
+      // A pointer may have opened this from outside the dialog beneath it. That control
+      // cannot receive the keyboard while the underlying dialog still owns it.
+      const target = beneath && (!previous || !beneath.contains(previous)) ? beneath : previous
       if (top && target?.isConnected && (box.contains(document.activeElement) || document.activeElement === document.body)) target.focus()
     }
   }, [panel, open, opener, before])

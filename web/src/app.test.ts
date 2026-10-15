@@ -702,8 +702,11 @@ describe('finding a page with the keyboard', () => {
     await start()
     await act(async () => button('Notifications')!.click())
     const panel = host.querySelector<HTMLElement>('.notif-panel')!
-    // A new dialog can also be opened by application state, without a pointer crossing the tray.
-    await act(async () => button('Take the tour')!.click())
+    // Clicking a background control moves focus there before opening the second dialog.
+    // Closing it must still put the keyboard in the notification dialog that remains.
+    const tour = button('Take the tour')!
+    tour.focus()
+    await act(async () => tour.click())
     expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(2)
     await key(document, 'Escape')
     expect(host.querySelector('.modal-panel')).toBeNull()
