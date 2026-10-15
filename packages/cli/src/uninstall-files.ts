@@ -20,6 +20,8 @@ const ROOT_FILES = [
   'connector.sock',
   'journal.jsonl',
   'delivery-recovery.json',
+  'conversations.json',
+  'conversation-notes-erasing',
   'aliases.json',
   'runs.json',
   'cut-off.json',
@@ -176,7 +178,18 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
     'bin',
   ])
     empty(dir)
-  const retained = readdirSync(folder)
-  if (!retained.length) rmdirSync(folder)
-  return retained
+  return finishInstallationRemoval(folder)
+}
+
+/** A shutdown lock can keep the backend folder until cleanup returns. Remove only empty directories after it is released. */
+export function finishInstallationRemoval(folder: string): string[] {
+  for (const at of [path.join(folder, 'backend'), folder]) {
+    if (!lstatSync(at, { throwIfNoEntry: false })?.isDirectory()) continue
+    try {
+      rmdirSync(at)
+    } catch (err) {
+      if (!['ENOTEMPTY', 'EEXIST'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err
+    }
+  }
+  return lstatSync(folder, { throwIfNoEntry: false }) ? readdirSync(folder) : []
 }

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { LICENSE } from './src/addons.generated'
 import { INSTALLATION, INSTALLATION_FILE, installationHome, legacyInstallation, markedInstallation, markInstallation } from './src/installation'
 import { home } from './src/lib'
-import { removeInstallationFiles } from './src/uninstall-files'
+import { finishInstallationRemoval, removeInstallationFiles } from './src/uninstall-files'
 
 const folders: string[] = []
 const folder = () => {
@@ -117,6 +117,8 @@ describe('installation ownership', () => {
       'machine.json',
       'token.json',
       'push.json',
+      'conversations.json',
+      'conversation-notes-erasing',
       'backend/db.sqlite3',
       'backend/db.sqlite3-wal',
       'backend/data.json',
@@ -148,6 +150,8 @@ describe('installation ownership', () => {
       'machine.json',
       'token.json',
       'push.json',
+      'conversations.json',
+      'conversation-notes-erasing',
       'backend/db.sqlite3',
       `${backup}/db.sqlite3`,
       `content/${prefix}/${name}`,
@@ -170,6 +174,22 @@ describe('installation ownership', () => {
     put(clean, 'bin/it')
     expect(removeInstallationFiles(clean, false)).toEqual([])
     expect(existsSync(clean)).toBe(false)
+  })
+
+  test('cleanup keeps a held shutdown lock and removes only empty folders after its owner releases it', () => {
+    const at = folder()
+    markInstallation(at)
+    put(at, 'backend/lock', 'owned by the shutdown barrier')
+    put(at, 'backend/db.sqlite3')
+    expect(removeInstallationFiles(at, false)).toEqual(['backend'])
+    expect(readFileSync(path.join(at, 'backend/lock'), 'utf8')).toBe('owned by the shutdown barrier')
+    rmSync(path.join(at, 'backend/lock'))
+    expect(finishInstallationRemoval(at)).toEqual([])
+    expect(existsSync(at)).toBe(false)
+    const kept = folder()
+    put(kept, 'backend/notes.txt', 'mine')
+    expect(finishInstallationRemoval(kept)).toEqual(['backend'])
+    expect(readFileSync(path.join(kept, 'backend/notes.txt'), 'utf8')).toBe('mine')
   })
 
   test.skipIf(process.platform === 'win32')('cleanup never follows linked directories or removes linked records', () => {
