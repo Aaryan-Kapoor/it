@@ -119,3 +119,26 @@ test('a newly enrolled machine never receives copies kept for a different identi
   writeFileSync(path.join(folder, 'machine.json'), JSON.stringify({ id: 'new' }))
   expect(open().waiters.size).toBe(0)
 })
+
+test('mark fallback routing survives a restart beside older marks without it', () => {
+  const store = open()
+  const entries = [
+    { id: 'old', texts: ['Old private text'], at: 1 },
+    { id: 'codex', texts: ['Typed private text'], at: 2, fallback: { via: 'codex' as const, text: 'Read it with it action action' } },
+    { id: 't3', texts: ['Typed private text'], at: 3, fallback: { via: 't3' as const, thread: 'thread', text: 'Typed private text' } },
+  ]
+  store.change(() => store.marks.set('codex:thread', entries))
+  store.close()
+  expect(open().marks.get('codex:thread')).toEqual(entries)
+})
+
+test('a malformed mark fallback is refused without changing the previous record', () => {
+  const store = open()
+  store.change(() => store.marks.set('codex:thread', [{ id: 'old', texts: ['Private text'], at: 1 }]))
+  const kept = readFileSync(store.file, 'utf8')
+  const changed = JSON.parse(kept)
+  changed.marks[0][1][0].fallback = { via: 't3', text: 'Private text' }
+  writeFileSync(store.file, JSON.stringify(changed))
+  expect(open).toThrow(expect.objectContaining({ code: 'record_unread' }))
+  expect(store.marks.get('codex:thread')?.[0]).toEqual({ id: 'old', texts: ['Private text'], at: 1 })
+})

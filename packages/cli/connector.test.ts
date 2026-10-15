@@ -115,6 +115,7 @@ vi.mock('./src/lib', async (original) => {
 })
 
 import { type ConnectorInfo, infoFile, local, mac, runConnector, wayOf } from './src/connector'
+import { eraseDeliveryRecovery } from './src/delivery-recovery'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
 import { identity, SINCE_TOLD, WAS_STOPPED } from './src/wake'
@@ -164,7 +165,7 @@ const CONNECTED = [
  */
 async function start(
   over: 'socket' | 'port' = 'socket',
-  apps: { wanted?: string[]; found?: typeof stand.found } = {},
+  apps: { wanted?: string[]; found?: typeof stand.found; deferSettings?: boolean } = {},
   /** What is put into the folder before the connector starts in it. */
   first: (home: string) => void = () => {},
 ): Promise<ConnectorInfo> {
@@ -181,7 +182,7 @@ async function start(
   // It is up once it answers, watches the backend, and can be told to stop
   const stopper = () => process.listeners('SIGTERM').find((l) => !had.SIGTERM.has(l)) as ((signal: string) => void) | undefined
   await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inbox') && stand.watching.has('machines:me') && stopper() !== undefined)
-  wants(apps.wanted ?? ['codex', 'pi'])
+  if (!apps.deferSettings) wants(apps.wanted ?? ['codex', 'pi'])
   stop = async () => {
     stopper()!('SIGTERM')
     await running
@@ -491,6 +492,80 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     return answer
   }
   const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
+
+  const recoveryClaims = () => readJson<{ returning: string[]; targets: [string, string][] }>(path.join(home, 'delivery-recovery.json'))!
+
+  test('acknowledged releases and parks retire durable claims while uncertain outcomes keep them', async () => {
+    standIn()
+    await start()
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let releaseFails = true
+    let parkFails = true
+    stand.answer = (name) => {
+      if (name === 'delivery:release' && releaseFails) throw new Error('offline')
+      if (name === 'delivery:park') return !parkFails
+      return undefined
+    }
+    try {
+      offered(click(1))
+      await until(() => stand.codex.length === 1)
+      stand.codex[0]!.end(new Error('declined'))
+      await until(() => called('delivery:release').length === 1)
+      await settled()
+      expect(recoveryClaims().returning).toEqual(['click-1'])
+      releaseFails = false
+      for (let n = 2; n <= 4; n++) {
+        now += 601_000
+        await pass()
+        await until(() => stand.codex.length === n)
+        stand.codex[n - 1]!.end(new Error('declined'))
+        await until(() => called(n === 4 ? 'delivery:park' : 'delivery:release').length >= (n === 4 ? 1 : n))
+        await settled()
+        expect(recoveryClaims().returning).toEqual(n === 4 ? ['click-1'] : [])
+        if (n < 4) expect(recoveryClaims().targets).toEqual([])
+      }
+      parkFails = false
+      await pass()
+      await until(() => recoveryClaims().returning.length === 0)
+      expect(recoveryClaims().targets).toEqual([])
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('a delayed release acknowledgement cannot retire a newer claim of the same click', async () => {
+    standIn()
+    await start()
+    await turn(6, true)
+    offered({ ...click(6), at: Date.now() })
+    await pass()
+    await until(() => called('delivery:claim').length === 1)
+    let acknowledge!: (value: null) => void
+    stand.answer = (name) =>
+      name === 'delivery:release'
+        ? new Promise((resolve) => {
+            acknowledge = resolve
+          })
+        : undefined
+    await waitingFor(6)
+    await until(() => acknowledge !== undefined)
+    await local('/waiting', { method: 'POST', body: { id: 'waiter-6', done: true } })
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6000)
+    try {
+      await pass()
+      await until(() => called('delivery:claim').length === 2)
+      acknowledge(null)
+      stand.answer = null
+      await settled()
+      expect(recoveryClaims().returning).toEqual(['click-6'])
+      expect(recoveryClaims().targets).toEqual([['click-6', 'codex:thread-6']])
+    } finally {
+      acknowledge(null)
+      stand.answer = null
+      clock.mockRestore()
+    }
+  })
 
   test('one that stood in line for a place is left for the waiter once its place comes', async () => {
     await start()
@@ -1339,6 +1414,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await pass(5)
     expect(called('delivery:claim')).toEqual([])
     failed = false
+    await pass(5)
+    expect(called('delivery:claim')).toEqual([])
     offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
     await pass()
     await until(() => stand.codex.length === 1)
@@ -2329,6 +2406,89 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.codex).toHaveLength(1)
     await asksBehind(9, { taken: before!.marks })
     expect((await asksBehind(9))?.texts).toEqual([])
+  })
+
+  test.each(['codex', 't3'] as const)('a restored %s mark sends its short-line fallback after settings and recovery answer', async (via) => {
+    standIn(true)
+    if (via === 't3') {
+      withT3Code()
+      stand.t3.threads.set('thread-9', 't3-thread-nine')
+    }
+    await start()
+    await heard(9)
+    offered({ ...click(9), name: 'it:message', payload: '{"text":"Private fallback message"}' })
+    for (let i = 0; i < 5 && stand.codex.length + stand.t3.sent.length < 1; i++) await pass()
+    if (via === 'codex') stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    offered()
+    const previous = home
+    await stop!()
+    stop = null
+    let reconciled = false
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch' && !reconciled) throw new Error('offline')
+      return undefined
+    }
+    await start('socket', { deferSettings: true }, (folder) => {
+      for (const name of ['delivery-recovery.json', 'heard.json']) writeFileSync(path.join(folder, name), readFileSync(path.join(previous, name)))
+    })
+    await pass(25)
+    expect(stand.codex.length + stand.t3.sent.length).toBe(1)
+    wants(['codex'])
+    await pass(25)
+    expect(stand.codex.length + stand.t3.sent.length).toBe(1)
+    reconciled = true
+    await pass(25)
+    await until(() => stand.codex.length + stand.t3.sent.length === 2)
+    if (via === 'codex') {
+      expect(stand.codex[1]!.args).toContain('--message=[It] "A page" (page-9), typed above it: read it with `it action click-9` [action click-9]')
+      expect(JSON.stringify(stand.codex)).not.toContain('Private fallback message')
+      stand.codex[1]!.end()
+    } else {
+      expect(stand.t3.sent[1]).toEqual({ thread: 't3-thread-nine', text: '[It] "A page" (page-9), typed above it: Private fallback message [action click-9]' })
+      expect(stand.codex).toEqual([])
+    }
+    await until(async () => (await behindMarks(9))?.length === 0)
+  })
+
+  test.each(['acknowledged', 'disconnected', 'closed', 'erased'] as const)('a restored mark is not sent after it is %s', async (state) => {
+    standIn(true)
+    await start('socket', {}, (folder) =>
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({
+          version: 1,
+          waiters: [],
+          accepted: [],
+          returning: [],
+          marks: [
+            [
+              'codex:thread-9',
+              [
+                {
+                  id: 'restored-mark',
+                  texts: ['Private text'],
+                  at: Date.now(),
+                  fallback: { via: 'codex', text: '[It] safe short line' },
+                },
+              ],
+            ],
+          ],
+        }),
+      ),
+    )
+    if (state === 'acknowledged') await asksBehind(9, { taken: ['restored-mark'] })
+    if (state === 'disconnected') wants([])
+    if (state === 'closed') stand.closed.add('thread-9')
+    if (state === 'erased') {
+      eraseDeliveryRecovery()
+      await stop!()
+      stop = null
+    }
+    await pass(25)
+    expect(stand.codex).toEqual([])
+    if (state === 'erased') expect(existsSync(path.join(home, 'delivery-recovery.json'))).toBe(false)
+    else if (state !== 'acknowledged') expect(readJson<{ marks: unknown[] }>(path.join(home, 'delivery-recovery.json'))?.marks).toHaveLength(1)
   })
 
   test('the mark goes into Codex’s queue as well, and what a person typed is handed over behind it and kept off the command line', async () => {

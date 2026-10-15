@@ -18,7 +18,8 @@ export interface Offered {
 }
 export type Given = { who: string; at: number }
 export type WaitCopy = { click: Offered; key: string; given?: Given }
-export type MarkCopy = { id: string; texts: string[]; at: number }
+export type MarkFallback = { via: 'codex'; text: string } | { via: 't3'; text: string; thread: string }
+export type MarkCopy = { id: string; texts: string[]; at: number; fallback?: MarkFallback }
 const file = () => inHome('delivery-recovery.json')
 const MOST = 200
 const BYTES = 16_000_000
@@ -132,9 +133,21 @@ export class DeliveryRecovery {
       )
         throw new Error('invalid')
     }
-    for (const [key, marks] of data.marks)
-      if (typeof key !== 'string' || !Array.isArray(marks) || marks.some((m) => typeof m.id !== 'string' || !strings(m.texts) || !Number.isFinite(m.at)))
-        throw new Error('invalid')
+    for (const [key, marks] of data.marks) {
+      if (typeof key !== 'string' || !Array.isArray(marks)) throw new Error('invalid')
+      for (const m of marks) {
+        if (typeof m.id !== 'string' || !strings(m.texts) || !Number.isFinite(m.at)) throw new Error('invalid')
+        const fallback = m.fallback
+        if (
+          fallback !== undefined &&
+          (typeof fallback.text !== 'string' ||
+            (fallback.via !== 'codex' && fallback.via !== 't3') ||
+            (fallback.via === 'codex' && !key.startsWith('codex:')) ||
+            (fallback.via === 't3' && typeof fallback.thread !== 'string'))
+        )
+          throw new Error('invalid')
+      }
+    }
   }
 
   /** Nothing changes in memory if its durable replacement could not be written. */
