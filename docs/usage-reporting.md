@@ -56,7 +56,7 @@ The agent apps are named as `claude-code`, `codex`, `openclaw`, `hermes`, `openc
 | `display.paired` | A browser is paired and opens the site as a display for the first time | `screen` and `sameMachine`: as above. `first`: `true` or `false`, whether it is the only display there is |
 | `answer.sent` | You do something on a page that is sent to the agent | `screen`: as above. `from`: `page` for something done on the page itself, `notification` for a button of a notification, `message` for words typed to the agent in the box above a page |
 | `answer.delivered` | The backend has confirmed that your answer was handed over to an agent app for its conversation. For Codex's queue that is the queue accepting the answer, which can be before any turn has run | `path`: `heard`, `woke` or `waited`. `after`: how long after you answered the hand-over was confirmed, one of `under 1 second`, `1 to 10 seconds`, `10 to 60 seconds`, `1 to 10 minutes`, `10 to 60 minutes`, `1 to 24 hours` or `over 24 hours`. `agent`: which agent app the answer was for |
-| `agent.woken` | An agent app has taken an answer to start a turn with, or has refused to. It is recorded as soon as the agent app answers, before the backend has confirmed anything | `result`: `resumed`, `declined` or `failed`. `agent`: as for `answer.delivered` |
+| `agent.woken` | An add-on reports a turn starting, a queue or T3 Code accepts a message, or an Auto-wake attempt ends. The result is recorded before the backend confirms delivery, as described below | `result`: `resumed`, `declined` or `failed`. `agent`: as for `answer.delivered` |
 | `notification.sent` | `it notify` has sent a notification | `agent`: which agent app's conversation sent it. `buttons`: `true` or `false`, whether it has any. `sticky`: `true` or `false`, whether it stays until dismissed. `page`: `true` or `false`, whether it is about a page. `to`: `one` display or `all` |
 | `notification.ended` | You answer a notification with one of its buttons, or put it away unanswered | `how`: `answered` or `dismissed`. `pushed`: `true` or `false`, whether it had been pushed to a display that was closed |
 | `tour.shown` | `it tour show` brings up a page of It's own tour | `page`: which of the tour's pages, one of `menu`, `whiteboard`, `chess`, `checklist`, `drums`, `button` or `done`. `agent`: which agent app gives the tour |
@@ -65,25 +65,27 @@ The agent apps are named as `claude-code`, `codex`, `openclaw`, `hermes`, `openc
 | `service.failed` | The background service ends because something went wrong | `what`: one of `backend_program`, `backend_silent`, `backend_exited`, `port_taken`, `lock_lost`, `functions` or `door`, and `other` for anything else |
 | `installation.removed` | `it uninstall` takes It off the machine. It is sent by that command itself, before anything is removed | `age`: how long the installation had been counting, in the bands of `installation.seen` |
 
-Five of these happen between a display and the backend, where the program that sends is not: `page.shown`, `screen.connected`, `display.paired`, `answer.sent` and `notification.ended`. The backend notes each as it happens, as a name and these same properties and nothing else, and only while reporting is on. The background service takes the notes from it a few times a minute and sends them like any other event. A note nobody came for is removed after a week. A note carries no id, and is sent under the id the installation has when the service takes it. So the backend removes every note it holds when the service tells it that reporting is off, which the service does within a second or two of finding it off. Notes waiting for deletion cannot be collected after that, even if reporting is already on again. That leaves one case in which something noted before you turned reporting off is sent after you turn it on again: a note made in the seconds before, where reporting was turned off and on again before the service had told the backend, or while the service was not running.
+Five of these happen between a display and the backend, where the program that sends is not: `page.shown`, `screen.connected`, `display.paired`, `answer.sent` and `notification.ended`. The backend notes each as it happens, as a name and these same properties and nothing else, and only while reporting is on. The background service takes the notes from it a few times a minute and sends them like any other event. A note nobody came for is removed after a week. A note carries no installation id. When the service tells the backend that reporting is off, the backend ends that reporting generation and removes its notes. Notes from an earlier generation cannot be collected, even while deletion is pending or after the clock moves backward. The service also discards notes waiting when it starts or finds a changed reporting id, and rejects a reply that arrives across an id change. This covers reporting turned off and on between collections or while the service was stopped. Counts around those changes can be lost.
 
 What a page's files hold is looked at once, on your machine, to answer one question: whether they call It to send something back. Only the answer, `true` or `false`, is sent.
 
 ### What the three paths mean
 
 - `heard`: the agent's conversation was working, or the agent was already waiting for you with `it wait`, and your answer was handed to it there and then.
-- `woke`: nothing was running in the conversation, and your answer was handed over to start a turn. For the Claude Code add-on that is a turn the add-on says it started. For Codex it is Codex's own queue accepting the answer. The queue starts a turn as soon as the conversation is free, and if the conversation is closed, only when it is next opened, so for Codex `woke` is counted once the queue has the answer, which can be before any turn runs.
+- `woke`: your answer was handed over through a route that starts or queues a turn. The Claude Code add-on reports that it started a turn. Codex's queue and T3 Code report that they accepted a message, which can wait behind a running turn. Auto-wake reopens a closed conversation and reports after the run ends successfully or you stop it. Starting the process alone is not a successful hand-over. In every case, `answer.delivered` still waits for the backend to confirm delivery.
 - `waited`: It could not hand your answer over by itself, and the agent came and took it later, with `it wait` or `it ack`.
 
-Only the Claude Code add-on and Codex's queue say that an answer started a turn. Answers handed over through the other add-ons are counted as `heard` even when they started a turn, so `heard` is counted too high and `woke` too low for them.
+Among live add-ons, only Claude Code reports whether it started a turn. Answers handed over through the other live add-ons are counted as `heard` even when they started a turn, so `heard` is counted too high and `woke` too low for them. Codex's queue, T3 Code and Auto-wake use the separate `woke` route described above. Queue acceptance does not prove that a turn started or finished.
 
 ### What the three results mean
 
-- `resumed`: the agent app took the answer to start a turn with. For the Claude Code add-on that is a turn it started, and one turn is counted once, however many answers it carried. For Codex it is Codex's own queue accepting the answer, which can be before any turn runs, and each answer the queue accepts is counted.
-- `declined`: Codex's queue did not take the answer this time, and It will try again.
-- `failed`: It gave up on putting that answer in Codex's queue. The answer stays waiting where you and the agent can see it.
+- `resumed`: the Claude Code add-on reports a turn starting, Codex's queue or T3 Code accepts a message, or an Auto-wake run ends successfully or is stopped by you. Claude Code counts one reported turn, and the other routes count one accepted message or reopened run, however many answers it carried. Codex's queue is given one answer per message. Acceptance by a queue or T3 Code can be counted before any turn runs. A successful Auto-wake process exit does not prove that the agent completed what you asked.
+- `declined`: a queue or T3 Code did not accept the message, or an Auto-wake attempt failed, and It will try again.
+- `failed`: the attempt limit was reached for that hand-over. The answer stays waiting where you and the agent can see it.
 
-`declined` and `failed` are reported for Codex's queue and for the reopening of a closed conversation. Neither is a hand-over. Because `agent.woken` is recorded without waiting for the backend, a `resumed` can also be counted for an answer whose `answer.delivered` never is.
+`declined` and `failed` are not confirmed hand-overs. An Auto-wake run interrupted because the service stops or its hold on the answers is lost reports no wake result for that attempt. Because `agent.woken` is recorded before backend confirmation, `resumed` can be counted without any corresponding `answer.delivered`.
+
+For example, one Auto-wake run carrying five clicks counts one `agent.woken` with `resumed` when the run succeeds, and up to five `answer.delivered` events with `woke` as delivery is confirmed. If the run succeeds but the backend confirmation is never received, that one `resumed` can stand alone. A process that merely starts and then fails counts `declined` or `failed`, not `resumed`.
 
 ## What is never sent
 
@@ -106,7 +108,7 @@ An event whose name or values are not in the table above is not kept. The privac
 
 ## How an installation is identified
 
-It keeps a random id in `telemetry.json` in its own folder, beside the time counting began there. Those two things are all that file holds, and a file that holds them in any other form is treated as holding neither, so that nothing is recorded or sent under it.
+It keeps a random id in `telemetry.json` in its own folder, beside the time counting began there. It writes only those two fields, `installation` and `told`. When reading an object, it uses the known fields whose values are valid and ignores any extra fields. Either known field may be absent, but if either has an invalid value, neither is used. A file that cannot be read as a JSON object supplies neither field. Counting needs a valid id and start time together.
 
 The id is made by the first `it` command, other than the ones listed at the top of this page, or by the background service as it first starts, whichever comes first and whoever runs it. Every `it telemetry on` makes a new one.
 

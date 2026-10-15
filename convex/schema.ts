@@ -219,6 +219,7 @@ export default defineSchema({
   })
     .index('by_user_slug', ['userId', 'slug'])
     .index('by_user_updated', ['userId', 'updatedAt'])
+    .index('by_user_conversation', ['userId', 'session.harness', 'session.id'])
     // Whether any page still names a machine, which is what keeps a revoked machine's record
     .index('by_machine', ['machineId']),
 

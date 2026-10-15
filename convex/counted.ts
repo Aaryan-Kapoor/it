@@ -84,12 +84,35 @@ export const picture = internalQuery({
         .withIndex('by_user', (q) => q.eq('userId', user._id).eq('revoked', false))
         .take(ENOUGH),
     ])
-    const conversations = new Set(pages.flatMap((p) => (p.session ? [`${p.session.harness}:${p.session.id}`] : [])))
+    // Seek past each conversation's pages, including pages without a conversation. Each
+    // successful seek reads one representative, so even a conversation with thousands of
+    // pages cannot hide the next one or exhaust the query's document budget. There are at
+    // most 101 representatives and two seeks per conversation, regardless of page count.
+    let conversation = await ctx.db
+      .query('artifacts')
+      .withIndex('by_user_conversation', (q) => q.eq('userId', user._id).gt('session.harness', undefined))
+      .first()
+    let conversations = 0
+    while (conversation?.session) {
+      conversations++
+      if (conversations === ENOUGH) break
+      const { harness, id } = conversation.session
+      conversation = await ctx.db
+        .query('artifacts')
+        .withIndex('by_user_conversation', (q) => q.eq('userId', user._id).eq('session.harness', harness).gt('session.id', id))
+        .first()
+      if (!conversation) {
+        conversation = await ctx.db
+          .query('artifacts')
+          .withIndex('by_user_conversation', (q) => q.eq('userId', user._id).gt('session.harness', harness))
+          .first()
+      }
+    }
     return {
       pages: pages.length,
       displays: displays.length,
       machines: machines.length,
-      conversations: conversations.size,
+      conversations,
       push: displays.some((d) => d.push !== undefined),
     }
   },

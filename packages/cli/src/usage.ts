@@ -400,9 +400,9 @@ const takenFile = () => inHome('usage.jsonl.taken')
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 /**
- * The settings as the file is this moment. A file of any other shape than It writes holds
- * neither a telling nor an id. Whether reporting is on or off is nothing the settings say: that
- * is the off file's alone, and whatever else a settings file holds is passed over.
+ * The settings as the file is this moment. It reads valid `told` and `installation` fields
+ * from an object and ignores unknown fields. If either known field is invalid, neither is
+ * used. Whether reporting is on or off is nothing the settings say: that is the off file's alone.
  */
 function fresh(): Settings {
   let value: unknown = null
