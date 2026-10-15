@@ -40,7 +40,7 @@ import { conversationFolder, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { type T3, t3Send, t3Server, t3ThreadOf } from './t3'
+import { type T3, type T3Search, t3Send, t3Server, t3ThreadOf } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -541,18 +541,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const t3Known = new Map<string, { thread: string | null; at: number } | 'asking'>()
   /** When each conversation that is being asked for was first asked for, by the clock that only goes forward. */
   const t3Asked = new Map<string, number>()
+  const t3Searches = new Map<string, T3Search>()
+  const t3RetryAt = new Map<string, number>()
   const t3Refused = new Map<string, number>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
   /** How long a conversation that is in no thread of T3 Code is taken to be in none. */
   const T3_AGAIN_MS = 6 * 3_600_000
-  /** How long a conversation is kept from T3 Code after it could not take a message for it, or could not be asked. */
+  /** How long a conversation is kept from T3 Code after it could not take a message for it. */
   const T3_REFUSED_MS = 10 * 60_000
   /**
    * How long T3 Code is given to say which thread holds a conversation, before a click for it
    * goes the way it would without T3 Code. It says so in a fifth of a second to two seconds
-   * where it is well. One that answers the first question and then stalls would otherwise keep
-   * a click waiting through two dozen threads at twenty seconds each, which some Codex could
-   * have taken at once. What it says in the end is kept, for the clicks that come after.
+   * where it is well. Later batches keep their progress but do not restart this wait.
+   * What it says in the end is kept for the clicks that come after.
    */
   const T3_ASKED_MS = 5_000
   /**
@@ -577,29 +578,40 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (known === 'asking') return steady() - (t3Asked.get(key) ?? 0) < T3_ASKED_MS ? 'asking' : undefined
     if (known?.thread) return { server, thread: known.thread }
     if (known && now - known.at < T3_AGAIN_MS) return undefined
-    if (t3Known.size > 2000) {
+    const waiting = () => steady() - (t3Asked.get(key) ?? steady()) < T3_ASKED_MS
+    if (steady() < (t3RetryAt.get(key) ?? 0)) return waiting() ? 'asking' : undefined
+    if (t3Known.size + t3Searches.size > 2000) {
       t3Known.clear()
       t3Asked.clear()
+      t3Searches.clear()
+      t3RetryAt.clear()
     }
     t3Known.set(key, 'asking')
-    t3Asked.set(key, steady())
+    if (!t3Asked.has(key)) t3Asked.set(key, steady())
+    const search = t3Searches.get(key) ?? { pending: [], read: new Map() }
+    t3Searches.set(key, search)
     // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
     const ids = [...new Set([session.id, threadOf(key)])]
-    void t3ThreadOf(server, { harness: session.harness, ids, cwd: conversationFolder(session) })
-      .catch(() => undefined)
-      .then((thread) => {
-        t3Asked.delete(key)
-        if (thread === undefined) {
-          // T3 Code could not be asked: the conversation is reopened as any other meanwhile, and T3 Code is asked again later
+    void t3ThreadOf(server, { harness: session.harness, ids, cwd: conversationFolder(session) }, search)
+      .catch(() => ({ status: 'incomplete' as const }))
+      .then((result) => {
+        if (t3Searches.get(key) !== search) return
+        if (result.status === 'incomplete') {
+          // More candidates, unread answers and expired budgets are not evidence of absence.
+          // Keep the first deadline while continuing through later batches on subsequent passes.
           t3Known.delete(key)
-          t3Refused.set(key, Date.now())
+          t3RetryAt.set(key, steady() + 300)
         } else {
+          t3Asked.delete(key)
+          t3Searches.delete(key)
+          t3RetryAt.delete(key)
+          const thread = result.status === 'found' ? result.thread : null
           t3Known.set(key, { thread, at: Date.now() })
           if (thread) say(`${a(session.harness)} conversation (${short(session.id)}) is held in a thread of T3 Code`)
         }
-        soon(10)
+        soon(result.status === 'incomplete' ? 310 : 10)
       })
-    return 'asking'
+    return waiting() ? 'asking' : undefined
   }
   /**
    * What each mark that was put into a conversation stands for, by the conversation: the
@@ -769,6 +781,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const done = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route })
         journal('confirmed', id)
         toConfirm.delete(id)
+        hookSeen.delete(id)
         const how = counting.get(id)
         counting.delete(id)
         // Counted once: not when It already had it down as handed over
@@ -869,6 +882,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** When this machine first saw each click that waits for a closed conversation, by the clock that is never set back. */
   const firstSeen = new Map<string, number>()
+  /** Hook freshness starts at this connector's first observation, independently of either machine's wall clock. */
+  const hookSeen = new Map<string, number>()
   const reopenedNow = new Map<string, AbortController>()
   /** The name each of them has with It, by which It says which run a person stopped. */
   const runNames = new Map<string, string>()
@@ -1892,7 +1907,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // and before anything was asked for it. Given to the turn's next hook, this one would
         // be read before it: so it follows the earlier one, and is handed over after it.
         const queuedBefore = inTurn && ([...queues.keys()].some((line) => follow(line) === key) || [...behindTurn.values()].some((b) => follow(b.key) === key))
-        const forAddOn = listening || (inTurn && now - click.at < FRESH_MS && !queuedBefore)
+        const forAddOn = listening || (inTurn && performance.now() - (hookSeen.get(click.id) ?? Number.NEGATIVE_INFINITY) < FRESH_MS && !queuedBefore)
         // Which of the other ways it goes, asked only where the first does not take it
         const way = forAddOn
           ? undefined
@@ -2486,6 +2501,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
       api.delivery.inbox,
       args,
       (clicks: Offered[]) => {
+        const here = performance.now()
+        for (const click of clicks) {
+          // A full observation table declines another hook hold; it must not forget old ids
+          // and give a repeated offer a new freshness window. Confirmed deliveries free space.
+          if (!hookSeen.has(click.id) && hookSeen.size < 5000) hookSeen.set(click.id, here)
+        }
         inbox = clicks
         void route()
       },
