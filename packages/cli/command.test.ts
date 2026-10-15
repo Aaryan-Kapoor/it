@@ -3407,12 +3407,18 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
     // anything else, and here there is none to be had: a setup that got that far would end saying so
     const m = machine(false)
     const first = { IT_BACKEND_BIN: path.join(m.home, 'no-such-program'), IT_PORT: String(SITE_PORT + 500) }
+    const releaseFile = path.join(m.it, 'releases.json')
+    const releaseBefore = JSON.stringify({ base: 'https://example.invalid/original' })
+    writeFileSync(releaseFile, releaseBefore)
+    Object.assign(first, { IT_INSTALL_BASE: 'https://example.invalid/replacement' })
     const begun = () => ['service.json', 'machine.json', 'backend'].filter((name) => existsSync(path.join(m.it, name)))
     const held = await run(m, ['setup', '--only', 'openclaw', '--no-service'], first)
     expect([held.code, error(held).code]).toEqual([2, 'invalid'])
+    expect(readFileSync(releaseFile, 'utf8')).toBe(releaseBefore)
     expect(error(held).message).toMatch(/has not yet been tried in a chat channel.*run `IT_EXPERIMENTAL=openclaw it setup` once\.$/)
     const unknown = await run(m, ['setup', '--only', 'pi,no-such-app', '--no-service'], first)
     expect([unknown.code, error(unknown).message]).toEqual([2, 'Not an agent app It knows: no-such-app'])
+    expect(readFileSync(releaseFile, 'utf8')).toBe(releaseBefore)
     expect(begun()).toEqual([])
     // Asked for by a person at a terminal, who is led step by step, it is refused before the first step
     if (python) {
