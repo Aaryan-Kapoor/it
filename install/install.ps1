@@ -15,6 +15,8 @@
 # IT_INSTALL_BASE names another place to download from, laid out as GitHub lays out a
 # repository's releases. IT_VERSION names a release other than the latest, by its tag.
 # IT_INSTALL_NO_PATH, set to anything, leaves your PATH alone.
+# To join another computer, pass login and its arguments with:
+#   & ([scriptblock]::Create((irm https://itcan.do/install.ps1))) login --url <address> --code <code>
 #
 # Run by a person in a console window, it shows a few short lines and then goes straight on to
 # the setup, which the program leads. Run any other way (by a script, by an agent, with what it
@@ -24,6 +26,9 @@
 # Everything runs inside a block of its own, so that running this as `irm ... | iex` leaves
 # nothing behind in the session it was run from: no variable, no function, no changed setting.
 & {
+  # Arguments belong to this block, including when the script is invoked from downloaded text.
+  $joining = @($args)
+  if ($joining.Count -gt 0 -and $joining[0] -ne 'login') { throw 'The install script accepts only login followed by its arguments.' }
   $ErrorActionPreference = 'Stop'
   # A person at a console window is shown a few short lines, each with a mark, and is then led
   # through the setup by the program itself, as the script for macOS and Linux leads them.
@@ -126,6 +131,7 @@
   $places = @()
   $replacing = $false
   $kept = $false
+  $recoveryWritten = $false
   try {
     if ([int]$tls -ne 0) { try { [Net.ServicePointManager]::SecurityProtocol = $tls -bor [Net.SecurityProtocolType]::Tls12 } catch {} }
     # Each download is asked for one address at a time, so that where a redirect may lead is
@@ -263,11 +269,25 @@
     $replacing = $true
     foreach ($place in $places) {
       Assert-NoFolder $place.At
-      if ((Get-Kind $place.At) -ne 'nothing') { [IO.File]::Move($place.At, $place.Old) }
+      if ((Get-Kind $place.At) -ne 'nothing') {
+        if ($place.At -eq $target -and (Get-Kind $target) -eq 'file') {
+          # A service may restore only this exact previous program after this installer dies.
+          $record = ConvertTo-Json @{ file = [IO.Path]::GetFileName($place.Old); sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash.ToLower(); pid = $PID } -Compress
+          $note = "$target.recovery.json"
+          $part = "$note.$PID"
+          $bytes = (New-Object Text.UTF8Encoding $false).GetBytes($record)
+          $keptNote = [IO.File]::Open($part, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+          try { $keptNote.Write($bytes, 0, $bytes.Length); $keptNote.Flush($true) } finally { $keptNote.Dispose() }
+          Move-Item -Force -LiteralPath $part -Destination $note
+          $recoveryWritten = $true
+        }
+        [IO.File]::Move($place.At, $place.Old)
+      }
       $place.Begun = $true
       Move-Held $place.New $place.At
     }
     $replacing = $false
+    if (Test-Path -LiteralPath "$target.recovery.json") { Remove-Item -Force -LiteralPath "$target.recovery.json" }
     if ($led) { Write-Done "Installed in $dir" }
     # Earlier programs that were moved aside are removed once they have stopped running. One
     # that still runs is left for the next install to remove.
@@ -345,7 +365,10 @@
     # Nothing is said here of the usage counts It reports. The program says that itself, once,
     # at the first command a person runs at a terminal, which the setup is, and records nothing
     # before it has. So this leaves no note that it was said.
-    if ($led) {
+    if ($joining.Count -gt 0) {
+      Write-Host "It is source-available software under the It License, which is in $license."
+      Write-Host 'It is installed. Joining the other computer now.'
+    } elseif ($led) {
       Write-Quiet "Source-available under the It License, which is in $license."
       $then = $true
     } else {
@@ -387,6 +410,7 @@
         }
       }
     }
+    if ($recoveryWritten -and -not $kept) { try { Remove-Item -Force -LiteralPath "$target.recovery.json" -ErrorAction SilentlyContinue } catch {} }
     # The folder made for this run goes, with whatever is still in it, and then the lock
     if (-not $kept) { try { [IO.Directory]::Delete($stage, $true) } catch {} }
     if ($lock) { try { $lock.Dispose() } catch {} }
@@ -399,18 +423,27 @@
   # be at work for as long as the person takes. The folder is on the PATH of the setup, as it
   # will be in every terminal opened from now on, and the three settings made for it here are
   # put back as they were when it ends, so that nothing of this session is left changed.
-  if ($then) {
+  if ($then -or $joining.Count -gt 0) {
     $was = @{ Flow = $env:IT_INSTALL_FLOW; OnPath = $env:IT_INSTALL_ON_PATH; Path = $env:Path }
     try {
       $env:IT_INSTALL_FLOW = '1'
       $env:IT_INSTALL_ON_PATH = $onPath
       $env:Path = "$dir;$env:Path"
       Write-Host ''
-      & $target setup
+      if ($joining.Count -gt 0) {
+        # Windows PowerShell strips embedded quotes when it passes native arguments. Quote
+        # each word for Windows there; newer PowerShell passes the array without that step.
+        $native = @($joining)
+        if ($PSVersionTable.PSVersion -lt [Version]'7.3' -or $PSNativeCommandArgumentPassing -eq 'Legacy') {
+          $native = @($joining | ForEach-Object { '"' + ($_ -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' })
+        }
+        & $target @native
+        if ($LASTEXITCODE -ne 0) { throw 'It is installed, but joining failed. Run it login again with a new code from the other computer.' }
+      } else { & $target setup }
     } finally {
       $env:IT_INSTALL_FLOW = $was.Flow
       $env:IT_INSTALL_ON_PATH = $was.OnPath
       $env:Path = $was.Path
     }
   }
-}
+} @args

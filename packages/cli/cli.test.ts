@@ -1337,7 +1337,7 @@ describe('background service definitions', () => {
       IT_SITE_URL: '',
       IT_HARNESSES: 'pi\r\ncalc.exe',
     })
-    expect(launcher.split('\r\n')).toEqual([
+    expect(launcher.split('\r\n').filter((line) => !line.startsWith('if not exist '))).toEqual([
       '@echo off',
       'setlocal DisableDelayedExpansion',
       'chcp 65001 >nul 2>&1',
@@ -1508,9 +1508,9 @@ describe('background service definitions', () => {
     // The task is started in the folder's `bin`, where its launcher is
     expect(windowsRegisteredFor(task(printed('C:\\Users\\Ada\\.it\\bin')))).toBe('C:\\Users\\Ada\\.it')
     expect(windowsRegisteredFor(task(printed('C:\\Users\\Ada\\.it\\bin\\')))).toBe('C:\\Users\\Ada\\.it')
-    expect(asked[0]).toBe(
-      "[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((Get-ScheduledTask -TaskName 'it' -ErrorAction Stop).Actions[0].WorkingDirectory))",
-    )
+    expect(asked[0]).toContain("$name = 'it-' + $sid")
+    expect(asked[0]).toContain('Test-ItTask $legacy')
+    expect(asked[0]).toContain('[System.Text.Encoding]::UTF8.GetBytes($task.Actions[0].WorkingDirectory)')
     // A folder whose name has letters that no one code page holds is read as itself, whichever code page PowerShell prints in
     expect(windowsRegisteredFor(task(printed('C:\\Users\\René 漢字\\.it\\bin')))).toBe('C:\\Users\\René 漢字\\.it')
     expect(sameWindowsFolder(windowsRegisteredFor(task(printed('C:\\Users\\René 漢字\\.it\\bin')))!, 'c:/users/rené 漢字/.it')).toBe(true)
@@ -1605,9 +1605,10 @@ describe('background service definitions', () => {
         const runs = readFileSync(asked, 'utf8').trim().split('\n')
         expect(runs.map((line) => line.split(' ')[0])).toEqual(['stopped'])
         const script = Buffer.from(runs[0]!.split(' ')[1]!, 'base64').toString('utf16le')
-        expect(script).toMatch(
-          /Stop-ScheduledTask -TaskName 'it' .*; Unregister-ScheduledTask -TaskName 'it' .*; if \(Get-ScheduledTask -ErrorAction Stop .*\) \{ .*exit 3 \} \}; exit 0$/,
-        )
+        expect(script).toContain('Stop-ScheduledTask -InputObject $owned -ErrorAction Stop')
+        expect(script).toContain('Unregister-ScheduledTask -InputObject $owned -Confirm:$false -ErrorAction Stop')
+        expect(script).toContain("throw 'Windows still has the task'")
+        expect(script).toMatch(/; exit 0$/)
         expect([existsSync(launcher), runningFor(folder)]).toEqual([false, false])
         // Where Windows still has the task afterwards, or could not be asked, that is said and what the task starts is left where it is
         writeFileSync(launcher, '@echo off\r\n')
@@ -1669,9 +1670,9 @@ describe('background service definitions', () => {
   test('windows: a service the task is already running is stopped before the task is registered again, so that the new one starts with the new settings', () => {
     const lines = windowsScript('C:\\it\\bin', 'it-service.cmd').split('\n')
     const at = (start: string) => lines.findIndex((line) => line.startsWith(start))
-    expect(lines[at('Stop-ScheduledTask')]).toBe("Stop-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue")
-    expect(at('Stop-ScheduledTask')).toBeGreaterThanOrEqual(0)
-    expect(at('Stop-ScheduledTask')).toBeLessThan(at('Register-ScheduledTask'))
+    expect(lines[at('if ($task)')]).toBe('if ($task) { Stop-ScheduledTask -InputObject $task -ErrorAction Stop }')
+    expect(at('if ($task)')).toBeGreaterThanOrEqual(0)
+    expect(at('if ($task)')).toBeLessThan(at('Register-ScheduledTask'))
     expect(at('Register-ScheduledTask')).toBeLessThan(at('Start-ScheduledTask'))
   })
 })

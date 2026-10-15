@@ -224,11 +224,13 @@ async function install(
   // `irm ... | iex` does, and then asks what running it left behind in the session
   const pipedIn = [
     '$itTestTls = [Net.ServicePointManager]::SecurityProtocol',
-    `Get-Content -Raw -LiteralPath '${ps1.replaceAll("'", "''")}' | Invoke-Expression`,
+    args.length
+      ? `& ([scriptblock]::Create([IO.File]::ReadAllText('${ps1.replaceAll("'", "''")}'))) @(${args.map((word) => `'${word.replaceAll("'", "''")}'`).join(',')})`
+      : `Get-Content -Raw -LiteralPath '${ps1.replaceAll("'", "''")}' | Invoke-Expression`,
     "if ((Test-Path variable:root) -or (Test-Path function:Get-File) -or $ErrorActionPreference -ne 'Continue' -or [Net.ServicePointManager]::SecurityProtocol -ne $itTestTls) { Write-Output 'something was left behind in the session'; exit 9 }",
   ].join('\n')
   const r = windows
-    ? await run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...(piped ? encoded(pipedIn) : ['-File', ps1])], env, home, started)
+    ? await run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...(piped ? encoded(pipedIn) : ['-File', ps1, ...args])], env, home, started)
     : // `first` is a line of shell run in the very process that then becomes the install, so
       // that it can do something under the number that process is known by
       await run(
@@ -1213,6 +1215,56 @@ try {
   }
 
   if (windows) {
+    // A native Windows install forwards each login argument through either invocation form.
+    const enrolled = []
+    let refuseJoin = false
+    const host = await serve((req, res) => {
+      const chunks = []
+      req
+        .on('data', (chunk) => chunks.push(chunk))
+        .on('end', () => {
+          const answer = (value, status = 200) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+          if (req.url === '/cli/config') return answer({ protocol: 1, issuer: 'http://127.0.0.1:1' })
+          if (req.url === '/bridge/enroll') {
+            if (refuseJoin) return answer({ error: 'invalid' }, 400)
+            enrolled.push(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+            return answer({ machine: 'machine-windows' })
+          }
+          res.writeHead(404).end()
+        })
+    })
+    try {
+      const name = `Laptop "quoted" %USERNAME% $(throw) trailing${String.fromCharCode(92)}`
+      const args = ['login', '--url', `http://127.0.0.1:${host.address().port}`, '--code', 'Ab3dEf6hIj9kLm2nOp5q', '--name', name, '--no-setup']
+      for (const piped of [false, true]) {
+        const joined = await install(`windows-join-${piped}`, {}, { args, piped })
+        check(
+          `Windows joins from ${piped ? 'downloaded text' : 'a script file'} with quoted arguments unchanged and no local setup`,
+          joined.code === 0 &&
+            enrolled.at(-1)?.name === name &&
+            existsSync(path.join(joined.folder, 'machine.json')) &&
+            !existsSync(path.join(joined.folder, 'service.json')) &&
+            !existsSync(path.join(joined.folder, 'backend')) &&
+            !/ setup$/m.test(joined.said),
+          joined.said,
+        )
+      }
+      refuseJoin = true
+      const refused = await install('windows-join-refused', {}, { args, piped: true })
+      check(
+        'Windows reports a refused join separately from a completed installation',
+        refused.code !== 0 &&
+          existsSync(refused.it) &&
+          /installed, but joining failed/.test(refused.flat) &&
+          !existsSync(path.join(refused.folder, 'service.json')),
+        refused.said,
+      )
+      const invalid = await install('windows-command-refused', {}, { args: ['setup', '--none'] })
+      check('Windows refuses a command other than login before installing anything', invalid.code !== 0 && !existsSync(invalid.folder), invalid.said)
+    } finally {
+      await new Promise((resolve) => host.close(resolve))
+    }
+
     // ---------- a folder whose name PowerShell would read as more than a name ----------
     // Run as printed, the name would write a file where the command was run
     const odd = await install('odd', { IT_HOME: path.join(tmp, 'odd', "it's $(Set-Content RAN 1) `here") })
@@ -1245,21 +1297,33 @@ try {
     const RUN_ONCE = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'
     // What Windows was left to run: each of its lines that is one of these, by its name and what it runs
     const leftToRun = () =>
-      [...spawnSync('reg.exe', ['query', RUN_ONCE], { encoding: 'utf8' }).stdout.matchAll(/^\s+(ItRemoved\d+)\s+REG_SZ\s+(.*?)\s*$/gm)].map(
+      [...spawnSync('reg.exe', ['query', RUN_ONCE], { encoding: 'utf8' }).stdout.matchAll(/^\s+(ItRemoved[0-9a-z-]+)\s+REG_SZ\s+(.*?)\s*$/gm)].map(
         ([, name, line]) => ({ name, line }),
       )
-    const mine = leftToRun().filter(({ line }) => aside.length === 1 && line.includes(aside[0]))
+    const queue = 'HKCU\\Software\\It\\PendingRemoval'
+    const mine = leftToRun().filter(({ name }) => {
+      const value = spawnSync('reg.exe', ['query', queue, '/v', name], { encoding: 'utf8' }).stdout
+      return aside.length === 1 && value.includes(path.join(os.tmpdir(), aside[0]))
+    })
     check(
       'the program it moved out of the folder to do that is where it said, and Windows is left one line that deletes it the next time the person signs in',
       aside.length === 1 &&
         mine.length === 1 &&
-        mine[0].line === `cmd.exe /d /c del /f /q "${path.join(os.tmpdir(), aside[0])}"` &&
+        mine[0].line.startsWith('powershell.exe ') &&
+        mine[0].line.length <= 260 &&
+        !mine[0].line.includes(aside[0]) &&
         said?.said?.some((line) => line.includes(path.join(os.tmpdir(), aside[0])) && /next time you sign in/.test(line)),
       `${aside.join(' ')}\n${JSON.stringify(leftToRun())}\n${off.said}`,
     )
     // The line, run as Windows will run it. The runner is never signed in to again, so it is run here, and taken out of what Windows is to run
-    if (mine.length === 1) spawnSync(mine[0].line, { shell: true, windowsHide: true })
-    for (const { name } of mine) spawnSync('reg.exe', ['delete', RUN_ONCE, '/v', name, '/f'])
+    if (mine.length === 1) {
+      const args = mine[0].line.slice('powershell.exe '.length).replaceAll("'", "''")
+      await inPowerShell(`$p = [Diagnostics.Process]::Start('powershell.exe', '${args}'); $p.WaitForExit(); exit $p.ExitCode`, gone)
+    }
+    for (const { name } of mine) {
+      spawnSync('reg.exe', ['delete', RUN_ONCE, '/v', name, '/f'])
+      spawnSync('reg.exe', ['delete', queue, '/v', name, '/f'])
+    }
     check('and that line, run as it is written, deletes it', aside.length === 1 && !existsSync(path.join(os.tmpdir(), aside[0])), asideIn().join(' '))
   }
 

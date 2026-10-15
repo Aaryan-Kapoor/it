@@ -241,13 +241,11 @@ process.exit(/exit 0\\s*$/.test(script) ? 0 : missing ? 1 : 0)
 
   test('only a task that is started in this folder is stopped and taken away: another account’s It, or something else of the person’s that is called `it`, is left as it is', () => {
     const script = windowsRemoval("C:\\Users\\O'Neil\\.it\\bin\\")
-    // The task is asked for once, and everything that changes it comes after the look at where it is started, inside it
-    const task = "Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq 'it' }"
-    expect(script).toBe(
-      `$task = ${task}; if ($task -and (([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq 'C:\\Users\\O''Neil\\.it\\bin')) { Stop-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName 'it' -Confirm:$false -ErrorAction SilentlyContinue; if (${task}) { 'Windows still has the task'; exit 3 } }; exit 0`,
-    )
-    // However the folder was spelled when it was named here, it is the folder the task was registered with
-    expect(windowsRemoval('C:/Users/Ada/.it/bin')).toContain("-ieq 'C:\\Users\\Ada\\.it\\bin'))")
+    expect(script).toContain("$name = 'it-' + $sid")
+    expect(script).toContain('Test-ItTask $legacy')
+    expect(script).toContain("-ieq 'C:\\Users\\O''Neil\\.it\\bin'")
+    expect(script).toContain('Unregister-ScheduledTask -InputObject $owned')
+    expect(windowsRemoval('C:/Users/Ada/.it/bin')).toContain("-ieq 'C:\\Users\\Ada\\.it\\bin'")
     expect(windowsScript('C:\\Users\\Ada\\.it\\bin', 'it-service.cmd')).toContain("-WorkingDirectory 'C:\\Users\\Ada\\.it\\bin'")
   })
 })

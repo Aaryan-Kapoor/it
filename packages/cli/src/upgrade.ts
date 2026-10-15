@@ -15,7 +15,7 @@
 // matches its checksum, that starts on this system, and that says of itself that it is newer.
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, realpathSync, renameSync, rmSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeSync } from 'node:fs'
 import path from 'node:path'
 import { INSTALL, newer } from '@it/protocol'
 import { ask, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
@@ -354,6 +354,14 @@ export async function fetchNewer(
             rmSync(path.join(dir, old), { force: true })
           } catch {}
         const aside = path.join(dir, `it.old.${Date.now()}.exe`)
+        const recovery = `${program}.recovery.json`
+        put(
+          recovery,
+          Buffer.from(
+            JSON.stringify({ file: path.basename(aside), sha256: createHash('sha256').update(readFileSync(program)).digest('hex'), pid: process.pid }),
+          ),
+          0o600,
+        )
         renameSync(program, aside)
         try {
           renameSync(fresh, program)
@@ -362,6 +370,7 @@ export async function fetchNewer(
           renameSync(aside, program)
           throw err
         }
+        rmSync(recovery, { force: true })
       } else renameSync(fresh, program)
       putLegal()
       say(`Installed in ${dir}.`)
