@@ -655,7 +655,7 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
       expect(await disconnect(id, say)).toBe(false)
       expect(kept[bin]!.get(folderOf(bin))!.on).toBe(true)
       expect(read(skill)).toBe(SKILL)
-      expect(said).toContain(`${label}: the add-on could not be removed, or it could not be told whether it was; it will be tried again`)
+      expect(said).toContain(`${label}: removal has not been confirmed, so the companion files and installation note are kept for another try`)
       // Asked for again meanwhile, the add-on is whole and nothing has to be put back
       expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
       expect(read(skill)).toBe(SKILL)
@@ -1028,6 +1028,38 @@ describe('where an add-on was installed', () => {
     expect([...kept.pi!.get(first)!.packages!]).toEqual([])
   })
 
+  test.each([
+    ['claude-code', 'claude', 'unknown'],
+    ['claude-code', 'claude', 'present'],
+    ['codex', 'codex', 'unknown'],
+    ['codex', 'codex', 'present'],
+  ] as const)('keeps %s ownership until companion cleanup follows a temporarily %s report of %s', async (id, bin, state) => {
+    await connect(id, () => {})
+    const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+    const real = fake.execFile.getMockImplementation()!
+    let removed = false
+    let interrupted = false
+    fake.execFile.mockImplementation(
+      (command: string, given: string[], options: { env: NodeJS.ProcessEnv }, done: (err: Error | null, out: string, err2: string) => void) => {
+        const words = given.map((word) => word.replace(/^"(.*)"$/, '$1')).join(' ')
+        if (command === bin && /plugin (uninstall|remove) /.test(words)) removed = true
+        if (removed && !interrupted && words.startsWith('plugin list')) {
+          interrupted = true
+          return state === 'unknown'
+            ? done(new Error('briefly unavailable'), '', '')
+            : done(null, bin === 'claude' ? JSON.stringify([{ id: ID, enabled: true }]) : `${ID}  installed, enabled`, '')
+        }
+        return real(command, given, options, done)
+      },
+    )
+    expect(await disconnect(id, () => {})).toBe(false)
+    expect(existsSync(skill)).toBe(true)
+    expect(existsSync(stampFile(id))).toBe(true)
+    fake.execFile.mockImplementation(real)
+    expect(await disconnect(id, () => {})).toBe(true)
+    expect(existsSync(skill)).toBe(false)
+  })
+
   test('may have been deleted since, add-on and all: the app is then asked nothing about that folder, and the note of the installation goes', async () => {
     const first = path.join(tmp, 'first')
     vi.stubEnv('CLAUDE_CONFIG_DIR', first)
@@ -1206,6 +1238,18 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
     expect(commands('openclaw').filter((words) => /uninstall|install|enable/.test(words))).toEqual([])
     expect(existsSync(root(retained))).toBe(true)
     expect((await statusOf('openclaw'))!.addon).toBe('connected')
+  })
+
+  test('a missing optional OpenClaw config file is not proof that the installed profile is gone', async () => {
+    const config = path.join(tmp, 'openclaw-custom.json')
+    writeFileSync(config, '{}')
+    vi.stubEnv('OPENCLAW_CONFIG_PATH', config)
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    rmSync(config)
+    vi.stubEnv('OPENCLAW_STATE_DIR', path.join(tmp, 'second-state'))
+    expect((await connect('openclaw', () => {})).addon).toBe('unavailable')
+    expect(noted('openclaw').installs).toHaveLength(1)
+    expect(existsSync(root(path.join(person, '.openclaw')))).toBe(true)
   })
 
   test('a folder it was connected in that has been deleted since does not stand in the way of another', async () => {
