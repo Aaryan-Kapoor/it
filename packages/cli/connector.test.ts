@@ -1285,6 +1285,180 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:handedOff')).toEqual(['click-6'])
   })
 
+  test('a waiter copy and its receipt survive consecutive connector restarts', async () => {
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    const restart = async () => {
+      const previous = home
+      await stop!()
+      stop = null
+      await start('socket', {}, (folder) => {
+        for (const name of ['delivery-recovery.json', 'aliases.json', 'heard.json']) {
+          if (existsSync(path.join(previous, name))) writeFileSync(path.join(folder, name), readFileSync(path.join(previous, name)))
+        }
+      })
+    }
+    await restart()
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    await waitingFor(6)
+    await restart()
+    expect((await waitingFor(6))?.clicks).toBeUndefined()
+  })
+
+  test('a returned click cannot be overtaken after more than three seconds without visibility', async () => {
+    standIn()
+    stand.answer = (name) => (name === 'delivery:giveBackBatch' ? { back: ['click-left'], done: true } : undefined)
+    await start()
+    offered(click(6))
+    await settled()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5000)
+    try {
+      await pass(5)
+      expect(called('delivery:claim')).toEqual([])
+    } finally {
+      clock.mockRestore()
+    }
+    offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
+    await pass()
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')[0]).toBe('click-left')
+  })
+
+  test('a failed legacy release stays unresolved until it succeeds', async () => {
+    standIn()
+    let failed = true
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch' || name === 'delivery:giveBack') throw new Error(`Could not find public function for '${name}'.`)
+      if (name === 'delivery:release' && failed) throw new Error('offline')
+      return undefined
+    }
+    await start('socket', {}, (folder) => writeFileSync(path.join(folder, 'journal.jsonl'), `${JSON.stringify({ event: 'claimed', id: 'click-left' })}\n`))
+    offered(click(6))
+    await pass(5)
+    expect(called('delivery:claim')).toEqual([])
+    failed = false
+    offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
+    await pass()
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')[0]).toBe('click-left')
+  })
+
+  test('recovery fetches an older click omitted by the inbox and lets unrelated conversations progress', async () => {
+    standIn()
+    let reachable = false
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch')
+        return { back: ['click-left'], done: true, routes: [{ id: 'click-left', session: { harness: 'codex', id: 'thread-6' } }] }
+      if (name === 'delivery:recover') {
+        if (!reachable) throw new Error('offline')
+        return [{ id: 'click-left', click: { ...click(6), id: 'click-left', at: Date.now() - 20_000 } }]
+      }
+      return undefined
+    }
+    await start()
+    offered(click(6), click(7))
+    await pass()
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')).toEqual(['click-7'])
+    reachable = true
+    await pass()
+    await until(() => stand.codex.length === 2)
+    expect(called('delivery:claim')[1]).toBe('click-left')
+    stand.codex[1]!.end()
+    await pass()
+    await until(() => called('delivery:claim').includes('click-6'))
+  })
+
+  test('a returned click intentionally excluded from subscriptions never holds another conversation', async () => {
+    stand.answer = (name) =>
+      name === 'delivery:giveBackBatch'
+        ? { back: ['disconnected'], done: true }
+        : name === 'delivery:recover'
+          ? [{ id: 'disconnected', click: { ...click(9), id: 'disconnected', session: { harness: 'opencode', id: 'closed' } } }]
+          : undefined
+    await start()
+    offered(click(6))
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')).toEqual(['click-6'])
+  })
+
+  test('an accepted queue receipt still prevents resubmission after its backend confirmation was lost', async () => {
+    await start()
+    await turn(6, true)
+    stand.answer = (name) => {
+      if (name === 'delivery:handedOff') throw new Error('offline')
+      return undefined
+    }
+    offered(click(6))
+    await until(() => stand.codex.length === 1)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-6'))
+    const previous = home
+    await stop!()
+    stop = null
+    stand.answer = (name) => (name === 'delivery:giveBackBatch' ? { back: ['click-6'], done: true } : undefined)
+    await start('socket', {}, (folder) => {
+      writeFileSync(path.join(folder, 'delivery-recovery.json'), readFileSync(path.join(previous, 'delivery-recovery.json')))
+    })
+    offered(click(6))
+    await until(() => called('delivery:handedOff').length >= 2)
+    expect(stand.codex).toHaveLength(1)
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+  })
+
+  test('a restored accepted receipt is reconciled even when the backend already removed the click from its inbox', async () => {
+    standIn()
+    await start('socket', {}, (folder) =>
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({ version: 1, waiters: [], marks: [], accepted: ['accepted'], returning: ['accepted'] }),
+      ),
+    )
+    stand.answer = (name) => (name === 'delivery:recover' ? [{ id: 'accepted', click: null }] : undefined)
+    offered()
+    await pass()
+    expect(called('delivery:handedOff')).toContain('accepted')
+    expect(JSON.parse(readFileSync(path.join(home, 'delivery-recovery.json'), 'utf8')).accepted).toEqual([])
+    expect(stand.codex).toHaveLength(0)
+  })
+
+  test('outstanding queue commands reserve durable receipt space before another app can accept a click', async () => {
+    stand.answer = (name) => {
+      if (name === 'delivery:handedOff') throw new Error('offline')
+      return undefined
+    }
+    await start('socket', {}, (folder) =>
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({ version: 1, waiters: [], marks: [], accepted: Array.from({ length: 199 }, (_, n) => `accepted-${n}`), returning: [] }),
+      ),
+    )
+    offered(click(1), click(2), click(3))
+    await until(() => stand.codex.length > 0)
+    await settled()
+    expect(stand.codex).toHaveLength(1)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    expect(JSON.parse(readFileSync(path.join(home, 'delivery-recovery.json'), 'utf8')).accepted).toHaveLength(200)
+    expect(stand.codex).toHaveLength(1)
+  })
+
+  test('a queue is never used when its waiter recovery copy could not be persisted', async () => {
+    await start()
+    await turn(6, true)
+    const file = path.join(home, 'delivery-recovery.json')
+    rmSync(file, { force: true })
+    mkdirSync(file)
+    offered(click(6))
+    await settled()
+    await settled()
+    expect(stand.codex).toHaveLength(0)
+    expect(called('delivery:claim')).toEqual([])
+    rmSync(file, { recursive: true })
+  })
+
   test('a connector started anew has It give back what this machine still holds, and takes nothing that was done after until it is offered that again', async () => {
     // The connector before this one claimed a click and ended before it had handed it over: It
     // holds that click back until its lease runs out, and offers the next one meanwhile
@@ -2126,6 +2300,35 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(await behindMarks(1)).toEqual([])
     expect((await behindMarks(8))?.length).toBe(1)
     expect(stand.codex).toEqual([])
+  })
+
+  test('an accepted mark survives restart without being submitted again and only its own receipt removes it', async () => {
+    await start()
+    await heard(9)
+    offered(click(9))
+    await until(() => stand.codex.length === 1)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    const before = await asksBehind(9)
+    const previous = home
+    await stop!()
+    stop = null
+    await start('socket', {}, (folder) => {
+      for (const name of ['delivery-recovery.json', 'heard.json']) {
+        if (existsSync(path.join(previous, name))) writeFileSync(path.join(folder, name), readFileSync(path.join(previous, name)))
+      }
+    })
+    expect(await asksBehind(9)).toEqual(before)
+    wants([])
+    expect((await asksBehind(9))?.texts).toEqual([])
+    wants(['codex'])
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-99', was: 'thread-9' } })
+    expect(await asksBehind(99)).toEqual(before)
+    expect(await asksBehind(1, { taken: before!.marks })).toEqual({ ok: true })
+    expect(await asksBehind(9)).toEqual(before)
+    expect(stand.codex).toHaveLength(1)
+    await asksBehind(9, { taken: before!.marks })
+    expect((await asksBehind(9))?.texts).toEqual([])
   })
 
   test('the mark goes into Codex’s queue as well, and what a person typed is handed over behind it and kept off the command line', async () => {

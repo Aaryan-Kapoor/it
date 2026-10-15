@@ -1546,6 +1546,39 @@ describe('clicks and their delivery', () => {
     expect(await code(browser.mutation(api.delivery.giveBack, {}))).not.toBe('ok')
   })
 
+  test('recovery reads returned clicks directly and resolves stopped, deleted and reassigned actions', async () => {
+    const { t, m, click } = await setup()
+    const other = await machineOf(t, 'alice', 'other')
+    const first = (await click('recover-first')).actionId
+    const gone = (await click('recover-gone')).actionId
+    const moved = (await click('recover-moved')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [first, gone, moved] })
+    const batch = await m.as.mutation(api.delivery.giveBackBatch, {})
+    expect(batch.routes).toHaveLength(3)
+    await t.run(async (ctx) => {
+      await ctx.db.delete(gone)
+      const row = (await ctx.db.get(moved))!
+      await ctx.db.patch(row.artifactId, { machineId: other.id })
+    })
+    // All actions share this page, so its reassignment resolves every remaining hold.
+    expect(await m.as.query(api.delivery.recover, { ids: [first, gone, moved] })).toEqual([
+      { id: first, click: null },
+      { id: gone, click: null },
+      { id: moved, click: null },
+    ])
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.get(first))!
+      await ctx.db.patch(row.artifactId, { machineId: m.id })
+    })
+    expect((await m.as.query(api.delivery.recover, { ids: [first] }))[0]?.click?.id).toBe(first)
+    await m.as.mutation(api.delivery.claim, { ids: [first] })
+    await m.as.mutation(api.delivery.handedOff, { id: first, route: 'queue' })
+    expect(await m.as.query(api.delivery.recover, { ids: [first] })).toEqual([{ id: first, click: null }])
+    const stranger = await machineOf(t, 'bob', 'stranger')
+    expect(await stranger.as.query(api.delivery.recover, { ids: [moved] })).toEqual([{ id: moved, click: null }])
+    expect(await m.as.query(api.delivery.recover, { ids: Array(40).fill('invalid') })).toHaveLength(32)
+  })
+
   test('more than four thousand leases held by another machine cannot hide this machine’s lease when it starts', async () => {
     const { t, m, click } = await setup()
     const other = await machineOf(t, 'alice', 'server')
@@ -1559,7 +1592,7 @@ describe('clicks and their delivery', () => {
     expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([first])
     expect((await inbox(m)).map((c) => c.id)).toEqual([first])
     expect(await m.as.mutation(api.delivery.claim, { ids: [first] })).toEqual([first])
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [first], done: true })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [first], done: true })
     expect(
       await t.run((ctx) =>
         ctx.db
@@ -1601,11 +1634,11 @@ describe('clicks and their delivery', () => {
       back.push(...batch.back)
     }
     expect(back).toEqual(ids)
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: true })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [], done: true })
     // An older connector still gets its array answer with the same 500-action ceiling.
     for (let i = 0; i < ids.length; i += 50) await m.as.mutation(api.delivery.claim, { ids: ids.slice(i, i + 50) })
     expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual(ids.slice(0, 500))
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: ids.slice(500), done: true })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: ids.slice(500), done: true })
     const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
     expect(await code(browser.mutation(api.delivery.giveBackBatch, {}))).not.toBe('ok')
   })
@@ -1620,9 +1653,9 @@ describe('clicks and their delivery', () => {
       for (let i = 1; i < 64; i++) await ctx.db.insert('actions', { ...base, clientActionId: `stopped-${i}` })
       return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', createdAt: Date.now() + 1 })
     })
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: false })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [], done: false })
     expect(await t.run((ctx) => ctx.db.get(first))).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [later], done: true })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [later], done: true })
   })
 
   test('a connector keeps a click it is still delivering by renewing, and cannot renew what it has lost', async () => {
