@@ -127,7 +127,7 @@ export const leave = mutation({
  *
  * A browser cancels the registered command even if its last lease has expired. Its next
  * poll still ends, while a newly registered command is independent of that cancellation.
- * An agent ending a tour clears the registration without marking it as skipped.
+ * An agent ending a tour preserves an identified wait and any cancellation of that wait.
  */
 export const done = mutation({
   args: {},
@@ -136,14 +136,14 @@ export const done = mutation({
     const now = Date.now()
     const was = await kept(ctx, user._id)
     const tour = of(was)
-    const waitingUntil = kind === 'browser' && (tour.waitingId !== undefined || (tour.waitingUntil ?? 0) > now) ? tour.waitingUntil : undefined
+    const waitingUntil = tour.waitingId !== undefined || (kind === 'browser' && (tour.waitingUntil ?? 0) > now) ? tour.waitingUntil : undefined
     await keep(ctx, user._id, was, {
       ...tour,
       doneAt: now,
       askedAt: undefined,
       waitingUntil,
-      waitingId: kind === 'browser' ? tour.waitingId : undefined,
-      waitingCancelled: kind === 'browser' && tour.waitingId !== undefined ? true : undefined,
+      waitingId: tour.waitingId,
+      waitingCancelled: kind === 'browser' && tour.waitingId !== undefined ? true : tour.waitingCancelled,
     })
     return null
   },

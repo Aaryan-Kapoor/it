@@ -180,6 +180,18 @@ describe('a tour that is over', () => {
 })
 
 describe('the identity of a tour wait', () => {
+  test('an agent finishing its tour preserves a concurrent identified waiter, including its cancellation', async () => {
+    const { browser, agent } = await household()
+    await agent.mutation(api.tour.wait, { waitId: 'current', first: true, harness: 'pi' })
+    vi.advanceTimersByTime(1000)
+    await agent.mutation(api.tour.done, {})
+    expect(await agent.mutation(api.tour.wait, { waitId: 'current' })).toEqual({ asked: false })
+    expect(await browser.mutation(api.tour.ask, {})).toEqual({ waiting: true, by: 'pi' })
+    await browser.mutation(api.tour.done, {})
+    await agent.mutation(api.tour.done, {})
+    await expect(agent.mutation(api.tour.wait, { waitId: 'current' })).rejects.toThrow(/want no tour/)
+  })
+
   test('Skip survives an expired lease and a backward clock, while a new command can wait immediately', async () => {
     for (const elapsed of [0, WAITING_MS * 3, -60_000]) {
       const { browser, agent } = await household()
