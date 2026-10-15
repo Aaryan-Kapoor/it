@@ -1349,6 +1349,31 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     }
   })
 
+  test('an unanswered first recovery batch still blocks routing after old leases expire', async () => {
+    standIn(true)
+    let readable = false
+    stand.answer = (name) => {
+      if (name !== 'delivery:giveBackBatch') return undefined
+      if (!readable) throw new Error('Recovery is temporarily unavailable.')
+      return { back: [], done: true }
+    }
+    await start()
+    offered(click(6))
+    await pass(2)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 90_000)
+    try {
+      await pass(2)
+      expect(called('delivery:claim')).toEqual([])
+      expect(stand.codex).toEqual([])
+      readable = true
+      await pass(2)
+      await until(() => stand.codex.length === 1)
+      expect(called('delivery:claim')).toEqual(['click-6'])
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   test('recovery still accepts an older backend’s array answer when it has no batch function', async () => {
     stand.answer = (name) => {
       if (name === 'delivery:giveBackBatch') throw new Error(`Could not find public function for '${name}'.`)

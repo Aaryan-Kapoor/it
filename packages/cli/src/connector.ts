@@ -717,12 +717,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** What was given back and has not been offered again yet, and until when that is waited for. */
   const comingBack = new Set<string>()
   let legacyGiveBack = false
-  let recoveringBatches = false
   let backBy = 0
-  /** When this connector first looked at what was waiting, by the clock that is never set back. */
-  let began = 0
-  /** For how long it is tried where It cannot be asked. Past it, the leases have run out by themselves. */
-  const BACK_TRY_MS = LEASE_MS + 5000
   /** For how long the offer of what was given back is waited for. One whose conversation is not listened for here is never offered. */
   const BACK_SEEN_MS = 3000
   async function recoverBatch(): Promise<{ back: string[]; done: boolean } | null> {
@@ -731,7 +726,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
       try {
         const result = await call<{ back: string[]; done: boolean }>('mutation', api.delivery.giveBackBatch, {})
         if (!result || !Array.isArray(result.back) || !result.back.every((id) => typeof id === 'string') || typeof result.done !== 'boolean') return null
-        recoveringBatches = true
         return result
       } catch (err) {
         if (!missing(err)) return null
@@ -1757,18 +1751,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (routing || closing || unfitting) return
     routing = true
     try {
-      if (!began) began = steady()
       if (givingBack === 'due') {
         const asked = await recoverBatch()
         if (asked === null) {
-          // It could not be asked. Nothing is taken meanwhile, for as long as a lease of the
-          // connector before this one can still stand. Once batch recovery has begun, only
-          // its explicit completion ends the hold, even if a later batch cannot be read yet.
-          if (recoveringBatches || steady() - began < BACK_TRY_MS) {
-            soon(1000)
-            return
-          }
-          givingBack = 'done'
+          // An expired lease is still hidden until the backend requeues it. Only a complete
+          // recovery answer proves that older work no longer waits behind a newer click.
+          soon(1000)
+          return
         } else {
           for (const id of asked.back) {
             journal('released', id)
