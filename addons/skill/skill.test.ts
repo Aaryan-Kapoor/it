@@ -3,7 +3,7 @@
 // `it` command and the in-page script really have.
 import { readdirSync, readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, onTestFinished, test } from 'vitest'
 import { RUNTIME } from '../../packages/content/src/runtime.generated'
 import { LIMITS, QUOTA } from '../../packages/protocol/src/index'
 
@@ -22,6 +22,58 @@ const help = /const HELP = `([\s\S]*?)`\n/.exec(main)![1]!
 const code = [...skill.matchAll(/```[a-z]*\n([\s\S]*?)```|`([^`\n]+)`/g)].flatMap((m) => (m[1] ?? m[2]!).split('\n'))
 /** The `it` commands among it, each as its words. */
 const commands = code.filter((line) => /^it [a-z]/.test(line)).map((line) => line.split(/\s+/))
+
+/** Run the documented draft example with the served runtime and control the site's answers. */
+const draftPage = () => {
+  const example = /```html\n([\s\S]*?)```/.exec(more.page!)![1]!
+  const script = /<script>([\s\S]*?)<\/script>/.exec(example)![1]!
+  const w = new JSDOM(`<!doctype html><body>${example.replace(/<script>[\s\S]*?<\/script>/, '')}</body>`, {
+    url: 'http://content.test/s/a-token/v/1/index.html',
+    runScripts: 'outside-only',
+  }).window as any
+  onTestFinished(() => w.close())
+  const later = new Map<number, { fn: () => void; ms: number }>()
+  let timer = 0
+  w.setTimeout = (fn: () => void, ms: number) => {
+    later.set(++timer, { fn, ms })
+    return timer
+  }
+  w.clearTimeout = (n: number) => later.delete(n)
+  w.setInterval = () => 0
+  w.__IT__ = { app: 'http://app.test', id: 'notes', version: 1, keep: '/s/a-token/__it/keep' }
+  w.parent.postMessage = () => {}
+  w.eval(RUNTIME)
+  w.eval(script)
+  const sent: any[] = []
+  const port = { postMessage: (m: unknown) => sent.push(m), onmessage: null as ((e: { data: unknown }) => void) | null }
+  w.dispatchEvent(Object.assign(new w.Event('message'), { origin: 'http://app.test', source: w.parent, data: { type: 'it:port' }, ports: [port] }))
+  const box = w.document.getElementById('draft')
+  const stores = () => sent.filter((m) => m.type === 'it:store')
+  return {
+    box,
+    retry: w.document.getElementById('draft-retry'),
+    said: () => w.document.getElementById('draft-status')?.textContent,
+    types(text: string) {
+      box.value = text
+      box.dispatchEvent(new w.Event('input'))
+    },
+    arrives: (state: unknown, revision: number) => port.onmessage!({ data: { type: 'it:state', state, revision } }),
+    /** Run only the documented debounce, not the runtime's connection retry. */
+    aMomentLater() {
+      for (const [id, { fn, ms }] of [...later]) {
+        if (ms !== 800) continue
+        later.delete(id)
+        fn()
+      }
+    },
+    stored: () => stores().map((m) => m.value),
+    async answer(index: number, ok: boolean) {
+      const requestId = stores()[index].requestId
+      port.onmessage!({ data: { type: 'it:result', requestId, ok, ...(ok ? {} : { error: 'The save was refused.' }) } })
+      await new Promise(setImmediate)
+    },
+  }
+}
 
 describe('the agent skill', () => {
   test('is short, and names each part it leaves out where an agent would want it, by the command that prints it', () => {
@@ -279,53 +331,14 @@ describe('the agent skill', () => {
     expect(skill).toContain("It is not there yet when the page's scripts first run")
     expect(skill).toContain('so as the page starts it returns `undefined` even for something that was saved')
     // The example reads what was saved where the state arrives, and saves no faster than a page may send
-    const example = /```html\n<textarea id="draft">[\s\S]*?```/.exec(skill)![0]
+    const example = /```html\n[\s\S]*?```/.exec(more.page!)![0]
     expect(example).toMatch(/It\.onState\(\(\) => \{[\s\S]{0,80}box\.value = It\.store\.get\('draft'\) \?\? ''/)
-    expect(example).toMatch(/setTimeout\(\(\) => It\.store\.set\('draft', box\.value\)/)
+    expect(example).toContain('setTimeout(save, 800)')
   })
 
   test('its example of a draft, run as it is written, puts back what was saved once and never over what was typed, before the state came or after', () => {
-    const example = /```html\n(<textarea id="draft">[\s\S]*?)```/.exec(skill)![1]!
-    const script = /<script>([\s\S]*?)<\/script>/.exec(example)![1]!
-    /** The example in a page of its own, with the in-page script as it is served, and the site stood in for by hand. */
-    const page = () => {
-      const w = new JSDOM(`<!doctype html><body>${example.replace(/<script>[\s\S]*?<\/script>/, '')}</body>`, {
-        url: 'http://content.test/s/a-token/v/1/index.html',
-        runScripts: 'outside-only',
-      }).window as any
-      /** What the page has asked to be done later, and not yet. */
-      let later: (() => void)[] = []
-      w.setTimeout = (fn: () => void) => later.push(fn)
-      w.clearTimeout = (n: number) => {
-        later[n - 1] = () => {}
-      }
-      w.setInterval = () => 0
-      w.__IT__ = { app: 'http://app.test', id: 'notes', version: 1, keep: '/s/a-token/__it/keep' }
-      w.parent.postMessage = () => {}
-      w.eval(RUNTIME)
-      w.eval(script)
-      const sent: any[] = []
-      const port = { postMessage: (m: unknown) => sent.push(m), onmessage: null as ((e: { data: unknown }) => void) | null }
-      w.dispatchEvent(Object.assign(new w.Event('message'), { origin: 'http://app.test', source: w.parent, data: { type: 'it:port' }, ports: [port] }))
-      const box = w.document.getElementById('draft')
-      return {
-        box,
-        types(text: string) {
-          box.value = text
-          box.dispatchEvent(new w.Event('input'))
-        },
-        arrives: (state: unknown, revision: number) => port.onmessage!({ data: { type: 'it:state', state, revision } }),
-        /** The moment after the typing stopped. */
-        aMomentLater() {
-          const due = later
-          later = []
-          for (const fn of due) fn()
-        },
-        stored: () => sent.filter((m) => m.type === 'it:store').map((m) => m.value),
-      }
-    }
     // Opened with nothing typed: what was saved is put back, and what is typed after it stays through every later change of the state
-    const opened = page()
+    const opened = draftPage()
     opened.arrives({ _page: { draft: 'what was saved' } }, 3)
     expect(opened.box.value).toBe('what was saved')
     opened.types('what was saved, and more')
@@ -334,12 +347,83 @@ describe('the agent skill', () => {
     opened.aMomentLater()
     expect(opened.stored()).toEqual(['what was saved, and more'])
     // Typed into before the state came, which takes a moment: what was typed stays, and it is what is saved
-    const early = page()
+    const early = draftPage()
     early.types('typed before the state came')
     early.arrives({ _page: { draft: 'what was saved' } }, 3)
     expect(early.box.value).toBe('typed before the state came')
     early.aMomentLater()
     expect(early.stored()).toEqual(['typed before the state came'])
+  })
+
+  test('the draft example reports a failed save, preserves its text and retries without another edit', async () => {
+    const p = draftPage()
+    p.arrives({}, 0)
+    expect(p.said()).toBe('No unsaved changes.')
+    p.types('first letter')
+    p.types('the whole draft')
+    expect(p.said()).toBe('Changes not saved yet.')
+    expect(p.stored()).toEqual([])
+    p.aMomentLater()
+    expect(p.stored()).toEqual(['the whole draft'])
+    expect(p.said()).toBe('Saving...')
+    await p.answer(0, false)
+    expect(p.box.value).toBe('the whole draft')
+    expect(p.said()).toMatch(/^Not saved\. Keep this page open and try again\./)
+    expect(p.retry.hidden).toBe(false)
+    // A failure does not start an endless retry loop.
+    p.aMomentLater()
+    expect(p.stored()).toHaveLength(1)
+    p.retry.click()
+    p.retry.click()
+    expect(p.stored()).toEqual(['the whole draft', 'the whole draft'])
+    expect(p.said()).toBe('Saving...')
+    expect(p.retry.hidden).toBe(true)
+    await p.answer(1, true)
+    expect(p.said()).toBe('Saved.')
+    expect(p.box.value).toBe('the whole draft')
+    expect(p.retry.hidden).toBe(true)
+  })
+
+  test.each([true, false])('the draft example keeps newer text unsaved when an older request finishes with ok=%s', async (ok) => {
+    const p = draftPage()
+    p.types('older draft')
+    p.aMomentLater()
+    // Typing and its debounce both happen before the older request is answered.
+    p.types('newest draft')
+    p.aMomentLater()
+    expect(p.stored()).toEqual(['older draft'])
+    await p.answer(0, ok)
+    expect(p.box.value).toBe('newest draft')
+    expect(p.said()).toBe('Changes not saved yet.')
+    expect(p.retry.hidden).toBe(true)
+    p.aMomentLater()
+    expect(p.stored()).toEqual(['older draft', 'newest draft'])
+    await p.answer(1, false)
+    expect(p.said()).toMatch(/^Not saved\./)
+    // Even a repeated answer for the old request cannot clear this revision's failure.
+    await p.answer(0, true)
+    expect(p.said()).toMatch(/^Not saved\./)
+    expect(p.retry.hidden).toBe(false)
+    p.retry.click()
+    await p.answer(2, true)
+    expect(p.said()).toBe('Saved.')
+    expect(p.box.value).toBe('newest draft')
+  })
+
+  test('the draft example saves an edit made during a retry before saying it is saved', async () => {
+    const p = draftPage()
+    p.types('a draft')
+    p.aMomentLater()
+    await p.answer(0, false)
+    p.retry.click()
+    p.types('a draft with another sentence')
+    // The retry finishes before the new edit's debounce.
+    await p.answer(1, true)
+    expect(p.said()).toBe('Changes not saved yet.')
+    p.aMomentLater()
+    expect(p.stored()).toEqual(['a draft', 'a draft', 'a draft with another sentence'])
+    await p.answer(2, true)
+    expect(p.said()).toBe('Saved.')
   })
 
   test('says how much of what is waiting one `it wait` or one `it actions` prints, in the number the program keeps, and to run it again past that', () => {

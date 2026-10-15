@@ -15,23 +15,63 @@ A page is shown in a sandbox, as a document that shares nothing with the site, w
 
 `It.store.set(key, value)` and `It.store.get(key)` keep small things for the page itself. What is kept there is kept with the page, so it is there the next time the page is opened, on any display. It arrives with the page's state, which is empty until it arrives, a moment after the page opens. It is not there yet when the page's scripts first run: `It.store.get` waits for nothing and answers from what has arrived, so as the page starts it returns `undefined` even for something that was saved. Read what was saved in `It.onState`, as below.
 
-A draft is put back once, when the state first arrives, and never over what is being typed: not when the state changes later, and not when the user began typing before it arrived. It is saved a moment after the typing stops, and not at every letter, which would be more than a page may send:
+A draft is put back once, when the state first arrives, and never over what is being typed: not when the state changes later, and not when the user began typing before it arrived. It is saved a moment after the typing stops, and not at every letter, which would be more than a page may send. A failed save keeps the text and offers a retry. Keep the page open until it says "Saved." Closing it while changes are unsaved can lose them.
+
+Only one save runs at a time. Each save remembers the draft revision it sent, so its answer cannot mark newer text as saved. This counter belongs to this open page, not to the backend's state revision. Two displays editing the same draft still overwrite each other's saved values.
 
 ```html
-<textarea id="draft"></textarea>
+<label for="draft">Draft</label>
+<textarea id="draft" aria-describedby="draft-status"></textarea>
+<p id="draft-status" role="status">Loading saved draft...</p>
+<button id="draft-retry" type="button" hidden>Retry saving</button>
 <script>
   const box = document.getElementById('draft')
+  const status = document.getElementById('draft-status')
+  const retry = document.getElementById('draft-retry')
   let settled = false
   It.onState(() => {
     if (settled) return
     settled = true
     box.value = It.store.get('draft') ?? ''
+    status.textContent = 'No unsaved changes.'
   })
   let later
+  let revision = 0
+  let savedRevision = 0
+  let saving = false
+  async function save() {
+    clearTimeout(later)
+    if (saving || revision === savedRevision) return
+    const sentRevision = revision
+    saving = true
+    retry.hidden = true
+    status.textContent = 'Saving...'
+    try {
+      await It.store.set('draft', box.value)
+      savedRevision = sentRevision
+      if (revision === sentRevision) status.textContent = 'Saved.'
+    } catch {
+      if (revision === sentRevision) {
+        status.textContent = 'Not saved. Keep this page open and try again. If it keeps failing, check the connection or shorten the draft.'
+        retry.hidden = false
+      }
+    } finally {
+      saving = false
+      if (revision !== sentRevision) {
+        status.textContent = 'Changes not saved yet.'
+        clearTimeout(later)
+        later = setTimeout(save, 800)
+      }
+    }
+  }
+  retry.addEventListener('click', save)
   box.addEventListener('input', () => {
     settled = true
+    revision++
+    status.textContent = 'Changes not saved yet.'
+    retry.hidden = true
     clearTimeout(later)
-    later = setTimeout(() => It.store.set('draft', box.value).catch(() => {}), 800)
+    later = setTimeout(save, 800)
   })
 </script>
 ```
