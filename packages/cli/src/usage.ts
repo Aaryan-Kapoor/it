@@ -571,6 +571,7 @@ function decision(): (() => void) | null {
   const file = decidingFile()
   const owner: DecisionOwner = { pid: process.pid, holder: randomUUID() }
   const whole = `${file}.${owner.holder}.tmp`
+  const claims: string[] = []
   const drop = (): void => {
     if (decisionOwner(file)?.holder === owner.holder) remove(file)
   }
@@ -589,6 +590,9 @@ function decision(): (() => void) | null {
       const abandoned: { file: string; holder: string }[] = []
       for (let attempt = 0; attempt < 20; attempt++) {
         const after = `${file}.after.${word}`
+        // Linking can succeed even if removing the temporary name then throws.
+        // Remember the attempted claim before either operation, and clean only our owner.
+        claims.push(after)
         if (make(after)) {
           try {
             // Only one recoverer may replace this dead owner's marker. If that recoverer
@@ -616,6 +620,9 @@ function decision(): (() => void) | null {
     drop()
     return null
   } finally {
+    for (const claim of claims) {
+      if (decisionOwner(claim)?.holder === owner.holder) remove(claim)
+    }
     remove(whole)
   }
   const mine = ordinary(file, constants.O_RDONLY)

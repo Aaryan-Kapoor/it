@@ -1418,6 +1418,47 @@ await sendNow('installation.removed', { age: 'under 1 day' })
     }
   })
 
+  test.each([false, true])('a failed temporary cleanup releases only its own recovery claim, with a replacement: %s', async (replace) => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    const left = JSON.stringify({ pid, holder: randomUUID() })
+    writeFileSync(deciding, left)
+    const claim = `${deciding}.after.${JSON.parse(left).holder}`
+    const replacement = JSON.stringify({ pid: process.pid, holder: randomUUID() })
+    const posts: string[] = []
+    const sender = noting(posts)
+    for (let i = 0; i < 20; i++) published()
+    let failed = false
+    try {
+      await withFiles(
+        {
+          rmSync:
+            (real) =>
+            (file: fs.PathLike, ...rest: any[]) => {
+              if (String(file).startsWith(`${deciding}.`) && String(file).endsWith('.tmp') && existsSync(claim) && !failed) {
+                failed = true
+                if (replace) writeFileSync(claim, replacement)
+                throw Object.assign(new Error('temporary name is busy'), { code: 'EBUSY' })
+              }
+              return real(file, ...rest)
+            },
+        },
+        () => sender.tick(),
+      )
+      expect(failed).toBe(true)
+      expect(posts).toEqual([])
+      expect(readFileSync(deciding, 'utf8')).toBe(left)
+      if (replace) expect(readFileSync(claim, 'utf8')).toBe(replacement)
+      else expect(readdirSync(home).filter((file) => file.startsWith('telemetry-sending'))).toEqual(['telemetry-sending'])
+      await sender.tick()
+      expect(sent(posts).flatMap((batch) => batch.events)).toHaveLength(replace ? 0 : 20)
+      expect(existsSync(deciding)).toBe(replace)
+    } finally {
+      sender.stop()
+    }
+  })
+
   test('a sender neither adopts nor releases a replacement marker when opening its own marker', async () => {
     told()
     const deciding = path.join(home, 'telemetry-sending')
