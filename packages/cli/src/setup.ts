@@ -458,6 +458,8 @@ interface Adapter {
 
 /** The files of an add-on that a removal left where they were. */
 interface Left {
+  /** The host has not yet confirmed removal, so companion cleanup has not run. */
+  pending?: boolean
   /** Changed by the person since they were put there, so theirs to keep or to take out. */
   changed: string[]
   /** Could not be looked at, or could not be taken out. */
@@ -585,7 +587,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       // while it is still listed, there is something left to try removing again. The skill
       // goes then too, and no sooner: a plugin that stayed would go on telling the agent to
       // load a skill that was no longer there.
-      if ((await this.present(at)) !== false) return undefined
+      if ((await this.present(at)) !== false) return { changed: [], closed: [], outside: [], pending: true }
       await run('claude', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
       return withoutSkill(settingsAt(at, 'CLAUDE_CONFIG_DIR', '.claude'), was)
     },
@@ -622,7 +624,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       // Its marketplace is what `present` looks in. It goes only once the add-on is seen to be
       // gone from Codex (whoever removed it): otherwise a failed removal would look like a
       // finished one. The skill goes then too, and no sooner, as in Claude Code.
-      if ((await this.present(at)) !== false) return undefined
+      if ((await this.present(at)) !== false) return { changed: [], closed: [], outside: [], pending: true }
       await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
       return withoutSkill(settingsAt(at, 'CODEX_HOME', '.codex'), was)
     },
@@ -1122,9 +1124,18 @@ function onRecord(from: string, id: Harness, at: Place): boolean {
 const elsewhere = (id: Harness, from: string | null, at: Place): Other | null =>
   from && real(from) !== thisHome() ? { home: from, kept: onRecord(from, id, at) } : null
 
+/** Optional config files do not prove that the folder holding an add-on was removed. */
+const installationFolders = (i: Installation) =>
+  [
+    ...Object.entries(i.env ?? {})
+      .filter(([key]) => key !== 'OPENCLAW_CONFIG_PATH')
+      .map(([, folder]) => folder),
+    ...(i.dir ? [i.dir] : []),
+  ].map(reached)
+
 /** Whether every folder an installation was made in is seen to be gone, and the add-on with it. One that cannot be looked at is not known to be. */
 const folderGone = (i: Installation) => {
-  const folders = [...Object.values(i.env ?? {}), ...(i.dir ? [i.dir] : [])].map(reached)
+  const folders = installationFolders(i)
   return folders.length > 0 && folders.every((seen) => seen === 'none')
 }
 /**
@@ -1448,7 +1459,7 @@ export async function disconnect(
     const at = placed(was) ?? (await whereNow(ADAPTERS[id]))
     // A settings folder the person has deleted since took the add-on with it. The harness is
     // not asked about such a folder: asking would only make it anew.
-    const folders = [...Object.values(was.env ?? {}), ...(was.dir ? [was.dir] : [])].map(reached)
+    const folders = installationFolders(was)
     // A folder that cannot be looked at is not known to be gone, and neither is what is in it
     if (folders.length && !folders.includes('there') && folders.includes('closed')) {
       say(`${label}: the folder its add-on was put into could not be looked at, so the add-on was left as it is and the note of it is kept`)
@@ -1467,6 +1478,10 @@ export async function disconnect(
         )
       } else {
         const stayed = await adapter.remove(at, was)
+        if (stayed?.pending) {
+          say(`${label}: removal has not been confirmed, so the companion files and installation note are kept for another try`)
+          continue
+        }
         if (stayed?.nowhere) {
           say(
             `${label}: It has a note of putting its add-on there that does not say where ${label} kept its settings then, and no add-on of It’s is where ${label} keeps them now. Nothing was touched, and the note is kept`,
