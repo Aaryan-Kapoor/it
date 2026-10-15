@@ -687,6 +687,48 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(read(`${plugin}.set-aside-by-it`)).toBe('The person changed the plugin.')
   })
 
+  test('a failed record removal does not report a completed disconnect or lose the remaining ownership', async () => {
+    await connect('opencode', () => {})
+    const original = fs.rmSync
+    fs.rmSync = ((file: fs.PathLike, options?: fs.RmOptions) => {
+      if (String(file) === stampFile('opencode')) throw new Error('the record could not be removed')
+      original(file, options)
+    }) as typeof fs.rmSync
+    syncBuiltinESMExports()
+    try {
+      await expect(disconnect('opencode', () => {})).rejects.toThrow('the record could not be removed')
+    } finally {
+      fs.rmSync = original
+      syncBuiltinESMExports()
+    }
+    expect(existsSync(stampFile('opencode'))).toBe(true)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(existsSync(stampFile('opencode'))).toBe(false)
+  })
+
+  test('a failed record update during disconnect keeps both profiles recorded for retry', async () => {
+    const folders = [path.join(tmp, 'profile-one'), path.join(tmp, 'profile-two')]
+    for (const folder of folders) {
+      vi.stubEnv('XDG_CONFIG_HOME', folder)
+      await connect('opencode', () => {})
+    }
+    const original = fs.renameSync
+    fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to) === stampFile('opencode')) throw new Error('the remaining installation could not be recorded')
+      original(from, to)
+    }) as typeof fs.renameSync
+    syncBuiltinESMExports()
+    try {
+      await expect(disconnect('opencode', () => {})).rejects.toThrow('the remaining installation could not be recorded')
+    } finally {
+      fs.renameSync = original
+      syncBuiltinESMExports()
+    }
+    expect(noted('opencode').installs).toHaveLength(2)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    for (const folder of folders) expect(under(folder)).toEqual([])
+  })
+
   test('the note of an installation says where it was made and names every file written, with a checksum of each, and is the person’s alone to read', async () => {
     vi.stubEnv('XDG_CONFIG_HOME', path.join(tmp, 'settings'))
     const folder = folderOf('opencode')
