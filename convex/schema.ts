@@ -105,6 +105,8 @@ export default defineSchema({
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
+    /** Earlier pairings of this display, whose invitations are ended when it is forgotten. */
+    previousSessions: v.optional(v.array(v.id('sessions'))),
     /** What kind of screen it is, as its browser's own name for itself said when it registered, whether it reached It at this machine's own address, and when it last said that it had the site open. For the counts of how It is used, and nothing else. */
     screen: v.optional(v.union(v.literal('phone'), v.literal('tablet'), v.literal('computer'), v.literal('tv'))),
     local: v.optional(v.boolean()),
@@ -262,8 +264,10 @@ export default defineSchema({
     .index('by_artifact', ['artifactId']),
 
   // Which revision each page's state is at, by itself: a state can be half a megabyte, and
-  // whoever only needs to know whether it has changed should not have to read it.
-  revisions: defineTable({ artifactId: v.id('artifacts'), revision: v.number() }).index('by_artifact', ['artifactId']),
+  // whoever only needs to know whether it has changed should not have to read it. With it,
+  // when the page's agent last changed the state, which is nothing where it never did. A
+  // record from before that was kept here does not say, and the state is read for it.
+  revisions: defineTable({ artifactId: v.id('artifacts'), revision: v.number(), agentAt: v.optional(v.number()) }).index('by_artifact', ['artifactId']),
 
   // Something a person did on a page. Stored before anything tries to deliver it.
   actions: defineTable({
@@ -350,6 +354,7 @@ export default defineSchema({
     pushedTo: v.optional(v.array(v.id('displays'))),
   })
     .index('by_user', ['userId', 'createdAt'])
+    .index('by_artifact', ['artifactId'])
     // What one display's tray holds: what is addressed to it (or to every display) and not dismissed
     .index('by_user_target', ['userId', 'displayId', 'dismissedAt', 'createdAt'])
     .index('by_created', ['createdAt']),
@@ -403,6 +408,8 @@ export default defineSchema({
     addresses: v.array(v.string()),
     background: v.optional(v.boolean()),
     usage: v.optional(v.boolean()),
+    /** Raised when reporting stops, so earlier notes cannot be collected while their deletion waits. */
+    usageGeneration: v.optional(v.number()),
     /** Whether the door, being open to the network, answers the person's tailnet and nothing else. */
     tailnet: v.optional(v.boolean()),
     /** Whether the machine It runs on is on a tailnet, so that It can be kept to one. */
@@ -432,5 +439,7 @@ export default defineSchema({
   // used and kept only until the service takes them (see lib/counted.ts): a name, properties
   // that are each one of a fixed set of words, as JSON text, and when. Nothing of a page, a
   // display's name or the person is in one, and none is made while counts are not being sent.
-  counted: defineTable({ name: v.string(), properties: v.string(), at: v.number() }).index('by_at', ['at']),
+  counted: defineTable({ name: v.string(), properties: v.string(), at: v.number(), generation: v.optional(v.number()) })
+    .index('by_at', ['at'])
+    .index('by_generation', ['generation']),
 })
