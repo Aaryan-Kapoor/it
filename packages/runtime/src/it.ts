@@ -98,11 +98,21 @@ function applyBindings(): void {
     const value = get(state, el.getAttribute('data-it-bind') ?? '')
     if ((el instanceof HTMLInputElement && el.type !== 'checkbox') || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
       const last = written.get(el)
+      const text = value === undefined ? '' : String(value)
+      // A matching snapshot confirms the edit. Later changes can follow this new baseline,
+      // including when typing began before any state arrived.
+      if (el.value === text) {
+        written.set(el, { state: value, value: el.value })
+        edited.delete(el)
+        if (value === undefined) filled.delete(el)
+        else filled.add(el)
+        continue
+      }
       // A snapshot may change only a status or a stored value. It must not replace an edit,
       // even when the agent also changes or removes the value this field was bound to.
       if (last ? el.value !== last.value || Object.is(value, last.state) : edited.has(el)) continue
       if (value === undefined && !filled.has(el)) continue
-      el.value = value === undefined ? '' : String(value)
+      el.value = text
       written.set(el, { state: value, value: el.value })
       if (value === undefined) filled.delete(el)
       else filled.add(el)

@@ -254,6 +254,21 @@ describe('the script inside a page', () => {
     ['text input', '<input data-it-bind="reply">'],
     ['dropdown', '<select data-it-bind="reply"><option value=""></option><option>first</option><option>edited</option><option>second</option></select>'],
   ])('a bound %s', (_name, markup) => {
+    test.each([false, true])('follows later state after a matching snapshot confirms an edit made before first state: %s', (early) => {
+      const p = load(markup)
+      p.answer()
+      const field = p.w.document.querySelector('[data-it-bind]')
+      if (!early) p.fromSite({ type: 'it:state', state: { reply: 'first' }, revision: 1 })
+      field.value = 'edited'
+      field.dispatchEvent(new p.w.Event('input', { bubbles: true }))
+      p.fromSite({ type: 'it:state', state: { reply: 'edited' }, revision: 2 })
+      expect(field.value).toBe('edited')
+      p.fromSite({ type: 'it:state', state: { reply: 'second' }, revision: 3 })
+      expect(field.value).toBe('second')
+      p.fromSite({ type: 'it:state', state: {}, revision: 4 })
+      expect(field.value).toBe('')
+    })
+
     test('keeps an unsent edit when another key changes, its own key changes, or its value is removed', () => {
       const p = load(markup)
       p.answer()
