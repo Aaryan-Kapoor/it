@@ -1277,7 +1277,7 @@ export async function disconnect(
   id: Harness,
   say: (line: string) => void,
   // What does the removing, and whether the harness can be run at all: given by the tests
-  how: { adapter?: Pick<Adapter, 'remove' | 'present' | 'note'>; runnable?: () => Promise<boolean> } = {},
+  how: { adapter?: Pick<Adapter, 'remove' | 'present' | 'note'>; runnable?: () => Promise<boolean>; keepLocalFiles?: boolean } = {},
   forLog = false,
 ): Promise<boolean> {
   const label = KNOWN[id].label
@@ -1368,7 +1368,7 @@ export async function disconnect(
   }
   if (left.length) return false
   rmSync(stampFile(id), { force: true })
-  rmSync(addonDir(id), { recursive: true, force: true })
+  if (!how.keepLocalFiles) rmSync(addonDir(id), { recursive: true, force: true })
   rmSync(hookSeenFile(id), { force: true })
   return true
 }

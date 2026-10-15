@@ -240,10 +240,19 @@
     # anything stops this before then. A program that is running cannot be written over or
     # removed, and can be renamed: so the old program is kept beside the new one under another
     # name, and the old terms in the folder made for this run.
+    $installation = '{"product":"It","format":1,"about":"This folder holds an installation of It."}' + "`n"
+    $installationAt = Join-Path $root 'installation.json'
+    if ((Get-Kind $installationAt) -ne 'nothing') {
+      if ((Get-Kind $installationAt) -ne 'file' -or [IO.File]::ReadAllText($installationAt) -cne $installation) {
+        throw "The installation record in $root is not the one It wrote. Inspect it before installing again. Nothing was installed."
+      }
+    }
+    [IO.File]::WriteAllText((Join-Path $stage 'installation'), $installation, (New-Object Text.UTF8Encoding($false)))
     $places = @(
       @{ New = (Join-Path $stage 'program.exe'); At = $target; Old = (Join-Path $dir ('it.old.{0}.exe' -f [DateTime]::UtcNow.Ticks)); Begun = $false },
       @{ New = (Join-Path $stage 'license'); At = $license; Old = (Join-Path $stage 'old.license'); Begun = $false },
-      @{ New = (Join-Path $stage 'notices'); At = $notices; Old = (Join-Path $stage 'old.notices'); Begun = $false }
+      @{ New = (Join-Path $stage 'notices'); At = $notices; Old = (Join-Path $stage 'old.notices'); Begun = $false },
+      @{ New = (Join-Path $stage 'installation'); At = $installationAt; Old = (Join-Path $stage 'old.installation'); Begun = $false }
     )
     # A program that was run a moment ago may still be held open, by Windows itself or by
     # whatever on this system looks at each new program, and a file that is held cannot be

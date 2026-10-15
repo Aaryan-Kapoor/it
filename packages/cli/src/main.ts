@@ -42,6 +42,7 @@ import { type Args, json, loose, need, nested, parse, text } from './args'
 import { local } from './connector'
 import * as flow from './flow'
 import { hook } from './hooks'
+import { legacyInstallation, markedInstallation, markInstallation } from './installation'
 import {
   api,
   askConnectorWith,
@@ -117,6 +118,7 @@ import {
 } from './setup'
 import { printEnv } from './shell-env'
 import { GUIDE, NAMES, END as TOUR_END, MENU as TOUR_MENU, TOUR_PREFIX, STEPS as TOUR_STEPS, tourPage } from './tour'
+import { installationFile, removeInstallationFiles } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched } from './upgrade'
 import * as usage from './usage'
 
@@ -1322,37 +1324,6 @@ function stepOutOf(folder: string): { at: string; deletedLater: boolean } | unde
   return undefined
 }
 
-/**
- * Whether a folder is It's own, which is asked before the whole of it is deleted. A name proves
- * nothing: many a project has a folder called `addons`, or a `service.json`. So it is told by
- * what It alone writes, read and found to be that: its settings, the identity this machine was
- * given, or the note it keeps of an add-on it put into an agent app. Or by the program asking
- * being the one in the folder's own `bin`, which is all an install that stopped early leaves.
- */
-function holdsIt(folder: string, program: string = process.execPath): boolean {
-  const read = (...at: string[]) => {
-    const kept = readJson<Record<string, unknown>>(path.join(folder, ...at))
-    return kept && typeof kept === 'object' && !Array.isArray(kept) ? kept : undefined
-  }
-  const settings = read('service.json')
-  if (typeof settings?.instanceSecret === 'string' && typeof settings.adminKey === 'string') return true
-  const machine = read('machine.json')
-  if (typeof machine?.id === 'string' && typeof machine.key === 'object' && machine.key !== null) return true
-  if (HARNESSES.some((id) => Array.isArray(read('addons', `${id}.json`)?.installs))) return true
-  try {
-    const bin = path.join(folder, 'bin')
-    const executable = path.join(bin, process.platform === 'win32' ? 'it.exe' : 'it')
-    return (
-      lstatSync(executable).isFile() &&
-      realpathSync(bin) === path.join(realpathSync(folder), 'bin') &&
-      path.dirname(realpathSync(executable)) === realpathSync(bin) &&
-      realpathSync(executable) === realpathSync(program)
-    )
-  } catch {
-    return false
-  }
-}
-
 /** Whether this command has taken It off the machine. Nothing is counted after that: the folder a count is kept in is gone, or holds only what taking an add-on out later needs. */
 let takenOff = false
 
@@ -1364,7 +1335,6 @@ async function uninstall(a: Args) {
     if (forPerson(a)) tell([line])
   }
   // Only a folder that is It's is ever removed: one a variable names by mistake is left alone
-  if (!holdsIt(folder)) throw new Problem(`${folder} does not hold It, so there is nothing here to take off this machine.`, 'invalid')
   // Never the person's own folder, and never the whole disk, however the path to either is
   // spelled: asked of the folders themselves, since a link somewhere along the way makes the
   // same folder read as another. Where that cannot be asked, nothing is removed.
@@ -1378,17 +1348,26 @@ async function uninstall(a: Args) {
   }
   if (real === own || real === path.parse(real).root || path.resolve(folder) === path.resolve(os.homedir()) || path.resolve(folder) === path.parse(folder).root)
     throw new Problem(`${folder} is not a folder It may remove.`, 'invalid')
+  if (!markedInstallation(folder) && !legacyInstallation(folder))
+    throw new Problem(
+      `${folder} does not hold It with a recognized installation record or its running installed program. Nothing was removed.`,
+      'invalid',
+      'For an older installation, run its own bin/it with IT_HOME set to that folder, or install It there again first. Inspect an ambiguous folder and remove its files by hand.',
+    )
   if (!a.flags.yes) {
     if (!flow.live())
       throw new Problem(
-        'This takes It off this machine with everything it holds, the pages among them, and is not done without being asked for twice.',
+        'This removes It and deletes the databases and page files it recognizes, and is not done without being asked for twice. Unrecognized data may remain.',
         'invalid',
         'Run `it uninstall` at a terminal, where it asks first, or `it uninstall --yes`.',
       )
-    const go = await flow.pick(`Take It off this machine? Every page it holds here goes with it, and its folder (${folder}) is deleted.`, [
-      { value: false, label: 'No, leave it' },
-      { value: true, label: 'Yes, remove It' },
-    ])
+    const go = await flow.pick(
+      `Take It off this machine? Databases and page files It recognizes in ${folder} are deleted. Unknown files and unrecognized data stay.`,
+      [
+        { value: false, label: 'No, leave it' },
+        { value: true, label: 'Yes, remove It' },
+      ],
+    )
     if (!go) return forPerson(a) ? tell(['Nothing was changed.']) : out({ removed: false })
   }
   // Counted before anything goes, and sent from here, since the service that sends will be gone: that It was taken off, and how long it had been here, as a band
@@ -1420,19 +1399,24 @@ async function uninstall(a: Args) {
   const program = path.join(folder, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
   let kept = false
   for (const id of HARNESSES) {
-    if (!existsSync(stampFile(id))) continue
-    const gone = await disconnect(id, say).catch(() => false)
+    if (!installationFile(real, `addons/${id}.json`)) continue
+    const gone = await disconnect(id, say, { keepLocalFiles: true }).catch(() => false)
     if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
     else {
       kept = true
       left.push(
-        `${KNOWN[id].label} still has It’s add-on, which could not be taken out. What It noted of where it put the add-on is kept in ${path.join(folder, 'addons')}, with the program: once ${KNOWN[id].label} can be run from here, run \`${program} uninstall\`${process.env.IT_HOME ? `, with IT_HOME set to ${folder} as it is now` : ''}, which takes the add-on out and deletes the folder. To leave the add-on where it is, delete ${folder} yourself.`,
+        `${KNOWN[id].label} still has It’s add-on, which could not be taken out. What It noted of where it put the add-on is kept in ${path.join(folder, 'addons')}, with the program: once ${KNOWN[id].label} can be run from here, run \`${program} uninstall\`${process.env.IT_HOME ? `, with IT_HOME set to ${folder} as it is now` : ''}, which takes the add-on out and removes recognized files. Inspect any remaining files before deleting them yourself.`,
       )
     }
   }
   // 2. An `it serve` someone started by hand in this folder
   service.askToStop(folder, 30_000)
-  if (service.runningFor(folder)) left.push('It is still running, and was asked to stop: end the `it serve` you started, in its terminal.')
+  if (service.runningFor(folder))
+    throw new Problem(
+      'It is still running, and no data was removed.',
+      'still_running',
+      'End the `it serve` you started in its terminal, then run `it uninstall` again.',
+    )
   // 3. Its line in the shell's profile, with the comment above it
   const bin = path.join(folder, 'bin')
   const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
@@ -1453,39 +1437,26 @@ async function uninstall(a: Args) {
     say(
       `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
     )
-  // 5. Its folder, the program in it included. A program that is running may delete its own
-  // file on every system but Windows, where it steps out of the folder first. What the service
-  // held open there a moment ago may be held a moment longer, and is tried again.
-  // Where an add-on is still to be taken out, the folder keeps what that takes and nothing else:
-  // everything It held for the person goes all the same, and the program stays where it is.
+  // 5. Recognized files only. Windows moves the running executable out first. An add-on
+  // that remains keeps the program and its ownership record so removal can be retried.
   const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
   if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
   else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
-  const retried = process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}
   takenOff = true
-  // Where the folder that was named is a link to the one It is kept in, deleting it deletes
-  // the link and leaves everything It held where it was, pages and keys and all, with It said
-  // to be gone. So the folder the link leads to is deleted, which is the one that was looked at
-  // above and found to be It's and not the person's own, and then the link.
-  let linked = false
   try {
-    linked = lstatSync(folder).isSymbolicLink()
-  } catch {}
-  try {
-    if (!kept) {
-      rmSync(linked ? real : folder, { recursive: true, force: true, ...retried })
-      if (linked) rmSync(folder, { force: true })
-    } else
-      for (const name of readdirSync(folder))
-        if (name !== 'addons' && name !== 'bin') rmSync(path.join(folder, name), { recursive: true, force: true, ...retried })
+    const retained = removeInstallationFiles(real, kept)
+    if (!retained.length && lstatSync(folder, { throwIfNoEntry: false })?.isSymbolicLink()) rmSync(folder)
+    const unknown = retained.filter((name) => !kept || !['addons', 'bin', 'installation.json'].includes(name))
+    if (unknown.length)
+      left.push(
+        `${real} still holds files It could not safely remove: ${unknown.join(', ')}. These may include page data or backups. Inspect them and remove only what you intend to erase. The folder and any link to it were kept.`,
+      )
   } catch (err) {
-    left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
+    left.push(`${folder} could not be fully cleaned (${why(err)}). Inspect the remaining files before removing them yourself.`)
   }
-  if (!kept && (existsSync(folder) || existsSync(real)) && !left.some((line) => line.startsWith(folder)))
-    left.push(`${existsSync(real) ? real : folder} could not be deleted whole. Delete it to finish.`)
   if (!forPerson(a)) return out({ removed: left.length === 0, folder, ...(left.length ? { left } : {}), said })
   tell([
-    left.length ? 'It is off this machine, but for this:' : 'It is off this machine.',
+    left.length ? 'Removal is incomplete:' : 'It is off this machine.',
     ...left.map((line) => `  ${line}`),
     left.some((line) => /PATH/.test(line))
       ? 'Once the PATH is as you want it, a new terminal has it: one that is open keeps the old PATH.'
@@ -1668,6 +1639,7 @@ function setUp(a: Args, was: boolean): void {
 }
 
 async function setup(a: Args, joined = false) {
+  markInstallation(home())
   // Where this It was installed from, if that is not the usual place, is where it looks for newer versions
   keepBase()
   if (a.flags.none && !enrolledHere()) {

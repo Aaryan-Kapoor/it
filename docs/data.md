@@ -1,11 +1,12 @@
 # What It keeps
 
-Everything It keeps is in one folder, `~/.it`, which only your user can look inside. `IT_HOME` names another folder for it. That folder is the only copy of your pages and of the record of what was done on them, and nothing of them is kept off the machine. The one other place It keeps anything is the browsers you pair, and [What a paired browser keeps](#what-a-paired-browser-keeps) says what.
+Everything It keeps is in one folder, `~/.it`, which only your user can look inside. `IT_HOME` names another folder for it. Without that variable, an installed standalone command finds its home above its real `bin` directory; a source or package command uses `~/.it`. That folder is the only copy of your pages and of the record of what was done on them, and nothing of them is kept off the machine. The one other place It keeps anything is the browsers you pair, and [What a paired browser keeps](#what-a-paired-browser-keeps) says what.
 
 ## Where everything is kept
 
 | In `~/.it` | What it is |
 |---|---|
+| `installation.json` | The installation record used to find a custom home and to authorize selective removal. It is not a list of every file in the folder |
 | `service.json` | It's settings: the port, whether the network is on, and the secrets It runs its backend with. Whoever can read this file can do anything to what It holds |
 | `backend/` | The backend's database and the files it stores, the backend program as it was fetched, in `bin/`, and the copies of the database that It keeps before a newer version changes it, in folders whose names begin with `before-` |
 | `content/`, `content-data/` | The files of every version of every page, and the small database of the part of It that serves them |

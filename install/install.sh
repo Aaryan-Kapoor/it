@@ -290,6 +290,7 @@ cleanup() {
   # Once it is clearing up, a further signal does not stop it half way
   trap ':' HUP INT QUIT PIPE TERM
   if [ "${replacing}" = 1 ]; then
+    put_back installation "${HOME_DIR}/installation.json"
     put_back notices "${HOME_DIR}/THIRD_PARTY_NOTICES.md"
     put_back license "${HOME_DIR}/LICENSE.md"
     put_back program "${DIR}/it"
@@ -415,6 +416,15 @@ if ! say "${me}" 2>/dev/null > "${lock}/owner"; then
   exit 1
 fi
 locked=1
+# A damaged or linked ownership record is never silently replaced.
+installation='{"product":"It","format":1,"about":"This folder holds an installation of It."}'
+if [ -e "${HOME_DIR}/installation.json" ] || [ -L "${HOME_DIR}/installation.json" ]; then
+  if [ -L "${HOME_DIR}/installation.json" ] || [ ! -f "${HOME_DIR}/installation.json" ] || [ "$(cat "${HOME_DIR}/installation.json")" != "${installation}" ]; then
+    say "The installation record in ${HOME_DIR} is not the one It wrote. Inspect it before installing again. Nothing was installed." >&2
+    exit 1
+  fi
+fi
+(umask 077; printf '%s\n' "${installation}" > "${stage}/installation")
 # A link where a file is to go is moved aside like anything else and the file put in its place:
 # nothing is written through a link to wherever it leads, and a link to a folder is not a way
 # into that folder.
@@ -422,6 +432,7 @@ replacing=1
 replace program "${DIR}/it"
 replace license "${HOME_DIR}/LICENSE.md"
 replace notices "${HOME_DIR}/THIRD_PARTY_NOTICES.md"
+replace installation "${HOME_DIR}/installation.json"
 replacing=0
 unlock
 trap 'exit 129' HUP

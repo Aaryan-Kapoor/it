@@ -20,6 +20,7 @@ const AFTER_SETUP =
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
+import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { bases, holdBase } from './test-ports'
 
 // Every test here starts the program, and some start it a dozen times over. Each is given the
@@ -72,6 +73,7 @@ function machine(enrolled = true, here = false) {
   const bin = path.join(home, 'commands')
   mkdirSync(it)
   mkdirSync(bin)
+  if (enrolled || here) writeFileSync(path.join(it, INSTALLATION_FILE), INSTALLATION)
   if (enrolled) writeFileSync(path.join(it, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'test', key: {} }))
   if (here) writeFileSync(path.join(it, 'service.json'), JSON.stringify({ port: SITE_PORT }))
   return { home, it, bin }
@@ -1232,7 +1234,7 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     mkdirSync(path.join(m.it, 'addons', 'pi'), { recursive: true })
     mkdirSync(path.join(m.it, 'backend'))
     writeFileSync(path.join(m.it, 'bin', 'it'), '#!/bin/sh\n')
-    writeFileSync(path.join(m.it, 'backend', 'pages.sqlite3'), 'the pages')
+    writeFileSync(path.join(m.it, 'backend', 'db.sqlite3'), 'the pages')
     const note = JSON.stringify({ installs: [{ version: '0.1.0', at: 1, by: '0.1.22', env: {} }] })
     writeFileSync(path.join(m.it, 'addons', 'pi.json'), note)
     writeFileSync(path.join(m.home, 'pi-has'), `${path.join(m.it, 'addons', 'pi')}\n`)
@@ -1240,7 +1242,7 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     const said = printed(first)
     expect([first.code, said.removed, said.left.length]).toEqual([0, false, 1])
     // Everything else It kept is gone, the pages and this machine's identity among it
-    expect(readdirSync(m.it).sort()).toEqual(['addons', 'bin'])
+    expect(readdirSync(m.it).sort()).toEqual(['addons', 'bin', 'installation.json'])
     expect(readFileSync(path.join(m.it, 'addons', 'pi.json'), 'utf8')).toBe(note)
     // And it says how the add-on is taken out later, by the program's whole name, since the folder is off the PATH by now
     expect(said.left[0]).toContain('Pi still has It’s add-on, which could not be taken out')
@@ -1268,7 +1270,7 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     mkdirSync(path.dirname(real))
     execFileSync('mv', [m.it, real])
     mkdirSync(path.join(real, 'backend'))
-    writeFileSync(path.join(real, 'backend', 'pages.sqlite3'), 'the pages')
+    writeFileSync(path.join(real, 'backend', 'db.sqlite3'), 'the pages')
     symlinkSync(real, m.it)
     const done = await run(m, ['uninstall', '--yes'])
     expect([done.code, printed(done).removed, existsSync(real), readdirSync(m.home).includes('.it')]).toEqual([0, true, false, false])
@@ -1295,6 +1297,55 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
       expect([ran.code, existsSync(path.join(project, 'unrelated.txt'))]).toEqual([2, true])
       expect(error(ran).code).toBe('invalid')
     }
+  })
+
+  test.skipIf(process.platform !== 'linux')('`it uninstall` preserves every file when its registered service refuses to stop', async () => {
+    const m = machine(true, true)
+    const unit = path.join(m.home, '.config', 'systemd', 'user', 'it.service')
+    mkdirSync(path.dirname(unit), { recursive: true })
+    writeFileSync(unit, `[Service]\nEnvironment="IT_HOME=${m.it}"\nExecStart=${m.it}/bin/it serve --log "${m.it}/logs/it.log"\n`)
+    writeFileSync(path.join(m.bin, 'systemctl'), '#!/bin/sh\ncase " $* " in *" disable "*) exit 1 ;; esac\nexit 0\n')
+    chmodSync(path.join(m.bin, 'systemctl'), 0o755)
+    mkdirSync(path.join(m.it, 'backend'))
+    writeFileSync(path.join(m.it, 'backend', 'db.sqlite3'), 'pages')
+    const profile = `# It\nexport PATH='${path.join(m.it, 'bin')}':"$PATH"\n`
+    writeFileSync(path.join(m.home, '.profile'), profile)
+    const refused = await run(m, ['uninstall', '--yes'])
+    expect(refused.code).toBe(1)
+    expect(refused.err).toContain('Nothing else was changed')
+    expect(readFileSync(path.join(m.it, 'backend', 'db.sqlite3'), 'utf8')).toBe('pages')
+    expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)
+    expect(existsSync(path.join(m.it, INSTALLATION_FILE))).toBe(true)
+    expect(existsSync(unit)).toBe(true)
+    expect(readFileSync(path.join(m.home, '.profile'), 'utf8')).toBe(profile)
+  })
+
+  test('`it uninstall` refuses unrelated JSON records and preserves unknown files in a marked installation', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    const project = path.join(m.home, 'project')
+    mkdirSync(path.join(project, 'addons'), { recursive: true })
+    writeFileSync(path.join(project, 'addons', 'pi.json'), '{"installs":[]}')
+    writeFileSync(path.join(project, 'machine.json'), '{"id":"project","key":{}}')
+    writeFileSync(path.join(project, 'service.json'), '{"instanceSecret":"other","adminKey":"other"}')
+    writeFileSync(path.join(project, 'valuable.txt'), 'mine')
+    const refused = await run(m, ['uninstall', '--yes'], { IT_HOME: project })
+    expect(refused.code).toBe(2)
+    expect(readFileSync(path.join(project, 'valuable.txt'), 'utf8')).toBe('mine')
+    writeFileSync(path.join(m.it, 'valuable.txt'), 'mine')
+    mkdirSync(path.join(m.it, 'backend'))
+    writeFileSync(path.join(m.it, 'backend', 'db.sqlite3'), 'pages')
+    writeFileSync(path.join(m.it, 'backend', 'notes.txt'), 'mine')
+    const removed = await run(m, ['uninstall', '--yes'])
+    expect(printed(removed).removed).toBe(false)
+    expect(printed(removed).left.join(' ')).toContain('may include page data or backups')
+    expect(existsSync(path.join(m.it, 'backend', 'db.sqlite3'))).toBe(false)
+    expect(existsSync(path.join(m.it, 'machine.json'))).toBe(false)
+    expect(readFileSync(path.join(m.it, 'valuable.txt'), 'utf8')).toBe('mine')
+    expect(readFileSync(path.join(m.it, 'backend', 'notes.txt'), 'utf8')).toBe('mine')
   })
 
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
@@ -1368,18 +1419,19 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     const named = await run(m, ['uninstall', '--yes'], { IT_HOME: project })
     expect([named.code, existsSync(path.join(project, 'valuable.txt')), existsSync(path.join(project, 'addons', 'theme'))]).toEqual([2, true, true])
     expect(named.err).toContain('does not hold It')
-    // One that holds no more of It than its note of an add-on is It's all the same, and goes
+    // An empty add-on record alone cannot authorize deleting a folder.
     const begun = mkdtempSync(path.join(scratch, 'begun-'))
     mkdirSync(path.join(begun, 'addons'))
     writeFileSync(path.join(begun, 'addons', 'pi.json'), '{"installs": []}')
     const little = await run(m, ['uninstall', '--yes'], { IT_HOME: begun })
-    expect([little.code, existsSync(begun)]).toEqual([0, false])
+    expect([little.code, existsSync(begun)]).toEqual([2, true])
     // Nor the person's own folder, though a variable names it by a path that goes through a link, and though something of It's is in it
     const ana = path.join(scratch, 'people', 'ana')
     mkdirSync(path.join(ana, 'bin'), { recursive: true })
     writeFileSync(path.join(ana, 'bin', 'it'), '')
     writeFileSync(path.join(ana, 'machine.json'), '{"id": "a-machine", "name": "ana", "key": {}}')
     writeFileSync(path.join(ana, 'personal.txt'), 'mine')
+    writeFileSync(path.join(ana, INSTALLATION_FILE), INSTALLATION)
     symlinkSync(path.join(scratch, 'people'), path.join(scratch, 'mnt'))
     const own = await run(m, ['uninstall', '--yes'], { HOME: ana, IT_HOME: path.join(scratch, 'mnt', 'ana') })
     expect([own.code, existsSync(path.join(ana, 'personal.txt')), existsSync(path.join(ana, 'bin', 'it'))]).toEqual([2, true, true])
