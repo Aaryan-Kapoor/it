@@ -57,7 +57,7 @@ function fakeConnector(listenOn: string | number): Promise<http.Server> {
         }
         const body = text ? JSON.parse(text) : null
         const url = new URL(req.url ?? '/', 'http://it')
-        asked.push({ path: req.url ?? '', body })
+        if (url.pathname !== '/addon') asked.push({ path: req.url ?? '', body })
         if (url.pathname === '/ack') for (const k of Object.keys(offered)) offered[k] = offered[k]!.filter((c) => !body.ids.includes(c.id))
         const answer = JSON.stringify(url.pathname === '/clicks' ? { clicks: offered[url.searchParams.get('session') ?? ''] ?? [] } : { ok: true })
         const seal = overPort && sealing !== 'none' ? { 'x-it-mac': sealed(sealing === 'right' ? TOKEN : 'b'.repeat(48), `200\n${answer}`) } : {}

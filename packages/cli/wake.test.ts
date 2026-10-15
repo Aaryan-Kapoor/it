@@ -360,22 +360,22 @@ describe('whether some Codex has a conversation open', () => {
     writeFileSync(lock('thread-open'), '')
     const held = openSync(lock('thread-open'), 'r')
     try {
-      expect(codexHeld('thread-open', codexHome)).toBe(true)
+      expect(codexHeld('thread-open', codexHome)).toBe(process.platform === 'win32' ? null : true)
     } finally {
       closeSync(held)
     }
     // Left behind by a Codex that was ended without warning: where the system says who has a file
     // open, that is not taken for an open conversation. Elsewhere the file is all there is to go by.
     writeFileSync(lock('thread-left'), '')
-    expect(codexHeld('thread-left', codexHome)).toBe(process.platform !== 'linux' && process.platform !== 'darwin')
+    expect(codexHeld('thread-left', codexHome)).toBe(process.platform === 'linux' || process.platform === 'darwin' ? false : null)
     // What was found is good for a moment only: closed a moment later, it is found closed
     const t = Date.now()
     writeFileSync(lock('thread-then'), '')
     const then = openSync(lock('thread-then'), 'r')
-    expect(codexHeld('thread-then', codexHome, t)).toBe(true)
+    expect(codexHeld('thread-then', codexHome, t)).toBe(process.platform === 'win32' ? null : true)
     closeSync(then)
     rmSync(lock('thread-then'))
-    expect(codexHeld('thread-then', codexHome, t + 500)).toBe(true)
+    expect(codexHeld('thread-then', codexHome, t + 500)).toBe(process.platform === 'win32' ? null : true)
     expect(codexHeld('thread-then', codexHome, t + 2000)).toBe(false)
     // An id that is not one Codex makes names no file at all
     expect(codexHeld('../thread-open', codexHome)).toBe(false)

@@ -7,7 +7,7 @@ import { stoppedSince } from './actions'
 import { ownMachine, requireMachine, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
 import { log } from './lib/log'
-import { session } from './schema'
+import { addonRuntime, session } from './schema'
 import { lineOf, pairedOf, revokeMachine } from './sessions'
 
 const view = (m: Doc<'machines'>) => ({
@@ -328,12 +328,37 @@ export const me = query({
 })
 
 /** The harnesses found on a machine, as it reports them, and as they are kept: only the ones It knows, and nothing long. */
-const found = v.array(v.object({ id: v.string(), version: v.optional(v.string()), addon: v.string(), detail: v.optional(v.string()) }))
-const kept = (harnesses: { id: string; version?: string; addon: string; detail?: string }[]) =>
+const found = v.array(
+  v.object({ id: v.string(), version: v.optional(v.string()), addon: v.string(), detail: v.optional(v.string()), runtime: v.optional(addonRuntime) }),
+)
+const kept = (
+  harnesses: {
+    id: string
+    version?: string
+    addon: string
+    detail?: string
+    runtime?: { state: 'active' | 'inactive' | 'unverified' | 'incompatible'; version?: string; idle?: boolean; detail: string }
+  }[],
+) =>
   harnesses
     .filter((h) => (HARNESSES as readonly string[]).includes(h.id))
     .slice(0, HARNESSES.length)
-    .map((h) => ({ id: h.id, version: h.version?.slice(0, 40), addon: h.addon.slice(0, 40), detail: h.detail?.slice(0, 600) }))
+    .map((h) => ({
+      id: h.id,
+      version: h.version?.slice(0, 40),
+      addon: h.addon.slice(0, 40),
+      detail: h.detail?.slice(0, 600),
+      ...(h.runtime
+        ? {
+            runtime: {
+              state: h.runtime.state,
+              version: h.runtime.version?.slice(0, 40),
+              ...(h.runtime.idle === undefined ? {} : { idle: h.runtime.idle }),
+              detail: h.runtime.detail.slice(0, 600),
+            },
+          }
+        : {}),
+    }))
 
 /**
  * `it setup` says what it found on the machine, so that the site can show it before a connector

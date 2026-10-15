@@ -22,6 +22,8 @@ import path from 'node:path'
 // `it setup` put this add-on in place. `it setup` fills it in. The IT_HOME variable comes first.
 const IT_HOME_AT_SETUP = null
 
+const ADDON_VERSION = 'IT_ADDON_BUILD'
+const INSTANCE = randomBytes(12).toString('hex')
 const HARNESS = 'pi'
 // What the agent is told of It among its own instructions, which this add-on adds: when a page
 // is the answer. The skill says how, and an agent reads it only once it has decided to use It.
@@ -198,7 +200,16 @@ export default function (pi) {
    * all, one that took too long or was too long, or one over a port that was not sealed with the
    * token. This never throws.
    */
+  const addon = () => ({
+    api: 1,
+    version: ADDON_VERSION,
+    delivery: typeof pi.sendUserMessage === 'function' && typeof ctx?.sessionManager?.getSessionId === 'function',
+    idle: true,
+    missing: [...(typeof pi.sendUserMessage === 'function' ? [] : ['submit']), ...(typeof ctx?.sessionManager?.getSessionId === 'function' ? [] : ['session'])],
+  })
   async function ask(route, body) {
+    if (route === '/session' || route.startsWith('/clicks?')) body = { ...body, instance: INSTANCE, addon: addon() }
+
     const c = find()
     if (!c) return null
     const text = body === undefined ? undefined : JSON.stringify(body)
@@ -308,6 +319,10 @@ export default function (pi) {
     if (!ctx || checking) return
     checking = true
     try {
+      if (!addon().delivery) {
+        await ask('/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
+        return
+      }
       const id = ctx.sessionManager.getSessionId()
       const kept = ctx.sessionManager.getSessionFile?.() ?? null
       // The same conversation under a new id: Pi still keeps it in the same file. Pages made

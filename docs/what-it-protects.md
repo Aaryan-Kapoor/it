@@ -104,7 +104,7 @@ A machine that is enrolled may ask for a code that pairs a browser as the person
 
 ### Auto-wake runs an agent with nobody watching
 
-Auto-wake is on for an agent app from when you connect it on a machine, and stays on until you turn it off there, on the site's Machines page. Setup says so when it connects an app. With it on, whatever is done on a page whose conversation is closed starts that agent again by itself, in the folder the conversation was in, and for most apps in the permission mode you last had it in. For Claude Code that includes the mode that asks about nothing.
+Auto-wake is on for an agent app from when you connect it on a machine, and stays on until you turn it off there, on the site's Machines page. Setup says so when it connects an app. With it on, whatever is done on a page whose conversation is closed starts that agent again by itself, where It can restore the recorded app profile and tell that reopening is allowed. It runs in the folder the conversation was in, and for most apps in the permission mode you last had it in. For Claude Code that includes the mode that asks about nothing.
 
 So think of who can do something on a page. You can, from any paired browser. So can a paired screen, and whoever can pair one. On your network everything travels in the clear, so someone there who reads one request of a paired browser can send one of their own. And another account on the same computer can reach the door. What they send reaches the agent as text: the name of what was pressed and the first 2,000 characters of what it carried, for up to eight things done at once, and the agent can read the whole of each. That is enough to ask an agent for something you did not.
 

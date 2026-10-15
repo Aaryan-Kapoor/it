@@ -12,7 +12,8 @@ import path from 'node:path'
 import { MARK, PROTOCOL_VERSION } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { conversationFolder, noteConversation } from './src/publish'
+import { ADDONS } from './src/addons.generated'
+import { conversationFolder, conversationProfile, noteConversation } from './src/publish'
 
 const stand = vi.hoisted(() => ({
   /** What the connector watches the backend for, by the name of the function, and how to tell it something new. */
@@ -29,6 +30,8 @@ const stand = vi.hoisted(() => ({
   codex: [] as { args: string[]; end: (err?: unknown) => void }[],
   /** The Codex conversations that no Codex has open. Every other one is open somewhere, as it is in a window. */
   closed: new Set<string>(),
+  unknown: new Set<string>(),
+  profiles: true,
   /**
    * T3 Code as a test has it, which is not running unless the test says so: the thread each
    * conversation is held in, by the conversation's id; every time it was asked which thread
@@ -68,7 +71,7 @@ vi.mock('./src/t3', () => ({
 // (wake.test.ts tries that against real files). Here the test says which are closed.
 vi.mock('./src/wake', async (original) => ({
   ...(await original<typeof import('./src/wake')>()),
-  codexHeld: (thread: string) => !stand.closed.has(thread),
+  codexHeld: (thread: string) => (stand.unknown.has(thread) ? null : !stand.closed.has(thread)),
 }))
 vi.mock('node:child_process', async (original) => ({
   ...(await original<typeof import('node:child_process')>()),
@@ -93,7 +96,14 @@ vi.mock('./src/lib', async (original) => {
     ...real,
     live: () => ({
       onUpdate: (fn: any, args: unknown, heard: (value: any) => void) => {
-        stand.watching.set(getFunctionName(fn), heard)
+        stand.watching.set(getFunctionName(fn), (value) => {
+          // Pages in these delivery fixtures were published by a known app profile. The working folder may still be unknown.
+          if (getFunctionName(fn) === 'delivery:inbox' && stand.profiles)
+            for (const click of value ?? []) {
+              if (click.session && !conversationProfile(click.session)) noteConversation(click.session, '/not-a-recorded-working-folder')
+            }
+          heard(value)
+        })
         stand.asking.set(getFunctionName(fn), args)
         return () => {}
       },
@@ -172,6 +182,10 @@ async function start(
   // Every folder a test starts a connector in is taken away when the test is over, and not only the last
   made.push(home)
   process.env.IT_HOME = home
+  for (const key of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'PI_CODING_AGENT_DIR', 'HERMES_HOME']) {
+    process.env[key] = path.join(home, key)
+    mkdirSync(process.env[key]!, { recursive: true })
+  }
   first(home)
   if (over === 'port') process.env.IT_CONNECTOR_PORT = '1'
   else delete process.env.IT_CONNECTOR_PORT
@@ -209,6 +223,8 @@ afterEach(async () => {
   said.length = 0
   stand.codex.length = 0
   stand.closed.clear()
+  stand.unknown.clear()
+  stand.profiles = true
   stand.answer = null
   // A lookup a test left unanswered is answered, so that nothing of it outlasts the test
   for (const asked of stand.t3.asked) asked.answer(null)
@@ -463,6 +479,56 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     session: { harness: 'codex', id: `thread-${n}` },
   })
   const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inbox')!(clicks)
+  test('Unknown Codex liveness never queues or reopens a conversation, and a waiter can still take its click.', async () => {
+    standIn()
+    await start()
+    stand.unknown.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await pass(2)
+    expect(stand.codex).toEqual([])
+    expect(stand.calls.filter((c) => c.name === 'delivery:handedOff' || c.name === 'machines:runBegan')).toEqual([])
+    expect((await waitingFor(1))?.ok).toBe(true)
+  })
+
+  test('A legacy conversation with no profile is never looked up under the connector’s profile.', async () => {
+    standIn()
+    stand.profiles = false
+    await start()
+    offered(click(1))
+    await pass(2)
+    expect(stand.codex).toEqual([])
+    expect(conversationProfile({ harness: 'codex', id: 'thread-1' })).toBeUndefined()
+  })
+
+  test('Stale loaded code receives no clicks and its status names the repair.', async () => {
+    standIn()
+    await start()
+    const report = { harness: 'pi', session: 'session-one', instance: 'loaded-one', addon: { api: 1, version: 'old-build', delivery: true, idle: true } }
+    offered({ ...click(1), session: { harness: 'pi', id: 'session-one' } })
+    expect(await local('/clicks', { method: 'POST', body: report })).toMatchObject({ ok: false, clicks: [], runtime: { state: 'incompatible' } })
+    const health = await local<{ addons: Record<string, { detail: string }> }>('/health')
+    expect(health?.addons.pi?.detail).toMatch(/restart the agent app/)
+    expect(stand.calls.filter((c) => c.name === 'delivery:claim')).toEqual([])
+    report.addon.version = ADDONS.pi!.version
+    const heard = await local<{ clicks: unknown[] }>('/clicks', { method: 'POST', body: report })
+    expect(heard?.clicks).toHaveLength(1)
+  })
+
+  test('An open host without idle discovery leaves unknown conversations in the inbox.', async () => {
+    standIn()
+    await start('socket', { wanted: ['opencode'], found: [{ id: 'opencode', addon: 'connected' }] })
+    stand.watching.get('machines:me')!({ wanted: ['opencode'], wakes: [{ harness: 'opencode', since: Date.now() - 60_000 }] })
+    await local('/addon', {
+      method: 'POST',
+      body: { harness: 'opencode', instance: 'open-app', addon: { api: 1, version: ADDONS.opencode!.version, delivery: true, idle: false } },
+    })
+    offered({ ...click(1), session: { harness: 'opencode', id: 'ses_idle' } })
+    await pass(2)
+    expect(stand.calls.filter((c) => c.name === 'delivery:claim' || c.name === 'machines:runBegan')).toEqual([])
+    expect((await local<{ sessions: unknown[] }>('/health'))?.sessions).toEqual([])
+  })
+
   const waitingFor = (n: number) =>
     local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
       method: 'POST',
@@ -1104,6 +1170,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.codex).toEqual([])
     // The person opens the conversation in Codex. The click is still on offer, and the pause before the next reopening has ten seconds to run.
     stand.closed.clear()
+    stand.unknown.clear()
+    stand.profiles = true
     offered(click(1))
     await until(() => stand.codex.length === 1)
     expect(stand.codex[0]!.args).toContain('--thread=thread-1')

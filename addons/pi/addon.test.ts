@@ -265,7 +265,7 @@ describe('the Pi add-on', () => {
     expect(polls().length).toBe(2)
     await second(3)
     expect(polls().length).toBe(5)
-    for (const p of polls()) expect(p).toMatchObject({ method: 'GET', harness: 'pi', session: 'session-one', token: TOKEN })
+    for (const p of polls()) expect(p).toMatchObject({ method: 'POST', harness: 'pi', session: 'session-one', token: TOKEN })
   })
 
   it('hands a click to an idle Pi as a user message with steering delivery, in the connector’s words, and reports it', async () => {
@@ -523,8 +523,21 @@ describe('the Pi add-on', () => {
     expect(p.conversation).toEqual([])
     honest = true
     await until(() => seen.some((s) => s.startsWith('POST /ack')))
-    expect(seen[0]).toBe('GET /clicks?harness=pi&session=session-port undefined true')
+    expect(seen[0]).toBe('POST /clicks?harness=pi&session=session-port undefined true')
     expect(p.conversation).toEqual([c.text])
+  })
+
+  it('reports a missing message API without asking for any conversation’s clicks', async () => {
+    await connect()
+    const p = pi('session-one', undefined, (api) => {
+      delete api.sendUserMessage
+      addon(api)
+    })
+    p.start()
+    await until(() => asked.some((a) => a.path === '/addon'))
+    expect(asked.find((a) => a.path === '/addon')?.body).toMatchObject({ harness: 'pi', addon: { api: 1, delivery: false, idle: true } })
+    expect(polls()).toEqual([])
+    p.shutdown()
   })
 
   it('takes an answer too long to be the connector’s for no answer, and reads the next as usual', async () => {
@@ -746,7 +759,7 @@ describe.skipIf(process.platform === 'win32')('the Pi add-on, in a Pi started wi
           const end = performance.now() + 15_000
           while (!seen.some((s) => s.startsWith('POST /ack')) && !proxy.seen.length && performance.now() < end) await new Promise((r) => really(r, 20))
           expect(proxy.seen).toEqual([])
-          expect(seen[0]).toBe('GET /clicks?harness=pi&session=the-persons-own-session true')
+          expect(seen[0]).toBe('POST /clicks?harness=pi&session=the-persons-own-session true')
           expect(handed.trim()).toBe(c.text)
           expect(seen).toContain('POST /ack true')
         } finally {
