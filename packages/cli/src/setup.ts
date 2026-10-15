@@ -1572,7 +1572,7 @@ export async function disconnect(
   const label = KNOWN[id].label
   const unread = unreadInstallations(id)
   if (unread) {
-    say(unread)
+    say(forLog ? `${label}: its installation record could not be read, so the add-on and record were kept` : unread)
     return false
   }
   // Only what this program installed is removed, and from where it installed it

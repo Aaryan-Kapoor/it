@@ -2088,6 +2088,13 @@ describe('what the connector writes down about installing and removing', () => {
     for (const line of said) expect(line).not.toContain(tmp)
   })
 
+  test('a damaged installation record is reported without its filename in the service log', async () => {
+    put(stampFile('opencode'), 'not a record')
+    const { said, say } = lines()
+    expect(await disconnect('opencode', say, {}, true)).toBe(false)
+    expect(said).toEqual(['OpenCode: its installation record could not be read, so the add-on and record were kept'])
+  })
+
   test('says what went wrong as one of the system’s own codes or the word "error", and never in an error’s own name, code or words', async () => {
     vi.stubEnv('IT_HARNESSES', 'opencode')
     const failsWith = (code: string) =>
