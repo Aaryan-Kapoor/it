@@ -2456,7 +2456,9 @@ describe('clicks and their delivery', () => {
     // Its conversation is open on the machine that joined again, which takes the click for it: the page is that machine's now
     expect(await again.as.mutation(api.delivery.claim, { ids: [first as never], for: SESSION })).toEqual([first])
     await settle(t)
-    expect(await page()).toMatchObject({ machine: 'laptop again', machineGone: false, wake: { machineId: again.id, harness: 'claude-code', on: false } })
+    expect(await page()).toMatchObject({ machine: 'laptop again', machineGone: false, wake: null })
+    await t.run((ctx) => ctx.db.patch(again.id, { wanted: ['claude-code'] }))
+    expect((await page()).wake).toEqual({ machineId: again.id, harness: 'claude-code', on: false })
     expect((await page()).machineSeenAt).toBeGreaterThan(0)
     // The next click is that machine's with nobody listening, and no other machine is offered it
     const second = await press('click-second')
@@ -3401,7 +3403,7 @@ describe('displays and machines', () => {
         expect(got).not.toHaveProperty('wanted')
         expect(got).not.toHaveProperty('publicKey')
         expect(JSON.stringify(got)).not.toMatch(/private installation detail|private unrelated detail|unrelated-app/)
-        if (harness === 'openclaw') expect(got.wake).toBeNull()
+        if (harness === 'openclaw' || !wanted) expect(got.wake).toBeNull()
       }
       expect(await code(screen.browser.query(api.machines.list, {}))).toBe('forbidden')
     },

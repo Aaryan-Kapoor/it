@@ -312,6 +312,24 @@ describe('what is said of an agent app on a machine', () => {
     expect(said()).toEqual(['It 0.1.1 is installed on the laptop. It runs once It is started again there: stop it serve where it is running, and start it.'])
   })
 
+  test.each([null, '0.1.0'])('a joined machine shows a newer host before its next release lookup, last result %s', async (latest) => {
+    const { Machines } = await import('./machines')
+    watched['machines:list'] = [
+      { ...machine(Date.now(), [], []), connectorVersion: '0.10.0', runsIt: true },
+      { ...machine(Date.now(), [], []), id: 'machine-2', connectorVersion: '0.9.0', latest },
+    ]
+    await show(createElement(Machines))
+    expect(text('p.newer')).toContain('The machine It runs on uses 0.10.0.')
+    expect(text('p.newer')).toContain('A matching release has not been confirmed here.')
+    expect(host.querySelector('p.newer button')).toBeNull()
+    watched['machines:list'] = [
+      { ...machine(Date.now(), [], []), connectorVersion: '0.9.0', runsIt: true },
+      { ...machine(Date.now(), [], []), id: 'machine-2', connectorVersion: '0.10.0', latest },
+    ]
+    await act(async () => root.render(createElement(Machines)))
+    expect(host.querySelector('p.newer')).toBeNull()
+  })
+
   test('each connected app It can reopen a closed conversation of has a switch for that, off until the owner turns it on, and no other app has one', async () => {
     const found = [
       { id: 'claude-code', version: '2.1.0', addon: 'connected' },

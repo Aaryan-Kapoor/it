@@ -1,4 +1,5 @@
 // The site: pairing, this display's registration, and the frame around everything else.
+
 import { NOUN } from '@it/protocol'
 import { useConvex, useConvexAuth, useMutation, useQuery } from 'convex/react'
 import { Component, type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -35,6 +36,7 @@ import { Bell, Toasts } from './notifications'
 import { anyUnsaved, drain, outboxBelongsTo, pairedForSomeone, stillPairedFor, thisPairing, watchOutbox } from './outbox'
 import { Grid, PageView, wasShown } from './pages'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
+import { ServiceNotice } from './service'
 import { codeSeen, current, signOut as endSession, pair, pairAsScreen, recheck, useSession } from './session'
 import { Displays, Settings } from './settings'
 import { TourDialog } from './welcome'
@@ -719,6 +721,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   )
   const notices = (
     <>
+      <ServiceNotice />
       {code === 'owner' && <CodeForAnotherScreen />}
       {code === 'screen' && <ScreenOffered onDecline={codeSeen} />}
     </>
@@ -728,7 +731,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
       {slug ? (
         <>
           {notices}
-          {view}
+          <div className="page-container">{view}</div>
         </>
       ) : (
         <Site>

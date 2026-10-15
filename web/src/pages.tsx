@@ -1,4 +1,5 @@
 // The person's pages: the grid of all of them, and one of them shown.
+
 import { ALIVE, LIMITS, NOUN, WAKE_BACK_MS } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
@@ -8,6 +9,7 @@ import { Mount } from './mount'
 import { Bell, say } from './notifications'
 import { onItsWayUntil, outboxChanges, unsaved, unsent, watchOutbox } from './outbox'
 import { Preview } from './preview'
+import { useSession } from './session'
 import { Starters, useTour, Welcome } from './welcome'
 
 export interface Card {
@@ -208,7 +210,8 @@ function Empty({ owner }: { owner: boolean }) {
 export const wasShown = new Set<string>()
 
 export function PageView({ slug, user, owner }: { slug: string; user: string; owner: boolean }) {
-  const page = useQuery(api.artifacts.get, { slug, history: false })
+  const { service } = useSession()
+  const page = useQuery(api.artifacts.get, service?.functions === 'current' ? { slug, history: false } : { slug })
   const now = useNow()
   useEffect(() => {
     if (page) wasShown.add(slug)

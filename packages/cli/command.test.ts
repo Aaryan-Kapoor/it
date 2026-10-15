@@ -20,7 +20,7 @@ const AFTER_SETUP =
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
-import { bases } from './test-ports'
+import { bases, holdBase } from './test-ports'
 
 // Every test here starts the program, and some start it a dozen times over. Each is given the
 // time that takes on a machine that is busy with other things as well.
@@ -673,6 +673,122 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(await begun('--take')).toMatchObject({ take: true })
     } finally {
       await b.close()
+    }
+  })
+})
+
+describe('a network change taken by the running service', () => {
+  async function changing(answer: (read: number, network: boolean) => unknown, initialTailnet = true) {
+    const m = machine(true, true)
+    const held = await holdBase(58_000, 10)
+    const settings = () => JSON.parse(readFileSync(path.join(m.it, 'service.json'), 'utf8')) as { network: boolean }
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify({
+        port: held.base,
+        network: true,
+        tailnet: initialTailnet,
+        instanceSecret: 'a'.repeat(64),
+        adminKey: 'it-000000000000|made-up',
+        sessionSecret: 'made-up',
+      }),
+    )
+    let reads = 0
+    const answering = (port: number) =>
+      new Promise<http.Server>((resolve) => {
+        const server = http.createServer((req, res) => {
+          req.resume().on('end', () => {
+            if (req.url === '/health') return res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true,"it":true}')
+            const value = answer(++reads, settings().network)
+            const body =
+              value instanceof Refusal
+                ? { status: 'error', errorData: value.data, errorMessage: 'refused', logLines: [] }
+                : { status: 'success', value, logLines: [] }
+            res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+          })
+        })
+        server.listen(port, '127.0.0.1', () => resolve(server))
+      })
+    const servers = await Promise.all([held.base, held.base + PORTS.backendApi].map(answering))
+    const clock = path.join(m.home, 'network-clock.mjs')
+    // Only the network's polling waits move this clock, so requests still take their usual time.
+    writeFileSync(
+      clock,
+      "import os from 'node:os'; os.networkInterfaces = () => ({tailscale0:[{address:'100.64.0.1',family:'IPv4',internal:false}]}); let offset = 0; const now = Date.now; Date.now = () => now() + offset; const later = setTimeout; globalThis.setTimeout = (run, ms, ...args) => later(() => { if (ms === 200) offset += 5000; run(...args) }, ms === 200 || ms === 2500 ? 1 : ms)\n",
+    )
+    return {
+      settings,
+      reads: () => reads,
+      run: (to = 'on') => run(m, ['network', to], {}, process.execPath, ['--import', pathToFileURL(clock).href]),
+      close: async () => {
+        await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
+        await held.release()
+      },
+    }
+  }
+
+  test('looks again until the service reports the requested policy, though networking was on already', async () => {
+    const door = await changing((read) => ({ on: true, wanted: true, tailnet: read < 4 }))
+    try {
+      const ran = await door.run()
+      expect([ran.code, printed(ran).network, door.reads()]).toEqual([0, true, 4])
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('narrowing access waits for the service to report the tailnet policy', async () => {
+    const door = await changing((read) => ({ on: true, wanted: true, tailnet: read >= 4 }), false)
+    try {
+      const ran = await door.run('tailscale')
+      expect([ran.code, printed(ran).network, door.reads()]).toEqual([0, true, 4])
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('says that the network could not listen and leaves it off where reopening the door falls back to this machine', async () => {
+    const door = await changing((read, network) => ({ on: read < 3 && network, wanted: network, tailnet: read < 3 }))
+    try {
+      const ran = await door.run()
+      expect(ran.code).toBe(1)
+      expect([ran.code, ran.out, error(ran).code, door.settings().network]).toEqual([1, '', 'cannot_listen', false])
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('says that the running service has not taken a policy it still reports differently', async () => {
+    const door = await changing(() => ({ on: true, wanted: true, tailnet: true }))
+    try {
+      const ran = await door.run()
+      expect([ran.code, ran.out, error(ran).code]).toEqual([1, '', 'not_taken'])
+      expect(door.reads()).toBeGreaterThan(2)
+    } finally {
+      await door.close()
+    }
+  })
+
+  for (const report of ['unsaid', 'unavailable'])
+    test(`reports an unconfirmed network setting where the applied policy is ${report}`, async () => {
+      const door = await changing(() =>
+        report === 'unsaid' ? { on: true, wanted: true } : new Refusal({ code: 'unavailable', message: 'The report is not available.' }),
+      )
+      try {
+        const ran = await door.run()
+        expect([ran.code, ran.out, error(ran).code, door.settings().network]).toEqual([1, '', 'not_confirmed', true])
+        expect(door.reads()).toBe(2)
+      } finally {
+        await door.close()
+      }
+    })
+  test('network off waits for actual closure even when an older report has no policy', async () => {
+    const door = await changing((read, network) => ({ on: read < 4, wanted: network }))
+    try {
+      const ran = await door.run('off')
+      expect([ran.code, printed(ran).network, door.reads()]).toEqual([0, false, 4])
+    } finally {
+      await door.close()
     }
   })
 })

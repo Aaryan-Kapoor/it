@@ -13,6 +13,9 @@ const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, agent: 'cl
 let recent: { at: number; delivery: string; outcome?: string | null; route?: string | null; handedAt?: number | null }[]
 /** Whether there is a connection to the backend, and what was asked to be told when that changes. */
 let connected: boolean
+let functions: 'current' | 'retained' | undefined
+const pageQueries: unknown[] = []
+vi.mock('./session', () => ({ useSession: () => ({ service: functions ? { functions } : undefined }) }))
 const told = new Set<() => void>()
 /** What the backend answers each click with, in the order they were sent: nothing, until the test lets it. */
 const answers: ((said: { actionId: string }) => void)[] = []
@@ -35,7 +38,11 @@ const askedToStop = () => new Promise<{ stopping: boolean }>((answer, refuse) =>
 vi.mock('convex/react', () => ({
   useConvex: () => client,
   useMutation: (fn: unknown) => (getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : async () => null),
-  useQuery: (fn: unknown) => ({ 'artifacts:get': PAGE, 'actions:forArtifact': recent })[getFunctionName(fn as never)],
+  useQuery: (fn: unknown, args: unknown) => {
+    const name = getFunctionName(fn as never)
+    if (name === 'artifacts:get') pageQueries.push(args)
+    return { 'artifacts:get': PAGE, 'actions:forArtifact': recent }[name]
+  },
 }))
 // The frame a page is shown in has tests of its own
 vi.mock('./mount', () => ({ Mount: () => null }))
@@ -73,6 +80,8 @@ beforeEach(() => {
   localStorage.setItem('it.display', 'a-display-key-000001')
   recent = [{ at: NOW - 5000, delivery: 'handed_off', outcome: 'succeeded' }]
   connected = true
+  functions = undefined
+  pageQueries.length = 0
   told.clear()
   answers.length = 0
   stopsAsked.length = 0
@@ -568,4 +577,10 @@ describe('the line that moves under a page’s bar', () => {
     await drawnAgain()
     expect(host.querySelector('.page-progress')).toBeNull()
   })
+})
+
+test.each([undefined, 'retained', 'current'] as const)('the page uses only arguments supported by %s functions', async (state) => {
+  functions = state
+  await shown()
+  expect(pageQueries.at(-1)).toEqual(state === 'current' ? { slug: 'plan', history: false } : { slug: 'plan' })
 })

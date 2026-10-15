@@ -306,7 +306,11 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
       .map((line) => line.replace(/^\S+ /, ''))
   /** How the running service last told the backend its door stands. */
   const told = () =>
-    asAdmin({ api: backendAt(port).api, adminKey: settings().adminKey }, 'network:current', {}) as Promise<{ on: boolean; addresses: string[] }>
+    asAdmin({ api: backendAt(port).api, adminKey: settings().adminKey }, 'network:current', {}) as Promise<{
+      on: boolean
+      addresses: string[]
+      tailnet?: boolean
+    }>
   /** Sets It up, starts its service by hand as `it serve`, and waits until it is all there. */
   async function serving() {
     expect(await run(['setup', '--none', '--no-service']).ended).toBe(0)
@@ -435,6 +439,21 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
       expect(service.child.exitCode).toBeNull()
       // What the service wrote down names none of this machine's addresses
       for (const at of reachable(port)) expect(log()).not.toContain(new URL(at).hostname)
+    },
+    120_000,
+  )
+
+  turningItOn(
+    'the real service reports the policy it applied before the command confirms a change',
+    async () => {
+      await serving()
+      writeFileSync(path.join(folder, 'service.json'), JSON.stringify({ ...settings(), network: true, tailnet: true }))
+      expect(await until(async () => (await told()).tailnet === true)).toBe(true)
+      expect(await told()).toMatchObject({ on: true, tailnet: true })
+      expect((await said(['network', 'on'])).answer.network).toBe(true)
+      expect(await told()).toMatchObject({ on: true, tailnet: false })
+      expect((await said(['network', 'off'])).answer.network).toBe(false)
+      expect(await told()).toMatchObject({ on: false, tailnet: false })
     },
     120_000,
   )

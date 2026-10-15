@@ -69,6 +69,23 @@ describe('whether this browser is paired', () => {
     expect(d.asked).toEqual([{ path: '/session/token', method: 'POST', site: '1', body: undefined }])
   })
 
+  test.each(['current', 'retained'])('the door reports %s functions without changing the session', async (functions) => {
+    let service: unknown = { functions }
+    door(() => paired({ service }))
+    const session = await load()
+    await session.begin()
+    expect(session.current().service).toEqual({ functions })
+    service = { functions: 'unexpected', administrator: 'not for the site' }
+    await session.token(true)
+    expect(session.current().service).toBeUndefined()
+    service = { functions }
+    await session.token(true)
+    expect(session.current().service).toEqual({ functions })
+    door(() => refused)
+    await session.token(true)
+    expect(session.current().service).toBeUndefined()
+  })
+
   test('a 401 means this browser is not paired, and there is no token to give', async () => {
     door(() => refused)
     const session = await load()

@@ -28,9 +28,14 @@ const ADDRESS = /^http:\/\/(\[[0-9a-f:.]{2,45}\]|[a-z0-9]([a-z0-9.-]{0,251}[a-z0
 /** The most addresses that are kept. */
 const MOST = 16
 
-async function said(ctx: QueryCtx): Promise<{ on: boolean; wanted: boolean; addresses: string[] }> {
+async function said(ctx: QueryCtx): Promise<{ on: boolean; wanted: boolean; addresses: string[]; tailnet?: boolean }> {
   const row = await ctx.db.query('network').first()
-  return { on: row?.on ?? false, wanted: row?.wanted ?? false, addresses: row?.on ? row.addresses : [] }
+  return {
+    on: row?.on ?? false,
+    wanted: row?.wanted ?? false,
+    addresses: row?.on ? row.addresses : [],
+    ...(typeof row?.tailnet === 'boolean' ? { tailnet: row.on && row.tailnet } : {}),
+  }
 }
 
 /**

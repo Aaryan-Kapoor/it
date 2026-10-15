@@ -121,3 +121,9 @@ If a page says that a turn from before may still be running, or `it status` says
 On a machine that joined an It, `it status` may say that the two are of versions that do not work together, and which of them to update. The machine stays joined. Nothing done on a page is handed to an agent on it until the two fit, which It asks about every minute, so there is nothing to do after the update but wait a moment.
 
 A page that a conversation made belongs to that conversation until another one brings it up or takes it, so what you do on it goes to the agent you last asked to show it.
+
+## Older backend functions
+
+If an update cannot load its backend functions, It keeps serving with the functions already loaded. The site shows this beside its pages and on Machines. Some pages or controls may fail because the site and functions differ. In an owner browser, the warning points to `it status` on the machine It runs on for the reason. After resolving the reported problem, restart It to retry loading the functions. `it service logs` shows what the service met. A paired screen shows the warning and asks you to open your owner browser.
+
+Machines compares the running versions already reported by the host and joined machines. A joined machine can say it is behind before its next release check. That alone does not offer an update: a release must also have been found by that machine.

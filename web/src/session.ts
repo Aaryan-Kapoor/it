@@ -21,6 +21,8 @@ export type Role = 'owner' | 'screen'
 export interface Session {
   /** Whether the question has been answered yet. Until it has, nothing else here says anything. */
   loaded: boolean
+  /** The door says whether this program's functions loaded. Earlier doors leave this unsaid. */
+  service?: { functions: 'current' | 'retained' }
   paired: boolean
   /** The person's id, this browser's session, and what the session may do. All null when not paired. */
   user: string | null
@@ -49,7 +51,7 @@ const subscribe = (fn: () => void) => {
   return () => void listeners.delete(fn)
 }
 function set(next: Session): void {
-  const same = (Object.keys(next) as (keyof Session)[]).every((k) => next[k] === state[k])
+  const same = next.service === state.service && (Object.keys(next) as (keyof Session)[]).every((k) => next[k] === state[k])
   if (same) return
   state = next
   for (const fn of listeners) fn()
@@ -254,7 +256,7 @@ function askOnce(): Promise<Said> {
         return 'unpaired'
       }
       if (!r.ok) return 'trouble'
-      const a = (await r.json()) as { token?: unknown; expiresIn?: unknown; user?: unknown; session?: unknown; role?: unknown } | null
+      const a = (await r.json()) as { token?: unknown; expiresIn?: unknown; user?: unknown; session?: unknown; role?: unknown; service?: unknown } | null
       if (began !== era) return 'overtaken'
       if (!a || !text(a.token) || !text(a.user) || !text(a.session) || typeof a.expiresIn !== 'number' || !(a.expiresIn > 0)) return 'trouble'
       // Counted from when it was asked for: the token was made after that, so it lasts at least this long
@@ -269,7 +271,17 @@ function askOnce(): Promise<Said> {
       }
       const code = stillToSay(role)
       // What was said of waiting was said of a code that is still offered, or is said no more
-      set({ loaded: true, paired: true, user: a.user, session: a.session, role, code, wait: code === 'screen' ? state.wait : null })
+      const functions = a.service && typeof a.service === 'object' && 'functions' in a.service ? a.service.functions : undefined
+      set({
+        loaded: true,
+        paired: true,
+        user: a.user,
+        session: a.session,
+        role,
+        code,
+        wait: code === 'screen' ? state.wait : null,
+        ...(functions === 'current' || functions === 'retained' ? { service: { functions } } : {}),
+      })
       return 'paired'
     } catch {
       return began === era ? 'trouble' : 'overtaken'
