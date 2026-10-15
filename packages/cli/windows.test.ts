@@ -128,7 +128,7 @@ Start-Sleep -Seconds 60
     }
   })
 
-  test('task selection rejects foreign principals and launchers and migrates only this folder', () => {
+  test('task selection rejects foreign principals and launchers and discovers this account’s legacy installation', () => {
     const folder = 'C:\\it-test\\bin'
     const fixture = `
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -136,10 +136,10 @@ $action = [pscustomobject]@{ Execute = 'conhost.exe'; Arguments = '--headless cm
 $candidate = [pscustomobject]@{ TaskName = 'it'; Principal = [pscustomobject]@{ UserId = $sid }; Actions = @($action) }
 function Get-ScheduledTask { param($TaskPath, $ErrorAction); $candidate }
 `
-    const selected = (change: string) => powershell(`${fixture}\n${change}\n${windowsTask(folder)}\nif ($task) { $task.TaskName }`)
+    const selected = (change: string) => powershell(`${fixture}\n${change}\n${windowsTask()}\nif ($task) { $task.TaskName }`)
     expect(selected('').stdout.trim()).toBe('it')
     expect(selected("$candidate.Principal.UserId = 'S-1-5-18'").stdout.trim()).toBe('')
-    expect(selected("$action.WorkingDirectory = 'C:\\another\\bin'").stdout.trim()).toBe('')
+    expect(selected("$action.WorkingDirectory = 'C:\\another\\bin'").stdout.trim()).toBe('it')
     expect(selected("$action.Execute = 'unrelated.exe'").stdout.trim()).toBe('')
     expect(selected("$candidate.TaskName = 'it-' + $sid; $action.Execute = 'unrelated.exe'").status).not.toBe(0)
     expect(selected("$candidate.TaskName = 'it-' + $sid").stdout.trim()).toMatch(/^it-S-1-/)
@@ -148,21 +148,27 @@ function Get-ScheduledTask { param($TaskPath, $ErrorAction); $candidate }
   test.skipIf(!process.env.CI)('the scheduler migrates and removes only isolated test registrations', () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-task-'))
     const bin = path.join(folder, 'bin')
-    mkdirSync(bin)
-    writeFileSync(path.join(bin, 'it-service.cmd'), '@echo off\r\nexit /b 0\r\n')
+    const nextBin = path.join(folder, 'next', 'bin')
+    for (const at of [bin, nextBin]) {
+      mkdirSync(at, { recursive: true })
+      writeFileSync(path.join(at, 'it-service.cmd'), '@echo off\r\nexit /b 0\r\n')
+    }
     const prefix = `it-test-${process.pid}-${Date.now().toString(36)}`
     const scoped = (script: string) => script.replaceAll("'it-'", psQuote(`${prefix}-`)).replaceAll("'it'", psQuote(prefix))
     try {
       const legacy = scoped(windowsScript(bin, 'it-service.cmd')).replace(`$name = '${prefix}-' + $sid`, `$name = '${prefix}'`)
       const madeLegacy = powershell(legacy)
       expect(madeLegacy.status, madeLegacy.stderr).toBe(0)
-      const installed = powershell(scoped(windowsScript(bin, 'it-service.cmd')))
+      const installed = powershell(scoped(windowsScript(nextBin, 'it-service.cmd')))
       expect(installed.status, installed.stderr).toBe(0)
-      const selected = powershell(`${scoped(windowsTask(bin))}\nif ($legacy) { throw 'legacy task remains' }; $task.TaskName`)
+      const selected = powershell(`${scoped(windowsTask())}\nif ($legacy) { throw 'legacy task remains' }; $task.TaskName`)
       expect(selected.stdout.trim()).toMatch(new RegExp(`^${prefix}-S-1-`))
-      const removed = powershell(scoped(windowsRemoval(bin)))
+      const left = powershell(scoped(windowsRemoval(bin)))
+      expect(left.status, left.stderr).toBe(0)
+      expect(powershell(`${scoped(windowsTask())}\n$task.Actions[0].WorkingDirectory`).stdout.trim()).toBe(nextBin)
+      const removed = powershell(scoped(windowsRemoval(nextBin)))
       expect(removed.status, removed.stderr).toBe(0)
-      expect(powershell(`${scoped(windowsTask(bin))}\nif ($task) { throw 'still registered' }`).status).toBe(0)
+      expect(powershell(`${scoped(windowsTask())}\nif ($task) { throw 'still registered' }`).status).toBe(0)
     } finally {
       powershell(`Get-ScheduledTask -TaskPath '\\' | Where-Object { $_.TaskName -like '${prefix}*' } | Unregister-ScheduledTask -Confirm:$false`)
       rmSync(folder, { recursive: true, force: true })

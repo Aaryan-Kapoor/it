@@ -287,9 +287,8 @@ export function windowsLauncher(cmd: string[], env: Record<string, string>): str
 const windowsLauncherFile = () => inHome('bin', 'it-service.cmd')
 
 const ps = psQuote
-/** Selects only this account's task, or an owned legacy task in this folder. */
-export function windowsTask(folder = path.win32.join(home(), 'bin')): string {
-  const started = ps(folder.replace(/\//g, '\\').replace(/\\+$/, ''))
+/** Selects only this account's task, or a legacy launcher owned by this account. */
+export function windowsTask(): string {
   return `
 $ErrorActionPreference = 'Stop'
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -307,13 +306,13 @@ $tasks = @(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop)
 $task = $tasks | Where-Object { $_.TaskName -eq $name }
 if ($task -and -not (Test-ItTask $task)) { throw 'The task for this account is not an It launcher owned by this account. It was left unchanged.' }
 $legacy = $tasks | Where-Object { $_.TaskName -eq 'it' }
-if (-not ((Test-ItTask $legacy) -and (([string]$legacy.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq ${started}))) { $legacy = $null }
+if (-not (Test-ItTask $legacy)) { $legacy = $null }
 if (-not $task) { $task = $legacy }
 `.trim()
 }
 export function windowsScript(folder: string, launcher: string): string {
   return [
-    windowsTask(folder),
+    windowsTask(),
     // The service was asked to stop before this script runs. Only its launcher remains.
     'if ($task) { Stop-ScheduledTask -InputObject $task -ErrorAction Stop }',
     'if ($legacy -and $legacy.TaskName -ne $task.TaskName) { Stop-ScheduledTask -InputObject $legacy -ErrorAction Stop }',
@@ -331,7 +330,7 @@ export function windowsScript(folder: string, launcher: string): string {
 /** Takes away only an owned task whose launcher starts in this folder. */
 export function windowsRemoval(folder: string): string {
   const started = ps(folder.replace(/\//g, '\\').replace(/\\+$/, ''))
-  return `${windowsTask(folder)}
+  return `${windowsTask()}
 $ownedTasks = @($task, $legacy) | Where-Object { $_ } | Sort-Object TaskName -Unique
 foreach ($owned in $ownedTasks) {
   if (([string]$owned.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq ${started}) {

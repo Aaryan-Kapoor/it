@@ -225,7 +225,7 @@ async function install(
   const pipedIn = [
     '$itTestTls = [Net.ServicePointManager]::SecurityProtocol',
     args.length
-      ? `& ([scriptblock]::Create([IO.File]::ReadAllText('${ps1.replaceAll("'", "''")}'))) @(${args.map((word) => `'${word.replaceAll("'", "''")}'`).join(',')})`
+      ? `& ([scriptblock]::Create([IO.File]::ReadAllText('${ps1.replaceAll("'", "''")}'))) ${args.map((word) => `'${word.replaceAll("'", "''")}'`).join(' ')}`
       : `Get-Content -Raw -LiteralPath '${ps1.replaceAll("'", "''")}' | Invoke-Expression`,
     "if ((Test-Path variable:root) -or (Test-Path function:Get-File) -or $ErrorActionPreference -ne 'Continue' -or [Net.ServicePointManager]::SecurityProtocol -ne $itTestTls) { Write-Output 'something was left behind in the session'; exit 9 }",
   ].join('\n')
