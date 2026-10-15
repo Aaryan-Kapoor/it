@@ -715,7 +715,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   let givingBack: 'due' | 'asked' | 'done' = 'due'
   /** What was given back and has not been offered again yet, and until when that is waited for. */
-  let comingBack = new Set<string>()
+  const comingBack = new Set<string>()
+  let legacyGiveBack = false
+  let recoveringBatches = false
   let backBy = 0
   /** When this connector first looked at what was waiting, by the clock that is never set back. */
   let began = 0
@@ -723,6 +725,36 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const BACK_TRY_MS = LEASE_MS + 5000
   /** For how long the offer of what was given back is waited for. One whose conversation is not listened for here is never offered. */
   const BACK_SEEN_MS = 3000
+  async function recoverBatch(): Promise<{ back: string[]; done: boolean } | null> {
+    const missing = (err: unknown) => /could not find/i.test(String((err as Error)?.message ?? err))
+    if (!legacyGiveBack) {
+      try {
+        const result = await call<{ back: string[]; done: boolean }>('mutation', api.delivery.giveBackBatch, {})
+        if (!result || !Array.isArray(result.back) || !result.back.every((id) => typeof id === 'string') || typeof result.done !== 'boolean') return null
+        recoveringBatches = true
+        return result
+      } catch (err) {
+        if (!missing(err)) return null
+        legacyGiveBack = true
+      }
+    }
+    try {
+      const back = await call<string[]>('mutation', api.delivery.giveBack, {})
+      return Array.isArray(back) && back.every((id) => typeof id === 'string') ? { back, done: true } : null
+    } catch (err) {
+      if (!missing(err)) return null
+      // An It from before either function: give back each click the journal names.
+      const gone = await Promise.all(
+        claimedAndLeft().map((id) =>
+          call('mutation', api.delivery.release, { id }).then(
+            () => id,
+            () => null,
+          ),
+        ),
+      )
+      return { back: gone.filter((id): id is string => id !== null), done: true }
+    }
+  }
   let inbox: Offered[] = []
   let routing = false
   let stopping: ((code: number) => void) | null = null
@@ -1480,11 +1512,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
       // hook of It's hands the agent the rest, and otherwise one short line for each click
       const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
-      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexQueue(threadOf(key), text))
+      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexQueue(threadOf(follow(key)), text))
       const mark =
-        !reopening && marks(key, harness)
+        !reopening && marks(follow(key), harness)
           ? noteMark(
-              key,
+              follow(key),
               harness,
               [click, ...(t3 ? withIt : [])].map((c) => describeClick(asClick(c))),
               () => put(lines()),
@@ -1585,12 +1617,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // for a thread whose turn is running, with every click that went along in the same
         // message: an agent that waits in that turn for one of those would wait for a message
         // that stands behind its own turn. A reopening never does: nothing was running
-        if (!reopening && turnRunning(key, Date.now())) {
+        if (!reopening && turnRunning(follow(key), Date.now())) {
           // One that a waiter was given while the command was still to answer is kept as given
           // to it, until it says that it has it. Where it has said so already, it is not kept
           for (const c of [click, ...withIt]) {
             if (c === click && sent.printed) continue
-            behindTurn.set(c.id, { click: c, key, ...(c === click && sent.given ? { given: sent.given } : {}) })
+            behindTurn.set(c.id, { click: c, key: follow(key), ...(c === click && sent.given ? { given: sent.given } : {}) })
           }
         }
         await confirmAll()
@@ -1727,34 +1759,25 @@ async function connecting(say: (line: string) => void): Promise<void> {
     try {
       if (!began) began = steady()
       if (givingBack === 'due') {
-        const asked = await call<string[]>('mutation', api.delivery.giveBack, {}).then(
-          (back) => (Array.isArray(back) ? back : []),
-          async (err: unknown) => {
-            // An It that cannot be asked this yet: each click the journal names is given back by itself
-            if (!/could not find/i.test(String((err as Error)?.message ?? err))) return null
-            const named = claimedAndLeft()
-            const gone = await Promise.all(
-              named.map((id) =>
-                call('mutation', api.delivery.release, { id }).then(
-                  () => id,
-                  () => null,
-                ),
-              ),
-            )
-            return gone.filter((id): id is string => id !== null)
-          },
-        )
+        const asked = await recoverBatch()
         if (asked === null) {
           // It could not be asked. Nothing is taken meanwhile, for as long as a lease of the
-          // connector before this one can still stand
-          if (steady() - began < BACK_TRY_MS) {
+          // connector before this one can still stand. Once batch recovery has begun, only
+          // its explicit completion ends the hold, even if a later batch cannot be read yet.
+          if (recoveringBatches || steady() - began < BACK_TRY_MS) {
             soon(1000)
             return
           }
           givingBack = 'done'
         } else {
-          for (const id of asked) journal('released', id)
-          comingBack = new Set(asked)
+          for (const id of asked.back) {
+            journal('released', id)
+            comingBack.add(id)
+          }
+          if (!asked.done) {
+            soon(0)
+            return
+          }
           backBy = steady() + BACK_SEEN_MS
           givingBack = 'asked'
         }
@@ -1879,7 +1902,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // one may have its place in line for the queue, from the moment it was given that place
         // and before anything was asked for it. Given to the turn's next hook, this one would
         // be read before it: so it follows the earlier one, and is handed over after it.
-        const queuedBefore = inTurn && (queues.has(key) || [...behindTurn.values()].some((b) => b.key === key))
+        const queuedBefore = inTurn && ([...queues.keys()].some((line) => follow(line) === key) || [...behindTurn.values()].some((b) => follow(b.key) === key))
         const forAddOn = listening || (inTurn && now - click.at < FRESH_MS && !queuedBefore)
         // Which of the other ways it goes, asked only where the first does not take it
         const way = forAddOn

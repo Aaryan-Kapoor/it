@@ -10,7 +10,7 @@ import { LEASE_MS, LISTENING_MOST, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKES, wakes
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { internalMutation, mutation, type QueryCtx, query } from './_generated/server'
+import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { destination, dropStopped, noLongerWaiting, stoppedSince } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
@@ -423,27 +423,35 @@ export const release = mutation({
  */
 export const giveBack = mutation({
   args: {},
-  handler: async (ctx) => {
-    const { machine } = await requireMachine(ctx)
-    // Few are ever held at once: a connector holds a click for seconds, and one that is held
-    // past its lease is given back within the minute. Every one of them is looked at, whichever
-    // machine holds it, so that this machine's are found however many another holds; only so
-    // many are given back in one asking, which is far more than a connector ever held
-    const back: Id<'actions'>[] = []
-    let seen = 0
-    for await (const x of ctx.db.query('actions').withIndex('by_delivery_lease', (q) => q.eq('delivery', 'leased'))) {
-      if (++seen > 4000 || back.length >= 500) break
-      if (x.leaseMachineId !== machine._id) continue
-      if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
-      else {
-        await ctx.db.patch(x._id, await backToWaiting(ctx, x))
-        back.push(x._id)
-      }
-    }
-    if (back.length) log('lease.given_back', { machineId: machine._id, count: back.length })
-    return back
-  },
+  // Older connectors expect an array and know no continuation. Keep that answer for them;
+  // connectors that can finish every batch use giveBackBatch instead.
+  handler: async (ctx) => (await giveBackHeld(ctx, 500)).back,
 })
+
+/** A bounded part of recovery, including whether every lease this machine held was examined. */
+export const giveBackBatch = mutation({ args: {}, handler: (ctx) => giveBackHeld(ctx, 64) })
+
+async function giveBackHeld(ctx: MutationCtx, most: number) {
+  const { machine } = await requireMachine(ctx)
+  // New connectors read at most two MiB of action payloads, with room for the page and machine
+  // records read with them. The legacy answer retains its old 500-action ceiling. Foreign
+  // leases are excluded by the index, before anything is read. Every processed
+  // row leaves this index range, so asking again progresses even if an entire batch was stopped.
+  const leased = await ctx.db
+    .query('actions')
+    .withIndex('by_lease_machine', (q) => q.eq('leaseMachineId', machine._id).eq('delivery', 'leased'))
+    .take(most)
+  const back: Id<'actions'>[] = []
+  for (const x of leased) {
+    if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
+    else {
+      await ctx.db.patch(x._id, await backToWaiting(ctx, x))
+      back.push(x._id)
+    }
+  }
+  if (back.length) log('lease.given_back', { machineId: machine._id, count: back.length })
+  return { back, done: leased.length < most }
+}
 
 /**
  * A click this machine cannot deliver by itself (its conversation's own queue keeps refusing

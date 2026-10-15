@@ -107,6 +107,7 @@ vi.mock('./src/lib', async (original) => {
       // The backend as it answers when nothing is in the way: what is asked for is given
       if (name === 'delivery:claim' || name === 'delivery:renew') return args.ids
       if (name === 'delivery:lost') return []
+      if (name === 'delivery:giveBackBatch') return { back: [], done: true }
       if (name === 'delivery:handedOff') return { already: false }
       return null
     },
@@ -1287,10 +1288,10 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   test('a connector started anew has It give back what this machine still holds, and takes nothing that was done after until it is offered that again', async () => {
     // The connector before this one claimed a click and ended before it had handed it over: It
     // holds that click back until its lease runs out, and offers the next one meanwhile
-    stand.answer = (name) => (name === 'delivery:giveBack' ? ['click-left'] : undefined)
+    stand.answer = (name) => (name === 'delivery:giveBackBatch' ? { back: ['click-left'], done: true } : undefined)
     await start()
     offered(click(6))
-    await until(() => stand.calls.some((c) => c.name === 'delivery:giveBack'))
+    await until(() => stand.calls.some((c) => c.name === 'delivery:giveBackBatch'))
     await new Promise((r) => setTimeout(r, 600))
     expect(called('delivery:claim')).toEqual([])
     // It offers the earlier one again, and they go in the order they were made
@@ -1302,13 +1303,13 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   test('where It cannot be asked for them yet, nothing is taken, and it is asked again', async () => {
     let refuses = true
     stand.answer = (name) => {
-      if (name !== 'delivery:giveBack') return undefined
+      if (name !== 'delivery:giveBackBatch') return undefined
       if (refuses) throw new Error('It did not answer in time, so whether that went through is not known.')
-      return []
+      return { back: [], done: true }
     }
     await start()
     offered(click(6))
-    await until(() => stand.calls.filter((c) => c.name === 'delivery:giveBack').length >= 2, 10_000)
+    await until(() => stand.calls.filter((c) => c.name === 'delivery:giveBackBatch').length >= 2, 10_000)
     expect(called('delivery:claim')).toEqual([])
     expect(stand.codex).toEqual([])
     refuses = false
@@ -1316,9 +1317,56 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:claim')).toEqual(['click-6'])
   }, 30_000)
 
+  test('recovery finishes every batch before routing, including empty batches and a later batch that cannot yet be read', async () => {
+    standIn(true)
+    let batches = 0
+    let readable = false
+    stand.answer = (name) => {
+      if (name !== 'delivery:giveBackBatch') return undefined
+      batches++
+      if (batches === 1) return { back: ['click-left'], done: false }
+      // Stopped clicks fill a batch but none goes back to waiting.
+      if (batches === 2) return { back: [], done: false }
+      if (!readable) throw new Error('The next recovery batch could not be read.')
+      return { back: [], done: true }
+    }
+    await start()
+    offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
+    await pass(3)
+    expect(batches).toBeGreaterThan(2)
+    // Even after the old initial-retry deadline, an incomplete batch sequence is not complete.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 40_000)
+    try {
+      await pass(2)
+      expect(called('delivery:claim')).toEqual([])
+      expect(stand.codex).toEqual([])
+      readable = true
+      await pass(2)
+      await until(() => stand.codex.length === 1)
+      expect(called('delivery:claim')[0]).toBe('click-left')
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('recovery still accepts an older backend’s array answer when it has no batch function', async () => {
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch') throw new Error(`Could not find public function for '${name}'.`)
+      if (name === 'delivery:giveBack') return ['click-left']
+      return undefined
+    }
+    await start()
+    offered(click(6))
+    await until(() => stand.calls.some((c) => c.name === 'delivery:giveBack'))
+    expect(called('delivery:claim')).toEqual([])
+    offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')[0]).toBe('click-left')
+  })
+
   test('an It from before it could be asked that is asked to give back each click the journal names, a record that was cut short among them or not', async () => {
     stand.answer = (name) => {
-      if (name === 'delivery:giveBack') throw new Error("Could not find public function for 'delivery:giveBack'. Did you forget to run `npx convex dev`?")
+      if (name === 'delivery:giveBackBatch' || name === 'delivery:giveBack') throw new Error(`Could not find public function for '${name}'.`)
       return undefined
     }
     await start('socket', {}, (folder) =>
@@ -1369,6 +1417,32 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:claim')).not.toContain('click-6-later')
     answerClaim(['click-6'])
     await until(() => stand.codex.length === 1)
+  })
+
+  test('an older click’s reserved queue place still precedes a new hook click after the conversation changes its id', async () => {
+    await start()
+    await turn(6, true)
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name, args) => (name === 'delivery:claim' && args.ids.includes('click-6') ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    offered(click(6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    try {
+      expect(await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-60', was: 'thread-6', busy: true } })).toEqual({ ok: true })
+      offered({ ...click(60), at: Date.now() })
+      const hook = await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-60')
+      expect(hook?.clicks).toEqual([])
+      expect(called('delivery:claim')).not.toContain('click-60')
+      // The running turn ends before the old claim answers, so the queued click uses a mark.
+      await turn(60, false)
+    } finally {
+      answerClaim(['click-6'])
+    }
+    await until(() => stand.codex.length === 1)
+    expect(stand.codex[0]!.args).toContain('--thread=thread-60')
+    expect((await local<{ texts: string[] }>('/marked', { method: 'POST', body: { harness: 'codex', session: 'thread-60' } }))?.texts[0]).toContain('click-6')
+    stand.codex[0]!.end()
+    await until(() => stand.codex.length === 2)
+    expect(called('delivery:claim')).toEqual(['click-6', 'click-60'])
   })
 
   test('a waiter that says it has a click while Codex’s command for it is still to answer is not given it again once the command has', async () => {
