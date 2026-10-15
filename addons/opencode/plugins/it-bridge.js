@@ -422,6 +422,7 @@ export const ItBridge = async ({ client }) => {
         await ask('/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
         return
       }
+      let polled = false
       for (const s of [...sessions.values()]) {
         // Asking tells the connector that someone is listening, and it then sets the
         // conversation's clicks aside for this add-on. So a conversation is only asked about
@@ -430,8 +431,13 @@ export const ItBridge = async ({ client }) => {
         // And one that has refused twice running is not asked about while it is being left
         // alone: asking would keep its click set aside here, where `it wait` and the site
         // cannot have it.
-        if (sessions.get(s.id) === s && s.agent && !(s.tries >= 2 && Date.now() < s.notBefore)) await check(s)
+        if (sessions.get(s.id) === s && s.agent && !(s.tries >= 2 && Date.now() < s.notBefore)) {
+          polled = true
+          await check(s)
+        }
       }
+      // Backoff releases the clicks, not the evidence that this host is still open.
+      if (!polled) await ask('/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
     } catch {
     } finally {
       asking = false

@@ -646,9 +646,12 @@ describe('the OpenCode add-on', () => {
     expect(c.polls().length).toBe(asksBefore)
     await seconds(1)
     expect(state.tried).toBe(4)
+    c.state.runtimes.length = 0
     vi.setSystemTime(Date.now() + 178_000)
     await seconds(1)
     expect(state.tried).toBe(4)
+    expect(c.polls().length).toBe(asksBefore + 1)
+    expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { delivery: true, idle: false } })
     await seconds(1)
     expect(state.tried).toBe(5)
     expect(c.state.acked).toEqual([])
