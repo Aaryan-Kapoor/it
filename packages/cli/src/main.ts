@@ -91,7 +91,7 @@ import {
 import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { gather, noteConversation, publish } from './publish'
-import { alone, asAdmin, standing, startBackend } from './serve/backend'
+import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
@@ -1395,7 +1395,7 @@ async function uninstall(a: Args) {
   const since = usage.sinceBegun()
   if (since !== undefined) await usage.sendNow('installation.removed', { age: usage.ageBand(since) })
   const left: string[] = []
-  // First of all the background service, since it is the one thing that may refuse: where it
+  // First of all the background service, since stopping it may be refused: where it
   // could not be stopped, nothing else is taken away, so that It is still whole and this can
   // be run again. With the program and its folder gone and the service left, there would be
   // nothing left to run.
@@ -1408,81 +1408,101 @@ async function uninstall(a: Args) {
       if (was) say('The background service is stopped, and no longer starts by itself.')
     } catch (err) {
       throw new Problem(
-        `It was not taken off this machine: ${why(err)}.`,
+        `It was not taken off this machine: ${err instanceof Error && err.message.trim() ? err.message.replace(/\.$/, '') : 'the background service could not be stopped or removed'}.`,
         'error',
         'Nothing else was changed, and It is as it was. Run `it uninstall` again once the service can be stopped.',
       )
     }
   }
-  // 1. The add-ons, each from where this folder put it. One that could not be taken out is
-  // taken out by running this again, which needs the note It keeps of where it put the add-on,
-  // and the program: so those are kept, and said, with how it is run once its PATH is gone
-  const program = path.join(folder, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
-  let kept = false
-  for (const id of HARNESSES) {
-    if (!existsSync(stampFile(id))) continue
-    const gone = await disconnect(id, say).catch(() => false)
-    if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
-    else {
-      kept = true
-      left.push(
-        `${KNOWN[id].label} still has It’s add-on, which could not be taken out. What It noted of where it put the add-on is kept in ${path.join(folder, 'addons')}, with the program: once ${KNOWN[id].label} can be run from here, run \`${program} uninstall\`${process.env.IT_HOME ? `, with IT_HOME set to ${folder} as it is now` : ''}, which takes the add-on out and deletes the folder. To leave the add-on where it is, delete ${folder} yourself.`,
-      )
-    }
-  }
-  // 2. An `it serve` someone started by hand in this folder
+  // A service started by hand and an orphaned backend must stop before anything else goes.
   service.askToStop(folder, 30_000)
-  if (service.runningFor(folder)) left.push('It is still running, and was asked to stop: end the `it serve` you started, in its terminal.')
-  // 3. Its line in the shell's profile, with the comment above it
-  const bin = path.join(folder, 'bin')
-  const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
-  for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
-  for (const { file, why: reason } of profiles.failed)
-    left.push(`${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`)
-  // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
-  if (process.platform === 'win32') {
-    const taken = offWindowsPath(bin)
-    if (taken === 'off') say(`${bin} is off your PATH.`)
-    else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
-  }
-  // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
-  crumbs(folder)
-  // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
-  // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
-  if (codexRuleLetsItOut())
-    say(
-      `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
+  if (service.runningFor(folder)) throw new Problem('It is still running for this folder, so nothing else was removed.', 'still_running')
+  const heard: string[] = []
+  let removing = false
+  try {
+    await nothingLeft(
+      (line) => heard.push(line),
+      async () => {
+        removing = true
+        if (heard.length) say('The backend program that an It which had died left running here is stopped.')
+        // 1. The add-ons, each from where this folder put it. One that could not be taken out is
+        // taken out by running this again, which needs the note It keeps of where it put the add-on,
+        // and the program: so those are kept, and said, with how it is run once its PATH is gone
+        const program = path.join(folder, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
+        let kept = false
+        for (const id of HARNESSES) {
+          if (!existsSync(stampFile(id))) continue
+          const gone = await disconnect(id, say).catch(() => false)
+          if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
+          else {
+            kept = true
+            left.push(
+              `${KNOWN[id].label} still has It’s add-on, which could not be taken out. What It noted of where it put the add-on is kept in ${path.join(folder, 'addons')}, with the program: once ${KNOWN[id].label} can be run from here, run \`${program} uninstall\`${process.env.IT_HOME ? `, with IT_HOME set to ${folder} as it is now` : ''}, which takes the add-on out and deletes the folder. To leave the add-on where it is, delete ${folder} yourself.`,
+            )
+          }
+        }
+        // 3. Its line in the shell's profile, with the comment above it
+        const bin = path.join(folder, 'bin')
+        const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
+        for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
+        for (const { file, why: reason } of profiles.failed)
+          left.push(`${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`)
+        // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
+        if (process.platform === 'win32') {
+          const taken = offWindowsPath(bin)
+          if (taken === 'off') say(`${bin} is off your PATH.`)
+          else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
+        }
+        // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
+        crumbs(folder)
+        // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
+        // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
+        if (codexRuleLetsItOut())
+          say(
+            `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
+          )
+        // 5. Its folder, the program in it included. A program that is running may delete its own
+        // file on every system but Windows, where it steps out of the folder first. What the service
+        // held open there a moment ago may be held a moment longer, and is tried again.
+        // Where an add-on is still to be taken out, the folder keeps what that takes and nothing else:
+        // everything It held for the person goes all the same, and the program stays where it is.
+        const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
+        if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
+        else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+        const retried = process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}
+        takenOff = true
+        // Where the folder that was named is a link to the one It is kept in, deleting it deletes
+        // the link and leaves everything It held where it was, pages and keys and all, with It said
+        // to be gone. So the folder the link leads to is deleted, which is the one that was looked at
+        // above and found to be It's and not the person's own, and then the link.
+        let linked = false
+        try {
+          linked = lstatSync(folder).isSymbolicLink()
+        } catch {}
+        try {
+          // A service waiting on this lock must refuse after the settings are removed.
+          rmSync(path.join(folder, 'service.json'), { force: true })
+          if (!kept) {
+            rmSync(linked ? real : folder, { recursive: true, force: true, ...retried })
+            if (linked) rmSync(folder, { force: true })
+          } else
+            for (const name of readdirSync(folder))
+              if (name !== 'addons' && name !== 'bin') rmSync(path.join(folder, name), { recursive: true, force: true, ...retried })
+        } catch (err) {
+          left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
+        }
+        if (!kept && (existsSync(folder) || existsSync(real)) && !left.some((line) => line.startsWith(folder)))
+          left.push(`${existsSync(real) ? real : folder} could not be deleted whole. Delete it to finish.`)
+      },
     )
-  // 5. Its folder, the program in it included. A program that is running may delete its own
-  // file on every system but Windows, where it steps out of the folder first. What the service
-  // held open there a moment ago may be held a moment longer, and is tried again.
-  // Where an add-on is still to be taken out, the folder keeps what that takes and nothing else:
-  // everything It held for the person goes all the same, and the program stays where it is.
-  const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
-  if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
-  else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
-  const retried = process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}
-  takenOff = true
-  // Where the folder that was named is a link to the one It is kept in, deleting it deletes
-  // the link and leaves everything It held where it was, pages and keys and all, with It said
-  // to be gone. So the folder the link leads to is deleted, which is the one that was looked at
-  // above and found to be It's and not the person's own, and then the link.
-  let linked = false
-  try {
-    linked = lstatSync(folder).isSymbolicLink()
-  } catch {}
-  try {
-    if (!kept) {
-      rmSync(linked ? real : folder, { recursive: true, force: true, ...retried })
-      if (linked) rmSync(folder, { force: true })
-    } else
-      for (const name of readdirSync(folder))
-        if (name !== 'addons' && name !== 'bin') rmSync(path.join(folder, name), { recursive: true, force: true, ...retried })
   } catch (err) {
-    left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
+    if (removing) throw err
+    throw new Problem(
+      `It could not make sure that no backend program is left running on this folder’s database: ${err instanceof Problem ? err.message : why(err)}.`,
+      'still_running',
+      'The folder and add-ons were kept. Resolve the running program or unreadable settings, then run `it uninstall` again.',
+    )
   }
-  if (!kept && (existsSync(folder) || existsSync(real)) && !left.some((line) => line.startsWith(folder)))
-    left.push(`${existsSync(real) ? real : folder} could not be deleted whole. Delete it to finish.`)
   if (!forPerson(a)) return out({ removed: left.length === 0, folder, ...(left.length ? { left } : {}), said })
   tell([
     left.length ? 'It is off this machine, but for this:' : 'It is off this machine.',
@@ -2868,15 +2888,20 @@ async function main(argv: string[]): Promise<void> {
       if (!done) return forPerson(a) ? tell([`This is the newest It there is (${VERSION}).`]) : out({ version: VERSION, upgraded: false })
       // The program is in place. What runs is still the one that was started: the service is
       // started again by the new program, which also writes the service's definition as its
-      // version has it and brings the add-ons in the agent apps up to it. Where nothing starts
-      // It by itself, whoever started it does so again.
+      // version has it and brings the add-ons in the agent apps up to it. It is given what the
+      // definition that is there gives the service, so that a setting this terminal does not
+      // name is in the one written next. Where nothing starts It by itself, whoever started it
+      // does so again.
       let started: 'again' | 'by hand' | 'failed' = 'by hand'
       let why: string | undefined
       if (service.installedHere()) {
         say('Starting It again as the new version…')
         const ran = await new Promise<{ ok: boolean; said: string; failed: string }>((resolve) =>
-          execFile(done.program, ['setup'], { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) =>
-            resolve({ ok: !err, said: String(stdout), failed: String(stderr) }),
+          execFile(
+            done.program,
+            ['setup'],
+            { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true, env: service.againWith() },
+            (err, stdout, stderr) => resolve({ ok: !err, said: String(stdout), failed: String(stderr) }),
           ),
         )
         started = ran.ok ? 'again' : 'failed'

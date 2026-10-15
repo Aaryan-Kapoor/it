@@ -226,7 +226,10 @@ function placeOf(address: string): { name: string; port: number; rest: string } 
  * address it has on its networks, its host name, and that name as a home network looks it up.
  * A machine's addresses change as it moves between networks, so they are read again when the
  * last reading is a few seconds old. Kept to the tailnet, the names are the machine's addresses
- * there, its host name, and its name on the tailnet.
+ * there, its host name, and its name on the tailnet. That name is one of the machine's with
+ * the network on for everyone too, where the machine is on a tailnet: it is the address a
+ * screen was given while the door was kept to the tailnet, and a door opened wider since still
+ * answers to it. Who may ask is another matter, held to by the caller's address.
  */
 function knownNames(network: boolean, tailnet = false): (name: string) => boolean {
   const own = new Set(['localhost', '127.0.0.1', '[::1]'])
@@ -247,8 +250,9 @@ function knownNames(network: boolean, tailnet = false): (name: string) => boolea
       const host = os.hostname().toLowerCase()
       if (host) others.add(host)
       if (host && !host.includes('.') && !tailnet) others.add(`${host}.local`)
-      // And to the name it has on the tailnet, where Tailscale says what that is
-      const there = tailnet ? tailnetName() : undefined
+      // And to the name it has on the tailnet, where Tailscale says what that is. A machine that
+      // has no address on one has no name there, and Tailscale is not asked for one
+      const there = tailnet || [...others].some(inTailnet) ? tailnetName() : undefined
       if (there) others.add(there)
     }
     return others.has(name)
@@ -278,8 +282,15 @@ function declared(headers: Headers): number | null {
 /** Whether a request says that it carries a body: a length that is not nothing, or that it comes in pieces. */
 const carries = (headers: Headers): boolean => headers.has('transfer-encoding') || !['0', null].includes(headers.get('content-length'))
 
-/** A body as it arrives, cut off once it is longer than it may be or has taken longer than it may. Whoever reads it is told by an error. */
-function held(body: ReadableStream<Uint8Array>, most: number, ms: number): ReadableStream<Uint8Array> {
+/**
+ * A body as it arrives, cut off once it is longer than it may be or has taken longer than it
+ * may. Whoever reads it is told by an error. `over` is for whoever handed it on, once what it
+ * was handed to has answered: a body that was refused with none of it read is never read to
+ * its end, and the waiting for it would otherwise go on, with the body kept, for all the time
+ * it was given. What was not read is then the listener's to take off the connection, as it
+ * does for any request.
+ */
+function held(body: ReadableStream<Uint8Array>, most: number, ms: number): { stream: ReadableStream<Uint8Array>; over(): void } {
   const reader = body.getReader()
   let size = 0
   let late = false
@@ -288,7 +299,11 @@ function held(body: ReadableStream<Uint8Array>, most: number, ms: number): Reada
     void reader.cancel().catch(() => {})
   }, ms)
   timer.unref?.()
-  return new ReadableStream<Uint8Array>({
+  const over = () => {
+    clearTimeout(timer)
+    void reader.cancel().catch(() => {})
+  }
+  const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const { done, value } = await reader.read()
@@ -312,6 +327,7 @@ function held(body: ReadableStream<Uint8Array>, most: number, ms: number): Reada
       return reader.cancel(reason)
     },
   })
+  return { stream, over }
 }
 
 /** Says a thing about the door seldom: once, and then not again for ten minutes, however often it happens. */
@@ -594,8 +610,8 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
     }
   }
 
-  /** A request for the content package, with the caller's address beside it. */
-  async function toContent(which: 'showing' | 'upload' | 'control', a: Arrival, url: URL, body: BodyInit | null): Promise<Response> {
+  /** A request for the content package, with the caller's address beside it. `over` is called once it has been answered, however that went. */
+  async function toContent(which: 'showing' | 'upload' | 'control', a: Arrival, url: URL, body: BodyInit | null, over?: () => void): Promise<Response> {
     const request = new Request(url, {
       method: a.method,
       headers: a.headers,
@@ -606,6 +622,8 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       return await content[which](request, { port: a.port, address: a.address })
     } catch {
       return refuse(500, 'content_failed')
+    } finally {
+      over?.()
     }
   }
 
@@ -657,7 +675,8 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       if (length === null) return refuse(411, 'length_required')
       if (length > LIMITS.fileBytes) return unread('too_large')
       // A file is passed on as it arrives, for as many bytes as it said and no more
-      return toContent('upload', a, url, a.body ? held(a.body, length, patience * 20) : null)
+      const file = a.body ? held(a.body, length, patience * 20) : null
+      return toContent('upload', a, url, file?.stream ?? null, file?.over)
     }
     if (path.startsWith('/control/')) {
       if (a.method !== 'POST') return refuse(405, 'control_method', { allow: 'POST' })
