@@ -476,9 +476,9 @@ export const _gate = internalMutation({
   args: { artifactId: v.id('artifacts'), version: v.number() },
   handler: async (ctx, { artifactId, version }) => {
     const { user } = await requireMachine(ctx)
-    await rateLimit(ctx, 'finish', user._id)
     const result = await recorded(ctx, user._id, artifactId, version)
     if (result) return { result }
+    await rateLimit(ctx, 'finish', user._id)
     const { ver } = await staged(ctx, user._id, artifactId, version)
     if (Date.now() >= ver.createdAt + PUBLICATION.budgetMs) fail('conflict', 'That publication has expired.')
     return { waiting: { prefix: prefixOf(user._id, artifactId, version), files: ver.files } }

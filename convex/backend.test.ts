@@ -5876,6 +5876,28 @@ describe('publication transactions', () => {
     expect(await code(m.as.action(api.publish.begin, { ...request, title: 'Different request' }))).toBe('conflict')
   })
 
+  test('a recorded completion is recovered when new finishes have exhausted their rate limit', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const request = { slug: 'limited-receipt', title: 'Original', files: page, operation: 'limited-publication-identity' }
+    const begun = await m.as.action(api.publish.begin, request)
+    const args = { artifactId: begun.artifactId, version: begun.version }
+    const original = await m.as.action(api.publish.finish, args)
+    const next = await m.as.action(api.publish.begin, { ...request, operation: 'another-publication-identity' })
+    const waiting = { artifactId: next.artifactId, version: next.version }
+    for (let n = 0; n < 29; n++) await m.as.mutation(internal.publish._gate, waiting)
+    expect(await code(m.as.action(api.publish.finish, waiting))).toBe('rate_limited')
+    const checked = content.calls.filter((c) => c.op === 'verify').length
+    expect(await m.as.action(api.publish.resume, { operation: request.operation })).toMatchObject({ version: 1, upload: { grant: '' } })
+    for (let n = 0; n < 3; n++) expect(await m.as.action(api.publish.finish, args)).toEqual(original)
+    expect(content.calls.filter((c) => c.op === 'verify')).toHaveLength(checked)
+    expect(await code(m.as.action(api.publish.finish, waiting))).toBe('rate_limited')
+    expect(await t.run((ctx) => ctx.db.get(begun.artifactId))).toMatchObject({ currentVersion: 1, lastVersion: 2 })
+    vi.setSystemTime(Date.now() + 1000)
+    expect(await m.as.action(api.publish.finish, waiting)).toMatchObject({ version: 2 })
+  })
+
   test('publication outcomes leave with the page and expire after thirty days', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

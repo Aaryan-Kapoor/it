@@ -457,22 +457,38 @@ export async function publish(input: {
   const clear = () => {
     if (readJson<{ operation: string }>(file)?.operation === pending.operation) rmSync(file, { force: true })
   }
-  const uncertain = (err: unknown) => err instanceof Problem && ['offline', 'timeout', 'unavailable', 'error'].includes(err.code)
+  const uncertain = (err: unknown): err is Problem =>
+    err instanceof Problem && ['offline', 'timeout', 'unavailable', 'error', 'rate_limited'].includes(err.code)
   const unresolved = (): never => {
     throw new Problem(
       'The publication could not be confirmed.',
       'unavailable',
-      'Run the same publishing command again when It can be reached. It will recover this publication before starting another.',
+      `Run the same publishing command again to recover this publication. If recovery keeps failing, wait for other publishing commands to end and check the page before removing ${file}.`,
     )
   }
-  const begun = await call<{ artifactId: string; slug: string; version: number; upload: { url: string; grant: string } }>(
-    'action',
-    resuming ? api.publish.resume : api.publish.begin,
-    resuming ? { operation: pending.operation } : { ...request, operation: pending.operation },
-  ).catch((err) => {
-    if (!uncertain(err)) clear()
-    throw err
-  })
+  const begin = async () => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await call<{ artifactId: string; slug: string; version: number; upload: { url: string; grant: string } }>(
+          'action',
+          resuming ? api.publish.resume : api.publish.begin,
+          resuming ? { operation: pending.operation } : { ...request, operation: pending.operation },
+        )
+      } catch (err) {
+        // Another command can have saved the shared receipt before begin reaches the backend.
+        // A missing record is inconclusive, including after a begin whose answer was lost.
+        const missing = err instanceof Problem && err.code === 'not_found'
+        if (resuming && missing && attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 250))
+          continue
+        }
+        if (missing) return unresolved()
+        if (!uncertain(err)) clear()
+        throw err
+      }
+    }
+  }
+  const begun = await begin()
   const remaining = Math.max(0, PUBLICATION.budgetMs - (Date.now() - pending.at))
   const canceled = new AbortController()
   const ending = AbortSignal.any([canceled.signal, AbortSignal.timeout(remaining)])
@@ -503,7 +519,7 @@ export async function publish(input: {
       } catch (err) {
         // Completing again returns the original outcome, even if a later version is live.
         // No upload or new version is needed after an answer was lost.
-        if (uncertain(err) && attempt < 2 && !ending.aborted) continue
+        if (uncertain(err) && err.code !== 'rate_limited' && attempt < 2 && !ending.aborted) continue
         if (uncertain(err)) return unresolved()
         await call('mutation', api.publish.abandon, { artifactId: begun.artifactId, version: begun.version }).catch(() => {})
         clear()

@@ -181,7 +181,7 @@ async function backend(
     const chunks: Buffer[] = []
     req
       .on('data', (c: Buffer) => chunks.push(c))
-      .on('end', () => {
+      .on('end', async () => {
         const json = (value: unknown, status = 200) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
         if (req.method === 'GET' && req.url === '/cli/config') return json({ protocol: 1, issuer: 'http://127.0.0.1:23001' })
         // Asked how it is, it says that it is It, as the backend does
@@ -204,7 +204,7 @@ async function backend(
         const call = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as { path: string; args: [Record<string, unknown>] }
         const one = { path: call.path, args: call.args?.[0] ?? {} }
         asked.push(one)
-        const said = answer(one)
+        const said = await answer(one)
         if (said === Symbol.for('drop-answer')) {
           req.socket.destroy()
           return
@@ -998,6 +998,121 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(identities[1]).toBe(identities[2])
       expect(identities[0]).not.toBe(identities[1])
       expect(readdirSync(path.join(m.it, 'publication-pending'))).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a concurrent command keeps the receipt while the first begin is still being recorded', async () => {
+    const m = machine()
+    let release!: () => void
+    let reached!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const beginning = new Promise<void>((resolve) => (reached = resolve))
+    let committed = false
+    let lost = 3
+    const b = await backend(m, async ({ path: fn }) => {
+      if (fn === 'publish:begin') {
+        reached()
+        await held
+      }
+      if (fn === 'publish:resume' && !committed) return new Refusal({ code: 'not_found', message: 'That publication is not recorded.' })
+      if (fn === 'publish:begin' || fn === 'publish:resume')
+        return { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: committed ? '' : 'a-grant' } }
+      if (fn === 'publish:finish') {
+        committed = true
+        if (lost-- > 0) return Symbol.for('drop-answer')
+        return { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      }
+      return null
+    })
+    const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+    const first = run(m, args, b.env)
+    try {
+      await beginning
+      const folder = path.join(m.it, 'publication-pending')
+      const file = path.join(folder, readdirSync(folder)[0]!)
+      const pending = readFileSync(file, 'utf8')
+      const concurrent = await run(m, args, b.env)
+      expect(concurrent.code).toBe(1)
+      expect(readFileSync(file, 'utf8')).toBe(pending)
+      expect(b.asked.filter((x) => x.path === 'publish:resume')).toHaveLength(3)
+      release()
+      expect((await first).code).toBe(1)
+      expect(readFileSync(file, 'utf8')).toBe(pending)
+      const recovered = await run(m, args, b.env)
+      expect([recovered.code, printed(recovered).version, b.uploads.length]).toEqual([0, 1, 1])
+      expect(b.asked.filter((x) => x.path === 'publish:begin')).toHaveLength(1)
+      expect(b.asked.filter((x) => x.path === 'publish:abandon')).toEqual([])
+      expect(b.asked.filter((x) => x.path === 'publish:resume').every((x) => x.args.operation === JSON.parse(pending).operation)).toBe(true)
+      expect(readdirSync(folder)).toEqual([])
+    } finally {
+      release()
+      await first
+      await b.close()
+    }
+  })
+
+  test.each(['not_found', 'rate_limited'])('an uncertain begin answered with %s keeps its identity when recovery still finds nothing', async (refusal) => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn }) =>
+      fn === 'publish:begin'
+        ? new Refusal({ code: refusal, message: 'The publication could not be prepared.' })
+        : new Refusal({ code: 'not_found', message: 'That publication is not recorded.' }),
+    )
+    try {
+      const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+      expect((await run(m, args, b.env)).code).toBe(1)
+      const folder = path.join(m.it, 'publication-pending')
+      expect(readdirSync(folder)).toHaveLength(1)
+      const file = path.join(folder, readdirSync(folder)[0]!)
+      const pending = readFileSync(file, 'utf8')
+      expect((await run(m, args, b.env)).code).toBe(1)
+      expect(readFileSync(file, 'utf8')).toBe(pending)
+      expect(b.asked.filter((x) => x.path === 'publish:begin')).toHaveLength(1)
+      expect(b.asked.filter((x) => x.path === 'publish:resume')).toHaveLength(3)
+      expect(b.uploads).toEqual([])
+      writeFileSync(file, JSON.stringify({ ...JSON.parse(pending), at: 0 }))
+      const calls = b.asked.length
+      expect(error(await run(m, args, b.env)).code).toBe('conflict')
+      expect(b.asked).toHaveLength(calls)
+      expect(existsSync(file)).toBe(true)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test.each(['publish:resume', 'publish:finish'])('a lost completion keeps its receipt when %s is rate limited', async (limited) => {
+    const m = machine()
+    let committed = false
+    let lost = limited === 'publish:resume' ? 3 : 1
+    let blocked = true
+    const b = await backend(m, ({ path: fn }) => {
+      if (fn === limited && committed && lost <= 0 && blocked) return new Refusal({ code: 'rate_limited', message: 'Too many requests. Try again shortly.' })
+      if (fn === 'publish:begin' || fn === 'publish:resume')
+        return { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: committed ? '' : 'a-grant' } }
+      if (fn === 'publish:finish') {
+        committed = true
+        if (lost-- > 0) return Symbol.for('drop-answer')
+        return { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      }
+      return null
+    })
+    try {
+      const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+      expect((await run(m, args, b.env)).code).toBe(1)
+      const folder = path.join(m.it, 'publication-pending')
+      expect(readdirSync(folder)).toHaveLength(1)
+      const file = path.join(folder, readdirSync(folder)[0]!)
+      const pending = readFileSync(file, 'utf8')
+      expect((await run(m, args, b.env)).code).toBe(1)
+      expect(readFileSync(file, 'utf8')).toBe(pending)
+      blocked = false
+      const recovered = await run(m, args, b.env)
+      expect([recovered.code, printed(recovered).version, b.uploads.length]).toEqual([0, 1, 1])
+      expect(b.asked.filter((x) => x.path === 'publish:begin')).toHaveLength(1)
+      expect(b.asked.filter((x) => x.path === 'publish:abandon')).toEqual([])
+      expect(readdirSync(folder)).toEqual([])
     } finally {
       await b.close()
     }
