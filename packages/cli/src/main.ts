@@ -2993,6 +2993,7 @@ async function main(argv: string[]): Promise<void> {
       // the meantime has made it the folder of an It that runs on this machine
       const done = await oneAtATime(() => {
         refused()
+        markInstallation(home())
         return login(asked)
       }).catch(said)
       say(`\nThis machine has joined as "${done.name}".`)

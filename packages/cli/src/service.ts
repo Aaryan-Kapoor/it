@@ -9,7 +9,7 @@
 // that program cannot be counted on to hear, by ending it once it has been asked. What stops
 // the service is held to asking, on every system.
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
@@ -319,8 +319,8 @@ const launchdDomain = () => `gui/${process.getuid?.() ?? 501}`
 // taking It out of another folder (a second one kept elsewhere, a test) never takes the service
 // away from the one that owns it. What is registered names its folder's log file, which is how
 // it is told whose it is. The name is looked for as the definition's writer wrote it, as one
-// whole word: a percent sign or an ampersand in it is not written there as itself, and another
-// folder's name may end in this one's. On Windows the task is asked for its own action, which
+// whole word, or resolved to the same real folder when setup used a symlink. A percent sign or
+// an ampersand in it is not written there as itself. On Windows the task is asked for its own action, which
 // names the folder it is started in: a launcher left in a folder says only that the folder once
 // registered the task, and another folder may have registered it since.
 export function installedHere(): boolean {
@@ -336,7 +336,23 @@ export function installedHere(): boolean {
         : [null, '']
   if (!registered) return false
   try {
-    return readFileSync(registered, 'utf8').includes(named)
+    const definition = readFileSync(registered, 'utf8')
+    if (definition.includes(named)) return true
+    let log: string
+    if (process.platform === 'linux') {
+      const token = /^ExecStart=.* "--log" ("(?:\\.|[^"\\])*")\s*$/m.exec(definition)?.[1]
+      if (!token) return false
+      log = (JSON.parse(token) as string).replaceAll('%%', '%').replaceAll('$$', '$')
+      if (systemdQuote(log, true) !== token) return false
+    } else {
+      const args = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(definition)?.[1]
+      const token = args && /<string>--log<\/string>\s*<string>([^<]*)<\/string>\s*$/.exec(args)?.[1]
+      if (!token) return false
+      log = token.replace(/&(amp|lt|gt);/g, (_, name: string) => ({ amp: '&', lt: '<', gt: '>' })[name]!)
+      if (xml(log) !== token) return false
+    }
+    if (!path.isAbsolute(log) || path.basename(log) !== 'it.log' || path.basename(path.dirname(log)) !== 'logs') return false
+    return realpathSync(path.dirname(path.dirname(log))) === realpathSync(home())
   } catch {
     return false
   }

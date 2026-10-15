@@ -1632,6 +1632,15 @@ describe('background service definitions', () => {
           say('disabled')
           expect([system, definedFor()]).toEqual([system, 'another folder'])
           say('enabled')
+          const alias = path.join(user, `linked-${system}`)
+          symlinkSync(mine, alias, 'dir')
+          process.env.IT_HOME = alias
+          write()
+          process.env.IT_HOME = mine
+          expect([installedHere(), definedFor()]).toEqual([true, 'this folder'])
+          rmSync(alias)
+          symlinkSync(other, alias, 'dir')
+          expect([installedHere(), definedFor()]).toEqual([false, 'another folder'])
         }
       })
     } finally {

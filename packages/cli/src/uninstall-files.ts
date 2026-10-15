@@ -108,7 +108,16 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
     const match = COPY.exec(name)
     if (!match) continue
     const note = json(`backend/${name}/copy.json`)
-    if (note?.copy !== match[1] || !/^[0-9a-f]{16}$/.test(note.id) || !Number.isSafeInteger(note.order) || typeof note.it !== 'string') continue
+    if (
+      note?.copy !== match[1] ||
+      typeof note.id !== 'string' ||
+      !/^[0-9a-f]{16}$/.test(note.id) ||
+      typeof note.made !== 'number' ||
+      !Number.isSafeInteger(note.order) ||
+      typeof note.it !== 'string' ||
+      (note.erased !== undefined && note.erased !== true)
+    )
+      continue
     for (const file of DATABASE_FILES) remove(`backend/${name}/${file}`)
     // Storage and any other files remain. Keep the note while anything from this copy remains.
     empty(`backend/${name}/storage`)

@@ -110,6 +110,18 @@ describe('installation ownership', () => {
     expect(legacyInstallation(at)).toBe(false)
   })
 
+  test.each([{ made: undefined }, { erased: false }])('cleanup retains backups with an incomplete ownership record: %j', (damaged) => {
+    const at = folder()
+    markInstallation(at)
+    const copy = 'before-functions-123456789abc'
+    const note = { copy, id: '123456789abcdef0', made: Date.now(), order: 1, it: '0.1.22', ...damaged }
+    put(at, `backend/${copy}/copy.json`, JSON.stringify(note))
+    const database = put(at, `backend/${copy}/db.sqlite3`, 'must remain')
+    removeInstallationFiles(at, false)
+    expect(readFileSync(database, 'utf8')).toBe('must remain')
+    expect(JSON.parse(readFileSync(path.join(at, `backend/${copy}/copy.json`), 'utf8'))).toEqual(JSON.parse(JSON.stringify(note)))
+  })
+
   test('cleanup removes recognized data and keys while keeping unknown siblings at every level', () => {
     const at = folder()
     markInstallation(at)
@@ -131,7 +143,7 @@ describe('installation ownership', () => {
     ])
       put(at, file)
     const backup = 'backend/before-functions-123456789abc'
-    put(at, `${backup}/copy.json`, JSON.stringify({ copy: 'before-functions-123456789abc', id: '123456789abcdef0', order: 1, it: '0.1.22' }))
+    put(at, `${backup}/copy.json`, JSON.stringify({ copy: 'before-functions-123456789abc', id: '123456789abcdef0', made: Date.now(), order: 1, it: '0.1.22' }))
     put(at, `${backup}/db.sqlite3`)
     const prefix = 'u/person/page/version'
     const name = createHash('sha256').update('index.html').digest('hex')

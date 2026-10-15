@@ -3739,6 +3739,7 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
         { code: 'invalid', message: 'This machine has already joined an It.', hint: 'Run `it logout` to leave it first.' },
       ])
       expect(b.joined).toHaveLength(1)
+      expect(readFileSync(path.join(m.it, 'installation.json'), 'utf8')).toBe(INSTALLATION)
     } finally {
       await b.close()
     }
