@@ -106,6 +106,7 @@ export const get = query({
         wakesOn(machine.system) &&
         a.session &&
         (machine.wanted ?? []).includes(a.session.harness) &&
+        (machine.harnesses ?? []).some((h) => h.id === a.session?.harness && (h.addon === 'connected' || h.addon === 'needs_approval')) &&
         (WAKES as readonly string[]).includes(a.session.harness)
           ? { machineId: machine._id, harness: a.session.harness, on: (machine.wakes ?? []).some((w) => w.harness === a.session?.harness) }
           : null,
