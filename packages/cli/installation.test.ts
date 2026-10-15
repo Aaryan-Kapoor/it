@@ -92,6 +92,18 @@ describe('installation ownership', () => {
     expect(() => markedInstallation(first)).toThrow('is not the installation record')
   })
 
+  test('a folder alias keeps the installation spelling used by its launcher and PATH', () => {
+    const parent = folder()
+    const physical = path.join(parent, 'physical')
+    const alias = path.join(parent, 'installed')
+    markInstallation(physical)
+    put(physical, process.platform === 'win32' ? 'bin/it.exe' : 'bin/it')
+    symlinkSync(physical, alias, 'junction')
+    const executable = path.join(alias, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
+    expect(installationHome(executable)).toBe(alias)
+    expect(realpathSync(installationHome(executable)!)).toBe(physical)
+  })
+
   test('legacy recognition requires the running program in its real bin folder', () => {
     const at = folder()
     const program = put(at, process.platform === 'win32' ? 'bin/it.exe' : 'bin/it')

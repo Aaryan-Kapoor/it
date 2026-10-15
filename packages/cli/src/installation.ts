@@ -45,7 +45,15 @@ export function installationHome(program = process.execPath, script = program ==
   // A corrupt marker refuses discovery. A markerless legacy program in its own bin is
   // recognized with its installed terms, including after an older updater replaced it.
   // A bare program copied to /usr/local/bin keeps the usual default home.
-  return markedInstallation(folder) || legacyInstallation(folder, real, script) ? folder : undefined
+  if (!markedInstallation(folder) && !legacyInstallation(folder, real, script)) return undefined
+  // A folder junction is the same installation, but its spelling is what PATH and the
+  // service registration retain. An executable symlink alone never assigns another home.
+  const named = path.resolve(program)
+  const namedFolder = path.dirname(path.dirname(named))
+  try {
+    if (lstatSync(named).isFile() && path.basename(path.dirname(named)).toLowerCase() === 'bin' && realpathSync(namedFolder) === folder) return namedFolder
+  } catch {}
+  return folder
 }
 
 /** The running program and its installed terms identify a legacy home. JSON shapes alone do not. */
