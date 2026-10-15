@@ -614,7 +614,7 @@ async function marketplacePreflight(id: 'claude-code' | 'codex', at: Place, was:
       const root = claude ? market.path : market.root
       if (claude && market.source !== 'directory') return conflict
       if (!was || !placed(was) || typeof root !== 'string' || !path.isAbsolute(root) || real(root) !== real(addonDir(id))) return conflict
-      if (!lstatSync(root).isDirectory()) return conflict
+      if (!lstatSync(root).isDirectory() || !holds(thisHome(), real(root))) return conflict
       // Read before unpacking: unpacking must not erase evidence of another plugin in this marketplace.
       const file = path.join(root, claude ? '.claude-plugin' : '.agents/plugins', 'marketplace.json')
       if (lookAt(root, file).is !== 'file') return retry

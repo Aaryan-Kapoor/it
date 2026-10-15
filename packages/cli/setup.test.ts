@@ -1764,7 +1764,7 @@ describe('managed plugin and marketplace ownership', () => {
     },
   )
 
-  test.each(apps.flatMap((app) => ['source folder', 'manifest folder'].map((replacement) => ({ ...app, replacement }))))(
+  test.each(apps.flatMap((app) => ['source folder', 'source parent', 'manifest folder'].map((replacement) => ({ ...app, replacement }))))(
     '$bin refuses a $replacement replaced with a link to another folder',
     async ({ id, bin, manifest, replacement }) => {
       await connect(id, () => {})
@@ -1772,7 +1772,7 @@ describe('managed plugin and marketplace ownership', () => {
       const file = path.join(dir, manifest)
       const saved = read(file)
       const savedRecord = read(stampFile(id))
-      const target = replacement === 'source folder' ? dir : path.dirname(file)
+      const target = replacement === 'source folder' ? dir : replacement === 'source parent' ? path.dirname(dir) : path.dirname(file)
       const foreign = path.join(tmp, 'foreign-marketplace')
       renameSync(target, foreign)
       symlinkSync(foreign, target, 'junction')
