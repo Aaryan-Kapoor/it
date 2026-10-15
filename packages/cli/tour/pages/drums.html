@@ -361,9 +361,13 @@
       // one is told that the pads are empty, as the button that empties them tells it
       if (!n) {
         if (sentKey === null) return;
-        sentKey = k; waiting = false;
+        sentKey = k; waiting = false; asked = false;
         clearTimeout(quietTimer);
+        theirs = blank();
+        stop();
+        paint();
         Tour.say("you", "took the last hit off");
+        Tour.say("did", "");
         Tour.act("cleared", {}).then(() => Tour.plate("", false), () => { if (sentKey === k) sentKey = null; });
         return;
       }

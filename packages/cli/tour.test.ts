@@ -476,6 +476,25 @@ describe('the drum machine', () => {
     expect(idle.sent).toEqual([])
     idle.close()
   })
+
+  test('taking off the last hit clears the agent pattern and stops playback before the agent answers', async () => {
+    const page = await opened('drums', silent)
+    tapped(page, 3, 0)
+    await page.advance(1500)
+    await page.sent[0]!.accept()
+    await page.set({ theirs: ['x.......', '........', '........', '........'] })
+    expect(page.$('#play').getAttribute('data-on')).toBe('1')
+    tapped(page, 3, 0)
+    await page.advance(1500)
+    expect(page.$('#play').getAttribute('data-on')).toBe('0')
+    expect(page.$('.pad[data-r="0"][data-c="0"]').classList.contains('theirs')).toBe(false)
+    expect(page.$('#t-did').classList.contains('in')).toBe(false)
+    expect(page.sent.at(-1)?.name).toBe('cleared')
+    // Repeating unrelated state does not bring the old agent pattern back.
+    await page.set({ theirs: ['x.......', '........', '........', '........'], note: 'Still here' })
+    expect(page.$('#play').getAttribute('data-on')).toBe('0')
+    page.close()
+  })
 })
 
 describe('the ways on', () => {
