@@ -675,6 +675,44 @@ describe('finding a page with the keyboard', () => {
     ]
   })
 
+  test('Notifications keeps the keyboard visible and blocks the finder until it closes', async () => {
+    await start()
+    const bell = button('Notifications')!
+    bell.focus()
+    await act(async () => bell.click())
+    const panel = host.querySelector<HTMLElement>('.notif-panel')!
+    expect(document.activeElement).toBe(panel)
+    for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+      await key(panel, 'k', modifier)
+      expect(field()).toBeNull()
+      expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+    }
+    for (const shiftKey of [false, true]) {
+      await key(panel, 'Tab', { shiftKey })
+      expect(document.activeElement).toBe(panel)
+    }
+    await key(panel, 'Escape')
+    expect(host.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(bell)
+    await key(bell, 'k', { ctrlKey: true })
+    expect(document.activeElement).toBe(field())
+  })
+
+  test('one Escape closes only the last dialog and returns focus to the dialog beneath it', async () => {
+    await start()
+    await act(async () => button('Notifications')!.click())
+    const panel = host.querySelector<HTMLElement>('.notif-panel')!
+    // A new dialog can also be opened by application state, without a pointer crossing the tray.
+    await act(async () => button('Take the tour')!.click())
+    expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(2)
+    await key(document, 'Escape')
+    expect(host.querySelector('.modal-panel')).toBeNull()
+    expect(host.querySelector('.notif-panel')).toBe(panel)
+    expect(document.activeElement).toBe(panel)
+    await key(document, 'Escape')
+    expect(host.querySelector('[role="dialog"]')).toBeNull()
+  })
+
   test('the keyboard stays in the finder while it is open: Tab goes nowhere else, Escape closes it wherever the keyboard is, and the keyboard is then back where it was', async () => {
     await start()
     const tour = button('Take the tour')!

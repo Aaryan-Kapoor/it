@@ -161,27 +161,41 @@ export function TourDialog({ onClose }: { onClose: () => void }) {
 
 /**
  * The agent apps on the person's machines, for the owner: those that are connected, those of
- * them that are listening now, and those that were found there and could be connected. Unknown
+ * them on machines currently available, and those that were found there and could be connected. Unknown
  * until the backend has said.
  */
-function useApps(owner: boolean): { connected: string[]; listening: string[]; more: string[] } | undefined {
+function useApps(owner: boolean): { connected: string[]; ready: string[]; approval: string[]; more: string[] } | undefined {
   const machines = useQuery(api.machines.list, owner ? {} : 'skip') as
-    | { harnesses: { id: string; addon: string }[]; lastSeenAt: number; connectorVersion: string | null; off?: boolean; paused?: string | null }[]
+    | {
+        harnesses: { id: string; addon: string }[]
+        wanted?: string[]
+        lastSeenAt: number
+        connectorVersion: string | null
+        off?: boolean
+        paused?: string | null
+      }[]
     | undefined
   const now = useNow()
   if (!owner || !machines) return undefined
   const named = (ids: string[]) => [...new Set(ids)].map((id) => agentName(id) ?? id)
-  const all = machines.flatMap((m) => m.harnesses)
+  const appsOn = (m: (typeof machines)[number]) => m.harnesses.map((h) => ({ ...h, addon: m.wanted && !m.wanted.includes(h.id) ? 'not_connected' : h.addon }))
+  const all = machines.flatMap(appsOn)
   const connected = (h: { addon: string }) => h.addon === 'connected' || h.addon === 'needs_approval'
   const on = all.filter(connected).map((h) => h.id)
-  // That an app is connected is what was put in place on its machine, and is kept while the
-  // machine is stopped. It is listening only where the machine is there, as the Machines screen
-  // judges it, and hands what is done on a page to its agents
   const there = machines.filter((m) => !m.off && !m.paused && m.connectorVersion !== null && now - m.lastSeenAt < ALIVE.onlineMs)
-  const listening = there.flatMap((m) => m.harnesses.filter(connected).map((h) => h.id))
+  const ready = there.flatMap((m) =>
+    appsOn(m)
+      .filter((h) => h.addon === 'connected')
+      .map((h) => h.id),
+  )
+  const approval = there.flatMap((m) =>
+    appsOn(m)
+      .filter((h) => h.addon === 'needs_approval')
+      .map((h) => h.id),
+  )
   // Found and not connected, and nothing stands in the way of connecting it: not one that is too old, or that It cannot connect yet
   const off = all.filter((h) => !on.includes(h.id) && h.addon !== 'unavailable' && h.addon !== 'too_old').map((h) => h.id)
-  return { connected: named(on), listening: named(listening), more: named(off) }
+  return { connected: named(on), ready: named(ready), approval: named(approval), more: named(off) }
 }
 
 /** A list of names as a person says it: "Claude Code", "Claude Code and Codex", "Claude Code, Codex and Pi". */
@@ -248,7 +262,6 @@ const lessMotion = () => typeof matchMedia === 'function' && matchMedia(LESS_MOT
  */
 export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<typeof useTour> }) {
   const apps = useApps(owner)
-  const listening = apps?.listening
   const panel = useRef<HTMLDivElement>(null)
   const stage = useRef<HTMLDivElement>(null)
   const first = useRef<HTMLSpanElement>(null)
@@ -327,7 +340,7 @@ export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<type
   return (
     <main className="hello" data-playing={things.length ? '' : undefined}>
       <div className="hello-text">
-        <div className="hello-eyebrow">{listening?.length ? `${listed(listening)} ${listening.length > 1 ? 'are' : 'is'} listening` : 'It is listening'}</div>
+        <div className="hello-eyebrow">It is ready to show pages</div>
         {/* What is typed here is read out once, whole: letter by letter it would be read as noise */}
         <h2 className="hello-h" aria-label="It can be anything your agent needs">
           <span aria-hidden="true">
@@ -337,7 +350,16 @@ export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<type
             <i className="hello-dot" />
           </span>
         </h2>
-        <p className="hello-lede">Your agent builds whatever the moment needs, here, and what you do on it goes back to the agent.</p>
+        <p className="hello-lede">Open your agent to start. It builds a page here, and what you do on the page goes back to the agent.</p>
+        {apps && apps.connected.length > 0 && apps.ready.length === 0 && apps.approval.length === 0 && (
+          <p className="hello-hint">Your agent's machine is offline or paused. Check Machines before starting.</p>
+        )}
+        {apps && apps.approval.length > 0 && (
+          <p className="hello-hint">
+            {`${listed(apps.approval)} needs add-on approval. Open the app to review it.`}
+            {apps.approval.includes('Codex') && ' Codex can still receive queued clicks in an open conversation.'}
+          </p>
+        )}
         <div className="hello-say">
           <TourAsk tour={tour} />
         </div>

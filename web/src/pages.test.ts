@@ -7,12 +7,12 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { Sent } from './outbox'
 
-const NOW = Date.now()
+const NOW = Date.UTC(2026, 9, 15, 12)
 const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, agent: 'claude-code', machine: 'the laptop', machineSeenAt: NOW }
 /** What the backend last said of the page's clicks, newest first. */
 let recent: { at: number; delivery: string; outcome?: string | null; route?: string | null; handedAt?: number | null }[]
 /** The person's machines as the backend gives them to the owner's browser, with the agent apps chosen on each. */
-let machines: { id: string; wanted: string[] }[] | undefined
+let machines: { id: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[] | undefined
 /** Whether there is a connection to the backend, and what was asked to be told when that changes. */
 let connected: boolean
 const told = new Set<() => void>()
@@ -71,11 +71,21 @@ async function drawnAgain() {
 }
 
 beforeEach(() => {
+  vi.spyOn(Date, 'now').mockReturnValue(NOW)
   vi.resetModules()
   localStorage.clear()
   localStorage.setItem('it.display', 'a-display-key-000001')
   recent = [{ at: NOW - 5000, delivery: 'handed_off', outcome: 'succeeded' }]
-  machines = [{ id: 'machine-1', wanted: ['claude-code', 'pi'] }]
+  machines = [
+    {
+      id: 'machine-1',
+      wanted: ['claude-code', 'pi'],
+      harnesses: [
+        { id: 'claude-code', addon: 'connected' },
+        { id: 'pi', addon: 'connected' },
+      ],
+    },
+  ]
   connected = true
   told.clear()
   answers.length = 0
@@ -86,6 +96,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 /** Lets so much time pass, on a clock the test holds. */
 const pass = (ms: number) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)))
@@ -99,6 +110,7 @@ const connection = (up: boolean) =>
 describe('what the page’s bar says of the last thing the person did', () => {
   test('when It has not been reachable for a few seconds the bar says so, whatever was last done, and stops saying so when It is back', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(NOW)
     await shown()
     expect(said()).toBe('Done')
     await connection(false)
@@ -231,6 +243,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
 
   test('a click that has not been taken a few seconds after it was made is said to be saved in this browser and not sent, whatever the connection claims, until it is taken', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(NOW)
     // The page's machine goes on saying it is there for the three minutes this takes
     Object.assign(PAGE, { machineSeenAt: NOW + 180_000 })
     const outbox = await shown()
@@ -260,6 +273,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
 
   test('a new click made while an older one is still waiting is not said to be on its way: the older one has not been sent', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(NOW)
     const outbox = await shown()
     await act(async () => void outbox.submit(client as never, 'user-1', 'page-1', envelope('click-0007')))
     await pass(10_000)
@@ -307,6 +321,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
 
   test('a click this browser would not store, and that has not been taken a few seconds on, is said not to have been sent', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(NOW)
     const outbox = await shown()
     const full = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('full', 'QuotaExceededError')
@@ -407,13 +422,80 @@ describe('what the page’s bar says of the last thing the person did', () => {
       await drawnAgain()
       expect(said()).toBe('Sent. Pi is not connected on the laptop, and gets it once it is connected there, under Machines')
       // Connected again, it is as any click nobody has taken
-      machines = [{ id: 'machine-1', wanted: ['claude-code', 'pi'] }]
+      machines = [
+        {
+          id: 'machine-1',
+          wanted: ['claude-code', 'pi'],
+          harnesses: [
+            { id: 'claude-code', addon: 'connected' },
+            { id: 'pi', addon: 'connected' },
+          ],
+        },
+      ]
       Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'pi', on: false } })
       await drawnAgain()
       expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
       expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(true)
     } finally {
       Object.assign(PAGE, { agent: 'claude-code', wake: null, pending: 0 })
+    }
+  })
+
+  test.each([true, false])('page readiness explains disconnected and transitional apps to owner=%s, including apps without wake support', async (owner) => {
+    const { PageView } = await import('./pages')
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    Object.assign(PAGE, { agent: 'openclaw', wake: null, pending: 1, connection: { harness: 'openclaw', state: 'disconnected', queue: false } })
+    await shown()
+    const expectations = {
+      disconnected: 'is not connected',
+      connecting: 'is still connecting',
+      needs_approval: 'needs approval',
+      error: 'could not connect',
+      too_old: 'needs an update',
+      unavailable: 'is unavailable',
+      unknown: 'has not confirmed',
+    }
+    try {
+      for (const [state, message] of Object.entries(expectations)) {
+        Object.assign(PAGE, { connection: { harness: 'openclaw', state, queue: false } })
+        await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner })))
+        expect(said()).toContain(message)
+        expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+        expect(said()).not.toContain('conversation looks closed')
+      }
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', pending: 0, connection: undefined })
+    }
+  })
+
+  test('Codex awaiting hook approval still describes its supported queue, without treating it as disconnected', async () => {
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    Object.assign(PAGE, {
+      agent: 'codex',
+      wake: { machineId: 'machine-1', harness: 'codex', on: false },
+      connection: { harness: 'codex', state: 'needs_approval', queue: true },
+    })
+    try {
+      await shown()
+      expect(said()).toContain('open conversation can still receive queued clicks')
+      expect(said()).not.toContain('not connected')
+      expect(said()).not.toContain('looks closed')
+      expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', wake: null, connection: undefined })
+    }
+  })
+
+  test('an older backend owner fallback uses the reported add-on state, not just the desired selection', async () => {
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: false } })
+    machines = [{ id: 'machine-1', wanted: ['claude-code'], harnesses: [{ id: 'claude-code', addon: 'error' }] }]
+    try {
+      await shown()
+      expect(said()).toContain('could not connect')
+      expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+    } finally {
+      Object.assign(PAGE, { wake: null })
     }
   })
 

@@ -35,6 +35,7 @@
 
   --accent: var(--fg);
   --danger: #ff4d4a;
+  --danger-solid: #d92d20;
   --ok: #34d399;
 
   --chip-bg: rgba(2, 2, 2, 0.82);
@@ -186,6 +187,7 @@ button {
   align-items: baseline;
   gap: 10px;
   min-width: 0;
+  flex: none;
 }
 
 .grid-title {
@@ -199,7 +201,7 @@ button {
 
 .grid-subtitle {
   font-size: 12.5px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   letter-spacing: -0.005em;
   white-space: nowrap;
   overflow: hidden;
@@ -216,7 +218,7 @@ button {
   align-items: center;
   gap: 14px;
   font-size: 12px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   white-space: nowrap;
 }
 
@@ -227,7 +229,7 @@ button {
 .grid-version {
   font-family: var(--mono);
   font-size: 11px;
-  color: var(--fg-ghost);
+  color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -248,7 +250,7 @@ button {
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   cursor: pointer;
   text-decoration: none;
   transition:
@@ -271,7 +273,7 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   transition: color 0.3s var(--ease-swift);
 }
 
@@ -326,7 +328,7 @@ button {
   height: 14px;
   pointer-events: none;
   background: currentColor;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   -webkit-mask: var(--icon-search) center / contain no-repeat;
   mask: var(--icon-search) center / contain no-repeat;
 }
@@ -338,6 +340,7 @@ button {
 
 .grid-search {
   width: 100%;
+  min-width: 0;
   background: var(--interactive);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
@@ -353,7 +356,7 @@ button {
 }
 
 .grid-search::placeholder {
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .grid-search:hover {
   border-color: var(--line-strong);
@@ -371,7 +374,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: transparent;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   font-family: var(--mono);
   font-size: 10px;
   line-height: 1;
@@ -500,7 +503,7 @@ button {
   flex-direction: column;
   align-items: center;
   gap: 14px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   font-size: 13.5px;
   padding: clamp(56px, 16vh, 140px) 20px;
 }
@@ -709,7 +712,7 @@ button {
 .card-fallback--prose .card-fallback-line {
   font-size: clamp(9.5px, 4cqw, 13px);
   line-height: 1.5;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   letter-spacing: -0.004em;
 
   display: -webkit-box;
@@ -759,7 +762,7 @@ button {
   font-size: clamp(9px, 3.4cqw, 11px);
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--fg-ghost);
+  color: var(--fg-muted);
 }
 
 .card-live,
@@ -844,7 +847,7 @@ button {
   min-width: 21px;
   height: 21px;
   border-radius: var(--r-pill);
-  background: var(--danger);
+  background: var(--danger-solid);
   color: #fff;
   font-size: 11px;
   font-weight: 650;
@@ -928,7 +931,7 @@ button {
   display: block;
 }
 .card-action--danger:hover {
-  background: var(--danger);
+  background: var(--danger-solid);
   color: #fff;
 }
 
@@ -990,7 +993,7 @@ input.card-title::selection {
 
 .card-sub {
   font-size: 12px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   line-height: 1.35;
   white-space: nowrap;
   overflow: hidden;
@@ -1087,7 +1090,7 @@ main:has(.modal-overlay) {
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   cursor: pointer;
   font-size: 18px;
   line-height: 1;
@@ -1109,7 +1112,7 @@ main:has(.modal-overlay) {
   font-size: 10.5px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   margin-bottom: 12px;
 }
 
@@ -1177,7 +1180,7 @@ main:has(.modal-overlay) {
 
 .modal-sub {
   font-size: 12px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   line-height: 1.5;
 }
 
@@ -1213,11 +1216,13 @@ main:has(.modal-overlay) {
   position: relative;
   z-index: 2;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 0 8px;
   padding-top: env(safe-area-inset-top, 0px);
-  height: calc(var(--nav-h) + env(safe-area-inset-top, 0px));
+  min-height: calc(var(--nav-h) + env(safe-area-inset-top, 0px));
+  row-gap: 0;
   flex-shrink: 0;
   background: color-mix(in srgb, var(--bg) 86%, transparent);
   backdrop-filter: saturate(180%) blur(20px);
@@ -1279,7 +1284,7 @@ main:has(.modal-overlay) {
   align-items: baseline;
   gap: 0;
   font-size: 11.5px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   white-space: nowrap;
   flex-shrink: 0;
   overflow: hidden;
@@ -1303,7 +1308,7 @@ main:has(.modal-overlay) {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 
 .page-nav-live::before {
@@ -1321,6 +1326,7 @@ main:has(.modal-overlay) {
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
+  min-height: var(--nav-h);
 }
 
 .nav-action {
@@ -1329,7 +1335,7 @@ main:has(.modal-overlay) {
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1495,7 +1501,7 @@ iframe.page-frame.is-loaded {
   font: inherit;
   font-size: 16px;
   line-height: 1;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   background: none;
   border: 0;
   border-radius: var(--r-sm);
@@ -1569,7 +1575,7 @@ iframe.page-frame.is-loaded {
   font-weight: 600;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   font-family: var(--mono);
 }
 .notif-clear {
@@ -1609,7 +1615,7 @@ iframe.page-frame.is-loaded {
 }
 .notif-item-meta {
   font-size: 11.5px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .notif-item-answer {
   font-size: 11.5px;
@@ -1620,7 +1626,7 @@ iframe.page-frame.is-loaded {
   padding: 22px 12px 26px;
   text-align: center;
   font-size: 13px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 
 .finder-overlay {
@@ -1673,7 +1679,7 @@ iframe.page-frame.is-loaded {
   height: 15px;
   flex-shrink: 0;
   background: currentColor;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   -webkit-mask: var(--icon-search) center / contain no-repeat;
   mask: var(--icon-search) center / contain no-repeat;
 }
@@ -1690,7 +1696,7 @@ iframe.page-frame.is-loaded {
 }
 
 .finder-input::placeholder {
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 
 .finder-results {
@@ -1737,13 +1743,13 @@ iframe.page-frame.is-loaded {
 
 .finder-result-sub {
   font-size: 11.5px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 
 .finder-empty {
   padding: 26px 18px;
   text-align: center;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   font-size: 13px;
 }
 
@@ -1753,13 +1759,30 @@ iframe.page-frame.is-loaded {
   display: flex;
   gap: 18px;
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 
 @media (max-width: 940px) {
   :root {
     --gutter: 28px;
     --card-min: 215px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .grid-header {
+    flex-wrap: wrap;
+    row-gap: 0;
+    height: auto;
+    padding-bottom: 10px;
+  }
+  .grid-brand {
+    min-height: calc(var(--header-h) - 1px);
+  }
+  .grid-search-wrap {
+    order: 1;
+    flex: none;
+    width: 100%;
   }
 }
 
@@ -1790,54 +1813,9 @@ iframe.page-frame.is-loaded {
     width: 30px;
     height: 30px;
   }
-  .grid-search-wrap {
-    width: auto;
-  }
-  .grid-search-wrap::before {
-    left: 10px;
-  }
   .grid-search {
-    width: 34px;
     height: 34px;
-    padding: 0 0 0 30px;
-    cursor: pointer;
-    transition:
-      width 0.24s var(--ease-out),
-      padding 0.24s var(--ease-out),
-      background 0.18s var(--ease-swift),
-      border-color 0.18s var(--ease-swift);
-  }
-  .grid-search:focus,
-  .grid-search:not(:placeholder-shown) {
-    width: min(56vw, 240px);
     padding-right: 12px;
-  }
-  /* Opened, the search has a row of its own under the bar's. In the bar's row there is no
-     room for it beside the links to the other sections: it lay over them, and they could be
-     neither seen nor pressed for as long as anything was typed in it. */
-  .grid-header:has(.grid-search:focus, .grid-search:not(:placeholder-shown)) {
-    flex-wrap: wrap;
-    row-gap: 0;
-    height: auto;
-    padding-bottom: 10px;
-  }
-  .grid-header:has(.grid-search:focus, .grid-search:not(:placeholder-shown)) .grid-brand {
-    min-height: calc(var(--header-h) - 1px);
-  }
-  .grid-header:has(.grid-search:focus, .grid-search:not(:placeholder-shown)) .grid-search-wrap {
-    order: 1;
-    flex: none;
-    width: 100%;
-  }
-  .grid-header:has(.grid-search:focus, .grid-search:not(:placeholder-shown)) .grid-search {
-    width: 100%;
-  }
-
-  .grid-search::placeholder {
-    color: transparent;
-  }
-  .grid-search:focus::placeholder {
-    color: var(--fg-faint);
   }
   .grid-kbd {
     display: none;
@@ -1889,7 +1867,7 @@ iframe.page-frame.is-loaded {
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   cursor: pointer;
   align-items: center;
   justify-content: center;
@@ -2133,7 +2111,7 @@ a.grid-chip {
 .chip.x {
   padding: 0 8px;
   border-color: transparent;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .chip.quiet {
   height: 19px;
@@ -2199,8 +2177,8 @@ button.danger {
   color: var(--danger);
 }
 button.danger.solid {
-  background: var(--danger);
-  border-color: var(--danger);
+  background: var(--danger-solid);
+  border-color: var(--danger-solid);
   color: #fff;
 }
 
@@ -2245,7 +2223,7 @@ button.link.danger:hover:not(:disabled) {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg) 8%, transparent);
 }
 input::placeholder {
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 
 .inline {
@@ -2347,7 +2325,7 @@ input[role="switch"]:disabled {
   flex: none;
   font-family: var(--mono);
   font-size: 12.5px;
-  color: var(--fg-ghost);
+  color: var(--fg-muted);
   user-select: none;
 }
 .copyable-btn {
@@ -2475,7 +2453,7 @@ input[role="switch"]:disabled {
 .door-foot {
   margin-top: 22px;
   font-size: 12px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   text-align: center;
 }
 
@@ -2668,6 +2646,7 @@ span.card-fallback {
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+  flex: none;
 }
 .working-stop:hover {
   background: var(--interactive);
@@ -2695,6 +2674,19 @@ span.card-fallback {
 }
 .page-nav .status {
   margin-right: 4px;
+}
+/* The controls keep their row. Status text moves below them when it does not fit. */
+.page-nav .status,
+.page-nav .working {
+  order: 1;
+  max-width: 100%;
+  padding: 6px 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.page-nav .status::before,
+.page-nav .working-dot {
+  flex: none;
 }
 .back-btn,
 .nav-action {
@@ -2777,7 +2769,7 @@ span.card-fallback {
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -2807,7 +2799,7 @@ span.card-fallback {
 }
 .page-talk-box:focus {
   outline: none;
-  border-color: var(--fg-faint);
+  border-color: var(--fg-muted);
 }
 .page-talk-send {
   flex: none;
@@ -2972,7 +2964,7 @@ span.card-fallback {
 .notif-note {
   padding: 0 12px 12px;
   font-size: 12px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .note-foot {
   display: flex;
@@ -3028,7 +3020,7 @@ span.card-fallback {
   font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .section-head {
   display: flex;
@@ -3117,7 +3109,7 @@ form.row-main {
 }
 .row-sub {
   font-size: 12px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .row-sub code {
   background: none;
@@ -3140,7 +3132,7 @@ form.row-main {
   margin-left: 9px;
   font-size: 11px;
   font-weight: 400;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .row-detail {
   flex: 1 0 100%;
@@ -3180,7 +3172,7 @@ form.row-main {
   flex-wrap: wrap;
   gap: 6px 18px;
   font-size: 12px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   padding-bottom: 8px;
 }
 .list-foot a {
@@ -3234,7 +3226,7 @@ form.row-main {
 .pair-or {
   margin-top: 16px;
   font-size: 12.5px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   text-align: center;
   margin-bottom: 8px;
 }
@@ -3250,7 +3242,7 @@ form.row-main {
   gap: 6px;
   margin: 0 0 16px;
   font-size: 12px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .pair-other select {
   width: 100%;
@@ -3282,37 +3274,39 @@ form.row-main {
   .page-nav-meta {
     display: none;
   }
-  /* What the bar says of a page is often a sentence, and a screen this narrow has no room for
-     one beside the buttons: kept to one line, it pushed Stop and the buttons after it off the
-     screen. Here it comes after them, and so does the word that the agent is working. It stays
-     in the row while it fits there, and otherwise goes under the row, where it wraps. */
-  .page-nav {
-    flex-wrap: wrap;
-    row-gap: 0;
-    height: auto;
-    min-height: calc(var(--nav-h) + env(safe-area-inset-top, 0px));
-  }
-  .page-nav-actions {
-    min-height: var(--nav-h);
-  }
-  .page-nav .status,
-  .page-nav .working {
-    order: 1;
-    max-width: 100%;
-    padding: 6px 0;
-    white-space: normal;
-  }
-  .page-nav .status::before {
-    flex: none;
-  }
 }
 
 @media (max-width: 520px) {
+  .grid-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    padding-top: 10px;
+  }
+  .grid-brand {
+    display: contents;
+  }
+  .grid-title {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .grid-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .grid-brand nav {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .grid-search-wrap {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
   .grid-meta {
     display: none;
   }
   .grid-header-spacer {
-    min-width: 0;
+    display: none;
   }
 }
 
@@ -3385,7 +3379,7 @@ form.row-main {
   gap: 8px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   border: 1px solid var(--line);
   border-radius: var(--r-pill);
   padding: 5px 12px 5px 9px;
@@ -3444,7 +3438,7 @@ form.row-main {
   font-weight: 600;
   letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 
 .hello-say .copyable {
@@ -3489,7 +3483,7 @@ form.row-main {
 
 .hello-hint {
   font-size: 13px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 
 .hello-connect {
@@ -3557,7 +3551,7 @@ form.row-main {
 }
 .hello-skip {
   font-size: 13px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 
 /* What someone with no pages is shown once they have had the tour: things to ask an agent for */

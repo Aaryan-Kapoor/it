@@ -417,7 +417,10 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     const key = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
       // Not over a dialog, which keeps the keyboard to itself: Tab in the finder would go to the dialog under it
-      if (document.querySelector('.modal-overlay')) return
+      if (document.querySelector('[role="dialog"]')) {
+        e.preventDefault()
+        return
+      }
       e.preventDefault()
       setFinding(true)
     }

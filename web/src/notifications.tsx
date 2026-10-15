@@ -5,6 +5,7 @@ import { useMutation, useQuery } from 'convex/react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { IconBell } from './brand'
 import { ago, api, displayKey, type Id, navigate, refusal, useNow } from './lib'
+import { useDialogKeys } from './overlay'
 import { NOT_SECURE, notSecure } from './push'
 
 interface Note {
@@ -194,19 +195,14 @@ export function Bell({ compact = false }: { compact?: boolean }) {
   // keyboard goes to the bell: what it was on is gone, and it would otherwise be left nowhere
   const box = useRef<HTMLDivElement>(null)
   const opener = useRef<HTMLButtonElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  useDialogKeys(panel, () => setOpen(false), open, opener)
   useEffect(() => {
     if (!open) return
     const away = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false)
-    const key = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      if (box.current?.contains(document.activeElement)) opener.current?.focus()
-      setOpen(false)
-    }
     document.addEventListener('mousedown', away)
-    document.addEventListener('keydown', key)
     return () => {
       document.removeEventListener('mousedown', away)
-      document.removeEventListener('keydown', key)
     }
   }, [open])
   return (
@@ -225,7 +221,14 @@ export function Bell({ compact = false }: { compact?: boolean }) {
         {unseen > 0 && <span className="count notif-badge">{unseen > 9 ? '9+' : unseen}</span>}
       </button>
       {open && (
-        <div className={`tray-panel notif-panel${compact ? ' notif-panel--low' : ''}`} role="dialog" aria-label="Notifications">
+        <div
+          ref={panel}
+          tabIndex={-1}
+          className={`tray-panel notif-panel${compact ? ' notif-panel--low' : ''}`}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Notifications"
+        >
           <div className="tray-head notif-head">
             <span className="notif-head-title">Notifications</span>
             {(notes?.length ?? 0) > 0 && (

@@ -86,6 +86,20 @@ describe('adding a display, in the browser on the machine It runs on', () => {
     await show(createElement(Displays, { thisDisplay: 'display-1' }))
   }
 
+  test('default ports share one destination and a chosen origin survives a spelling change', async () => {
+    browser.reconfigure({ url: 'http://workstation/' })
+    watched['network:get'] = { on: true, addresses: ['http://workstation:80', 'http://other:80', 'http://workstation:4700'] }
+    await displays()
+    await press('Add a display')
+    const options = () => [...host.querySelectorAll('option')].map((o) => o.value)
+    expect(options()).toEqual(['http://workstation', 'http://other:80', 'http://workstation:4700'])
+    await choose('http://other:80')
+    await networkIs({ on: true, addresses: ['http://other', 'http://workstation:4700'] })
+    expect(text('.pair-address')).toBe(`http://other/pair#${CODE}`)
+    await networkIs({ on: true, addresses: ['http://workstation:4700'] })
+    expect(text('.pair-address')).toBe(`http://workstation/pair#${CODE}`)
+  })
+
   test('with the network on, the owner is given the machine’s address on the network to open on the other screen, a QR code of it, and the code in letters', async () => {
     watched['network:get'] = { on: true, addresses: [LAN] }
     await displays()

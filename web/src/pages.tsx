@@ -8,6 +8,7 @@ import { Mount } from './mount'
 import { Bell, say } from './notifications'
 import { onItsWayUntil, outboxChanges, typedOnItsWay, typedWaiting, unsaved, unsent, watchOutbox } from './outbox'
 import { Preview } from './preview'
+import { type PageConnection, reportedConnection } from './readiness'
 import { Starters, useTour, Welcome } from './welcome'
 
 export interface Card {
@@ -299,6 +300,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               // Whether a closed conversation is reopened is said to every browser alike. Only the owner may switch it on
               wakes={page.wake}
               mayWake={owner}
+              connection={(page as { connection?: PageConnection | null }).connection}
               agent={agentName(page.agent)}
               stoppedAt={page.stoppedAt}
               wakeFailed={page.wakeFailed}
@@ -651,6 +653,7 @@ function ActionStatus({
   pending,
   wakes,
   mayWake,
+  connection,
   agent,
   stoppedAt,
   wakeFailed,
@@ -670,6 +673,7 @@ function ActionStatus({
   wakes: { machineId: string; harness: string; on: boolean } | null
   /** Whether this browser may switch that on: one paired as the person's own. */
   mayWake: boolean
+  connection?: PageConnection | null
   agent: string | null
   /** When a person last stopped the page's agent, if they have. */
   stoppedAt: number | null
@@ -717,11 +721,19 @@ function ActionStatus({
   // where more wait than the last few show
   const stillWaiting = recent?.filter((a) => a.delivery !== 'handed_off') ?? []
   const waiting = Math.max(stillWaiting.length, recent ? pending || 0 : 0)
-  // Whether the page's agent app is connected on its machine, which is the person's choice
-  // under Machines. The owner's browser is told of the machines and a paired screen is not, so
-  // it is known only there, and it is asked only while something waits
-  const machines = useQuery(api.machines.list, mayWake && wakes && stillWaiting.length > 0 ? {} : 'skip') as { id: string; wanted: string[] }[] | undefined
-  const chosen = wakes && machines ? machines.find((m) => m.id === wakes.machineId)?.wanted.includes(wakes.harness) : undefined
+  // New backends report the owning app to both roles. Older ones expose inventory only to
+  // owners, so that fallback is asked only while something waits and the page names its app.
+  const machines = useQuery(api.machines.list, connection === undefined && mayWake && wakes && stillWaiting.length > 0 ? {} : 'skip') as
+    | { id: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[]
+    | undefined
+  const readiness =
+    connection ??
+    (wakes && machines
+      ? reportedConnection(
+          wakes.harness,
+          machines.find((m) => m.id === wakes.machineId),
+        )
+      : undefined)
   // The bar speaks of the last thing that is still waiting, where anything is: that something
   // done after it was dealt with does not make it so. Otherwise of the last thing done.
   const last = stillWaiting[0] ?? recent?.[0]
@@ -837,16 +849,39 @@ function ActionStatus({
   // A conversation is reopened only for what was done in the last day. For anything older the
   // switch would change nothing, so it is not offered, and the bar says what would bring it
   const tooOld = now - last.at > WAKE_BACK_MS
-  const offer = mayWake && wakes && !wakes.on && slow && !busy && !tooOld
+  const offer = mayWake && wakes && readiness?.state === 'connected' && !wakes.on && slow && !busy && !tooOld
   // Its app is not connected on that machine. The machine hands nothing to such an app and
   // reopens no conversation of it, whatever Auto-wake is set to, so opening the conversation
   // brings nothing and neither would waking it: said as that, with where it is put right
-  if (chosen === false && slow)
+  if (readiness?.state === 'disconnected' && slow)
     return (
       <span className="status" data-tone="wait">
         {`Sent${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Its agent app'} is not connected on ${machine ?? 'its machine'}, and gets it once it is connected there, under Machines`}
       </span>
     )
+  if (readiness && readiness.state !== 'connected' && slow) {
+    const app = agent ?? 'Its agent app'
+    const prefix = `Sent${waiting > 1 ? ` (${waiting})` : ''}. `
+    const reason =
+      readiness.state === 'needs_approval'
+        ? readiness.queue
+          ? `${app}'s hooks need approval. Its open conversation can still receive queued clicks. Open the app to review the hooks`
+          : `${app}'s add-on needs approval. Open the app to review it`
+        : readiness.state === 'connecting'
+          ? `${app} is still connecting on ${machine ?? 'its machine'}. Check Machines if it does not finish`
+          : readiness.state === 'too_old'
+            ? `${app} needs an update before It can connect it. Check Machines`
+            : readiness.state === 'unavailable'
+              ? `${app}'s add-on is unavailable on ${machine ?? 'its machine'}. Check Machines`
+              : readiness.state === 'error'
+                ? `${app}'s add-on could not connect on ${machine ?? 'its machine'}. Check Machines`
+                : `It has not confirmed ${app}'s connection on ${machine ?? 'its machine'}. Check Machines`
+    return (
+      <span className="status" data-tone="wait">
+        {prefix + reason}
+      </span>
+    )
+  }
   // Tried, and it could not be reopened: said as that, with why where it is asked for
   if (wakeFailed && wakeFailed.at >= last.at)
     return (

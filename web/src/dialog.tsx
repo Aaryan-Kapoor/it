@@ -1,6 +1,7 @@
 // The one box every dialog of the site is built to, and a button that copies what is beside it.
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { copy, IconCopy } from './brand'
+import { useDialogKeys } from './overlay'
 
 /**
  * A dialog over whatever is on screen. It opens with a small word that says what it is about
@@ -22,44 +23,11 @@ export function Dialog({
   // Drawn hidden and shown a moment later, so that it eases in
   const [shown, setShown] = useState(false)
   const panel = useRef<HTMLDivElement>(null)
-  // Where the keyboard was when the dialog was opened, noted as the dialog is first drawn:
-  // before anything in it has taken the keyboard for itself, as a field that asks for it does
-  const [before] = useState(() => (document.activeElement instanceof HTMLElement ? document.activeElement : null))
-  const closing = useRef(onClose)
-  closing.current = onClose
+  useDialogKeys(panel, onClose)
   useEffect(() => {
-    const t = requestAnimationFrame(() => setShown(true))
-    // The keyboard is in the dialog for as long as it is open: it goes there when the dialog
-    // opens, Tab goes round what is in it and not on to what lies under it, and when the
-    // dialog closes the keyboard is back where it was
-    const box = panel.current
-    if (box && !box.contains(document.activeElement)) box.focus()
-    const within = () =>
-      [...(box?.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex]') ?? [])].filter(
-        (el) => el.tabIndex >= 0 && !el.hasAttribute('disabled') && el.getClientRects().length > 0,
-      )
-    const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') return closing.current()
-      if (e.key !== 'Tab' || !box) return
-      const all = within()
-      const first = all[0]
-      const last = all[all.length - 1]
-      const at = document.activeElement
-      if (!first || !last) {
-        e.preventDefault()
-        box.focus()
-      } else if (!box.contains(at) || (e.shiftKey && (at === first || at === box)) || (!e.shiftKey && at === last)) {
-        e.preventDefault()
-        ;(e.shiftKey ? last : first).focus()
-      }
-    }
-    document.addEventListener('keydown', key)
-    return () => {
-      cancelAnimationFrame(t)
-      document.removeEventListener('keydown', key)
-      if (before?.isConnected) before.focus()
-    }
-  }, [before])
+    const timer = requestAnimationFrame(() => setShown(true))
+    return () => cancelAnimationFrame(timer)
+  }, [])
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: Escape closes it, wherever the keyboard is
     // biome-ignore lint/a11y/noStaticElementInteractions: the box itself is the dialog

@@ -35,8 +35,14 @@ export function useWhere(): Where {
   const said = useQuery(api.network.get, {}) as { on: boolean; addresses: string[] } | undefined
   const [chosen, choose] = useState<string | null>(null)
   const here = ownAddress()
-  const all = [...new Set([...(here ? [here] : []), ...(said?.on ? said.addresses : [])])]
-  const address = chosen !== null && all.includes(chosen) ? chosen : (all[0] ?? null)
+  // Compare destinations as origins, keeping the first spelling for display.
+  const origins = new Map<string, string>()
+  for (const address of [...(here ? [here] : []), ...(said?.on ? said.addresses : [])]) {
+    const origin = new URL(address).origin
+    if (!origins.has(origin)) origins.set(origin, address)
+  }
+  const all = [...origins.values()]
+  const address = (chosen !== null ? origins.get(new URL(chosen).origin) : null) ?? all[0] ?? null
   return { state: address !== null ? 'known' : said === undefined ? 'unknown' : said.on ? 'nowhere' : 'off', address, all, choose }
 }
 
