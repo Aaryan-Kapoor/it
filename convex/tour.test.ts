@@ -178,3 +178,69 @@ describe('a tour that is over', () => {
     expect(await browser.query(api.tour.get, {})).toMatchObject({ waitingUntil: Date.now() + WAITING_MS })
   })
 })
+
+describe('the identity of a tour wait', () => {
+  test('Skip survives an expired lease and a backward clock, while a new command can wait immediately', async () => {
+    for (const elapsed of [0, WAITING_MS * 3, -60_000]) {
+      const { browser, agent } = await household()
+      await agent.mutation(api.tour.wait, { waitId: 'old', first: true, harness: 'codex' })
+      await browser.mutation(api.tour.done, {})
+      vi.setSystemTime(Date.now() + elapsed)
+      // Retrying the initial registration must also preserve its cancellation.
+      for (const first of [undefined, true]) await expect(agent.mutation(api.tour.wait, { waitId: 'old', first })).rejects.toThrow(/want no tour/)
+      await expect(agent.mutation(api.tour.wait, { waitId: 'new', first: true, harness: 'pi' })).resolves.toEqual({ asked: false })
+      const waiting = await browser.query(api.tour.get, {})
+      expect(waiting).toMatchObject({ waitingUntil: Date.now() + WAITING_MS, by: 'pi' })
+      await expect(agent.mutation(api.tour.wait, { waitId: 'old' })).rejects.toThrow(/no longer current/)
+      await agent.mutation(api.tour.leave, { waitId: 'old' })
+      await agent.mutation(api.tour.leave, {})
+      expect(await browser.query(api.tour.get, {})).toEqual(waiting)
+      await browser.mutation(api.tour.ask, {})
+      await expect(agent.mutation(api.tour.wait, { waitId: 'old' })).rejects.toThrow(/no longer current/)
+      await expect(agent.mutation(api.tour.wait, { waitId: 'new' })).resolves.toEqual({ asked: true })
+    }
+  })
+
+  test('a command that is superseded or has left cannot register again through a later poll', async () => {
+    const { browser, agent } = await household()
+    await agent.mutation(api.tour.wait, { waitId: 'old', first: true })
+    await agent.mutation(api.tour.wait, { waitId: 'new', first: true })
+    vi.advanceTimersByTime(WAITING_MS * 2)
+    await expect(agent.mutation(api.tour.wait, { waitId: 'old' })).rejects.toThrow(/no longer current/)
+    await agent.mutation(api.tour.leave, { waitId: 'old' })
+    await agent.mutation(api.tour.wait, { waitId: 'new' })
+    expect((await browser.query(api.tour.get, {})).waitingUntil).toBe(Date.now() + WAITING_MS)
+    await agent.mutation(api.tour.leave, { waitId: 'new' })
+    expect((await browser.query(api.tour.get, {})).waitingUntil).toBeNull()
+    await expect(agent.mutation(api.tour.wait, { waitId: 'new' })).rejects.toThrow(/no longer current/)
+  })
+
+  test('a new wait on another machine can start while the skipped command is still polling', async () => {
+    const { t, browser, agent } = await household()
+    const machine = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...first } = (await ctx.db.query('machines').first())!
+      return ctx.db.insert('machines', { ...first, name: 'another machine' })
+    })
+    const another = t.withIdentity({ issuer: SITE, subject: machine, kind: 'machine' })
+    await agent.mutation(api.tour.wait, { waitId: 'old', first: true })
+    await browser.mutation(api.tour.done, {})
+    await another.mutation(api.tour.wait, { waitId: 'new', first: true })
+    await agent.mutation(api.tour.leave, { waitId: 'old' })
+    expect((await browser.mutation(api.tour.ask, {})).waiting).toBe(true)
+    await expect(agent.mutation(api.tour.wait, { waitId: 'old' })).rejects.toThrow(/no longer current/)
+    expect(await another.mutation(api.tour.wait, { waitId: 'new' })).toEqual({ asked: true })
+  })
+
+  test('old rows and commands still work, and an identified command can replace a cancelled legacy wait', async () => {
+    const { browser, agent } = await household()
+    await agent.mutation(api.tour.wait, { harness: 'pi' })
+    await browser.mutation(api.tour.done, {})
+    await expect(agent.mutation(api.tour.wait, {})).rejects.toThrow(/want no tour/)
+    await agent.mutation(api.tour.wait, { waitId: 'new', first: true })
+    // A command without an id cannot overwrite an identified registration.
+    await expect(agent.mutation(api.tour.wait, {})).rejects.toThrow(/no longer current/)
+    await agent.mutation(api.tour.leave, { waitId: 'new' })
+    vi.advanceTimersByTime(1)
+    await expect(agent.mutation(api.tour.wait, {})).resolves.toEqual({ asked: false })
+  })
+})

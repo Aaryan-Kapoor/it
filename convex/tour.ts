@@ -28,15 +28,16 @@ async function keep(ctx: MutationCtx, userId: Id<'users'>, was: Doc<'tours'> | n
   if (was) await ctx.db.replace(was._id, { userId, ...now })
   else await ctx.db.insert('tours', { userId, ...now })
 }
-const of = (row: Doc<'tours'> | null): Tour =>
-  row ? { waitingUntil: row.waitingUntil, by: row.by, askedAt: row.askedAt, takenAt: row.takenAt, doneAt: row.doneAt } : {}
-/**
- * Whether the agent that is written down as waiting said so before the person said on the site
- * that they want no tour. Such an agent is waiting for nobody: the site is told that none
- * waits, and the agent is told why when it next asks. It is known by what is written alone,
- * since what an agent says of its waiting is written `WAITING_MS` ahead of when it said it.
- */
-const turnedAway = (tour: Tour): boolean => tour.doneAt !== undefined && tour.waitingUntil !== undefined && tour.waitingUntil - WAITING_MS <= tour.doneAt
+const of = (row: Doc<'tours'> | null): Tour => {
+  if (!row) return {}
+  const { _id, _creationTime, userId, ...tour } = row
+  return tour
+}
+/** Old commands have no invocation identity, so their cancellation lasts only for their lease. */
+const turnedAway = (tour: Tour): boolean =>
+  tour.waitingId !== undefined
+    ? tour.waitingCancelled === true
+    : tour.doneAt !== undefined && tour.waitingUntil !== undefined && tour.waitingUntil - WAITING_MS <= tour.doneAt
 
 /** How things stand with the tour, for the site to show. Times are the backend's own. */
 export const get = query({
@@ -79,15 +80,13 @@ export const ask = mutation({
  * waits is written down only when what is written is about to run out, and not at every
  * asking: the site asks again for what it shows of the tour each time this is written.
  *
- * An agent that was waiting when the person said they want no tour is refused, for as long as
- * what it last said of its waiting would have stood. Left to go on, it would be written down
- * as waiting again at its next asking, and the site would take the person's word back. The
- * refusal ends its command, and tells the agent why. One that comes to wait after that began
- * after the person said so, and waits as any does.
+ * Each command registers its identity once. Later polls must still own that registration,
+ * even after its lease expires. Skip cancels that identity, and a new command can register
+ * immediately. An older command cannot restore or clear the new command's registration.
  */
 export const wait = mutation({
-  args: { harness: v.optional(v.string()) },
-  handler: async (ctx, { harness }) => {
+  args: { harness: v.optional(v.string()), waitId: v.optional(v.string()), first: v.optional(v.boolean()) },
+  handler: async (ctx, { harness, waitId, first }) => {
     const { user } = await requireMachine(ctx)
     await rateLimit(ctx, 'patchState', user._id)
     const now = Date.now()
@@ -95,21 +94,28 @@ export const wait = mutation({
     const tour = of(was)
     const asked = tour.askedAt !== undefined && tour.askedAt > (tour.takenAt ?? 0) && now - tour.askedAt < ASKED_FOR_MS
     const by = harness?.slice(0, 40) ?? tour.by
-    if (turnedAway(tour) && tour.waitingUntil! > now)
+    if (waitId !== undefined && (!waitId || waitId.length > 80)) fail('invalid', 'The tour wait needs an id of at most 80 characters.')
+    if (first !== undefined && waitId === undefined) fail('invalid', 'The first tour poll needs a wait id.')
+    const same = tour.waitingId === waitId
+    if (same && turnedAway(tour) && (waitId !== undefined || tour.waitingUntil! > now))
       fail('conflict', 'The person said on the site that they want no tour, so there is nothing to wait for. Give the tour when they ask you for it.')
-    if (asked) await keep(ctx, user._id, was, { ...tour, takenAt: now, waitingUntil: undefined, by })
-    else if ((tour.waitingUntil ?? 0) < now + WAITING_MS / 2 || tour.by !== by) await keep(ctx, user._id, was, { ...tour, waitingUntil: now + WAITING_MS, by })
+    if ((!same && !first && waitId !== undefined) || (waitId === undefined && tour.waitingId !== undefined))
+      fail('conflict', 'This tour wait is no longer current. Run it tour --wait again if the person wants a tour.')
+    if (asked) await keep(ctx, user._id, was, { ...tour, takenAt: now, waitingUntil: undefined, waitingId: undefined, waitingCancelled: undefined, by })
+    else if (!same || (tour.waitingUntil ?? 0) < now + WAITING_MS / 2 || tour.by !== by)
+      await keep(ctx, user._id, was, { ...tour, waitingUntil: now + WAITING_MS, waitingId: waitId, waitingCancelled: undefined, by })
     return { asked }
   },
 })
 
 /** An agent that was waiting stops, with nobody having asked: the site says so no longer. */
 export const leave = mutation({
-  args: {},
-  handler: async (ctx) => {
+  args: { waitId: v.optional(v.string()) },
+  handler: async (ctx, { waitId }) => {
     const { user } = await requireMachine(ctx)
     const was = await kept(ctx, user._id)
-    if (was?.waitingUntil !== undefined) await keep(ctx, user._id, was, { ...of(was), waitingUntil: undefined })
+    if (was?.waitingUntil !== undefined && was.waitingId === waitId && !turnedAway(of(was)))
+      await keep(ctx, user._id, was, { ...of(was), waitingUntil: undefined, waitingId: undefined, waitingCancelled: undefined })
     return null
   },
 })
@@ -119,9 +125,9 @@ export const leave = mutation({
  * site that they want none. From then on someone with no pages is shown things to ask for,
  * and not the way into the tour. An asking that no agent had taken up is over with it.
  *
- * Where it is the person who says so and an agent is waiting, what that agent said of its
- * waiting is left as it is written, and is what the agent is turned away by when it next
- * asks: see `turnedAway`. An agent that ends a tour of its own turns nobody away.
+ * A browser cancels the registered command even if its last lease has expired. Its next
+ * poll still ends, while a newly registered command is independent of that cancellation.
+ * An agent ending a tour clears the registration without marking it as skipped.
  */
 export const done = mutation({
   args: {},
@@ -130,8 +136,15 @@ export const done = mutation({
     const now = Date.now()
     const was = await kept(ctx, user._id)
     const tour = of(was)
-    const waitingUntil = kind === 'browser' && (tour.waitingUntil ?? 0) > now ? tour.waitingUntil : undefined
-    await keep(ctx, user._id, was, { ...tour, doneAt: now, askedAt: undefined, waitingUntil })
+    const waitingUntil = kind === 'browser' && (tour.waitingId !== undefined || (tour.waitingUntil ?? 0) > now) ? tour.waitingUntil : undefined
+    await keep(ctx, user._id, was, {
+      ...tour,
+      doneAt: now,
+      askedAt: undefined,
+      waitingUntil,
+      waitingId: kind === 'browser' ? tour.waitingId : undefined,
+      waitingCancelled: kind === 'browser' && tour.waitingId !== undefined ? true : undefined,
+    })
     return null
   },
 })

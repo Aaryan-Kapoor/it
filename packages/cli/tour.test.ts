@@ -345,14 +345,14 @@ describe('the chessboard', () => {
     const first = moved(after, 'e2', 'e4')
     expect(first).toMatchObject({ name: 'move', data: { move: 'e2e4' } })
     await first.accept()
-    await after.set({ reply: 'e7e5' })
+    await after.set({ reply: `${first.data.request}:e7e5` })
     expect([piece(after, 'e7'), piece(after, 'e5') !== '', waits(after)]).toEqual(['', true, false])
     after.close()
     // A connection that dropped brings the two back in the other order: the answer is kept
     // for the move it was heard after, and played when that move is known to have reached the agent
     const before = await opened('chess')
     const move = moved(before, 'e2', 'e4')
-    await before.set({ reply: 'e7e5' })
+    await before.set({ reply: `${move.data.request}:e7e5` })
     expect([piece(before, 'e5'), waits(before)]).toEqual(['', true])
     await move.accept()
     expect([piece(before, 'e7'), piece(before, 'e5') !== '', waits(before)]).toEqual(['', true, false])
@@ -363,8 +363,8 @@ describe('the chessboard', () => {
 
   test('an answer that was heard early is not played in a new game, nor after a move that did not go', async () => {
     const page = await opened('chess')
-    moved(page, 'e2', 'e4')
-    await page.set({ reply: 'e7e5' })
+    const first = moved(page, 'e2', 'e4')
+    await page.set({ reply: `${first.data.request}:e7e5` })
     page.$('#new').click()
     const again = moved(page, 'd2', 'd4')
     await again.accept()
@@ -372,13 +372,55 @@ describe('the chessboard', () => {
     page.close()
     const other = await opened('chess')
     const lost = moved(other, 'e2', 'e4')
-    await other.set({ reply: 'e7e5' })
+    await other.set({ reply: `${lost.data.request}:e7e5` })
     await lost.refuse()
     // The move was taken back, and what was set for it is not an answer to the one made in its place
     expect([piece(other, 'e2') !== '', waits(other)]).toEqual([true, false])
     await moved(other, 'd2', 'd4').accept()
     expect([piece(other, 'e7') !== '', piece(other, 'e5'), waits(other)]).toEqual([true, '', true])
     other.close()
+  })
+
+  test('a reply names the pending move, so an old answer cannot play after a reset or another turn', async () => {
+    const page = await opened('chess')
+    const old = moved(page, 'e2', 'e4')
+    await old.accept()
+    page.$('#new').click()
+    const reset = page.sent.at(-1)!
+    const current = moved(page, 'd2', 'd4')
+    await current.accept()
+    await reset.accept()
+    expect(waits(page)).toBe(true)
+    expect(current.data.request).not.toBe(old.data.request)
+    for (const reply of ['e7e5', `${old.data.request}:e7e5`]) {
+      await page.set({ reply })
+      expect([piece(page, 'e7') !== '', piece(page, 'e5'), waits(page)]).toEqual([true, '', true])
+    }
+    // The correct first answer after reset is accepted, even when an old answer arrived first.
+    await page.set({ reply: `${current.data.request}:e7e5` })
+    expect([piece(page, 'e7'), piece(page, 'e5') !== '', waits(page)]).toEqual(['', true, false])
+    const next = moved(page, 'g1', 'f3')
+    await next.accept()
+    await page.set({ reply: `${current.data.request}:g8f6`, note: 'A late note.' })
+    expect([piece(page, 'g8') !== '', piece(page, 'f6'), waits(page)]).toEqual([true, '', true])
+    await page.set({ reply: `${next.data.request}:g8f6` })
+    expect([piece(page, 'g8'), piece(page, 'f6') !== '', waits(page)]).toEqual(['', true, false])
+    page.close()
+  })
+
+  test('an early illegal answer requests a correction for the same move only once', async () => {
+    const page = await opened('chess')
+    const move = moved(page, 'e2', 'e4')
+    const reply = `${move.data.request}:e7e9`
+    await page.set({ reply })
+    await page.set({ reply })
+    await move.accept()
+    expect(page.sent.filter((x) => x.name === 'illegal')).toMatchObject([{ data: { request: move.data.request, move: 'e7e9' } }])
+    await page.set({ reply, note: 'Try again.' })
+    expect(page.sent.filter((x) => x.name === 'illegal')).toHaveLength(1)
+    await page.set({ reply: `${move.data.request}:e7e5` })
+    expect(waits(page)).toBe(false)
+    page.close()
   })
 })
 
@@ -518,13 +560,18 @@ describe('the ways on', () => {
 
 // How a page is laid out is only known in a browser, so this is run in one, where one is installed
 describe.skipIf('Bun' in globalThis || !existsSync(chromium.executablePath()))('the menu on a phone', () => {
-  test('keeps the words of its last button on one line, inside the button, while it says beside it what the agent is doing', async () => {
+  test.each([320, 390])('keeps the exit button inside a %i pixel page while the status changes', async (width) => {
     const browser = await chromium.launch({ timeout: 0 })
     try {
-      const tab = await browser.newPage({ viewport: { width: 390, height: 844 } })
+      const tab = await browser.newPage({ viewport: { width, height: 844 } })
       // It takes whatever the page sends, and never answers
-      await tab.addInitScript('window.It = { state: {}, onState: () => () => {}, action: () => Promise.resolve({ ok: true }) }')
-      await tab.setContent(tourPage('menu').html)
+      await tab.clock.install()
+      await tab.setContent(
+        tourPage('menu').html.replace(
+          '<head>',
+          '<head><script>window.It = { state: {}, onState: () => () => {}, action: () => Promise.resolve({ ok: true }) }</script>',
+        ),
+      )
       const enough = () =>
         tab.locator('#enough').evaluate((el) => ({ shows: el.clientHeight, holds: el.scrollHeight, tall: el.getBoundingClientRect().height }))
       const alone = await enough()
@@ -536,6 +583,10 @@ describe.skipIf('Bun' in globalThis || !existsSync(chromium.executablePath()))('
       // And the light before those words is as round as it was made
       const light = await tab.locator('#status').evaluate((el) => getComputedStyle(el, '::before').width)
       expect(light).toBe('8px')
+      await tab.clock.fastForward(40_001)
+      expect(await tab.locator('#status').textContent()).toContain('has not answered')
+      expect(await enough()).toEqual(alone)
+      expect(await tab.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     } finally {
       await browser.close()
     }

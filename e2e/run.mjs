@@ -1670,8 +1670,8 @@ try {
   // open at once
   const many = []
   const manyFrames = []
-  // Ten tabs opened at one moment each ask for a token, which is more than a session is given
-  // in one go: a tab that is told to wait asks again, and is shown its page all the same
+  // Batches may use up the token allowance on a fast machine. A refused tab retries.
+  // Slower batches can refill the allowance and load every page without a refusal.
   // No oftener than the browser was seen to ask for a token while they were open
   let tokensAsked = 0
   const tokenAsked = (request) => {
@@ -1679,7 +1679,7 @@ try {
   }
   one.context.on('request', tokenAsked)
   const toldToWait = during(one, [
-    { says: refusedWith(429), of: exactly(`${APP}/session/token`), times: () => tokensAsked, because: 'forty tabs asked for tokens at once' },
+    { says: refusedWith(429), of: exactly(`${APP}/session/token`), times: () => tokensAsked, may: true, because: 'forty tabs asked for tokens in batches' },
   ])
   for (let batch = 0; batch < 4; batch++) {
     const more = await Promise.all(Array.from({ length: 10 }, () => one.context.newPage()))

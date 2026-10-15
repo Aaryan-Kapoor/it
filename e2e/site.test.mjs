@@ -169,6 +169,25 @@ describe('what a run foresees of its browsers', () => {
     })
   })
 
+  test('incidental token refusals may be absent, but other failures and excess refusals still fail', () => {
+    const TOKEN = 'http://localhost:20000/session/token'
+    for (const count of [0, 1, 4]) {
+      const { foresee, heldToAccount } = site.expectations()
+      const one = browser()
+      const end = foresee(one, { says: site.refusedWith(429), of: site.exactly(TOKEN), times: 4, may: true, because: 'tabs may exhaust the token allowance' })
+      for (let n = 0; n < count; n++) one.problems.push(says(REFUSED.replace('401 (Unauthorized)', '429 (Too Many Requests)'), { of: TOKEN }))
+      end()
+      expect(heldToAccount([one])).toEqual({ own: [], neverSaid: [] })
+      one.problems.push(says(REFUSED, { of: TOKEN }))
+      expect(heldToAccount([one]).own).toHaveLength(1)
+    }
+    const { foresee, heldToAccount } = site.expectations()
+    const one = browser()
+    foresee(one, { says: site.refusedWith(429), of: site.exactly(TOKEN), times: 1, may: true, because: 'one token request was sent' })
+    for (let n = 0; n < 2; n++) one.problems.push(says(REFUSED.replace('401 (Unauthorized)', '429 (Too Many Requests)'), { of: TOKEN }))
+    expect(heldToAccount([one]).own).toHaveLength(1)
+  })
+
   test('a file that was asked for on purpose is foreseen by its own address and its own showing, and no other file of that showing or of another passes for it', () => {
     const { foresee, heldToAccount } = site.expectations()
     const one = browser()

@@ -265,6 +265,29 @@ describe('a token asked for while what the browser is was being found out afresh
     expect(session.current().paired).toBe(false)
   })
 
+  test('a token request retries a controlled rate limit without losing the pairing', async () => {
+    vi.useFakeTimers()
+    let now: Answer = paired()
+    const d = door(() => now)
+    const session = await load()
+    await session.begin()
+    now = { status: 429 }
+    anotherTabChanged()
+    await vi.advanceTimersByTimeAsync(10)
+    let given: string | null | undefined
+    void session.tokenFor('session-1', true).then((token) => {
+      given = token
+    })
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(given).toBeUndefined()
+    expect(d.to('/session/token').length).toBeGreaterThan(2)
+    expect(session.current()).toMatchObject({ paired: true, session: 'session-1' })
+    now = paired()
+    await vi.advanceTimersByTimeAsync(16_000)
+    expect(given).toMatch(/^token-\d+$/)
+    expect(session.current()).toMatchObject({ paired: true, session: 'session-1' })
+  })
+
   test('with no token to give and no word of whether the browser is paired, the connection is kept waiting and is not told that it is not', async () => {
     vi.useFakeTimers()
     let now: Answer = paired()
