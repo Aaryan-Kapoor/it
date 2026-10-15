@@ -1621,7 +1621,10 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     const first = serve(Number(process.env.IT_PORT), undefined, 'no-links', { MAKE: '1' })
     expect(await first.ended).toBe(1)
     expect(first.lines()).toEqual(['ERROR home_unfit'])
-    expect(readdirSync(folder)).toEqual([])
+    // Key generation uses an empty backend folder even when saving the settings fails.
+    expect(readdirSync(folder)).toEqual(['backend'])
+    expect(readdirSync(inBackend())).toEqual([])
+    expect(programsOn(folder)).toEqual([])
     // And the lock, in a folder whose settings were made where a file can be given one
     const config = makeConfig()
     const second = serve(config.port, undefined, 'no-links')
@@ -1730,7 +1733,7 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
       process.env.IT_PORT = String(await ports.next())
       const other = makeConfig()
       expect(other.instanceSecret).not.toBe(config.instanceSecret)
-      mkdirSync(path.join(first, 'backend'))
+      expect(readdirSync(path.join(first, 'backend'))).toEqual([])
       for (const name of [instanceName(other.instanceSecret), instanceName(config.instanceSecret)]) expect(programsHere(name, 'linux')).toEqual([])
       // It is started, and the program of the folder that was moved is asked nothing
       const backend = await start(other)

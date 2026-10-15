@@ -1511,7 +1511,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
       expect(await ran.ended).toBe(1)
       expect(lines()).toEqual(['could not start: port_taken'])
       // Nothing of the backend was begun: no program was started on the folder, and nothing was loaded
-      expect(existsSync(path.join(folder, 'backend'))).toBe(false)
+      expect(readdirSync(path.join(folder, 'backend'))).toEqual([])
       expect(readConfig()!.functions).toBeUndefined()
     } finally {
       await closed(taken)
