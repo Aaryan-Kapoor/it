@@ -205,7 +205,7 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
     )
   const behind = !m.runsIt && newer(host, m.connectorVersion)
   const mismatch = behind ? `This machine runs It ${m.connectorVersion}. The machine It runs on uses ${host}. ` : ''
-  if (!out)
+  if (!out || (behind && newer(host, out)))
     return behind ? (
       <p className="panel-note newer" data-tone="wait">
         {mismatch}A matching release has not been confirmed here. Run <code>it upgrade --check</code> on this machine to check for updates.
@@ -219,7 +219,6 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
   const working = asked && !cutShort
   return (
     <p className="panel-note newer" data-tone={state === 'failed' || cutShort ? 'bad' : undefined}>
-      {behind && newer(host, out) && mismatch}
       {working ? (
         `Updating to It ${out}…`
       ) : (

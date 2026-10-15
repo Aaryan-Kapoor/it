@@ -3500,6 +3500,18 @@ describe('displays and machines', () => {
     expect(await code(alice.browser.mutation(api.machines.inventory, { harnesses: [] }))).toBe('forbidden')
   })
 
+  test('a joined machine cannot request a cached release below its host version', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const host = await machineOf(t, 'alice', 'the desk')
+    const laptop = await machineOf(t, 'alice', 'the laptop')
+    await t.run((ctx) => ctx.db.patch(laptop.id as never, { byMachine: host.id } as never))
+    await host.as.mutation(api.machines.report, { connectorVersion: '0.10.0', harnesses: [] })
+    await laptop.as.mutation(api.machines.report, { connectorVersion: '0.9.0', latest: '0.9.5', harnesses: [] })
+    expect(await code(alice.browser.mutation(api.machines.upgrade, { machineId: laptop.id as never }))).toBe('conflict')
+    expect((await laptop.as.query(api.machines.me, {})).upgrade).toBeNull()
+  })
+
   test('a machine says which newer version of It it has learned is out, and only the owner’s own browser can have it brought to it, the machine It runs on first', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

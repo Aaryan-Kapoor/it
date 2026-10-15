@@ -312,7 +312,7 @@ describe('what is said of an agent app on a machine', () => {
     expect(said()).toEqual(['It 0.1.1 is installed on the laptop. It runs once It is started again there: stop it serve where it is running, and start it.'])
   })
 
-  test.each([null, '0.1.0'])('a joined machine shows a newer host before its next release lookup, last result %s', async (latest) => {
+  test.each([null, '0.1.0', '0.9.5'])('a joined machine shows a newer host before its next release lookup, last result %s', async (latest) => {
     const { Machines } = await import('./machines')
     watched['machines:list'] = [
       { ...machine(Date.now(), [], []), connectorVersion: '0.10.0', runsIt: true },
