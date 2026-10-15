@@ -13,7 +13,15 @@ let notes: Record<string, unknown>[]
 let answer: { accept: () => void; refuse: (why: unknown) => void } | null
 const asked: string[] = []
 vi.mock('convex/react', () => ({
-  useConvex: () => ({}),
+  useConvex: () => ({
+    mutation: (fn: unknown) => {
+      asked.push(getFunctionName(fn as never))
+      return new Promise((accept, refuse) => {
+        answer = { accept: () => accept({ actionId: null }), refuse }
+      })
+    },
+    connectionState: () => ({ isWebSocketConnected: true }),
+  }),
   useMutation: (fn: unknown) => () => {
     const name = getFunctionName(fn as never)
     asked.push(name)
@@ -37,7 +45,10 @@ async function drawn() {
   await act(async () => root.render(createElement(Bell)))
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  const { outboxBelongsTo } = await import('./outbox')
+  outboxBelongsTo(null)
+  outboxBelongsTo('user-1', 'session-1')
   localStorage.clear()
   localStorage.setItem('it.display', 'a-display-key-000001')
   notes = [
@@ -72,7 +83,7 @@ test('what became of an answer given in the tray is said aloud: that it is on it
   const where = host.querySelector('.notif-item [role="status"]')!
   expect(where.textContent).toBe('')
   await act(async () => button('Fine').click())
-  expect(where.textContent).toBe('Sending “Fine”… Keep this tab open until it says it was sent')
+  expect(where.textContent).toBe('“Fine” is not confirmed yet. Saved on this browser and retried when It is back')
   // Refused: said as an alert, and the choice can be made again
   await act(async () => answer!.refuse(new ConvexError({ code: 'conflict', message: 'That could not be sent.' })))
   expect(where.textContent).toBe('')
@@ -104,4 +115,23 @@ test('Escape from inside the tray closes it and leaves the keyboard on the bell,
   } finally {
     other.remove()
   }
+})
+
+test('closing and reopening the tray restores the pending choice without allowing a different answer', async () => {
+  await drawn()
+  await act(async () => bell().click())
+  await act(async () => button('Fine').click())
+  const { hasPending } = await import('./pending')
+  expect(hasPending()).toBe(true)
+  await act(async () => bell().click())
+  expect(host.querySelector('.notif-panel')).toBeNull()
+  await act(async () => bell().click())
+  expect(host.querySelector('.notif-item [role="status"]')?.textContent).toContain('“Fine” is not confirmed yet')
+  expect(button('Roll back').disabled).toBe(true)
+  expect(asked.filter((name) => name === 'notifications:answer')).toHaveLength(1)
+  await act(async () => answer!.accept())
+  expect(hasPending()).toBe(false)
+  notes = [{ ...notes[0], answer: 'ok' }]
+  await drawn()
+  expect(host.querySelector('.notif-item [role="status"]')?.textContent).toBe('Sent to your agent: Fine')
 })

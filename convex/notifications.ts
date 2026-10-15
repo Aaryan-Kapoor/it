@@ -145,9 +145,9 @@ export const dismiss = mutation({
 
 /** Pressing a notification's button records an ordinary click on its page: one inbox, one set of rules. */
 export const answer = mutation({
-  args: { id: v.id('notifications'), action: v.string(), displayKey: v.string() },
-  handler: async (ctx, { id, action, displayKey }) => {
-    const c = await requireBrowser(ctx)
+  args: { id: v.id('notifications'), action: v.string(), displayKey: v.string(), expectedSession: v.optional(v.string()) },
+  handler: async (ctx, { id, action, displayKey, expectedSession }) => {
+    const c = await requireBrowser(ctx, expectedSession)
     const { user } = c
     const n = await ctx.db.get(id)
     if (!n || n.userId !== user._id) fail('not_found', 'No such notification.')

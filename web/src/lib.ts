@@ -2,6 +2,7 @@
 // where a page is shown, the address bar, and how a refusal from the backend reads.
 import { ConvexError } from 'convex/values'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { hasPending, watchPending } from './pending'
 
 export { api } from '../../convex/_generated/api'
 export type { Id } from '../../convex/_generated/dataModel'
@@ -222,12 +223,30 @@ let reloading = false
 export function reloadWhenThere(): void {
   if (reloading) return
   reloading = true
-  const attempt = () =>
-    fetch('/', { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(15_000) }).then(
-      (r) => (r.ok ? location.reload() : void setTimeout(attempt, 5000)),
-      () => void setTimeout(attempt, 5000),
+  let checking = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const attempt = () => {
+    if (checking || hasPending()) return
+    clearTimeout(timer)
+    checking = true
+    void fetch('/', { method: 'HEAD', cache: 'no-store', signal: AbortSignal.timeout(15_000) }).then(
+      (r) => {
+        checking = false
+        // Work may have started while the connection check was on its way.
+        if (hasPending()) return
+        if (r.ok) {
+          unwatch()
+          location.reload()
+        } else timer = setTimeout(attempt, 5000)
+      },
+      () => {
+        checking = false
+        timer = setTimeout(attempt, 5000)
+      },
     )
-  void attempt()
+  }
+  const unwatch = watchPending(attempt)
+  attempt()
 }
 
 // ---------- signing a display out when the backend could not be told at the time ----------

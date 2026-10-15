@@ -19,11 +19,12 @@ const told = new Set<() => void>()
 /** What the backend answers each click with, in the order they were sent: nothing, until the test lets it. */
 const answers: ((said: { actionId: string }) => void)[] = []
 const client = {
-  mutation: vi.fn(
-    () =>
-      new Promise<{ actionId: string }>((resolve) => {
-        answers.push(resolve)
-      }),
+  mutation: vi.fn((fn: unknown) =>
+    getFunctionName(fn as never) === 'actions:replayGrant'
+      ? Promise.resolve({ until: Date.now() + 6 * 86400_000 })
+      : new Promise<{ actionId: string }>((resolve) => {
+          answers.push(resolve)
+        }),
   ),
   connectionState: () => ({ isWebSocketConnected: connected }),
   subscribeToConnectionState: (fn: () => void) => {
@@ -32,8 +33,13 @@ const client = {
   },
 }
 /** What the backend is to answer each stop with, in the order they were asked: nothing, until the test lets it. */
-const stopsAsked: { answer: (said: { stopping: boolean }) => void; refuse: (why: unknown) => void }[] = []
-const askedToStop = () => new Promise<{ stopping: boolean }>((answer, refuse) => void stopsAsked.push({ answer, refuse }))
+const stopsAsked: {
+  input: { expectedRun?: string; expectedSession?: string }
+  answer: (said: { stopping: boolean }) => void
+  refuse: (why: unknown) => void
+}[] = []
+const askedToStop = (input: { expectedRun?: string; expectedSession?: string }) =>
+  new Promise<{ stopping: boolean }>((answer, refuse) => void stopsAsked.push({ input, answer, refuse }))
 vi.mock('convex/react', () => ({
   useConvex: () => client,
   useMutation: (fn: unknown) => (getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : async () => null),
@@ -655,13 +661,17 @@ describe('what the page’s bar says of the last thing the person did', () => {
   })
 
   test('a stop that was asked of one run of the conversation is not said of the next, which can be stopped in its turn', async () => {
-    Object.assign(PAGE, { run: { since: NOW - 60_000, stopping: false }, machineSeenAt: NOW })
+    Object.assign(PAGE, { run: { identity: 'original-run', since: NOW - 60_000, stopping: false }, machineSeenAt: NOW })
     await shown()
+    const { hasPending } = await import('./pending')
     await act(async () => stops()[0]!.click())
+    expect(hasPending()).toBe(true)
+    expect(stopsAsked[0]!.input).toMatchObject({ expectedRun: 'original-run', expectedSession: 'session-1' })
     await act(async () => stopsAsked[0]!.answer({ stopping: true }))
+    expect(hasPending()).toBe(false)
     expect(host.querySelector('.working')?.textContent).toBe('Stopping')
     // The machine reopens the conversation for something done since, before the page has heard that the first run ended
-    Object.assign(PAGE, { run: { since: NOW, stopping: false } })
+    Object.assign(PAGE, { run: { identity: 'next-run', since: NOW - 60_000, stopping: false } })
     await drawnAgain()
     expect(host.querySelector('.working')?.textContent).toContain('Working')
     expect(stops().length).toBe(1)

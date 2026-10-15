@@ -3,11 +3,13 @@
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
 import { ALIVE, describeClick, LEASE_MS, LIMITS, QUOTA, STORE_KEY } from '@it/protocol'
+import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -136,7 +138,21 @@ async function browserOf(t: T, who: string, role: 'owner' | 'screen') {
     }
   })
   // What the backend is told about a caller is what its own token for a session says (see the tests of pairing)
-  return { browser: t.withIdentity({ issuer: SITE, subject: user, kind: 'browser', sid: session, role }), session }
+  const browser = t.withIdentity({ issuer: SITE, subject: user, kind: 'browser', sid: session, role })
+  const mutation = browser.mutation
+  // The browser saves the server's deadline before dispatching each new click.
+  browser.mutation = (async (fn, args) => {
+    if (['actions:submit', 'actions:message'].includes(getFunctionName(fn))) {
+      const { until } = await mutation(api.actions.replayGrant, {})
+      return mutation(fn, { ...args, replayUntil: until })
+    }
+    if (getFunctionName(fn) === 'artifacts:stop') {
+      const shown = await browser.query(api.artifacts.get, args as { artifactId: Id<'artifacts'> })
+      return mutation(fn, { ...args, expectedRun: shown.run?.identity, expectedSession: session })
+    }
+    return mutation(fn, args)
+  }) as typeof mutation
+  return { browser, session }
 }
 /** The same, once it has registered itself as a display. */
 async function paired(t: T, who: string, role: 'owner' | 'screen', key: string, userAgent = 'Mozilla/5.0 (X11; Linux x86_64) Chrome/144.0') {
@@ -1889,7 +1905,7 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.delivery.claim, { ids: [first as never], for: SESSION })
     const began = Date.now()
     await m.as.mutation(api.machines.runBegan, { for: SESSION })
-    expect(await onPage()).toEqual({ since: began, stopping: false })
+    expect(await onPage()).toMatchObject({ since: began, stopping: false })
     expect((await m.as.query(api.machines.me, {})).runs).toEqual([{ harness: 'claude-code', sessionId: 'sess-1', since: began }])
     // Said twice, it is one run
     await m.as.mutation(api.machines.runBegan, { for: SESSION })
