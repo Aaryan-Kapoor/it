@@ -2,7 +2,9 @@
 // (`lib/counted.ts`): the notes themselves, which it takes away, and once a day how much this
 // It holds, as numbers that it turns into bands before anything is sent.
 import { v } from 'convex/values'
+import { internal } from './_generated/api'
 import { internalMutation, internalQuery } from './_generated/server'
+import { forgetNoted } from './lib/counted'
 
 /** The most notes given at one asking. */
 const AT_ONCE = 200
@@ -17,9 +19,25 @@ export const KEPT_MS = 7 * 86_400_000
 export const take = internalMutation({
   args: { keep: v.optional(v.boolean()) },
   handler: async (ctx, { keep }) => {
+    const generation = (await ctx.db.query('network').first())?.usageGeneration ?? 0
     const rows = await ctx.db.query('counted').order('asc').take(AT_ONCE)
     for (const row of rows) await ctx.db.delete(row._id)
-    return { notes: keep === false ? [] : rows.map((row) => ({ name: row.name, properties: row.properties, at: row.at })), more: rows.length === AT_ONCE }
+    return {
+      notes:
+        keep === false
+          ? []
+          : rows.filter((row) => (row.generation ?? 0) === generation).map((row) => ({ name: row.name, properties: row.properties, at: row.at })),
+      more: rows.length === AT_ONCE,
+    }
+  },
+})
+
+/** Removes earlier reporting generations a step at a time. The timestamp also accepts tasks scheduled before generations were recorded. */
+export const forget = internalMutation({
+  args: { upTo: v.number(), generation: v.optional(v.number()) },
+  handler: async (ctx, { upTo, generation }) => {
+    if (await forgetNoted(ctx, upTo, generation)) await ctx.scheduler.runAfter(0, internal.counted.forget, { upTo, generation })
+    return null
   },
 })
 

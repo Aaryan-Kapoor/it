@@ -55,12 +55,12 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 | What | How long |
 |---|---|
 | A page, with its state | Until you delete it, with `it delete <id>` or on the site |
-| Earlier versions of a page | The ten newest. An older one goes when a newer one is published |
+| Earlier versions of a page | The nine newest, which with the one that is shown makes ten versions kept. An older one goes when a newer one is published |
 | What was done on a page | A week after an agent was given it. A month if no agent ever took it |
 | A notification | A month |
 | A publish that was begun and never finished | An hour |
 | A browser's pairing | For as long as the browser is used, and a year after it was last used, unless you end it sooner |
-| A showing of a page | Until nothing has asked under it for ten minutes, and a day at most. The site then shows the page again by itself. It ends at once when the page is deleted, when its display is signed out, and when It stops |
+| A showing of a page | Until nothing has asked under it for ten minutes, and a day at most. The site then shows the page again by itself. It ends at once when It stops, and a moment after the page is deleted or its display is signed out, as the second paragraph under this table says |
 | A machine you revoked | Its record for a month, and for as long after that as a page it made is still there |
 | The key of a display you forgot | Refused for 90 days, so that the browser that held it has to be paired again to be a display |
 | The background service's log | Its newest few megabytes |
@@ -68,6 +68,8 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 | The backend program's note of a task it ran in the background | About an hour after the task ran, and then, as with anything removed, about an hour more inside the database's file |
 
 Removing something takes it out of what It shows and answers with at once. Inside the database's own file it takes longer to go: what was removed can still be read there for about an hour, counted while the backend program runs, by whoever can read the file, and traces of it can stay in the file's unused space after that. The copies kept from before an update are copies of the whole file, and hold all of it for as long as they are kept. [What It protects, and what it does not](what-it-protects.md#what-is-removed-can-be-read-in-the-databases-file-for-a-while) says all of this in full.
+
+One thing follows a moment later, and not at once: the address of a showing that was already open. Deleting a page, erasing everything and signing a display out are recorded in the backend, and from that moment the page is in no list, nothing can be done on it and no display is let open it anew. The part of It that serves a page's files is then told, in a step of its own that starts as soon as the deletion or the sign-out is recorded, and until it has heard, the address still answers with the files to whoever holds it. Measured on one computer, over forty deletions, it went on answering for between three and six hundredths of a second after the deletion was asked for. Where the telling fails it is tried again after five seconds, then after ten, then twenty, and so on, with an hour at most between two tries, and where the backend stopped before it could try at all, within about seven minutes of running again. A browser that signs itself out waits a few seconds to hear that it was told, and says so where it was not; for a deleted page nothing says that it has been. However long that takes, the address stops answering as the table says: ten minutes after anything was last asked under it, and a day after the showing began at the latest.
 
 ## How much It takes
 
@@ -88,7 +90,7 @@ Whatever goes past one of these is refused, in a sentence that says which, and w
 | Displays | 25 |
 | Paired browsers | 50 |
 
-Where there are 25 displays already, another is let in only if room can be made for it by letting one go. The one to go is the one longest unopened among those that were never named, take no notifications and have not been open for ten minutes. Failing that, it is the one that has gone longest unopened of all, if that is a month or more. Where there is neither, the new display is refused, and you forget one on the Displays page first. For a fifty-first paired browser room is always made, by ending the one that has gone longest unused.
+Where there are 25 displays already, another is let in only if room can be made for it by letting one go. The one to go is the one longest unopened among those that were never named, take no notifications and have not been open for ten minutes. Failing that, it is the one that has gone longest unopened of all, if that is a month or more. Where there is neither, the new display is refused, and you forget one on the Displays page first. A paired screen makes room only by letting go of a display of its own, and is refused where it has none to let go. For a fifty-first paired browser room is always made, by ending the one that has gone longest unused.
 
 It also counts how fast things come, so that one page or one command that has gone wrong cannot use up what the rest need. What comes too fast is refused with `rate_limited`, and is taken when it is sent again a moment later.
 
@@ -117,7 +119,7 @@ The site's settings can erase everything It holds and leave It installed. Afterw
 
 Erasing ends what every display and machine can do at once, and then removes every page, its files and every record of them, with the copies of the database that It had kept from before an update when it was told of the erasing. Each paired browser lets go of what it kept, as [What a paired browser keeps](#what-a-paired-browser-keeps) says. Some things stay:
 
-- What was removed stays inside the database's file for about an hour more, and traces of it can stay in the file's unused space after that, as [How long things are kept](#how-long-things-are-kept) says. For about an hour after a task has run, the backend program also keeps its note of it, which holds the id of a record of It's own and no person's.
+- What was removed stays inside the database's file for about an hour more, and traces of it can stay in the file's unused space after that, as [How long things are kept](#how-long-things-are-kept) says. For about an hour after a task has run, the backend program also keeps its note of it, which holds ids of records of It's own, for some tasks the id an agent app gave a conversation, and no person's.
 - A copy of the database that It makes before the backend program has run for about two and a half hours since everything was erased still holds what was erased, as the database's own file does for that long. It removes such a copy once that time is over, whether or not a later copy exists, so the way back that copy gave lasts only until then.
 - The content service keeps two notes, by ids alone, so that nothing from before can be used: that every display was signed out, which it clears away the next time a page is shown more than a day later, and that the files were deleted, which it clears away the next time something is deleted more than an hour later.
 - The program stays, with its settings, its keys and its log, which holds ids and counts and nothing that was on a page.
