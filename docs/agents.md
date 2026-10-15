@@ -8,6 +8,8 @@ An agent drives It with one command, `it`, and learns how from the agent skill, 
 
 An add-on is how what you do on a page gets back into an open conversation in one agent app, by itself. `it setup` finds the apps on the machine and installs the add-on for each one you choose: with the app's own commands for installing a plugin where it has them, and by putting its files where the app reads plugins from where it has none (OpenCode and Hermes). Run it again to change which apps are connected: `--all`, `--only claude-code,codex` and `--none` say which, as [Installing It](install.md#the-first-run) describes.
 
+Auto-wake can be turned on only for an app you have chosen to connect. Turning it off is allowed even after you disconnect the app, and that choice is kept when you connect it again. Codex waiting for hook approval can still receive queued clicks in an open conversation when its version supports that route.
+
 It has add-ons for six agent apps, and they are not all proven alike.
 
 | Agent app | Proven? | What that rests on |

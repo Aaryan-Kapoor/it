@@ -1,4 +1,4 @@
-import { LIMITS, QUOTA, WAKES, wakesOn } from '@it/protocol'
+import { LIMITS, newer, QUOTA, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -96,6 +96,8 @@ export const get = query({
     const machine = a.machineId ? await ctx.db.get(a.machineId) : null
     return {
       ...card(a, a.waiting ?? 0, machine?.name ?? null),
+      // Only this page's app readiness is shared with its readers, including paired screens.
+      connection: connection(machine, a),
       // Where the page's conversation is in an agent app It can reopen a closed conversation of:
       // the machine that would do it, and whether the person has switched that on there
       wake:
@@ -173,6 +175,7 @@ export const remove = mutation({
     const told = await ctx.db
       .query('notifications')
       .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
+      .order('desc')
       .take(300)
     for (const n of told) if (n.artifactId === a._id && !n.dismissedAt) await ctx.db.patch(n._id, { dismissedAt: Date.now() })
     await ctx.db.delete(a._id)
@@ -207,6 +210,39 @@ export const take = mutation({
     return { took: true }
   },
 })
+
+type Connection = {
+  harness: string
+  state: 'disconnected' | 'connecting' | 'needs_approval' | 'error' | 'unavailable' | 'too_old' | 'connected' | 'unknown'
+  queue: boolean
+}
+
+/** The owning app's reported capability, without claiming that this conversation is open. */
+function connection(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): Connection | null {
+  if (!machine || machine.revoked || !a.session) return null
+  const harness = a.session.harness
+  if (!(machine.wanted ?? []).includes(harness)) return { harness, state: 'disconnected', queue: false }
+  const report = machine.harnesses?.find((h) => h.id === harness)
+  let state: Connection['state'] = 'unknown'
+  switch (report?.addon) {
+    case 'not_connected':
+      state = 'connecting'
+      break
+    case 'needs_approval':
+    case 'error':
+    case 'unavailable':
+    case 'too_old':
+    case 'connected':
+      state = report.addon
+  }
+  // This minimum matches Codex's supported version in setup. An unreadable version proves nothing.
+  const queue =
+    harness === 'codex' &&
+    (state === 'connected' || state === 'needs_approval') &&
+    /^v?\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(report?.version ?? '') &&
+    !newer('0.160.0', report?.version)
+  return { harness, state, queue }
+}
 
 /** The reopened run of a page's conversation, where its machine says one is under way. */
 function running(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): { since: number; stopping: boolean } | null {

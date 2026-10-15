@@ -1620,6 +1620,8 @@ describe('clicks and their delivery', () => {
     const t = backend()
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
+    // These delivery fixtures have connected apps whose reopening has not been switched on.
+    await t.run((ctx) => ctx.db.patch(m.id, { wanted: ['claude-code', 'codex'] }))
     const p = await publish(m, 'plan', { session: SESSION })
     const click = (id: string, over = {}) =>
       alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id, over) })
@@ -3274,6 +3276,7 @@ describe('displays and machines', () => {
     const t = backend()
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
+    await t.run((ctx) => ctx.db.patch(m.id, { wanted: ['claude-code'] }))
     const other = await machineOf(t, 'alice', 'desktop')
     await publish(m, 'plan', { session: { harness: 'claude-code', id: 'c-1' } })
     await publish(m, 'sketch', { session: { harness: 'openclaw', id: 'x-1' } })
@@ -3307,6 +3310,7 @@ describe('displays and machines', () => {
     ])
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: false })
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([{ harness: 'claude-code', since: at }])
+    await alice.browser.mutation(api.machines.toggle, { machineId: m.id, harness: 'claude-code', on: true })
     // On a machine that runs Windows, or that has not said what it runs, reopening is not to be had:
     // the switch is refused with why, what was switched on before says nothing, and nothing is offered for reopening
     for (const [system, why] of [
@@ -3349,6 +3353,107 @@ describe('displays and machines', () => {
     // A connector of another version that does not say, as an earlier one does not, is not paused
     await m.as.mutation(api.machines.report, { connectorVersion: '0.0.9', harnesses: [] })
     expect(await paused()).toEqual([null, null])
+  })
+
+  test.each([
+    ['codex', false, 'connected', '0.160.0', 'disconnected', false],
+    ['codex', true, 'connected', '0.160.0', 'connected', true],
+    ['codex', true, 'needs_approval', '0.160.0', 'needs_approval', true],
+    ['codex', true, 'needs_approval', '0.161.0', 'needs_approval', true],
+    ['codex', true, 'needs_approval', 'v0.160.0', 'needs_approval', true],
+    ['codex', true, 'needs_approval', '0.159.0', 'needs_approval', false],
+    ['codex', true, 'connected', '0.159.0', 'connected', false],
+    ['codex', true, 'needs_approval', undefined, 'needs_approval', false],
+    ['codex', true, 'needs_approval', 'invalid', 'needs_approval', false],
+    ['codex', true, 'needs_approval', '1000000.0.0', 'needs_approval', false],
+    ['codex', true, 'needs_approval', '0.160.0-beta', 'needs_approval', false],
+    ['codex', true, 'needs_approval', ' 0.160.0 ', 'needs_approval', false],
+    ['codex', true, 'not_connected', '0.160.0', 'connecting', false],
+    ['codex', true, undefined, undefined, 'unknown', false],
+    ['codex', true, 'error', '0.160.0', 'error', false],
+    ['codex', true, 'too_old', '0.160.0', 'too_old', false],
+    ['codex', true, 'unavailable', '0.160.0', 'unavailable', false],
+    ['codex', true, 'future-state', '0.160.0', 'unknown', false],
+    ['claude-code', true, 'connected', '2.1.287', 'connected', false],
+    ['openclaw', true, 'connected', '2026.9.6', 'connected', false],
+    ['openclaw', false, 'connected', '2026.9.6', 'disconnected', false],
+  ] as const)(
+    'owners and screens read only the page app readiness for %s selected=%s report=%s version=%s',
+    async (harness, wanted, addon, version, state, queue) => {
+      const t = backend()
+      const alice = await person(t, 'alice')
+      const screen = await paired(t, 'alice', 'screen', 'readiness-screen-0001')
+      const m = await machineOf(t, 'alice')
+      const p = await publish(m, 'plan', { session: { harness, id: 'page-conversation' } })
+      await t.run((ctx) =>
+        ctx.db.patch(m.id, {
+          wanted: wanted ? [harness] : [],
+          harnesses: [
+            ...(addon ? [{ id: harness, addon, ...(version ? { version } : {}), detail: 'private installation detail' }] : []),
+            { id: 'unrelated-app', addon: 'error', detail: 'private unrelated detail' },
+          ],
+        }),
+      )
+      for (const reader of [alice.browser, screen.browser]) {
+        const got = await reader.query(api.artifacts.get, { artifactId: p.artifactId, history: false })
+        expect(got.connection).toEqual({ harness, state, queue })
+        expect(got).not.toHaveProperty('harnesses')
+        expect(got).not.toHaveProperty('wanted')
+        expect(got).not.toHaveProperty('publicKey')
+        expect(JSON.stringify(got)).not.toMatch(/private installation detail|private unrelated detail|unrelated-app/)
+        if (harness === 'openclaw') expect(got.wake).toBeNull()
+      }
+      expect(await code(screen.browser.query(api.machines.list, {}))).toBe('forbidden')
+    },
+  )
+
+  test('page readiness accepts old machine records and is absent without an owning session or live machine', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const screen = await paired(t, 'alice', 'screen', 'readiness-screen-0001')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan', { session: SESSION })
+    const expectConnection = async (connection: unknown) => {
+      for (const reader of [alice.browser, screen.browser]) expect((await reader.query(api.artifacts.get, { slug: 'plan' })).connection).toEqual(connection)
+    }
+    await expectConnection({ harness: SESSION.harness, state: 'disconnected', queue: false })
+    await t.run((ctx) => ctx.db.patch(m.id, { wanted: [SESSION.harness] }))
+    await expectConnection({ harness: SESSION.harness, state: 'unknown', queue: false })
+    await t.run((ctx) => ctx.db.patch(p.artifactId, { session: undefined }))
+    await expectConnection(null)
+    await t.run((ctx) => ctx.db.patch(p.artifactId, { session: SESSION, machineId: undefined }))
+    await expectConnection(null)
+    await t.run(async (ctx) => {
+      await ctx.db.patch(p.artifactId, { machineId: m.id })
+      await ctx.db.patch(m.id, { revoked: true })
+    })
+    await expectConnection(null)
+    await t.run((ctx) => ctx.db.delete(m.id))
+    await expectConnection(null)
+  })
+
+  test('only an owner can enable wake for a selected app, while turning it off preserves consent for an unselected app', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const screen = await paired(t, 'alice', 'screen', 'readiness-screen-0001')
+    const m = await machineOf(t, 'alice')
+    const args = { machineId: m.id, harness: 'codex', on: true }
+    await t.run((ctx) => ctx.db.patch(m.id, { harnesses: [{ id: 'codex', addon: 'connected', version: '0.160.0' }] }))
+    expect(await code(alice.browser.mutation(api.machines.wake, args))).toBe('invalid')
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+    await alice.browser.mutation(api.machines.wake, { ...args, on: false })
+    expect((await t.run((ctx) => ctx.db.get(m.id)))?.wakesOff).toEqual(['codex'])
+    await m.as.mutation(api.machines.choose, { harnesses: ['codex'], system: 'linux' })
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+    await m.as.mutation(api.machines.inventory, { harnesses: [{ id: 'codex', addon: 'needs_approval', version: '0.160.0' }] })
+    for (const reader of [screen.browser, m.as]) expect(await code(reader.mutation(api.machines.wake, args))).toBe('forbidden')
+    await alice.browser.mutation(api.machines.wake, args)
+    expect((await m.as.query(api.machines.me, {})).wakes).toMatchObject([{ harness: 'codex' }])
+    await alice.browser.mutation(api.machines.toggle, { ...args, on: false })
+    expect(await code(alice.browser.mutation(api.machines.wake, args))).toBe('invalid')
+    await alice.browser.mutation(api.machines.wake, { ...args, on: false })
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+    expect((await t.run((ctx) => ctx.db.get(m.id)))?.wakesOff).toEqual(['codex'])
   })
 
   test('a machine cannot switch reopening on, so no agent switches it on for itself, and it is only for an agent app It can reopen', async () => {
@@ -4337,6 +4442,70 @@ describe('cases at the edges', () => {
     expect(await t.run((ctx) => ctx.db.get(live.artifactId))).not.toBeNull()
     await alice.browser.mutation(api.notifications.dismiss, { key: displayKey('alice'), ids: [kept.id] })
     expect(await alice.browser.query(api.notifications.list, { key: displayKey('alice') })).toEqual([])
+  })
+
+  test('a deleted page cannot be pushed while its old notices wait beyond the immediate cleanup batch', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const dead = await publish(m, 'dead')
+    await alice.browser.mutation(api.push.subscribe, { key: displayKey('alice'), endpoint: PUSH('phone'), p256dh: 'p', auth: 'a' })
+    await vi.advanceTimersByTimeAsync(200_000)
+    const notices = await t.run(async (ctx) => {
+      const p = (await ctx.db.get(dead.artifactId))!
+      const ids = []
+      for (let i = 0; i < 601; i++)
+        ids.push(await ctx.db.insert('notifications', { userId: p.userId, artifactId: p._id, text: 'Gone', sticky: false, createdAt: Date.now() + i }))
+      return ids
+    })
+    const newest = notices.at(-1)!
+    const oldest = notices[0]!
+    const still = (notificationId: typeof oldest) => t.query(internal.push._still, { notificationId, displayId: alice.display.id, endpoint: PUSH('phone') })
+    for (const notificationId of [oldest, newest]) {
+      expect((await t.query(internal.push._targets, { notificationId }))?.url).toBe('/p/dead')
+      expect(await still(notificationId)).toBe(true)
+    }
+    await alice.browser.mutation(api.artifacts.remove, { artifactId: dead.artifactId })
+    // Timers have not advanced. The oldest notice is still stored and was not dismissed by the immediate batch.
+    expect((await t.run((ctx) => ctx.db.get(oldest)))?.dismissedAt).toBeUndefined()
+    expect((await t.run((ctx) => ctx.db.get(newest)))?.dismissedAt).toBe(Date.now())
+    for (const notificationId of [oldest, newest]) {
+      expect(await t.query(internal.push._targets, { notificationId })).toBeNull()
+      expect(await still(notificationId)).toBe(false)
+      expect(await t.action(internal.push.deliver, { notificationId })).toBe(0)
+    }
+    expect(sender.asked).toHaveLength(0)
+    const independent = await m.as.mutation(api.notifications.send, { text: 'Still useful' })
+    expect((await t.query(internal.push._targets, { notificationId: independent.id }))?.url).toBe('/')
+    expect(await still(independent.id)).toBe(true)
+    await settle(t)
+    expect(await t.run((ctx) => ctx.db.get(oldest))).toBeNull()
+  })
+
+  test('a page deleted during push delivery is not sent to the remaining displays before its older notices are purged', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan')
+    const phoneKey = 'alice-phone-key-0001'
+    await alice.browser.mutation(api.displays.register, { key: phoneKey, userAgent: 'Phone' })
+    for (const key of [displayKey('alice'), phoneKey]) await alice.browser.mutation(api.push.subscribe, { key, endpoint: PUSH(key), p256dh: 'p', auth: 'a' })
+    await vi.advanceTimersByTimeAsync(200_000)
+    const notificationId = await t.run(async (ctx) => {
+      const userId = (await ctx.db.get(p.artifactId))!.userId
+      const n = await ctx.db.insert('notifications', { userId, artifactId: p.artifactId, text: 'Old', sticky: false, createdAt: Date.now() })
+      for (let i = 0; i < 301; i++)
+        await ctx.db.insert('notifications', { userId, artifactId: p.artifactId, text: 'Newer', sticky: false, createdAt: Date.now() + i + 1 })
+      return n
+    })
+    expect((await t.query(internal.push._targets, { notificationId }))?.targets).toHaveLength(2)
+    sender.whileSending = async () => {
+      await alice.browser.mutation(api.artifacts.remove, { artifactId: p.artifactId })
+    }
+    expect(await t.action(internal.push.deliver, { notificationId })).toBe(1)
+    expect(sender.asked).toHaveLength(1)
+    expect((await t.run((ctx) => ctx.db.get(notificationId)))?.dismissedAt).toBeUndefined()
+    await settle(t)
   })
 
   test('a tray holds what is for its display, however much is addressed elsewhere or was dismissed since', async () => {
