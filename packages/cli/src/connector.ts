@@ -542,6 +542,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** When each conversation that is being asked for was first asked for, by the clock that only goes forward. */
   const t3Asked = new Map<string, number>()
   const t3Searches = new Map<string, T3Search>()
+  const t3Pending = new Map<string, { harness: string; id: string }>()
   const t3RetryAt = new Map<string, number>()
   const t3Refused = new Map<string, number>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
@@ -584,12 +585,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
       t3Known.clear()
       t3Asked.clear()
       t3Searches.clear()
+      t3Pending.clear()
       t3RetryAt.clear()
     }
     t3Known.set(key, 'asking')
     if (!t3Asked.has(key)) t3Asked.set(key, steady())
     const search = t3Searches.get(key) ?? { pending: [], read: new Map() }
     t3Searches.set(key, search)
+    t3Pending.set(key, session)
     // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
     const ids = [...new Set([session.id, threadOf(key)])]
     void t3ThreadOf(server, { harness: session.harness, ids, cwd: conversationFolder(session) }, search)
@@ -604,6 +607,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         } else {
           t3Asked.delete(key)
           t3Searches.delete(key)
+          t3Pending.delete(key)
           t3RetryAt.delete(key)
           const thread = result.status === 'found' ? result.thread : null
           t3Known.set(key, { thread, at: Date.now() })
@@ -1766,6 +1770,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (routing || closing || unfitting) return
     routing = true
     try {
+      // Discovery outlives the click that started it, including a completed fallback delivery.
+      for (const [key, session] of t3Pending) if (connected(session.harness)) t3For(key, session)
       if (givingBack === 'due') {
         const asked = await recoverBatch()
         if (asked === null) {

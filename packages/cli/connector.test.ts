@@ -2338,6 +2338,26 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     }
   })
 
+  test('an incomplete search finishes after its click left the inbox through the fallback route', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    await until(() => stand.codex.length === 1, 12_000)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-3'))
+    offered()
+    stand.t3.asked[0]!.answer(undefined)
+    await until(() => stand.t3.asked.length === 2)
+    stand.t3.asked[1]!.answer('t3-thread-c')
+    await settled()
+    offered({ ...click(3), id: 'click-after-search' })
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.codex.length).toBe(1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+  }, 30_000)
+
   test('a T3 Code that does not say which thread holds a conversation is waited for only so long: the click then goes into Codex’s queue, and what T3 Code says in the end holds for the next', async () => {
     withT3Code()
     stand.t3.slow = true
