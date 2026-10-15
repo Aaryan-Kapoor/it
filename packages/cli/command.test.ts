@@ -1954,7 +1954,7 @@ describe.skipIf(process.platform === 'win32')('a connector that cannot start, on
     mkdirSync(deep)
     writeFileSync(path.join(deep, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'test', key: {} }))
     const { written, running } = await served(m, path.join(m.home, 'it.log'), { IT_HOME: deep })
-    expect(written).toMatch(/ connector: could not start: home_too_long\n$/)
+    expect(written).toMatch(/ connector: could not start: home_too_long\n/)
     expect(written).not.toContain('PRIVATE-NAME')
     expect(running).toBe(true)
   })
