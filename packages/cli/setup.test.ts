@@ -44,6 +44,7 @@ import {
   connect,
   detectAll,
   disconnect,
+  holdsAddons,
   newerProgramSeen,
   reconcile,
   shim,
@@ -70,6 +71,8 @@ let unknown: string[]
 let kept: Record<string, Map<string, { from?: string; on?: boolean; packages?: Set<string> }>>
 /** A command a test has made fail, as `<app> <words>`. */
 let failing: string[]
+/** Exact replies used to exercise incomplete or changed app output. */
+let replies: Map<string, string>
 
 const VERSIONS: Record<string, string> = {
   claude: '2.1.287 (Claude Code)',
@@ -96,6 +99,7 @@ const folderOf = (bin: string, env: NodeJS.ProcessEnv = process.env): string =>
 function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
   const said = words.join(' ')
   if (failing.includes(`${bin} ${said}`)) throw new Error('the stand-in was told to fail')
+  if (replies.has(`${bin} ${said}`)) return replies.get(`${bin} ${said}`)!
   if (said === '--version') return VERSIONS[bin]!
   const folder = folderOf(bin, env)
   // An app makes its settings folder when it is first asked to keep something there
@@ -107,6 +111,8 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
   if (bin === 'claude') {
     // Claude Code keeps a copy of the plugin, and says where
     const copy = path.join(folder, 'plugins/cache/it/it-bridge/0.1.0')
+    if (said === 'plugin marketplace list --json')
+      return JSON.stringify(has.from ? [{ name: 'it', source: 'directory', path: has.from, installLocation: has.from }] : [])
     if (said === 'plugin list --json')
       return JSON.stringify(has.on === undefined ? [] : [{ id: ID, version: '0.1.0', scope: 'user', enabled: has.on, installPath: copy }])
     if (said === `plugin uninstall ${ID}`) {
@@ -133,6 +139,18 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
   }
   if (bin === 'codex') {
     // Codex installs from the marketplace's folder, and lists that folder as the plugin's source
+    if (said === 'plugin marketplace list --json') return JSON.stringify({ marketplaces: has.from ? [{ name: 'it', root: has.from }] : [] })
+    if (said === 'plugin list --marketplace it --json') {
+      const entry = {
+        pluginId: ID,
+        name: 'it-bridge',
+        marketplaceName: 'it',
+        enabled: Boolean(has.on),
+        installed: Boolean(has.on),
+        source: { source: 'local', path: path.join(has.from ?? '', 'plugins/it-bridge') },
+      }
+      return JSON.stringify({ installed: has.from && has.on ? [entry] : [], available: has.from && !has.on ? [entry] : [] })
+    }
     if (said === 'plugin list --marketplace it') {
       if (!has.from) return 'No plugins found in marketplace `it`.'
       const source = path.join(has.from, 'plugins/it-bridge')
@@ -250,7 +268,7 @@ const sameFolder = (a: string | undefined, b: string) => {
 /** What this It folder has noted about an app's add-on. */
 const noted = (id: Harness) =>
   JSON.parse(read(stampFile(id))) as {
-    installs: { version: string; at: number; env: Record<string, string>; dir?: string; files?: { path: string; sha256: string }[] }[]
+    installs: { version: string; at: number; env: Record<string, string>; dir?: string; files?: { path: string; sha256: string; previousSha256?: string }[] }[]
   }
 const statusOf = async (id: Harness) => (await detectAll()).find((h) => h.id === id)
 const commands = (bin: string) => ran.filter((r) => r.bin === bin).map((r) => r.args)
@@ -276,6 +294,7 @@ beforeEach(() => {
   unknown = []
   kept = {}
   failing = []
+  replies = new Map()
   fake.randomBytes = undefined
   // Nothing may reach the folders of whoever runs the tests: every app's settings are looked for under the temporary folder
   vi.spyOn(os, 'homedir').mockReturnValue(person)
@@ -497,15 +516,17 @@ describe('an add-on whose files It copies into an app’s folder', () => {
   test.each([
     ['cannot be read', 'not a note'],
     ['holds no list of installations', JSON.stringify({ version: 'some-version', at: 1 })],
-  ])('an installation whose note %s, and so names none of its files, is put out of the app’s way under another name and not deleted', async (_, note) => {
+  ])('an installation whose note %s stays untouched until its record is restored', async (_, note) => {
     const folder = folderOf('opencode')
     put(path.join(folder, 'plugins/it-bridge.js'), '// The It add-on for OpenCode, with words that are not this version’s')
     put(path.join(folder, 'skills/it/SKILL.md'), 'and here')
     put(path.join(folder, 'skills/it/more.md'), 'something the person keeps beside it')
     put(stampFile('opencode'), note)
-    expect(await disconnect('opencode', () => {})).toBe(true)
-    expect(under(folder)).toEqual(['plugins/it-bridge.js.set-aside-by-it', 'skills/it/SKILL.md.set-aside-by-it', 'skills/it/more.md'])
-    expect(existsSync(stampFile('opencode'))).toBe(false)
+    const before = under(folder)
+    expect(await disconnect('opencode', () => {})).toBe(false)
+    expect((await connect('opencode', () => {})).addon).toBe('error')
+    expect(under(folder)).toEqual(before)
+    expect(read(stampFile('opencode'))).toBe(note)
   })
 
   test('an install that is stopped the moment a file is in its place, before anything more can be written down, has a note of that file all the same, and it is taken out with the rest', async () => {
@@ -560,6 +581,110 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(await disconnect('opencode', () => {})).toBe(true)
     expect(under(folder)).toEqual(['skills/it/SKILL.md'])
     expect(read(skill)).toBe('a skill of the person’s own')
+  })
+
+  const replacement = async () => {
+    await connect('opencode', () => {})
+    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    const old = 'The previous It add-on for OpenCode.'
+    put(plugin, old)
+    const record = noted('opencode')
+    record.installs[0]!.version = 'previous-version'
+    record.installs[0]!.files!.find((f) => f.path === plugin)!.sha256 = sha(old)
+    put(stampFile('opencode'), JSON.stringify(record))
+    return { plugin, old }
+  }
+  const interruptReplacement = async (plugin: string, boundary: string) => {
+    const original = fs.renameSync
+    let stopped = false
+    let fileWritten = false
+    let noteWrites = 0
+    fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
+      if (stopped) throw new Error('the program was stopped')
+      const target = path.resolve(String(to))
+      const isRecord = target === stampFile('opencode')
+      const record = isRecord ? JSON.parse(read(String(from))) : undefined
+      if (isRecord) noteWrites++
+      const pending = record?.installs[0]?.files?.find((f: { path: string }) => f.path === plugin)?.previousSha256 !== undefined
+      if (
+        (boundary === 'before the first record' && isRecord && noteWrites === 1) ||
+        (boundary === 'before the intent record' && pending) ||
+        (boundary === 'before the replacement' && target === plugin) ||
+        (boundary === 'before the completed record' && isRecord && record.installs[0].version !== 'installing')
+      ) {
+        stopped = true
+        throw new Error('the program was stopped')
+      }
+      original(from, to)
+      if (target === plugin) fileWritten = true
+      if (
+        (boundary === 'after the intent record' && pending) ||
+        (boundary === 'after the replacement' && target === plugin) ||
+        (boundary === 'after the file record' && isRecord && fileWritten && !pending)
+      )
+        stopped = true
+    }) as typeof fs.renameSync
+    syncBuiltinESMExports()
+    try {
+      const result = await connect('opencode', () => {}).catch(() => undefined)
+      expect(result?.addon).not.toBe('connected')
+    } finally {
+      fs.renameSync = original
+      syncBuiltinESMExports()
+    }
+    expect(stopped).toBe(true)
+  }
+
+  test.each(
+    [
+      'before the first record',
+      'before the intent record',
+      'after the intent record',
+      'before the replacement',
+      'after the replacement',
+      'after the file record',
+      'before the completed record',
+    ].flatMap((boundary) => ['reconnect', 'disconnect'].map((recovery) => ({ boundary, recovery }))),
+  )('a replacement stopped $boundary retains ownership for $recovery', async ({ boundary, recovery }) => {
+    const { plugin } = await replacement()
+    await interruptReplacement(plugin, boundary)
+    const record = noted('opencode').installs[0]!.files!.find((f) => f.path === plugin)!
+    expect([record.sha256, record.previousSha256]).toContain(sha(read(plugin)))
+    if (recovery === 'reconnect') {
+      expect((await connect('opencode', () => {})).addon).toBe('connected')
+      expect(noted('opencode').installs[0]!.files!.every((f) => f.previousSha256 === undefined)).toBe(true)
+      expect(under(folderOf('opencode')).some((f) => f.includes('set-aside'))).toBe(false)
+    }
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(under(folderOf('opencode'))).toEqual([])
+  })
+
+  test.each(['before the replacement', 'after the replacement'])('consecutive partial upgrades retain the bytes actually left %s', async (boundary) => {
+    const { plugin } = await replacement()
+    await interruptReplacement(plugin, boundary)
+    const left = sha(read(plugin))
+    const files = ADDONS.opencode!.files
+    const previous = files['plugins/it-bridge.js']!
+    files['plugins/it-bridge.js'] = `${previous}\n// The next version.\n`
+    try {
+      await interruptReplacement(plugin, 'before the replacement')
+      expect(noted('opencode').installs[0]!.files!.find((f) => f.path === plugin)!.previousSha256).toBe(left)
+      expect(await disconnect('opencode', () => {})).toBe(true)
+      expect(under(folderOf('opencode'))).toEqual([])
+    } finally {
+      files['plugins/it-bridge.js'] = previous
+    }
+  })
+
+  test('a file changed after an interrupted replacement stays with the person', async () => {
+    const { plugin } = await replacement()
+    await interruptReplacement(plugin, 'after the replacement')
+    put(plugin, 'The person changed the plugin.')
+    expect(await disconnect('opencode', () => {})).toBe(false)
+    expect(read(plugin)).toBe('The person changed the plugin.')
+    expect(existsSync(stampFile('opencode'))).toBe(true)
+    expect((await connect('opencode', () => {})).addon).toBe('connected')
+    expect(read(`${plugin}.set-aside-by-it`)).toBe('The person changed the plugin.')
   })
 
   test('the note of an installation says where it was made and names every file written, with a checksum of each, and is the person’s alone to read', async () => {
@@ -964,6 +1089,7 @@ describe('where an add-on was installed', () => {
     vi.stubEnv('XDG_CONFIG_HOME', first)
     await connect('opencode', () => {})
     const installed = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    const saved = read(stampFile('opencode'))
     // The note is there and says nothing that can be read, and the add-on's own note of where it came from is gone
     put(stampFile('opencode'), 'not a note')
     rmSync(path.join(folderOf('opencode'), 'skills/it/it-home.json'))
@@ -978,19 +1104,20 @@ describe('where an add-on was installed', () => {
     expect(existsSync(installed)).toBe(true)
     expect(existsSync(stampFile('opencode'))).toBe(true)
     expect(said).toContain(
-      'OpenCode: It has a note of putting its add-on there that does not say where OpenCode kept its settings then, and no add-on of It’s is where OpenCode keeps them now. Nothing was touched, and the note is kept',
+      'The installation record for OpenCode could not be read. Restore its addons/opencode.json file from a backup, then run `it setup` again. No add-on was changed and the record is kept.',
     )
-    // Pointed back at the folder the add-on is in, it is found and put out of OpenCode's way
     vi.stubEnv('XDG_CONFIG_HOME', first)
+    expect(await disconnect('opencode', () => {})).toBe(false)
+    put(stampFile('opencode'), saved)
     expect(await disconnect('opencode', () => {})).toBe(true)
     expect(existsSync(installed)).toBe(false)
-    expect(existsSync(`${installed}.set-aside-by-it`)).toBe(true)
   })
 
   test('is not guessed for an installation whose note cannot be read in an app that removes its own add-ons: an app that has none where it keeps its settings now is asked to remove nothing', async () => {
     const first = path.join(tmp, 'first')
     vi.stubEnv('CLAUDE_CONFIG_DIR', first)
     await connect('claude-code', () => {})
+    const saved = read(stampFile('claude-code'))
     put(stampFile('claude-code'), 'not a note')
     vi.stubEnv('CLAUDE_CONFIG_DIR', path.join(tmp, 'second'))
     ran = []
@@ -999,6 +1126,8 @@ describe('where an add-on was installed', () => {
     expect(kept.claude!.get(first)!.on).toBe(true)
     expect(existsSync(stampFile('claude-code'))).toBe(true)
     vi.stubEnv('CLAUDE_CONFIG_DIR', first)
+    expect(await disconnect('claude-code', () => {})).toBe(false)
+    put(stampFile('claude-code'), saved)
     expect(await disconnect('claude-code', () => {})).toBe(true)
     expect(kept.claude!.get(first)!.on).toBe(undefined)
   })
@@ -1320,7 +1449,7 @@ describe('two It folders connected to one app', () => {
     },
   )
 
-  test.each(SHARED)(
+  test.each(SHARED.filter(({ id }) => id === 'opencode' || id === 'hermes'))(
     'an add-on whose It folder has no note of it any more is taken over, and the person is told that it now belongs to this folder ($id)',
     async ({ id, variable, note }) => {
       const shared = path.join(tmp, 'shared')
@@ -1401,34 +1530,183 @@ describe('two It folders connected to one app', () => {
     expect([...packages]).toEqual([path.join(second, 'addons/pi')])
   })
 
-  test('an add-on that says it came from this It folder is this folder’s again, though the folder has lost its note of installing it', async () => {
-    await connect('claude-code', () => {})
-    rmSync(stampFile('claude-code'))
-    const { said, say } = lines()
-    expect((await connect('claude-code', say)).addon).toBe('connected')
-    // Nothing is said of replacing someone else's add-on: it is its own. The skill beside the
-    // person's own skills is another matter: with the note gone, nothing says that this program
-    // put it there, so it is kept under another name like any file of the person's
-    expect(said).toEqual([
-      'connecting Claude Code',
-      `Claude Code: one file that It had not put there, or that had been changed since, was in the add-on’s place. Nothing was written over: it is kept beside the add-on, as ${path.join(folderOf('claude'), 'skills/it/SKILL.md.set-aside-by-it')}`,
-    ])
-    expect(existsSync(stampFile('claude-code'))).toBe(true)
+  test.each(SHARED.filter(({ id }) => ['claude-code', 'codex', 'openclaw'].includes(id)))(
+    'an unrecorded managed plugin stays unchanged when $id is connected again',
+    async ({ id, bin }) => {
+      await connect(id, () => {})
+      const installed = under(folderOf(bin))
+      rmSync(stampFile(id))
+      ran = []
+      const result = await connect(id, () => {})
+      expect(result.addon).toBe('error')
+      expect(result.detail).toContain('not owned')
+      expect(commands(bin).filter((command) => /(?:uninstall|remove|add |install |enable)/.test(command))).toEqual([])
+      expect(under(folderOf(bin))).toEqual(installed)
+      expect(existsSync(stampFile(id))).toBe(false)
+    },
+  )
+})
+
+describe('managed plugin and marketplace ownership', () => {
+  const apps = [
+    {
+      id: 'claude-code' as const,
+      bin: 'claude',
+      manifest: '.claude-plugin/marketplace.json',
+      list: 'plugin list --json',
+      install: `plugin install ${ID} --scope user`,
+    },
+    {
+      id: 'codex' as const,
+      bin: 'codex',
+      manifest: '.agents/plugins/marketplace.json',
+      list: 'plugin list --marketplace it --json',
+      install: `plugin add ${ID}`,
+    },
+  ]
+  const mutations = (bin: string) => commands(bin).filter((command) => /\b(?:uninstall|remove|add|install|enable)\b/.test(command))
+
+  test.each(apps.flatMap((app) => [true, false].map((plugin) => ({ ...app, plugin }))))(
+    '$bin leaves a foreign marketplace and its plugin=$plugin unchanged even if installation would fail',
+    async ({ id, bin, plugin, install }) => {
+      const foreign = path.join(tmp, 'foreign-marketplace')
+      put(path.join(foreign, 'personal.txt'), 'The person owns this marketplace.')
+      kept[bin] = new Map([[folderOf(bin), { from: foreign, on: plugin || undefined }]])
+      failing = [`${bin} ${install}`]
+      const result = await connect(id, () => {})
+      expect(result.addon).toBe('error')
+      expect(result.detail).toContain('not owned')
+      expect(result.detail).toContain(`${bin} plugin marketplace remove it`)
+      expect(mutations(bin)).toEqual([])
+      expect(kept[bin]!.get(folderOf(bin))).toEqual({ from: foreign, on: plugin || undefined })
+      expect(read(path.join(foreign, 'personal.txt'))).toBe('The person owns this marketplace.')
+      expect(existsSync(stampFile(id))).toBe(false)
+    },
+  )
+
+  test.each(apps)('$bin refuses an unrecorded plugin even when no marketplace is listed', async ({ id, bin, list }) => {
+    const source = path.join(tmp, 'foreign-plugin')
+    put(path.join(source, 'personal.txt'), 'The person owns this plugin.')
+    replies.set(
+      `${bin} ${list}`,
+      JSON.stringify(
+        bin === 'claude'
+          ? [{ id: ID, enabled: true, scope: 'user', installPath: source }]
+          : { installed: [{ pluginId: ID, installed: true, enabled: true, source: { source: 'local', path: source } }], available: [] },
+      ),
+    )
+    const result = await connect(id, () => {})
+    expect(result.addon).toBe('error')
+    expect(result.detail).toContain(`${bin} plugin ${bin === 'claude' ? 'uninstall' : 'remove'} ${ID}`)
+    expect(mutations(bin)).toEqual([])
+    expect(read(path.join(source, 'personal.txt'))).toBe('The person owns this plugin.')
   })
 
-  test('an add-on under It’s name that no It folder has a note of is replaced, and the person is told so', async () => {
-    // Installed, and nothing inside it to say from where
-    const elsewhere = path.join(tmp, 'elsewhere')
-    put(path.join(elsewhere, 'it-bridge/hooks/register.js'), 'an add-on from somewhere else')
-    kept.claude = new Map([[folderOf('claude'), { from: elsewhere, on: true }]])
-    const { said, say } = lines()
-    expect((await connect('claude-code', say)).addon).toBe('connected')
-    expect(said).toContain(
-      'Claude Code: it already had an add-on under It’s name that this It folder has no note of installing, and that add-on is replaced by this folder’s',
-    )
-    // What it was installed from is not touched
-    expect(read(path.join(elsewhere, 'it-bridge/hooks/register.js'))).toBe('an add-on from somewhere else')
+  test.each(apps)('$bin preserves a foreign replacement even with an older installation on record', async ({ id, bin }) => {
+    await connect(id, () => {})
+    const saved = read(stampFile(id))
+    const foreign = path.join(tmp, 'foreign-marketplace')
+    put(path.join(foreign, 'personal.txt'), 'The person owns this replacement.')
+    kept[bin]!.get(folderOf(bin))!.from = foreign
+    ran = []
+    expect((await connect(id, () => {})).addon).toBe('error')
+    expect(await disconnect(id, () => {})).toBe(false)
+    expect(mutations(bin)).toEqual([])
+    expect(read(stampFile(id))).toBe(saved)
+    expect(read(path.join(foreign, 'personal.txt'))).toBe('The person owns this replacement.')
   })
+
+  test.each(apps)('$bin preserves a marketplace that offers another plugin before unpacking or removal', async ({ id, bin, manifest }) => {
+    await connect(id, () => {})
+    const file = path.join(process.env.IT_HOME!, 'addons', id, manifest)
+    const contents = JSON.parse(read(file))
+    contents.plugins.push({ name: 'personal-plugin', source: './personal-plugin' })
+    put(file, JSON.stringify(contents))
+    const saved = read(file)
+    const record = read(stampFile(id))
+    ran = []
+    expect((await connect(id, () => {})).addon).toBe('error')
+    expect(await disconnect(id, () => {})).toBe(false)
+    expect(mutations(bin)).toEqual([])
+    expect(read(file)).toBe(saved)
+    expect(read(stampFile(id))).toBe(record)
+  })
+
+  test.each(apps)('$bin leaves other installed plugins in the marketplace alone even when its manifest no longer lists them', async ({ id, bin, list }) => {
+    await connect(id, () => {})
+    const response = JSON.parse(standIn(bin, list.split(' '), process.env))
+    const other = bin === 'claude' ? { id: 'personal-plugin@it' } : { pluginId: 'personal-plugin@it' }
+    if (bin === 'claude') response.push(other)
+    else response.installed.push(other)
+    replies.set(`${bin} ${list}`, JSON.stringify(response))
+    ran = []
+    expect((await connect(id, () => {})).addon).toBe('error')
+    expect(await disconnect(id, () => {})).toBe(false)
+    expect(mutations(bin)).toEqual([])
+    expect(existsSync(stampFile(id))).toBe(true)
+  })
+
+  test.each(
+    apps.flatMap((app) =>
+      [app.list, 'plugin marketplace list --json'].flatMap((command) => ['not JSON', '{}', 'null'].map((reply) => ({ ...app, command, reply }))),
+    ),
+  )('$bin refuses an unknown $command reply of $reply before mutation', async ({ id, bin, command, reply }) => {
+    replies.set(`${bin} ${command}`, reply)
+    const result = await connect(id, () => {})
+    expect(result.addon).toBe('error')
+    expect(result.detail).toContain('then retry `it setup`')
+    expect(mutations(bin)).toEqual([])
+    expect(existsSync(stampFile(id))).toBe(false)
+  })
+
+  test.each(apps)('$bin retains a marketplace whose removal failed until a later disconnect confirms it is gone', async ({ id, bin }) => {
+    await connect(id, () => {})
+    failing = [`${bin} plugin marketplace remove it`]
+    expect(await disconnect(id, () => {})).toBe(false)
+    expect(existsSync(stampFile(id))).toBe(true)
+    expect(existsSync(path.join(folderOf(bin), 'skills/it/SKILL.md'))).toBe(true)
+    expect(kept[bin]!.get(folderOf(bin))!.from).toBeDefined()
+    failing = []
+    expect(await disconnect(id, () => {})).toBe(true)
+    expect(existsSync(stampFile(id))).toBe(false)
+    expect(kept[bin]!.get(folderOf(bin))!.from).toBeUndefined()
+  })
+
+  test.each(['not JSON', '{}', '{"plugin":null}', '{"plugin":[]}'])('OpenClaw refuses an unknown inspection reply of %s', async (reply) => {
+    replies.set('openclaw plugins inspect it-bridge --json', reply)
+    expect((await connect('openclaw', () => {})).addon).toBe('error')
+    expect(mutations('openclaw')).toEqual([])
+    expect(existsSync(stampFile('openclaw'))).toBe(false)
+  })
+
+  test.each([{ installs: [null] }, { installs: [{ version: 'installing', at: 1, files: [{ path: '/unknown', sha256: 42 }] }] }])(
+    'a damaged ownership record is kept without granting ownership',
+    async (record) => {
+      put(stampFile('opencode'), JSON.stringify(record))
+      expect(holdsAddons()).toBe(true)
+      expect((await connect('opencode', () => {})).addon).toBe('error')
+      expect(await disconnect('opencode', () => {})).toBe(false)
+      expect(read(stampFile('opencode'))).toBe(JSON.stringify(record))
+      expect(ran).toEqual([])
+    },
+  )
+
+  test.each(apps.flatMap((app) => ['marketplace', 'plugin'].map((step) => ({ ...app, step }))))(
+    '$bin retains a failed $step installation for retry and disconnect',
+    async ({ id, bin, step, install }) => {
+      await connect(id, () => {})
+      const record = noted(id)
+      record.installs[0]!.version = 'previous-version'
+      put(stampFile(id), JSON.stringify(record))
+      failing = [`${bin} ${step === 'marketplace' ? `plugin marketplace add ${path.join(process.env.IT_HOME!, 'addons', id)}` : install}`]
+      expect((await connect(id, () => {})).addon).toBe('error')
+      expect(noted(id).installs[0]!.version).toBe('installing')
+      failing = []
+      expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+      expect(await disconnect(id, () => {})).toBe(true)
+      expect(existsSync(stampFile(id))).toBe(false)
+    },
+  )
 })
 
 describe('the lock one program holds while it changes what is installed', () => {
@@ -1732,16 +2010,11 @@ describe('what the connector writes down about installing and removing', () => {
       'disconnecting Claude Code',
       'Claude Code: the add-on in it now belongs to another It folder, and was left as it is',
     ])
-    // And one taken over from an It folder that has forgotten it
+    // A managed plugin whose original record is gone is left untouched.
     rmSync(path.join(first, 'addons/claude-code.json'))
     said.length = 0
     await reconcile(['claude-code'], say, true)
-    expect(said).toEqual([
-      'connecting Claude Code',
-      'Claude Code: the add-on in it came from an It folder that has no note of it any more, and now belongs to this one',
-      // The skill that folder had put beside the person's own skills is nobody's on record, and is kept under another name
-      'Claude Code: one file that It had not put there, or that had been changed since, was kept beside the add-on under another name',
-    ])
+    expect(said).toEqual(['Claude Code: its add-on could not be installed'])
     for (const line of said) expect(line).not.toContain(tmp)
   })
 
