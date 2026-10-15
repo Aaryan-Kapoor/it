@@ -1,6 +1,21 @@
 // What every command shares: where things are kept on this machine, how the machine proves who
 // it is, and how to reach the backend.
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fchmodSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeSync,
+} from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -175,6 +190,82 @@ export function writeFlushed(file: string, text: string): void {
 }
 
 /**
+ * Changes a file that is not It's alone: Codex's settings, which Codex saves itself, or a
+ * shell's profile, which the person may have open in an editor. `change` is given what the
+ * file holds and gives what it is to hold: nothing where it is to stay as it is, and null where
+ * nothing of it is left. An ordinary file is then removed; a symlink and its empty target
+ * remain. True where the file was changed.
+ *
+ * The new text is written beside the file with every byte on the disk, under the file's own
+ * permissions, and is given the file's name only where the file still holds, the moment before,
+ * what the change was made from. A file that is a link is written where the link leads. Where
+ * the file holds something else by then, another program saved it while this was at work, and
+ * the change is made anew to what it holds now: given its name all the same, the first result
+ * would take that save back with nothing said, and a project the person had just trusted in
+ * Codex would be untrusted again. Between that last look and the giving of the name an instant
+ * is left that only the other program could close, by holding a lock that both keep to. A file
+ * that is saved again every time is left as its last save made it, and that is an error.
+ */
+export function changeWhole(file: string, change: (text: string) => string | null | undefined): boolean {
+  for (let tries = 1; ; tries++) {
+    const named = lstatSync(file, { bigint: true })
+    const linked = named.isSymbolicLink()
+    const target = realpathSync(file)
+    const part = `${target}.it-${process.pid}.part`
+    const stillNamed = () => {
+      const now = lstatSync(file, { bigint: true })
+      return now.dev === named.dev && now.ino === named.ino && realpathSync(file) === target
+    }
+    const before = statSync(target, { bigint: true })
+    const text = readFileSync(target, 'utf8')
+    const changed = change(text)
+    const after = changed === null && linked ? '' : changed
+    if (after === undefined || after === text) {
+      if (stillNamed()) return false
+      if (tries >= 5) throw new Error(`${file} was saved by another program each time It was about to change it, and was left as it is`)
+      continue
+    }
+    const mode = statSync(target).mode & 0o777
+    try {
+      if (after !== null) {
+        const out = openSync(part, 'w', mode)
+        try {
+          // Every byte, or an error: a disk that is nearly full takes a part of what it is given
+          // and says so without failing, and a part is not what is given the file's name
+          writeAll(out, Buffer.from(after))
+          // The permissions the file had, whatever this program's own mask would have left of them
+          fchmodSync(out, mode)
+          fsyncSync(out)
+        } finally {
+          closeSync(out)
+        }
+      }
+      const unchanged = readFileSync(target, 'utf8') === text
+      const now = statSync(target, { bigint: true })
+      // Identity and times can expose a save after the read, but same-size writes can share them.
+      // Check the content again when those agree, rather than trusting their precision.
+      if (
+        unchanged &&
+        now.dev === before.dev &&
+        now.ino === before.ino &&
+        now.size === before.size &&
+        now.mtimeNs === before.mtimeNs &&
+        now.ctimeNs === before.ctimeNs &&
+        readFileSync(target, 'utf8') === text &&
+        stillNamed()
+      ) {
+        if (after === null) rmSync(target, { force: true })
+        else renameSync(part, target)
+        return true
+      }
+    } finally {
+      rmSync(part, { force: true })
+    }
+    if (tries >= 5) throw new Error(`${file} was saved by another program each time It was about to change it, and was left as it is`)
+  }
+}
+
+/**
  * Keeps something in a file of It's folder: written whole and on the disk first, and then
  * given its name in one step, in the place of what the file held before. Whoever reads the
  * file finds what it held before or what it holds now, and never a part of it, also where the
@@ -198,6 +289,11 @@ export function writePrivate(file: string, data: unknown): void {
     throw err
   }
   chmodSync(file, 0o600)
+  // A system that does not let a folder be opened or flushed (Windows, and some disks that are
+  // shared over a network) keeps its names in its own way, and says so in one of a few ways
+  // that mean exactly that. Anything else is the disk failing as the name was made to last,
+  // and is not passed over: whoever asked would go on as though the record were kept, and
+  // throw away what it could have fallen back on.
   try {
     const folder = openSync(path.dirname(file), 'r')
     try {
@@ -205,7 +301,9 @@ export function writePrivate(file: string, data: unknown): void {
     } finally {
       closeSync(folder)
     }
-  } catch {}
+  } catch (err) {
+    if (!['EISDIR', 'EPERM', 'EACCES', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'EBADF'].includes((err as NodeJS.ErrnoException)?.code ?? '')) throw err
+  }
 }
 // ---------- what may be written down ----------
 
@@ -339,6 +437,24 @@ export const unreachable = (where: string) =>
         `It could not reach the It at ${where}.`,
         'offline',
         'Check that It is running on the machine it runs on, that its network is on, which `it network` says there, and that this machine can reach that address.',
+      )
+
+/**
+ * What is said when It took the connection and then gave no answer in the time it had. That is
+ * not It being stopped: on the machine It runs on, something listens where It does, and a
+ * person told to start It would start a second one beside the first.
+ */
+export const silent = (where: string) =>
+  !process.env.IT_URL && basePort() !== undefined
+    ? new Problem(
+        'It did not answer in time on this machine.',
+        'timeout',
+        'Something took the connection where It listens, so It is most likely running and busy: try again in a moment. If it goes on, `it service logs` says what It met.',
+      )
+    : new Problem(
+        `The It at ${where} did not answer in time.`,
+        'timeout',
+        'Try again in a moment. If it goes on, check that It is running on the machine it runs on, and that this machine can reach that address.',
       )
 
 /**
@@ -1031,13 +1147,28 @@ const wasAll = (): { at: string; id: string }[] => {
   return Array.isArray(kept) ? kept.filter((w): w is { at: string; id: string } => typeof w?.at === 'string' && typeof w?.id === 'string') : []
 }
 export const wasAt = (at: string): string | undefined => wasAll().find((w) => w.at === at)?.id
-export function forgetMachine(): void {
+/**
+ * Writes down which machine this one is at the It it joined, for when it joins that It again.
+ * Leaving begins with this, before It is told and before anything is deleted, so that a machine
+ * that cannot write it down has not left at all and can try again: one that deleted its
+ * identity all the same would join again as a stranger, and the pages its conversations made
+ * would not come along.
+ */
+export function noteWas(): void {
   const m = readJson<Machine>(machineFile())
-  if (typeof m?.at === 'string' && typeof m.id === 'string') {
-    try {
-      writePrivate(wasFile(), [...wasAll().filter((w) => w.at !== m.at), { at: m.at, id: m.id }].slice(-20))
-    } catch {}
+  if (typeof m?.at !== 'string' || typeof m.id !== 'string' || wasAt(m.at) === m.id) return
+  try {
+    writePrivate(wasFile(), [...wasAll().filter((w) => w.at !== m.at), { at: m.at, id: m.id }].slice(-20))
+  } catch (err) {
+    throw new Problem(
+      `Which machine this was at ${m.at} could not be written down in ${home()} (${(err as NodeJS.ErrnoException)?.code ?? 'an error'}), so this machine has not left, and nothing of it was deleted.`,
+      'error',
+      'Make room on the disk, or see that the folder can be written to, and run `it logout` again.',
+    )
   }
+}
+export function forgetMachine(): void {
+  noteWas()
   for (const f of ['machine.json', 'token.json']) rmSync(inHome(f), { force: true })
 }
 /**
@@ -1120,6 +1251,8 @@ export async function token(
     signal: within(15_000, ending),
   }).catch(async (err) => {
     ending?.throwIfAborted()
+    // Given up on after waiting, which a connection that was refused never is: something took it and did not answer
+    if ((err as Error)?.name === 'TimeoutError') throw silent(b.site)
     throw (await keptFromIt(err)) ? shutIn() : unreachable(b.site)
   })
   if (r.status === 401) {
@@ -1185,7 +1318,7 @@ export async function token(
 }
 
 /** Turns a refusal from the backend into a Problem with its code. */
-async function translate(err: unknown): Promise<never> {
+export async function translate(err: unknown): Promise<never> {
   if (err instanceof Problem) throw err
   if (err instanceof ConvexError) {
     const data = (typeof err.data === 'string' ? JSON.parse(err.data) : err.data) as {

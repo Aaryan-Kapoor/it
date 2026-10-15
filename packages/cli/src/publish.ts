@@ -1,11 +1,12 @@
 // Publishing: gather the files, say what they are, upload them, and ask for the switch.
 
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN } from '@it/protocol'
-import { api, call, direct, doorRefusal, inHome, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
+import { api, call, direct, doorRefusal, inHome, Problem, readJson, sessionAsked, sessionNote, throughDoor, writeFlushed, writePrivate } from './lib'
+import { makeOnce } from './serve/config'
 import { agentOf, filesBand, record, sizeBand } from './usage'
 
 interface Gathered {
@@ -13,24 +14,50 @@ interface Gathered {
   data: Buffer
 }
 
-/** Reads one file, having checked first that it is small enough to be worth reading. */
+/**
+ * What is in an open file, and never more than `most` bytes of it, however much the file has
+ * grown since it was looked at. `size` is what it held then, which is read in one piece.
+ */
+function upTo(fd: number, most: number, size: number): Buffer {
+  const pieces: Buffer[] = []
+  let got = 0
+  while (got < most) {
+    const piece = Buffer.allocUnsafe(Math.min(most - got, got === 0 ? size + 1 : 64 * 1024))
+    const n = readSync(fd, piece, 0, piece.length, null)
+    if (n === 0) break
+    pieces.push(piece.subarray(0, n))
+    got += n
+  }
+  return pieces.length === 1 ? pieces[0]! : Buffer.concat(pieces, got)
+}
+
+/**
+ * Reads one file, having checked first that it is small enough to be worth reading. `size` is
+ * what the listing said it held, which is only a first look: a build that is still writing can
+ * have made it larger by the time it is opened, and larger again while it is read. So it is
+ * read no further than a file may be large and than is left of what a page may hold, with one
+ * byte more to tell that it went past, and what is counted against the page is what was read.
+ */
 export function read(full: string, as: string, size: number, total: { bytes: number }, inside?: string): Gathered {
   if (!isSafePath(as)) throw new Problem(`Not a usable file path: ${as}`, 'invalid')
-  if (size > LIMITS.fileBytes) throw new Problem(`${as} is larger than ${LIMITS.fileBytes / 1024 / 1024} MB.`, 'limit')
-  total.bytes += size
-  if (total.bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
+  const tooLarge = () => new Problem(`${as} is larger than ${LIMITS.fileBytes / 1024 / 1024} MB.`, 'limit')
+  const tooMuch = () => new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
+  if (size > LIMITS.fileBytes) throw tooLarge()
+  if (total.bytes + size > LIMITS.versionBytes) throw tooMuch()
   // Opened so that a link is refused by the system itself, in case one was put there after the
-  // check above; and what was opened is checked again before it is read
+  // check above; and what was opened is checked again before it is read. And opened so that it
+  // is never waited for: a pipe put there in the same moment would otherwise hold this command
+  // until something wrote to it, with nothing said and no way for a time limit to end it
   let fd: number
   try {
-    fd = openSync(full, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    fd = openSync(full, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
   } catch {
     throw new Problem(`${as} could not be read, or is a link.`, 'invalid')
   }
   try {
     const stat = fstatSync(fd)
     if (!stat.isFile()) throw new Problem(`${as} is not an ordinary file.`, 'invalid')
-    if (stat.size > LIMITS.fileBytes) throw new Problem(`${as} is larger than ${LIMITS.fileBytes / 1024 / 1024} MB.`, 'limit')
+    if (stat.size > LIMITS.fileBytes) throw tooLarge()
     // A folder on the way to the file may have been swapped for a link after it was listed,
     // which the check on the file itself cannot see. So where the opened file really is gets
     // looked up, and it must be this very file, inside the folder being published.
@@ -40,7 +67,11 @@ export function read(full: string, as: string, size: number, total: { bytes: num
       if (!real.startsWith(inside + path.sep) || there.ino !== stat.ino || there.dev !== stat.dev)
         throw new Problem(`${as} is outside the folder being published.`, 'invalid')
     }
-    return one(as, readFileSync(fd))
+    const data = upTo(fd, Math.min(LIMITS.fileBytes, LIMITS.versionBytes - total.bytes) + 1, stat.size)
+    if (data.length > LIMITS.fileBytes) throw tooLarge()
+    total.bytes += data.length
+    if (total.bytes > LIMITS.versionBytes) throw tooMuch()
+    return one(as, data)
   } finally {
     closeSync(fd)
   }
@@ -146,17 +177,112 @@ const CONVERSATIONS = 300
  */
 export function noteConversation(session: { harness: string; id: string }, cwd = process.cwd()): void {
   try {
-    const kept = readJson<Record<string, { cwd: string; at: number }>>(conversationsFile()) ?? {}
     const key = `${session.harness}:${session.id}`
-    if (kept[key]?.cwd === cwd) return
-    kept[key] = { cwd, at: Date.now() }
-    const newest = Object.entries(kept)
-      .filter(([, noted]) => typeof noted?.cwd === 'string' && typeof noted.at === 'number')
-      .sort((a, b) => b[1].at - a[1].at)
-      .slice(0, CONVERSATIONS)
-    writePrivate(conversationsFile(), Object.fromEntries(newest))
+    const read = () => readJson<Record<string, { cwd: string; at: number }>>(conversationsFile()) ?? {}
+    // Read afresh once the note is this command's alone: what another wrote meanwhile is kept
+    toItself(() => {
+      const kept = read()
+      kept[key] = { cwd, at: Date.now() }
+      const newest = Object.entries(kept)
+        .filter(([, noted]) => typeof noted?.cwd === 'string' && typeof noted.at === 'number')
+        .sort((a, b) => b[1].at - a[1].at)
+        .slice(0, CONVERSATIONS)
+      writePrivate(conversationsFile(), Object.fromEntries(newest))
+    })
   } catch {
     // A note that cannot be kept keeps nothing from being published
+  }
+}
+interface ConversationLock {
+  pid: number
+  holder: string
+}
+function conversationLock(file: string): ConversationLock | undefined {
+  const held = readJson<ConversationLock>(file)
+  return held && Number.isInteger(held.pid) && held.pid > 0 && typeof held.holder === 'string' && /^[0-9a-f]{16}$/.test(held.holder) ? held : undefined
+}
+// Only a lock this process has finished using can be recovered while its PID is alive.
+const abandonedConversationLocks = new Set<string>()
+function releaseConversationLock(file: string, holder: string): void {
+  const key = `${file}\0${holder}`
+  abandonedConversationLocks.add(key)
+  if (conversationLock(file)?.holder === holder) rmSync(file, { force: true })
+  abandonedConversationLocks.delete(key)
+}
+function gone(file: string, held: ConversationLock): boolean {
+  if (held.pid === process.pid && abandonedConversationLocks.has(`${file}\0${held.holder}`)) return true
+  try {
+    process.kill(held.pid, 0)
+    return false
+  } catch (err) {
+    // Permission errors and reused process numbers keep the lock held.
+    return (err as NodeJS.ErrnoException).code === 'ESRCH'
+  }
+}
+/**
+ * Holds the conversation note while reading and replacing it. A live or unknown holder keeps
+ * its lock however old the file is. A dead holder is replaced only after taking a claim named
+ * for that lock, so two commands recovering it cannot remove each other's replacement. A dead
+ * claimant is recovered through another such claim. The record is skipped after three seconds.
+ */
+function toItself(run: () => void): void {
+  const lock = `${conversationsFile()}.lock`
+  const until = performance.now() + 3000
+  const me: ConversationLock = { pid: process.pid, holder: randomBytes(8).toString('hex') }
+  const whole = `${lock}.${me.holder}.tmp`
+  const make = (file: string): boolean => {
+    writeFlushed(whole, JSON.stringify(me))
+    try {
+      return makeOnce(whole, file)
+    } catch (err) {
+      // Publication may have succeeded before temporary cleanup failed.
+      releaseConversationLock(file, me.holder)
+      rmSync(whole, { force: true })
+      throw err
+    }
+  }
+  let held = false
+  while (performance.now() < until) {
+    if (make(lock)) {
+      held = true
+      break
+    }
+    const seen = conversationLock(lock)
+    if (seen && gone(lock, seen)) {
+      let word = seen.holder
+      const abandoned: { file: string; holder: string }[] = []
+      for (let attempt = 0; attempt < 20 && performance.now() < until; attempt++) {
+        const after = `${lock}.after.${word}`
+        if (make(after)) {
+          try {
+            if (conversationLock(lock)?.holder === seen.holder) {
+              writeFlushed(whole, JSON.stringify(me))
+              renameSync(whole, lock)
+              held = true
+              for (const old of abandoned) {
+                releaseConversationLock(old.file, old.holder)
+              }
+            }
+          } finally {
+            releaseConversationLock(after, me.holder)
+            rmSync(whole, { force: true })
+          }
+          break
+        }
+        const claimant = conversationLock(after)
+        if (!claimant || !gone(after, claimant)) break
+        abandoned.push({ file: after, holder: claimant.holder })
+        word = claimant.holder
+      }
+    }
+    if (held) break
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5 + Math.random() * 20)
+  }
+  if (!held) return
+  try {
+    run()
+  } finally {
+    releaseConversationLock(lock, me.holder)
   }
 }
 /** The folder a conversation was last known to be working in, if it is still there. */
@@ -277,6 +403,13 @@ export async function publish(input: {
   const done = await call<{ slug: string; version: number; url: string; elsewhere?: boolean; took?: boolean }>('action', api.publish.finish, {
     artifactId: begun.artifactId,
     version: begun.version,
+  }).catch(async (err) => {
+    // Not finished, and this command will not try it again: It is told here too, or what was
+    // uploaded goes on counting against what may be under way until it is cleared as stale, and
+    // a few tries in a row leave no room for the next. A publish that was finished after all,
+    // with only its answer lost on the way, is no longer one that can be given up, and stays
+    await call('mutation', api.publish.abandon, { artifactId: begun.artifactId, version: begun.version }).catch(() => {})
+    throw err
   })
   // Counted: which agent app, new or not, how large and of how many files in a few bands, and
   // four things that are each so or not: whether it was given a state to start with, whether it

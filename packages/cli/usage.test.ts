@@ -70,7 +70,7 @@ const another = async (): Promise<Usage> => {
  * Runs something with some of the file functions the program calls replaced, the way a full disk
  * or another program at the wrong moment would get in its way, and puts the real ones back.
  */
-type FileFunction = 'openSync' | 'readSync' | 'readFileSync' | 'renameSync' | 'lstatSync' | 'readdirSync' | 'opendirSync' | 'rmSync'
+type FileFunction = 'openSync' | 'readSync' | 'readFileSync' | 'renameSync' | 'linkSync' | 'lstatSync' | 'readdirSync' | 'opendirSync' | 'rmSync'
 async function withFiles(
   replaced: { [K in FileFunction]?: (real: (...args: any[]) => any) => (...args: any[]) => unknown },
   run: () => unknown,
@@ -1173,6 +1173,387 @@ describe('what an event may hold', () => {
       await new Promise((resolve) => server.close(resolve))
     }
   })
+  test('the one event a command sends at once is not sent when another program turned reporting off after the command had read that it was on', async () => {
+    told()
+    const got: string[] = []
+    const server = http.createServer((req, res) => {
+      got.push(req.url ?? '')
+      req.resume().on('end', () => res.writeHead(204).end())
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    process.env.IT_TELEMETRY_URL = `http://127.0.0.1:${(server.address() as { port: number }).port}/usage`
+    try {
+      const other = await another()
+      const deciding = path.join(home, 'telemetry-sending')
+      const settings = new Set<number>()
+      let switched = false
+      let wasDeciding = false
+      /** When the other program's `it telemetry off` had returned, by the machine's own clock. */
+      let returned = 0
+      await withFiles(
+        {
+          openSync:
+            (real) =>
+            (file: fs.PathLike, ...rest: any[]) => {
+              const fd = real(file, ...rest) as number
+              if (String(file) === settingsFile()) settings.add(fd)
+              else settings.delete(fd)
+              return fd
+            },
+          readSync:
+            (real) =>
+            (fd: number, ...rest: any[]) => {
+              const n = real(fd, ...rest)
+              // The command has just read the id it would send under. The other program turns reporting off now, and runs to its end
+              if (settings.has(fd) && !switched) {
+                switched = true
+                wasDeciding = existsSync(deciding)
+                other.set(false)
+                returned = performance.now()
+              }
+              return n
+            },
+        },
+        () => usage.sendNow('installation.removed', { age: 'under 1 day' }),
+      )
+      expect(switched).toBe(true)
+      // No request began once the other had returned: the command had said that it was deciding, which is what the other waited on
+      expect(returned).toBeGreaterThan(0)
+      expect(got).toEqual([])
+      expect(wasDeciding).toBe(true)
+      expect(existsSync(deciding)).toBe(false)
+      expect(usage.status().enabled).toBe(false)
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
+  })
+  test('another telemetry sender cannot remove the marker of a sender that is still deciding', async () => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const settings = new Set<number>()
+    const requests: boolean[] = []
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      requests.push(usage.status().enabled)
+      return new Response(null, { status: 204 })
+    })
+    let interleaved = false
+    let marked = false
+    let other: Promise<void> | undefined
+    try {
+      await withFiles(
+        {
+          openSync:
+            (real) =>
+            (file: fs.PathLike, ...rest: any[]) => {
+              const fd = real(file, ...rest) as number
+              if (String(file) === settingsFile()) settings.add(fd)
+              else settings.delete(fd)
+              return fd
+            },
+          readSync:
+            (real) =>
+            (fd: number, ...rest: any[]) => {
+              const n = real(fd, ...rest)
+              if (settings.has(fd) && !interleaved) {
+                interleaved = true
+                other = usage.sendNow('installation.removed', { age: 'under 1 day' })
+                marked = existsSync(deciding)
+                usage.set(false)
+              }
+              return n
+            },
+        },
+        () => usage.sendNow('installation.removed', { age: 'under 1 day' }),
+      )
+      await other
+      expect(marked).toBe(true)
+      expect(requests).toEqual([])
+      expect(existsSync(deciding)).toBe(false)
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('a sender leaves another sender’s replacement marker when its request has begun', async () => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      rmSync(deciding)
+      writeFileSync(deciding, 'another sender')
+      return new Response(null, { status: 204 })
+    })
+    try {
+      await usage.sendNow('installation.removed', { age: 'under 1 day' })
+      expect(readFileSync(deciding, 'utf8')).toBe('another sender')
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('a stalled sender keeps its marker, and another sender recovers it after the process is killed', async () => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-usage-owner-'))
+    await build({
+      entryPoints: [path.join(__dirname, 'src/usage.ts')],
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      target: 'node22',
+      outfile: path.join(scratch, 'usage.mjs'),
+      logLevel: 'silent',
+    })
+    const command = path.join(scratch, 'sender.mjs')
+    writeFileSync(
+      command,
+      `import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+import { sendNow } from './usage.mjs'
+const open = fs.openSync
+fs.openSync = (file, ...args) => {
+  const fd = open(file, ...args)
+  if (String(file).endsWith('telemetry-sending')) {
+    process.stdout.write('deciding\\n')
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000)
+  }
+  return fd
+}
+syncBuiltinESMExports()
+await sendNow('installation.removed', { age: 'under 1 day' })
+`,
+    )
+    const child = spawn(process.execPath, [command], { env: process.env, stdio: ['ignore', 'pipe', 'inherit'] })
+    const ended = new Promise<void>((resolve) => child.once('exit', () => resolve()))
+    let said = ''
+    child.stdout!.on('data', (text) => (said += text))
+    const posts: string[] = []
+    const sender = noting(posts)
+    try {
+      await begun(() => said.includes('deciding'))
+      const owner = readFileSync(deciding, 'utf8')
+      expect(JSON.parse(owner)).toMatchObject({ pid: child.pid })
+      // Neither an old timestamp nor a sender standing still past its send budget proves exit.
+      fs.utimesSync(deciding, 0, 0)
+      for (let i = 0; i < 20; i++) published()
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      await sender.tick()
+      expect(posts).toEqual([])
+      expect(readFileSync(deciding, 'utf8')).toBe(owner)
+      child.kill('SIGKILL')
+      await ended
+      await sender.tick()
+      expect(sent(posts).flatMap((batch) => batch.events)).toHaveLength(20)
+      expect(existsSync(deciding)).toBe(false)
+    } finally {
+      child.kill('SIGKILL')
+      await ended
+      sender.stop()
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  test.each([false, true])('concurrent senders recover a dead owner with a dead earlier claimant: %s', async (claimed) => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    const left = { pid, holder: randomUUID() }
+    writeFileSync(deciding, JSON.stringify(left))
+    fs.utimesSync(deciding, new Date('2099-01-01'), new Date('2099-01-01'))
+    if (claimed) writeFileSync(`${deciding}.after.${left.holder}`, JSON.stringify({ pid, holder: randomUUID() }))
+    const other = await another()
+    const requests: string[] = []
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      requests.push(readFileSync(deciding, 'utf8'))
+      return new Response(null, { status: 204 })
+    })
+    let interleaved = false
+    let competing: Promise<void> | undefined
+    try {
+      await withFiles(
+        {
+          linkSync: (real) => (from: fs.PathLike, to: fs.PathLike) => {
+            const result = real(from, to)
+            if (String(to).startsWith(`${deciding}.after.`) && !interleaved) {
+              interleaved = true
+              competing = other.sendNow('installation.removed', { age: 'under 1 day' })
+              expect(readFileSync(deciding, 'utf8')).toBe(JSON.stringify(left))
+            }
+            return result
+          },
+        },
+        () => usage.sendNow('installation.removed', { age: 'under 1 day' }),
+      )
+      await competing
+      expect(interleaved).toBe(true)
+      expect(requests).toHaveLength(1)
+      expect(JSON.parse(requests[0]!)).toMatchObject({ pid: process.pid })
+      expect(readdirSync(home).filter((file) => file.startsWith('telemetry-sending'))).toEqual([])
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test('a recoverer leaves a replacement marker that appeared before it took its claim', async () => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    writeFileSync(deciding, JSON.stringify({ pid, holder: randomUUID() }))
+    const replacement = JSON.stringify({ pid: process.pid, holder: randomUUID() })
+    const fetch = vi.spyOn(globalThis, 'fetch')
+    try {
+      await withFiles(
+        {
+          linkSync: (real) => (from: fs.PathLike, to: fs.PathLike) => {
+            if (String(to).startsWith(`${deciding}.after.`)) writeFileSync(deciding, replacement)
+            return real(from, to)
+          },
+        },
+        () => usage.sendNow('installation.removed', { age: 'under 1 day' }),
+      )
+      expect(fetch).not.toHaveBeenCalled()
+      expect(readFileSync(deciding, 'utf8')).toBe(replacement)
+      expect(readdirSync(home).filter((file) => file.startsWith('telemetry-sending'))).toEqual(['telemetry-sending'])
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test.each([false, true])('a failed temporary cleanup releases only its own recovery claim, with a replacement: %s', async (replace) => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    const left = JSON.stringify({ pid, holder: randomUUID() })
+    writeFileSync(deciding, left)
+    const claim = `${deciding}.after.${JSON.parse(left).holder}`
+    const replacement = JSON.stringify({ pid: process.pid, holder: randomUUID() })
+    const posts: string[] = []
+    const sender = noting(posts)
+    for (let i = 0; i < 20; i++) published()
+    let failed = false
+    try {
+      await withFiles(
+        {
+          rmSync:
+            (real) =>
+            (file: fs.PathLike, ...rest: any[]) => {
+              if (String(file).startsWith(`${deciding}.`) && String(file).endsWith('.tmp') && existsSync(claim) && !failed) {
+                failed = true
+                if (replace) writeFileSync(claim, replacement)
+                throw Object.assign(new Error('temporary name is busy'), { code: 'EBUSY' })
+              }
+              return real(file, ...rest)
+            },
+        },
+        () => sender.tick(),
+      )
+      expect(failed).toBe(true)
+      expect(posts).toEqual([])
+      expect(readFileSync(deciding, 'utf8')).toBe(left)
+      if (replace) expect(readFileSync(claim, 'utf8')).toBe(replacement)
+      else expect(readdirSync(home).filter((file) => file.startsWith('telemetry-sending'))).toEqual(['telemetry-sending'])
+      await sender.tick()
+      expect(sent(posts).flatMap((batch) => batch.events)).toHaveLength(replace ? 0 : 20)
+      expect(existsSync(deciding)).toBe(replace)
+    } finally {
+      sender.stop()
+    }
+  })
+
+  test('a sender neither adopts nor releases a replacement marker when opening its own marker', async () => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const replacement = JSON.stringify({ pid: process.pid, holder: randomUUID() })
+    const fetch = vi.spyOn(globalThis, 'fetch')
+    try {
+      await withFiles(
+        {
+          openSync:
+            (real) =>
+            (file: fs.PathLike, ...rest: any[]) => {
+              if (String(file) === deciding) {
+                rmSync(deciding)
+                writeFileSync(deciding, replacement)
+              }
+              return real(file, ...rest)
+            },
+        },
+        () => usage.sendNow('installation.removed', { age: 'under 1 day' }),
+      )
+      expect(fetch).not.toHaveBeenCalled()
+      expect(readFileSync(deciding, 'utf8')).toBe(replacement)
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test.each(['off', 'on'])('recovery rechecks the privacy setting after reporting is turned %s', async (setting) => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    writeFileSync(deciding, JSON.stringify({ pid, holder: randomUUID() }))
+    const posts: string[] = []
+    const sender = noting(posts)
+    for (let i = 0; i < 20; i++) published()
+    try {
+      await withFiles(
+        {
+          renameSync: (real) => (from: fs.PathLike, to: fs.PathLike) => {
+            if (String(to) === deciding) {
+              if (setting === 'off') writeFileSync(offFile(), 'command')
+              else writeFileSync(settingsFile(), JSON.stringify({ told: kept().told, installation: randomUUID() }))
+            }
+            return real(from, to)
+          },
+        },
+        () => sender.tick(),
+      )
+      expect(posts).toEqual([])
+      expect(existsSync(deciding)).toBe(false)
+    } finally {
+      sender.stop()
+    }
+  })
+
+  test('a marker whose owner cannot be checked stays in place', async () => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    const owner = JSON.stringify({ pid: process.pid, holder: randomUUID() })
+    writeFileSync(deciding, owner)
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('cannot check'), { code: 'EPERM' })
+    })
+    const fetch = vi.spyOn(globalThis, 'fetch')
+    try {
+      await usage.sendNow('installation.removed', { age: 'under 1 day' })
+      expect(fetch).not.toHaveBeenCalled()
+      expect(readFileSync(deciding, 'utf8')).toBe(owner)
+    } finally {
+      fetch.mockRestore()
+      kill.mockRestore()
+    }
+  })
+
+  test('an older empty marker stays until reporting is explicitly turned off and on', async () => {
+    told()
+    const before = kept().installation
+    const deciding = path.join(home, 'telemetry-sending')
+    writeFileSync(deciding, '')
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+    try {
+      await usage.sendNow('installation.removed', { age: 'under 1 day' })
+      expect(fetch).not.toHaveBeenCalled()
+      expect(existsSync(deciding)).toBe(true)
+      usage.set(false)
+      usage.set(true)
+      expect(kept().installation).not.toBe(before)
+      await usage.sendNow('installation.removed', { age: 'under 1 day' })
+      expect(fetch).toHaveBeenCalledTimes(1)
+      expect(existsSync(deciding)).toBe(false)
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
   test('sending one event at once never throws and never waits long, where nothing answers', async () => {
     told()
     process.env.IT_TELEMETRY_URL = 'http://127.0.0.1:9/usage'
@@ -1259,6 +1640,8 @@ describe('sending', () => {
   })
   test('a batch that cannot be sent is tried five times, less and less often, and then dropped', async () => {
     told()
+    // Retry times must not depend on the real disk taking longer than the decision budget.
+    ownClock()
     let now = 0
     const tries: number[] = []
     const sender = usage.startSender({
@@ -1335,6 +1718,8 @@ describe('sending', () => {
     ['fails later', () => Promise.reject(new Error('no network'))],
   ])('a send that %s is a try that failed: five tries, and the batch is dropped', async (_how, fail) => {
     told()
+    // Retry times must not depend on the real disk taking longer than the decision budget.
+    ownClock()
     let now = 0
     const tries: number[] = []
     const sender = usage.startSender({
@@ -1349,6 +1734,46 @@ describe('sending', () => {
     for (; now <= 1_200_000; now += 1000) await expect(sender.tick()).resolves.toBeUndefined()
     sender.stop()
     expect(tries).toEqual([0, 2_000, 17_000, 77_000, 377_000])
+    expect(lines()).toEqual([])
+  })
+  test('a decision that takes too long leaves the batch untried and releases its marker for the next pass', async () => {
+    told()
+    ownClock()
+    const deciding = path.join(home, 'telemetry-sending')
+    let now = 0
+    let opened = 0
+    const tries: number[] = []
+    const sender = usage.startSender({
+      post: () => {
+        tries.push(now)
+        throw new Error('no network')
+      },
+      now: () => now,
+      everyMs: 0,
+    })
+    try {
+      for (let i = 0; i < 20; i++) published()
+      await withFiles(
+        {
+          openSync:
+            (real) =>
+            (file: fs.PathLike, ...rest: any[]) => {
+              const fd = real(file, ...rest)
+              if (String(file) === deciding && ++opened === 1) vi.advanceTimersByTime(251)
+              return fd
+            },
+        },
+        () => sender.tick(),
+      )
+      expect(opened).toBe(1)
+      expect(tries).toEqual([])
+      expect(existsSync(deciding)).toBe(false)
+      for (now = 1000; now <= 1_200_000; now += 1000) await sender.tick()
+      expect(tries).toEqual([1_000, 3_000, 18_000, 78_000, 378_000])
+      expect(existsSync(deciding)).toBe(false)
+    } finally {
+      sender.stop()
+    }
     expect(lines()).toEqual([])
   })
   test('stopping does not wait for a send that is under way', async () => {
