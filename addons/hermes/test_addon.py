@@ -767,6 +767,37 @@ class InTheTuiAndTheGateway(Case):
         self.assertEqual(hermes.messages, [], "a message goes by the chat's name, which is B's now")
         self.assertEqual(self.connector.acks(), [], "the click is still A's to have")
 
+    def test_a_chat_switch_during_the_last_host_check_leaves_the_click_for_its_original_conversation(self):
+        hermes = self.named()
+        bound["HERMES_SESSION_KEY"] = self.KEY
+        checking = threading.Event()
+        carry_on = threading.Event()
+
+        def allowed():
+            # Hermes reads its configuration here. Hold that read after the connector has
+            # answered, while the host's other thread starts a conversation under the same key.
+            if ("hermes", A) in self.connector.asked() and not checking.is_set():
+                checking.set()
+                return carry_on.wait(5)
+            return True
+
+        hermes._gateway_injection_allowed = allowed
+        self.connector.offer(A, click("k1"))
+        hermes.turn(A, running=False)
+        try:
+            self.assertTrue(checking.wait(5), "the last host check runs after the connector answered")
+            hermes.turn(B, running=False)
+        finally:
+            carry_on.set()
+        self.assertTrue(until(lambda: ("hermes", B) in self.connector.asked()))
+        self.assertEqual(hermes.messages, [], "the chat belongs to B before the host check finishes")
+        self.assertEqual(self.connector.acks(), [], "A's click was not handed over")
+
+        hermes.turn(A, running=False)
+        self.assertTrue(until(lambda: self.connector.acks()))
+        self.assertEqual(hermes.messages, [(TEXT, "user", self.KEY)])
+        self.assertEqual(self.connector.acks(), [("k1",)], "the same click reaches A when it returns")
+
     def test_as_many_conversations_are_asked_about_as_the_connector_listens_for_and_past_that_the_one_heard_from_longest_ago_gives_way(self):
         # The number is the connector's own, read from where It keeps it
         protocol = (HERE.parent.parent / "packages" / "protocol" / "src" / "index.ts").read_text(encoding="utf-8")

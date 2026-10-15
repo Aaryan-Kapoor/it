@@ -110,6 +110,10 @@ So think of who can do something on a page. You can, from any paired browser. So
 
 What It does about it: the text is marked as coming from a page, a conversation is reopened only on a machine and for an app where it is on, what you have turned off is turned on again by nobody but you, while It's service is running it asks a run to end after fifteen minutes and ends it if it does not, and Stop on the page ends it and what it started once its machine has heard: a machine that is out of reach is told when it is back, and the page says so meanwhile. If the service itself dies during a run, the agent goes on until the service starts again, which is when it looks at the runs it had noted and ends what is left of them. A reopened Codex conversation is kept to Codex's sandbox, with It's own folder writable too. None of that makes an agent refuse a request. Leave Auto-wake on where you would accept that agent acting on anything a page can send, and turn it off where you would not.
 
+### Hermes can switch conversations during a handover
+
+The Hermes add-on checks that a click still belongs to the conversation in its chat before handing it over. Hermes does not let the add-on make that check and the handover one operation. A switch after the last check can send the click to the replacement conversation. In the terminal, a `/resume` entered just after the check for waiting input can do this too. [Add-ons](add-ons.md#hermes-agent) describes these limits.
+
 ### It is not made for the public internet
 
 Do not forward a port to It, give it a public address, or put it where strangers can reach it. It has no encryption, it answers only to the machine's own names, and its limits on how fast a caller may try things are sized for one household.

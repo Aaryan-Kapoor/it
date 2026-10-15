@@ -532,19 +532,20 @@ class _Bridge:
             self._ask("/ack", {"ids": again})
         if not fresh or self._busy(talk):
             return
-        with self._lock:
-            # Another conversation may have taken this one's place under its name while the
-            # connector was answering (/new, /resume, /branch in the same chat). A message goes
-            # by that name, so it would reach the other one, and the click would be reported as
-            # given. It stays with the connector, for the conversation whose page it was.
-            if talk.closed or talk.id != session or self._talks.get(talk.key) is not talk:
-                return
-        # The person may have gone to another conversation while the connector was answering
+        # This calls into Hermes and may read its configuration. A hook can replace the
+        # conversation while that happens, so check our record after the host has answered.
         if not self._reachable(talk):
             return
+        # The connector's own wording, as it is: it names each click so a repeat can be told apart.
+        text = "\n".join(c["text"] for c in fresh)
+        with self._lock:
+            # A message goes by the chat's name, which /new, /resume or /branch can give to
+            # another conversation. A click for the one it left stays with the connector.
+            if talk.closed or talk.id != session or self._talks.get(talk.key) is not talk:
+                return
         try:
-            # The connector's own wording, as it is: it names each click so a repeat can be told apart
-            text = "\n".join(c["text"] for c in fresh)
+            # The host accepts only a chat key, with no expected conversation id. This check
+            # cannot prevent a switch inside Hermes after we hand the message to it.
             # By name only where there is a name. In the terminal there is none, and an older
             # Hermes does not know the word for it at all.
             taken = (self._ctx.inject_message(text, session_key=talk.key) if talk.key else self._ctx.inject_message(text)) is True

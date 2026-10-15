@@ -150,6 +150,8 @@ Where a click can arrive depends on where Hermes runs:
 
 One narrow window is known and accepted: in the terminal a click is handed over only when nothing you typed is waiting, but a `/resume` entered in the instant between that look and the hand-over takes the click with it into the other conversation.
 
+In the TUI, desktop app and gateway, the add-on checks Hermes's permissions after asking the connector. It then checks that the chat still holds the same conversation. If a hook has reported another conversation there, the click stays with the original one. Hermes accepts a message by the chat's name, without an expected conversation id. A switch after that final check can still send the click to the replacement conversation.
+
 ### OpenClaw
 
 The add-on runs inside the OpenClaw gateway and puts a click into the conversation that owns the page. What happens next is OpenClaw's own doing, as for any message:
