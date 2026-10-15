@@ -419,7 +419,6 @@ export function unpack(id: Harness): string {
   const addon = ADDONS[id]
   if (!addon) throw new Error(`there is no add-on for ${id}`)
   const dir = addonDir(id)
-  rmSync(dir, { recursive: true, force: true })
   // The terms are kept in It's own folder wherever an add-on is installed from it, as the
   // install script leaves them. An add-on that is one file with no folder of its own (OpenCode's)
   // says in its first lines that they are here.
@@ -439,13 +438,20 @@ export function unpack(id: Harness): string {
   const command = `${quoted} hook ${id}`
   for (const [rel, text] of Object.entries(addon.files)) {
     const file = path.join(dir, ...rel.split('/'))
-    mkdirSync(path.dirname(file), { recursive: true })
+    makeWithin(home(), path.dirname(file))
+    const found = lookAt(home(), file)
+    if (found.is !== 'file' && found.is !== 'none') throw new Error(`${file} cannot be replaced safely, so it was left as it is`)
     // A hook is one fixed command at one fixed address; all the logic is inside this program
     // Put into the JSON as a value, so that whatever the address contains it stays one string
-    if (rel.endsWith('hooks.json')) writeFileSync(file, text.replaceAll(JSON.stringify(`it hook ${id}`), JSON.stringify(command)))
+    let content: string
+    if (rel.endsWith('hooks.json')) content = text.replaceAll(JSON.stringify(`it hook ${id}`), JSON.stringify(command))
     // The note of which It folder the add-on comes from says this one
-    else if (path.basename(rel) === HOME_NOTE) writeFileSync(file, `${JSON.stringify({ ...(readNote(text) ?? {}), home: thisHome() }, null, 1)}\n`)
-    else writeFileSync(file, itHomeWritten(text))
+    else if (path.basename(rel) === HOME_NOTE) content = `${JSON.stringify({ ...(readNote(text) ?? {}), home: thisHome() }, null, 1)}\n`
+    else content = itHomeWritten(text)
+    // A registered marketplace must keep its manifest and ownership note throughout an upgrade.
+    // Replacing whole files in place leaves those proofs readable if unpacking stops, so the
+    // next setup or disconnect can pass the same ownership checks. Other files are left alone.
+    putInPlace(Buffer.from(content), file)
   }
   return dir
 }
@@ -608,8 +614,11 @@ async function marketplacePreflight(id: 'claude-code' | 'codex', at: Place, was:
       const root = claude ? market.path : market.root
       if (claude && market.source !== 'directory') return conflict
       if (!was || !placed(was) || typeof root !== 'string' || !path.isAbsolute(root) || real(root) !== real(addonDir(id))) return conflict
+      if (!lstatSync(root).isDirectory()) return conflict
       // Read before unpacking: unpacking must not erase evidence of another plugin in this marketplace.
-      const manifest = readJson<{ name?: unknown; plugins?: unknown }>(path.join(root, claude ? '.claude-plugin' : '.agents/plugins', 'marketplace.json'))
+      const file = path.join(root, claude ? '.claude-plugin' : '.agents/plugins', 'marketplace.json')
+      if (lookAt(root, file).is !== 'file') return retry
+      const manifest = readJson<{ name?: unknown; plugins?: unknown }>(file)
       if (manifest?.name !== MARKET) return retry
       const entries = list(manifest.plugins)
       if (entries.length !== 1 || entries[0]?.name !== PLUGIN) return conflict

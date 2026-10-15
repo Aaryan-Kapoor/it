@@ -1636,6 +1636,152 @@ describe('managed plugin and marketplace ownership', () => {
   ]
   const mutations = (bin: string) => commands(bin).filter((command) => /\b(?:uninstall|remove|add|install|enable)\b/.test(command))
 
+  const interruptedUnpack = async (id: 'claude-code' | 'codex', rel: string, boundary: string) => {
+    const target = path.join(process.env.IT_HOME!, 'addons', id, rel)
+    const original = { open: fs.openSync, write: fs.writeFileSync, rename: fs.renameSync }
+    let descriptor: number | undefined
+    let stopped = false
+    fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+      const fd = original.open(...args)
+      if (String(args[0]).startsWith(`${target}.`) && String(args[0]).endsWith('.part')) descriptor = fd
+      return fd
+    }) as typeof fs.openSync
+    fs.writeFileSync = ((file, data, ...options) => {
+      if ((file === descriptor || String(file) === target) && boundary === 'during the write') {
+        original.write(file, String(data).slice(0, 12), ...options)
+        stopped = true
+        throw new Error('the program stopped during unpacking')
+      }
+      return original.write(file, data, ...options)
+    }) as typeof fs.writeFileSync
+    fs.renameSync = ((from, to) => {
+      const selected = String(to) === target
+      if (selected && boundary === 'before the rename') {
+        stopped = true
+        throw new Error('the program stopped during unpacking')
+      }
+      original.rename(from, to)
+      if (selected && boundary === 'after the rename') {
+        stopped = true
+        throw new Error('the program stopped during unpacking')
+      }
+    }) as typeof fs.renameSync
+    syncBuiltinESMExports()
+    try {
+      await expect(connect(id, () => {})).rejects.toThrow('the program stopped during unpacking')
+    } finally {
+      fs.openSync = original.open
+      fs.writeFileSync = original.write
+      fs.renameSync = original.rename
+      syncBuiltinESMExports()
+    }
+    expect(stopped).toBe(true)
+  }
+
+  test.each(
+    apps.flatMap((app) =>
+      [app.manifest, app.id === 'codex' ? 'plugins/it-bridge/it-home.json' : 'it-bridge/it-home.json'].flatMap((rel) =>
+        ['during the write', 'before the rename', 'after the rename'].flatMap((boundary) =>
+          ['reconnect', 'disconnect'].map((recovery) => ({ ...app, rel, boundary, recovery })),
+        ),
+      ),
+    ),
+  )('$bin can $recovery after unpacking $rel stops $boundary', async ({ id, bin, manifest, rel, boundary, recovery }) => {
+    await connect(id, () => {})
+    const dir = path.join(process.env.IT_HOME!, 'addons', id)
+    const record = noted(id)
+    record.installs[0]!.version = 'previous-version'
+    put(stampFile(id), JSON.stringify(record))
+    const note = path.join(dir, id === 'codex' ? 'plugins/it-bridge/it-home.json' : 'it-bridge/it-home.json')
+    const target = path.join(dir, rel)
+    const intended = read(target)
+    put(target, JSON.stringify({ ...JSON.parse(intended), previousVersion: true }))
+    const before = { manifest: read(path.join(dir, manifest)), note: read(note) }
+    ran = []
+    await interruptedUnpack(id, rel, boundary)
+    expect(read(path.join(dir, manifest))).toBe(boundary === 'after the rename' && rel === manifest ? intended : before.manifest)
+    expect(read(note)).toBe(boundary === 'after the rename' && target === note ? intended : before.note)
+    expect(mutations(bin)).toEqual([])
+    expect(kept[bin]!.get(folderOf(bin))).toEqual({ from: dir, on: true })
+    expect(noted(id).installs[0]!.version).toBe('installing')
+    if (recovery === 'reconnect') expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+    expect(await disconnect(id, () => {})).toBe(true)
+    expect(existsSync(stampFile(id))).toBe(false)
+  })
+
+  test.each(apps.flatMap((app) => ['foreign root', 'shared manifest'].map((replacement) => ({ ...app, replacement }))))(
+    '$bin refuses a $replacement after unpacking was interrupted',
+    async ({ id, bin, manifest, replacement }) => {
+      await connect(id, () => {})
+      const record = noted(id)
+      record.installs[0]!.version = 'previous-version'
+      put(stampFile(id), JSON.stringify(record))
+      await interruptedUnpack(id, manifest, 'during the write')
+      const dir = path.join(process.env.IT_HOME!, 'addons', id)
+      const file = path.join(dir, manifest)
+      if (replacement === 'foreign root') {
+        const foreign = path.join(tmp, 'foreign-marketplace')
+        put(path.join(foreign, manifest), read(file))
+        kept[bin]!.get(folderOf(bin))!.from = foreign
+      } else {
+        const contents = JSON.parse(read(file))
+        contents.plugins.push({ name: 'personal-plugin', source: './personal-plugin' })
+        put(file, JSON.stringify(contents))
+      }
+      const saved = read(file)
+      const savedRecord = read(stampFile(id))
+      ran = []
+      expect((await connect(id, () => {})).addon).toBe('error')
+      expect(await disconnect(id, () => {})).toBe(false)
+      expect(mutations(bin)).toEqual([])
+      expect(read(file)).toBe(saved)
+      expect(read(stampFile(id))).toBe(savedRecord)
+    },
+  )
+
+  test.each(apps.flatMap((app) => ['missing', 'malformed'].map((manifestState) => ({ ...app, manifestState }))))(
+    '$bin refuses a $manifestState manifest even with an installing record',
+    async ({ id, bin, manifest, manifestState }) => {
+      await connect(id, () => {})
+      const record = noted(id)
+      record.installs[0]!.version = 'installing'
+      put(stampFile(id), JSON.stringify(record))
+      const file = path.join(process.env.IT_HOME!, 'addons', id, manifest)
+      if (manifestState === 'missing') rmSync(file)
+      else put(file, '{')
+      const savedRecord = read(stampFile(id))
+      ran = []
+      expect((await connect(id, () => {})).addon).toBe('error')
+      expect(await disconnect(id, () => {})).toBe(false)
+      expect(mutations(bin)).toEqual([])
+      expect(read(stampFile(id))).toBe(savedRecord)
+      if (manifestState === 'missing') expect(existsSync(file)).toBe(false)
+      else expect(read(file)).toBe('{')
+    },
+  )
+
+  test.each(apps.flatMap((app) => ['source folder', 'manifest folder'].map((replacement) => ({ ...app, replacement }))))(
+    '$bin refuses a $replacement replaced with a link to another folder',
+    async ({ id, bin, manifest, replacement }) => {
+      await connect(id, () => {})
+      const dir = path.join(process.env.IT_HOME!, 'addons', id)
+      const file = path.join(dir, manifest)
+      const saved = read(file)
+      const savedRecord = read(stampFile(id))
+      const target = replacement === 'source folder' ? dir : path.dirname(file)
+      const foreign = path.join(tmp, 'foreign-marketplace')
+      renameSync(target, foreign)
+      symlinkSync(foreign, target, 'junction')
+      ran = []
+      expect((await connect(id, () => {})).addon).toBe('error')
+      expect(await disconnect(id, () => {})).toBe(false)
+      expect(mutations(bin)).toEqual([])
+      expect(read(file)).toBe(saved)
+      expect(read(stampFile(id))).toBe(savedRecord)
+      expect(lstatSync(target).isSymbolicLink()).toBe(true)
+    },
+  )
+
   test.each(apps.flatMap((app) => [true, false].map((plugin) => ({ ...app, plugin }))))(
     '$bin leaves a foreign marketplace and its plugin=$plugin unchanged even if installation would fail',
     async ({ id, bin, plugin, install }) => {
