@@ -1921,7 +1921,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
         return [200, url.pathname === '/session' ? { ok: true } : { clicks: [] }]
       }
       const runtime = body.addon === undefined ? undefined : runtimes.hear(harness, body.instance, body.addon)
-      if (body.addon !== undefined && runtime?.state !== 'active') return [200, { ok: false, clicks: [], runtime }]
+      const blocked = body.addon !== undefined && runtime?.state !== 'active'
+      // The session metadata still uses this API when only the loaded build is stale.
+      if (blocked && (!runtime || body.addon.api !== 1)) return [200, { ok: false, clicks: [], runtime }]
       const key = keyOf(harness, id)
       // An add-on that can see which folder its conversation is held in says so, and it is noted
       // here: where the app runs the agent's commands with It's folder shut to them (Codex does),
@@ -1929,6 +1931,28 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // could never be reopened.
       if (typeof body.folder === 'string' && body.folder.length <= 4096 && path.isAbsolute(body.folder))
         noteConversation({ harness, id }, body.folder, readProfile(harness, body.profile) ?? null)
+      let changed = false
+      // A conversation that is here under its own id is not somewhere else under another
+      if (aliases.delete(key)) changed = true
+      if (typeof body.was === 'string' && body.was && body.was !== id && body.was.length <= 200) {
+        const was = keyOf(harness, body.was)
+        if (!conversationProfile({ harness, id })) {
+          const previous = { harness, id: body.was }
+          const folder = conversationFolder(previous)
+          const profile = readProfile(harness, conversationProfile(previous))
+          if (folder && profile) noteConversation({ harness, id }, folder, profile)
+        }
+        // Whatever led to the old id leads straight to the new one, so no chain grows
+        for (const [from, to] of aliases) if (to === was) aliases.set(from, key)
+        aliases.set(was, key)
+        while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
+        changed = true
+      }
+      if (changed) writePrivate(aliasFile(), Object.fromEntries(aliases))
+      if (blocked) {
+        if (changed) watch()
+        return [200, { ok: false, clicks: [], runtime }]
+      }
       // An add-on that speaks is one its app lets run. Where the last look found it waiting for
       // the person's yes, as Codex has an add-on's hooks wait, that has been given since: the
       // machine is looked at again now, and not at the next half hour, until when `it status`
@@ -1955,24 +1979,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
       }
       sessions.set(key, s)
       if (isNew && (harness === 'codex' || harness === 'claude-code')) noteHeard(key)
-      let changed = false
-      // A conversation that is here under its own id is not somewhere else under another
-      if (aliases.delete(key)) changed = true
-      if (typeof body.was === 'string' && body.was && body.was !== id && body.was.length <= 200) {
-        const was = keyOf(harness, body.was)
-        if (!conversationProfile({ harness, id })) {
-          const previous = { harness, id: body.was }
-          const folder = conversationFolder(previous)
-          const profile = readProfile(harness, conversationProfile(previous))
-          if (folder && profile) noteConversation({ harness, id }, folder, profile)
-        }
-        // Whatever led to the old id leads straight to the new one, so no chain grows
-        for (const [from, to] of aliases) if (to === was) aliases.set(from, key)
-        aliases.set(was, key)
-        while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
-        changed = true
-      }
-      if (changed) writePrivate(aliasFile(), Object.fromEntries(aliases))
       // The harness as It knows it, and never as whoever asked spelled it
       if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
       if (changed && typeof body.was === 'string') say(`${a(agentOf(harness))} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)

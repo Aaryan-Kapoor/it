@@ -501,6 +501,22 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(conversationProfile({ harness: 'codex', id: 'thread-1' })).toBeUndefined()
   })
 
+  test('an incompatible build keeps an authenticated session move without listening for clicks', async () => {
+    standIn()
+    await start()
+    const report = {
+      harness: 'pi',
+      session: 'session-new',
+      was: 'session-old',
+      instance: 'loaded-one',
+      addon: { api: 1, version: 'old-build', delivery: true, idle: true },
+    }
+    expect(await local('/session', { method: 'POST', body: report })).toMatchObject({ ok: false })
+    expect(readJson<Record<string, string>>(path.join(home, 'aliases.json'))?.['pi:session-old']).toBe('pi:session-new')
+    expect((await local<{ sessions: unknown[] }>('/health'))?.sessions).toEqual([])
+    expect(stand.calls.filter((c) => c.name === 'delivery:claim')).toEqual([])
+  })
+
   test('Stale loaded code receives no clicks and its status names the repair.', async () => {
     standIn()
     await start()

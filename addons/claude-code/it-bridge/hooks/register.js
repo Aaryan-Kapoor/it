@@ -378,16 +378,16 @@ export function register(on) {
     return entered
   })
   on('session.start', async ($, e, next) => {
+    // Keep reporting a missing delivery API for as long as this process stays open.
+    if (!ticking && typeof $.clock?.every === 'function') {
+      ticking = true
+      $.clock.every(1000, () => check($).catch(() => {}))
+    }
     if (!addon($).delivery) {
       await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon($) })
       return next(e)
     }
     running = false
-    // One timer, however often a session starts in this process
-    if (!ticking) {
-      ticking = true
-      $.clock.every(1000, () => check($).catch(() => {}))
-    }
     return next(e)
   })
   on('session.end', async (_$, e, next) => {

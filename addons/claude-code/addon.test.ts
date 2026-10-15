@@ -224,6 +224,20 @@ describe('the Claude Code add-on', () => {
     expect(describeClick({ ...fault, payload: null })).toContain('an error it gave no words for')
   })
 
+  test('keeps reporting when the submission API was missing as the session started', async () => {
+    vi.resetModules()
+    const { register } = await import('./it-bridge/hooks/register.js')
+    const host = fakeHost()
+    delete (host.$.prompt as { submit?: unknown }).submit
+    register(host.on)
+    await host.fire('session.start')
+    await host.tick()
+    await host.tick()
+    expect(asked.filter((a) => a.path === '/addon')).toHaveLength(3)
+    expect(host.submits).toEqual([])
+    expect(acks()).toEqual([])
+  })
+
   test('reports a missing submission API without taking a click', async () => {
     const host = await start()
     delete (host.$.prompt as { submit?: unknown }).submit
