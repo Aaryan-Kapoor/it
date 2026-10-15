@@ -26,6 +26,7 @@ import { ConvexError } from 'convex/values'
 import { importJWK, type JWK, SignJWT } from 'jose'
 import { agentAppsAbove } from './ancestry'
 import { CODEX_SHUT_SAID } from './codex-settings'
+import { keepOriginal, putAbsent, restoreAbsent } from './preserve'
 import { added, shellEnv } from './shell-env'
 
 export const VERSION = '0.1.22'
@@ -196,22 +197,18 @@ export function writeFlushed(file: string, text: string): void {
  * nothing of it is left. An ordinary file is then removed; a symlink and its empty target
  * remain. True where the file was changed.
  *
- * The new text is written beside the file with every byte on the disk, under the file's own
- * permissions, and is given the file's name only where the file still holds, the moment before,
- * what the change was made from. A file that is a link is written where the link leads. Where
- * the file holds something else by then, another program saved it while this was at work, and
- * the change is made anew to what it holds now: given its name all the same, the first result
- * would take that save back with nothing said, and a project the person had just trusted in
- * Codex would be untrusted again. Between that last look and the giving of the name an instant
- * is left that only the other program could close, by holding a lock that both keep to. A file
- * that is saved again every time is left as its last save made it, and that is an error.
+ * The new text is written and flushed first, under the original permissions. Changes noticed
+ * before replacement are retried. The original is then moved to a recovery folder, and the
+ * new file is published only if nobody has recreated its name. This is not a transaction with
+ * other programs: the file is briefly absent, and an interrupted change leaves the original
+ * in recovery. A symlink is kept, and its target is handled this way instead.
  */
-export function changeWhole(file: string, change: (text: string) => string | null | undefined): boolean {
+export function changeWhole(file: string, change: (text: string) => string | null | undefined, kept: (original: string) => void = () => {}): boolean {
   for (let tries = 1; ; tries++) {
     const named = lstatSync(file, { bigint: true })
     const linked = named.isSymbolicLink()
     const target = realpathSync(file)
-    const part = `${target}.it-${process.pid}.part`
+    const part = `${target}.it-${crypto.randomUUID()}.part`
     const stillNamed = () => {
       const now = lstatSync(file, { bigint: true })
       return now.dev === named.dev && now.ino === named.ino && realpathSync(file) === target
@@ -228,7 +225,7 @@ export function changeWhole(file: string, change: (text: string) => string | nul
     const mode = statSync(target).mode & 0o777
     try {
       if (after !== null) {
-        const out = openSync(part, 'w', mode)
+        const out = openSync(part, 'wx', mode)
         try {
           // Every byte, or an error: a disk that is nearly full takes a part of what it is given
           // and says so without failing, and a part is not what is given the file's name
@@ -254,8 +251,14 @@ export function changeWhole(file: string, change: (text: string) => string | nul
         readFileSync(target, 'utf8') === text &&
         stillNamed()
       ) {
-        if (after === null) rmSync(target, { force: true })
-        else renameSync(part, target)
+        const original = keepOriginal(target)
+        kept(original)
+        try {
+          if (after !== null) putAbsent(part, target)
+        } catch (err) {
+          restoreAbsent(original, target)
+          throw new Error(`${file} could not be replaced. Its original is kept at ${original}`, { cause: err })
+        }
         return true
       }
     } finally {

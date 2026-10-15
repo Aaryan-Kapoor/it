@@ -10,11 +10,12 @@ import {
   closeSync,
   constants,
   existsSync,
+  fchmodSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
-  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -28,7 +29,8 @@ import path from 'node:path'
 import { HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
 import { ADDONS, LICENSE } from './addons.generated'
 import { codexConfig } from './codex-settings'
-import { harnessEnv, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
+import { harnessEnv, home, inHome, Problem, readJson, VERSION, writePrivate } from './lib'
+import { keepOriginal, putAbsent, restoreAbsent } from './preserve'
 import { alone as oneAtATime } from './serve/backend'
 
 export type AddonState = 'connected' | 'not_connected' | 'needs_approval' | 'too_old' | 'unavailable' | 'error'
@@ -224,11 +226,6 @@ function lookAt(root: string, file: string): Found {
     return { is: absent(err) ? 'none' : 'closed' }
   }
 }
-/** Whether a file is there and holds just what this program put in it. */
-const asPut = (root: string, f: Put) => {
-  const now = lookAt(root, f.path)
-  return now.is === 'file' && now.sha256 === f.sha256
-}
 /**
  * Makes a folder inside a harness's folder, one step at a time. A step that is a link leading
  * out of the harness's folder is not gone through, so nothing is ever made on the far side of it.
@@ -253,17 +250,25 @@ function makeWithin(root: string, dir: string): void {
  * and the file of that name is made new by this very call and never opened through a link: what
  * is written can go nowhere but into that new file.
  */
-function putInPlace(data: Buffer, to: string): void {
+function putInPlace(data: Buffer, to: string, before?: () => string | undefined, mode?: number): void {
   const part = `${to}.${randomBytes(12).toString('hex')}.part`
   const made = openSync(part, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o666)
   try {
     try {
       writeFileSync(made, data)
+      if (mode !== undefined) fchmodSync(made, mode)
+      fsyncSync(made)
     } finally {
       closeSync(made)
     }
-    // Tried again for a little while on Windows, where a program that looks into every new file may have this one open for a moment
-    rename(part, to)
+    // Publish at a free name after preserving what occupied it.
+    const original = before?.()
+    try {
+      putAbsent(part, to)
+    } catch (err) {
+      if (original) restoreAbsent(original, to)
+      throw err
+    }
   } catch (err) {
     rmSync(part, { force: true })
     throw err
@@ -442,7 +447,12 @@ interface Adapter {
    */
   note?(at: Place): Promise<string | null>
   /** `wrote` is told, each time a file has been written, every file of the add-on that is this program's now. */
-  install(dir: string, at: Place, was: Installation | undefined, wrote: (files: Put[]) => void): Promise<Ran & { files?: Put[]; aside?: string[] }>
+  install(
+    dir: string,
+    at: Place,
+    was: Installation | undefined,
+    wrote: (files: Put[]) => void,
+  ): Promise<Ran & { files?: Put[]; aside?: string[]; recovery?: string[] }>
   /** Takes the add-on out. What it returns are the files it did not take out. */
   remove(at: Place, was?: Installation): Promise<Left | undefined>
   /** Something the person still has to do inside the harness, if anything. */
@@ -451,6 +461,7 @@ interface Adapter {
 
 /** The files of an add-on that a removal left where they were. */
 interface Left {
+  recovery?: string[]
   /** Changed by the person since they were put there, so theirs to keep or to take out. */
   changed: string[]
   /** Could not be looked at, or could not be taken out. */
@@ -525,7 +536,7 @@ function withSkill(
   dir: string,
   was: Installation | undefined,
   wrote: (files: Put[]) => void,
-): Ran & { files?: Put[]; aside?: string[] } {
+): Ran & { files?: Put[]; aside?: string[]; recovery?: string[] } {
   if (!installed.ok) return installed
   const put = putFiles(
     root,
@@ -536,14 +547,14 @@ function withSkill(
     was,
     wrote,
   )
-  return { ok: put.err === undefined, out: installed.out, err: put.err ?? installed.err, files: put.files, aside: put.aside }
+  return { ok: put.err === undefined, out: installed.out, err: put.err ?? installed.err, files: put.files, aside: put.aside, recovery: put.recovery }
 }
 /** Takes the skill out again, where this program has a note of putting it there. An installation from before the skill was put beside the plugin has none, and nothing to take. */
 function withoutSkill(root: string, was: Installation | undefined): Left | undefined {
   if (!was?.files) return undefined
   const left = takeFiles(root, was.files)
   takeFolders(root, [path.dirname(SKILL_FILE)])
-  return left.changed.length || left.closed.length || left.outside.length ? left : undefined
+  return left.changed.length || left.closed.length || left.outside.length || left.recovery?.length ? left : undefined
 }
 
 const ADAPTERS: Partial<Record<Harness, Adapter>> = {
@@ -651,22 +662,6 @@ interface Copied {
   before?(at: Place, was: Installation | undefined): Promise<void>
 }
 
-/** Whether a folder holds nothing but files this program put there, unchanged, and what Python leaves beside code it has run. */
-function onlyOurs(root: string, dir: string, files: Put[]): boolean {
-  try {
-    return readdirSync(dir, { withFileTypes: true }).every((entry) => {
-      const full = path.join(dir, entry.name)
-      // What Python leaves is compiled code and nothing else: any other file kept there is the person's
-      if (entry.isDirectory() && entry.name === '__pycache__')
-        return readdirSync(full, { withFileTypes: true }).every((left) => left.isFile() && left.name.endsWith('.pyc'))
-      if (entry.isDirectory()) return onlyOurs(root, full, files)
-      return files.some((f) => f.path === full && asPut(root, f))
-    })
-  } catch {
-    return false
-  }
-}
-
 /** A file an add-on is to have in a harness's folder: where, and what it holds. */
 interface Wanted {
   to: string
@@ -688,8 +683,9 @@ function putFiles(
   wanted: () => Wanted[],
   was: Installation | undefined,
   wrote: (files: Put[]) => void,
-): { files: Put[]; aside: string[]; err?: string } {
+): { files: Put[]; aside: string[]; recovery: string[]; err?: string } {
   const kept: string[] = []
+  const recovery: string[] = []
   // The files that are this program's: what the last install left, and then each file this
   // one writes, from the moment it has been written and no sooner
   const mine = new Map((was?.files ?? []).map((f) => [f.path, f.sha256]))
@@ -710,15 +706,21 @@ function putFiles(
       const own = now.is === 'file' && mine.get(f.to) === now.sha256
       if (own && now.sha256 === f.sha256) continue
       makeWithin(root, path.dirname(f.to))
-      // Whatever is there that this program did not put there, or that has been changed
-      // since, is the person's, though it hold the very same words
-      if (now.is !== 'none' && !own) {
-        const name = aside(f.to)
-        renameSync(f.to, name)
-        mine.delete(f.to)
-        kept.push(name)
-      }
-      putInPlace(f.data, f.to)
+      const mode = now.is === 'file' ? statSync(f.to).mode & 0o777 : undefined
+      putInPlace(
+        f.data,
+        f.to,
+        () => {
+          if (now.is === 'none') return undefined
+          // Moving the actual entry captures a save after the checksum, even an atomic save.
+          const name = own ? keepOriginal(f.to) : aside(f.to)
+          if (!own) renameSync(f.to, name)
+          mine.delete(f.to)
+          ;(own ? recovery : kept).push(name)
+          return name
+        },
+        mode,
+      )
       mine.set(f.to, f.sha256)
       wrote(noted())
     }
@@ -726,12 +728,12 @@ function putFiles(
     for (const [file, sha256] of [...mine]) {
       if (files.some((f) => f.to === file)) continue
       const now = lookAt(root, file)
-      if (now.is === 'file' && now.sha256 === sha256) rmSync(file, { force: true })
+      if (now.is === 'file' && now.sha256 === sha256) recovery.push(keepOriginal(file))
       if (now.is !== 'closed') mine.delete(file)
     }
-    return { files: noted(), aside: kept }
+    return { files: noted(), aside: kept, recovery }
   } catch (err) {
-    return { files: noted(), aside: kept, err: (err as Error).message }
+    return { files: noted(), aside: kept, recovery, err: (err as Error).message }
   }
 }
 
@@ -748,7 +750,8 @@ function takeFiles(root: string, files: Put[]): Left {
     if (now.is !== 'file' || now.sha256 !== f.sha256) leaveAs(left, f.path, now)
     else
       try {
-        rmSync(f.path)
+        left.recovery ??= []
+        left.recovery.push(keepOriginal(f.path))
       } catch (err) {
         if (!absent(err)) left.closed.push(f.path)
       }
@@ -807,8 +810,8 @@ function copied(id: Harness, c: Copied): Adapter {
         was,
         wrote,
       )
-      if (put.err !== undefined) return { ok: false, out: '', err: put.err, files: put.files, aside: put.aside }
-      return { ...((await c.after?.(at)) ?? { ok: true, out: '', err: '' }), files: put.files, aside: put.aside }
+      if (put.err !== undefined) return { ok: false, out: '', err: put.err, files: put.files, aside: put.aside, recovery: put.recovery }
+      return { ...((await c.after?.(at)) ?? { ok: true, out: '', err: '' }), files: put.files, aside: put.aside, recovery: put.recovery }
     },
     async remove(at, was) {
       const root = at.dir!
@@ -936,14 +939,10 @@ Object.assign(ADAPTERS, {
     after(at) {
       return run('hermes', ['plugins', 'enable', PLUGIN], 60_000, envAt(this.profile, at))
     },
-    async before(at, was) {
-      // Hermes's own command for removing a plugin takes the plugin's folder away whole, and
-      // with it the person's permission for the plugin in their settings. It is used when that
-      // folder holds nothing but what this program put there. When the person has changed or
-      // added something in it, the plugin is switched off with Hermes's own command instead,
-      // and only this program's files are taken out.
-      const whole = was?.files !== undefined && onlyOurs(at.dir!, path.join(at.dir!, 'plugins', PLUGIN), was.files)
-      await run('hermes', ['plugins', whole ? 'remove' : 'disable', PLUGIN], 60_000, envAt(this.profile, at))
+    async before(at) {
+      // A whole-folder removal can erase files saved after an ownership check. Disable it
+      // through Hermes and preserve each copied file ourselves, leaving every other entry.
+      await run('hermes', ['plugins', 'disable', PLUGIN], 60_000, envAt(this.profile, at))
     },
   }),
 } satisfies Partial<Record<Harness, Adapter>>)
@@ -1264,6 +1263,12 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
         : `${found} ${one ? 'was' : 'were'} in the add-on’s place. Nothing was written over: ${one ? 'it is' : 'each is'} kept beside the add-on, as ${r.aside.join(', ')}`,
     )
   }
+  if (r.recovery?.length)
+    say(
+      forLog
+        ? `${label}: ${r.recovery.length} originals were kept for recovery`
+        : `${label}: originals are kept for recovery at ${r.recovery.join(', ')}. Review them before removing their numbered folders`,
+    )
   if (!r.ok) {
     if (r.files) keep(id, noted('installing', r.files))
     return { id, version: before.version, addon: 'error', detail: (r.err || r.out).split('\n').slice(-3).join(' ').slice(0, 200) }
@@ -1316,6 +1321,12 @@ export async function disconnect(
         )
       } else {
         const stayed = await adapter.remove(at, was)
+        if (stayed?.recovery?.length)
+          say(
+            forLog
+              ? `${label}: ${stayed.recovery.length} originals were kept for recovery`
+              : `${label}: originals are kept for recovery at ${stayed.recovery.join(', ')}. Review them before removing their numbered folders`,
+          )
         if (stayed?.nowhere) {
           say(
             `${label}: It has a note of putting its add-on there that does not say where ${label} kept its settings then, and no add-on of It’s is where ${label} keeps them now. Nothing was touched, and the note is kept`,

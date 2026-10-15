@@ -1,6 +1,6 @@
 # What It keeps
 
-Everything It keeps is in one folder, `~/.it`, which only your user can look inside. `IT_HOME` names another folder for it. That folder is the only copy of your pages and of the record of what was done on them, and nothing of them is kept off the machine. The one other place It keeps anything is the browsers you pair, and [What a paired browser keeps](#what-a-paired-browser-keeps) says what.
+Your pages and It's own records are in one folder, `~/.it`, which only your user can look inside. `IT_HOME` names another folder for it. That folder is the only copy of your pages and of the record of what was done on them, and nothing of them is kept off the machine. Add-ons and recovery originals also live beside your agent apps and shell files, as described below. The browsers you pair keep their own share, and [What a paired browser keeps](#what-a-paired-browser-keeps) says what.
 
 ## Where everything is kept
 
@@ -29,6 +29,16 @@ Three things about the folder are worth knowing.
 - **It never moves, replaces or deletes a database.** One that the backend program cannot open is left exactly where it is: It stops, and says what it found. Under `backend/` it removes, renames and writes over nothing that it did not make, whatever it is called. [When something does not work](troubleshooting.md) says what each such stop means.
 - **The folder has to be on a disk of the computer's own.** A memory stick or a network share may not let It make its settings and its locks in the way it needs, and there It stops with `home_unfit`: name a folder on the computer's own disk with `IT_HOME`.
 - **On Linux and macOS the folder's path can be at most 85 bytes long.** In a folder with a longer one the connector, which hands clicks to your agents, does not start, and says `home_too_long`.
+
+## Recovery originals
+
+Before It replaces or removes a settings file, shell profile or file it previously copied into an agent app, it moves that original into `<file>.it-recovery/<number>/original` beside it. For a linked shell profile this folder is beside its target, and the symlink stays in place. It reports the recovery path at the terminal. Service logs report only the number of originals.
+
+Each file has 20 numbered recovery slots. Originals do not expire. Erasing pages leaves them alone, and uninstall leaves them beside the external files they came from. If you deliberately keep an app's settings or a profile target inside `IT_HOME`, uninstall deletes that folder and the originals inside it too. A change that needs a twenty-first slot stops until you review the originals and remove numbered folders you no longer need. An interrupted change can leave an empty numbered folder, which also uses a slot. A change that leaves the file identical uses none. Existing user files already kept under `.set-aside-by-it` names stay until you remove them too.
+
+To recover a change, close the app or editor that writes the file, compare the reported original with the current file, and copy back the parts you need. If an interrupted operation left the file absent, copy the original back to its former name. Review it first: restoring the whole original also restores It's entries. After checking the result, remove only the numbered folders you no longer need, leaving `owner.json` in the recovery folder.
+
+The original keeps its permissions. The recovery directory is private to your account on macOS and Linux; on Windows it inherits the parent folder's access rules. Originals can hold private settings and remain readable to anyone who can read those files. They are on the same disk and are not a backup against disk failure. There is a brief gap between moving the original and placing the new file. If another program creates a file at that name in the gap, It leaves that save in place and stops the replacement. Apps that install or remove their own plugins handle their own files; this recovery policy covers the files It edits or copies itself.
 
 ## Backing it up
 

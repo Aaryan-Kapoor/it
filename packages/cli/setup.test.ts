@@ -224,10 +224,11 @@ const put = (file: string, text: string) => {
   mkdirSync(path.dirname(file), { recursive: true })
   writeFileSync(file, text)
 }
-/** Every file under a folder, by its name from there, written with forward slashes on every system. */
+/** Installed files, excluding separately asserted recovery folders, named with forward slashes. */
 const under = (dir: string, base = dir): string[] =>
   existsSync(dir)
     ? readdirSync(dir, { withFileTypes: true })
+        .filter((e) => !e.name.endsWith('.it-recovery'))
         .flatMap((e) => (e.isDirectory() ? under(path.join(dir, e.name), base) : [path.relative(base, path.join(dir, e.name)).split(path.sep).join('/')]))
         .sort()
     : []
@@ -352,7 +353,7 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(commands('hermes')).not.toContain('plugins remove it-bridge')
   })
 
-  test('Hermes’s own command removes the plugin when its folder holds nothing but what It put there, and the skill’s folder goes once it is empty', async () => {
+  test('Hermes is disabled and its copied files are kept for recovery, without deleting the plugin folder', async () => {
     const folder = folderOf('hermes')
     expect((await connect('hermes', () => {})).addon).toBe('connected')
     expect(under(folder)).toEqual([
@@ -365,9 +366,10 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     // Python leaves this beside code it has run: it is nobody's file
     put(path.join(folder, 'plugins/it-bridge/__pycache__/__init__.cpython-312.pyc'), 'compiled')
     expect(await disconnect('hermes', () => {})).toBe(true)
-    expect(commands('hermes')).toContain('plugins remove it-bridge')
-    expect(under(folder)).toEqual([])
-    expect(existsSync(path.join(folder, 'skills/it'))).toBe(false)
+    expect(commands('hermes')).toContain('plugins disable it-bridge')
+    expect(commands('hermes')).not.toContain('plugins remove it-bridge')
+    expect(under(folder)).toEqual(['plugins/it-bridge/__pycache__/__init__.cpython-312.pyc'])
+    expect(read(path.join(folder, 'skills/it/SKILL.md.it-recovery/1/original'))).toBe(SKILL)
     // Hermes's own skills folder is never removed
     expect(existsSync(path.join(folder, 'skills'))).toBe(true)
   })
@@ -452,7 +454,7 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(read(`${plugin}.set-aside-by-it-2`)).toBe('changed again')
   })
 
-  test('a newer version replaces the files It put there, keeps aside none of them, and takes away a file It put there that the add-on does not have', async () => {
+  test('a newer version preserves replaced and obsolete files for recovery', async () => {
     const folder = folderOf('opencode')
     const plugin = path.join(folder, 'plugins/it-bridge.js')
     await connect('opencode', () => {})
@@ -474,8 +476,67 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect((await connect('opencode', say)).addon).toBe('connected')
     expect(under(folder)).toEqual(['plugins/it-bridge.js', 'skills/it/SKILL.md', 'skills/it/it-home.json'])
     expect(read(plugin)).toContain('The It add-on for OpenCode')
-    expect(said).toEqual(['connecting OpenCode'])
+    expect(read(`${plugin}.it-recovery/1/original`)).toBe('another version')
+    expect(read(`${gone}.it-recovery/1/original`)).toBe('a file of another version')
+    expect(said.join('\n')).toContain(`${plugin}.it-recovery`)
+    expect(said.join('\n')).toContain(`${gone}.it-recovery`)
     expect(noted('opencode').installs.map((i) => i.version)).toEqual([ADDONS.opencode!.version])
+  })
+
+  test.each(['replace', 'obsolete', 'remove'])('keeps a last-moment external save during copied-file %s', async (operation) => {
+    await connect('opencode', () => {})
+    const folder = folderOf('opencode')
+    const file = path.join(folder, operation === 'obsolete' ? 'plugins/old.js' : 'plugins/it-bridge.js')
+    const before = noted('opencode')
+    if (operation !== 'remove') {
+      put(file, 'an earlier version')
+      before.installs[0]!.version = 'another-version'
+      before.installs[0]!.files = [...before.installs[0]!.files!.filter((f) => f.path !== file), { path: file, sha256: sha('an earlier version') }]
+      writeFileSync(stampFile('opencode'), JSON.stringify(before))
+    }
+    const rename = fs.renameSync
+    let saved = false
+    fs.renameSync = (from, to) => {
+      if (from === realpathSync(path.dirname(file)) + path.sep + path.basename(file)) {
+        saved = true
+        writeFileSync(file, 'the final external save')
+      }
+      return rename(from, to)
+    }
+    syncBuiltinESMExports()
+    const { said, say } = lines()
+    try {
+      if (operation === 'remove') expect(await disconnect('opencode', say)).toBe(true)
+      else expect((await connect('opencode', say)).addon).toBe('connected')
+    } finally {
+      fs.renameSync = rename
+      syncBuiltinESMExports()
+    }
+    expect(saved).toBe(true)
+    expect(read(`${file}.it-recovery/1/original`)).toBe('the final external save')
+    expect(said.join('\n')).toContain(`${file}.it-recovery`)
+    expect(said.join('\n')).not.toContain('the final external save')
+  })
+
+  test('leaves a file created in the Hermes folder just before its removal command', async () => {
+    await connect('hermes', () => {})
+    const file = path.join(folderOf('hermes'), 'plugins/it-bridge/new-notes.txt')
+    const run = fake.execFile.getMockImplementation()!
+    fake.execFile.mockImplementation((bin, args, ...rest) => {
+      if (bin === 'hermes' && args.join(' ') === 'plugins disable it-bridge') put(file, 'new notes')
+      return run(bin, args, ...rest)
+    })
+    expect(await disconnect('hermes', () => {})).toBe(true)
+    expect(read(file)).toBe('new notes')
+    expect(commands('hermes')).not.toContain('plugins remove it-bridge')
+  })
+
+  test('reports recovery counts without paths or contents in service logs', async () => {
+    await connect('opencode', () => {})
+    const { said, say } = lines()
+    expect(await disconnect('opencode', say, {}, true)).toBe(true)
+    expect(said.join('\n')).toContain('originals were kept for recovery')
+    expect(said.join('\n')).not.toContain(tmp)
   })
 
   test('an install that stops half way leaves a note of every file it wrote, and they are removed with it', async () => {
@@ -543,7 +604,7 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
     expect(said.filter((line) => /set aside|kept beside|had not put there/.test(line))).toEqual([])
     expect(under(path.dirname(skill))).toEqual(['SKILL.md'])
     expect(await disconnect(id, () => {})).toBe(true)
-    expect(existsSync(path.dirname(skill))).toBe(false)
+    expect(read(`${skill}.it-recovery/1/original`)).toBe(SKILL)
     expect(existsSync(stampFile(id))).toBe(false)
   })
   test.each(APPS)('where $label is told to keep its settings elsewhere, the skill goes there', async ({ id, bin, variable }) => {
@@ -556,7 +617,7 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
     vi.stubEnv(variable, '')
     delete process.env[variable]
     expect(await disconnect(id, () => {})).toBe(true)
-    expect(existsSync(path.join(elsewhere, 'skills/it'))).toBe(false)
+    expect(read(path.join(elsewhere, 'skills/it/SKILL.md.it-recovery/1/original'))).toBe(SKILL)
   })
   test.each(APPS)(
     'a skill of that name the person had in $label is kept under another name, and what they keep beside it is left alone',

@@ -54,6 +54,10 @@ It's folder, `~/.it`, is made so that only your user can look inside it, and eac
 
 A machine's key is made on that machine, and its private half never leaves it. A machine proves itself by signing a statement that is good for one use, and is given a token for five minutes. Revoking a machine on the site takes effect on its next call.
 
+### Changes to shared files keep a way back
+
+When It changes a shell profile or Codex's settings, or replaces or removes files it copied into an agent app, it keeps the original file at a named recovery path beside it. An edit saved just before It moves that file goes with the original. A file another writer creates at the vacated name is left in place. Linked profiles keep their symlink, and the target and its original keep their file permissions. [Recovery originals](data.md#recovery-originals) explains how to restore them and the limit of 20 originals per file.
+
 ### What is uploaded is what was declared
 
 An agent publishes a page by declaring its files, each with its size and checksum, and is given leave to upload exactly those. A file that was not declared, or does not match what was declared, is refused, and a page is switched to a new version only when every file of it has been checked on the disk.
@@ -69,6 +73,10 @@ One file beside the log is not like it. While a conversation that It reopened is
 The backend program is fetched from its own release, and kept only if it matches a SHA-256 checksum written in It's source. `IT_BACKEND_RELEASES` names another place to fetch it from, which is an https address or this machine itself over plain http, and anything else it holds is refused before anything is asked. Whatever it names, what arrives is kept only if it matches that same checksum. The install script checks the program it downloads against the checksum published beside it. That second check guards against a damaged download and is not a signature: whoever could replace the program in a release could replace the checksum too.
 
 ## What It does not protect
+
+### Shared file edits are not a transaction with other apps
+
+It does not share a lock with your editor or agent app. A file is briefly absent between being moved to recovery and its replacement being placed. A crash then can leave only the recovery original, and another writer can change the current file or an open original again afterwards. It cannot promise that a series of saves by another program all survive. Close other writers before restoring an original. Recovery copies do not expire, can contain private settings, and remain beside external files after uninstall until you remove them. Files you placed inside `IT_HOME`, and originals beside them, are deleted with that folder. A full recovery folder stops further changes to that file. Plugins installed or removed by an app's own commands remain that app's responsibility.
 
 ### Other accounts on the same computer are not kept out
 

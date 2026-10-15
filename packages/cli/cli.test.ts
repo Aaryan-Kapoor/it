@@ -2261,7 +2261,8 @@ describe('a file that is not It’s alone, changed while another program may sav
       expect(after).toContain('[projects."/work"]\ntrust_level = "trusted"')
       expect(after).toContain('[hooks.state."other@market:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:bb"')
       expect(after).not.toContain('it-bridge@it')
-      expect(readdirSync(folder)).toEqual(['config.toml'])
+      expect(readdirSync(folder).sort()).toEqual(['config.toml', 'config.toml.it-recovery'])
+      expect(readFileSync(path.join(folder, 'config.toml.it-recovery/1/original'), 'utf8')).toBe(SAVED)
     } finally {
       rmSync(folder, { recursive: true, force: true })
     }
