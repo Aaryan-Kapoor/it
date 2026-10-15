@@ -816,12 +816,12 @@ describe('what ending a paired browser takes with it', () => {
       const owner = await ownerOf(t, machine)
       const first = await joined(t, owner.browser, 'laptop')
       await first.as.mutation(api.machines.leave, {})
+      let previousRequest: { code: string; name: string; publicKey: Awaited<ReturnType<typeof aPublicKey>>; replaces: string }
+      const retry = () => t.fetch('/bridge/enroll', { method: 'POST', body: JSON.stringify(previousRequest) })
       const enrollAgain = async (by: Asks) => {
         const invite = await by.mutation(api.sessions.inviteMachine, {})
-        return t.fetch('/bridge/enroll', {
-          method: 'POST',
-          body: JSON.stringify({ code: invite.code, name: 'laptop', publicKey: await aPublicKey(), replaces: first.id }),
-        })
+        previousRequest = { code: invite.code, name: 'laptop', publicKey: await aPublicKey(), replaces: first.id }
+        return retry()
       }
       const secondReply = await enrollAgain(owner.browser)
       expect(secondReply.status).toBe(200)
@@ -839,8 +839,14 @@ describe('what ending a paired browser takes with it', () => {
       expect(accepted.status).toBe(200)
       const heir = (await accepted.json()) as { machine: string; waitsFor: string }
       expect(heir.waitsFor).toBe('laptop')
+      expect(await (await retry()).json()).toEqual(heir)
+      // A second invite for the same key reaches the normal enrollment path.
+      previousRequest!.code = (await owner.browser.mutation(api.sessions.inviteMachine, {})).code
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(await (await retry()).json()).toEqual(heir)
       await owner.browser.mutation(api.machines.revoke, { machineId: second.machine as never })
       await settle(t)
+      expect(await (await retry()).json()).toEqual({ machine: heir.machine })
       expect(await alive(t.withIdentity({ issuer: SITE, subject: heir.machine, kind: 'machine' }))).toBe(true)
       expect(await alive(retained)).toBe(false)
       expect(await alive(owner)).toBe(true)

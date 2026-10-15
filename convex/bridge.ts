@@ -19,6 +19,15 @@ const activeOf = (ctx: MutationCtx, user: Doc<'users'>) =>
     .withIndex('by_user', (q) => q.eq('userId', user._id).eq('revoked', false))
     .take(QUOTA.machines)
 
+/** A lost enrollment response is answered from the stored identity, including any live predecessor. */
+async function recorded(ctx: MutationCtx, machine: Doc<'machines'>) {
+  const previous = machine.replaces ? await ctx.db.get(machine.replaces) : null
+  return {
+    machineId: machine._id,
+    ...(previous && previous.userId === machine.userId && !previous.revoked ? { waitsFor: previous.name } : {}),
+  }
+}
+
 /**
  * Records a new machine for a person. Says so when they already have as many as they may.
  * `by` is what asked for the code the machine enrolled with: nothing, for the machine the
@@ -34,7 +43,7 @@ async function record(
   // The same key asked for a second time is the same machine: the first answer was lost on
   // its way back, and the machine is asking again
   const same = active.find((x) => sameKey(x.publicKey, m.publicKey))
-  if (same) return { machineId: same._id }
+  if (same) return recorded(ctx, same)
   if (active.length >= QUOTA.machines) {
     log('enroll.refused', { userId: user._id, reason: 'machine_quota', have: active.length }, 'warn')
     return { error: 'limit' as const }
@@ -144,7 +153,7 @@ export const enrollInvited = internalMutation({
       // The code was used, by this very key: the answer was lost on its way back, and the machine is asking again
       const owner = await ctx.db.get(used.userId)
       const same = owner && !owner.deletedAt ? (await activeOf(ctx, owner)).find((x) => sameKey(x.publicKey, m.publicKey)) : undefined
-      if (same) return { machineId: same._id }
+      if (same) return recorded(ctx, same)
     }
     const named = await inviteFor(ctx, codeHash, ['machine'])
     if (!named) return { error: 'code' as const }
