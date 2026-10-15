@@ -52,7 +52,7 @@ beforeEach(() => {
   calls.length = 0
   for (const name of Object.keys(answers)) delete answers[name]
   answers['sessions:inviteScreen'] = () => ({ code: CODE, expiresAt: Date.now() + 600_000 })
-  watched = { 'displays:list': DISPLAYS }
+  watched = { 'displays:list': DISPLAYS, 'sessions:list': [], 'sessions:leftBehind': [] }
   localStorage.clear()
   sessionStorage.clear()
   // This stand-in browser has no notifications, and cannot say how the site is being shown
@@ -68,6 +68,23 @@ afterEach(async () => {
 
 describe('what each kind of session is offered', () => {
   const mine = DISPLAYS[0]!
+
+  test.each(['sessions:list', 'sessions:leftBehind'])('does not offer Forget before %s has answered', async (delayed) => {
+    const confirm = vi.fn(() => false)
+    vi.stubGlobal('confirm', confirm)
+    watched[delayed] = undefined
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    expect(button('Forget')).toBeUndefined()
+    expect(confirm).not.toHaveBeenCalled()
+    watched['sessions:list'] = []
+    watched['sessions:leftBehind'] = [{ display: 'display-2', along: { browsers: ['browser-child'], machines: ['machine-child'] } }]
+    await act(async () => root.render(createElement(Displays, { thisDisplay: 'display-1' })))
+    const row = [...host.querySelectorAll('li')].find((li) => li.textContent?.includes('Kitchen TV'))!
+    await act(async () => [...row.querySelectorAll('button')].find((b) => b.textContent === 'Forget')!.click())
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('1 paired browser and 1 machine'))
+    expect(calls).toEqual([])
+  })
 
   test('the owner may name and forget every display', async () => {
     vi.stubGlobal('confirm', () => true)
