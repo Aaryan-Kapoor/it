@@ -13,9 +13,10 @@
 // its own for It and takes everything away at its end, whatever became of the checks.
 import './node.mjs'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { holdBase } from '../packages/cli/test-ports.ts'
 
 const program = process.env.IT_BIN
 if (!program || !existsSync(program)) {
@@ -28,7 +29,8 @@ if (!process.env.CI && process.env.IT_E2E_SERVICE !== '1') {
 }
 const windows = process.platform === 'win32'
 const home = mkdtempSync(path.join(os.tmpdir(), 'it-service-'))
-const port = Number(process.env.IT_PORT ?? 4700)
+const heldPorts = await holdBase(Number(process.env.IT_PORT ?? 27_000), process.env.IT_PORT ? 1 : 20)
+const port = heldPorts.base
 const env = { ...process.env, IT_HOME: home, IT_PORT: String(port), IT_TELEMETRY_ENABLED: 'false' }
 for (const name of ['IT_SESSION', 'IT_HARNESS', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID']) delete env[name]
 
@@ -155,6 +157,44 @@ try {
   )
   if (!(second.code === 0 && second.json?.service?.registered === true && still)) why('after the second setup')
 
+  // A permanent startup failure must stop retries under the real supervisor too. No database
+  // is touched: only the settings file is made unreadable, and its exact bytes are restored.
+  const settings = path.join(home, 'service.json')
+  const savedSettings = readFileSync(settings)
+  const beforeFailure = it(['service', 'uninstall', '--json'], 180_000)
+  if (beforeFailure.code === 0) {
+    try {
+      writeFileSync(settings, '{not settings')
+      const failedStart = it(['service', 'install', '--json'])
+      const paused = await until(() => {
+        try {
+          return JSON.parse(readFileSync(path.join(home, 'startup.json'), 'utf8')).retryAt === null
+        } catch {
+          return false
+        }
+      }, 60_000)
+      await sleep(7000)
+      const afterFailure = it(['service', 'status', '--json']).json
+      check(
+        'a permanent startup failure stops automatic attempts and reports how to retry',
+        failedStart.code === 0 && paused && afterFailure?.startup?.paused === true && afterFailure.startup.failures === 1 && !(await answers()),
+        JSON.stringify(afterFailure),
+      )
+    } finally {
+      writeFileSync(settings, savedSettings)
+    }
+    const retried = it(['service', 'install', '--json'])
+    const recovered = await until(async () => (await answers()) && stands().running, 180_000, 2000)
+    check(
+      'an explicit retry starts the repaired service and clears its startup failure',
+      retried.code === 0 && recovered && !existsSync(path.join(home, 'startup.json')),
+      retried.said.slice(-600),
+    )
+  } else check('the service stops before a permanent startup failure is tested', false, beforeFailure.said.slice(-600))
+
+  const macDefinition = process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'LaunchAgents', 'dev.it.plist') : null
+  const savedDefinition = macDefinition ? readFileSync(macDefinition, 'utf8') : null
+
   // ---------- taken away ----------
   const off = it(['service', 'uninstall', '--json'], 180_000)
   const gone = await until(
@@ -172,6 +212,48 @@ try {
     `${off.said.slice(-600)}\nnow: ${JSON.stringify(stands())}`,
   )
 
+  // A real launchd job deliberately takes five seconds to stop. Replacing it exercises the
+  // unload boundary on macOS; the tests with a stand-in separately force several print polls.
+  if (macDefinition && savedDefinition && gone) {
+    const slow = path.join(home, 'slow-stop.mjs')
+    const ready = path.join(home, 'slow-ready')
+    const stopped = path.join(home, 'slow-stopped')
+    writeFileSync(
+      slow,
+      `import { writeFileSync } from 'node:fs'
+writeFileSync(${JSON.stringify(ready)}, String(process.pid))
+const keep = setInterval(() => {}, 1000)
+process.once('SIGTERM', () => {
+  clearInterval(keep)
+  setTimeout(() => { writeFileSync(${JSON.stringify(stopped)}, 'stopped'); process.exit(0) }, 5000)
+})
+`,
+    )
+    const xml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    writeFileSync(
+      macDefinition,
+      savedDefinition.replace(
+        /<key>ProgramArguments<\/key>\s*<array>[\s\S]*?<\/array>/,
+        `<key>ProgramArguments</key><array><string>${xml(process.execPath)}</string><string>${xml(slow)}</string><string>--log</string><string>${xml(path.join(home, 'logs', 'it.log'))}</string></array>`,
+      ),
+    )
+    registered = true
+    execFileSync('launchctl', ['bootstrap', `gui/${process.getuid()}`, macDefinition], { timeout: 30_000 })
+    const started = await until(() => existsSync(ready), 20_000, 100)
+    const began = Date.now()
+    const replacement = it(['service', 'install', '--json'])
+    const took = Date.now() - began
+    const back = await until(async () => (await answers()) && stands().running, 180_000, 2000)
+    check(
+      'launchd finishes a deliberately slow stop before the replacement starts',
+      started && replacement.code === 0 && took >= 5000 && existsSync(stopped) && back,
+      replacement.said.slice(-600),
+    )
+    const removed = it(['service', 'uninstall', '--json'], 180_000)
+    registered = removed.code !== 0
+    check('the replacement is removed after the slow-stop check', !registered, removed.said.slice(-600))
+  }
+
   const whole = it(['uninstall', '--yes', '--json'], 180_000)
   const emptied = await until(() => !existsSync(home), 20_000, 500)
   check(
@@ -181,7 +263,9 @@ try {
   )
 } finally {
   // Whatever became of the checks, nothing is left registered or running on the machine
-  if (registered) it(['service', 'uninstall', '--json'], 180_000)
+  const cleanup = registered ? it(['service', 'uninstall', '--json'], 180_000) : null
+  const stopped = !cleanup || cleanup.code === 0
+  if (!stopped) check('the test service is stopped during cleanup', false, cleanup.said.slice(-600))
   if (windows) {
     // What the uninstall left Windows to run at the next sign-in, which never comes on a machine made for a run
     try {
@@ -191,8 +275,9 @@ try {
     } catch {}
   }
   try {
-    rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+    if (stopped) rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
   } catch {}
+  await heldPorts.release()
 }
 const passed = results.filter((r) => r.ok).length
 console.log(`\n${passed} of ${results.length} passed`)

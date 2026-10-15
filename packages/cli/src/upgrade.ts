@@ -211,8 +211,9 @@ function saysItIs(program: string): Promise<string | null> {
     execFile(program, ['--version'], { timeout: 30_000, killSignal: 'SIGKILL', env: { ...process.env, IT_HOME: home() }, windowsHide: true }, (err, out) => {
       if (err) return resolve(null)
       try {
-        const version = (JSON.parse(String(out)) as { version?: unknown } | null)?.version
-        resolve(typeof version === 'string' ? version : null)
+        const said = (JSON.parse(String(out)) as { version?: unknown } | null)?.version
+        const version = typeof said === 'string' ? said.trim().replace(/^v/, '') : ''
+        resolve(/^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(version) ? version : null)
       } catch {
         resolve(null)
       }
@@ -241,6 +242,8 @@ export async function fetchNewer(
     say?: (line: string) => void
     progress?: (got: number, of: number | undefined) => void
     signal?: AbortSignal
+    /** The version the host approved for a site update. A changed latest release requires another approval. */
+    expectedVersion?: string
     /** The file to replace, where it is not the program this is: for a test, which is no standalone program. */
     program?: string
     /** How long the fetching may take, where it is not the usual: for a test, which does not wait so long. */
@@ -263,6 +266,12 @@ export async function fetchNewer(
   if (!name) throw new Problem(`There is no program of It for this system (${process.platform} ${process.arch}).`, 'invalid')
   const to = await latest(opts.signal)
   if (!to) throw new Problem('The newest version of It could not be learned.', 'offline', 'Check that this machine is online, then try again.')
+  if (opts.expectedVersion !== undefined && to !== opts.expectedVersion)
+    throw new Problem(
+      'The newest release changed after this update was requested, so nothing was changed.',
+      'upgrade_program',
+      'Refresh the Machines page and request the update again.',
+    )
   if (!newer(to, VERSION)) return null
   say(`It ${to} is out, and this is ${VERSION}.`)
   // Everything that is fetched from here on has so long between it, and is given up when the
@@ -310,10 +319,10 @@ export async function fetchNewer(
   try {
     put(fresh, fetched, 0o755)
     const is = await saysItIs(fresh)
-    if (!is || !newer(is, VERSION))
+    if (!is || is !== to)
       throw new Problem(
         is
-          ? `The program that was fetched says it is version ${is}, which is not newer than this one, so nothing was changed.`
+          ? `The program that was fetched says it is version ${is}, but the release advertises ${to}, so nothing was changed.`
           : 'The program that was fetched does not start on this system, so the one that is here stays.',
         'upgrade_program',
       )

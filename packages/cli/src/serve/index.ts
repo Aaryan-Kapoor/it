@@ -8,12 +8,13 @@ import { contentPort } from '@it/protocol'
 import { runConnector } from '../connector'
 import { elsewhere, inHome, type Machine, machine, machineFile, notSetUp, Problem, readJson, why, writePrivate } from '../lib'
 import { conversationsFile } from '../publish'
-import { startsByItself, stopFile } from '../service'
+import { startsByItself, stopFile, supervised } from '../service'
 import { ageBand, begin, countBand, counting, failureOf, record, recordNoted, sinceBegun } from '../usage'
 import { asAdmin, type Backend, endOf, removeCopies, startBackend } from './backend'
 import { backendFolder, noteNetwork, readConfig, type ServiceConfig } from './config'
 import { makeContent, startDoor } from './door'
 import { onTheInternet, reachable } from './network'
+import { recoverStartup } from './startup'
 import { tailnetAddresses } from './tailnet'
 
 /**
@@ -22,9 +23,6 @@ import { tailnetAddresses } from './tailnet'
  * it again. On a machine whose backend is elsewhere, the connector is all of It there is to run.
  */
 export async function serve(say: (line: string) => void = (line) => void process.stderr.write(`${line}\n`)): Promise<void> {
-  const config = elsewhere() ? null : readConfig()
-  if (!config && !elsewhere()) throw notSetUp()
-  if (!config) machine()
   const asked = new AbortController()
   /** The signal that asked, which the connector is told in its turn. */
   let heard: NodeJS.Signals | undefined
@@ -49,7 +47,19 @@ export async function serve(say: (line: string) => void = (line) => void process
   // cannot start is counted as one that could not
   begin()
   try {
-    failed = config ? await here(config, say, asked, told) : await connector(say, asked.signal, told)
+    failed = await recoverStartup(
+      async (ready) => {
+        const config = elsewhere() ? null : readConfig()
+        if (!config && !elsewhere()) throw notSetUp()
+        if (!config) {
+          machine()
+          ready()
+          return connector(say, asked.signal, told)
+        }
+        return here(config, say, asked, told, ready)
+      },
+      { supervised: supervised(), signal: asked.signal, say },
+    )
   } catch (err) {
     // Asked to stop while it was still starting, it has stopped, which is no failure
     if (!(err instanceof Problem && err.code === 'stopped')) {
@@ -111,7 +121,13 @@ async function portsFree(config: ServiceConfig): Promise<void> {
 }
 
 /** The backend, then the door, then the connector, and when the connector has stopped, the door and then the backend. Whether it ended as a failure. */
-async function here(config: ServiceConfig, say: (line: string) => void, asked: AbortController, told: () => NodeJS.Signals): Promise<boolean> {
+async function here(
+  config: ServiceConfig,
+  say: (line: string) => void,
+  asked: AbortController,
+  told: () => NodeJS.Signals,
+  ready: () => void,
+): Promise<boolean> {
   let failed = false
   await portsFree(config)
   const backend = await startBackend(config, say, asked.signal)
@@ -133,7 +149,10 @@ async function here(config: ServiceConfig, say: (line: string) => void, asked: A
           asked.abort()
         })
     try {
-      if (door) say(`service started (pid ${process.pid}); the site is on port ${config.port}`)
+      if (door) {
+        ready()
+        say(`service started (pid ${process.pid}); the site is on port ${config.port}`)
+      }
       if (await connector(say, asked.signal, told)) failed = true
     } finally {
       await door?.stop()

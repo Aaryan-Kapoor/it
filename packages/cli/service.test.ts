@@ -15,10 +15,13 @@ import {
   install,
   kept,
   launchdPlist,
+  restartsAfterUpgrade,
   runningFor,
   stopFile,
+  supervised,
   systemdUnit,
   uninstall,
+  waitForLaunchdUnload,
   windowsLauncher,
   windowsRemoval,
   windowsScript,
@@ -30,6 +33,20 @@ describe('what a service is given of the shell that registered it', () => {
   })
   test('that It is not to look for a newer version is not, since `it updates on` could then never turn it back on', () => {
     expect(environment({ PATH: '/bin', IT_UPDATE_CHECK: 'false' })).toEqual({ PATH: '/bin' })
+  })
+  test('marks the command that the supervisor launches without passing the marker to child commands', () => {
+    expect(command()).toContain('--supervised')
+    const argv = process.argv
+    try {
+      process.argv = [process.execPath, 'it.mjs', 'serve']
+      expect(supervised()).toBe(false)
+      process.argv.push('--supervised')
+      expect(supervised()).toBe(true)
+      process.argv = [process.execPath, 'it.mjs', 'serve', '--log', 'test.log']
+      expect(supervised()).toBe(false)
+    } finally {
+      process.argv = argv
+    }
   })
 })
 
@@ -71,6 +88,18 @@ describe('what a registered service was given, read back from its definition', (
         // Registered with a port and a backend program that only the shell of that day named
         const saved = { PATH: '/then/bin', IT_HOME: process.env.IT_HOME, IT_PORT: '4800', IT_BACKEND_BIN: '/opt/backend/convex-local-backend' }
         writeFileSync(registered, systemdUnit(command(), saved))
+        const argv = process.argv
+        try {
+          process.argv = [process.execPath, 'it.mjs', 'serve']
+          expect(restartsAfterUpgrade()).toBe(false)
+          process.argv.push('--supervised')
+          expect(restartsAfterUpgrade()).toBe(true)
+          rmSync(registered)
+          expect(restartsAfterUpgrade()).toBe(false)
+          writeFileSync(registered, systemdUnit(command(), saved))
+        } finally {
+          process.argv = argv
+        }
         // The PATH is each shell's own to give, and is not kept
         expect(kept()).toEqual({ IT_HOME: saved.IT_HOME, IT_PORT: '4800', IT_BACKEND_BIN: '/opt/backend/convex-local-backend' })
         // A terminal that names neither: both go on to the setup that registers the service again
@@ -100,6 +129,74 @@ describe('what a registered service was given, read back from its definition', (
 })
 
 describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('registering the service again on a Mac', () => {
+  test.each(['delayed', 'timeout', 'unanswered'] as const)('waits for confirmed unload before loading a replacement (%s)', (outcome) => {
+    const user = mkdtempSync(path.join(os.tmpdir(), 'it-launchd-wait-'))
+    const before = { home: process.env.IT_HOME, PATH: process.env.PATH, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(user)
+    const commands = path.join(user, 'commands')
+    const asked = path.join(user, 'asked')
+    const polls = path.join(user, 'polls')
+    const definition = path.join(user, 'Library', 'LaunchAgents', 'dev.it.plist')
+    let clock: ReturnType<typeof vi.spyOn> | undefined
+    try {
+      mkdirSync(commands)
+      mkdirSync(path.dirname(definition), { recursive: true })
+      writeFileSync(
+        path.join(commands, 'launchctl'),
+        `#!/bin/sh
+echo "$1" >> '${asked}'
+case "$1" in
+  print)
+    n=0; [ ! -f '${polls}' ] || n=$(cat '${polls}')
+    n=$((n + 1)); echo "$n" > '${polls}'
+    ${outcome === 'unanswered' ? 'exit 1' : outcome === 'timeout' ? 'exit 0' : '[ "$n" -le 3 ] || exit 113'} ;;
+esac
+`,
+        { mode: 0o755 },
+      )
+      process.env.IT_HOME = path.join(user, '.it')
+      process.env.PATH = `${commands}:/usr/bin:/bin`
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+      const earlier = launchdPlist(command(), { PATH: '/earlier/path' })
+      writeFileSync(definition, earlier)
+      if (outcome === 'timeout') {
+        let now = Date.now()
+        clock = vi.spyOn(Date, 'now').mockImplementation(() => (now += 100_000))
+      }
+      if (outcome === 'delayed') {
+        install()
+        expect(readFileSync(asked, 'utf8').trim().split('\n').slice(0, 6)).toEqual(['bootout', 'print', 'print', 'print', 'print', 'bootstrap'])
+      } else {
+        expect(() => install()).toThrow(outcome === 'timeout' ? /still unloading/ : /could not confirm/)
+        expect(readFileSync(definition, 'utf8')).toBe(earlier)
+        expect(readFileSync(asked, 'utf8')).not.toContain('bootstrap')
+      }
+    } finally {
+      clock?.mockRestore()
+      homedir.mockRestore()
+      Object.defineProperty(process, 'platform', before.platform)
+      process.env.PATH = before.PATH
+      if (before.home === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before.home
+      rmSync(user, { recursive: true, force: true })
+    }
+  })
+
+  test('bounds a launchd question that does not answer', () => {
+    const user = mkdtempSync(path.join(os.tmpdir(), 'it-launchd-silent-'))
+    const was = process.env.PATH
+    try {
+      writeFileSync(path.join(user, 'launchctl'), '#!/bin/sh\nexec sleep 10\n', { mode: 0o755 })
+      process.env.PATH = `${user}:/usr/bin:/bin`
+      const began = Date.now()
+      expect(() => waitForLaunchdUnload(100)).toThrow(/could not confirm/)
+      expect(Date.now() - began).toBeLessThan(3000)
+    } finally {
+      process.env.PATH = was
+      rmSync(user, { recursive: true, force: true })
+    }
+  })
+
   test.each([false, true])(
     'restores the earlier definition after loading fails, and says separately whether loading it again failed too (%s)',
     (recoveryFails) => {
@@ -117,6 +214,7 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('regis
 echo "$1" >> '${asked}'
 case "$1" in
   bootout) rm -f '${loaded}' ;;
+  print) test -f '${loaded}' || exit 113 ;;
   bootstrap)
     if grep -q '/an/earlier/path' "$3"; then
       ${recoveryFails ? 'echo recovery refused; exit 1' : `touch '${loaded}'`}
@@ -137,7 +235,7 @@ esac
         writeFileSync(loaded, '')
         expect(() => install()).toThrow(recoveryFails ? /replacement refused.*restoring the earlier agent failed: recovery refused/ : /replacement refused/)
         expect(readFileSync(definition, 'utf8')).toBe(earlier)
-        expect(readFileSync(asked, 'utf8').trim().split('\n')).toEqual(['bootout', 'bootstrap', 'bootstrap'])
+        expect(readFileSync(asked, 'utf8').trim().split('\n')).toEqual(['bootout', 'print', 'bootstrap', 'bootstrap'])
         expect(existsSync(loaded)).toBe(!recoveryFails)
       } finally {
         homedir.mockRestore()
@@ -160,7 +258,7 @@ esac
       const commands = path.join(user, 'commands')
       const asked = path.join(user, 'launchctl-was-asked')
       mkdirSync(commands)
-      writeFileSync(path.join(commands, 'launchctl'), `#!/bin/sh\necho "$1" >> '${asked}'\n`, { mode: 0o755 })
+      writeFileSync(path.join(commands, 'launchctl'), `#!/bin/sh\necho "$1" >> '${asked}'\n[ "$1" != print ] || exit 113\n`, { mode: 0o755 })
       const told = () => (existsSync(asked) ? readFileSync(asked, 'utf8').trim().split('\n') : [])
       process.env.IT_HOME = path.join(user, '.it')
       process.env.PATH = `${commands}:/usr/bin:/bin`
@@ -177,7 +275,7 @@ esac
       // Once it can be written, the old one is taken out of launchd and the new one given to it, in that order
       chmodSync(agents, 0o755)
       install()
-      expect(told().slice(0, 2)).toEqual(['bootout', 'bootstrap'])
+      expect(told().slice(0, 3)).toEqual(['bootout', 'print', 'bootstrap'])
       expect(readFileSync(definition, 'utf8')).not.toContain('/an/earlier/path')
     } finally {
       chmodSync(agents, 0o755)

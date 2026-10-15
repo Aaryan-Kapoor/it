@@ -14,6 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
 import { holderRuns } from './serve/backend'
+import { resetStartup, startupStatus } from './serve/startup'
 import { watch, watched } from './upgrade'
 
 const NAME = 'it'
@@ -25,6 +26,7 @@ export interface ServiceStatus {
   where: string
   /** Something the person should know about how it was set up. */
   note?: string
+  startup?: ReturnType<typeof startupStatus>
 }
 
 /** The command the service runs: this program, by the address it was started from. */
@@ -33,9 +35,12 @@ export function command(): string[] {
   const underRuntime = script !== undefined && /\.(m?js|ts)$/.test(script)
   // The program is told where to write its log, and keeps that file to a sensible size itself:
   // a supervisor that appends output to a file never trims it
-  return [process.execPath, ...(underRuntime ? [path.resolve(script)] : []), 'serve', '--log', logFile()]
+  return [process.execPath, ...(underRuntime ? [path.resolve(script)] : []), 'serve', '--supervised', '--log', logFile()]
 }
 export const logFile = () => inHome('logs', 'it.log')
+/** A launch argument belongs to this process alone, unlike an inherited environment marker. */
+export const supervised = () => process.argv.includes('--supervised')
+export const restartsAfterUpgrade = () => supervised() && process.platform !== 'win32' && installedHere()
 
 /**
  * The file by which a service is asked to stop where the system has no way of its own to ask:
@@ -95,12 +100,17 @@ export function askToStop(folder: string, forMs = STOP_MS): void {
  * is ended and has not answered. A command that changes something is given no limit, since
  * some of them wait for the service to stop, which takes as long as it takes.
  */
-function run(cmd: string, args: string[], forMs?: number): { ok: boolean; out: string } {
+function run(cmd: string, args: string[], forMs?: number): { ok: boolean; out: string; status: number | null } {
   // The environment is named, though it is this program's own: Bun looks for a command along
   // the path it started with unless it is given one, and Node along the path as it is now.
   // Given it, both find the system's command where this program would be told to look.
-  const r = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, env: process.env, ...(forMs === undefined ? {} : { timeout: forMs }) })
-  return { ok: r.status === 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() }
+  const r = spawnSync(cmd, args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: process.env,
+    ...(forMs === undefined ? {} : { timeout: forMs, killSignal: 'SIGKILL' as const }),
+  })
+  return { ok: r.status === 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim(), status: r.status }
 }
 /** How long the system is given to answer a question about the service. */
 const ASKED_MS = 10_000
@@ -358,6 +368,19 @@ const unitPath = () => {
 const plistPath = () => path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`)
 const launchdDomain = () => `gui/${process.getuid?.() ?? 501}`
 
+/** A failed question is not proof of absence. launchctl returns 113 when the job is gone. */
+export function waitForLaunchdUnload(forMs = STOP_MS): void {
+  const until = Date.now() + forMs
+  for (;;) {
+    const left = until - Date.now()
+    if (left <= 0) throw new Error('The earlier agent is still unloading. Its definition was kept. Run `it service install` once it has stopped.')
+    const seen = run('launchctl', ['print', `${launchdDomain()}/${LABEL}`], Math.min(ASKED_MS, left))
+    if (!seen.ok && seen.status === 113) return
+    if (!seen.ok) throw new Error('launchd could not confirm that the earlier agent has unloaded. Its definition was kept. Run `it service install` again.')
+    sleep(Math.min(200, Math.max(0, until - Date.now())))
+  }
+}
+
 // A machine has one background service, and it belongs to the It folder it was set up from:
 // taking It out of another folder (a second one kept elsewhere, a test) never takes the service
 // away from the one that owns it. What is registered names its folder's log file, which is how
@@ -537,6 +560,8 @@ export function install(): ServiceStatus {
   mkdirSync(path.dirname(logFile()), { recursive: true, mode: 0o700 })
   const cmd = command()
   const env = environment()
+  // Registration is an explicit request to retry, including after an unchanged failed start.
+  resetStartup()
   // The service is started by the system, with nothing of this shell: a shell that says It is
   // not to look for a newer version says so to the service by the file `it updates off` makes,
   // which `it updates on` takes away again
@@ -592,7 +617,10 @@ export function install(): ServiceStatus {
     // was running goes on running under the definition that is still there
     writeDefinition(plistPath(), launchdPlist(cmd, env))
     const unloaded = run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`]).ok
+    let absent = false
     try {
+      waitForLaunchdUnload()
+      absent = true
       must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'loading the agent')
     } catch (err) {
       // A failed replacement gives the earlier definition back to launchd. Where no agent
@@ -600,7 +628,7 @@ export function install(): ServiceStatus {
       if (before !== null) {
         try {
           writeDefinition(plistPath(), before)
-          if (unloaded) must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'restoring the earlier agent')
+          if (unloaded && absent) must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'restoring the earlier agent')
         } catch (recovery) {
           throw new Error(`${(err as Error).message}; ${(recovery as Error).message}`)
         }
@@ -678,6 +706,12 @@ export function uninstall(patience = STOP_MS): void {
  * when the person next logs in, whatever it says of it now.
  */
 export function status(): ServiceStatus {
+  const system = systemStatus()
+  const startup = startupStatus()
+  return startup ? { ...system, startup } : system
+}
+
+function systemStatus(): ServiceStatus {
   // A machine has one definition. Where it is another folder's, the service it speaks of runs
   // that folder's It: of this one, nothing is registered, however that other stands
   if (process.platform !== 'win32' && definedFor() === 'another folder')
