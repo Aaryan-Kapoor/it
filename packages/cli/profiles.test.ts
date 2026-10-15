@@ -92,3 +92,13 @@ test('Legacy and malformed profile records never fall back to the service’s pr
   expect(readProfile('codex', { version: 1, paths: { CODEX_HOME: folder(), SECRET_KEY: 'no' } })).toBeUndefined()
   expect(readProfile('codex', { version: 1, paths: { CODEX_HOME: '../another' } })).toBeUndefined()
 })
+
+test('OpenCode with no global config directory can restore its intact data profile.', () => {
+  const first = folder()
+  mkdirSync(path.join(first, 'data', 'opencode'), { recursive: true })
+  const profile = profileOf('opencode', { XDG_DATA_HOME: path.join(first, 'data'), XDG_CONFIG_HOME: path.join(first, 'config') })!
+  expect(profile.configPresent).toBe(false)
+  expect(typeof profileEnvironment('opencode', profile, {})).toBe('object')
+  rmSync(path.join(first, 'data', 'opencode'), { recursive: true })
+  expect(profileEnvironment('opencode', profile, {})).toMatch(/profile is gone/)
+})

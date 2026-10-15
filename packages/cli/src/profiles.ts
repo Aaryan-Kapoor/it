@@ -15,6 +15,7 @@ export interface Profile {
   version: 1
   paths: Record<string, string | null>
   unsupported?: true
+  configPresent?: boolean
 }
 
 /** Capture defaults too, so a service's other profile cannot silently replace them. */
@@ -36,7 +37,12 @@ export function profileOf(harness: string, env: NodeJS.ProcessEnv = process.env)
   const unsupported =
     Object.values(paths).some((p) => p !== null && (!path.isAbsolute(p) || p.length > 4096 || p.includes('\0'))) ||
     (harness === 'opencode' && Boolean(env.OPENCODE_CONFIG_CONTENT))
-  return { version: 1, paths, ...(unsupported ? { unsupported: true } : {}) }
+  return {
+    version: 1,
+    paths,
+    ...(harness === 'opencode' ? { configPresent: existsSync(path.join(paths.XDG_CONFIG_HOME!, 'opencode')) } : {}),
+    ...(unsupported ? { unsupported: true } : {}),
+  }
 }
 
 /** A local record or authenticated add-on may still send malformed data. Accept exactly the path allow-list. */
@@ -49,7 +55,13 @@ export function readProfile(harness: string, value: unknown): Profile | undefine
   if (Object.values(p.paths).some((v) => v !== null && (typeof v !== 'string' || !path.isAbsolute(v) || v.length > 4096 || v.includes('\0')))) return undefined
   const required = harness === 'opencode' ? keys.slice(0, 4) : keys
   if (required.some((key) => p.paths[key] === null)) return undefined
-  return { version: 1, paths: Object.fromEntries(keys.map((key) => [key, p.paths[key]!])), ...(p.unsupported ? { unsupported: true } : {}) }
+  if (p.configPresent !== undefined && typeof p.configPresent !== 'boolean') return undefined
+  return {
+    version: 1,
+    paths: Object.fromEntries(keys.map((key) => [key, p.paths[key]!])),
+    ...(harness === 'opencode' ? { configPresent: p.configPresent === true } : {}),
+    ...(p.unsupported ? { unsupported: true } : {}),
+  }
 }
 
 /** No automatic fallback for an old, missing or removed profile. A live add-on can record it afresh. */
@@ -57,11 +69,13 @@ export function profileEnvironment(harness: string, value: unknown, base: NodeJS
   const profile = readProfile(harness, value)
   if (!profile) return 'its app profile is not recorded; open the conversation and publish its page again'
   if (profile.unsupported) return 'its app profile uses settings It cannot safely restore; open the conversation to receive its clicks'
+  // OpenCode can run with no user config directory. A directory known to have existed must still be there.
   const roots =
     harness === 'opencode'
       ? [
           path.join(profile.paths.XDG_DATA_HOME!, 'opencode'),
-          profile.paths.OPENCODE_CONFIG_DIR ?? path.join(profile.paths.XDG_CONFIG_HOME!, 'opencode'),
+          ...(profile.configPresent ? [path.join(profile.paths.XDG_CONFIG_HOME!, 'opencode')] : []),
+          profile.paths.OPENCODE_CONFIG_DIR,
           profile.paths.OPENCODE_CONFIG,
         ]
       : Object.values(profile.paths)
