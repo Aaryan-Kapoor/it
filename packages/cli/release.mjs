@@ -64,7 +64,10 @@ mkdirSync(out, { recursive: true })
 const sums = []
 for (const target of TARGETS) {
   const name = `it-${target}${target.startsWith('windows') ? '.exe' : ''}`
-  execFileSync('bun', ['build', path.join(here, 'src/main.ts'), '--compile', '--minify', `--target=bun-${target}`, '--outfile', path.join(out, name)], {
+  // Without a CPU variant, Bun inherits the builder's baseline mode. Name the standard x64
+  // variant explicitly so every builder produces the runtime described in docs/install.md.
+  const compileTarget = `bun-${target}${target.endsWith('-x64') ? '-modern' : ''}`
+  execFileSync('bun', ['build', path.join(here, 'src/main.ts'), '--compile', '--minify', `--target=${compileTarget}`, '--outfile', path.join(out, name)], {
     stdio: ['ignore', 'ignore', 'inherit'],
   })
   // Bun leaves on the program for an Intel Mac the signature that its own runtime for that

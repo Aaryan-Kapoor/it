@@ -3,9 +3,10 @@
 // The program for a Mac with Apple silicon carries one that Bun made for it, and a release
 // only reads that one.
 //
-// No Mach-O here is made up by hand. A program of one line is built for each kind of Mac, by
-// the Bun the programs are built with, out of the runtime for that Mac which Bun keeps once it
-// has fetched it: the build a release makes, of a smaller program. A test fetches nothing, so
+// Small fixtures hold the refusal of commands whose data cannot safely be kept. A program of
+// one line is also built for each kind of Mac, by the Bun the programs are built with, out of
+// the runtime for that Mac which Bun keeps once it has fetched it. This is the build a release
+// makes, of a smaller program. A test fetches nothing, so
 // where that Bun or either runtime is not on the machine these are skipped, and that is said
 // in a line.
 import { execFileSync } from 'node:child_process'
@@ -60,6 +61,73 @@ const SIGNATURE = 0x1d
 const linkeditOf = (program) =>
   commandsOf(program).find((one) => one.kind === SEGMENT && program.toString('latin1', one.at + 8, one.at + 18) === '__LINKEDIT').at
 
+describe('the load commands that may remain when a signature is removed', () => {
+  // The signature starts at 256. The header and signature stay valid as the middle command
+  // changes, so every refusal below reaches the command's own check.
+  const fixture = (kind, length = 40) => {
+    const program = Buffer.alloc(288)
+    program.writeUInt32LE(0xfeedfacf, 0)
+    program.writeUInt32LE(0x01000007, 4)
+    program.writeUInt32LE(3, 16)
+    program.writeUInt32LE(72 + length + 16, 20)
+    program.writeUInt32LE(SEGMENT, 32)
+    program.writeUInt32LE(72, 36)
+    program.write('__LINKEDIT', 40)
+    program.writeBigUInt64LE(256n, 72)
+    program.writeBigUInt64LE(32n, 80)
+    program.writeUInt32LE(kind, 104)
+    program.writeUInt32LE(length, 108)
+    const named = 104 + length
+    program.writeUInt32LE(SIGNATURE, named)
+    program.writeUInt32LE(16, named + 4)
+    program.writeUInt32LE(256, named + 8)
+    program.writeUInt32LE(32, named + 12)
+    program.writeUInt32BE(0xfade0cc0, 256)
+    program.writeUInt32BE(32, 260)
+    return program
+  }
+
+  test.each([0x31, 0x777, 0x80000777])('an unsupported command of kind %i is refused without changing the input', (kind) => {
+    const program = fixture(kind)
+    // LC_NOTE uses two 64-bit fields here for the position and size of data outside itself.
+    // An unknown command with that layout must be refused even without LC_REQ_DYLD set.
+    program.writeBigUInt64LE(256n, 128)
+    program.writeBigUInt64LE(16n, 136)
+    const before = Buffer.from(program)
+    expect(() => unsign(program)).toThrow(`load command 2 of 3 has unsupported kind 0x${kind.toString(16)}`)
+    expect(program.equals(before)).toBe(true)
+  })
+
+  test('a UUID stays intact even when its bytes resemble a range inside the signature', () => {
+    const program = fixture(0x1b, 24)
+    program.writeBigUInt64LE(256n, 112)
+    program.writeBigUInt64LE(16n, 120)
+    const before = Buffer.from(program)
+    const bare = unsign(program)
+    expect(bare.length).toBe(256)
+    expect(signature(bare)).toBe(null)
+    expect(bare.subarray(104, 128).equals(program.subarray(104, 128))).toBe(true)
+    expect(program.equals(before)).toBe(true)
+  })
+
+  test('a known command too short to hold its fields is refused without changing the input', () => {
+    const program = fixture(0x1b, 8)
+    const before = Buffer.from(program)
+    expect(() => unsign(program)).toThrow('load command 2 of 3 is shorter than its kind is')
+    expect(program.equals(before)).toBe(true)
+  })
+
+  test('the entry point must be before the signature, including at its exact boundary', () => {
+    const program = fixture(0x80000028, 24)
+    program.writeBigUInt64LE(255n, 112)
+    expect(unsign(program).length).toBe(256)
+    program.writeBigUInt64LE(256n, 112)
+    const before = Buffer.from(program)
+    expect(() => unsign(program)).toThrow('load command 2 of 3 names bytes inside the signature')
+    expect(program.equals(before)).toBe(true)
+  })
+})
+
 describe.skipIf(Boolean(why))('the signatures on the programs Bun builds for a Mac', () => {
   let folder
   let intel
@@ -74,7 +142,7 @@ describe.skipIf(Boolean(why))('the signatures on the programs Bun builds for a M
         path.join(folder, 'one.js'),
         '--compile',
         '--minify',
-        `--target=bun-darwin-${target}`,
+        `--target=bun-darwin-${target}${target === 'x64' ? '-modern' : ''}`,
         `--compile-executable-path=${RUNTIMES[target]}`,
         '--outfile',
         to,
