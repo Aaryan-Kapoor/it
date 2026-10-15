@@ -2348,6 +2348,23 @@ describe('a file that is not It’s alone, changed while another program may sav
     }
   })
 
+  test.skipIf(process.platform === 'win32')('keeps a symlinked profile and its target when removing every installer line', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, '.profile')
+    const target = path.join(folder, 'dotfile')
+    try {
+      writeFileSync(target, '# It\nexport PATH=it:$PATH\n', { mode: 0o640 })
+      symlinkSync(target, file)
+      expect(changeWhole(file, () => null)).toBe(true)
+      expect(fs.lstatSync(file).isSymbolicLink()).toBe(true)
+      expect(readFileSync(target, 'utf8')).toBe('')
+      expect(statSync(target).mode & 0o777).toBe(0o640)
+      expect(changeWhole(file, () => null)).toBe(false)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test('is not written where nothing is to change, and is taken away only where it still holds what it was read to hold', () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
     const file = path.join(folder, '.profile')

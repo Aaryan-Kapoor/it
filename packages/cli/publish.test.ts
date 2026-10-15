@@ -1,5 +1,7 @@
 // The local note that lets a closed conversation be reopened in the folder it last used.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import fs, { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -25,10 +27,37 @@ describe('the conversation folders It remembers', () => {
     const record = { 'pi:holder': { cwd: scratch, at: Date.now() } }
     writeFileSync(conversationsFile(), JSON.stringify(record))
     const lock = `${conversationsFile()}.lock`
-    writeFileSync(lock, String(process.pid))
+    const holder = JSON.stringify({ pid: process.pid, holder: 'a'.repeat(16) })
+    writeFileSync(lock, holder)
+    utimesSync(lock, 0, 0)
     noteConversation({ harness: 'pi', id: 'contender' }, scratch)
     expect(JSON.parse(readFileSync(conversationsFile(), 'utf8'))).toEqual(record)
-    expect(readFileSync(lock, 'utf8')).toBe(String(process.pid))
+    expect(readFileSync(lock, 'utf8')).toBe(holder)
+  })
+
+  test('recovers a lock only after its process has exited', () => {
+    const pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']))
+    writeFileSync(`${conversationsFile()}.lock`, JSON.stringify({ pid, holder: 'b'.repeat(16) }))
+    noteConversation({ harness: 'pi', id: 'next' }, scratch)
+    expect(conversationFolder({ harness: 'pi', id: 'next' })).toBe(scratch)
+  })
+
+  test('does not release a replacement lock when its original owner finishes', () => {
+    const lock = `${conversationsFile()}.lock`
+    const replacement = JSON.stringify({ pid: process.pid, holder: 'c'.repeat(16) })
+    const rename = fs.renameSync
+    fs.renameSync = (from, to) => {
+      rename(from, to)
+      if (to === conversationsFile()) writeFileSync(lock, replacement)
+    }
+    syncBuiltinESMExports()
+    try {
+      noteConversation({ harness: 'pi', id: 'original' }, scratch)
+      expect(readFileSync(lock, 'utf8')).toBe(replacement)
+    } finally {
+      fs.renameSync = rename
+      syncBuiltinESMExports()
+    }
   })
 
   test('keeps a conversation used again in the same folder when the oldest unused one is forgotten', () => {

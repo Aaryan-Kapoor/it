@@ -6,6 +6,7 @@ import {
   existsSync,
   fchmodSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -192,7 +193,8 @@ export function writeFlushed(file: string, text: string): void {
  * Changes a file that is not It's alone: Codex's settings, which Codex saves itself, or a
  * shell's profile, which the person may have open in an editor. `change` is given what the
  * file holds and gives what it is to hold: nothing where it is to stay as it is, and null where
- * nothing of it is left and it is to be taken away. True where the file was changed.
+ * nothing of it is left. An ordinary file is then removed; a symlink and its empty target
+ * remain. True where the file was changed.
  *
  * The new text is written beside the file with every byte on the disk, under the file's own
  * permissions, and is given the file's name only where the file still holds, the moment before,
@@ -205,12 +207,14 @@ export function writeFlushed(file: string, text: string): void {
  * that is saved again every time is left as its last save made it, and that is an error.
  */
 export function changeWhole(file: string, change: (text: string) => string | null | undefined): boolean {
+  const linked = lstatSync(file).isSymbolicLink()
   const target = realpathSync(file)
   const part = `${target}.it-${process.pid}.part`
   for (let tries = 1; ; tries++) {
     const before = statSync(target, { bigint: true })
     const text = readFileSync(target, 'utf8')
-    const after = change(text)
+    const changed = change(text)
+    const after = changed === null && linked ? '' : changed
     if (after === undefined || after === text) return false
     const mode = statSync(target).mode & 0o777
     try {

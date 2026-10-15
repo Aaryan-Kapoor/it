@@ -1496,7 +1496,7 @@ async function uninstall(a: Args) {
 /**
  * Takes the installer's line out of every shell profile it may have put it in, with the comment
  * and the blank line it wrote above it, and says which files it was in. A profile that held
- * nothing else was made by the installer, and goes too.
+ * nothing else is removed unless it is a link, whose target is left empty.
  */
 /** The files a shell reads when it starts, each with the line the install script writes into it to put a folder on the PATH. */
 function profileLines(bin: string): Map<string, string> {

@@ -5,7 +5,7 @@
 // It folder that hold only what the test put there.
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -1199,8 +1199,30 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     },
   )
 
+  test.skipIf(process.platform === 'win32')('`it uninstall` leaves a linked profile and its empty target in place', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    const target = path.join(m.home, 'dotfile')
+    const profile = path.join(m.home, '.profile')
+    const line = `export PATH='${path.join(m.it, 'bin')}':"$PATH"`
+    writeFileSync(target, `\n# It\n${line}\n`, { mode: 0o640 })
+    symlinkSync(target, profile)
+    const done = await run(m, ['uninstall', '--yes'])
+    expect([done.code, printed(done).removed]).toEqual([0, true])
+    expect(lstatSync(profile).isSymbolicLink()).toBe(true)
+    expect(readFileSync(profile, 'utf8')).toBe('')
+    expect(statSync(target).mode & 0o777).toBe(0o640)
+  })
+
   test('`it uninstall` keeps its note of an add-on it could not take out, with the program, and takes the add-on out and deletes the folder when it is run again', async () => {
     const m = machine(true, true)
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify({ port: SITE_PORT, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' }),
+    )
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
       writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
       chmodSync(path.join(m.bin, name), 0o755)
@@ -1233,6 +1255,10 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
 
   test('`it uninstall` deletes the folder It is kept in where the folder it was told of is a link to it, and the link with it', async () => {
     const m = machine(true, true)
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify({ port: SITE_PORT, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' }),
+    )
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
       writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
       chmodSync(path.join(m.bin, name), 0o755)
@@ -1639,6 +1665,57 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
 })
 
 describe.skipIf(process.platform === 'win32')('the note of which folder each conversation works in', () => {
+  test('a writer suspended for more than ten seconds keeps its lock and another command leaves its record alone', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:take' ? { took: false } : asked.path === 'displays:show' ? { displays: ['Desk'] } : null))
+    const marker = path.join(m.home, 'suspended')
+    const preload = path.join(m.home, 'suspend.mjs')
+    const record = path.join(m.it, 'conversations.json')
+    writeFileSync(
+      preload,
+      `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const rename = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (to === ${JSON.stringify(record)}) {
+    fs.writeFileSync(${JSON.stringify(marker)}, 'ready');
+    process.kill(process.pid, 'SIGSTOP');
+  }
+  return rename(from, to);
+};
+syncBuiltinESMExports();
+`,
+    )
+    const child = spawn(process.execPath, ['--import', pathToFileURL(preload).href, program, 'open', 'board'], {
+      cwd: m.home,
+      env: { PATH: m.bin, HOME: m.home, IT_HOME: m.it, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'suspended' },
+    })
+    child.stdin.end()
+    child.stdout.resume()
+    child.stderr.resume()
+    const first = new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject)
+      child.once('close', resolve)
+    })
+    try {
+      for (let attempt = 0; attempt < 200 && !existsSync(marker); attempt++) await new Promise((resolve) => setTimeout(resolve, 25))
+      expect(existsSync(marker)).toBe(true)
+      const held = readFileSync(`${record}.lock`, 'utf8')
+      await new Promise((resolve) => setTimeout(resolve, 10_100))
+      expect((await run(m, ['open', 'board'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'contender' })).code).toBe(0)
+      expect(existsSync(record)).toBe(false)
+      expect(readFileSync(`${record}.lock`, 'utf8')).toBe(held)
+    } finally {
+      child.kill('SIGCONT')
+      if (!existsSync(marker)) child.kill('SIGTERM')
+      const finished = await first
+      await b.close()
+      expect(finished).toBe(0)
+    }
+    expect(Object.keys(JSON.parse(readFileSync(record, 'utf8')))).toEqual(['pi:suspended'])
+    expect(existsSync(`${record}.lock`)).toBe(false)
+  }, 30_000)
+
   test('keeps every conversation that commands running at the same moment note, and none of them writes over another’s', async () => {
     const m = machine()
     const b = await backend(m, (asked) => (asked.path === 'artifacts:take' ? { took: false } : asked.path === 'displays:show' ? { displays: ['Desk'] } : null))
@@ -1646,8 +1723,15 @@ describe.skipIf(process.platform === 'win32')('the note of which folder each con
       // Each conversation opens a page, which notes its folder, and all of them do so together, three times over,
       // under each runtime the program runs under that is on this machine
       const runtimes = RUNTIMES.map(([, runtime]) => runtime).filter((runtime): runtime is string => runtime !== undefined)
+      const dead = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']))
       const all: string[] = []
       for (let round = 0; round < 3; round++) {
+        // The same contention also recovers a dead holder and a dead recovery claimant.
+        if (round > 0) {
+          const lock = path.join(m.it, 'conversations.json.lock')
+          writeFileSync(lock, JSON.stringify({ pid: dead, holder: 'a'.repeat(16) }))
+          if (round === 2) writeFileSync(`${lock}.after.${'a'.repeat(16)}`, JSON.stringify({ pid: dead, holder: 'b'.repeat(16) }))
+        }
         const ids = Array.from({ length: 10 }, (_, n) => `conversation-${round}-${n}`)
         all.push(...ids)
         const ran = await Promise.all(
