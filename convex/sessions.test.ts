@@ -1000,6 +1000,31 @@ describe('what ending a paired browser takes with it', () => {
     expect(await alive(h.machine)).toBe(true)
   })
 
+  test('removal counts follow the earlier pairings of a descendant display', async () => {
+    const h = await household()
+    const key = 'nested-reclaimed-display-key'
+    await register(h.desk, key)
+    const extra = await joined(h.t, h.desk.browser, 'the earlier pairing added this')
+    await endOf(h.t, h.desk)
+    await register(h.kitchen, key)
+    const viewer = await ownerOf(h.t, h.machine)
+    const display = await register(h.laptop, 'the-laptop-display-key-01')
+    const expected = {
+      browsers: [h.kitchen.session, h.agent.session, h.agentsScreen.session, h.hall.session].sort(),
+      machines: [h.second.id, h.third.id, extra.id].sort(),
+    }
+    const listed = (await viewer.browser.query(api.sessions.list, {})).find((s) => s.id === h.laptop.session)!.along
+    expect({ browsers: listed.browsers.sort(), machines: listed.machines.sort() }).toEqual(expected)
+    await endOf(h.t, h.laptop)
+    const left = (await viewer.browser.query(api.sessions.leftBehind, {})).find((d) => d.display === display.id)!.along
+    expect({ browsers: left.browsers.sort(), machines: left.machines.sort() }).toEqual(expected)
+    await viewer.browser.mutation(api.displays.forget, { displayId: display.id })
+    expect(await living(h)).toEqual([])
+    expect(await alive(extra.as)).toBe(false)
+    expect(await alive(viewer)).toBe(true)
+    expect(await alive(h.machine)).toBe(true)
+  })
+
   test("ending a screen that reclaimed its inviter's display ends each pairing once", async () => {
     const h = await household()
     const key = 'the-laptop-display-key-01'
