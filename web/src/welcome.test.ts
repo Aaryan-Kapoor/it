@@ -130,6 +130,24 @@ describe('the way into the tour, for someone with no pages', () => {
     expect(host.textContent).not.toContain('is listening')
   })
 
+  test('an app ready on one online machine is not also said to need approval', async () => {
+    machines = [
+      { harnesses: [{ id: 'codex', addon: 'connected' }], lastSeenAt: NOW, connectorVersion: '0.1.22' },
+      {
+        harnesses: [
+          { id: 'codex', addon: 'needs_approval' },
+          { id: 'pi', addon: 'needs_approval' },
+        ],
+        lastSeenAt: NOW,
+        connectorVersion: '0.1.22',
+      },
+    ]
+    await shown()
+    expect(host.textContent).not.toContain('Codex needs add-on approval')
+    expect(host.textContent).not.toContain('Codex and Pi needs add-on approval')
+    expect(host.textContent).toContain('Pi needs add-on approval')
+  })
+
   test('says what a setup at a terminal would have asked: the other agent apps found, and another screen', async () => {
     machines = [
       {

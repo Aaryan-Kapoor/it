@@ -190,7 +190,7 @@ function useApps(owner: boolean): { connected: string[]; ready: string[]; approv
   )
   const approval = there.flatMap((m) =>
     appsOn(m)
-      .filter((h) => h.addon === 'needs_approval')
+      .filter((h) => h.addon === 'needs_approval' && !ready.includes(h.id))
       .map((h) => h.id),
   )
   // Found and not connected, and nothing stands in the way of connecting it: not one that is too old, or that It cannot connect yet
