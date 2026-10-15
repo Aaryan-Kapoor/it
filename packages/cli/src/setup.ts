@@ -1148,8 +1148,7 @@ const folderGone = (i: Installation) => {
  * pages, and whichever asked first would put it into a conversation of its own. So a second is
  * never installed, and where an It from before installed two, all but this one are taken out.
  */
-const staying = (all: Installation[]): Installation | undefined =>
-  all.filter((i) => !folderGone(i)).reduce<Installation | undefined>((latest, i) => (latest && latest.at >= i.at ? latest : i), undefined)
+const staying = (all: Installation[]): Installation | undefined => all.filter((i) => !folderGone(i)).at(-1)
 /** The folder the harness says holds its add-on, with links and other spellings resolved. An uncertain place never permits removal. */
 async function profileFolder(adapter: Pick<Adapter, 'note'>, at: Place): Promise<string | undefined> {
   const file = await adapter.note?.(at)

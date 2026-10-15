@@ -1152,7 +1152,7 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
     expect(noted('openclaw').installs.map((i) => i.env)).toEqual([{ OPENCLAW_STATE_DIR: second }])
   })
 
-  test.each(['a trailing slash', 'a link', 'another spelling'])(
+  test.each(['a trailing slash', 'a link', 'another spelling', 'another spelling after the clock moved backward'])(
     'a cleanup retried after a partial upgrade keeps the add-on when the older place names the retained folder by %s',
     async (spelling) => {
       const folder = path.join(tmp, 'profile')
@@ -1162,7 +1162,7 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
       const alias = spelling === 'a trailing slash' ? `${folder}/` : spelling === 'a link' ? path.join(tmp, 'profile-link') : `${folder}/../profile`
       if (spelling === 'a link') symlinkSync(folder, alias, 'junction')
       // The older record survived a failed removal, and the retained record has the upgraded payload.
-      const retained = { ...current, at: 2000, env: { OPENCLAW_STATE_DIR: alias } }
+      const retained = { ...current, at: spelling.includes('backward') ? 500 : 2000, env: { OPENCLAW_STATE_DIR: alias } }
       put(stampFile('openclaw'), JSON.stringify({ installs: [{ ...current, version: 'older', at: 1000 }, retained] }))
       vi.stubEnv('OPENCLAW_STATE_DIR', alias)
       ran = []
@@ -1350,8 +1350,8 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
     await connect('openclaw', () => {})
     const [two] = noted('openclaw').installs
     const installs = [
-      { ...two, at: 2000 },
-      { ...one, at: 1000 },
+      { ...one, at: 2000 },
+      { ...two, at: 1000 },
     ]
     put(stampFile('openclaw'), JSON.stringify({ installs }))
 
