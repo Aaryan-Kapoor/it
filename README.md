@@ -3,10 +3,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Aaryan-Kapoor/it/releases/latest"><img src="https://img.shields.io/github/v/release/Aaryan-Kapoor/it?style=flat-square&label=release&labelColor=0a0a0a&color=34d399" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-34d399?style=flat-square&labelColor=0a0a0a" alt="Runs on macOS, Linux and Windows">
-  <img src="https://img.shields.io/badge/runs-on%20your%20computer-34d399?style=flat-square&labelColor=0a0a0a" alt="Runs on your own computer">
-  <img src="https://img.shields.io/badge/account-none-34d399?style=flat-square&labelColor=0a0a0a" alt="No account">
+  <a href="https://github.com/Aaryan-Kapoor/it/releases/latest"><img src="https://img.shields.io/github/v/release/Aaryan-Kapoor/it?style=flat-square&label=release&labelColor=1f2328&color=34d399" alt="Latest release"></a>
+  <a href="#get-it"><img src="https://img.shields.io/badge/macOS-1f2328?style=flat-square&logo=apple&logoColor=white" alt="macOS"></a>
+  <a href="#get-it"><img src="https://img.shields.io/badge/Linux-1f2328?style=flat-square&logo=linux&logoColor=white" alt="Linux"></a>
+  <a href="#get-it"><img src="https://img.shields.io/badge/Windows-1f2328?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc%2BPHBhdGggZmlsbD0nd2hpdGUnIGQ9J00wIDBoMTEuNHYxMS40SDB6TTEyLjYgMEgyNHYxMS40SDEyLjZ6TTAgMTIuNmgxMS40VjI0SDB6TTEyLjYgMTIuNkgyNFYyNEgxMi42eicvPjwvc3ZnPg%3D%3D" alt="Windows"></a>
 </p>
 
 <p align="center">
@@ -52,7 +52,13 @@ Start a long job, close the terminal and walk away. When you tap Stop on your ph
 <p align="center"><img src="docs/assets/any-agent.gif" alt="Claude Code, Codex, T3 Code, Pi, OpenCode, Hermes Agent and your own agent each read the same floor plan" width="720"></p>
 
 <p align="center">
-  <b>Claude Code</b> &nbsp;·&nbsp; <b>Codex</b> &nbsp;·&nbsp; <b>T3 Code</b> &nbsp;·&nbsp; <b>Pi</b> &nbsp;·&nbsp; <b>OpenCode</b> &nbsp;·&nbsp; <b>Hermes Agent</b> &nbsp;·&nbsp; <b>OpenAI Dots Call</b> <sub>(Coming Soon)</sub>
+  <img src="https://img.shields.io/badge/Claude%20Code-1f2328?style=flat-square" alt="Claude Code">
+  <img src="https://img.shields.io/badge/Codex-1f2328?style=flat-square" alt="Codex">
+  <img src="https://img.shields.io/badge/T3%20Code-1f2328?style=flat-square" alt="T3 Code">
+  <img src="https://img.shields.io/badge/Pi-1f2328?style=flat-square" alt="Pi">
+  <img src="https://img.shields.io/badge/OpenCode-1f2328?style=flat-square" alt="OpenCode">
+  <img src="https://img.shields.io/badge/Hermes%20Agent-1f2328?style=flat-square" alt="Hermes Agent">
+  <img src="https://img.shields.io/badge/OpenAI%20Dots%20Call-coming%20soon-1f2328?style=flat-square&labelColor=1f2328&color=59636e" alt="OpenAI Dots Call, coming soon">
 </p>
 
 Each of them reads the same room and works in it with you. It works with the agent you already use, and setup finds it on your machine and connects it.
