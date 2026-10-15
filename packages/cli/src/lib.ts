@@ -262,7 +262,9 @@ export function changeWhole(file: string, change: (text: string) => string | nul
         return true
       }
     } finally {
-      rmSync(part, { force: true })
+      try {
+        rmSync(part, { force: true })
+      } catch {}
     }
     if (tries >= 5) throw new Error(`${file} was saved by another program each time It was about to change it, and was left as it is`)
   }

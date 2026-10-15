@@ -523,7 +523,7 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     const file = path.join(folderOf('hermes'), 'plugins/it-bridge/new-notes.txt')
     const run = fake.execFile.getMockImplementation()!
     fake.execFile.mockImplementation((bin, args, ...rest) => {
-      if (bin === 'hermes' && args.join(' ') === 'plugins disable it-bridge') put(file, 'new notes')
+      if (bin === 'hermes' && args.map((word: string) => word.replace(/^"(.*)"$/, '$1')).join(' ') === 'plugins disable it-bridge') put(file, 'new notes')
       return run(bin, args, ...rest)
     })
     expect(await disconnect('hermes', () => {})).toBe(true)

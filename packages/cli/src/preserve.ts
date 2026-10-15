@@ -67,7 +67,10 @@ export function keepOriginal(file: string): string {
 /** Publishes only at an unused name. A writer that recreated it after preservation wins. */
 export function putAbsent(part: string, target: string): void {
   tryFile(() => linkSync(part, target))
-  unlinkSync(part)
+  // The target is already published. Cleanup trouble cannot undo that fact or prevent its ownership from being recorded.
+  try {
+    tryFile(() => unlinkSync(part))
+  } catch {}
 }
 
 /** Restores an original only if nothing has been saved under its old name in the meantime. */

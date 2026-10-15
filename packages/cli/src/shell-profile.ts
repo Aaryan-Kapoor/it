@@ -1,14 +1,14 @@
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 
-/** Asks zsh after it reads .zshenv, including a ZDOTDIR it did not export. */
+/** Asks an interactive zsh for its startup folder, including a ZDOTDIR it did not export. */
 export async function zshDirectory(env: NodeJS.ProcessEnv = process.env, timeoutMs = 5_000): Promise<string | undefined> {
   const shell = env.SHELL
   if (!shell || path.basename(shell) !== 'zsh' || !path.isAbsolute(shell)) return undefined
   return new Promise((resolve) => {
     const mark = 'it-zdotdir-56e730c1'
     // The value is expanded by zsh itself, so a shell-local ZDOTDIR is visible.
-    const child = spawn(shell, ['-c', `printf '\\0${mark}%s\\0' "\${ZDOTDIR-$HOME}"`], {
+    const child = spawn(shell, ['-i', '-c', `printf '\\0${mark}%s\\0' "\${ZDOTDIR-$HOME}"`], {
       env,
       stdio: ['ignore', 'pipe', 'ignore'],
       detached: true,

@@ -19,11 +19,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import { changeWhole } from './src/lib'
-import { keepOriginal, ORIGINAL_LIMIT } from './src/preserve'
+import { keepOriginal, ORIGINAL_LIMIT, putAbsent } from './src/preserve'
 
 let folder: string
 let file: string
-const original = { renameSync: fs.renameSync, linkSync: fs.linkSync }
+const original = { renameSync: fs.renameSync, linkSync: fs.linkSync, unlinkSync: fs.unlinkSync }
 beforeEach(() => {
   folder = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-preserve-')))
   file = path.join(folder, 'settings')
@@ -152,4 +152,16 @@ test.skipIf(process.platform === 'win32')('moves a symlink itself without touchi
   const kept = keepOriginal(file)
   expect(lstatSync(kept).isSymbolicLink()).toBe(true)
   expect(readFileSync(target, 'utf8')).toBe('user content')
+})
+
+test('a staging cleanup failure does not turn a published file into a failed publication', () => {
+  const part = `${file}.part`
+  writeFileSync(part, 'installed')
+  fs.unlinkSync = (name) => {
+    if (name === part) throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+    return original.unlinkSync(name)
+  }
+  syncBuiltinESMExports()
+  expect(() => putAbsent(part, file)).not.toThrow()
+  expect(readFileSync(file, 'utf8')).toBe('installed')
 })

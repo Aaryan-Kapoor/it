@@ -28,6 +28,12 @@ describe.skipIf(process.platform === 'win32' || !zsh)('zsh startup folders', () 
     expect(execFileSync(process.execPath, [cli, 'shell-profile'], { env: { ...env, SHELL: zsh }, encoding: 'utf8' }).trim()).toBe(dir)
   })
 
+  test('uses the startup directory selected only for an interactive shell', async () => {
+    const { home, dir, env } = fixture()
+    writeFileSync(path.join(home, '.zshenv'), `if [[ -o interactive ]]; then ZDOTDIR=${quote(dir)}; fi\n`)
+    expect(await zshDirectory({ ...env, SHELL: zsh })).toBe(dir)
+  })
+
   test.each(['relative', ''])('refuses a relative startup directory %j instead of guessing a profile', async (value) => {
     const { home, env } = fixture()
     writeFileSync(path.join(home, '.zshenv'), `ZDOTDIR=${quote(value)}\n`)
