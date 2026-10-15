@@ -1385,8 +1385,12 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
     await connect('openclaw', () => {})
     rmSync(first, { recursive: true })
     vi.stubEnv('OPENCLAW_STATE_DIR', path.join(tmp, 'second'))
+    ran = []
     expect((await statusOf('openclaw'))!.addon).toBe('not_connected')
     expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    expect(existsSync(first)).toBe(false)
+    expect(ran.filter((r) => r.env.OPENCLAW_STATE_DIR === first)).toEqual([])
+    expect(noted('openclaw').installs).toHaveLength(1)
   })
 
   test.each([
