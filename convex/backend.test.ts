@@ -2636,6 +2636,24 @@ describe('clicks and their delivery', () => {
     expect(await code(click('click-0002'))).toBe('ok')
   })
 
+  test.each([0, 3, 59_999, 60_000])('a retry delay includes a refill time that is %i milliseconds ahead', async (ahead) => {
+    const { t, click } = await setup()
+    const countedAt = Date.now()
+    for (let i = 0; i < 30; i++) await click(`click-${String(i).padStart(4, '0')}`)
+    await runWhatIsDue(t)
+    vi.setSystemTime(countedAt - ahead)
+    await expect(click('click-refused')).rejects.toThrow(`"retryAfterMs":${ahead + 1000}`)
+
+    // Waiting for the future baseline earns nothing. The next token needs another second.
+    vi.setSystemTime(countedAt)
+    await expect(click('click-at-baseline')).rejects.toThrow('"retryAfterMs":1000')
+    vi.setSystemTime(countedAt + 999)
+    await expect(click('click-before-ready')).rejects.toThrow('"retryAfterMs":1')
+    vi.setSystemTime(countedAt + 1000)
+    expect(await code(click('click-ready'))).toBe('ok')
+    expect(await code(click('click-no-second-token'))).toBe('rate_limited')
+  })
+
   test('callers that come a moment out of order are not given the limit afresh', async () => {
     const { click } = await setup()
     // As many small clicks as the limit lets through at once, each a few milliseconds "before" the one that came ahead of it,
@@ -2647,7 +2665,8 @@ describe('clicks and their delivery', () => {
       if (results.at(-1) !== 'ok') dropWhatAFailedCallScheduled()
     }
     // The limit is met all the same: counted afresh for each that came out of order, none would ever be refused
-    expect(results.filter((r) => r === 'rate_limited').length).toBeGreaterThan(100)
+    expect(results.filter((r) => r === 'ok')).toHaveLength(30)
+    expect(results.filter((r) => r === 'rate_limited')).toHaveLength(370)
   })
 
   test('only so many clicks may wait: on one page, and for one person', async () => {
@@ -5683,6 +5702,43 @@ describe('what is written down', () => {
       await settle(t)
       expect(out.of('limit.reached').some((e) => e.rule === 'enroll' && e.who === undefined)).toBe(true)
       expect(out.raw.join('\n')).not.toContain('user_alice')
+    } finally {
+      out.stop()
+    }
+  })
+
+  test.each([0, 3_600_000])('limit warnings remain one minute apart after a %i millisecond clock correction', async (setBack) => {
+    const out = written()
+    try {
+      const t = backend()
+      const alice = await person(t, 'alice')
+      const ask = () => alice.browser.mutation(api.account.exportStart, {})
+      await ask()
+      await ask()
+      await runWhatIsDue(t)
+      expect(out.of('limit.reached')).toMatchObject([{ rule: 'export', level: 'warn' }])
+      expect(out.of('limit.reached')).toHaveLength(1)
+
+      const correctedAt = Date.now() - setBack
+      vi.setSystemTime(correctedAt)
+      if (setBack) {
+        // A large correction starts a fresh bucket. Its first call leaves one token and writes no warning.
+        await ask()
+        const count = await t.run(async (ctx) => (await ctx.db.query('rateLimits').collect()).find((row) => row.key === `export:${alice.user}`))
+        expect(count).toMatchObject({ tokens: 1, updatedAt: correctedAt, saidAt: correctedAt })
+        await ask()
+        await runWhatIsDue(t)
+        expect(out.of('limit.reached')).toHaveLength(1)
+      }
+
+      for (const elapsed of [0, 15_000, 30_000, 45_000, 59_999, 60_000, 75_000, 90_000, 105_000, 119_999, 120_000]) {
+        vi.setSystemTime(correctedAt + elapsed)
+        // This bucket earns one token every thirty seconds. Refusals never add a log line.
+        expect(await code(ask())).toBe(elapsed > 0 && elapsed % 30_000 === 0 ? 'ok' : 'rate_limited')
+        for (let i = 0; i < 5; i++) expect(await code(ask())).toBe('rate_limited')
+        await runWhatIsDue(t)
+        expect(out.of('limit.reached')).toHaveLength(1 + Math.floor(elapsed / 60_000))
+      }
     } finally {
       out.stop()
     }

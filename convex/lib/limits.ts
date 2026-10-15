@@ -70,10 +70,12 @@ export async function rateLimit(ctx: MutationCtx, rule: Rule, who: string, cost 
   // through that came out of order.)
   const ahead = row ? row.updatedAt - now : 0
   const tokens = !row || ahead > SET_BACK_MS ? burst : Math.min(burst, row.tokens + (Math.max(0, -ahead) / 60_000) * perMinute)
+  // Counted from the later of the two times, so that what came out of order is not given the same moments twice.
+  const counted = row && ahead > 0 && ahead <= SET_BACK_MS ? row.updatedAt : now
   if (tokens < cost) {
     // Not written down here: a caller past a limit can ask as often as it likes, and each
     // refusal would be a line. It is written down below, when the limit is reached.
-    fail('rate_limited', 'Too many requests. Try again shortly.', { retryAfterMs: Math.ceil(((cost - tokens) / perMinute) * 60_000) })
+    fail('rate_limited', 'Too many requests. Try again shortly.', { retryAfterMs: Math.ceil(counted - now + ((cost - tokens) / perMinute) * 60_000) })
   }
   // The call that leaves too little for another like it is the one that is written down: the
   // next will be refused. Once a minute at most for each limit and each caller, however hard
@@ -82,10 +84,11 @@ export async function rateLimit(ctx: MutationCtx, rule: Rule, who: string, cost 
   // same again the next time, so the line is left with the scheduler, which a failed call's
   // requests never reach.
   const left = tokens - cost
-  const say = left < cost && now - (row?.saidAt ?? 0) >= 60_000
-  // Counted from the later of the two times, so that what came out of order is not given the same moments twice
-  const counted = row && ahead > 0 && ahead <= SET_BACK_MS ? row.updatedAt : now
-  if (row) await ctx.db.patch(row._id, { who, tokens: left, updatedAt: counted, ...(say ? { saidAt: now } : {}) })
+  // When a large correction moves the last warning into the future, start its minute again.
+  // Save that new time even when this call leaves enough tokens to write no warning.
+  const saidAt = row && ahead > SET_BACK_MS && row.saidAt !== undefined && row.saidAt > now ? now : row?.saidAt
+  const say = left < cost && now - (saidAt ?? 0) >= 60_000
+  if (row) await ctx.db.patch(row._id, { who, tokens: left, updatedAt: counted, saidAt: say ? now : saidAt })
   const limit = row?._id ?? (await ctx.db.insert('rateLimits', { key, who, tokens: left, updatedAt: now, ...(say ? { saidAt: now } : {}) }))
   // The line is asked for by the count's own record, which says whose it is: the backend
   // program keeps what a job was started with for days after it has run, and nobody is named there
