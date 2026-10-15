@@ -146,6 +146,7 @@ async function browserOf(t: T, who: string, role: 'owner' | 'screen') {
       const { until } = await mutation(api.actions.replayGrant, {})
       return mutation(fn, { ...args, replayUntil: until })
     }
+    if (getFunctionName(fn) === 'notifications:answer') return mutation(fn, { ...args, expectedSession: session })
     if (getFunctionName(fn) === 'artifacts:stop') {
       const shown = await browser.query(api.artifacts.get, args as { artifactId: Id<'artifacts'> })
       return mutation(fn, { ...args, expectedRun: shown.run?.identity, expectedSession: session })

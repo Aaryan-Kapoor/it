@@ -156,3 +156,26 @@ test('queued requests cannot run under a replacement pairing, even with the same
   expect(await t.run((ctx) => ctx.db.query('actions').collect())).toEqual([])
   expect((await t.run((ctx) => ctx.db.get(notification)))?.answeredAt).toBeUndefined()
 })
+
+test('an old site must reload before a new notification answer, but may confirm an accepted one', async () => {
+  const { t, browser, user, artifact, session, input } = await fixture()
+  await browser.mutation(api.displays.register, { key: input.displayKey, userAgent: 'Test browser' })
+  const id = await t.run((ctx) =>
+    ctx.db.insert('notifications', {
+      userId: user,
+      artifactId: artifact,
+      text: 'Approve?',
+      sticky: true,
+      buttons: [{ label: 'Approve', action: 'approve' }],
+      contentVersion: 1,
+      stateRevision: 0,
+      createdAt: Date.now(),
+    }),
+  )
+  const answer = { id, action: 'approve', displayKey: input.displayKey }
+  await expect(browser.mutation(api.notifications.answer, answer)).rejects.toThrow(/Reload It before answering/)
+  expect(await t.run((ctx) => ctx.db.query('actions').collect())).toEqual([])
+  expect((await browser.mutation(api.notifications.answer, { ...answer, expectedSession: session })).actionId).not.toBeNull()
+  expect(await browser.mutation(api.notifications.answer, answer)).toEqual({ actionId: null })
+  expect(await t.run((ctx) => ctx.db.query('actions').collect())).toHaveLength(1)
+})
