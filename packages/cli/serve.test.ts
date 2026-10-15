@@ -624,8 +624,12 @@ describe('what It had noted on this machine of a person’s conversations, when 
     // What stays: the turns It reopened that may still be running, which is what keeps a second from being started beside one, and the settings
     const stays = { 'runs.json': JSON.stringify({ 'pi:a-conversation': { pid: 4242 } }), 'service.json': '{}' }
     for (const [name, holds] of Object.entries({ ...notes, ...stays })) writeFileSync(path.join(folder, name), holds)
+    const pending = path.join(folder, 'publication-pending')
+    mkdirSync(pending)
+    writeFileSync(path.join(pending, 'request.json'), JSON.stringify({ operation: 'an-operation', at: 1 }))
     const lines: string[] = []
     erasing((line) => lines.push(line))('the person who erased everything')
+    expect(existsSync(pending)).toBe(false)
     expect(Object.keys(notes).filter((name) => existsSync(path.join(folder, name)))).toEqual([])
     expect(Object.keys(stays).filter((name) => existsSync(path.join(folder, name)))).toEqual(Object.keys(stays))
     expect(lines).toEqual(['backend: everything was erased, and what It had noted here of conversations went with it'])

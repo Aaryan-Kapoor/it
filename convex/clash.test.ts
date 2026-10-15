@@ -14,6 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { backendAt } from '../packages/cli/src/lib'
 import { RELEASE } from '../packages/cli/src/serve/config'
 import { bases } from '../packages/cli/test-ports'
 
@@ -209,10 +210,17 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
           },
           ...(body.length ? { body } : {}),
         })
-        const data = Buffer.from(await answer.arrayBuffer())
+        let data = Buffer.from(await answer.arrayBuffer())
+        if (fn === 'publish:begin' || fn === 'publish:resume') {
+          const said = JSON.parse(data.toString())
+          if (said.status === 'success') {
+            said.value.upload.url = `${address}/upload/`
+            data = Buffer.from(JSON.stringify(said))
+          }
+        }
         // The real backend has answered after committing. Only the caller's reply is lost.
         if (fn === 'publish:finish' && lost-- > 0) return res.destroy()
-        res.writeHead(answer.status, Object.fromEntries(answer.headers))
+        res.writeHead(answer.status, { 'content-type': answer.headers.get('content-type') ?? 'application/json' })
         res.end(data)
       } catch {
         res.destroy()
@@ -224,7 +232,7 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
       new Promise<{ code: number | null; out: string }>((resolve) => {
         const child = spawn(process.execPath, [it, ...args], {
           cwd: folder,
-          env: { ...env(), IT_URL: address },
+          env: { ...env(), IT_URL: address, IT_SITE_URL: backendAt(Number(new URL(origin).port)).site },
           stdio: ['ignore', 'pipe', 'ignore'],
         })
         let out = ''

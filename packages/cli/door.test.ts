@@ -2364,11 +2364,13 @@ describe('What the door will wait for', () => {
       const stalled = await ask(opened.base, { method: 'PUT', path: '/upload/index.html', length: LIMITS.fileBytes, body: 'five!' })
       expect(stalled.status).toBe(500)
       expect(Date.now() - began).toBeLessThan(5000)
-      expect((await ask(opened.base, { method: 'PUT', path: '/upload/index.html', length: LIMITS.fileBytes + 1, body: '' })).status).toBe(413)
+      expect(
+        (await ask(opened.base, { method: 'PUT', path: '/upload/index.html', length: LIMITS.fileBytes + 1, body: 'x'.repeat(LIMITS.fileBytes + 1) })).status,
+      ).toBe(413)
     } finally {
       await opened.stop()
     }
-  })
+  }, 15_000)
 
   test('A request whose body stops arriving is given up on', async () => {
     const impatient = await open(false, { patience: 300 })
