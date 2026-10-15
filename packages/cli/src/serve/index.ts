@@ -6,7 +6,7 @@ import net from 'node:net'
 import path from 'node:path'
 import { contentPort } from '@it/protocol'
 import { runConnector } from '../connector'
-import { elsewhere, inHome, type Machine, machine, machineFile, notSetUp, Problem, readJson, why } from '../lib'
+import { elsewhere, inHome, type Machine, machine, machineFile, notSetUp, Problem, readJson, why, writePrivate } from '../lib'
 import { conversationsFile } from '../publish'
 import { startsByItself, stopFile } from '../service'
 import { ageBand, begin, countBand, counting, failureOf, record, recordNoted, sinceBegun } from '../usage'
@@ -253,8 +253,14 @@ function removeNotes(): boolean {
   }
   return any
 }
-/** When this service was last told that a person had erased everything, by its own measure of time passing. */
-let erasedAt: number | undefined
+/** Its presence means conversation notes still need removing after the connector has stopped. It names nobody. */
+const pendingNotes = () => inHome('conversation-notes-erasing')
+/** Completes a pending erasure only while no connector can write its old notes back. A failure leaves the mark for the next try or service start. */
+function finishErasingNotes(): void {
+  if (!existsSync(pendingNotes())) return
+  removeNotes()
+  rmSync(pendingNotes())
+}
 
 /**
  * What the service does when it is told that a person has erased everything. What It had noted
@@ -265,8 +271,10 @@ let erasedAt: number | undefined
  */
 export function erasing(say: (line: string) => void): (person: string) => void {
   return (person) => {
-    erasedAt = performance.now()
     try {
+      // Keep the retry on disk before removing anything. The running connector may write its
+      // old notes again as it stops, even after the backend has accepted this answer.
+      writePrivate(pendingNotes(), '')
       if (removeNotes()) say('backend: everything was erased, and what It had noted here of conversations went with it')
     } catch (err) {
       say(
@@ -600,6 +608,15 @@ async function connector(say: (line: string) => void, asked: AbortSignal, heard:
   /** The identity the connector last ran as, and stopped by itself as. */
   let ended: string | undefined
   while (!asked.aborted) {
+    try {
+      // A previous connector or service may have stopped with cleanup still pending. Do this
+      // before checking the machine too: erasure may have removed that identity already.
+      finishErasingNotes()
+    } catch (err) {
+      say(`connector: erased conversation notes could not be removed (${why(err)}); trying again`)
+      await pause(30_000)
+      continue
+    }
     const id = readJson<Machine>(machineFile())?.id
     if (!id || id === ended) {
       await pause(1000)
@@ -611,14 +628,14 @@ async function connector(say: (line: string) => void, asked: AbortSignal, heard:
     const again = setInterval(() => {
       if (asked.aborted && running) process.emit(heard())
     }, 250)
-    const began = performance.now()
     try {
-      await runConnector(say)
-      // A connector that was running when everything was erased held what it had heard of
-      // conversations in memory, and writes it down as it goes and as it stops: what was
-      // removed when the service was told of the erasing may be there again. It has stopped
-      // now, and nothing holds any of it any more
-      if (erasedAt !== undefined && erasedAt >= began) removeNotes()
+      try {
+        await runConnector(say)
+      } finally {
+        // A connector can write its old notes as it stops, whether it returns or throws.
+        // Keep cleanup pending until every note is gone, before another connector starts.
+        finishErasingNotes()
+      }
     } catch (err) {
       say(`connector: could not start: ${why(err)}`)
       await pause(30_000)

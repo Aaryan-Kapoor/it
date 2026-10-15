@@ -216,9 +216,15 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
   })
 
-  test.each(['its own path', 'a linked folder'])('two data folders share one update lock for a program reached through %s', async (through) => {
+  test.each([
+    { through: 'its own path', secondVersion: '9.9.8' },
+    { through: 'a linked folder', secondVersion: '9.9.8' },
+    { through: 'its own path', secondVersion: '9.9.9' },
+    { through: 'a linked folder', secondVersion: '9.9.9' },
+  ])('two data folders share one update lock through $through when the second fetches $secondVersion', async ({ through, secondVersion }) => {
     const homes = ['newer-home', 'older-home'].map((name) => path.join(folder, name))
     for (const home of homes) mkdirSync(home)
+    writeFileSync(path.join(homes[1]!, 'LICENSE.md'), 'the earlier terms\n')
     const linked = path.join(folder, 'linked-bin')
     symlinkSync(path.dirname(here()), linked, 'dir')
     const otherProgram = through === 'a linked folder' ? path.join(linked, 'it') : here()
@@ -282,7 +288,7 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     try {
       const newer = run(homes[0]!, here())
       await until(path.join(homes[0]!, 'probing'))
-      release('9.9.8')
+      release(secondVersion)
       const older = run(homes[1]!, otherProgram)
       // The candidate's callback has run and its continuations have had their turn. An updater
       // with a separate lock has started its destination probe by then, and is held there too.
@@ -295,6 +301,17 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
       const second = await older
       expect([first.code, first.err, second.code, second.err]).toEqual([0, '', 0, ''])
       expect([bothProbed, JSON.parse(first.out).to, JSON.parse(second.out).to, readFileSync(here(), 'utf8')]).toEqual([false, '9.9.9', '9.9.9', says('9.9.9')])
+      for (const [file, text] of [
+        ['LICENSE.md', 'the terms'],
+        ['THIRD_PARTY_NOTICES.md', 'the notices'],
+      ]) {
+        expect(readFileSync(path.join(homes[0]!, file!), 'utf8')).toBe(`${text} of 9.9.9\n`)
+        if (secondVersion === '9.9.9') expect(readFileSync(path.join(homes[1]!, file!), 'utf8')).toBe(`${text} of 9.9.9\n`)
+      }
+      if (secondVersion === '9.9.8') {
+        expect(readFileSync(path.join(homes[1]!, 'LICENSE.md'), 'utf8')).toBe('the earlier terms\n')
+        expect(existsSync(path.join(homes[1]!, 'THIRD_PARTY_NOTICES.md'))).toBe(false)
+      }
     } finally {
       for (const home of homes) writeFileSync(path.join(home, 'release'), '')
       await Promise.allSettled(runs)

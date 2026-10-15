@@ -233,8 +233,8 @@ export interface Upgraded {
  * it. Nothing is started or stopped here: the program that is running runs on as it was until
  * it is started again, and `started` is for whoever calls to see to.
  *
- * Every step that can fail comes before the one that replaces the program, so a failure leaves
- * the installation exactly as it was.
+ * The download and program checks finish before replacement. A legal file that cannot be
+ * written is reported separately, since the program may already have been installed.
  */
 export async function fetchNewer(
   opts: {
@@ -317,6 +317,20 @@ export async function fetchNewer(
           : 'The program that was fetched does not start on this system, so the one that is here stays.',
         'upgrade_program',
       )
+    const putLegal = () => {
+      // The terms it comes under and the notices of what it includes are this version's too
+      for (const [as, bytes] of [
+        ['LICENSE.md', license],
+        ['THIRD_PARTY_NOTICES.md', notices],
+      ] as const) {
+        try {
+          put(inHome(as), bytes, 0o644)
+        } catch {
+          // The program is in place, and is what matters: this is said, and is no reason to call the upgrade failed
+          say(`${as} could not be written beside it, and is still the one of the version before.`)
+        }
+      }
+    }
     // One update at a time puts its program in place, of however many were asked for at once,
     // at a terminal and on the site. Each took what it fetched to be newer than the version it
     // runs as itself, and by now another may have put a newer one still where this one goes.
@@ -325,6 +339,9 @@ export async function fetchNewer(
     return await aloneAt(lock, async () => {
       const there = await saysItIs(program)
       if (there && !newer(is, there)) {
+        // Another home may have installed this program. This home still needs its matching
+        // legal files, but a newer program must never receive this older release's files.
+        if (there === is) putLegal()
         say(`It ${there} was put in place by another update meanwhile, and is left as it is.`)
         return { from: VERSION, to: there, program }
       }
@@ -346,18 +363,7 @@ export async function fetchNewer(
           throw err
         }
       } else renameSync(fresh, program)
-      // The terms it comes under and the notices of what it includes are this version's too
-      for (const [as, bytes] of [
-        ['LICENSE.md', license],
-        ['THIRD_PARTY_NOTICES.md', notices],
-      ] as const) {
-        try {
-          put(inHome(as), bytes, 0o644)
-        } catch {
-          // The program is in place, and is what matters: this is said, and is no reason to call the upgrade failed
-          say(`${as} could not be written beside it, and is still the one of the version before.`)
-        }
-      }
+      putLegal()
       say(`Installed in ${dir}.`)
       return { from: VERSION, to: is, program }
     })
