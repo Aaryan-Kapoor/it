@@ -368,7 +368,7 @@ export function shim(): string {
  * the usual one, it is written into the add-on here: the harness may be started later from
  * somewhere that was never told.
  */
-export function itHomeWritten(text: string, elsewhere = process.env.IT_HOME ? path.resolve(process.env.IT_HOME) : null): string {
+export function itHomeWritten(text: string, elsewhere = home() !== path.join(os.homedir(), '.it') ? home() : null): string {
   if (!elsewhere) return text
   return text
     .replace(/^const IT_HOME_AT_SETUP = null$/m, () => `const IT_HOME_AT_SETUP = ${JSON.stringify(elsewhere)}`)
