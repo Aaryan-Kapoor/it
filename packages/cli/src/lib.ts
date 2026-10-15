@@ -255,9 +255,17 @@ export function changeWhole(file: string, change: (text: string) => string | nul
         kept(original)
         try {
           if (after !== null) putAbsent(part, target)
+          else {
+            try {
+              lstatSync(target)
+              throw new Error('Another program recreated the file')
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+            }
+          }
         } catch (err) {
           restoreAbsent(original, target)
-          throw new Error(`${file} could not be replaced. Its original is kept at ${original}`, { cause: err })
+          throw new Error(`${file} could not be ${after === null ? 'removed' : 'replaced'}. Its original is kept at ${original}`, { cause: err })
         }
         return true
       }

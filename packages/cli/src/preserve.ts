@@ -54,6 +54,11 @@ export function keepOriginal(file: string): string {
     }
     const saved = path.join(place, 'original')
     try {
+      // Verify this filesystem can publish without replacing a concurrent save before moving
+      // the installed file. Unsupported hard links leave that file in place.
+      const probe = path.join(place, 'link-check')
+      tryFile(() => linkSync(target, probe))
+      tryFile(() => unlinkSync(probe))
       tryFile(() => renameSync(target, saved))
       return saved
     } catch (err) {

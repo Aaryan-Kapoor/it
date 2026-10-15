@@ -165,3 +165,27 @@ test('a staging cleanup failure does not turn a published file into a failed pub
   expect(() => putAbsent(part, file)).not.toThrow()
   expect(readFileSync(file, 'utf8')).toBe('installed')
 })
+
+test('leaves the installed file in place when its filesystem cannot make hard links', () => {
+  writeFileSync(file, 'installed')
+  fs.linkSync = () => {
+    throw Object.assign(new Error('unsupported'), { code: 'ENOTSUP' })
+  }
+  syncBuiltinESMExports()
+  expect(() => changeWhole(file, () => 'updated')).toThrow()
+  expect(readFileSync(file, 'utf8')).toBe('installed')
+  expect(existsSync(copy())).toBe(false)
+})
+
+test('reports incomplete removal when another writer recreates the file after preservation', () => {
+  writeFileSync(file, 'installed')
+  expect(() =>
+    changeWhole(
+      file,
+      () => null,
+      () => writeFileSync(file, 'new save'),
+    ),
+  ).toThrow(/could not be removed/)
+  expect(readFileSync(file, 'utf8')).toBe('new save')
+  expect(readFileSync(copy(), 'utf8')).toBe('installed')
+})
