@@ -88,7 +88,7 @@ const folderOf = (bin: string, env: NodeJS.ProcessEnv = process.env): string =>
     codex: env.CODEX_HOME ?? path.join(person, '.codex'),
     pi: env.PI_CODING_AGENT_DIR ?? path.join(person, '.pi'),
     opencode: path.join(env.XDG_CONFIG_HOME ?? path.join(person, '.config'), 'opencode'),
-    openclaw: env.OPENCLAW_STATE_DIR ?? path.join(person, '.openclaw'),
+    openclaw: env.OPENCLAW_STATE_DIR ?? path.join(env.OPENCLAW_HOME ?? person, '.openclaw'),
     hermes: env.HERMES_HOME ?? path.join(person, '.hermes'),
   })[bin]!
 
@@ -1250,6 +1250,23 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
     expect((await connect('openclaw', () => {})).addon).toBe('unavailable')
     expect(noted('openclaw').installs).toHaveLength(1)
     expect(existsSync(root(path.join(person, '.openclaw')))).toBe(true)
+  })
+
+  test.each([false, true])('a surviving OpenClaw home does not recreate a removed state directory with an explicit override %s', async (explicit) => {
+    const home = path.join(tmp, 'openclaw-home')
+    const first = explicit ? path.join(tmp, 'explicit-state') : path.join(home, '.openclaw')
+    mkdirSync(home, { recursive: true })
+    vi.stubEnv('OPENCLAW_HOME', home)
+    if (explicit) vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    await connect('openclaw', () => {})
+    rmSync(first, { recursive: true })
+    vi.stubEnv('OPENCLAW_STATE_DIR', path.join(tmp, 'second-state'))
+    ran = []
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    expect(existsSync(home)).toBe(true)
+    expect(existsSync(first)).toBe(false)
+    expect(ran.filter((r) => folderOf(r.bin, r.env) === first)).toEqual([])
+    expect(noted('openclaw').installs).toHaveLength(1)
   })
 
   test('a folder it was connected in that has been deleted since does not stand in the way of another', async () => {

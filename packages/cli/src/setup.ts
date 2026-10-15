@@ -1122,14 +1122,18 @@ function onRecord(from: string, id: Harness, at: Place): boolean {
 const elsewhere = (id: Harness, from: string | null, at: Place): Other | null =>
   from && real(from) !== thisHome() ? { home: from, kept: onRecord(from, id, at) } : null
 
-/** Optional config files do not prove that the folder holding an add-on was removed. */
-const installationFolders = (i: Installation) =>
-  [
-    ...Object.entries(i.env ?? {})
-      .filter(([key]) => key !== 'OPENCLAW_CONFIG_PATH')
+/** Check the folder holding an add-on, rather than an optional config file or its surviving parent. */
+const installationFolders = (i: Installation) => {
+  const env = i.env ?? {}
+  const state = env.OPENCLAW_STATE_DIR ?? (env.OPENCLAW_HOME ? path.join(env.OPENCLAW_HOME, '.openclaw') : undefined)
+  return [
+    ...Object.entries(env)
+      .filter(([key]) => !OPENCLAW_VARS.includes(key as (typeof OPENCLAW_VARS)[number]))
       .map(([, folder]) => folder),
+    ...(state ? [state] : []),
     ...(i.dir ? [i.dir] : []),
-  ].map(reached)
+  ].map((folder) => reached(path.resolve(folder.replace(/^~(?=$|[\\/])/, os.homedir()))))
+}
 
 /** Whether every folder an installation was made in is seen to be gone, and the add-on with it. One that cannot be looked at is not known to be. */
 const folderGone = (i: Installation) => {
