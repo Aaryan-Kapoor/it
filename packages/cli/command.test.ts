@@ -541,7 +541,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     })
     try {
       const skipped = await run(m, ['tour', '--wait'], b.env)
-      expect([skipped.code, skipped.out, skipped.err]).toEqual([0, 'The person skipped the tour.\n', ''])
+      expect([skipped.code, JSON.parse(skipped.out), skipped.err]).toEqual([0, { skipped: true, hint: 'The person skipped the tour.' }, ''])
       expect(b.asked.map(({ path }) => path)).toEqual(['tour:wait', 'tour:wait'])
       message = 'Another tour is already under way.'
       const refused = await run(m, ['tour', '--wait'], b.env)

@@ -526,7 +526,7 @@ async function tourWhenAsked(a: Args) {
         return null
       throw err
     })
-    if (answer === null) return written(process.stdout, 'The person skipped the tour.\n')
+    if (answer === null) return out({ skipped: true, hint: 'The person skipped the tour.' })
     const { asked } = answer
     if (asked) {
       // What the person does on the tour's first page may come before this agent's first wait

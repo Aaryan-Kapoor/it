@@ -208,15 +208,24 @@ export function writeFlushed(file: string, text: string): void {
  * that is saved again every time is left as its last save made it, and that is an error.
  */
 export function changeWhole(file: string, change: (text: string) => string | null | undefined): boolean {
-  const linked = lstatSync(file).isSymbolicLink()
-  const target = realpathSync(file)
-  const part = `${target}.it-${process.pid}.part`
   for (let tries = 1; ; tries++) {
+    const named = lstatSync(file, { bigint: true })
+    const linked = named.isSymbolicLink()
+    const target = realpathSync(file)
+    const part = `${target}.it-${process.pid}.part`
+    const stillNamed = () => {
+      const now = lstatSync(file, { bigint: true })
+      return now.dev === named.dev && now.ino === named.ino && realpathSync(file) === target
+    }
     const before = statSync(target, { bigint: true })
     const text = readFileSync(target, 'utf8')
     const changed = change(text)
     const after = changed === null && linked ? '' : changed
-    if (after === undefined || after === text) return false
+    if (after === undefined || after === text) {
+      if (stillNamed()) return false
+      if (tries >= 5) throw new Error(`${file} was saved by another program each time It was about to change it, and was left as it is`)
+      continue
+    }
     const mode = statSync(target).mode & 0o777
     try {
       if (after !== null) {
@@ -243,7 +252,8 @@ export function changeWhole(file: string, change: (text: string) => string | nul
         now.size === before.size &&
         now.mtimeNs === before.mtimeNs &&
         now.ctimeNs === before.ctimeNs &&
-        readFileSync(target, 'utf8') === text
+        readFileSync(target, 'utf8') === text &&
+        stillNamed()
       ) {
         if (after === null) rmSync(target, { force: true })
         else renameSync(part, target)

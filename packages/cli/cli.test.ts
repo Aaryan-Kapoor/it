@@ -2267,6 +2267,36 @@ describe('a file that is not It’s alone, changed while another program may sav
     }
   })
 
+  test.skipIf(process.platform === 'win32')('follows a profile symlink repointed while its replacement is being written', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-link-'))
+    const file = path.join(folder, 'profile')
+    const first = path.join(folder, 'first')
+    const second = path.join(folder, 'second')
+    try {
+      writeFileSync(first, BEFORE)
+      writeFileSync(second, SAVED)
+      symlinkSync(first, file)
+      let moved = false
+      withASave(
+        file,
+        () => {
+          if (!moved) {
+            moved = true
+            rmSync(file)
+            symlinkSync(second, file)
+          }
+          return undefined
+        },
+        () => expect(changeWhole(file, without)).toBe(true),
+      )
+      expect(readFileSync(first, 'utf8')).toBe(BEFORE)
+      expect(readFileSync(second, 'utf8')).toBe(without(SAVED))
+      expect(realpathSync(file)).toBe(second)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test('keeps a settings save made after the last content read, before replacement or deletion', () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
     const file = path.join(realpathSync(folder), 'config.toml')
