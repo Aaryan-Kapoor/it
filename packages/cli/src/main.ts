@@ -2852,6 +2852,8 @@ async function main(argv: string[]): Promise<void> {
   const a = parse(rest)
   optionsFor(cmd, a)
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h' || a.flags.help) {
+    // An explicit opt-out must reach the background service even when this command only prints help.
+    usage.heed()
     // `it help <word>` prints one of the parts the agent skill leaves for when it is needed.
     // Any other word after it, a command's name among them, prints the whole help as before
     const more = cmd === 'help' && a._[0] !== undefined && Object.hasOwn(MORE, a._[0]) ? MORE[a._[0]] : undefined

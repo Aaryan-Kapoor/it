@@ -298,6 +298,24 @@ function atTerminal(m: { home: string; it: string; bin: string }, args: string[]
   })
 }
 
+describe('help respects persistent telemetry opt-outs', () => {
+  for (const env of [{ IT_TELEMETRY_ENABLED: 'false' }, { DO_NOT_TRACK: '1' }] as Record<string, string>[])
+    test(`persists ${Object.keys(env)[0]} before returning help without beginning counts`, async () => {
+      for (const args of [[], ['help'], ['--help'], ['status', '--help']]) {
+        const m = machine(false)
+        const ran = await run(m, args, env)
+        expect([ran.code, existsSync(path.join(m.it, 'telemetry-off'))]).toEqual([0, true])
+        expect(existsSync(path.join(m.it, 'telemetry.json'))).toBe(false)
+        expect(existsSync(path.join(m.it, 'usage.jsonl'))).toBe(false)
+      }
+    })
+  test('invalid options still make no reporting changes', async () => {
+    const m = machine(false)
+    const ran = await run(m, ['status', '--repalce'], { DO_NOT_TRACK: '1' })
+    expect([ran.code, error(ran).code, existsSync(path.join(m.it, 'telemetry-off'))]).toEqual([2, 'invalid', false])
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('setup prerequisites and diagnostics', () => {
   test('an incompatible-only first setup stops before downloading, and a retry or --none can proceed', async () => {
     const m = machine(false)
