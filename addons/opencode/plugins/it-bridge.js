@@ -232,7 +232,10 @@ export const ItBridge = async ({ client }) => {
   function gave(clicks) {
     for (const c of clicks) given.add(c.id)
     if (given.size > 2000) for (const id of [...given].slice(0, 1000)) given.delete(id)
-    void ask('/ack', { ids: clicks.map((c) => c.id) })
+    void ask('/ack', {
+      ids: clicks.map((c) => c.id),
+      ...(clicks.some((c) => c.receipt) ? { receipts: clicks.map((c) => ({ id: c.id, receipt: c.receipt })) } : {}),
+    })
   }
 
   /** Whether an answer of OpenCode's says that it will take the message. */
@@ -346,13 +349,17 @@ export const ItBridge = async ({ client }) => {
   }
 
   async function check(s) {
-    const got = await ask(`/clicks?harness=${HARNESS}&session=${encodeURIComponent(s.id)}`)
+    const got = await ask(`/clicks?receipts=1&harness=${HARNESS}&session=${encodeURIComponent(s.id)}`)
     // The conversation may have been dropped while the connector was answering
     if (!got || !Array.isArray(got.clicks) || sessions.get(s.id) !== s) return
     const clicks = got.clicks.filter((c) => c && typeof c.id === 'string' && c.id && typeof c.text === 'string' && c.text)
     const again = clicks.filter((c) => given.has(c.id))
     // Offered something the agent already has: the earlier report of it was lost, so it is sent again
-    if (again.length) void ask('/ack', { ids: again.map((c) => c.id) })
+    if (again.length)
+      void ask('/ack', {
+        ids: again.map((c) => c.id),
+        ...(again.some((c) => c.receipt) ? { receipts: again.map((c) => ({ id: c.id, receipt: c.receipt })) } : {}),
+      })
     // Only what the connector offers this very moment is handed over. A click it has stopped
     // offering may have gone to someone else.
     const fresh = clicks.filter((c) => !given.has(c.id))

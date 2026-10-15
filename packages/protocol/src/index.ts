@@ -3,6 +3,8 @@
 // anything, so every part can use it.
 
 export const PROTOCOL_VERSION = 1
+/** Machine delivery requires claim receipts. Page messages keep their separate version. */
+export const MACHINE_PROTOCOL_VERSION = 2
 
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const

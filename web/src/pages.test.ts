@@ -10,7 +10,15 @@ import type { Sent } from './outbox'
 const NOW = Date.now()
 const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, agent: 'claude-code', machine: 'the laptop', machineSeenAt: NOW }
 /** What the backend last said of the page's clicks, newest first. */
-let recent: { at: number; delivery: string; outcome?: string | null; route?: string | null; handedAt?: number | null }[]
+let recent: {
+  at: number
+  delivery: string
+  outcome?: string | null
+  route?: string | null
+  handedAt?: number | null
+  sequence?: number
+  stoppedSequence?: number
+}[]
 /** Whether there is a connection to the backend, and what was asked to be told when that changes. */
 let connected: boolean
 const told = new Set<() => void>()
@@ -372,6 +380,14 @@ describe('what the page’s bar says of the last thing the person did', () => {
     await shown()
     expect(said()).toBe('Stopped')
     Object.assign(PAGE, { stoppedAt: null })
+  })
+
+  test('a click made after Stop is not shown as stopped when its wall clock is earlier', async () => {
+    Object.assign(PAGE, { stoppedAt: NOW - 1000, stoppedSequence: 7, answeredAt: 0 })
+    recent = [{ at: NOW - 60_000, sequence: 8, delivery: 'pending' }]
+    await shown()
+    expect(said()).not.toContain('Stopped')
+    Object.assign(PAGE, { stoppedAt: null, stoppedSequence: null })
   })
 
   test('a stop is said with what else it dropped, and not with what an earlier stop of the same conversation dropped', async () => {

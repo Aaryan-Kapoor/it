@@ -196,7 +196,7 @@ describe('the Claude Code add-on', () => {
   test('asks the connector for this conversation’s clicks, and tells commands which conversation they are in', async () => {
     const host = await start()
     await host.tick()
-    expect(asked.at(-1)!.path).toBe('/clicks?harness=claude-code&session=session-1')
+    expect(asked.at(-1)!.path).toBe('/clicks?receipts=1&harness=claude-code&session=session-1')
     expect([host.env.IT_HARNESS, host.env.IT_SESSION]).toEqual(['claude-code', 'session-1'])
   })
 
@@ -478,7 +478,7 @@ describe('the Claude Code add-on', () => {
     await host.tick()
     expect(asked.find((a) => a.path === '/session')?.body).toEqual({ harness: 'claude-code', session: 'session-2', was: 'session-1' })
     expect(host.env.IT_SESSION).toBe('session-2')
-    expect(asked.at(-1)!.path).toBe('/clicks?harness=claude-code&session=session-2')
+    expect(asked.at(-1)!.path).toBe('/clicks?receipts=1&harness=claude-code&session=session-2')
   })
 
   /** Each change of id the connector was told of, in the order it was told. */
@@ -495,7 +495,7 @@ describe('the Claude Code add-on', () => {
     // The pages made under the first id follow the conversation through the second to the third
     expect(told()).toEqual(['session-1 is now session-2', 'session-2 is now session-3'])
     expect(host.env.IT_SESSION).toBe('session-3')
-    expect(asked.at(-1)!.path).toBe('/clicks?harness=claude-code&session=session-3')
+    expect(asked.at(-1)!.path).toBe('/clicks?receipts=1&harness=claude-code&session=session-3')
     // Told once: the next check only asks for clicks
     await host.tick()
     expect(told().length).toBe(2)
@@ -525,7 +525,7 @@ describe('the Claude Code add-on', () => {
     await host.tick()
     expect(told()).toEqual(['session-1 is now session-2', 'session-2 is now session-3'])
     // And a click on a page the first id made arrives in the conversation as it is now
-    expect(asked.at(-1)!.path).toBe('/clicks?harness=claude-code&session=session-3')
+    expect(asked.at(-1)!.path).toBe('/clicks?receipts=1&harness=claude-code&session=session-3')
     expect(host.submits.map((s) => s.text)).toEqual(['on a page the first id made'])
   })
 
@@ -536,7 +536,7 @@ describe('the Claude Code add-on', () => {
     host.state.session = 'session-2'
     await host.tick()
     expect(told()).toEqual(['session-1 is now session-2'])
-    expect(asked.at(-1)!.path).toBe('/clicks?harness=claude-code&session=session-2')
+    expect(asked.at(-1)!.path).toBe('/clicks?receipts=1&harness=claude-code&session=session-2')
   })
 
   test('a conversation that was cleared and then left for another has its change of id told, and the other is not taken for it', async () => {
@@ -553,7 +553,7 @@ describe('the Claude Code add-on', () => {
     await host.tick()
     // The first conversation's pages follow it to the id it was left under, where it can be resumed
     expect(told()).toEqual(['session-1 is now session-2'])
-    expect(asked.at(-1)!.path).toBe('/clicks?harness=claude-code&session=session-other')
+    expect(asked.at(-1)!.path).toBe('/clicks?receipts=1&harness=claude-code&session=session-other')
     // What was taken for the first conversation is not handed to the one that took its place
     const result = await host.fire('tool.call', {}, {})
     expect(result.context ?? []).toEqual([])
@@ -571,7 +571,7 @@ describe('the Claude Code add-on', () => {
     await host.tick()
     expect(asked.some((a) => a.path === '/session')).toBe(false)
     expect(host.env.IT_SESSION).toBe('session-other')
-    expect(asked.at(-1)!.path).toBe('/clicks?harness=claude-code&session=session-other')
+    expect(asked.at(-1)!.path).toBe('/clicks?receipts=1&harness=claude-code&session=session-other')
     // What was taken for the first conversation is not handed to the second
     const result = await host.fire('tool.call', {}, {})
     expect(result.context ?? []).toEqual([])
@@ -654,7 +654,7 @@ describe('the Claude Code add-on', () => {
     register(host.on)
     await host.fire('session.start')
     await host.tick()
-    expect(asked.at(-1)?.path).toBe('/clicks?harness=claude-code&session=session-1')
+    expect(asked.at(-1)?.path).toBe('/clicks?receipts=1&harness=claude-code&session=session-1')
   })
 
   test('with nothing said about where It is, it is looked for in the person’s own folder as the `it` command finds that folder', async () => {

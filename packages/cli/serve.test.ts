@@ -1163,7 +1163,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
         .on('data', (piece: Buffer) => pieces.push(piece))
         .on('end', async () => {
           const json = (value: unknown) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value))
-          if (req.url === '/cli/config') return json({ protocol: 1, issuer: 'http://127.0.0.1:1' })
+          if (req.url === '/cli/config') return json({ protocol: 2, issuer: 'http://127.0.0.1:1' })
           asked.push(JSON.parse(Buffer.concat(pieces).toString('utf8')))
           await held
           json({ machine: 'machine-far' })

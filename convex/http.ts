@@ -2,7 +2,7 @@
 // credential is turned into something the backend believes: it checks the credential itself,
 // strictly, and mints a five-minute token for one audience. A machine's credential is the key
 // it enrolled with, and a browser's is the session it was paired into.
-import { AUDIENCE, PROTOCOL_VERSION } from '@it/protocol'
+import { AUDIENCE, MACHINE_PROTOCOL_VERSION } from '@it/protocol'
 import { httpRouter } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { base64url, createLocalJWKSet, importJWK, type JWK, jwtVerify } from 'jose'
@@ -84,7 +84,7 @@ http.route({ path: '/health', method: 'GET', handler: httpAction(async () => jso
 http.route({
   path: '/cli/config',
   method: 'GET',
-  handler: httpAction(async () => json(200, { protocol: PROTOCOL_VERSION, issuer: issuer() })),
+  handler: httpAction(async () => json(200, { protocol: MACHINE_PROTOCOL_VERSION, issuer: issuer() })),
 })
 
 // Enrolling another machine: a code that a machine already enrolled, or the owner's browser,

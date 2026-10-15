@@ -626,7 +626,7 @@ try {
         .on('data', (c) => chunks.push(c))
         .on('end', () => {
           const answer = (value) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value))
-          if (req.method === 'GET' && req.url === '/cli/config') return answer({ protocol: 1, issuer: 'http://127.0.0.1:1' })
+          if (req.method === 'GET' && req.url === '/cli/config') return answer({ protocol: 2, issuer: 'http://127.0.0.1:1' })
           if (req.method === 'POST' && req.url === '/bridge/enroll') {
             joinedWith.push(JSON.parse(Buffer.concat(chunks).toString('utf8')))
             return answer({ machine: 'machine-2' })

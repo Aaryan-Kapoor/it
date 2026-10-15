@@ -177,3 +177,9 @@ A helper that the agent starts, and a run on a schedule, are given no conversati
 - It uses no queue but Codex's. Qwen has a queue of the same kind, and It has no add-on for Qwen.
 
 Any agent app without an add-on still gets the `it` command, the agent skill (`addons/skill/SKILL.md`, which `it skill` prints), `it wait` where the app can wake on a command's output, and the inbox. No click arrives there by itself.
+
+## Keeping delivery compatible
+
+Update It on every joined machine and restart open agent apps after an update. A connector or add-on that cannot carry delivery receipts is not given new clicks. Clicks stay in the inbox until a compatible connector and add-on can take them, or the agent reads them with `it wait`.
+
+Every delivery attempt carries its own receipt. A confirmation from an earlier attempt cannot confirm a later handover of the same click. The click keeps its original id so an agent can recognize a repeated delivery. An explicit `it ack` still marks the click as handled by the agent.

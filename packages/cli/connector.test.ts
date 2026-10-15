@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { MARK, PROTOCOL_VERSION } from '@it/protocol'
+import { MACHINE_PROTOCOL_VERSION, MARK } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { conversationFolder, noteConversation } from './src/publish'
@@ -422,7 +422,7 @@ describe.skipIf(process.platform === 'win32')('text that arrives in pieces, cut 
       try {
         const where = over === 'socket' ? { socket } : { port: (server.address() as { port: number }).port }
         writeFileSync(path.join(home, 'connector.json'), JSON.stringify({ ...where, token, pid: 1, version: 'x', startedAt: 0 }))
-        expect(await local('/clicks?harness=pi&session=s')).toEqual({ clicks: [{ id: 'click-1', payload: { note: NAME } }] })
+        expect(await local('/clicks?receipts=1&harness=pi&session=s')).toEqual({ clicks: [{ id: 'click-1', payload: { note: NAME } }] })
       } finally {
         await new Promise((r) => server.close(r))
       }
@@ -1033,7 +1033,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
 
   test('a machine that joined an It of a version it does not fit hands nothing over and reopens nothing, can still be stopped, and goes on by itself once the two fit', async () => {
     // The It this machine joined, as its door says which version it speaks
-    let speaks = PROTOCOL_VERSION + 1
+    let speaks = MACHINE_PROTOCOL_VERSION + 1
     const door = http.createServer((req, res) =>
       req.url === '/cli/config'
         ? res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ protocol: speaks }))
@@ -1059,7 +1059,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       await new Promise((r) => setTimeout(r, 2500))
       expect(called('delivery:claim')).toEqual([])
       // The It it joined is updated, or this machine is: asked again within the minute, and the click is taken
-      speaks = PROTOCOL_VERSION
+      speaks = MACHINE_PROTOCOL_VERSION
       await until(() => called('delivery:claim').includes('click-1'), 75_000)
       expect(said.some((line) => line.includes('fit again'))).toBe(true)
       expect((await local<{ ok: boolean; unfit?: string }>('/health'))?.unfit).toBeUndefined()
@@ -1296,7 +1296,7 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
   const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
   const session = (harness: string, n: number, more: Record<string, unknown> = {}) =>
     local('/session', { method: 'POST', body: { harness, session: `conversation-${n}`, ...more } })
-  const clicksFor = (harness: string, n: number) => local<{ clicks: { id: string }[] }>(`/clicks?harness=${harness}&session=conversation-${n}`)
+  const clicksFor = (harness: string, n: number) => local<{ clicks: { id: string }[] }>(`/clicks?receipts=1&harness=${harness}&session=conversation-${n}`)
 
   test('with none connected, Codex’s own command is never run for a click, and the connector asks It for no click of Codex’s queue', async () => {
     standIn()
@@ -1640,9 +1640,38 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     expect((await local<{ held: number }>('/health'))?.held).toBe(1)
     expect(asked('delivery:handedOff')).toEqual([])
     // Given out to its conversation, its receipt is taken
-    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=pi&session=conversation-1'))?.clicks.map((c) => c.id)).toEqual(['click-5'])
-    expect(await local('/ack', { method: 'POST', body: { ids: ['click-5'] } })).toEqual({ ok: true, acked: 1 })
+    const given = await local<{ clicks: { id: string; receipt: unknown }[] }>('/clicks?receipts=1&harness=pi&session=conversation-1')
+    expect(given?.clicks.map((c) => c.id)).toEqual(['click-5'])
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-5'], receipts: given!.clicks.map((c) => ({ id: c.id, receipt: c.receipt })) } })).toEqual(
+      { ok: true, acked: 1 },
+    )
     await until(() => asked('delivery:handedOff').includes('click-5'))
+  })
+
+  test('a receipt saved before restart cannot acknowledge a newly served claim on the same machine', async () => {
+    const session = { harness: 'pi', id: 'conversation-1' }
+    const old = { token: 'before-restart', session }
+    await start('socket', {}, (home) =>
+      writeFileSync(path.join(home, 'journal.jsonl'), `${JSON.stringify({ event: 'queued', id: 'click-restart', receipt: old })}\n`),
+    )
+    stand.answer = (name, args) => {
+      if (name === 'delivery:handedOff' && args.receipt?.token === old.token) return Promise.reject({ code: 'conflict' })
+    }
+    await local('/session', { method: 'POST', body: { harness: session.harness, session: session.id } })
+    stand.watching.get('delivery:inbox')!([
+      { id: 'click-restart', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now(), attended: true, session },
+    ])
+    await until(() => stand.calls.some((c) => c.name === 'delivery:handedOff' && c.args.receipt?.token === old.token))
+    await until(() => stand.calls.some((c) => c.name === 'delivery:claim' && c.args.ids.includes('click-restart')))
+    expect(await local('/clicks?harness=pi&session=conversation-1')).toEqual({ clicks: [], updateRequired: true })
+    const given = await local<{ clicks: { id: string; receipt: { token: string } }[] }>('/clicks?receipts=1&harness=pi&session=conversation-1')
+    expect(given?.clicks[0]?.receipt.token).not.toBe(old.token)
+    expect(await local('/ack', { method: 'POST', body: { receipts: [{ id: 'click-restart', receipt: old }] } })).toEqual({ ok: true, acked: 0 })
+    expect(await local('/ack', { method: 'POST', body: { receipts: given!.clicks.map((c) => ({ id: c.id, receipt: c.receipt })) } })).toEqual({
+      ok: true,
+      acked: 1,
+    })
+    await until(() => stand.calls.some((c) => c.name === 'delivery:handedOff' && c.args.receipt?.token === given!.clicks[0]!.receipt.token))
   })
 
   test('a click held for a conversation is held no longer than It gives it, though this machine’s clock is set back meanwhile', async () => {
@@ -1677,7 +1706,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
       )
       // By its own clock the hold had most of a minute left. It is not believed: nothing is given to the add-on that asks
       expect((await local<{ held: number }>('/health'))?.held).toBe(0)
-      expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=pi&session=conversation-1'))?.clicks).toEqual([])
+      expect((await local<{ clicks: { id: string }[] }>('/clicks?receipts=1&harness=pi&session=conversation-1'))?.clicks).toEqual([])
     } finally {
       vi.useRealTimers()
     }
@@ -1705,7 +1734,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     asking.on('error', () => {})
     let answered = ''
     asking.on('data', (piece) => (answered += piece))
-    asking.write(`GET /clicks?harness=pi&session=conversation-1 HTTP/1.1\r\nHost: local\r\nx-it-token: ${info.token}\r\n\r\n`)
+    asking.write(`GET /clicks?receipts=1&harness=pi&session=conversation-1 HTTP/1.1\r\nHost: local\r\nx-it-token: ${info.token}\r\n\r\n`)
     await until(() => asked('delivery:claim').includes('click-1'))
     // It goes away while It is still answering the claim, and the connector has heard that it has before the claim is answered
     asking.destroy()
@@ -1718,7 +1747,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     expect([journal(), answered]).toEqual([['claimed'], ''])
     // Asked again by an add-on that is there, the click is handed over, and that is written down
     stand.answer = null
-    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=pi&session=conversation-1'))?.clicks.map((c) => c.id)).toEqual(['click-1'])
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?receipts=1&harness=pi&session=conversation-1'))?.clicks.map((c) => c.id)).toEqual(['click-1'])
     expect(journal()).toEqual(['claimed', 'served'])
   })
 })

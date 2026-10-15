@@ -161,7 +161,12 @@ const briefOf = (clicks) => clicks.map((c) => (typeof c.brief === 'string' && c.
  * click started a turn (true) or joined one that was running (false); it is left out when that
  * is not known, as when an earlier report is repeated.
  */
-const report = ($, ids, woke) => void ask($, '/ack', woke === undefined ? { ids } : { ids, woke })
+const report = ($, clicks, woke) =>
+  void ask($, '/ack', {
+    ids: clicks.map((c) => c.id),
+    ...(clicks.some((c) => c.receipt) ? { receipts: clicks.map((c) => ({ id: c.id, receipt: c.receipt })) } : {}),
+    ...(woke === undefined ? {} : { woke }),
+  })
 
 // Being submitted this moment. Neither new (so not submitted a second time) nor yet Claude's
 // (so not reported): a prompt can still be refused, by one of the person's own hooks say.
@@ -200,11 +205,7 @@ function handOver($) {
         given.add(c.id)
       }
       if (given.size > 2000) for (const id of [...given].slice(0, 1000)) given.delete(id)
-      report(
-        $,
-        clicks.map((c) => c.id),
-        true,
-      )
+      report($, clicks, true)
     },
     (err) => refused(err),
   )
@@ -262,7 +263,7 @@ async function checkOnce($) {
     if (!(await ask($, '/session', { harness: HARNESS, session: move.now, was: move.was }))) return
     if (moves[0] === move) moves.shift()
   }
-  const got = await ask($, `/clicks?harness=${HARNESS}&session=${encodeURIComponent(id)}`)
+  const got = await ask($, `/clicks?receipts=1&harness=${HARNESS}&session=${encodeURIComponent(id)}`)
   if (!got || !Array.isArray(got.clicks)) return
   // A click is its id and the words for it. One without either is not handed over: Claude Code
   // takes no empty message, and no empty note beside what a tool gave back.
@@ -277,11 +278,7 @@ async function checkOnce($) {
   for (let i = pending.length - 1; i >= 0; i--) if (!offered.has(pending[i].id)) pending.splice(i, 1)
   const again = got.clicks.filter((c) => given.has(c.id))
   // Offered something Claude already has: the earlier report of it was lost, so it is sent again
-  if (again.length)
-    report(
-      $,
-      again.map((c) => c.id),
-    )
+  if (again.length) report($, again)
   for (const c of got.clicks) if (!given.has(c.id) && !submitting.has(c.id) && !pending.some((p) => p.id === c.id)) pending.push(c)
   if (!running) handOver($)
 }
@@ -382,11 +379,7 @@ export function register(on) {
     if (e.agentId !== undefined || !pending.length || result.deny) return result
     const clicks = pending.splice(0)
     for (const c of clicks) given.add(c.id)
-    report(
-      $,
-      clicks.map((c) => c.id),
-      false,
-    )
+    report($, clicks, false)
     return { ...result, context: [...(result.context ?? []), textOf(clicks)] }
   })
 }

@@ -517,7 +517,7 @@ class _Bridge:
                 if talk.was[:1] == [old]:
                     talk.was.pop(0)
 
-        answer = self._ask("/clicks?harness=%s&session=%s" % (HARNESS, quote(session, safe="")))
+        answer = self._ask("/clicks?receipts=1&harness=%s&session=%s" % (HARNESS, quote(session, safe="")))
         offered = answer.get("clicks") if isinstance(answer, dict) else None
         if not isinstance(offered, list):
             return
@@ -525,11 +525,11 @@ class _Bridge:
         # what it offers now is all there is to hand over, and nothing is kept here between askings.
         clicks = [c for c in offered if isinstance(c, dict) and isinstance(c.get("id"), str) and c["id"] and isinstance(c.get("text"), str) and c["text"]]
         with self._lock:
-            again = [c["id"] for c in clicks if c["id"] in self._given]
+            again = [c for c in clicks if c["id"] in self._given]
             fresh = [c for c in clicks if c["id"] not in self._given]
         # Offered something the agent already has: the earlier report of it was lost, so it is sent again
         if again:
-            self._ask("/ack", {"ids": again})
+            self._ask("/ack", {"ids": [c["id"] for c in again], "receipts": [{"id": c["id"], "receipt": c.get("receipt")} for c in again]})
         if not fresh or self._busy(talk):
             return
         with self._lock:
@@ -565,7 +565,7 @@ class _Bridge:
                 for old in list(self._given)[: REMEMBERED // 2]:
                     del self._given[old]
         # The agent has these now. If this report is lost, the connector offers them again and is told again.
-        self._ask("/ack", {"ids": [c["id"] for c in fresh]})
+        self._ask("/ack", {"ids": [c["id"] for c in fresh], "receipts": [{"id": c["id"], "receipt": c.get("receipt")} for c in fresh]})
 
 
 def register(ctx):

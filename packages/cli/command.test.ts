@@ -182,7 +182,7 @@ async function backend(
       .on('data', (c: Buffer) => chunks.push(c))
       .on('end', () => {
         const json = (value: unknown, status = 200) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
-        if (req.method === 'GET' && req.url === '/cli/config') return json({ protocol: 1, issuer: 'http://127.0.0.1:23001' })
+        if (req.method === 'GET' && req.url === '/cli/config') return json({ protocol: 2, issuer: 'http://127.0.0.1:23001' })
         // Asked how it is, it says that it is It, as the backend does
         if (req.method === 'GET' && req.url === '/health') return json({ ok: true, it: true })
         if (req.method === 'POST' && req.url === '/bridge/token') {
@@ -1649,7 +1649,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       background: expect.objectContaining({ registered: false }),
       harnesses: [],
       version: expect.any(String),
-      protocol: 1,
+      protocol: 2,
       hint: 'It is not running on this machine. Start it with `it serve`, or run `it setup` to keep it running in the background.',
     })
     // Nothing of where the backend listens, which a person can do nothing with
@@ -2677,8 +2677,8 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
       }
     }
     // A newer It: this machine is the one to update. An older one: the machine It runs on. Neither is joined, and no key is made
-    expect(await versions(2)).toEqual([2, 'Update It on this machine, with `it upgrade` or the install command. Then join again.', false, false])
-    expect(await versions(0)).toEqual([
+    expect(await versions(3)).toEqual([2, 'Update It on this machine, with `it upgrade` or the install command. Then join again.', false, false])
+    expect(await versions(1)).toEqual([
       2,
       'Update It on the machine it runs on, with `it upgrade` there or the Update button on its Machines page. Then join again.',
       false,
@@ -3039,7 +3039,7 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
           const json = (value: unknown, status = 200) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
           if (req.url === '/cli/config') {
             configRead.push(Date.now())
-            return json({ protocol: 1, issuer })
+            return json({ protocol: 2, issuer })
           }
           if (req.url === '/bridge/token') {
             const { proof } = JSON.parse(Buffer.concat(pieces).toString('utf8')) as { proof: string }
@@ -3079,7 +3079,7 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
           .on('end', () =>
             res
               .writeHead(req.url === '/cli/config' ? 200 : 401, { 'content-type': 'application/json' })
-              .end(JSON.stringify(req.url === '/cli/config' ? { protocol: 1, issuer } : { error: 'The proof does not verify.', reason: 'signature' })),
+              .end(JSON.stringify(req.url === '/cli/config' ? { protocol: 2, issuer } : { error: 'The proof does not verify.', reason: 'signature' })),
           )
       })
       await new Promise<void>((r) => refusing.listen(0, '127.0.0.1', r))

@@ -4,7 +4,7 @@
 // ends everything it can do.
 import { existsSync, rmSync } from 'node:fs'
 import os from 'node:os'
-import { PORTS, PROTOCOL_VERSION } from '@it/protocol'
+import { MACHINE_PROTOCOL_VERSION, PORTS } from '@it/protocol'
 import { exportJWK, generateKeyPair, type JWK } from 'jose'
 import { direct, doorRefusal, enrolledHere, inHome, keepMachine, Problem, readJson, settingsFile, unreachable, wasAt } from './lib'
 import { alone } from './serve/backend'
@@ -93,11 +93,11 @@ export const settleKept = (key: JWK): void => settle((kept) => kept.key.d === ke
  * It does not say.
  */
 export function incompatible(protocol: unknown): Problem | null {
-  if (typeof protocol !== 'number' || protocol === PROTOCOL_VERSION) return null
+  if (typeof protocol !== 'number' || protocol === MACHINE_PROTOCOL_VERSION) return null
   return new Problem(
-    `That It and the It on this machine are of versions that do not work together (it speaks version ${protocol} of how machines talk to It, and this one version ${PROTOCOL_VERSION}).`,
+    `That It and the It on this machine are of versions that do not work together (it speaks version ${protocol} of how machines talk to It, and this one version ${MACHINE_PROTOCOL_VERSION}).`,
     'invalid',
-    protocol > PROTOCOL_VERSION
+    protocol > MACHINE_PROTOCOL_VERSION
       ? 'Update It on this machine, with `it upgrade` or the install command.'
       : 'Update It on the machine it runs on, with `it upgrade` there or the Update button on its Machines page.',
   )
