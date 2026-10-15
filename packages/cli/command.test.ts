@@ -205,6 +205,10 @@ async function backend(
         const one = { path: call.path, args: call.args?.[0] ?? {} }
         asked.push(one)
         const said = answer(one)
+        if (said === Symbol.for('drop-answer')) {
+          req.socket.destroy()
+          return
+        }
         if (said instanceof Refusal) return json({ status: 'error', errorMessage: 'refused', errorData: said.data, logLines: [] })
         json({ status: 'success', value: said ?? null, logLines: [] })
       })
@@ -408,17 +412,13 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     const m = machine()
     const b = await backend(m, ({ path: fn, args }) => {
       if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 3, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
-      if (fn === 'publish:finish') return new Refusal({ code: 'unavailable', message: 'The upload could not be checked just now. Try again in a moment.' })
+      if (fn === 'publish:finish') return new Refusal({ code: 'invalid', message: 'One file did not arrive intact. Publish again.' })
       return null
     })
     try {
       const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], b.env)
       // What is said is why it was not finished, whatever became of giving it up
-      expect([ran.code, ran.out, error(ran)]).toEqual([
-        1,
-        '',
-        { code: 'unavailable', message: 'The upload could not be checked just now. Try again in a moment.' },
-      ])
+      expect([ran.code, ran.out, error(ran)]).toEqual([2, '', { code: 'invalid', message: 'One file did not arrive intact. Publish again.' }])
       expect(b.asked.filter((x) => x.path.startsWith('publish:')).map((x) => [x.path, x.args.artifactId, x.args.version])).toEqual([
         ['publish:begin', undefined, undefined],
         ['publish:finish', 'artifact-1', 3],
@@ -916,71 +916,88 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('`it open` says so, and does not end well, where the page was shown and could not be made this conversation’s', async () => {
+  test('`it open` asks for ownership and showing in one transaction and reports its refusal', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>
-      asked.path === 'artifacts:take'
-        ? new Refusal({ code: 'rate_limited', message: 'Too many of those at once. Try again shortly.' })
-        : asked.path === 'displays:show'
-          ? { displays: ['Kitchen'] }
+      asked.path === 'displays:show'
+        ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
+        : asked.path === 'displays:list'
+          ? [{ name: 'Kitchen' }]
           : null,
     )
     try {
-      const opened = await run(m, ['open', 'board'], { ...b.env, CODEX_THREAD_ID: 'codex-today' })
-      expect([opened.code, printed(opened)]).toEqual([
-        1,
-        {
-          id: 'board',
-          shownOn: ['Kitchen'],
-          notTaken: { code: 'rate_limited', message: 'Too many of those at once. Try again shortly.' },
-          hint: 'The page is shown, and it is still another conversation’s: what is done on it does not come here. Run `it open board` again before you ask the person to use it.',
-        },
-      ])
+      const opened = await run(m, ['open', 'board', '--on', 'Kichen'], { ...b.env, CODEX_THREAD_ID: 'codex-today' })
+      expect([opened.code, opened.out, error(opened).code]).toEqual([1, '', 'not_found'])
+      expect(b.asked.filter((x) => x.path === 'artifacts:take')).toEqual([])
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({
+        slug: 'board',
+        display: 'Kichen',
+        session: { harness: 'codex', id: 'codex-today' },
+        agent: 'codex',
+      })
     } finally {
       await b.close()
     }
   })
 
-  test('`it open` says that the page is this conversation’s now, and does not end well, where it was taken from another and could then not be shown', async () => {
+  test('an explicit publishing label is distinguished from the inferred app name', async () => {
     const m = machine()
-    const b = await backend(m, (asked) =>
-      asked.path === 'artifacts:take'
-        ? { took: true }
-        : asked.path === 'displays:show'
-          ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
-          : asked.path === 'displays:list'
-            ? [{ name: 'Kitchen' }]
+    const b = await backend(m, ({ path: fn }) =>
+      fn === 'artifacts:get'
+        ? { title: 'Plan' }
+        : fn === 'publish:begin'
+          ? { artifactId: 'artifact-1', slug: 'plan', version: 2, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+          : fn === 'publish:finish'
+            ? { slug: 'plan', version: 2, url: `${b.url}/p/plan` }
             : null,
     )
     try {
-      const opened = await run(m, ['open', 'board', '--on', 'Kichen'], { ...b.env, CODEX_THREAD_ID: 'codex-today' })
-      expect([opened.code, opened.err, printed(opened)]).toEqual([
-        1,
-        '',
-        {
-          id: 'board',
-          shownOn: [],
-          notShown: { code: 'not_found', message: 'No display is called "Kichen".', hint: 'Displays: "Kitchen"' },
-          note: 'This page was another conversation’s, and is this one’s now: what is done on it comes here.',
-          hint: 'The page was not shown, and `notShown` says why. It was made this conversation’s before that, and stays so. Run `it open board` again to show it.',
-        },
-      ])
-      // Where nothing was taken, a page that could not be shown is said as it always was, and nothing is printed
-      const own = await backend(m, (asked) =>
-        asked.path === 'artifacts:take'
-          ? { took: false }
-          : asked.path === 'displays:show'
-            ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
-            : asked.path === 'displays:list'
-              ? [{ name: 'Kitchen' }]
-              : null,
-      )
-      try {
-        const again = await run(m, ['open', 'board', '--on', 'Kichen'], { ...own.env, CODEX_THREAD_ID: 'codex-today' })
-        expect([again.code, again.out, error(again).code]).toEqual([1, '', 'not_found'])
-      } finally {
-        await own.close()
+      const env = { ...b.env, CODEX_THREAD_ID: 'label-conversation' }
+      expect((await run(m, ['update', 'plan', '--html', '<p>hi</p>'], env)).code).toBe(0)
+      expect(b.asked.findLast((x) => x.path === 'publish:begin')!.args).toMatchObject({ agent: 'codex' })
+      expect(b.asked.findLast((x) => x.path === 'publish:begin')!.args.agentExplicit).toBeUndefined()
+      expect((await run(m, ['update', 'plan', '--html', '<p>hi</p>', '--agent', 'New label'], env)).code).toBe(0)
+      expect(b.asked.findLast((x) => x.path === 'publish:begin')!.args).toMatchObject({ agent: 'New label', agentExplicit: true })
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a publication recovers a lost answer once in place and across another invocation', async () => {
+    const m = machine()
+    let committed = false
+    let loss = 1
+    let title = 'Original'
+    const identities: unknown[] = []
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'artifacts:get') return { title }
+      if (asked.path === 'publish:begin' || asked.path === 'publish:resume') {
+        identities.push(asked.args.operation)
+        return { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: committed ? '' : 'a-grant' } }
       }
+      if (asked.path === 'publish:finish') {
+        committed = true
+        if (loss-- > 0) return Symbol.for('drop-answer')
+        return { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      }
+      return null
+    })
+    try {
+      const args = ['update', 'plan', '--html', '<p>hi</p>']
+      const first = await run(m, args, b.env)
+      expect([first.code, printed(first).version, b.uploads.length]).toEqual([0, 1, 1])
+      committed = false
+      loss = 3
+      expect((await run(m, args, b.env)).code).toBe(1)
+      expect(b.asked.filter((x) => x.path === 'publish:abandon')).toEqual([])
+      const uploads = b.uploads.length
+      title = 'A newer publication changed this title'
+      loss = 0
+      const recovered = await run(m, args, b.env)
+      expect([recovered.code, printed(recovered).version, b.uploads.length]).toEqual([0, 1, uploads])
+      expect(identities[1]).toBe(identities[2])
+      expect(identities[0]).not.toBe(identities[1])
+      expect(readdirSync(path.join(m.it, 'publication-pending'))).toEqual([])
     } finally {
       await b.close()
     }
@@ -1596,6 +1613,7 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
       // On this machine it is this conversation's own page, under the id it had before, and is made again
       has = { ...has, machineId: 'machine-1' }
       expect([(await create()).code, taken()]).toEqual([0, true])
+      expect(b.asked.findLast((x) => x.path === 'publish:begin')!.args.expectedOwner).toEqual({ machineId: 'machine-1', session: has.session })
     } finally {
       await b.close()
     }
@@ -1616,7 +1634,7 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
           : asked.path === 'artifacts:take'
             ? { took: true }
             : asked.path === 'displays:show'
-              ? { displays: ['Kitchen'] }
+              ? { displays: ['Kitchen'], took: Boolean(asked.args.session) }
               : asked.path === 'publish:finish'
                 ? // The backend's word on what became of the page: taken by a publish that asked for it, left where it was by one that did not
                   {
@@ -1692,7 +1710,7 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
       // A conversation that only brings the page up for its person takes it as well: it is the one they are talking to
       b.asked.length = 0
       const opened = await run(m, ['open', 'board'], mine)
-      expect(b.asked.find((x) => x.path === 'artifacts:take')!.args).toEqual({
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({
         slug: 'board',
         session: { harness: 'codex', id: 'codex-today' },
         agent: 'codex',
@@ -2647,7 +2665,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       /^ {2}it update <id> .*\[--title "<title>"\]/m,
       /\[--agent <name>\]/,
       // The label is the page's from when it was made: an update by the conversation that has the page does not change it, and the help does not say that it does
-      /\[--agent <name>\], a label for who made it,\s+which a page keeps until another conversation has it/,
+      /\[--agent <name>\], a label for who made it,\s+which its owning conversation can change explicitly/,
       /\[--take\]/,
     ])
       expect(ran.out).toMatch(line)

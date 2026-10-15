@@ -92,6 +92,17 @@ export const LIMITS = {
   versionsKept: 10,
 } as const
 
+/** One file gets a minute plus its size at 20,000 bytes per second. */
+export const uploadBudgetMs = (bytes: number): number => 60_000 + Math.ceil(bytes / 20_000) * 1000
+/** All layers use this finite publication lifetime, including retries. */
+export const PUBLICATION = {
+  budgetMs: 30 * 60_000,
+  grantSeconds: 31 * 60,
+  grantTailMs: 36 * 60_000,
+  deletedSeconds: 60 * 60,
+  receiptDays: 30,
+} as const
+
 /** What one person may hold. */
 export const QUOTA = {
   artifacts: 500,

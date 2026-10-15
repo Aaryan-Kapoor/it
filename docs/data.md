@@ -60,7 +60,8 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 | Earlier versions of a page | The nine newest, which with the one that is shown makes ten versions kept. An older one goes when a newer one is published |
 | What was done on a page | A week after an agent was given it. A month if no agent ever took it |
 | A notification | A month |
-| A publish that was begun and never finished | An hour |
+| A publish that was begun and never finished | An hour. Completing it is allowed for thirty minutes |
+| The outcome of a publication | Thirty days from when publishing began, or until its page is deleted. A repeated completion returns that outcome even after the content version has gone |
 | A browser's pairing | For as long as the browser is used, and a year after it was last used, unless you end it sooner |
 | A showing of a page | Until nothing has asked under it for ten minutes, and a day at most. The site then shows the page again by itself. It ends at once when It stops, and a moment after the page is deleted or its display is signed out, as the second paragraph under this table says |
 | A machine you revoked | Its record for a month, and for as long after that as a page it made is still there |
@@ -100,6 +101,7 @@ It also counts how fast things come, so that one page or one command that has go
 - It takes 30 actions from one page before it slows that page to one a second, and 60 from all pages together before it slows them to two a second. What pages store for themselves is counted in the same way, apart from their actions. What actions carry is counted too: 4 MB at once, and then 512 KB a minute.
 - Your agents together may publish 30 times at once and then once a second, and ask the displays to show a page as often. They may send 15 notifications at once and then one every two seconds.
 - A showing's files may be asked for 3,000 times in a minute, and all of your showings together 30,000 times. A page of the most files loads several times over within that. Past either, the pages' port answers 429 until that minute is over.
+- A publication has thirty minutes for its files and completion, including retries. Each file gets a minute plus its size at 20,000 bytes per second. If a completion answer is lost, the command asks for the same outcome again. If It remains unreachable, running the identical command again resumes the saved publication. The local note holds only a digest of the request, an operation id and its time, under `publication-pending/` in It's folder. It goes when the result is known, or when everything is erased on the host. On a joined machine it stays until the command is tried again or It is uninstalled. After thirty days, the command asks you to check the page before removing the note and trying again.
 - The files of one version may be uploaded 1,500 times in a minute, and all uploads together 6,000 times, which is three times and more what a version of the most files takes. Past either, an upload is answered 429, and the `it` command waits and sends the file again, up to five times more, before it gives the publish up as `rate_limited`.
 - State may be changed 200 times at once and then ten times a second. Every change stores the whole state again and sends it to every display that shows the page, so a change is counted by the size of the whole state as well: for one page, 8 MB at once and then 2 MB a minute, and twice that for all pages together.
 

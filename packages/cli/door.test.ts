@@ -2335,6 +2335,41 @@ describe('What the door will wait for', () => {
     }
   }, 60_000)
 
+  test('the upload deadline allows a slow maximum-size file and ends a stalled one', async () => {
+    const reader = {
+      ...contentStandIn,
+      upload: async (request: Request) => {
+        await request.arrayBuffer()
+        return new Response('{}')
+      },
+    }
+    // Time is scaled by 1,000. A 25 MiB file at 35,000 bytes per second takes 749 seconds.
+    // The former 600-second door limit would close it before these bytes arrive.
+    const opened = await open(false, { patience: 30, content: reader })
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          { host: '127.0.0.1', port: opened.base, method: 'PUT', path: '/upload/index.html', headers: { 'content-length': LIMITS.fileBytes } },
+          (res) => {
+            res.resume()
+            res.on('end', () => resolve(res.statusCode!))
+          },
+        )
+        req.on('error', reject)
+        req.flushHeaders()
+        setTimeout(() => req.end(Buffer.alloc(LIMITS.fileBytes)), 750)
+      })
+      expect(status).toBe(200)
+      const began = Date.now()
+      const stalled = await ask(opened.base, { method: 'PUT', path: '/upload/index.html', length: LIMITS.fileBytes, body: 'five!' })
+      expect(stalled.status).toBe(500)
+      expect(Date.now() - began).toBeLessThan(5000)
+      expect((await ask(opened.base, { method: 'PUT', path: '/upload/index.html', length: LIMITS.fileBytes + 1, body: '' })).status).toBe(413)
+    } finally {
+      await opened.stop()
+    }
+  })
+
   test('A request whose body stops arriving is given up on', async () => {
     const impatient = await open(false, { patience: 300 })
     try {

@@ -7,7 +7,7 @@
 // check they arrived) are asked directly. Things that must happen even if the content service
 // cannot be reached at that moment (ending a display's showings, deleting stored bytes) are
 // kept as jobs and tried again until it confirms, because a scheduled action runs at most once.
-import { AUDIENCE } from '@it/protocol'
+import { AUDIENCE, PUBLICATION } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
@@ -89,7 +89,7 @@ async function enqueue(
 /** Showings opened for a display before `epoch` are over, and tickets made for it before then open nothing. Answers with the job, for a caller that wants to know when the content service has confirmed. */
 export const revokeLater = (ctx: MutationCtx, args: { userId: Id<'users'>; displayId: string; epoch: number }) => enqueue(ctx, 'revoke', args.userId, args)
 /** How long after something is deleted an upload that was already under way could still land. */
-const GRANT_TAIL_MS = 20 * 60_000
+const GRANT_TAIL_MS = PUBLICATION.grantTailMs
 /**
  * Deletes stored bytes under a prefix, which begins with whose they are (`u/<person>/`): a
  * retired version, a deleted page, or everything one person has. Where a grant to upload there

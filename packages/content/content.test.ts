@@ -1750,6 +1750,43 @@ describe('uploads', () => {
     expect((await control('delete', { prefix })).json()).toEqual({ removed: 3, more: false })
   })
 
+  test.each(['old-asset.js', 'index.html'])('a stale upload cannot restore %s after its declaration is replaced', async (file) => {
+    const prefix = `u/${USER}/stale-replacement/2/`
+    const old = 'old bytes'
+    await seedFiles(prefix, { 'index.html': old, 'old-asset.js': old })
+    let send!: ReadableStreamDefaultController<Uint8Array>
+    let reading!: () => void
+    const reached = new Promise<void>((resolve) => {
+      reading = resolve
+    })
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          send = controller
+        },
+        pull() {
+          reading()
+        },
+      },
+      { highWaterMark: 0 },
+    )
+    const request = new Request(`${SITE}/upload/${file}`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${await grantFor(prefix)}`, 'content-length': String(old.length), 'x-it-sha256': sha256(old) },
+      body: stream,
+      duplex: 'half',
+    } as RequestInit)
+    const uploading = content.upload(request, { port: BASE, address: '127.0.0.1' })
+    await reached
+    const files = [entry('index.html', 'replacement')]
+    expect((await stage(prefix, files)).status).toBe(200)
+    expect((await upload('index.html', 'replacement', { prefix })).status).toBe(200)
+    send.enqueue(Buffer.from(old))
+    send.close()
+    expect((await uploading).status).toBe(403)
+    expect((await control('verify', { prefix, files })).json()).toEqual({ ok: true, missing: [] })
+  })
+
   test('a grant allows exactly the files that were declared: that path, that size, those bytes', async () => {
     const prefix = `u/${USER}/exact/1/`
     await stage(prefix, [entry('index.html', 'hello'), entry('app.js', 'let a = 1')])

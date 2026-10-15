@@ -15,6 +15,18 @@ export const button = v.object({ label: v.string(), action: v.string() })
  */
 const invitedBy = { byMachine: v.optional(v.id('machines')), bySession: v.optional(v.id('sessions')) }
 
+export const expectedOwner = v.object({ machineId: v.id('machines'), session })
+export const publicationResult = v.object({
+  slug: v.string(),
+  version: v.number(),
+  url: v.string(),
+  superseded: v.boolean(),
+  anothers: v.optional(v.boolean()),
+  ownerChanged: v.optional(v.boolean()),
+  elsewhere: v.optional(v.boolean()),
+  took: v.optional(v.boolean()),
+})
+
 export default defineSchema({
   // A person. There is one, whose subject is `owner`, made when the first machine is enrolled.
   users: defineTable({
@@ -222,6 +234,21 @@ export default defineSchema({
     // Whether any page still names a machine, which is what keeps a revoked machine's record
     .index('by_machine', ['machineId']),
 
+  publications: defineTable({
+    userId: v.id('users'),
+    machineId: v.id('machines'),
+    key: v.string(),
+    requestHash: v.optional(v.string()),
+    artifactId: v.id('artifacts'),
+    version: v.number(),
+    createdAt: v.number(),
+    result: v.optional(publicationResult),
+    abandoned: v.optional(v.boolean()),
+  })
+    .index('by_user_key', ['userId', 'key'])
+    .index('by_artifact_n', ['artifactId', 'version'])
+    .index('by_created', ['createdAt']),
+
   versions: defineTable({
     artifactId: v.id('artifacts'),
     userId: v.id('users'),
@@ -230,6 +257,7 @@ export default defineSchema({
     bytes: v.number(),
     status: v.union(v.literal('staging'), v.literal('live'), v.literal('retired')),
     createdAt: v.number(),
+    publicationId: v.optional(v.id('publications')),
     /** The title this version was published with. It becomes the page's title when the version goes live. */
     title: v.optional(v.string()),
     /** Who published it, and whether they said they were taking the page over. Acted on when the version goes live. */
@@ -239,6 +267,8 @@ export default defineSchema({
         session: v.optional(session),
         agent: v.optional(v.string()),
         take: v.boolean(),
+        agentExplicit: v.optional(v.boolean()),
+        expectedOwner: v.optional(expectedOwner),
         /** Published as a page of that conversation's own making: not shown where the id is by then another conversation's page. */
         own: v.optional(v.boolean()),
       }),

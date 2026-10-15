@@ -9,6 +9,7 @@
 // which is why these start the program itself, in a folder and on ports of their own.
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
+import { createServer } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -185,6 +186,65 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
       ),
     )
     expect(tally(answers)).toEqual({ 200: 1, 401: 59 })
+  }, 120_000)
+
+  test('a committed publication whose replies are lost is recovered without uploading or replacing a newer version', async () => {
+    let lost = 3
+    let uploads = 0
+    const calls: string[] = []
+    const proxy = createServer(async (req, res) => {
+      try {
+        const pieces: Buffer[] = []
+        for await (const piece of req) pieces.push(Buffer.from(piece))
+        const body = Buffer.concat(pieces)
+        const fn = req.url === '/api/action' ? (JSON.parse(body.toString()) as { path: string }).path : ''
+        if (fn) calls.push(fn)
+        if (req.url?.startsWith('/upload/')) uploads++
+        const answer = await fetch(`${origin}${req.url}`, {
+          method: req.method,
+          headers: {
+            ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
+            ...(req.headers['content-type'] ? { 'content-type': req.headers['content-type'] } : {}),
+            ...(req.headers['x-it-sha256'] ? { 'x-it-sha256': String(req.headers['x-it-sha256']) } : {}),
+          },
+          ...(body.length ? { body } : {}),
+        })
+        const data = Buffer.from(await answer.arrayBuffer())
+        // The real backend has answered after committing. Only the caller's reply is lost.
+        if (fn === 'publish:finish' && lost-- > 0) return res.destroy()
+        res.writeHead(answer.status, Object.fromEntries(answer.headers))
+        res.end(data)
+      } catch {
+        res.destroy()
+      }
+    })
+    await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve))
+    const address = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`
+    const command = (args: string[]) =>
+      new Promise<{ code: number | null; out: string }>((resolve) => {
+        const child = spawn(process.execPath, [it, ...args], {
+          cwd: folder,
+          env: { ...env(), IT_URL: address },
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+        let out = ''
+        child.stdout!.on('data', (piece: Buffer) => (out += piece))
+        child.once('exit', (code) => resolve({ code, out }))
+      })
+    try {
+      const args = ['create', 'Lost completion', '--id', 'lost-completion', '--html', '<p>Original</p>']
+      expect((await command(args)).code).toBe(1)
+      expect([calls.filter((p) => p === 'publish:begin').length, calls.filter((p) => p === 'publish:finish').length, uploads]).toEqual([1, 3, 1])
+      expect(JSON.parse(await ran(['update', 'lost-completion', '--html', '<p>Newer</p>'])).version).toBe(2)
+      const recovered = await command(args)
+      expect(recovered.code).toBe(0)
+      expect(JSON.parse(recovered.out).version).toBe(1)
+      expect([calls.filter((p) => p === 'publish:begin').length, calls.filter((p) => p === 'publish:resume').length, uploads]).toEqual([1, 1, 1])
+      expect(JSON.parse(await ran(['read', 'lost-completion'])).version).toBe(2)
+    } finally {
+      proxy.closeAllConnections()
+      await new Promise<void>((resolve, reject) => proxy.close((err) => (err ? reject(err) : resolve())))
+    }
   }, 120_000)
 
   /** A token for the session a cookie is. */

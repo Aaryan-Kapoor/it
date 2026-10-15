@@ -556,7 +556,7 @@ async function upload(it: Service, request: Request): Promise<Response> {
     else it.log.seldom('upload.refused', `${prefix}:${why}`, { prefix, reason: why })
     return deny(status)
   }
-  // A grant is good for a quarter of an hour, and may outlast the person it was made for. What
+  // A grant lasts for the publication budget, and may outlast the person it was made for. What
   // marks their files as removed is looked at first, before anything is counted under their id
   if (erased(it, person)) return refuse(403, 'deleted')
   // By person before anything is looked up, and by version: many versions at once must not
@@ -662,7 +662,17 @@ async function control(it: Service, request: Request, asked: Asked): Promise<Res
     // declared, in case the version was deleted in between: the deletion is noted before
     // anything is removed, so one of the two always finds the other.
     if (it.records.wasDeleted(prefix)) return refuse(409, 'version_deleted')
-    await it.files.declare(prefix, clean)
+    await it.files
+      .declare(prefix, clean, (move) =>
+        it.records.together(() => {
+          if (it.records.wasDeleted(prefix)) return false
+          move()
+          return true
+        }),
+      )
+      .catch((err) => {
+        if (!it.records.wasDeleted(prefix)) throw err
+      })
     if (it.records.wasDeleted(prefix)) {
       await it.files.clear(prefix, REMOVED_AT_ONCE)
       return refuse(409, 'version_deleted')
@@ -672,7 +682,12 @@ async function control(it: Service, request: Request, asked: Asked): Promise<Res
     // backend's database was put back from an earlier copy, which the files are no part of: the
     // next publish is then given a number that was used before. Left there, such a file would
     // make the version fail its check, though every file of it had arrived whole.
-    const left = await it.files.only(prefix, new Set(clean.map((f) => nameOf(f.path))))
+    const left = await it.files.only(prefix, new Set(clean.map((f) => nameOf(f.path))), (remove) =>
+      it.records.together(() => {
+        remove()
+        return true
+      }),
+    )
     it.log.log('control.stage', { prefix, files: clean.length, ...(left ? { left } : {}) })
     return json(200, { ok: true })
   }
