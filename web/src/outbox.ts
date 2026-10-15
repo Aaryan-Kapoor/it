@@ -210,8 +210,8 @@ export function outboxBelongsTo(user: string | null, under: string | null = null
     pairings++
     if (pairedFor !== null) {
       discardPending(pairedFor)
-      if (user === null) {
-        for (const [key, entry] of entries(pairedFor)) if (entry.format === 2 && entry.session !== null) localStorage.removeItem(key)
+      for (const [key, entry] of entries(pairedFor)) {
+        if (entry.format !== 2 || entry.session !== null) localStorage.removeItem(key)
       }
     }
   }
@@ -494,6 +494,7 @@ const draining = new Map<string, { again: boolean }>()
  * and everything still left is tried again a while later, by itself.
  */
 export async function drain(convex: ConvexReactClient, user: string): Promise<void> {
+  dropOld()
   const running = draining.get(user)
   if (running) {
     running.again = true
@@ -588,8 +589,15 @@ export async function drain(convex: ConvexReactClient, user: string): Promise<vo
   // Whatever is still here when the sending stops, for whatever reason, is tried again later:
   // as soon as a click left to its page is old enough, and otherwise less and less often, for
   // a display nobody is standing at
-  if (entries(user).every(([, e]) => e.refused)) {
+  const remaining = entries(user)
+  if (remaining.every(([, e]) => e.refused)) {
     retry.delete(user)
+    if (remaining.length) {
+      // Refused messages expire without being sent again, even if this tab stays open.
+      const expires = Math.min(...remaining.map(([, e]) => e.at + MAX_AGE_MS + 1))
+      const wait = Math.max(1, Math.min(MAX_AGE_MS, expires - Date.now()))
+      retry.set(user, { wait, timer: setTimeout(() => void drain(convex, user), wait) })
+    }
     return
   }
   const wait = troubled || !fresh ? Math.min((pending?.wait ?? 2500) * 2, 300_000) : fresh + 100

@@ -169,6 +169,33 @@ describe('the box a person types to a page’s agent in', () => {
     expect(messageMutation.mock.calls[2]![1].clientActionId).not.toBe(first)
   })
 
+  test.each([false, true])('a message saved by another tab is readable without replacing local edits: %s', async (edited) => {
+    await shown()
+    await act(async () => opener().click())
+    if (edited) await type('My local draft')
+    const key = 'it.outbox.user-1.page-1.typed-other'
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        user: 'user-1',
+        artifactId: 'page-1',
+        at: Date.now(),
+        format: 2,
+        session: 'session-1',
+        envelope: { clientActionId: 'typed-other' },
+        operation: { kind: 'message', text: 'Saved in another tab' },
+        refused: 'Refused elsewhere',
+      }),
+    )
+    await act(async () => void window.dispatchEvent(new StorageEvent('storage', { key })))
+    expect(box()!.value).toBe(edited ? 'My local draft' : 'Saved in another tab')
+    if (edited) expect(host.textContent).toContain('Saved in another tab')
+    expect(send().disabled).toBe(false)
+    localStorage.removeItem(key)
+    await act(async () => void window.dispatchEvent(new StorageEvent('storage', { key })))
+    expect(box()!.value).toBe(edited ? 'My local draft' : '')
+  })
+
   test('closes on Escape, which does not leave the page from there', async () => {
     await shown()
     await act(async () => opener().click())

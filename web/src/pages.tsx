@@ -432,6 +432,11 @@ function Talk({
   const id = useRef(restored?.id ?? fresh())
   const pendingDraft = useRef(restored ? { id: restored.id, edits: 0 } : null)
   useEffect(() => {
+    if (restored && pendingDraft.current?.id !== restored.id && edits.current === 0 && !sending) {
+      setText(restored.text)
+      id.current = restored.id
+      pendingDraft.current = { id: restored.id, edits: edits.current }
+    }
     if (!restored && !sending && pendingDraft.current !== null) {
       if (edits.current === pendingDraft.current.edits) setText('')
       pendingDraft.current = null
@@ -530,6 +535,7 @@ function Talk({
           >
             <IconSend />
           </button>
+          {restored && restored.text !== text && <span role="status">Saved message: {restored.text}</span>}
           {(error || restored?.refused) && (
             <span className="error" role="alert">
               {error || restored?.refused}

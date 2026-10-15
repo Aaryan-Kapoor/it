@@ -187,3 +187,30 @@ test.each(['message', 'answer', 'page'] as const)('%s waiting for a browser lock
     Reflect.deleteProperty(navigator, 'locks')
   }
 })
+
+test.each(['signout', 'repair'] as const)('%s also discards requests written before pairing identities were stored', async (ending) => {
+  const box = await import('./outbox')
+  box.outboxBelongsTo('person', 'old-session')
+  localStorage.setItem(
+    'it.outbox.person.page.legacy-old',
+    JSON.stringify({ user: 'person', artifactId: 'page', at: Date.now(), envelope: { clientActionId: 'legacy-old' } }),
+  )
+  box.outboxBelongsTo(ending === 'signout' ? null : 'person', ending === 'signout' ? null : 'new-session')
+  expect(saved()).toEqual([])
+})
+
+test('a refused message expires in an open tab without being sent again', async () => {
+  const box = await import('./outbox')
+  box.outboxBelongsTo('person', 'session')
+  const client = backend(async () => {
+    throw new ConvexError({ code: 'invalid', message: 'Refused' })
+  })
+  await expect(box.message(client.client, 'person', 'page', 'typed-expired', 'Keep for one week')).rejects.toThrow()
+  await flush()
+  expect(box.pendingMessage('person', 'page')?.refused).toBe('Refused')
+  const calls = client.mutation.mock.calls.length
+  await vi.advanceTimersByTimeAsync(7 * DAY + 1)
+  expect(saved()).toEqual([])
+  expect(box.pendingMessage('person', 'page')).toBeNull()
+  expect(client.mutation).toHaveBeenCalledTimes(calls)
+})

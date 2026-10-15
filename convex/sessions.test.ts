@@ -474,7 +474,8 @@ describe('what a screen is told about a display that is not its own', () => {
       display: 'laptop',
       buttons: [{ label: 'Yes', action: 'yes' }],
     })
-    const answer = (as: typeof screen, displayKey: string) => as.browser.mutation(api.notifications.answer, { id: note.id, action: 'yes', displayKey })
+    const answer = (as: typeof screen, displayKey: string) =>
+      as.browser.mutation(api.notifications.answer, { id: note.id, action: 'yes', displayKey, expectedSession: as.session })
     const refused = () =>
       answer(screen, MINE).then(
         () => ({ code: 'ok' }),

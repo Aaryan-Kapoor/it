@@ -35,6 +35,7 @@ beforeEach(() => {
 describe('the outbox', () => {
   test('a click too old to send is dropped when the site starts, whoever it was kept for and whoever is paired here now', async () => {
     const WEEK = 7 * 86_400_000
+    outboxBelongsTo(null)
     keep('alice', 'click-old-0001', Date.now() - WEEK - 60_000)
     keep('alice', 'click-new-0001', Date.now() - WEEK + 60_000)
     // Kept for people who are not paired here, and may never be again
@@ -42,7 +43,6 @@ describe('the outbox', () => {
     keep('bob', 'click-new-0002')
     // And one that cannot be read at all
     localStorage.setItem('it.outbox.carol.page1.click-0003', '{not json')
-    outboxBelongsTo(null)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     dropOld()
     expect(stored().sort()).toEqual(['it.outbox.alice.page1.click-new-0001', 'it.outbox.bob.page1.click-new-0002'])
@@ -213,7 +213,7 @@ describe('the outbox', () => {
       give(await work({ name: 'lock' }))
       await draining
       expect(b.calls).toEqual([])
-      expect(stored()).toEqual(['it.outbox.alice.page1.click-0090'])
+      expect(stored()).toEqual([])
     } finally {
       Reflect.deleteProperty(navigator, 'locks')
     }
@@ -266,7 +266,7 @@ describe('the outbox', () => {
     expect(stored()).toEqual([])
   })
 
-  test('if the browser is paired for someone else while clicks are being sent, sending stops and nothing of theirs is removed', async () => {
+  test('if the browser is paired for someone else while legacy clicks are being sent, sending stops and their saved payloads are discarded', async () => {
     keep('alice', 'click-0012')
     keep('alice', 'click-0013')
     const calls: string[] = []
@@ -283,7 +283,7 @@ describe('the outbox', () => {
     } as never
     await drain(client, 'alice')
     expect(calls).toEqual(['click-0012'])
-    expect(stored().length).toBe(2)
+    expect(stored()).toEqual([])
   })
 
   test('a "not now" that comes back after the page has gone leaves the click to be sent later', async () => {
