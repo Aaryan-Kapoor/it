@@ -477,6 +477,26 @@ describe('the drum machine', () => {
     idle.close()
   })
 
+  test.each(['last hit', 'clear button'])('a late reply cannot restore the pads after clearing with %s', async (how) => {
+    const page = await opened('drums', silent)
+    tapped(page, 3, 0)
+    await page.advance(1500)
+    await page.sent[0]!.accept()
+    if (how === 'last hit') {
+      tapped(page, 3, 0)
+      await page.advance(1500)
+    } else page.$('#clear').click()
+    await page.set({ theirs: ['x.......', '........', '........', '........'], note: 'Late reply' })
+    expect(page.$('.pad.theirs')).toBeNull()
+    expect(page.$('#play').getAttribute('data-on')).not.toBe('1')
+    expect(page.$('#t-did').classList.contains('in')).toBe(false)
+    tapped(page, 2, 4)
+    await page.advance(1500)
+    await page.set({ theirs: ['..x.....', '........', '........', '........'], note: 'New reply' })
+    expect(page.$('.pad[data-r="0"][data-c="2"]').classList.contains('theirs')).toBe(true)
+    page.close()
+  })
+
   test('taking off the last hit clears the agent pattern and stops playback before the agent answers', async () => {
     const page = await opened('drums', silent)
     tapped(page, 3, 0)
