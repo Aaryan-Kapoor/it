@@ -202,14 +202,15 @@ function conversationLock(file: string): ConversationLock | undefined {
   return held && Number.isInteger(held.pid) && held.pid > 0 && typeof held.holder === 'string' && /^[0-9a-f]{16}$/.test(held.holder) ? held : undefined
 }
 // Only a lock this process has finished using can be recovered while its PID is alive.
-const abandonedConversationLocks = new Map<string, string>()
+const abandonedConversationLocks = new Set<string>()
 function releaseConversationLock(file: string, holder: string): void {
-  abandonedConversationLocks.set(file, holder)
+  const key = `${file}\0${holder}`
+  abandonedConversationLocks.add(key)
   if (conversationLock(file)?.holder === holder) rmSync(file, { force: true })
-  abandonedConversationLocks.delete(file)
+  abandonedConversationLocks.delete(key)
 }
 function gone(file: string, held: ConversationLock): boolean {
-  if (held.pid === process.pid && abandonedConversationLocks.get(file) === held.holder) return true
+  if (held.pid === process.pid && abandonedConversationLocks.has(`${file}\0${held.holder}`)) return true
   try {
     process.kill(held.pid, 0)
     return false
