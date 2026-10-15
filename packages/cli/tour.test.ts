@@ -3,7 +3,7 @@
 // what the page sends, and what a page is filled in with is held to its place in the page,
 // since some of it is the agent's own words.
 import { existsSync } from 'node:fs'
-import { LIMITS } from '@it/protocol'
+import { LIMITS, TOUR_NAMES } from '@it/protocol'
 import { chromium } from 'playwright'
 import { describe, expect, test } from 'vitest'
 import { END, GUIDE, MENU, NAMES, STEPS, TOUR_PREFIX, tourPage } from './src/tour'
@@ -97,7 +97,7 @@ async function opened(name: string, before: (w: any) => void = () => {}) {
 
 describe('the pages of the tour', () => {
   test('are a menu, the things it offers in the order the tour goes on through them, and an ending', () => {
-    expect(NAMES).toEqual(['menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done'])
+    expect(NAMES).toEqual(TOUR_NAMES)
     expect(STEPS).toEqual(['whiteboard', 'chess', 'checklist', 'drums', 'button'])
     expect([MENU, END]).toEqual(['menu', 'done'])
   })

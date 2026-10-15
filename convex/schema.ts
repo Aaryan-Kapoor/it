@@ -194,6 +194,8 @@ export default defineSchema({
 
   // A page. Its bytes are kept by the content service; this is everything else.
   artifacts: defineTable({
+    /** Set only by a tour publication. Ordinary publication, taking and rollback remove it. */
+    tour: v.optional(v.object({ name: v.string(), identity: v.string() })),
     userId: v.id('users'),
     slug: v.string(),
     title: v.string(),
@@ -225,6 +227,8 @@ export default defineSchema({
     .index('by_machine', ['machineId']),
 
   versions: defineTable({
+    /** The tour page and state this upload may replace, checked again when it goes live. */
+    tour: v.optional(v.object({ name: v.string(), identity: v.string(), version: v.optional(v.number()), revision: v.number() })),
     artifactId: v.id('artifacts'),
     userId: v.id('users'),
     n: v.number(),

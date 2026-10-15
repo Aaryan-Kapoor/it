@@ -7,6 +7,10 @@ export const PROTOCOL_VERSION = 1
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const
 
+/** The built-in tour's fixed page ids and the order in which its examples are shown. */
+export const TOUR = { prefix: 'tour-', menu: 'menu', end: 'done', steps: ['whiteboard', 'chess', 'checklist', 'drums', 'button'] } as const
+export const TOUR_NAMES: readonly string[] = [TOUR.menu, ...TOUR.steps, TOUR.end]
+
 /** Token audiences. A token made for one is refused everywhere else. */
 export const AUDIENCE = {
   machine: 'it-machine',

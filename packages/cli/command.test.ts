@@ -428,28 +428,12 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('`it tour show next` shows the first thing the menu does not say has been seen, tells the menu, and shows the ending once all have been', async () => {
+  test('`it tour show next` selects from backend-owned progress and delegates resets to publication', async () => {
     const m = machine()
-    let seen: string[] | null = ['whiteboard']
-    const pages = new Map<string, { title: unknown; state: unknown }>()
+    let seen: string[] = ['whiteboard']
     const b = await backend(m, ({ path: fn, args }) => {
-      if (fn === 'artifacts:get') {
-        if (args.slug === 'tour-menu') return seen ? { title: 'The It tour', version: 1 } : new Refusal({ code: 'not_found', message: 'No such page.' })
-        const page = pages.get(args.slug as string)
-        return page ? { title: page.title, version: 1 } : new Refusal({ code: 'not_found', message: 'No such page.' })
-      }
-      if (fn === 'state:get') {
-        if (args.slug === 'tour-menu')
-          return seen
-            ? { json: JSON.stringify({ status: 'open', picked: '', seen }), revision: 1 }
-            : new Refusal({ code: 'not_found', message: 'No such page.' })
-        const page = pages.get(args.slug as string)
-        return page ? { json: JSON.stringify(page.state) } : new Refusal({ code: 'not_found', message: 'No such page.' })
-      }
-      if (fn === 'publish:begin') {
-        pages.set(args.slug as string, { title: args.title, state: JSON.parse(args.state as string) })
-        return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
-      }
+      if (fn === 'tour:seen') return { seen }
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
       if (fn === 'publish:finish') return { slug: 'shown', version: 1, url: 'https://site.example/p/shown' }
       if (fn === 'displays:show') return { displays: ['Desk'] }
       return null
@@ -459,33 +443,17 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         b.asked.length = 0
         const ran = await run(m, ['tour', 'show', name], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' })
         expect([name, ran.code, ran.err]).toEqual([name, 0, ''])
-        return {
-          page: b.asked.find((x) => x.path === 'publish:begin')!.args.slug,
-          told: b.asked.filter((x) => x.path === 'state:patch').map((x) => [x.args.slug, JSON.parse(x.args.patch as string)]),
-        }
+        expect(b.asked.some((x) => x.path === 'state:patch')).toBe(false)
+        return b.asked.find((x) => x.path === 'publish:begin')!.args
       }
-      // The whiteboard has been seen: the chessboard is next, it starts as it was made, and the menu is told that it has been seen
-      expect(await shown('next')).toEqual({
-        page: 'tour-chess',
-        told: [
-          ['tour-chess', { reply: '', note: '' }],
-          ['tour-menu', { seen: ['whiteboard', 'chess'] }],
-        ],
-      })
-      // One that is asked for by name and was seen before is shown again, and the menu is told nothing new
-      expect((await shown('whiteboard')).told.map(([slug]) => slug)).toEqual(['tour-whiteboard'])
-      // The menu, shown again, starts open and keeps what was seen
-      seen = ['whiteboard', 'chess']
-      expect(await shown('menu')).toEqual({ page: 'tour-menu', told: [['tour-menu', { status: 'open', picked: '', seen: ['whiteboard', 'chess'] }]] })
-      // Everything seen: what is next is the ending, and nothing more is told the menu
+      expect(await shown('next')).toMatchObject({ slug: 'tour-chess', tour: 'chess', state: '{"reply":"","note":""}' })
+      expect((await shown('whiteboard')).tour).toBe('whiteboard')
+      expect(b.asked.some((x) => x.path === 'tour:seen')).toBe(false)
+      expect((await shown('menu')).tour).toBe('menu')
       seen = ['whiteboard', 'chess', 'checklist', 'drums', 'button']
-      expect((await shown('next')).page).toBe('tour-done')
-      // Something in the menu's state that is no thing of the tour is not counted as one
-      seen = ['whiteboard', 'tictactoe', 'done']
-      expect((await shown('next')).page).toBe('tour-chess')
-      // With no menu yet, as when an agent begins somewhere else, the first thing is next, and there is no menu to tell
-      seen = null
-      expect((await shown('next')).page).toBe('tour-whiteboard')
+      expect((await shown('next')).slug).toBe('tour-done')
+      seen = []
+      expect((await shown('next')).slug).toBe('tour-whiteboard')
     } finally {
       await b.close()
     }
@@ -690,13 +658,15 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
   test('each command is counted by its own name, who ran it and how it ended, and never by what was typed after it', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>
-      asked.path === 'artifacts:list'
-        ? [{ slug: 'tour-menu', title: 'The It tour' }]
-        : asked.path === 'artifacts:get'
-          ? { title: 'The It tour', version: 1 }
-          : asked.path === 'state:get'
-            ? { json: '{"status":"open","picked":"","seen":["chess","drums"]}' }
-            : null,
+      asked.path === 'tour:clear'
+        ? { deleted: ['tour-menu'], kept: [], seen: 2 }
+        : asked.path === 'artifacts:list'
+          ? [{ slug: 'tour-menu', title: 'The It tour' }]
+          : asked.path === 'artifacts:get'
+            ? { title: 'The It tour', version: 1 }
+            : asked.path === 'state:get'
+              ? { json: '{"status":"open","picked":"","seen":["chess","drums"]}' }
+              : null,
     )
     try {
       await run(m, ['list'], b.env)
@@ -757,117 +727,60 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('`it tour clear` removes the tour’s own pages and no other, also one whose id only begins as theirs do', async () => {
+  test('`it tour clear` uses the guarded backend mutation and reports preserved legacy pages', async () => {
     const m = machine()
-    const b = await backend(m, (asked) =>
-      asked.path === 'artifacts:list'
-        ? [
-            { slug: 'tour-menu', title: 'The It tour' },
-            { slug: 'tour-of-my-project', title: 'The It tour' },
-            { slug: 'plan', title: 'A plan' },
-            { slug: 'tour-whiteboard', title: 'A whiteboard' },
-            { slug: 'tour-', title: 'The It tour' },
-          ]
-        : asked.path === 'artifacts:get'
-          ? { title: asked.args.slug === 'tour-menu' ? 'The It tour' : 'A whiteboard', version: 1 }
-          : asked.path === 'state:get'
-            ? { json: asked.args.slug === 'tour-menu' ? '{"status":"done","picked":"chess","seen":["chess"]}' : '{"agent_strokes":[],"note":"a house"}' }
-            : null,
-    )
-    try {
-      const cleared = await run(m, ['tour', 'clear'], b.env)
-      expect([cleared.code, printed(cleared)]).toEqual([0, { deleted: ['tour-menu', 'tour-whiteboard'] }])
-      expect(b.asked.filter((x) => x.path === 'artifacts:remove').map((x) => x.args.slug)).toEqual(['tour-menu', 'tour-whiteboard'])
-    } finally {
-      await b.close()
-    }
-  })
-
-  test('`it tour clear` leaves a page of the person’s own that has the id of one of the tour’s, and says that it did', async () => {
-    const m = machine()
-    // A person's own pages: one with nothing of the tour's but the id, one with the tour's title and a state of its own, and one with the tour's state and a title of its own
-    const pages = [
-      { slug: 'tour-chess', title: 'Openings I am learning', state: { moves: ['e4', 'e5'] } },
-      { slug: 'tour-button', title: 'A big red button', state: { presses: 3 } },
-      { slug: 'tour-drums', title: 'Sunday’s beat', state: { theirs: [], note: '' } },
-      { slug: 'tour-checklist', title: 'A checklist', state: { added: [{ text: 'Umbrella' }], note: 'the rain', extra: true } },
-    ]
-    const b = await backend(m, (asked) =>
-      asked.path === 'artifacts:list'
-        ? pages.map(({ slug, title }) => ({ slug, title }))
-        : asked.path === 'artifacts:get'
-          ? (pages.find((p) => p.slug === asked.args.slug) ?? null)
-          : asked.path === 'state:get'
-            ? pages.some((p) => p.slug === asked.args.slug)
-              ? { json: JSON.stringify(pages.find((p) => p.slug === asked.args.slug)!.state) }
-              : new Refusal({ code: 'not_found', message: 'No such page.' })
-            : null,
-    )
+    let kept: string[] = ['tour-checklist']
+    const b = await backend(m, ({ path: fn }) => (fn === 'tour:clear' ? { deleted: ['tour-menu', 'tour-whiteboard'], kept, seen: 2 } : null))
     try {
       const cleared = await run(m, ['tour', 'clear'], b.env)
       expect([cleared.code, cleared.err]).toEqual([0, ''])
-      // Only the one that is the tour's by what is in it goes: its title, and a state that keeps what the tour's page keeps
-      expect(b.asked.filter((x) => x.path === 'artifacts:remove').map((x) => x.args.slug)).toEqual(['tour-checklist'])
-      const said = printed(cleared)
-      expect([said.deleted, said.kept]).toEqual([['tour-checklist'], ['tour-chess', 'tour-button', 'tour-drums']])
-      expect(said.hint).toContain('not pages the tour made')
-      // With none of the tour's among them, nothing is removed, no tour is said to have ended, and It is not told that one is over
-      pages.pop()
-      b.asked.length = 0
-      expect(printed(await run(m, ['tour', 'clear'], b.env)).deleted).toEqual([])
-      expect(b.asked.map((x) => x.path).filter((fn) => fn === 'artifacts:remove' || fn === 'tour:done')).toEqual([])
-      expect(readFileSync(path.join(m.it, 'usage.jsonl'), 'utf8').split('"tour.ended"').length - 1).toBe(1)
+      expect(printed(cleared)).toMatchObject({ deleted: ['tour-menu', 'tour-whiteboard'], kept: ['tour-checklist'] })
+      expect(printed(cleared).hint).toContain('Older tour pages are preserved too')
+      expect(b.asked.map((x) => x.path)).toEqual(['tour:clear'])
+      kept = []
+      expect(printed(await run(m, ['tour', 'clear'], b.env))).toEqual({ deleted: ['tour-menu', 'tour-whiteboard'] })
     } finally {
       await b.close()
     }
   })
 
-  test('a tour step leaves a personal menu and a page reauthored after publication untouched', async () => {
+  test('tour commands never fall back to unguarded deletion or state changes on an older backend', async () => {
     const m = machine()
-    let published = false
     const b = await backend(m, ({ path: fn, args }) => {
-      if (fn === 'artifacts:get') {
-        if (args.slug === 'tour-menu') return { title: 'Trips already seen', version: 1 }
-        return published ? { title: 'My lesson notes', version: 2 } : new Refusal({ code: 'not_found', message: 'No such page.' })
-      }
-      if (fn === 'state:get')
-        return { json: JSON.stringify(args.slug === 'tour-menu' ? { seen: ['Kyoto', 'Lima'], note: 'keep my list' } : { reply: '', note: '' }) }
-      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
-      if (fn === 'publish:finish') {
-        published = true
-        return { slug: 'tour-chess', version: 1, url: 'https://site.example/p/tour-chess' }
-      }
-      if (fn === 'displays:show') return { displays: ['Desk'] }
+      if (fn === 'tour:clear' || fn === 'tour:seen' || fn === 'publish:begin')
+        return new Refusal({ code: 'invalid', message: 'This backend does not support tour ownership.' })
+      if (fn === 'artifacts:list') return [{ slug: 'tour-checklist', title: 'A checklist' }]
+      if (fn === 'state:get') return { json: '{"added":[],"note":""}' }
+      if (fn === 'artifacts:get') return { slug: args.slug, title: 'A checklist', version: 1 }
       return null
     })
     try {
-      const shown = await run(m, ['tour', 'show', 'chess'], b.env)
-      expect(shown.code).toBe(0)
-      expect(b.asked.filter((x) => x.path === 'state:patch')).toEqual([])
+      for (const args of [
+        ['tour', 'clear'],
+        ['tour', 'show', 'next'],
+        ['tour', 'show', 'checklist'],
+      ]) {
+        const refused = await run(m, args, b.env)
+        expect([refused.code, refused.out, error(refused).code]).toEqual([2, '', 'invalid'])
+      }
+      expect(b.asked.map((x) => x.path)).toEqual(['tour:clear', 'tour:seen', 'publish:begin'])
     } finally {
       await b.close()
     }
   })
 
-  test('tour cleanup leaves a page reauthored while the menu progress was being read', async () => {
+  test('a tour finish conflict neither resets state nor shows a page the tour no longer owns', async () => {
     const m = machine()
-    let changed = false
     const b = await backend(m, ({ path: fn, args }) => {
-      if (fn === 'artifacts:list') return [{ slug: 'tour-chess', title: 'A chessboard' }]
-      if (fn === 'artifacts:get') return { title: args.slug === 'tour-menu' ? 'The It tour' : changed ? 'My lesson notes' : 'A chessboard', version: 1 }
-      if (fn === 'state:get') {
-        if (args.slug === 'tour-menu') {
-          changed = true
-          return { json: '{"status":"open","picked":"","seen":[]}' }
-        }
-        return { json: '{"reply":"","note":""}' }
-      }
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 2, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return new Refusal({ code: 'conflict', message: 'The page changed while the tour was publishing. Nothing was replaced.' })
       return null
     })
     try {
-      const cleared = await run(m, ['tour', 'clear'], b.env)
-      expect([cleared.code, printed(cleared).deleted, printed(cleared).kept]).toEqual([0, [], ['tour-chess']])
-      expect(b.asked.filter((x) => x.path === 'artifacts:remove')).toEqual([])
+      const refused = await run(m, ['tour', 'show', 'chess'], b.env)
+      expect([refused.code, refused.out, error(refused).code]).toEqual([1, '', 'conflict'])
+      expect(b.asked.map((x) => x.path)).toEqual(['publish:begin', 'publish:finish', 'publish:abandon'])
+      expect(b.asked[0]!.args).toMatchObject({ slug: 'tour-chess', tour: 'chess', state: '{"reply":"","note":""}' })
     } finally {
       await b.close()
     }
@@ -902,50 +815,16 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('`it tour show` publishes nothing over a page of the person’s own that has the tour’s id for that page', async () => {
+  test('`it tour show` reports a backend ownership refusal without uploading or showing anything', async () => {
     const m = machine()
-    let theirs: { title: string; version: number | null; state: Record<string, unknown> } | null = {
-      title: 'Openings I am learning',
-      version: 4,
-      state: { moves: ['e4'] },
-    }
-    const b = await backend(m, ({ path: fn, args }) => {
-      if (fn === 'artifacts:get')
-        return args.slug === 'tour-chess' && theirs
-          ? { slug: 'tour-chess', title: theirs.title, version: theirs.version }
-          : new Refusal({ code: 'not_found', message: 'No such page.' })
-      if (fn === 'state:get')
-        return args.slug === 'tour-chess' && theirs ? { json: JSON.stringify(theirs.state) } : new Refusal({ code: 'not_found', message: 'No such page.' })
-      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
-      if (fn === 'publish:finish') {
-        theirs = { title: 'A chessboard', version: 5, state: { reply: '', note: '' } }
-        return { slug: args.slug ?? 'tour-chess', version: 5, url: 'https://site.example/p/tour-chess' }
-      }
-      if (fn === 'displays:show') return { displays: ['Desk'] }
-      return null
-    })
-    const env = { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' }
-    // What was written of the page itself: the menu is told too that the thing was seen, which is another page's
-    const written = () =>
-      b.asked
-        .filter((x) => x.path.startsWith('publish:') || (x.path === 'state:patch' && x.args.slug === 'tour-chess') || x.path === 'displays:show')
-        .map((x) => x.path)
+    const b = await backend(m, ({ path: fn }) =>
+      fn === 'publish:begin' ? new Refusal({ code: 'conflict', message: 'This id belongs to a page that the tour does not own. Nothing was replaced.' }) : null,
+    )
     try {
-      const refused = await run(m, ['tour', 'show', 'chess'], env)
+      const refused = await run(m, ['tour', 'show', 'checklist'], b.env)
       expect([refused.code, refused.out, error(refused).code]).toEqual([1, '', 'conflict'])
-      expect(inWords(error(refused))).toContain('"Openings I am learning"')
-      expect(inWords(error(refused))).toContain('Nothing was published')
-      expect(written()).toEqual([])
-      // A page of the tour's from a tour before, with what the agent then wrote into it, is the tour's and is started afresh
-      theirs = { title: 'A chessboard', version: 2, state: { reply: 'e7e5', note: 'the Sicilian' } }
-      expect((await run(m, ['tour', 'show', 'chess'], env)).code).toBe(0)
-      expect(written()).toEqual(['publish:begin', 'publish:finish', 'state:patch', 'displays:show'])
-      expect(JSON.parse(b.asked.find((x) => x.path === 'state:patch')!.args.patch as string)).toEqual({ reply: '', note: '' })
-      // And an id that was begun under and never published holds nobody's page
-      theirs = { title: 'Openings I am learning', version: null, state: {} }
-      b.asked.length = 0
-      expect((await run(m, ['tour', 'show', 'chess'], env)).code).toBe(0)
-      expect(written()).toEqual(['publish:begin', 'publish:finish', 'state:patch', 'displays:show'])
+      expect(b.asked.map((x) => x.path)).toEqual(['publish:begin'])
+      expect(b.asked[0]!.args.tour).toBe('checklist')
     } finally {
       await b.close()
     }

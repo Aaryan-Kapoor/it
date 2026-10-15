@@ -164,6 +164,25 @@ export const say = mutation({
   },
 })
 
+/** Removes a page already checked by its caller, in the same transaction as that check. */
+export async function removeArtifact(ctx: MutationCtx, a: Doc<'artifacts'>): Promise<void> {
+  // Its waiting clicks stop counting against the person the moment it is gone
+  if (a.waiting) await bump(ctx, a.userId, { waiting: -a.waiting })
+  // What was sent to the bell about the page goes from the bell with it. Left there, it
+  // offers a button for a page that is gone: the tour's last notice outlived the tour so.
+  // The rest go in the bounded cleanup of this page, however old they are.
+  const told = await ctx.db
+    .query('notifications')
+    .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
+    .order('desc')
+    .take(300)
+  for (const n of told) if (n.artifactId === a._id && !n.dismissedAt) await ctx.db.patch(n._id, { dismissedAt: Date.now() })
+  await ctx.db.delete(a._id)
+  await ctx.scheduler.runAfter(0, internal.retention.purgeArtifact, { artifactId: a._id })
+  // A publish of this page may be under way, with a grant that is still good
+  await removeLater(ctx, prefixOf(a.userId, a._id), { grantMayBeLive: true })
+}
+
 /** Deletes a page: its record at once, and everything that hung off it, bytes included, soon after. */
 export const remove = mutation({
   args: ref,
@@ -171,21 +190,7 @@ export const remove = mutation({
     const { user } = await requireMachineOrOwner(ctx)
     const a = await resolve(ctx, user._id, args)
     await rateLimit(ctx, 'remove', user._id)
-    // Its waiting clicks stop counting against the person the moment it is gone
-    if (a.waiting) await bump(ctx, user._id, { waiting: -a.waiting })
-    // What was sent to the bell about the page goes from the bell with it. Left there, it
-    // offers a button for a page that is gone: the tour's last notice outlived the tour so.
-    // The rest go in the bounded cleanup of this page, however old they are.
-    const told = await ctx.db
-      .query('notifications')
-      .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
-      .order('desc')
-      .take(300)
-    for (const n of told) if (n.artifactId === a._id && !n.dismissedAt) await ctx.db.patch(n._id, { dismissedAt: Date.now() })
-    await ctx.db.delete(a._id)
-    await ctx.scheduler.runAfter(0, internal.retention.purgeArtifact, { artifactId: a._id })
-    // A publish of this page may be under way, with a grant that is still good
-    await removeLater(ctx, prefixOf(user._id, a._id), { grantMayBeLive: true })
+    await removeArtifact(ctx, a)
     return null
   },
 })
@@ -206,6 +211,7 @@ export const take = mutation({
     // with every page of the person's, each time they are listed.
     if (mine.harness.length > 40 || mine.id.length > 200) fail('invalid', 'That is not a session.')
     const a = await resolve(ctx, user._id, which)
+    if (a.tour !== undefined) await ctx.db.patch(a._id, { tour: undefined })
     if (a.machineId === machine._id && a.session?.harness === mine.harness && a.session?.id === mine.id) return { took: false }
     await rateLimit(ctx, 'take', user._id)
     await ctx.db.patch(a._id, { machineId: machine._id, session: mine, agent: agent?.slice(0, 60) ?? a.agent })
@@ -480,7 +486,7 @@ export const rollback = mutation({
     }
     await ctx.db.patch(target._id, { status: 'live' })
     // The page takes the title that version was published with
-    await ctx.db.patch(a._id, { currentVersion: version, updatedAt: Date.now(), title: target.title ?? a.title })
+    await ctx.db.patch(a._id, { currentVersion: version, updatedAt: Date.now(), title: target.title ?? a.title, tour: undefined })
     return { version }
   },
 })

@@ -1,17 +1,18 @@
 // The tour: the guide an agent follows to show a new person what It is for, and the pages it
 // shows as it goes. The pages are carried in the program, and each is filled in here with what
 // it is to say before it is published like any other page.
+import { TOUR } from '@it/protocol'
 import { Problem } from './lib'
 import { GUIDE, PAGES } from './tour.generated'
 
 export { GUIDE }
-/** What the id of every page of the tour begins with, which is how they are found again to be removed. */
-export const TOUR_PREFIX = 'tour-'
+/** What the id of every page of the tour begins with. Ownership is kept separately by the backend. */
+export const TOUR_PREFIX = TOUR.prefix
 /** The page a person picks from, and the page the tour ends on. Neither is one of the things It is shown being. */
-export const MENU = 'menu'
-export const END = 'done'
+export const MENU = TOUR.menu
+export const END = TOUR.end
 /** The things a person is shown, in the order the tour goes on through them. */
-export const STEPS = Object.keys(PAGES).filter((name) => name !== MENU && name !== END)
+export const STEPS: readonly string[] = TOUR.steps
 /** Every page of the tour, by name. */
 export const NAMES = Object.keys(PAGES)
 

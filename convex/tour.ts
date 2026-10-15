@@ -5,12 +5,15 @@
 // goes by when it chooses what to show someone who has no pages.
 //
 // All of it is kept in a record of its own, and not in the person's: see `tours` in the schema.
+import { TOUR, TOUR_NAMES } from '@it/protocol'
 import { v } from 'convex/values'
 import type { Doc, Id } from './_generated/dataModel'
 import { type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
-import { requireBrowser, requireCaller, requireMachine } from './lib/authz'
+import { removeArtifact } from './artifacts'
+import { artifactBySlug, requireBrowser, requireCaller, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
+import { isTourPage, progress } from './lib/tourPages'
 
 /** How long an agent that said it is waiting is taken to be waiting still. It says so again every few seconds. */
 export const WAITING_MS = 15_000
@@ -146,5 +149,47 @@ export const done = mutation({
       waitingCancelled: kind === 'browser' && tour.waitingId !== undefined ? true : tour.waitingCancelled,
     })
     return null
+  },
+})
+
+/** Only a marked menu supplies progress to the command that chooses the next step. */
+export const seen = query({
+  args: {},
+  handler: async (ctx) => {
+    const { user } = await requireMachine(ctx)
+    return { seen: await progress(ctx, user._id) }
+  },
+})
+
+/** Checks ownership and removes the tour's pages in one transaction. Legacy pages stay. */
+export const clear = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const { user } = await requireMachine(ctx)
+    const seen = await progress(ctx, user._id)
+    const deleted: string[] = []
+    const preserved: string[] = []
+    for (const name of TOUR_NAMES) {
+      const page = await artifactBySlug(ctx, user._id, `${TOUR.prefix}${name}`)
+      if (!page) continue
+      if (!isTourPage(page, name)) {
+        preserved.push(page.slug)
+        continue
+      }
+      await rateLimit(ctx, 'remove', user._id)
+      await removeArtifact(ctx, page)
+      deleted.push(page.slug)
+    }
+    if (deleted.length) {
+      const was = await kept(ctx, user._id)
+      const tour = of(was)
+      await keep(ctx, user._id, was, {
+        ...tour,
+        doneAt: Date.now(),
+        askedAt: undefined,
+        waitingUntil: tour.waitingId !== undefined ? tour.waitingUntil : undefined,
+      })
+    }
+    return { deleted, kept: preserved, seen: seen.length }
   },
 })

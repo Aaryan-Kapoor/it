@@ -367,6 +367,8 @@ export async function publish(input: {
   shown?: boolean
   /** One of It's own pages, which the tour's are: not counted as a page somebody made. */
   itsOwn?: boolean
+  /** The built-in tour step, whose ownership and state are checked by the backend. */
+  tour?: string
 }): Promise<{ slug: string; version: number; url: string; note?: string }> {
   const bytes = input.files.reduce((n, f) => n + f.entry.size, 0)
   if (bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
@@ -380,6 +382,7 @@ export async function publish(input: {
     project: project(),
     session,
     agent: input.agent ?? session?.harness,
+    ...(input.tour === undefined ? {} : { tour: input.tour }),
     ...(input.state === undefined ? {} : { state: input.state }),
     ...(input.take ? { take: true } : {}),
     // Only a conversation makes a page its own: from a plain terminal there is none to keep one for
