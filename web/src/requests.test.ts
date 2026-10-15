@@ -154,3 +154,36 @@ test('an unresolved old drain does not block work from a replacement pairing', a
   expect(fresh.mutation).toHaveBeenCalledTimes(2)
   expect(saved()).toEqual([])
 })
+
+test.each(['message', 'answer', 'page'] as const)('%s waiting for a browser lock cannot move to a replacement pairing', async (kind) => {
+  const box = await import('./outbox')
+  box.outboxBelongsTo('person', 'old-session')
+  let enter!: () => unknown
+  const client = backend(async () => ({ actionId: 'unexpected' }))
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    value: {
+      request: (_key: string, _options: unknown, work: () => unknown) =>
+        new Promise((yes, no) => {
+          enter = () => Promise.resolve().then(work).then(yes, no)
+        }),
+    },
+  })
+  try {
+    const work =
+      kind === 'message'
+        ? box.message(client.client, 'person', 'page', 'old-intent', 'Old words')
+        : kind === 'answer'
+          ? box.answerNotification(client.client, 'notification', 'approve')
+          : box.submit(client.client, 'person', 'page', { v: 1, clientActionId: 'old-intent', name: 'approve', payload: '{}', contentVersion: 1 }, () => true)
+    expect(box.anyUnsaved()).toBe(true)
+    const refused = expect(work).rejects.toThrow(/pairing has ended/)
+    box.outboxBelongsTo('person', 'new-session')
+    await enter()
+    await refused
+    expect(client.mutation).not.toHaveBeenCalled()
+    expect(saved()).toEqual([])
+  } finally {
+    Reflect.deleteProperty(navigator, 'locks')
+  }
+})

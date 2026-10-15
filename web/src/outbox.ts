@@ -289,10 +289,19 @@ export function answerNotification(convex: ConvexReactClient, id: string, action
     { kind: 'answer', id, action, display: displayKey() },
   )
 }
-function sendOperation(convex: ConvexReactClient, user: string, artifactId: string, envelope: Sent, operation: Operation) {
+async function sendOperation(convex: ConvexReactClient, user: string, artifactId: string, envelope: Sent, operation: Operation) {
   const key = keyOf(user, artifactId, envelope.clientActionId)
-  const work = () => sendNow(convex, user, artifactId, envelope, key, () => true, undefined, operation)
-  return locks()?.request(key, {}, work) ?? work()
+  const pairing = thisPairing()
+  const release = holdPending(user)
+  const work = () => {
+    if (!stillPairedFor(user, pairing)) throw new Error('This browser’s pairing has ended.')
+    return sendNow(convex, user, artifactId, envelope, key, () => true, undefined, operation)
+  }
+  try {
+    return await (locks()?.request(key, {}, work) ?? work())
+  } finally {
+    release()
+  }
 }
 
 // What was kept in this browser was let go of: everything, or what was one person's where the
@@ -344,12 +353,18 @@ export async function submit(
     throw new Error('That is not an action this page can send.')
   const key = keyOf(user, artifactId, envelope.clientActionId)
   const shared = locks()
-  // Held from here until the click is accepted, refused, or left behind for later
-  return (
-    shared
-      ? shared.request(key, {}, () => sendNow(convex, user, artifactId, envelope, key, stillThere, judge))
-      : sendNow(convex, user, artifactId, envelope, key, stillThere, judge)
-  ) as Promise<{ actionId: string }>
+  const pairing = thisPairing()
+  const release = holdPending(user)
+  const work = () => {
+    if (!stillPairedFor(user, pairing)) throw new Error('This browser’s pairing has ended.')
+    return sendNow(convex, user, artifactId, envelope, key, stillThere, judge)
+  }
+  // Waiting for another tab's lock remains pending work under the original pairing.
+  try {
+    return (await (shared ? shared.request(key, {}, work) : work())) as { actionId: string }
+  } finally {
+    release()
+  }
 }
 
 async function sendNow(
