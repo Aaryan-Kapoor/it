@@ -118,6 +118,10 @@ Once the agent has changed the page after what you did, the bar stops saying "Yo
 
 If a page says that a turn from before may still be running, or `it status` says that some conversations are not reopened for now, run `it runs` on that machine. It lists what It has reopened and what it holds back: a conversation whose earlier run it could not check on or end, or every conversation where it could not read its own note of what was running (kept as `runs.json.unreadable` in its folder). A conversation whose run could not be checked on is reopened again once the machine has been started again. To have that sooner, or where it was the note that could not be read, which starting the machine again does not put right, see that no agent It started is still running there, and run `it runs clear`.
 
+A run also stays held if the connector stopped before it could record a verified ending. That hold is written before the agent gets work, so a full disk cannot erase it. The agent's own process may have gone while a tool it started remains. Restarting It alone does not release this hold. Restart the machine, or check that nothing from the run is still working and use `it runs clear`.
+
+If the disk cannot save the notice that you pressed Stop, It keeps the run's record and the backend's Stop. It retries saving the notice while it runs. The conversation stays held until the notice is safe, and its next reopened turn is told not to continue the stopped work.
+
 On a machine that joined an It, `it status` may say that the two are of versions that do not work together, and which of them to update. The machine stays joined. Nothing done on a page is handed to an agent on it until the two fit, which It asks about every minute, so there is nothing to do after the update but wait a moment.
 
 A page that a conversation made belongs to that conversation until another one brings it up or takes it, so what you do on it goes to the agent you last asked to show it.

@@ -2,7 +2,7 @@
 // run, how the click is given to it, and the note of each conversation's folder that says where.
 
 import { spawn } from 'node:child_process'
-import {
+import fs, {
   chmodSync,
   closeSync,
   existsSync,
@@ -16,9 +16,10 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
 import {
   Budget,
@@ -292,6 +293,154 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     expect(alive(second)).toBe(false)
     expect(overtime).toBe(1)
   }, 40_000)
+
+  test.each(['Stop', 'timeout'])(
+    'a detached tool started by the termination handler is found and ended on %s',
+    async (cause) => {
+      const ready = path.join(scratch, 'ready')
+      const childPid = path.join(scratch, 'late.pid')
+      const tool = `require('node:fs').writeFileSync(${JSON.stringify(childPid)}, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)`
+      const script = `
+      process.stdin.resume()
+      process.stdin.on('end', () => require('node:fs').writeFileSync(${JSON.stringify(ready)}, ''))
+      process.on('SIGTERM', () => {
+        require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(tool)}], { detached: true, stdio: 'ignore' }).unref()
+        process.exit(0)
+      })
+      setInterval(() => {}, 1000)
+    `
+      const stop = new AbortController()
+      const ran = carryOn(
+        { argv: [process.execPath, '-e', script], input: 'a click', app: 'Pi' },
+        scratch,
+        { harness: 'pi', session: 'late-tool', run: `late-tool-${process.pid}-${cause}` },
+        {
+          signal: stop.signal,
+          patience: cause === 'timeout' ? 1000 : 30_000,
+        },
+      )
+      try {
+        for (let n = 0; n < 100 && !existsSync(ready); n++) await new Promise((r) => setTimeout(r, 20))
+        expect(existsSync(ready)).toBe(true)
+        if (cause === 'Stop') stop.abort()
+        expect(await ran).toBe(cause === 'Stop' ? STOPPED : 'Pi had not finished in fifteen minutes')
+        expect(existsSync(childPid)).toBe(true)
+        const pid = Number(readFileSync(childPid, 'utf8'))
+        expect(identity([pid]).has(pid)).toBe(false)
+        // Unreadable unrelated processes can conservatively hold the run. The connector's
+        // persistence tests cover that hold; this regression proves its own late tool ended.
+      } finally {
+        stop.abort()
+        await ran
+        if (existsSync(childPid)) {
+          const pid = Number(readFileSync(childPid, 'utf8'))
+          if (identity([pid]).has(pid)) {
+            process.kill(pid, 'SIGKILL')
+            for (let n = 0; n < 100 && identity([pid]).has(pid); n++) await new Promise((r) => setTimeout(r, 20))
+          }
+        }
+      }
+    },
+    20_000,
+  )
+
+  test.skipIf(process.platform !== 'linux')('Stop ends its known leader when discovering other processes fails, and keeps uncertainty', async () => {
+    const ready = path.join(scratch, 'ready')
+    const stop = new AbortController()
+    let pid = 0
+    let unsure = false
+    const list = fs.readdirSync
+    const ran = carryOn(
+      {
+        argv: [
+          process.execPath,
+          '-e',
+          `process.stdin.resume(); process.stdin.on('end', () => require('node:fs').writeFileSync(${JSON.stringify(ready)}, '')); setInterval(() => {}, 1000)`,
+        ],
+        input: 'a click',
+        app: 'Pi',
+      },
+      scratch,
+      { harness: 'pi', session: 'failed-scan', run: 'failed-scan' },
+      {
+        signal: stop.signal,
+        began: (started) => {
+          pid = started
+        },
+        unsure: () => {
+          unsure = true
+        },
+      },
+    )
+    try {
+      for (let n = 0; n < 100 && !existsSync(ready); n++) await new Promise((r) => setTimeout(r, 20))
+      expect(existsSync(ready)).toBe(true)
+      fs.readdirSync = ((where: unknown, ...args: unknown[]) => {
+        if (where === '/proc') throw Object.assign(new Error('process inspection failed'), { code: 'EACCES' })
+        return (list as any)(where, ...args)
+      }) as typeof fs.readdirSync
+      syncBuiltinESMExports()
+      stop.abort()
+      expect(await ran).toBe(STOPPED)
+      expect(unsure).toBe(true)
+      expect(identity([pid]).has(pid)).toBe(false)
+    } finally {
+      fs.readdirSync = list
+      syncBuiltinESMExports()
+      stop.abort()
+      await ran
+      if (pid && identity([pid]).has(pid)) {
+        process.kill(pid, 'SIGKILL')
+        for (let n = 0; n < 100 && identity([pid]).has(pid); n++) await new Promise((r) => setTimeout(r, 20))
+      }
+    }
+  })
+
+  test.skipIf(process.platform !== 'linux')('a newly found marked process is not signalled after its number is reused', async () => {
+    const leader = spawn('sleep', ['300'], { detached: true, stdio: 'ignore' })
+    const exited = new Promise((resolve) => leader.once('exit', resolve))
+    const since = identity([leader.pid!]).get(leader.pid!)!
+    const ticks = Number(since.slice(5))
+    const candidate = 999_999_998
+    const read = fs.readFileSync
+    const list = fs.readdirSync
+    const kill = process.kill.bind(process)
+    let environments = 0
+    let stats = 0
+    const signalled: number[] = []
+    const signal = vi.spyOn(process, 'kill').mockImplementation((pid, how) => {
+      if (pid === candidate) {
+        signalled.push(pid)
+        return true
+      }
+      return kill(pid, how)
+    })
+    try {
+      fs.readdirSync = ((where: unknown, ...args: unknown[]) =>
+        where === '/proc' ? [String(candidate)] : (list as any)(where, ...args)) as typeof fs.readdirSync
+      fs.readFileSync = ((where: unknown, ...args: unknown[]) => {
+        if (where === `/proc/${candidate}/stat`) {
+          // The first discovery sees one identity. Before a signal, the number names another.
+          const fields = ['S', ...Array(18).fill('0'), String(ticks + (++stats >= 4 ? 2 : 1))]
+          return `${candidate} (tool) ${fields.join(' ')}`
+        }
+        if (where === `/proc/${candidate}/environ`) return ++environments === 2 ? 'IT_RUN=late-reused\0' : ''
+        return (read as any)(where, ...args)
+      }) as typeof fs.readFileSync
+      syncBuiltinESMExports()
+      expect(await endTree(leader.pid!, since, { harness: 'pi', session: 'reuse', run: 'late-reused', told: SINCE_TOLD })).toBe('ended')
+      expect(environments).toBeGreaterThanOrEqual(2)
+      expect(stats).toBeGreaterThanOrEqual(4)
+      expect(signalled).toEqual([])
+    } finally {
+      fs.readFileSync = read
+      fs.readdirSync = list
+      syncBuiltinESMExports()
+      signal.mockRestore()
+      if (identity([leader.pid!]).has(leader.pid!)) leader.kill('SIGKILL')
+      await exited
+    }
+  })
 
   test('the app is told the folder it is in, and not the one this program was started in', async () => {
     // OpenCode believes PWD over the folder it is started in. Left with this program's own, it
@@ -690,9 +839,9 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       left.push(later.pid!)
       await until(() => alive(later.pid!))
       const reused = { ...of, told: SINCE_TOLD }
-      expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970', { ...reused, run: 'another-run' })).toBe('gone')
+      expect(await endTree(process.pid, identity([later.pid!]).get(later.pid!)!, { ...reused, run: 'another-run' })).toBe('gone')
       expect(alive(later.pid!)).toBe(true)
-      expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970', { ...reused, run: 'a-run-whose-number-was-reused' })).toBe('ended')
+      expect(await endTree(process.pid, identity([later.pid!]).get(later.pid!)!, { ...reused, run: 'a-run-whose-number-was-reused' })).toBe('ended')
       await until(() => !alive(later.pid!))
       // Started as a reopened run is, with the two marks, which what it starts carries on
       const ours = await orphan({ IT_HARNESS: of.harness, IT_SESSION: of.session })
