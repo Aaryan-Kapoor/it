@@ -1299,6 +1299,19 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   if (!('status' in seen)) return seen
   const { status: before, adapter, at, from, other } = seen
   let { all, was } = seen
+  if (adapter.single) {
+    // Confirmed absence needs no folder comparison. Keep unknown places and failed
+    // inspections, but retire an installation the app says is gone before choosing one to keep.
+    const remaining: Installation[] = []
+    for (const installation of all) {
+      const place = placed(installation)
+      if (!place || (await adapter.present(place, installation)) !== false) remaining.push(installation)
+    }
+    if (remaining.length !== all.length) {
+      keep(id, remaining)
+      return connect(id, say, forLog)
+    }
+  }
   // A harness that is connected in one folder only. Which folder that is goes by what is on
   // record and not by where this command was run from, so that a setup in a terminal and the
   // background service, which may each find the harness pointed somewhere else, agree on it
