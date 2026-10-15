@@ -155,7 +155,7 @@ jobs:
       # content service's pass there
       - name: The door, its notifications and what It asks of itself, under Bun
         if: ${{ !cancelled() }}
-        run: bun test ./packages/cli/door.test.ts ./packages/cli/push.test.ts ./packages/cli/direct.test.ts
+        run: bun test ./packages/cli/door.test.ts ./packages/cli/export.test.ts ./packages/cli/push.test.ts ./packages/cli/direct.test.ts
       # On Linux alone: on macOS Bun's own test runner ends with a fault of Bun's in the middle
       # of these, and the standalone program's first run, which is what they stand for, is run
       # there by the job that starts the programs

@@ -178,7 +178,9 @@ describe('what the jobs are held to running', () => {
     const service = steps('test').find((step) => step.includes('bun test ./packages/cli/serve.test.ts'))
     const content = steps('test').find((step) => step.includes('test:bun'))
     expect(door).toBeDefined()
-    expect(door).toMatch(/run: bun test \.\/packages\/cli\/door\.test\.ts \.\/packages\/cli\/push\.test\.ts \.\/packages\/cli\/direct\.test\.ts$/m)
+    expect(door).toMatch(
+      /run: bun test \.\/packages\/cli\/door\.test\.ts \.\/packages\/cli\/export\.test\.ts \.\/packages\/cli\/push\.test\.ts \.\/packages\/cli\/direct\.test\.ts$/m,
+    )
     // The service's are a step of their own, run on Linux, and not allowed to fail either
     expect(service).toMatch(/if: \$\{\{ !cancelled\(\) && runner\.os == 'Linux' \}\}/)
     expect(service).not.toMatch(/continue-on-error/)
