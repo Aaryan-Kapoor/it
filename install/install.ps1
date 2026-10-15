@@ -234,9 +234,9 @@
       try { [IO.File]::Delete((Join-Path $root '.installing')); $lock = Open-Lock }
       catch { throw "Another install of It is putting its files in $root. Run this again when it has finished." }
     }
-    # The three files are put in place together or not at all. Each goes in by a move, which
+    # The program, terms and installation record are put in place together. Each goes in by a move, which
     # never writes through a link to wherever it leads and never goes into a folder. What was
-    # at each place is moved aside first and kept until all three are in, and is put back if
+    # at each place is moved aside first and kept until every file is in, and is put back if
     # anything stops this before then. A program that is running cannot be written over or
     # removed, and can be renamed: so the old program is kept beside the new one under another
     # name, and the old terms in the folder made for this run.

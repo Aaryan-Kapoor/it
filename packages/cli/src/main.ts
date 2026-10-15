@@ -1352,7 +1352,7 @@ async function uninstall(a: Args) {
     throw new Problem(
       `${folder} does not hold It with a recognized installation record or its running installed program. Nothing was removed.`,
       'invalid',
-      'For an older installation, run its own bin/it with IT_HOME set to that folder, or install It there again first. Inspect an ambiguous folder and remove its files by hand.',
+      'For an older installation with its original license and notices, run its own bin/it with IT_HOME set to that folder, or install It there again first. Inspect an ambiguous folder and remove its files by hand.',
     )
   if (!a.flags.yes) {
     if (!flow.live())

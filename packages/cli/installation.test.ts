@@ -3,6 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import { LICENSE } from './src/addons.generated'
 import { INSTALLATION, INSTALLATION_FILE, installationHome, legacyInstallation, markedInstallation, markInstallation } from './src/installation'
 import { home } from './src/lib'
 import { removeInstallationFiles } from './src/uninstall-files'
@@ -78,6 +79,8 @@ describe('installation ownership', () => {
     markInstallation(first)
     markInstallation(second)
     const program = put(first, 'bin/it')
+    put(first, 'LICENSE.md', LICENSE)
+    put(first, 'THIRD_PARTY_NOTICES.md')
     mkdirSync(path.join(second, 'bin'))
     symlinkSync(program, path.join(second, 'bin', 'it'))
     expect(installationHome(path.join(second, 'bin', 'it'))).toBe(first)
@@ -91,6 +94,10 @@ describe('installation ownership', () => {
   test('legacy recognition requires the running program in its real bin folder', () => {
     const at = folder()
     const program = put(at, process.platform === 'win32' ? 'bin/it.exe' : 'bin/it')
+    expect(installationHome(program)).toBeUndefined()
+    expect(legacyInstallation(at, program)).toBe(false)
+    put(at, 'LICENSE.md', LICENSE)
+    put(at, 'THIRD_PARTY_NOTICES.md')
     expect(legacyInstallation(at, program)).toBe(true)
     expect(legacyInstallation(at, program, '/checkout/it.mjs')).toBe(false)
     expect(installationHome(program)).toBe(at)

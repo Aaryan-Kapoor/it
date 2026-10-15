@@ -1276,7 +1276,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
 export async function disconnect(
   id: Harness,
   say: (line: string) => void,
-  // What does the removing, and whether the harness can be run at all: given by the tests
+  // Tests can replace the adapter. Uninstall keeps local files for selective cleanup.
   how: { adapter?: Pick<Adapter, 'remove' | 'present' | 'note'>; runnable?: () => Promise<boolean>; keepLocalFiles?: boolean } = {},
   forLog = false,
 ): Promise<boolean> {

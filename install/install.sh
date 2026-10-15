@@ -234,12 +234,12 @@ unlock() {
   fi
   locked=0
 }
-# The three files are put in place together or not at all. What was at each place is kept
-# aside, in the folder made for this run, until all three are in. Stopped
+# The program, terms and installation record are put in place together or not at all.
+# What was at each place is kept aside until every file is in. Stopped
 # before then, what was there is put back: the old file where one was kept, and nothing where
 # the new file went in over nothing.
 replacing=0
-# Which of the three this run has begun to put in place, and whether something that was moved
+# Which files this run has begun to put in place, and whether something that was moved
 # aside could not be put back
 begun=""
 kept=0

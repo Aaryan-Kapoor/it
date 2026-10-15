@@ -1,5 +1,6 @@
 import { lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
+import { LICENSE } from './addons.generated'
 import { Problem, writePrivate } from './lib'
 
 export const INSTALLATION_FILE = 'installation.json'
@@ -42,18 +43,25 @@ export function installationHome(program = process.execPath, script = program ==
   if (!/^it(?:\.exe)?$/i.test(path.basename(real)) || (process.platform === 'win32' ? bin.toLowerCase() : bin) !== 'bin') return undefined
   const folder = path.dirname(path.dirname(real))
   // A corrupt marker refuses discovery. A markerless legacy program in its own bin is
-  // already evidence of the installation, including after an older updater replaced it.
-  markedInstallation(folder)
-  return folder
+  // recognized with its installed terms, including after an older updater replaced it.
+  // A bare program copied to /usr/local/bin keeps the usual default home.
+  return markedInstallation(folder) || legacyInstallation(folder, real, script) ? folder : undefined
 }
 
-/** The running installed program also identifies a home made before markers existed. JSON shapes do not. */
+/** The running program and its installed terms identify a legacy home. JSON shapes alone do not. */
 export function legacyInstallation(folder: string, program = process.execPath, script = program === process.execPath ? process.argv[1] : undefined): boolean {
   if (script && /\.(m?js|ts)$/.test(script)) return false
   try {
     const bin = path.join(folder, 'bin')
     const executable = path.join(bin, process.platform === 'win32' ? 'it.exe' : 'it')
-    return lstatSync(executable).isFile() && realpathSync(bin) === path.join(realpathSync(folder), 'bin') && realpathSync(executable) === realpathSync(program)
+    return (
+      lstatSync(executable).isFile() &&
+      realpathSync(bin) === path.join(realpathSync(folder), 'bin') &&
+      realpathSync(executable) === realpathSync(program) &&
+      lstatSync(path.join(folder, 'LICENSE.md')).isFile() &&
+      readFileSync(path.join(folder, 'LICENSE.md'), 'utf8') === LICENSE &&
+      lstatSync(path.join(folder, 'THIRD_PARTY_NOTICES.md')).isFile()
+    )
   } catch {
     return false
   }
