@@ -48,6 +48,9 @@ interface Entry {
 }
 
 const keyOf = (user: string, artifactId: string, id: string) => `${PREFIX}${user}.${artifactId}.${id}`
+// A request whose answer was lost must keep its original deadline even when storage refused it.
+// These bounded records contain no payload and stay until confirmation or the pairing ends.
+const memoryGrants = new Map<string, { session: string | null; until: number }>()
 
 // Whatever shows what became of a click is told the moment what is kept here changes, so that
 // it never goes on saying what was true of the click before. Each change is counted, and the
@@ -137,12 +140,16 @@ async function send(convex: ConvexReactClient, e: Entry, key: string) {
   // A legacy entry is never given a fresh deadline. The backend can confirm its old receipt,
   // but cannot safely treat an unknown old identity as a new click.
   if (e.format === 2 && e.replayUntil === undefined) {
-    const grant = await convex.mutation(api.actions.replayGrant, {})
+    const saved = memoryGrants.get(key)
+    if (!saved && localStorage.getItem(key) === null && memoryGrants.size >= MAX)
+      throw new Error('Too many requests could not be saved. Keep this tab open and retry them before sending more.')
+    const grant = saved?.session === session ? saved : await convex.mutation(api.actions.replayGrant, {})
     if (!mine()) throw new Error('This browser’s pairing has ended.')
     e.replayUntil = grant.until
     // Persist the grant before dispatch. If storage fails, keep the in-memory grant and remove
     // the old record: a reload must never obtain another grant for an already dispatched click.
-    if (localStorage.getItem(key) !== null) {
+    if (localStorage.getItem(key) === null) memoryGrants.set(key, { session, until: e.replayUntil! })
+    else {
       try {
         localStorage.setItem(key, JSON.stringify(e))
       } catch {
@@ -204,9 +211,22 @@ export const thisSession = (): string | undefined => session ?? undefined
 export const stillPairedFor = (user: string, since?: number): boolean => theirs(user) && (since === undefined || since === pairings)
 /** Whether this browser is paired for anyone now. */
 export const pairedForSomeone = (): boolean => pairedFor !== null
-export function outboxBelongsTo(user: string | null, under: string | null = null): void {
+export function outboxBelongsTo(user: string | null, under: string | null = null, known = true): void {
+  if (!known) return
+  if (user === null) {
+    // On a cold start there was no in-memory pairing to replace. The backend's refusal still ends saved work.
+    for (const key of Object.keys(localStorage)) {
+      if (!key.startsWith(PREFIX)) continue
+      try {
+        const entry = JSON.parse(localStorage.getItem(key) ?? '') as Entry
+        if (entry.format === 2 && entry.session !== null) localStorage.removeItem(key)
+      } catch {}
+    }
+    memoryGrants.clear()
+  }
   const replaced = user !== pairedFor || under !== session
   if (replaced) {
+    memoryGrants.clear()
     pairings++
     if (pairedFor !== null) {
       discardPending(pairedFor)
@@ -440,7 +460,9 @@ async function sendNow(
         throw new Error('This browser’s pairing has ended.')
       }
       try {
-        return await send(convex, entry, key)
+        const result = await send(convex, entry, key)
+        memoryGrants.delete(key)
+        return result
       } catch (err) {
         if (!mine() || ((!stillThere() || operation !== undefined) && !settled(err))) {
           // Nobody was told what became of it: it stays, and is sent when it can be

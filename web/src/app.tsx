@@ -45,7 +45,7 @@ export function App() {
   const { isLoading, isAuthenticated } = useConvexAuth()
   // Whose clicks may be sent from this browser right now: the person it is paired for, and
   // nobody else's. Which session of theirs it is goes with it, for whatever is begun under one
-  outboxBelongsTo(paired ? user : null, paired ? session : null)
+  outboxBelongsTo(paired ? user : null, paired ? session : null, loaded)
   // Leaving is one session's doing. When the browser turns out to be under another (it was
   // paired again in another tab meanwhile), whoever is here now did not ask to leave
   const under = useRef(session)

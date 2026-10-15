@@ -313,6 +313,36 @@ describe('the outbox', () => {
     }
   })
 
+  test('a retry reuses its original deadline after storage recovers from an unconfirmed request', async () => {
+    outboxBelongsTo('alice', 'session-1')
+    const b = backend([new Error('answer lost'), { actionId: 'already-accepted' }])
+    const full = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    await expect(submit(b.client, 'alice', 'page1', envelope('click-unrecorded'))).rejects.toThrow('answer lost')
+    full.mockRestore()
+    const deadline = (b.calls[0] as unknown as { replayUntil: number }).replayUntil
+    const now = vi.spyOn(Date, 'now').mockReturnValue(deadline + 1)
+    try {
+      await submit(b.client, 'alice', 'page1', envelope('click-unrecorded'))
+      expect((b.calls[1] as unknown as { replayUntil: number }).replayUntil).toBe(deadline)
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  test('a cold unpaired start discards saved work only after the pairing has been answered', () => {
+    outboxBelongsTo(null)
+    const key = 'it.outbox.alice.page1.old-session-click'
+    const saved = { user: 'alice', artifactId: 'page1', envelope: envelope('old-session-click'), format: 2, session: 'ended-session', at: Date.now() }
+    localStorage.setItem(key, JSON.stringify(saved))
+    outboxBelongsTo(null, null, false)
+    expect(localStorage.getItem(key)).not.toBeNull()
+    outboxBelongsTo(null, null, true)
+    expect(localStorage.getItem(key)).toBeNull()
+    expect(localStorage.getItem('it.display')).toBe('a-display-key-000001')
+  })
+
   test('what a page may send is checked before anything is stored', async () => {
     const b = backend([])
     await expect(submit(b.client, 'alice', 'page1', envelope('short'))).rejects.toThrow()
