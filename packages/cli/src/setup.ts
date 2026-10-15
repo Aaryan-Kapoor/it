@@ -1304,6 +1304,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
     // inspections, but retire an installation the app says is gone before choosing one to keep.
     const remaining: Installation[] = []
     for (const installation of all) {
+      if (folderGone(installation)) continue
       const place = placed(installation)
       if (!place || (await adapter.present(place, installation)) !== false) remaining.push(installation)
     }
