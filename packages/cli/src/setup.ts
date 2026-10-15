@@ -157,6 +157,7 @@ function unreadInstallations(id: Harness): string | undefined {
       (i) =>
         i &&
         typeof i.version === 'string' &&
+        (i.by === undefined || typeof i.by === 'string') &&
         Number.isFinite(i.at) &&
         (i.env === undefined ||
           (typeof i.env === 'object' && i.env !== null && !Array.isArray(i.env) && Object.values(i.env).every((v) => typeof v === 'string'))) &&

@@ -1899,17 +1899,18 @@ describe('managed plugin and marketplace ownership', () => {
     expect(existsSync(stampFile('openclaw'))).toBe(false)
   })
 
-  test.each([{ installs: [null] }, { installs: [{ version: 'installing', at: 1, files: [{ path: '/unknown', sha256: 42 }] }] }])(
-    'a damaged ownership record is kept without granting ownership',
-    async (record) => {
-      put(stampFile('opencode'), JSON.stringify(record))
-      expect(holdsAddons()).toBe(true)
-      expect((await connect('opencode', () => {})).addon).toBe('error')
-      expect(await disconnect('opencode', () => {})).toBe(false)
-      expect(read(stampFile('opencode'))).toBe(JSON.stringify(record))
-      expect(ran).toEqual([])
-    },
-  )
+  test.each([
+    { installs: [null] },
+    { installs: [{ version: 'old', at: 1, by: 42 }] },
+    { installs: [{ version: 'installing', at: 1, files: [{ path: '/unknown', sha256: 42 }] }] },
+  ])('a damaged ownership record is kept without granting ownership', async (record) => {
+    put(stampFile('opencode'), JSON.stringify(record))
+    expect(holdsAddons()).toBe(true)
+    expect((await connect('opencode', () => {})).addon).toBe('error')
+    expect(await disconnect('opencode', () => {})).toBe(false)
+    expect(read(stampFile('opencode'))).toBe(JSON.stringify(record))
+    expect(ran).toEqual([])
+  })
 
   test.each(apps.flatMap((app) => ['marketplace', 'plugin'].map((step) => ({ ...app, step }))))(
     '$bin retains a failed $step installation for retry and disconnect',
