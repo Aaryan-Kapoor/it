@@ -5,12 +5,21 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { psQuote, WINDOWS_CLEANUP, windowsDeletionCommand } from './src/lib'
-import { windowsLauncher, windowsRecovery, windowsRegisteredFolders, windowsRegisteredFor, windowsRemoval, windowsScript, windowsTask } from './src/service'
+import {
+  PS_QUIET,
+  windowsLauncher,
+  windowsRecovery,
+  windowsRegisteredFolders,
+  windowsRegisteredFor,
+  windowsRemoval,
+  windowsScript,
+  windowsTask,
+} from './src/service'
 
 const powershell = (script: string) =>
   spawnSync(
     'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`$ErrorActionPreference = 'Stop'\n${script}`, 'utf16le').toString('base64')],
+    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`${PS_QUIET}\n$ErrorActionPreference = 'Stop'\n${script}`, 'utf16le').toString('base64')],
     { encoding: 'utf8', windowsHide: true, timeout: 30_000 },
   )
 

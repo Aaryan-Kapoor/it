@@ -17,6 +17,7 @@ import {
   install,
   kept,
   launchdPlist,
+  PS_QUIET,
   runningFor,
   stopFile,
   systemdUnit,
@@ -259,6 +260,7 @@ process.exit(/exit 0\\s*$/.test(script) ? 0 : missing ? 1 : 0)
       // These functions replace the scheduler cmdlets, so no installed task is changed.
       // The other folder's task deliberately comes first and uses this installation's launcher.
       const script = `
+${PS_QUIET}
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 function New-ItTestTask($taskPath, $folder) {
   [pscustomobject]@{ TaskName = 'it'; TaskPath = $taskPath; Principal = [pscustomobject]@{ UserId = $sid }; Actions = @([pscustomobject]@{ Execute = 'conhost.exe'; Arguments = '--headless cmd.exe /d /c .\\it-service.cmd'; WorkingDirectory = $folder }) }

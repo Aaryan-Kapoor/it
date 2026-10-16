@@ -8,7 +8,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test } from 'vitest'
 import { keptFor, namedUnder, runtimeNotice, STATED, toBranches } from '../scripts/notices-runtime.mjs'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -19,8 +19,10 @@ const libraries = namedUnder(statement, STATED.libraries)
 const packages = namedUnder(statement, STATED.polyfills)
 
 const made = []
-afterAll(() => {
-  for (const folder of made) rmSync(folder, { recursive: true, force: true })
+// Release each test's copies while its cleanup budget still belongs to that test. Removing
+// every copy together can exceed the hook timeout on Windows after all assertions pass.
+afterEach(() => {
+  for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true })
 })
 /** A copy of what is kept, for a test to change, with where its list of sources and Bun's statement are. */
 const copy = () => {
