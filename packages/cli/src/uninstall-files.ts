@@ -1,18 +1,16 @@
-import { createHash } from 'node:crypto'
-import { lstatSync, readdirSync, readFileSync, rmdirSync, unlinkSync } from 'node:fs'
+import { lstatSync, readdirSync, readFileSync, rmdirSync, rmSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
-import { removeAbandonedUploads } from '@it/content'
-import { HARNESSES } from '@it/protocol'
-import { ADDONS } from './addons.generated'
 import { INSTALLATION_FILE } from './installation'
 import { withInstallerLock } from './installer-lock'
-import { home, Problem } from './lib'
+import { Problem } from './lib'
 import { aloneAt, holderRuns, startOf } from './serve/backend'
-import { addonHookCommand, itHomeWritten } from './setup'
 
 /** These are individual files It reserves in a marked home. */
-const ROOT_FILES = [
+export const ROOT_FILES = [
   'service.json',
+  'startup.json',
+  'startup.json.unreadable',
+  'installation.json.unreadable',
   'machine.json',
   'machine.pending.json',
   'token.json',
@@ -26,6 +24,7 @@ const ROOT_FILES = [
   'heard.json',
   'journal.jsonl',
   'delivery-recovery.json',
+  'delivery-recovery.json.unreadable',
   'conversations.json',
   'conversation-notes-erasing',
   'aliases.json',
@@ -42,20 +41,27 @@ const ROOT_FILES = [
   'LICENSE.md',
   'THIRD_PARTY_NOTICES.md',
 ]
-const DATABASE_FILES = ['db.sqlite3', 'db.sqlite3-wal', 'db.sqlite3-shm', 'db.sqlite3-journal', 'data.json']
-const RELEASE = 'precompiled-\\d{4}-\\d{2}-\\d{2}-[0-9a-f]{7,40}'
-const COPY = new RegExp(`^(before-(?:${RELEASE}(?:-functions-[0-9a-f]{12})?|functions-[0-9a-f]{12}))(?:\\.[0-9a-f]{16}\\.(?:part|old))?$`)
+// These folders hold only It's own files. The top level can also hold a person's files
+// if IT_HOME was set to a project by mistake, so only that level uses a file list.
+export const ROOT_FOLDERS = ['backend', 'content', 'content-data', 'logs', 'publication-pending', 'addons', 'bin']
 const LOCK_SUFFIX = /^(?:\.after\.(?:[0-9a-f]{16}|unread-\d+-\d+))?(?:\.[0-9a-f]{16}\.tmp)?$/
+export const ROOT_LOCKS = ['connector.lock', 'setup.lock', 'enrol.lock']
 const LOCKS: Record<string, string[]> = {
-  '': ['connector.lock', 'setup.lock', 'enrol.lock'],
-  addons: ['setup.lock'],
+  '': ROOT_LOCKS,
   bin: ['it.upgrade.lock', 'it.exe.upgrade.lock'],
 }
-const lockRecord = (value: any): value is { pid: number; started: string; where: string; holder: string } =>
-  Number.isInteger(value?.pid) &&
+const lockRecord = (value: unknown): value is { pid: number; started: string; where: string; holder: string } =>
+  typeof value === 'object' &&
+  value !== null &&
+  'pid' in value &&
+  typeof value.pid === 'number' &&
+  Number.isInteger(value.pid) &&
   value.pid > 0 &&
+  'started' in value &&
   typeof value.started === 'string' &&
+  'where' in value &&
   typeof value.where === 'string' &&
+  'holder' in value &&
   typeof value.holder === 'string' &&
   /^[0-9a-f]{16}$/.test(value.holder)
 
@@ -93,13 +99,13 @@ async function withProgramLock<T>(folder: string, run: () => Promise<T>): Promis
   return aloneAt(file, run)
 }
 
-/** Removes known files and then empty directories. Unknown and linked entries are left in place. */
+/** Removes known root files and whole owned folders, keeping the locks until their holders release them. */
 export function removeInstallationFiles(folder: string, keepAddons: boolean): string[] {
   const remove = (relative: string) => {
     const file = installationFile(folder, relative)
     if (file) unlinkSync(file)
   }
-  const json = (relative: string): any => {
+  const json = (relative: string): unknown => {
     const file = installationFile(folder, relative)
     if (!file) return undefined
     try {
@@ -135,85 +141,18 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
       if (!['ENOTEMPTY', 'EEXIST'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err
     }
   }
-  // Empty directories are removed only along the paths of files that were recognized.
-  const prune = (relative: string) => {
-    const parts = relative.split('/').slice(0, -1)
-    while (parts.length) {
-      empty(parts.join('/'))
-      parts.pop()
-    }
-  }
   for (const name of ROOT_FILES) remove(name)
   // Atomic writes reserve sidecars only beside these fixed records, never arbitrary filenames.
-  const records: Record<string, string[]> = {
-    '': [...ROOT_FILES.filter((name) => name.endsWith('.json')), 'updates-off', 'conversation-notes-erasing', ...(!keepAddons ? [INSTALLATION_FILE] : [])],
-    backend: ['erased.json'],
-    ...(!keepAddons ? { addons: ['asked-for.json', ...HARNESSES.map((id) => `${id}.json`)] } : {}),
+  const records = [
+    ...ROOT_FILES.filter((name) => name.endsWith('.json')),
+    'updates-off',
+    'conversation-notes-erasing',
+    ...(!keepAddons ? [INSTALLATION_FILE] : []),
+  ]
+  for (const name of readdirSync(folder)) {
+    const sidecar = /^(.*)\.([1-9]\d*)\.tmp$/.exec(name)
+    if (sidecar && records.includes(sidecar[1]!) && abandoned(sidecar[2]!)) remove(name)
   }
-  for (const [dir, names] of Object.entries(records)) {
-    for (const name of dir ? children(dir) : readdirSync(folder)) {
-      const sidecar = /^(.*)\.([1-9]\d*)\.tmp$/.exec(name)
-      if (sidecar && names.includes(sidecar[1]!) && abandoned(sidecar[2]!)) remove(dir ? `${dir}/${name}` : name)
-    }
-  }
-  for (const name of [...DATABASE_FILES, 'erased.json']) remove(`backend/${name}`)
-  for (const name of children('backend')) {
-    const match = COPY.exec(name)
-    if (!match) continue
-    const note = json(`backend/${name}/copy.json`)
-    if (
-      note?.copy !== match[1] ||
-      typeof note.id !== 'string' ||
-      !/^[0-9a-f]{16}$/.test(note.id) ||
-      typeof note.made !== 'number' ||
-      !Number.isSafeInteger(note.order) ||
-      typeof note.it !== 'string' ||
-      (note.erased !== undefined && note.erased !== true)
-    )
-      continue
-    for (const file of DATABASE_FILES) remove(`backend/${name}/${file}`)
-    // Storage and any other files remain. Keep the note while anything from this copy remains.
-    empty(`backend/${name}/storage`)
-    if (children(`backend/${name}`).every((file) => file === 'copy.json')) remove(`backend/${name}/copy.json`)
-    empty(`backend/${name}`)
-  }
-  for (const release of children('backend/bin')) {
-    if (!new RegExp(`^${RELEASE}$`).test(release)) continue
-    for (const file of ['convex-local-backend', 'convex-local-backend.exe']) remove(`backend/bin/${release}/${file}`)
-    for (const file of children(`backend/bin/${release}`)) {
-      const part = /^convex-local-backend(?:\.exe)?\.(\d+)\.part$/.exec(file)
-      if (part && abandoned(part[1]!)) remove(`backend/bin/${release}/${file}`)
-    }
-    empty(`backend/bin/${release}`)
-  }
-  for (const file of ['content.sqlite', 'content.sqlite-wal', 'content.sqlite-shm', 'content.sqlite-journal']) remove(`content-data/${file}`)
-  const uploads = directory('content/tmp')
-  if (uploads) removeAbandonedUploads(uploads)
-  // A manifest gives the exact filenames of a page. No glob can mistake an unknown sibling for one.
-  for (const user of children('content/manifest/u')) {
-    for (const page of children(`content/manifest/u/${user}`)) {
-      for (const version of children(`content/manifest/u/${user}/${page}`)) {
-        const prefix = `u/${user}/${page}/${version}`
-        const manifest = `content/manifest/${prefix}/files.json`
-        const files = json(manifest)
-        if (
-          !Array.isArray(files) ||
-          !files.every((f) => typeof f?.path === 'string' && Number.isSafeInteger(f.size) && f.size >= 0 && /^[0-9a-f]{64}$/.test(f.sha256))
-        )
-          continue
-        for (const file of files) {
-          const name = createHash('sha256').update(file.path).digest('hex')
-          remove(`content/${prefix}/${name}`)
-          prune(`content/${prefix}/${name}`)
-        }
-        remove(manifest)
-        prune(manifest)
-      }
-    }
-  }
-  remove('logs/it.log')
-  remove('logs/it.log.1')
-  for (const name of children('logs')) if (/^reopened-\d+-\d+\.txt$/.test(name)) remove(`logs/${name}`)
   for (const [directory, names] of Object.entries(LOCKS)) {
     for (const name of directory ? children(directory) : readdirSync(folder)) {
       const lock = names.find((base) => name.startsWith(base) && LOCK_SUFFIX.test(name.slice(base.length)))
@@ -223,61 +162,22 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
       if (lockRecord(owner) && !holderRuns(owner)) remove(relative)
     }
   }
-  if (!keepAddons) {
-    for (const name of ['it', 'it.exe', 'it.cmd', 'it-here', 'it-here.cmd', 'it-service.cmd']) remove(`bin/${name}`)
-    for (const name of children('bin')) {
-      if (/^it\.old\.\d+\.exe$/.test(name)) remove(`bin/${name}`)
-      // A download is staged before taking the program lock. Keep it while its updater
-      // is alive; that updater checks the installed program again before replacement.
-      const staged = /^\.it-upgrade-(\d+)(?:\.exe)?(?:\.\1\.part)?$/.exec(name)
-      if (staged && abandoned(staged[1]!)) remove(`bin/${name}`)
+  for (const dir of ROOT_FOLDERS) {
+    if (keepAddons && (dir === 'addons' || dir === 'bin')) continue
+    const at = directory(dir)
+    if (!at) continue
+    // Uninstall holds these locks through removal. Deleting one would let a service or
+    // updater start again before this command has finished. Its holder removes it on exit;
+    // finishInstallationRemoval then takes away the empty folder. Internal links are
+    // unlinked by rmSync, which never follows them to files outside this installation.
+    for (const name of children(dir)) {
+      if (dir === 'backend' && (name === 'lock' || (name.startsWith('lock') && LOCK_SUFFIX.test(name.slice(4))))) continue
+      if (dir === 'bin' && LOCKS.bin!.some((lock) => name.startsWith(lock) && LOCK_SUFFIX.test(name.slice(lock.length)))) continue
+      rmSync(path.join(at, name), { recursive: true, force: true })
     }
-    remove('addons/asked-for.json')
-    const homes = [...new Set([folder, path.resolve(home())])]
-    for (const id of HARNESSES) {
-      const stamp = json(`addons/${id}.json`)
-      if (Array.isArray(stamp?.installs) && stamp.installs.length === 0) remove(`addons/${id}.json`)
-      for (const [name, expected] of Object.entries(ADDONS[id]?.files ?? {})) {
-        const relative = `addons/${id}/${name}`
-        const file = installationFile(folder, relative)
-        if (!file) continue
-        const text = readFileSync(file, 'utf8')
-        const sourceMatches = homes.some((at) => text === itHomeWritten(expected, at))
-        const homeMatches =
-          path.basename(name) === 'it-home.json' && homes.some((at) => text === `${JSON.stringify({ ...JSON.parse(expected), home: at }, null, 1)}\n`)
-        const hookMatches =
-          name.endsWith('hooks.json') &&
-          homes.some((at) =>
-            ['it', 'it.exe', 'it.cmd', 'it-here', 'it-here.cmd'].some(
-              (bin) => text === expected.replaceAll(JSON.stringify(`it hook ${id}`), JSON.stringify(addonHookCommand(id, path.join(at, 'bin', bin)))),
-            ),
-          )
-        // Setup fills in the home and hook addresses. Recognize only those exact transformations.
-        if (text === expected || sourceMatches || homeMatches || hookMatches) {
-          remove(relative)
-          prune(relative)
-        }
-      }
-      remove(`addons/${id}.hooks-seen`)
-      empty(`addons/${id}`)
-    }
-    remove(INSTALLATION_FILE)
-  }
-  for (const dir of [
-    'backend/storage',
-    'backend/bin',
-    'backend',
-    'content/manifest/u',
-    'content/manifest',
-    'content/u',
-    'content/tmp',
-    'content',
-    'content-data',
-    'logs',
-    'addons',
-    'bin',
-  ])
     empty(dir)
+  }
+  if (!keepAddons) remove(INSTALLATION_FILE)
   return finishInstallationRemoval(folder)
 }
 

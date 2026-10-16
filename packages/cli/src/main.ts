@@ -1351,24 +1351,21 @@ async function uninstall(a: Args) {
     throw new Problem(`${folder} is not a folder It may remove.`, 'invalid')
   if (!markedInstallation(folder) && !legacyInstallation(folder))
     throw new Problem(
-      `${folder} does not hold It with a recognized installation record or its running installed program. Nothing was removed.`,
+      `${folder} does not hold It with a recognised installation record or its running installed program. Nothing was removed.`,
       'invalid',
       'For an older installation with its original license and notices, run its own bin/it with IT_HOME set to that folder, or install It there again first. Inspect an ambiguous folder and remove its files by hand.',
     )
   if (!a.flags.yes) {
     if (!flow.live())
       throw new Problem(
-        'This removes It and deletes the databases and page files it recognizes, and is not done without being asked for twice. Unrecognized data may remain.',
+        'This removes It and deletes its data folders whole, and is not done without being asked for twice. Unknown top-level files remain.',
         'invalid',
         'Run `it uninstall` at a terminal, where it asks first, or `it uninstall --yes`.',
       )
-    const go = await flow.pick(
-      `Take It off this machine? Databases and page files It recognizes in ${folder} are deleted. Unknown files and unrecognized data stay.`,
-      [
-        { value: false, label: 'No, leave it' },
-        { value: true, label: 'Yes, remove It' },
-      ],
-    )
+    const go = await flow.pick(`Take It off this machine? Its data folders in ${folder} are deleted whole. Unknown top-level files stay.`, [
+      { value: false, label: 'No, leave it' },
+      { value: true, label: 'Yes, remove It' },
+    ])
     if (!go) return forPerson(a) ? tell(['Nothing was changed.']) : out({ removed: false })
   }
   // Counted before anything goes, and sent from here, since the service that sends will be gone: that It was taken off, and how long it had been here, as a band
@@ -1424,7 +1421,7 @@ async function uninstall(a: Args) {
             else {
               kept = true
               left.push(
-                `${KNOWN[id].label} still has It’s add-on, which could not be taken out. What It noted of where it put the add-on is kept in ${path.join(folder, 'addons')}, with the program: once ${KNOWN[id].label} can be run from here, run \`${program} uninstall\`${process.env.IT_HOME ? `, with IT_HOME set to ${folder} as it is now` : ''}, which takes the add-on out and removes recognized files. Inspect any remaining files before deleting them yourself.`,
+                `${KNOWN[id].label} still has It’s add-on, which could not be taken out. What It noted of where it put the add-on is kept in ${path.join(folder, 'addons')}, with the program: once ${KNOWN[id].label} can be run from here, run \`${program} uninstall\`${process.env.IT_HOME ? `, with IT_HOME set to ${folder} as it is now` : ''}, which takes the add-on out and removes It’s folders and recognised top-level files. Inspect any remaining files before deleting them yourself.`,
               )
             }
           }
@@ -1450,7 +1447,7 @@ async function uninstall(a: Args) {
             say(
               `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
             )
-          // 5. Recognized files only. Windows moves the running executable out first. An add-on
+          // 5. Whole owned folders and recognised top-level files. Windows moves the running executable out first. An add-on
           // that remains keeps the program and its ownership record so removal can be retried.
           const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
           if (stepped?.deletedLater)

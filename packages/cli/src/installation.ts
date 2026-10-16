@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { LICENSE } from './addons.generated'
 import { Problem, writePrivate } from './lib'
@@ -7,7 +7,9 @@ export const INSTALLATION_FILE = 'installation.json'
 // The installers write these same bytes before putting the folder on PATH.
 export const INSTALLATION = '{"product":"It","format":1,"about":"This folder holds an installation of It."}\n'
 
-/** A marker is a regular file, never a link. An unreadable record cannot become a legacy installation. */
+const saidUnread = new Set<string>()
+
+/** A damaged record is kept aside, but never proves that a folder belongs to It. */
 export function markedInstallation(folder: string): boolean {
   const file = path.join(folder, INSTALLATION_FILE)
   try {
@@ -15,19 +17,39 @@ export function markedInstallation(folder: string): boolean {
     if (!stat) return false
     if (stat.isFile() && stat.size <= 1024 && readFileSync(file, 'utf8') === INSTALLATION) return true
   } catch {
-    // An unreadable record is the same refusal as one whose bytes are not the record.
+    // A record that cannot be opened gives no more proof than one with the wrong bytes.
   }
-  throw new Problem(
-    `${file} is not the installation record It wrote.`,
-    'record_unread',
-    'Restore the record from a backup, or inspect this folder and move the record aside before installing It there again. Nothing was removed.',
-  )
+  let kept = INSTALLATION_FILE
+  let reason = ''
+  try {
+    // As with runs.json, never replace an earlier unreadable record. Discovery can still
+    // use the installed program and its terms; uninstall requires that independent proof.
+    if (lstatSync(`${file}.unreadable`, { throwIfNoEntry: false })) reason = 'An earlier unreadable record is already kept aside.'
+    else {
+      renameSync(file, `${file}.unreadable`)
+      kept += '.unreadable'
+    }
+  } catch (err) {
+    reason = `It could not move the record aside: ${err instanceof Error ? err.message : String(err)}.`
+  }
+  if (!saidUnread.has(file)) {
+    saidUnread.add(file)
+    console.error(
+      `It could not read installation.json. It is kept as ${kept}.${reason ? ` ${reason}` : ''} The record cannot authorise removal of this folder.`,
+    )
+  }
+  return false
 }
 
 /** Setup deliberately chooses this folder. Existing files are never taken for a marker. */
 export function markInstallation(folder: string): void {
   mkdirSync(folder, { recursive: true, mode: 0o700 })
-  if (!markedInstallation(folder)) writePrivate(path.join(folder, INSTALLATION_FILE), INSTALLATION)
+  if (!markedInstallation(folder)) {
+    const file = path.join(folder, INSTALLATION_FILE)
+    if (lstatSync(file, { throwIfNoEntry: false }))
+      throw new Problem(`${file} is not the installation record It wrote.`, 'record_unread', 'Inspect the unreadable records before installing It here again.')
+    writePrivate(file, INSTALLATION)
+  }
 }
 
 /** A standalone program belongs to its real bin folder. A PATH symlink cannot assign it another home. */
@@ -42,8 +64,8 @@ export function installationHome(program = process.execPath, script = program ==
   const bin = path.basename(path.dirname(real))
   if (!/^it(?:\.exe)?$/i.test(path.basename(real)) || (process.platform === 'win32' ? bin.toLowerCase() : bin) !== 'bin') return undefined
   const folder = path.dirname(path.dirname(real))
-  // A corrupt marker refuses discovery. A markerless legacy program in its own bin is
-  // recognized with its installed terms, including after an older updater replaced it.
+  // A missing or unreadable marker gives no proof. The program in its own bin can still
+  // be recognised with its installed terms, including after an older updater replaced it.
   // A bare program copied to /usr/local/bin keeps the usual default home.
   if (!markedInstallation(folder) && !legacyInstallation(folder, real, script)) return undefined
   // A folder junction is the same installation, but its spelling is what PATH and the
