@@ -10,7 +10,7 @@ import { LEASE_MS, LISTENING_MOST, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKES, wakes
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
+import { internalMutation, mutation, type QueryCtx, query } from './_generated/server'
 import { destination, dropStopped, noLongerWaiting, stoppedSince } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
@@ -421,13 +421,6 @@ export const release = mutation({
  * first, that would reach its conversation ahead of what was done before it. The answer names
  * what went back, so that the connector takes nothing newer until it is offered these again.
  */
-export const giveBack = mutation({
-  args: {},
-  // Older connectors expect an array and know no continuation. Keep that answer for them;
-  // connectors that can finish every batch use giveBackBatch instead.
-  handler: async (ctx) => (await giveBackHeld(ctx, 500)).back,
-})
-
 /** Resolves returned claims without waiting for a bounded inbox subscription to include them. */
 export const recover = query({
   args: { ids: v.array(v.string()) },
@@ -450,32 +443,33 @@ export const recover = query({
 })
 
 /** A bounded part of recovery, including whether every lease this machine held was examined. */
-export const giveBackBatch = mutation({ args: {}, handler: (ctx) => giveBackHeld(ctx, 64) })
-
-async function giveBackHeld(ctx: MutationCtx, most: number) {
-  const { machine, user } = await requireMachine(ctx)
-  // New connectors read at most two MiB of action payloads, with room for the page and machine
-  // records read with them. The legacy answer retains its old 500-action ceiling. Foreign
-  // leases are excluded by the index, before anything is read. Every processed
-  // row leaves this index range, so asking again progresses even if an entire batch was stopped.
-  const leased = await ctx.db
-    .query('actions')
-    .withIndex('by_lease_machine', (q) => q.eq('leaseMachineId', machine._id).eq('delivery', 'leased'))
-    .take(most)
-  const back: Id<'actions'>[] = []
-  const routes: { id: string; session: { harness: string; id: string } | null }[] = []
-  for (const x of leased) {
-    if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
-    else {
-      const waiting = await backToWaiting(ctx, x)
-      await ctx.db.patch(x._id, waiting)
-      back.push(x._id)
-      routes.push({ id: x._id, session: waiting.harness && waiting.sessionId ? { harness: waiting.harness, id: waiting.sessionId } : null })
+export const giveBackBatch = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const most = 64
+    const { machine, user } = await requireMachine(ctx)
+    // At most two MiB of action payloads, with room for the page and machine records read
+    // with them. Foreign leases are excluded by the index, before anything is read. Every processed
+    // row leaves this index range, so asking again progresses even if an entire batch was stopped.
+    const leased = await ctx.db
+      .query('actions')
+      .withIndex('by_lease_machine', (q) => q.eq('leaseMachineId', machine._id).eq('delivery', 'leased'))
+      .take(most)
+    const back: Id<'actions'>[] = []
+    const routes: { id: string; session: { harness: string; id: string } | null }[] = []
+    for (const x of leased) {
+      if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
+      else {
+        const waiting = await backToWaiting(ctx, x)
+        await ctx.db.patch(x._id, waiting)
+        back.push(x._id)
+        routes.push({ id: x._id, session: waiting.harness && waiting.sessionId ? { harness: waiting.harness, id: waiting.sessionId } : null })
+      }
     }
-  }
-  if (back.length) log('lease.given_back', { machineId: machine._id, count: back.length })
-  return { back, done: leased.length < most, routes, person: user._id }
-}
+    if (back.length) log('lease.given_back', { machineId: machine._id, count: back.length })
+    return { back, done: leased.length < most, routes, person: user._id }
+  },
+})
 
 /**
  * A click this machine cannot deliver by itself (its conversation's own queue keeps refusing

@@ -809,25 +809,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
         legacyGiveBack = true
       }
     }
-    try {
-      const back = await call<string[]>('mutation', api.delivery.giveBack, {})
-      return Array.isArray(back) && back.every((id) => typeof id === 'string') ? { back, done: true } : null
-    } catch (err) {
-      if (!missing(err)) return null
-      // Older backends are asked about every locally recorded claim, a bounded batch at a time.
-      legacyLeft ??= new Set([...claimedAndLeft(), ...recovery.returning])
-      const gone = await Promise.all(
-        [...legacyLeft].slice(0, RECOVERY_BATCH).map((id) =>
-          call('mutation', api.delivery.release, { id }).then(
-            () => id,
-            (err) => ((err as { code?: string }).code === 'not_found' ? id : null),
-          ),
+    // Older backends are asked about every locally recorded claim, a bounded batch at a time.
+    legacyLeft ??= new Set([...claimedAndLeft(), ...recovery.returning])
+    const gone = await Promise.all(
+      [...legacyLeft].slice(0, RECOVERY_BATCH).map((id) =>
+        call('mutation', api.delivery.release, { id }).then(
+          () => id,
+          (err) => ((err as { code?: string }).code === 'not_found' ? id : null),
         ),
-      )
-      const back = gone.filter((id): id is string => id !== null)
-      for (const id of back) legacyLeft.delete(id)
-      return { back, done: legacyLeft.size === 0 }
-    }
+      ),
+    )
+    const back = gone.filter((id): id is string => id !== null)
+    for (const id of back) legacyLeft.delete(id)
+    return { back, done: legacyLeft.size === 0 }
   }
   // A late answer about a previous hold must not erase the receipt for a newer claim of the same click.
   const claimAttempts = new Map<string, object>()

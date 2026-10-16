@@ -1172,6 +1172,61 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
   }, 40_000)
 })
 
+test('a wait that follows keeps only the latest receipt ids, and acknowledges an older click again without printing it twice', async () => {
+  const m = machine()
+  const b = await backend(m, ({ path: fn }) => (fn === 'artifacts:get' ? { title: 'Plan' } : fn === 'delivery:waiting' ? [] : null))
+  const clicks = Array.from({ length: 501 }, (_, n) => ({
+    id: `click-${n}`,
+    artifact: 'plan',
+    title: 'Plan',
+    name: 'picked',
+    payload: '{}',
+    at: Date.now(),
+    session: null,
+  }))
+  const receipts: string[][] = []
+  const connector = http.createServer((req, res) => {
+    let text = ''
+    req
+      .on('data', (chunk) => (text += chunk))
+      .on('end', () => {
+        const body: { got?: string[]; done?: boolean } = JSON.parse(text)
+        receipts.push(body.got ?? [])
+        // The first answer crosses the receipt limit. The next offers the oldest click
+        // again, as a connector would if its earlier receipt had not reached it.
+        const offered = body.done ? [] : receipts.length === 1 ? clicks : receipts.length === 2 ? [clicks[0]] : []
+        const answer = JSON.stringify({ clicks: offered })
+        const nonce = req.headers['x-it-nonce']
+        const seal = createHmac('sha256', 'a'.repeat(48)).update(`${nonce}\n200\n${answer}`).digest('hex')
+        res.writeHead(200, { 'content-type': 'application/json', 'x-it-mac': seal }).end(answer)
+      })
+  })
+  await new Promise<void>((resolve) => connector.listen(0, '127.0.0.1', resolve))
+  try {
+    const address = connector.address()
+    if (!address || typeof address === 'string') throw new Error('The stand-in connector did not open its port.')
+    writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ port: address.port, token: 'a'.repeat(48), pid: process.pid, version: '0.0.0' }))
+    const ran = await run(m, ['wait', '--id', 'plan', '--follow', '--timeout', '5'], b.env)
+    expect(ran.code, ran.err).toBe(0)
+    expect(
+      ran.out
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line).id)
+        .filter(Boolean),
+    ).toEqual(clicks.map((click) => click.id))
+    expect(receipts[1]).toEqual(clicks.slice(1).map((click) => click.id))
+    // Reporting the first batch can take longer than a heartbeat on a busy machine. The
+    // final asking is sent only after every handed-back click has been dealt with.
+    expect(receipts.at(-1)).toEqual([...clicks.slice(2).map((click) => click.id), 'click-0'])
+    expect(receipts.every((ids) => ids.length <= 500)).toBe(true)
+  } finally {
+    connector.closeAllConnections()
+    await new Promise<void>((resolve) => connector.close(() => resolve()))
+    await b.close()
+  }
+})
+
 describe.skipIf(process.platform === 'win32')('a connector that cannot start, on a machine where it is all of It there is to run', () => {
   /** Starts `it serve` on a machine that joined an It elsewhere, and gives what it has written down once that holds a line. */
   async function served(m: { home: string; it: string; bin: string }, log: string, env: Record<string, string>) {
