@@ -682,6 +682,18 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       // By its own name it is found and ended
       expect(await endTree(leader.pid!, leaderSince, { ...of, told: SINCE_TOLD, run: 'a-run-of-its-own' })).toBe('ended')
       await until(() => !alive(stray))
+      // Nor is such a command lost sight of where another process has the run's number by now.
+      // That process is not the run, and neither it nor its group is touched: here it is this
+      // very test. What carries the run's name is ended all the same.
+      const later = spawn('sleep', ['300'], { detached: true, stdio: 'ignore', env: { ...process.env, IT_RUN: 'a-run-whose-number-was-reused' } })
+      later.unref()
+      left.push(later.pid!)
+      await until(() => alive(later.pid!))
+      const reused = { ...of, told: SINCE_TOLD }
+      expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970', { ...reused, run: 'another-run' })).toBe('gone')
+      expect(alive(later.pid!)).toBe(true)
+      expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970', { ...reused, run: 'a-run-whose-number-was-reused' })).toBe('ended')
+      await until(() => !alive(later.pid!))
       // Started as a reopened run is, with the two marks, which what it starts carries on
       const ours = await orphan({ IT_HARNESS: of.harness, IT_SESSION: of.session })
       expect(alive(ours.its)).toBe(true)

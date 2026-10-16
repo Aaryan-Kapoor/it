@@ -224,4 +224,46 @@ describe('what the service takes', () => {
     await laptop.mutation(api.displays.register, { key: key('laptop'), userAgent: LAPTOP })
     expect(await t.query(internal.counted.picture, {})).toEqual({ pages: 0, displays: 2, machines: 1, conversations: 0, push: false })
   })
+
+  test('conversations beyond hundreds of pages in one conversation are counted without sending their identities', async () => {
+    const { t } = await household()
+    await t.run(async (ctx) => {
+      const userId = (await ctx.db.query('users').first())!._id
+      const page = { userId, title: 'A private page title', lastVersion: 1, bytes: 0, createdAt: 1, updatedAt: 1 }
+      for (let i = 0; i < 1200; i++) {
+        await ctx.db.insert('artifacts', { ...page, slug: `same-${i}`, session: { harness: 'claude-code', id: 'private-conversation' } })
+      }
+      for (const [harness, id] of [
+        ['claude-code', 'another-private-conversation'],
+        ['codex', 'private-conversation'],
+        ['pi', 'private-conversation'],
+      ]) {
+        await ctx.db.insert('artifacts', { ...page, slug: `${harness}-${id}`, session: { harness: harness!, id: id! } })
+      }
+      await ctx.db.insert('artifacts', { ...page, slug: 'without-a-conversation' })
+      const other = await ctx.db.insert('users', { subject: 'another-person', createdAt: 1 })
+      await ctx.db.insert('artifacts', { ...page, userId: other, slug: 'another-person', session: { harness: 'codex', id: 'another-person' } })
+    })
+    expect(await t.query(internal.counted.picture, {})).toEqual({ pages: 101, displays: 0, machines: 1, conversations: 4, push: false })
+  })
+
+  test('conversation counting stops once the highest band is known', async () => {
+    const { t } = await household()
+    await t.run(async (ctx) => {
+      const userId = (await ctx.db.query('users').first())!._id
+      for (let i = 0; i < 130; i++) {
+        await ctx.db.insert('artifacts', {
+          userId,
+          slug: `page-${i}`,
+          title: 'Private',
+          lastVersion: 1,
+          bytes: 0,
+          createdAt: 1,
+          updatedAt: 1,
+          session: { harness: i % 2 ? 'codex' : 'claude-code', id: `private-${i}` },
+        })
+      }
+    })
+    expect(await t.query(internal.counted.picture, {})).toEqual({ pages: 101, displays: 0, machines: 1, conversations: 101, push: false })
+  })
 })

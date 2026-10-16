@@ -219,6 +219,7 @@ export default defineSchema({
   })
     .index('by_user_slug', ['userId', 'slug'])
     .index('by_user_updated', ['userId', 'updatedAt'])
+    .index('by_user_conversation', ['userId', 'session.harness', 'session.id'])
     // Whether any page still names a machine, which is what keeps a revoked machine's record
     .index('by_machine', ['machineId']),
 
@@ -315,7 +316,8 @@ export default defineSchema({
     .index('by_user_route', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'createdAt'])
     .index('by_delivery_created', ['delivery', 'createdAt'])
     .index('by_delivery_handed', ['delivery', 'handedAt'])
-    .index('by_delivery_lease', ['delivery', 'leaseExpiresAt']),
+    .index('by_delivery_lease', ['delivery', 'leaseExpiresAt'])
+    .index('by_lease_machine', ['leaseMachineId', 'delivery', 'createdAt']),
 
   // One showing of a page on a display. Each gets one ticket.
   mounts: defineTable({
