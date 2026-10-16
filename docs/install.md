@@ -37,6 +37,8 @@ it setup
 
 The first time, it begins by asking where your It is. "On this computer" sets It up here, as the steps below describe. "On another computer of mine" is for a second computer: It runs on one of your computers, and the others join it, so that the agents on all of them put their pages on the same screens. Joining takes the line that the first computer's site gives under Machines, "Add a machine", which you paste when you are asked for it. [Agents on another computer](agents.md#agents-on-another-computer) has the rest.
 
+Before downloading the backend, setup checks the agent apps. If every app It can connect to is too old, it says which versions are installed and required, and stops. Update an app and run setup again, or use `it setup --none` to continue without connecting one. A machine with no agent app can still be set up. Each command used to check an app has fifteen seconds to answer, and a later setup checks again.
+
 1. It fetches the backend program, once, and checks it against a checksum written in It's own source. It is about 60 MB to download, and a bar shows how far it has got.
 2. It makes It's settings, which hold the port It listens on and the secrets it works with, in `~/.it/service.json`.
 3. It registers It as a background service for your user, and starts it.
@@ -84,6 +86,8 @@ This is It 0.1.0.
 ```
 
 Some commands speak to a person in this way when they are run at a terminal: `it setup`, `it site`, `it network`, `it status`, `it service status`, `it list`, `it displays`, `it whoami`, `it upgrade`, `it updates` and `it uninstall`. With `--json`, and wherever a program reads what they print, as an agent does, they print JSON, as the other commands do whoever reads them. Four commands print plain text whoever reads it, since text is what was asked for: `it help`, `it skill`, `it tour` and `it service logs`. And `it serve` prints what the service writes down, a line at a time.
+
+Command failures say what went wrong and what to do next in sentences at a terminal. With `--json`, through a pipe, and for an agent, they keep the structured error with its code, message and any hint. Failures go to standard error in either form. An option that belongs to another command is refused before the command reads input or changes anything.
 
 The JSON of `it status` has `running`, whether It's door answers; `enrolled`, whether this machine is one of yours; where the `site` is; the `network`, as `on` and its `addresses`; the `database`, with the version of It and the release of the backend program that last ran on it; the `connector` and the `background` service; each agent app under `harnesses`; and, where something is wrong, a `hint` that says what to do next.
 

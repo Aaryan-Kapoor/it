@@ -1665,7 +1665,10 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     const first = serve(Number(process.env.IT_PORT), undefined, 'no-links', { MAKE: '1' })
     expect(await first.ended).toBe(1)
     expect(first.lines()).toEqual(['ERROR home_unfit'])
-    expect(readdirSync(folder)).toEqual([])
+    // Key generation uses an empty backend folder even when saving the settings fails.
+    expect(readdirSync(folder)).toEqual(['backend'])
+    expect(readdirSync(inBackend())).toEqual([])
+    expect(programsOn(folder)).toEqual([])
     // And the lock, in a folder whose settings were made where a file can be given one
     const config = makeConfig()
     const second = serve(config.port, undefined, 'no-links')
@@ -1774,7 +1777,7 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
       process.env.IT_PORT = String(await ports.next())
       const other = makeConfig()
       expect(other.instanceSecret).not.toBe(config.instanceSecret)
-      mkdirSync(path.join(first, 'backend'))
+      expect(readdirSync(path.join(first, 'backend'))).toEqual([])
       for (const name of [instanceName(other.instanceSecret), instanceName(config.instanceSecret)]) expect(programsHere(name, 'linux')).toEqual([])
       // It is started, and the program of the folder that was moved is asked nothing
       const backend = await start(other)
@@ -2136,7 +2139,7 @@ describe.skipIf(!program || windows)('enrolling this machine', () => {
     }
     const refused = async () => (await begin({ background: false, say: () => {}, name: 'the desk' }).catch((err) => err)) as Problem
     const HINT =
-      /^Nothing was set up\. Give this It ports of its own by naming another first port: `IT_PORT=(\d+) it setup`\. The port is written into its settings, so it is named this once\.$/
+      /^Nothing was set up\. To run a second It by hand, keep IT_HOME set to this folder and use `IT_PORT=(\d+) it setup --none --no-service`, then `it serve`\. The port is written into its settings, so it is named this once\. There is only one background service per account: setup without --no-service replaces its registration with this folder\.$/
     // Another program has one of the backend program's two
     let close = await listening(port + PORTS.backendApi, '{}')
     try {

@@ -337,6 +337,23 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true })
 })
 
+test('a discovery pass shares plugin answers and a later pass observes installation changes and recovered failures', async () => {
+  vi.stubEnv('IT_HARNESSES', 'claude-code')
+  const oneLook = async (addon: string) => {
+    ran = []
+    expect(await detectAll()).toMatchObject([{ id: 'claude-code', addon }])
+    expect(commands('claude').filter((args) => args === 'plugin list --json')).toEqual(['plugin list --json'])
+  }
+  await oneLook('not_connected')
+  failing.push('claude plugin list --json')
+  await oneLook('not_connected')
+  failing = []
+  await connect('claude-code', () => {})
+  await oneLook('connected')
+  expect(await disconnect('claude-code', () => {})).toBe(true)
+  await oneLook('not_connected')
+})
+
 describe('an add-on whose files It copies into an app’s folder', () => {
   test.each([
     { id: 'opencode' as const, files: ['plugins/it-bridge.js', 'skills/it/SKILL.md'] },

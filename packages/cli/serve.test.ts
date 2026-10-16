@@ -371,7 +371,7 @@ describe.skipIf(!program)('It’s settings file', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(made)
     if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
     // Nothing is left beside it of how it was written
-    expect(readdirSync(folder)).toEqual(['service.json'])
+    expect(readdirSync(folder).sort()).toEqual(['backend', 'service.json'])
     expect(readConfig()).toEqual(made)
     expect(makeConfig()).toEqual(made)
     // Another folder has other secrets
@@ -423,7 +423,7 @@ describe.skipIf(!program)('It’s settings file', () => {
 
   test('cannot be made before the backend program is on the machine, since the program makes the key', () => {
     process.env.IT_BACKEND_BIN = path.join(folder, 'no-such-program')
-    expect(() => makeConfig()).toThrow(/could not make the key/)
+    expect(() => makeConfig()).toThrow(/could not be started to make its key/)
     expect(existsSync(path.join(folder, 'service.json'))).toBe(false)
     expect(programFile()).toBe(path.join(folder, 'no-such-program'))
   })
@@ -1728,7 +1728,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
       expect(await ran.ended).toBe(1)
       expect(lines()).toEqual(['could not start: port_taken'])
       // Nothing of the backend was begun: no program was started on the folder, and nothing was loaded
-      expect(existsSync(path.join(folder, 'backend'))).toBe(false)
+      expect(readdirSync(path.join(folder, 'backend'))).toEqual([])
       expect(readConfig()!.functions).toBeUndefined()
     } finally {
       await closed(taken)
