@@ -146,14 +146,14 @@ async function send(convex: ConvexReactClient, e: Entry, key: string) {
     const grant = saved?.session === session ? saved : await convex.mutation(api.actions.replayGrant, {})
     if (!mine()) throw new Error('This browser’s pairing has ended.')
     e.replayUntil = grant.until
-    // Persist the grant before dispatch. If storage fails, keep the in-memory grant and remove
-    // the old record: a reload must never obtain another grant for an already dispatched click.
+    // Save the grant before dispatch so a retry keeps the same deadline. If storage refuses
+    // the update, leave the original request untouched: nothing has been dispatched yet.
+    // A request that could not be saved at all keeps its grant only in this tab.
     if (localStorage.getItem(key) === null) memoryGrants.set(key, { session, until: e.replayUntil! })
     else {
       try {
         localStorage.setItem(key, JSON.stringify(e))
       } catch {
-        localStorage.removeItem(key)
         throw new Error('This could not be saved. Try again when this browser has room.')
       }
     }

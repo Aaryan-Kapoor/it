@@ -114,9 +114,46 @@ test('storage failure during grant persistence dispatches nothing under an unrec
     if (String(value).includes('replayUntil')) throw new DOMException('Full', 'QuotaExceededError')
     write.call(this, key, value)
   })
-  const client = backend(async () => ({ actionId: 'unexpected' }))
+  const dispatch = vi.fn(async () => ({ actionId: 'unexpected' }))
+  const client = backend(dispatch)
   await expect(box.message(client.client, 'person', 'page', 'typed-original', 'Keep my words')).rejects.toThrow(/could not be saved/)
-  expect(client.mutation).toHaveBeenCalledTimes(1)
+  await flush()
+  expect(dispatch).not.toHaveBeenCalled()
+  expect(box.pendingMessage('person', 'page')).toMatchObject({ id: 'typed-original', text: 'Keep my words' })
+})
+
+test.each(['message', 'page'])('a saved %s survives a failed grant write and is sent when storage has room again', async (kind) => {
+  const box = await import('./outbox')
+  box.outboxBelongsTo('person', 'session')
+  const key = 'it.outbox.person.page.saved-request'
+  const entry = {
+    user: 'person',
+    artifactId: 'page',
+    format: 2,
+    session: 'session',
+    at: Date.now() - 60_000,
+    envelope: { v: 1, clientActionId: 'saved-request', name: 'approve', payload: '{}', contentVersion: 1 },
+    ...(kind === 'message' ? { operation: { kind: 'message', text: 'Keep my words' } } : {}),
+  }
+  // The tab closed after saving the request, before it could obtain and save a replay grant.
+  localStorage.setItem(key, JSON.stringify(entry))
+  const full = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new DOMException('Full', 'QuotaExceededError')
+  })
+  const dispatch = vi.fn(async (_name: string, args: Record<string, unknown>) => {
+    expect(read().replayUntil).toBe(args.replayUntil)
+    return { actionId: 'accepted' }
+  })
+  const client = backend(dispatch)
+  await box.drain(client.client, 'person')
+  expect(dispatch).not.toHaveBeenCalled()
+  expect(localStorage.getItem(key)).toBe(JSON.stringify(entry))
+  full.mockRestore()
+  await box.drain(client.client, 'person')
+  expect(dispatch).toHaveBeenCalledTimes(1)
+  expect(dispatch.mock.calls[0]?.[1]).toMatchObject(
+    kind === 'message' ? { clientActionId: 'saved-request', text: 'Keep my words' } : { envelope: entry.envelope },
+  )
   expect(saved()).toEqual([])
 })
 
