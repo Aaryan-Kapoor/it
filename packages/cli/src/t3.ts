@@ -33,6 +33,11 @@ const PROTOCOL = '2'
 const ANSWER_MS = 20_000
 /** How many threads are looked into in one pass, the likeliest first. */
 const LOOKED_INTO = 24
+/**
+ * Four batches reach beyond the first shortlist without letting one conversation read every
+ * thread in a large workspace. Failed reads use the same budget, so retries are bounded too.
+ */
+const SEARCH_READS = 4 * LOOKED_INTO
 /** One pass includes issuing a session, listing threads and reading their details. */
 const DISCOVERY_MS = 5_000
 
@@ -168,7 +173,7 @@ interface ShellThread {
 export function likeliest(
   shell: { threads?: unknown; projects?: unknown },
   of: { harness: string; cwd?: string },
-  most = Number.POSITIVE_INFINITY,
+  most = LOOKED_INTO,
   platform: string = process.platform,
 ): string[] {
   const roots = new Map<string, string>()
@@ -216,52 +221,52 @@ export function holds(snapshot: unknown, ids: readonly string[]): boolean {
 export interface T3Search {
   scope?: string
   pending: string[]
-  read: Map<string, string>
+  /** Snapshot requests made, including failed reads. */
+  read: number
+  /** Whether the one listing for this search fits within its read budget. */
+  listed?: 'whole' | 'limited'
   /** Candidates already attempted, so another failed read is not counted as progress. */
   attempted: Set<string>
 }
 
-export type T3ThreadResult = { status: 'found'; thread: string } | { status: 'absent' } | { status: 'incomplete'; progressed: boolean }
+export type T3ThreadResult = { status: 'found'; thread: string } | { status: 'absent' | 'limited' } | { status: 'incomplete'; progressed: boolean }
 
 /**
  * Looks through another batch of active threads. An unread thread goes behind those still
  * waiting, so it stays retryable without keeping an older matching thread out of reach.
- * Only a complete successful search says that the conversation is absent.
+ * Only a complete successful search says that the conversation is absent. A search that
+ * uses its read budget stops as limited, without claiming anything about unread threads.
  */
 export async function t3ThreadOf(
   t3: T3,
   of: { harness: string; ids: readonly string[]; cwd?: string },
-  search: T3Search = { pending: [], read: new Map(), attempted: new Set() },
+  search: T3Search = { pending: [], read: 0, attempted: new Set() },
   signal: AbortSignal = AbortSignal.timeout(DISCOVERY_MS),
 ): Promise<T3ThreadResult> {
   const scope = JSON.stringify([t3.home, t3.origin, of.harness, [...of.ids].sort(), of.cwd])
   if (search.scope !== scope) {
     search.scope = scope
     search.pending = []
-    search.read.clear()
+    search.read = 0
+    search.listed = undefined
     search.attempted.clear()
   }
-  const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell', signal)
-  if (!shell || !Array.isArray(shell.threads)) return { status: 'incomplete', progressed: false }
-  const ranked = likeliest(shell, of)
-  const active = new Set(ranked)
-  const versions = new Map<string, string>()
-  for (const t of shell.threads as ShellThread[]) if (typeof t?.id === 'string') versions.set(t.id, typeof t.updatedAt === 'string' ? t.updatedAt : '')
-  for (const [id, version] of search.read) if (!active.has(id) || versions.get(id) !== version) search.read.delete(id)
-  for (const id of search.attempted) if (!active.has(id)) search.attempted.delete(id)
-  search.pending = search.pending.filter((id) => active.has(id))
-  const pending = new Set(search.pending)
-  for (const id of ranked) {
-    if (search.read.has(id) || pending.has(id)) continue
-    search.pending.push(id)
-    pending.add(id)
+  if (!search.listed) {
+    const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell', signal)
+    if (!shell || !Array.isArray(shell.threads)) return { status: 'incomplete', progressed: false }
+    // Keep one extra id only to tell a complete search from a truncated one. Later passes
+    // use this same listing; another search can see threads added or changed meanwhile.
+    const ranked = likeliest(shell, of, SEARCH_READS + 1)
+    search.listed = ranked.length > SEARCH_READS ? 'limited' : 'whole'
+    search.pending = ranked.slice(0, SEARCH_READS)
   }
   let progressed = false
-  const count = Math.min(LOOKED_INTO, search.pending.length)
+  const count = Math.min(LOOKED_INTO, search.pending.length, SEARCH_READS - search.read)
   for (let i = 0; i < count && !signal.aborted; i++) {
     const id = search.pending.shift()!
     if (!search.attempted.has(id)) progressed = true
     search.attempted.add(id)
+    search.read++
     const snapshot = await ask<{ projection?: { providerThreads?: unknown } }>(
       t3,
       'GET',
@@ -270,12 +275,11 @@ export async function t3ThreadOf(
     )
     if (!Array.isArray(snapshot?.projection?.providerThreads)) search.pending.push(id)
     else if (holds(snapshot, of.ids)) return { status: 'found', thread: id }
-    else {
-      search.read.set(id, versions.get(id)!)
-      progressed = true
-    }
+    else progressed = true
   }
-  return search.pending.length ? { status: 'incomplete', progressed } : { status: 'absent' }
+  if (!search.pending.length && search.listed === 'whole') return { status: 'absent' }
+  if (search.read >= SEARCH_READS || !search.pending.length) return { status: 'limited' }
+  return { status: 'incomplete', progressed }
 }
 
 /**

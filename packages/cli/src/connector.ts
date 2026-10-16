@@ -534,9 +534,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const queueTries = new Map<string, { n: number; at: number; reopening: boolean }>()
   /**
    * What is known of the thread in T3 Code that a conversation is held in: the thread, that T3
-   * Code has none of it (asked again after a while, since a conversation may be brought into
-   * T3 Code later), or that it is being asked for at this moment. A conversation T3 Code
-   * could not take a message for is not offered to it again for a while: `t3Refused`.
+   * Code has none of it or the search reached its read limit (asked again after a while,
+   * since a conversation may be brought into T3 Code later), or that it is being asked for
+   * at this moment. A conversation T3 Code could not take a message for is not offered to it
+   * again for a while: `t3Refused`.
    */
   const t3Known = new Map<string, { thread: string | null; at: number } | 'asking'>()
   /** When each conversation that is being asked for was first asked for, by the clock that only goes forward. */
@@ -546,7 +547,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const t3Retries = new Map<string, { at: number; delay: number }>()
   const t3Refused = new Map<string, number>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
-  /** How long a conversation that is in no thread of T3 Code is taken to be in none. */
+  /** How long before another search after none matched or its read limit was reached. */
   const T3_AGAIN_MS = 6 * 3_600_000
   /** How long a conversation is kept from T3 Code after it could not take a message for it. */
   const T3_REFUSED_MS = 10 * 60_000
@@ -590,7 +591,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     t3Known.set(key, 'asking')
     if (!t3Asked.has(key)) t3Asked.set(key, steady())
-    const search = t3Searches.get(key) ?? { pending: [], read: new Map(), attempted: new Set() }
+    const search = t3Searches.get(key) ?? { pending: [], read: 0, attempted: new Set() }
     t3Searches.set(key, search)
     t3Pending.set(key, session)
     // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
@@ -886,7 +887,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** When this machine first saw each click that waits for a closed conversation, by the clock that is never set back. */
   const firstSeen = new Map<string, number>()
-  /** Hook freshness starts when this connector first sees a click for its current conversation, independently of either machine's wall clock. */
+  /**
+   * Hook freshness starts when this connector first sees a click for its current conversation.
+   * performance.now() ignores wall-clock corrections, but on Linux and macOS it pauses during
+   * sleep, so that time does not age the click here. These observations live only in memory.
+   * After a connector restart, pending clicks get a new window when they are offered again.
+   */
   const hookSeen = new Map<string, { tag: string; at: number }>()
   const reopenedNow = new Map<string, AbortController>()
   /** The name each of them has with It, by which It says which run a person stopped. */

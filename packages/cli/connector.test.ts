@@ -39,7 +39,7 @@ const stand = vi.hoisted(() => ({
     running: false,
     threads: new Map<string, string>(),
     slow: false,
-    asked: [] as { ids: string[]; answer: (thread: string | null | undefined | Error, progressed?: boolean) => void }[],
+    asked: [] as { ids: string[]; answer: (thread: string | null | undefined | Error | { status: 'limited' }, progressed?: boolean) => void }[],
     sent: [] as { thread: string; text: string }[],
     /** What T3 Code says where it will not take a message, and what it refused. */
     refusing: null as string | null,
@@ -51,12 +51,13 @@ const stand = vi.hoisted(() => ({
 vi.mock('./src/t3', () => ({
   t3Server: () => (stand.t3.running ? { origin: 'http://127.0.0.1:1', home: '/no-t3-code', program: 't3' } : undefined),
   t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }) =>
-    new Promise<{ thread: string | null | undefined | Error; progressed: boolean }>((resolve) => {
-      const answer = (thread: string | null | undefined | Error, progressed = true) => resolve({ thread, progressed })
+    new Promise<{ thread: string | null | undefined | Error | { status: 'limited' }; progressed: boolean }>((resolve) => {
+      const answer = (thread: string | null | undefined | Error | { status: 'limited' }, progressed = true) => resolve({ thread, progressed })
       stand.t3.asked.push({ ids: [...of.ids], answer })
       if (!stand.t3.slow) answer(of.ids.map((id) => stand.t3.threads.get(id)).find((thread) => thread !== undefined) ?? null)
     }).then(({ thread, progressed }) => {
       if (thread instanceof Error) throw thread
+      if (typeof thread === 'object' && thread !== null) return thread
       return thread === undefined ? { status: 'incomplete', progressed } : thread === null ? { status: 'absent' } : { status: 'found', thread }
     }),
   t3Send: async (_t3: unknown, thread: string, text: string) => {
@@ -2375,6 +2376,35 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     offered({ ...click(2), id: 'click-2-again' })
     await until(() => stand.codex.length === 2)
     expect(stand.t3.asked.length).toBe(1)
+  })
+
+  test('a search at its read limit uses the fallback route and starts afresh only after six hours', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    stand.t3.asked[0]!.answer({ status: 'limited' })
+    await until(() => stand.codex.length === 1)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-3'))
+    offered({ ...click(3), id: 'before-next-search' })
+    await until(() => stand.codex.length === 2)
+    expect(stand.t3.asked).toHaveLength(1)
+    stand.codex[1]!.end()
+    await until(() => called('delivery:handedOff').includes('before-next-search'))
+    offered()
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 3_600_000 + 1000)
+    try {
+      offered({ ...click(3), id: 'after-search-limit' })
+      await until(() => stand.t3.asked.length === 2)
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(stand.codex).toHaveLength(2)
+    } finally {
+      wall.mockRestore()
+    }
   })
 
   test('an incomplete thread search continues before using another route, also with Auto-wake off', async () => {
