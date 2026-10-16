@@ -99,14 +99,14 @@ const connection = (up: boolean) =>
   })
 
 describe('what the page’s bar says of the last thing the person did', () => {
-  test.each([true, false])('the live page omits version history from its subscription when owner is %s', async (owner) => {
+  test.each([true, false])('the live page keeps the request understood by retained backend functions when owner is %s', async (owner) => {
     await shown(owner)
     const pageQueries = () => queries.filter((q) => q.name === 'artifacts:get').map((q) => q.args)
-    expect(pageQueries()).toEqual([{ slug: 'plan', history: false }])
+    expect(pageQueries()).toEqual([{ slug: 'plan' }])
     queries.length = 0
     recent = [{ at: NOW - 2000, delivery: 'pending', outcome: null }]
     await drawnAgain(owner)
-    expect(pageQueries()).toEqual([{ slug: 'plan', history: false }])
+    expect(pageQueries()).toEqual([{ slug: 'plan' }])
     expect(said()).toBe('Sent. Waiting for your agent')
   })
 
