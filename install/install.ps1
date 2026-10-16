@@ -61,6 +61,10 @@
   # password, it is not followed anywhere else, and it is asked directly, whatever proxy this
   # system is set to use: a proxy would carry what is asked of this machine off it, in the clear.
   $plain = $base -match '^http://(127\.0\.0\.1|localhost):[0-9]+(/|$)'
+  # Where CI is set, every download says so, and itcan.do counts it apart from a person's. CI is
+  # read as the program reads it: without the spaces or quotes around it, and set to anything but
+  # nothing, 0, false, no or off.
+  $ci = @('', '0', 'false', 'no', 'off') -notcontains "$env:CI".Trim([char[]]" `t`r`n`"'").ToLower()
   if (-not $plain -and $base -notmatch '^https://') { throw 'IT_INSTALL_BASE must be an https address.' }
   if (-not $env:IT_HOME -and -not $env:USERPROFILE) { throw 'Neither USERPROFILE nor IT_HOME is set, so there is nowhere to install It.' }
   # A folder given as a relative path is taken from where this was run, as PowerShell knows it:
@@ -156,6 +160,7 @@
         $request = [Net.WebRequest]::Create($at)
         $request.AllowAutoRedirect = $false
         $request.UserAgent = 'it-install'
+        if ($ci) { $request.Headers.Add('X-It-CI', '1') }
         # A proxy that has no address is no proxy at all
         if ($plain) { $request.Proxy = New-Object Net.WebProxy }
         # An answer that is a refusal comes as an error, with the answer inside it

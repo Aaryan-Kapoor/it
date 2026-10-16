@@ -426,19 +426,26 @@ function save(settings: Settings): void {
   known = { file: settingsFile(), tag: tagFrom(settings) }
 }
 
-type Variable = 'IT_TELEMETRY_ENABLED' | 'DO_NOT_TRACK'
+type Variable = 'IT_TELEMETRY_ENABLED' | 'DO_NOT_TRACK' | 'CI'
 /** What a variable holds, without the spaces or quotes that a shell, a unit file or an env file may leave around it. */
 const held = (name: Variable): string => (process.env[name] ?? '').replace(/^[\s'"]+|[\s'"]+$/g, '').toLowerCase()
+/** Whether a variable is set to something other than the few values that plainly mean "no". */
+const said = (name: Variable): boolean => !['', '0', 'false', 'no', 'off'].includes(held(name))
 /**
  * Which variable in this process's environment turns reporting off, if one does. DO_NOT_TRACK
  * is read by its own convention: any value but an empty one and the few that plainly mean "no".
+ * CI is read the same way. It is set on a machine that builds and tests software, where an It
+ * is installed, tried and taken away again and is nobody's installation, and it turns reporting
+ * off there unless IT_TELEMETRY_URL names where to send, as a test of reporting does.
  */
 const offInEnvironment = (): Variable | null =>
   ['false', '0', 'off', 'no', 'n', 'disabled'].includes(held('IT_TELEMETRY_ENABLED'))
     ? 'IT_TELEMETRY_ENABLED'
-    : !['', '0', 'false', 'no', 'off'].includes(held('DO_NOT_TRACK'))
+    : said('DO_NOT_TRACK')
       ? 'DO_NOT_TRACK'
-      : null
+      : said('CI') && !process.env.IT_TELEMETRY_URL
+        ? 'CI'
+        : null
 /** Whether anything at all has this name. Where that cannot be told, something is taken to. */
 const stands = (file: string): boolean => {
   try {
@@ -476,6 +483,7 @@ const SAID_BY: Record<string, Status['because']> = {
   command: 'it telemetry off',
   IT_TELEMETRY_ENABLED: 'IT_TELEMETRY_ENABLED',
   DO_NOT_TRACK: 'DO_NOT_TRACK',
+  CI: 'CI',
 }
 /** Why reporting is off, or null when it is on. A variable set where this command runs is named before anything that was written down. */
 function whyOff(): Status['because'] | null {

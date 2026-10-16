@@ -154,6 +154,13 @@ case "${BASE}" in
 esac
 command -v curl >/dev/null 2>&1 || { say "Install curl first." >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || { say "Install sha256sum or shasum first." >&2; exit 1; }
+# Where CI is set, every download says so, and itcan.do counts it apart from a person's. CI is
+# read as the program reads it: without the spaces or quotes around it, and set to anything but
+# nothing, 0, false, no or off. Given nothing after the colon, curl sends no such header at all.
+case "$(printf '%s' "${CI:-}" | tr 'A-Z' 'a-z' | sed -e "s/^[[:space:]\"']*//" -e "s/[[:space:]\"']*\$//")" in
+  '' | 0 | false | no | off) ci= ;;
+  *) ci=1 ;;
+esac
 # A download is given up when it cannot be begun within half a minute, and when nothing of it
 # has come for a whole minute: left to itself curl waits for either without end, and says
 # nothing while it does. One that is slow and still coming is waited for, however long it
@@ -166,8 +173,8 @@ unfetched() {
 fetch() {
   meter=--silent
   if [ "${led}" = 1 ] && [ "${3:-}" = shown ]; then meter=--progress-bar; fi
-  if [ "${plain}" = 1 ]; then curl -fS "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --noproxy '*' --max-redirs 0 "$1" -o "$2" || unfetched "$1" "$?"
-  else curl -fSL "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --proto '=https' --proto-redir '=https' --tlsv1.2 "$1" -o "$2" || unfetched "$1" "$?"
+  if [ "${plain}" = 1 ]; then curl -fS "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --noproxy '*' --max-redirs 0 -H "X-It-CI:${ci}" "$1" -o "$2" || unfetched "$1" "$?"
+  else curl -fSL "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --proto '=https' --proto-redir '=https' --tlsv1.2 -H "X-It-CI:${ci}" "$1" -o "$2" || unfetched "$1" "$?"
   fi
   # What curl leaves is an ordinary file. Anything else there is not a download, and is not read
   if [ ! -f "$2" ] || [ -L "$2" ]; then
