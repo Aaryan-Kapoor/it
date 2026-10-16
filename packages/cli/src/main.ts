@@ -1493,6 +1493,8 @@ function setUp(a: Args, was: boolean): void {
 }
 
 async function setup(a: Args, joined = false) {
+  const only = text(a, 'only')
+  if (only !== undefined && !a.flags.none) appsNamed(only)
   // Where this It was installed from, if that is not the usual place, is where it looks for newer versions
   keepBase()
   if (a.flags.none && !enrolledHere()) {

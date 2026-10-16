@@ -504,6 +504,8 @@ interface Adapter {
 
 /** The files of an add-on that a removal left where they were. */
 interface Left {
+  /** The host has not yet confirmed removal, so companion cleanup has not run. */
+  pending?: boolean
   /** Changed by the person since they were put there, so theirs to keep or to take out. */
   changed: string[]
   /** Could not be looked at, or could not be taken out. */
@@ -522,8 +524,6 @@ interface Left {
    * stays with it: the skill above all, which tells an agent how to treat what arrives.
    */
   whole?: boolean
-  /** The app still has a registration, or its removal could not be verified. */
-  pending?: boolean
 }
 const NOWHERE: Left = { changed: [], closed: [], outside: [], nowhere: true }
 /**
@@ -719,7 +719,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       // while it is still listed, there is something left to try removing again. The skill
       // goes then too, and no sooner: a plugin that stayed would go on telling the agent to
       // load a skill that was no longer there.
-      if ((await this.present(at)) !== false) return undefined
+      if ((await this.present(at)) !== false) return { changed: [], closed: [], outside: [], pending: true }
       await run('claude', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
       if (!(await marketplaceGone('claude', env))) return { changed: [], closed: [], outside: [], pending: true }
       return withoutSkill(settingsAt(at, 'CLAUDE_CONFIG_DIR', '.claude'), was)
@@ -758,7 +758,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       // Its marketplace is what `present` looks in. It goes only once the add-on is seen to be
       // gone from Codex (whoever removed it): otherwise a failed removal would look like a
       // finished one. The skill goes then too, and no sooner, as in Claude Code.
-      if ((await this.present(at)) !== false) return undefined
+      if ((await this.present(at)) !== false) return { changed: [], closed: [], outside: [], pending: true }
       await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
       if (!(await marketplaceGone('codex', env))) return { changed: [], closed: [], outside: [], pending: true }
       return withoutSkill(settingsAt(at, 'CODEX_HOME', '.codex'), was)
@@ -1270,9 +1270,23 @@ function onRecord(from: string, id: Harness, at: Place): boolean {
 const elsewhere = (id: Harness, from: string | null, at: Place): Other | null =>
   from && real(from) !== thisHome() ? { home: from, kept: onRecord(from, id, at) } : null
 
+/** Check the folder holding an add-on, rather than an optional config file or its surviving parent. */
+const installationFolders = (id: Harness, i: Installation) => {
+  const env = i.env ?? {}
+  // An empty saved environment means the default profile. No saved environment means its place is unknown.
+  const state = id === 'openclaw' && i.env ? (env.OPENCLAW_STATE_DIR ?? path.join(env.OPENCLAW_HOME ?? os.homedir(), '.openclaw')) : undefined
+  return [
+    ...Object.entries(env)
+      .filter(([key]) => !OPENCLAW_VARS.includes(key as (typeof OPENCLAW_VARS)[number]))
+      .map(([, folder]) => folder),
+    ...(state ? [state] : []),
+    ...(i.dir ? [i.dir] : []),
+  ].map((folder) => reached(path.resolve(folder.replace(/^~(?=$|[\\/])/, os.homedir()))))
+}
+
 /** Whether every folder an installation was made in is seen to be gone, and the add-on with it. One that cannot be looked at is not known to be. */
-const folderGone = (i: Installation) => {
-  const folders = [...Object.values(i.env ?? {}), ...(i.dir ? [i.dir] : [])].map(reached)
+const folderGone = (id: Harness, i: Installation) => {
+  const folders = installationFolders(id, i)
   return folders.length > 0 && folders.every((seen) => seen === 'none')
 }
 /**
@@ -1283,8 +1297,7 @@ const folderGone = (i: Installation) => {
  * pages, and whichever asked first would put it into a conversation of its own. So a second is
  * never installed, and where an It from before installed two, all but this one are taken out.
  */
-const staying = (all: Installation[]): Installation | undefined =>
-  all.filter((i) => !folderGone(i)).reduce<Installation | undefined>((latest, i) => (latest && latest.at >= i.at ? latest : i), undefined)
+const staying = (id: Harness, all: Installation[]): Installation | undefined => all.filter((i) => !folderGone(id, i)).at(-1)
 /** The folder the harness says holds its add-on, with links and other spellings resolved. An uncertain place never permits removal. */
 async function profileFolder(adapter: Pick<Adapter, 'note'>, at: Place): Promise<string | undefined> {
   const file = await adapter.note?.(at)
@@ -1300,9 +1313,9 @@ const sameProfile = async (adapter: Pick<Adapter, 'note'>, a: Place, b: Place): 
   const [first, second] = await Promise.all([profileFolder(adapter, a), profileFolder(adapter, b)])
   return first !== undefined && first === second
 }
-async function profileFolders(adapter: Pick<Adapter, 'note'>, all: Installation[]): Promise<Map<Installation, string | undefined>> {
+async function profileFolders(id: Harness, adapter: Pick<Adapter, 'note'>, all: Installation[]): Promise<Map<Installation, string | undefined>> {
   const folders = new Map<Installation, string | undefined>()
-  for (const i of all) if (!folderGone(i)) folders.set(i, placed(i) ? await profileFolder(adapter, placed(i)!) : undefined)
+  for (const i of all) if (!folderGone(id, i)) folders.set(i, placed(i) ? await profileFolder(adapter, placed(i)!) : undefined)
   return folders
 }
 const unfinishedProfiles = (label: string) =>
@@ -1348,9 +1361,9 @@ async function look(id: Harness): Promise<Seen | HarnessStatus | null> {
   const all = installations(id)
   let was = all.find((i) => samePlace(placed(i) ?? at, at))
   // Connected in one folder only, and that folder is another than this one
-  const stays = adapter.single ? staying(all) : undefined
-  if (stays && all.some((i) => i !== stays && !folderGone(i))) {
-    const folders = await profileFolders(adapter, all)
+  const stays = adapter.single ? staying(id, all) : undefined
+  if (stays && all.some((i) => i !== stays && !folderGone(id, i))) {
+    const folders = await profileFolders(id, adapter, all)
     const detail = [...folders.values()].some((dir) => dir === undefined)
       ? uncertainProfiles(KNOWN[id].label)
       : [...folders.values()].some((dir) => dir !== folders.get(stays))
@@ -1456,7 +1469,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
     // inspections, but retire an installation the app says is gone before choosing one to keep.
     const remaining: Installation[] = []
     for (const installation of all) {
-      if (folderGone(installation)) continue
+      if (folderGone(id, installation)) continue
       const place = placed(installation)
       if (!place || (await adapter.present(place, installation)) !== false) remaining.push(installation)
     }
@@ -1469,11 +1482,11 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   // record and not by where this command was run from, so that a setup in a terminal and the
   // background service, which may each find the harness pointed somewhere else, agree on it
   // and neither moves the add-on away from under the other.
-  const stays = adapter.single ? staying(all) : undefined
+  const stays = adapter.single ? staying(id, all) : undefined
   if (stays) {
     const where = (i: Installation) => placed(i) ?? at
-    if (all.some((i) => i !== stays && !folderGone(i))) {
-      const folders = await profileFolders(adapter, all)
+    if (all.some((i) => i !== stays && !folderGone(id, i))) {
+      const folders = await profileFolders(id, adapter, all)
       if ([...folders.values()].some((dir) => dir === undefined)) {
         const detail = uncertainProfiles(label)
         say(`${label}: ${detail}`)
@@ -1488,7 +1501,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
         )
         await disconnect(id, say, { only: (i) => !samePlace(where(i), where(stays)) }, forLog)
         all = installations(id)
-        if (all.some((i) => i !== staying(all) && !folderGone(i))) {
+        if (all.some((i) => i !== staying(id, all) && !folderGone(id, i))) {
           const detail = unfinishedProfiles(label)
           say(`${label}: ${detail}`)
           return { id, version: before.version, addon: 'error', detail }
@@ -1603,7 +1616,7 @@ export async function disconnect(
     const at = placed(was) ?? (await whereNow(ADAPTERS[id]))
     // A settings folder the person has deleted since took the add-on with it. The harness is
     // not asked about such a folder: asking would only make it anew.
-    const folders = [...Object.values(was.env ?? {}), ...(was.dir ? [was.dir] : [])].map(reached)
+    const folders = installationFolders(id, was)
     // A folder that cannot be looked at is not known to be gone, and neither is what is in it
     if (folders.length && !folders.includes('there') && folders.includes('closed')) {
       say(`${label}: the folder its add-on was put into could not be looked at, so the add-on was left as it is and the note of it is kept`)
@@ -1628,9 +1641,7 @@ export async function disconnect(
         }
         const stayed = await adapter.remove(at, was)
         if (stayed?.pending) {
-          say(
-            `${label}: the marketplace could not be removed, or its removal could not be verified. The skill and installation record are kept; run \`it setup\` again to retry.`,
-          )
+          say(`${label}: removal has not been confirmed, so the companion files and installation note are kept for another try`)
           continue
         }
         if (stayed?.nowhere) {
