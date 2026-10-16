@@ -8,6 +8,7 @@ import fs, {
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
@@ -154,16 +155,31 @@ test.skipIf(process.platform === 'win32')('preserves a linked profile and the mo
   expect(statSync(`${file}.it-recovery`).mode & 0o777).toBe(0o700)
 })
 
-test.skipIf(process.platform === 'win32')('moves a symlink itself without touching its target', () => {
+test.skipIf(process.platform === 'win32').each([false, true])('moves and restores a symlink when hard links follow symlinks is %s', (follows) => {
   const target = path.join(folder, 'owned-elsewhere')
   writeFileSync(target, 'user content')
-  symlinkSync(target, file)
+  symlinkSync(path.basename(target), file)
+  fs.linkSync = (from, to) => original.linkSync(follows && lstatSync(from).isSymbolicLink() ? realpathSync(from) : from, to)
+  syncBuiltinESMExports()
   const kept = keepOriginal(file)
   expect(lstatSync(kept).isSymbolicLink()).toBe(true)
   restoreAbsent(kept, file)
   expect(lstatSync(file).isSymbolicLink()).toBe(true)
+  expect(readlinkSync(file)).toBe(path.basename(target))
   expect(lstatSync(file).ino).not.toBe(lstatSync(kept).ino)
   expect(readFileSync(file, 'utf8')).toBe('user content')
+  expect(readFileSync(target, 'utf8')).toBe('user content')
+})
+
+test.skipIf(process.platform === 'win32')('leaves a recreated file alone when restoring a symlink', () => {
+  const target = path.join(folder, 'owned-elsewhere')
+  writeFileSync(target, 'user content')
+  symlinkSync(target, file)
+  const kept = keepOriginal(file)
+  writeFileSync(file, 'the external save')
+  restoreAbsent(kept, file)
+  expect(readFileSync(file, 'utf8')).toBe('the external save')
+  expect(lstatSync(kept).isSymbolicLink()).toBe(true)
   expect(readFileSync(target, 'utf8')).toBe('user content')
 })
 

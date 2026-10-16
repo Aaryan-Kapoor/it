@@ -101,8 +101,14 @@ export function restoreAbsent(original: string, target: string): void {
   try {
     // A restored file must not share its inode with the saved original: a later in-place
     // save to the live name would otherwise change the recovery copy too.
-    if (lstatSync(original).isSymbolicLink()) symlinkSync(readlinkSync(original), part)
-    else copyFileSync(original, part, constants.COPYFILE_EXCL)
+    if (lstatSync(original).isSymbolicLink()) {
+      // Creating a symlink is already exclusive. Hard-link publication follows the source
+      // symlink on some systems, which would restore its target instead of the link itself.
+      const link = readlinkSync(original)
+      tryFile(() => symlinkSync(link, target))
+      return
+    }
+    copyFileSync(original, part, constants.COPYFILE_EXCL)
     made = true
     putAbsent(part, target)
   } catch {
