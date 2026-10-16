@@ -2329,7 +2329,7 @@ describe('a file that is not It’s alone, changed while another program may sav
       )
       expect(readFileSync(first, 'utf8')).toBe(BEFORE)
       expect(readFileSync(second, 'utf8')).toBe(without(SAVED))
-      expect(realpathSync(file)).toBe(second)
+      expect(realpathSync(file)).toBe(realpathSync(second))
     } finally {
       rmSync(folder, { recursive: true, force: true })
     }

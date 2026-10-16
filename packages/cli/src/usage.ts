@@ -28,7 +28,8 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFi
 import { release as osRelease, userInfo } from 'node:os'
 import path from 'node:path'
 import { HARNESSES } from '@it/protocol'
-import { inHome, Problem, VERSION } from './lib'
+import { inHome, Problem, VERSION, writeFlushed } from './lib'
+import { makeOnce } from './serve/config'
 
 export const DEFAULT_URL = 'https://itcan.do/api/usage'
 export const DOCS = 'https://itcan.do/usage-reporting'
@@ -544,12 +545,96 @@ function discard(): void {
 // there, which is to say that none begins. A command that turns reporting on waits in the same
 // way once it has written the new id down, so that none begins under the old one either.
 const decidingFile = () => inHome('telemetry-sending')
+interface DecisionOwner {
+  pid: number
+  holder: string
+}
+function decisionOwner(file: string): DecisionOwner | null {
+  try {
+    const owner = JSON.parse(readSmall(file, 1024) ?? 'null') as DecisionOwner | null
+    return owner && Number.isInteger(owner.pid) && owner.pid > 0 && typeof owner.holder === 'string' && UUID.test(owner.holder) ? owner : null
+  } catch {
+    return null
+  }
+}
+function decisionOwnerGone(owner: DecisionOwner): boolean {
+  try {
+    process.kill(owner.pid, 0)
+    return false
+  } catch (err) {
+    // A reused process number or a process we cannot inspect keeps its marker.
+    return (err as NodeJS.ErrnoException).code === 'ESRCH'
+  }
+}
 /** Takes the decision marker exclusively, and removes only the file this sender made. */
 function decision(): (() => void) | null {
   const file = decidingFile()
-  const mine = ordinary(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL)
-  if (!mine) return null
+  const owner: DecisionOwner = { pid: process.pid, holder: randomUUID() }
+  const whole = `${file}.${owner.holder}.tmp`
+  const claims: string[] = []
+  const drop = (): void => {
+    if (decisionOwner(file)?.holder === owner.holder) remove(file)
+  }
+  const make = (name: string): boolean => {
+    // The exclusive name is given only to a complete record, even if this process is killed.
+    writeFlushed(whole, JSON.stringify(owner))
+    return makeOnce(whole, name)
+  }
   try {
+    if (!make(file)) {
+      const left = decisionOwner(file)
+      // Empty markers from older programs and unreadable files stay until an explicit toggle.
+      if (!left || !decisionOwnerGone(left)) return null
+      let word = left.holder
+      let held = false
+      const abandoned: { file: string; holder: string }[] = []
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const after = `${file}.after.${word}`
+        // Linking can succeed even if removing the temporary name then throws.
+        // Remember the attempted claim before either operation, and clean only our owner.
+        claims.push(after)
+        if (make(after)) {
+          try {
+            // Only one recoverer may replace this dead owner's marker. If that recoverer
+            // dies as well, the next takes a claim named for it before replacing anything.
+            if (decisionOwner(file)?.holder !== left.holder) return null
+            writeFlushed(whole, JSON.stringify(owner))
+            renameSync(whole, file)
+            held = true
+            for (const old of abandoned) {
+              if (decisionOwner(old.file)?.holder === old.holder) remove(old.file)
+            }
+          } finally {
+            if (decisionOwner(after)?.holder === owner.holder) remove(after)
+          }
+          break
+        }
+        const claimant = decisionOwner(after)
+        if (!claimant || !decisionOwnerGone(claimant)) return null
+        abandoned.push({ file: after, holder: claimant.holder })
+        word = claimant.holder
+      }
+      if (!held) return null
+    }
+  } catch {
+    drop()
+    return null
+  } finally {
+    for (const claim of claims) {
+      if (decisionOwner(claim)?.holder === owner.holder) remove(claim)
+    }
+    remove(whole)
+  }
+  const mine = ordinary(file, constants.O_RDONLY)
+  if (!mine) {
+    drop()
+    return null
+  }
+  try {
+    if (mine.size > 1024 || textOf(mine.fd, mine.size) !== JSON.stringify(owner)) {
+      shut(mine.fd)
+      return null
+    }
     const opened = fstatSync(mine.fd, { bigint: true })
     return () => {
       try {
@@ -560,6 +645,7 @@ function decision(): (() => void) | null {
       }
     }
   } catch {
+    drop()
     shut(mine.fd)
     return null
   }
