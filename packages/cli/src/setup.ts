@@ -1124,18 +1124,23 @@ function onRecord(from: string, id: Harness, at: Place): boolean {
 const elsewhere = (id: Harness, from: string | null, at: Place): Other | null =>
   from && real(from) !== thisHome() ? { home: from, kept: onRecord(from, id, at) } : null
 
-/** Optional config files do not prove that the folder holding an add-on was removed. */
-const installationFolders = (i: Installation) =>
-  [
-    ...Object.entries(i.env ?? {})
-      .filter(([key]) => key !== 'OPENCLAW_CONFIG_PATH')
+/** Check the folder holding an add-on, rather than an optional config file or its surviving parent. */
+const installationFolders = (id: Harness, i: Installation) => {
+  const env = i.env ?? {}
+  // An empty saved environment means the default profile. No saved environment means its place is unknown.
+  const state = id === 'openclaw' && i.env ? (env.OPENCLAW_STATE_DIR ?? path.join(env.OPENCLAW_HOME ?? os.homedir(), '.openclaw')) : undefined
+  return [
+    ...Object.entries(env)
+      .filter(([key]) => !OPENCLAW_VARS.includes(key as (typeof OPENCLAW_VARS)[number]))
       .map(([, folder]) => folder),
+    ...(state ? [state] : []),
     ...(i.dir ? [i.dir] : []),
-  ].map(reached)
+  ].map((folder) => reached(path.resolve(folder.replace(/^~(?=$|[\\/])/, os.homedir()))))
+}
 
 /** Whether every folder an installation was made in is seen to be gone, and the add-on with it. One that cannot be looked at is not known to be. */
-const folderGone = (i: Installation) => {
-  const folders = installationFolders(i)
+const folderGone = (id: Harness, i: Installation) => {
+  const folders = installationFolders(id, i)
   return folders.length > 0 && folders.every((seen) => seen === 'none')
 }
 /**
@@ -1146,8 +1151,7 @@ const folderGone = (i: Installation) => {
  * pages, and whichever asked first would put it into a conversation of its own. So a second is
  * never installed, and where an It from before installed two, all but this one are taken out.
  */
-const staying = (all: Installation[]): Installation | undefined =>
-  all.filter((i) => !folderGone(i)).reduce<Installation | undefined>((latest, i) => (latest && latest.at >= i.at ? latest : i), undefined)
+const staying = (id: Harness, all: Installation[]): Installation | undefined => all.filter((i) => !folderGone(id, i)).at(-1)
 /** The folder the harness says holds its add-on, with links and other spellings resolved. An uncertain place never permits removal. */
 async function profileFolder(adapter: Pick<Adapter, 'note'>, at: Place): Promise<string | undefined> {
   const file = await adapter.note?.(at)
@@ -1163,9 +1167,9 @@ const sameProfile = async (adapter: Pick<Adapter, 'note'>, a: Place, b: Place): 
   const [first, second] = await Promise.all([profileFolder(adapter, a), profileFolder(adapter, b)])
   return first !== undefined && first === second
 }
-async function profileFolders(adapter: Pick<Adapter, 'note'>, all: Installation[]): Promise<Map<Installation, string | undefined>> {
+async function profileFolders(id: Harness, adapter: Pick<Adapter, 'note'>, all: Installation[]): Promise<Map<Installation, string | undefined>> {
   const folders = new Map<Installation, string | undefined>()
-  for (const i of all) if (!folderGone(i)) folders.set(i, placed(i) ? await profileFolder(adapter, placed(i)!) : undefined)
+  for (const i of all) if (!folderGone(id, i)) folders.set(i, placed(i) ? await profileFolder(adapter, placed(i)!) : undefined)
   return folders
 }
 const unfinishedProfiles = (label: string) =>
@@ -1209,9 +1213,9 @@ async function look(id: Harness): Promise<Seen | HarnessStatus | null> {
   const all = installations(id)
   let was = all.find((i) => samePlace(placed(i) ?? at, at))
   // Connected in one folder only, and that folder is another than this one
-  const stays = adapter.single ? staying(all) : undefined
-  if (stays && all.some((i) => i !== stays && !folderGone(i))) {
-    const folders = await profileFolders(adapter, all)
+  const stays = adapter.single ? staying(id, all) : undefined
+  if (stays && all.some((i) => i !== stays && !folderGone(id, i))) {
+    const folders = await profileFolders(id, adapter, all)
     const detail = [...folders.values()].some((dir) => dir === undefined)
       ? uncertainProfiles(KNOWN[id].label)
       : [...folders.values()].some((dir) => dir !== folders.get(stays))
@@ -1317,7 +1321,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
     // inspections, but retire an installation the app says is gone before choosing one to keep.
     const remaining: Installation[] = []
     for (const installation of all) {
-      if (folderGone(installation)) continue
+      if (folderGone(id, installation)) continue
       const place = placed(installation)
       if (!place || (await adapter.present(place, installation)) !== false) remaining.push(installation)
     }
@@ -1330,11 +1334,11 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   // record and not by where this command was run from, so that a setup in a terminal and the
   // background service, which may each find the harness pointed somewhere else, agree on it
   // and neither moves the add-on away from under the other.
-  const stays = adapter.single ? staying(all) : undefined
+  const stays = adapter.single ? staying(id, all) : undefined
   if (stays) {
     const where = (i: Installation) => placed(i) ?? at
-    if (all.some((i) => i !== stays && !folderGone(i))) {
-      const folders = await profileFolders(adapter, all)
+    if (all.some((i) => i !== stays && !folderGone(id, i))) {
+      const folders = await profileFolders(id, adapter, all)
       if ([...folders.values()].some((dir) => dir === undefined)) {
         const detail = uncertainProfiles(label)
         say(`${label}: ${detail}`)
@@ -1349,7 +1353,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
         )
         await disconnect(id, say, { only: (i) => !samePlace(where(i), where(stays)) }, forLog)
         all = installations(id)
-        if (all.some((i) => i !== staying(all) && !folderGone(i))) {
+        if (all.some((i) => i !== staying(id, all) && !folderGone(id, i))) {
           const detail = unfinishedProfiles(label)
           say(`${label}: ${detail}`)
           return { id, version: before.version, addon: 'error', detail }
@@ -1459,7 +1463,7 @@ export async function disconnect(
     const at = placed(was) ?? (await whereNow(ADAPTERS[id]))
     // A settings folder the person has deleted since took the add-on with it. The harness is
     // not asked about such a folder: asking would only make it anew.
-    const folders = installationFolders(was)
+    const folders = installationFolders(id, was)
     // A folder that cannot be looked at is not known to be gone, and neither is what is in it
     if (folders.length && !folders.includes('there') && folders.includes('closed')) {
       say(`${label}: the folder its add-on was put into could not be looked at, so the add-on was left as it is and the note of it is kept`)
