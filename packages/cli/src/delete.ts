@@ -1,3 +1,4 @@
+import { setTimeout as pause } from 'node:timers/promises'
 import { api, call } from './lib'
 
 type Receipt = {
@@ -22,12 +23,11 @@ export async function deletionStatus(slug: string, job?: string, status = false)
   // Earlier functions can accept a deletion without returning a receipt. That proves no completion.
   if (!status && !job)
     return { ...pending, hint: 'Deletion was requested, but this backend cannot confirm completion. Start It with the current backend functions.' }
-  const until = performance.now() + 5000
   const ending = new AbortController()
   const timer = setTimeout(() => ending.abort(new DOMException('Deletion status took too long.', 'TimeoutError')), 5000)
   try {
     while (true) {
-      if (ending.signal.aborted || performance.now() >= until) return pending
+      if (ending.signal.aborted) return pending
       let receipt: Receipt
       try {
         receipt = await call<Receipt>('query', api.deletions.get, job ? { job } : { slug }, ending.signal)
@@ -44,8 +44,10 @@ export async function deletionStatus(slug: string, job?: string, status = false)
         completedAt: receipt.completedAt,
       }
       if (receipt.state === 'completed') return { ...result, deleted: slug }
-      if (status || receipt.state === 'retrying' || performance.now() >= until) return { ...result, hint }
-      await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(0, until - performance.now()))))
+      if (status || receipt.state === 'retrying') return { ...result, hint }
+      await pause(250, undefined, { signal: ending.signal }).catch((err) => {
+        if (!ending.signal.aborted) throw err
+      })
     }
   } finally {
     clearTimeout(timer)
