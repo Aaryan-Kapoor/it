@@ -205,21 +205,26 @@ export const take = mutation({
   args: { ...ref, session, agent: v.optional(v.string()) },
   handler: async (ctx, { session: mine, agent, ...which }) => {
     const { user, machine } = await requireMachine(ctx)
-    // A conversation is named here in as many characters as publishing takes one in. A longer
-    // name is kept whole on the page and cut short where the machine says the conversation is
-    // running, so the page would never be seen to run and could not be stopped; and it is read
-    // with every page of the person's, each time they are listed.
-    if (mine.harness.length > 40 || mine.id.length > 200) fail('invalid', 'That is not a session.')
     const a = await resolve(ctx, user._id, which)
-    if (a.tour !== undefined) await ctx.db.patch(a._id, { tour: undefined })
-    if (a.machineId === machine._id && a.session?.harness === mine.harness && a.session?.id === mine.id) return { took: false }
-    await rateLimit(ctx, 'take', user._id)
-    await ctx.db.patch(a._id, { machineId: machine._id, session: mine, agent: agent?.slice(0, 60) ?? a.agent })
-    // Clicks already waiting on the page go where the page went
-    await ctx.scheduler.runAfter(0, internal.actions.readdress, { artifactId: a._id })
-    return { took: true }
+    return takePage(ctx, a, machine, mine, agent)
   },
 })
+
+/** Changes the owner inside the transaction that validated the requested operation. */
+export async function takePage(ctx: MutationCtx, a: Doc<'artifacts'>, machine: Doc<'machines'>, mine: { harness: string; id: string }, agent?: string) {
+  // A conversation is named here in as many characters as publishing takes one in. A longer
+  // name is kept whole on the page and cut short where the machine says the conversation is
+  // running, so the page would never be seen to run and could not be stopped; and it is read
+  // with every page of the person's, each time they are listed.
+  if (mine.harness.length > 40 || mine.id.length > 200) fail('invalid', 'That is not a session.')
+  if (a.tour !== undefined) await ctx.db.patch(a._id, { tour: undefined })
+  if (a.machineId === machine._id && a.session?.harness === mine.harness && a.session?.id === mine.id) return { took: false }
+  await rateLimit(ctx, 'take', a.userId)
+  await ctx.db.patch(a._id, { machineId: machine._id, session: mine, agent: agent?.slice(0, 60) ?? a.agent })
+  // Clicks already waiting on the page go where the page went
+  await ctx.scheduler.runAfter(0, internal.actions.readdress, { artifactId: a._id })
+  return { took: true }
+}
 
 type Connection = {
   harness: string

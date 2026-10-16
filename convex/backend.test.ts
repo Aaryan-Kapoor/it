@@ -8,7 +8,7 @@ import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
-import { get as pageQuery } from './artifacts'
+import { get as pageQuery, takePage } from './artifacts'
 import { inbox as inboxQuery } from './delivery'
 import schema from './schema'
 
@@ -1519,6 +1519,31 @@ describe('tour page ownership', () => {
     expect(await m.as.query(api.state.get, { slug: 'tour-menu' })).toEqual(menu)
   })
 
+  test.each(['menu', 'chess', 'done'])('a saved navigation attempt on %s survives a stale tour reset', async (name) => {
+    const t = backend()
+    const m = await machineOf(t, `tour-navigation-${name}`)
+    const p = await person(t, `tour-navigation-${name}`)
+    const showing = await make(m, name)
+    const pending = await start(m, name)
+    const attempt = { version: showing.version, attempt: 2, attempt_display: 'page-load-b' }
+    await p.browser.mutation(api.state.storeSet, { artifactId: showing.artifactId, key: 'tour-navigation', value: JSON.stringify(attempt) })
+    const state = await m.as.query(api.state.get, { slug: `tour-${name}` })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect(await m.as.query(api.state.get, { slug: `tour-${name}` })).toEqual(state)
+    expect(JSON.parse(state.json)[STORE_KEY]['tour-navigation']).toEqual(attempt)
+    expect((await m.as.query(api.artifacts.get, { slug: `tour-${name}` })).version).toBe(showing.version)
+    if (name === 'menu') {
+      await make(m, 'drums')
+      const progressed = JSON.parse((await m.as.query(api.state.get, { slug: 'tour-menu' })).json)
+      expect(progressed[STORE_KEY]['tour-navigation']).toEqual(attempt)
+      expect(progressed.seen).toEqual(['drums'])
+    }
+    // A fresh showing has its own version, so its counter may start again.
+    const next = await make(m, name)
+    expect(next.version).toBeGreaterThan(showing.version)
+    expect(JSON.parse((await m.as.query(api.state.get, { slug: `tour-${name}` })).json)[STORE_KEY]).toBeUndefined()
+  })
+
   test('progress added during a menu upload survives a stale menu reset', async () => {
     const t = backend()
     const m = await machineOf(t, 'tour-menu-progress-race')
@@ -1563,14 +1588,18 @@ describe('tour page ownership', () => {
     expect(await m.as.mutation(api.tour.clear, {})).toEqual({ deleted: ['tour-chess'], kept: ['tour-menu'], seen: 0 })
   })
 
-  test.each(['take', 'rollback'] as const)('%s revokes tour ownership and a pending tour cannot restore it', async (how) => {
+  test.each(['take', 'shared take', 'shared transfer', 'rollback'] as const)('%s revokes tour ownership and a pending tour cannot restore it', async (how) => {
     const t = backend()
     const m = await machineOf(t, `tour-${how}`)
     const mine = { harness: 'pi', id: 'conversation-1' }
     await publish(m, 'tour-chess', { tour: 'chess', state: '{"reply":"","note":""}', session: mine })
     const pending = await start(m, 'chess')
     if (how === 'take') expect(await m.as.mutation(api.artifacts.take, { slug: 'tour-chess', session: mine })).toEqual({ took: false })
-    else await m.as.mutation(api.artifacts.rollback, { slug: 'tour-chess', version: 1 })
+    else if (how === 'rollback') await m.as.mutation(api.artifacts.rollback, { slug: 'tour-chess', version: 1 })
+    else
+      expect(
+        await t.run(async (ctx) => takePage(ctx, (await ctx.db.get(pending.artifactId))!, (await ctx.db.get(m.id))!, how === 'shared take' ? mine : SESSION)),
+      ).toEqual({ took: how === 'shared transfer' })
     await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
     expect((await m.as.mutation(api.tour.clear, {})).kept).toEqual(['tour-chess'])
     await expect(start(m, 'chess')).rejects.toThrow('tour does not own')
