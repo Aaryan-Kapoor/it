@@ -613,6 +613,15 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
   })
 
+  test('removal clears an empty recovery folder left before its ownership note was written', async () => {
+    await connect('opencode', () => {})
+    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    mkdirSync(`${plugin}.it-recovery`)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(existsSync(plugin)).toBe(false)
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+  })
+
   test.each(['an earlier plugin', 'a personal edit'])('keeps ownership of an obsolete file recreated with %s during preservation', async (recreated) => {
     await connect('opencode', () => {})
     const file = path.join(folderOf('opencode'), 'plugins/obsolete.js')

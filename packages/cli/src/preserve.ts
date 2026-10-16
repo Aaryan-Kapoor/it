@@ -54,7 +54,7 @@ export function checkHardLinks(file: string, probe: string): void {
 /** Unresolved originals never expire. Twenty slots bound disk use before a person must review them. */
 export const ORIGINAL_LIMIT = 20
 
-/** Identifies only the recovery folder made for this file, never a folder or link placed there by someone else. */
+/** Identifies this file's recovery folder, or finishes reserving an empty one after an interruption. */
 function recoveryFolder(file: string, create: boolean): { target: string; dir: string } | undefined {
   const target = path.join(realpathSync(path.dirname(file)), path.basename(file))
   const dir = `${target}.it-recovery`
@@ -63,19 +63,24 @@ function recoveryFolder(file: string, create: boolean): { target: string; dir: s
   if (create) {
     try {
       mkdirSync(dir, { mode: 0o700 })
-      writeFileSync(note, owner, { flag: 'wx', mode: 0o600 })
     } catch (err) {
       if (!(err instanceof Error && 'code' in err && err.code === 'EEXIST')) throw err
     }
   } else if (!lstatSync(dir, { throwIfNoEntry: false })) return undefined
-  if (
-    !lstatSync(dir).isDirectory() ||
-    lstatSync(dir).isSymbolicLink() ||
-    !lstatSync(note).isFile() ||
-    lstatSync(note).isSymbolicLink() ||
-    readFileSync(note, 'utf8') !== owner
-  )
-    throw new Error(`${dir} is not a recovery folder It made. Move it away before trying again`)
+  const unrecognised = () => new Error(`${dir} is not a recovery folder It made. Move it away before trying again`)
+  if (!lstatSync(dir).isDirectory()) throw unrecognised()
+  if (readdirSync(dir).length === 0) {
+    // A process can stop between making the folder and marking it, or between deleting
+    // its last marker and removing the empty folder. Only an empty real directory can be
+    // claimed this way. Exclusive creation leaves another writer's marker untouched.
+    try {
+      writeFileSync(note, owner, { flag: 'wx', mode: 0o600 })
+    } catch (err) {
+      if (!(err instanceof Error && 'code' in err && err.code === 'EEXIST')) throw err
+    }
+  }
+  const marked = lstatSync(note, { throwIfNoEntry: false })
+  if (!marked?.isFile() || readFileSync(note, 'utf8') !== owner) throw unrecognised()
   return { target, dir }
 }
 

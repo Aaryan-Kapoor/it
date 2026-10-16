@@ -183,6 +183,25 @@ test('leaves an unrecognized recovery folder and the original untouched', () => 
   expect(readFileSync(file, 'utf8')).toBe('before')
 })
 
+test('finishes initializing an empty recovery folder left by an interrupted change', () => {
+  writeFileSync(file, 'before')
+  mkdirSync(`${file}.it-recovery`)
+  expect(changeWhole(file, () => 'after')).toBe(true)
+  expect(readFileSync(file, 'utf8')).toBe('after')
+  expect(existsSync(`${file}.it-recovery`)).toBe(false)
+})
+
+test('leaves an unmarked nonempty recovery folder and the original untouched', () => {
+  writeFileSync(file, 'before')
+  mkdirSync(`${file}.it-recovery`)
+  const personal = path.join(`${file}.it-recovery`, 'notes')
+  writeFileSync(personal, 'personal notes')
+  expect(() => changeWhole(file, () => 'after')).toThrow(/not a recovery folder/)
+  expect(readFileSync(file, 'utf8')).toBe('before')
+  expect(readFileSync(personal, 'utf8')).toBe('personal notes')
+  expect(readdirSync(`${file}.it-recovery`)).toEqual(['notes'])
+})
+
 test.skipIf(process.platform === 'win32')('preserves a linked profile and its permissions without retaining a successful change', () => {
   writeFileSync(file, 'before')
   chmodSync(file, 0o640)
