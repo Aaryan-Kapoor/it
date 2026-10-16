@@ -1792,10 +1792,24 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // waiter has it and says so to It itself, so there is nothing to try again or set aside
       if (!handed && sent.toWaiter) return
       if (handed) {
-        if (!recovery.stopped)
-          recovery.change(() => {
-            for (const c of [click, ...withIt]) recovery.accepted.add(c.id)
-          })
+        // The app has already taken these clicks. A failed receipt write must not turn
+        // that handoff into a refusal or release the rest of its batch for redelivery.
+        if (!recovery.stopped) {
+          try {
+            recovery.change(() => {
+              for (const c of [click, ...withIt]) {
+                recovery.accepted.add(c.id)
+                // Keep copies for a waiter in the running turn until it says it printed
+                // them. Its answer may have arrived while the app was taking this batch.
+                const kept = behindTurn.get(c.id)
+                if (c === click && sent.printed) behindTurn.delete(c.id)
+                else if (kept && c === click && sent.given) kept.given = sent.given
+              }
+            })
+          } catch (err) {
+            seldom('recovery', `could not keep the delivery receipt (${why(err)}); confirming the accepted clicks`)
+          }
+        }
         if (refused === STOPPED) say(`${a(harness)} conversation (${short(line)}) was stopped by the person`)
         for (const c of [click, ...withIt]) {
           journal('queued', c.id)
@@ -1809,18 +1823,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         record('agent.woken', { result: 'resumed', agent: agentOf(harness) })
         if (stalled.get(line) === click.id) stalled.delete(line)
-        // Codex's queue hands a click over behind a turn that is running, and so does T3 Code
-        // for a thread whose turn is running, with every click that went along in the same
-        // message: an agent that waits in that turn for one of those would wait for a message
-        // that stands behind its own turn. A reopening never does: nothing was running
-        if (!recovery.stopped)
-          recovery.change(() => {
-            for (const c of [click, ...withIt]) {
-              const kept = behindTurn.get(c.id)
-              if (c === click && sent.printed) behindTurn.delete(c.id)
-              else if (kept && c === click && sent.given) kept.given = sent.given
-            }
-          })
         await confirmAll()
       } else {
         const n = (queueTries.get(tag(click))?.n ?? 0) + 1

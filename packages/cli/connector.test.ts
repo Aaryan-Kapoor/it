@@ -1636,6 +1636,59 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
   })
 
+  test.each(['codex', 't3'] as const)('a successful %s handoff is still confirmed when its durable receipt cannot be saved', async (via) => {
+    standIn()
+    const t3 = await import('./src/t3')
+    const send = t3.t3Send
+    const temporary = () => `${path.join(home, 'delivery-recovery.json')}.${process.pid}.tmp`
+    const sending = vi.spyOn(t3, 't3Send').mockImplementation(async (...args) => {
+      const result = await send(...args)
+      mkdirSync(temporary())
+      return result
+    })
+    let reachable = false
+    stand.answer = (name) => {
+      if (name === 'delivery:handedOff' && !reachable) throw new Error('offline')
+      return undefined
+    }
+    try {
+      if (via === 't3') {
+        stand.t3.running = true
+        stand.t3.threads.set('thread-6', 't3-6')
+      }
+      await start()
+      await turn(6, true)
+      const clicks = via === 't3' ? [click(6), { ...click(7), session: click(6).session }] : [click(6)]
+      const ids = clicks.map((c) => c.id)
+      offered(...clicks)
+      for (let i = 0; i < 5 && stand.codex.length + stand.t3.sent.length === 0; i++) await pass()
+      expect(stand.codex.length + stand.t3.sent.length).toBe(1)
+      if (via === 'codex') {
+        mkdirSync(temporary())
+        stand.codex[0]!.end()
+      }
+      offered()
+      await pass(2)
+      expect([...new Set(called('delivery:handedOff'))]).toEqual(ids)
+      expect(called('delivery:release')).toEqual([])
+      expect(recoveryClaims().returning).toEqual(ids)
+      rmSync(temporary(), { recursive: true })
+      reachable = true
+      await pass(2)
+      expect(recoveryClaims().returning).toEqual([])
+      expect(recoveryClaims().targets).toEqual([])
+      offered(...clicks)
+      await pass(2)
+      expect(stand.codex.length + stand.t3.sent.length).toBe(1)
+      expect(called('delivery:claim')).toEqual(ids)
+      expect(called('delivery:release')).toEqual([])
+      expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(ids)
+    } finally {
+      sending.mockRestore()
+      rmSync(temporary(), { recursive: true, force: true })
+    }
+  })
+
   test('a restored accepted receipt is reconciled even when the backend already removed the click from its inbox', async () => {
     standIn()
     await start('socket', {}, (folder) =>
