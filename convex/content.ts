@@ -7,7 +7,7 @@
 // check they arrived) are asked directly. Things that must happen even if the content service
 // cannot be reached at that moment (ending a display's showings, deleting stored bytes) are
 // kept as jobs and tried again until it confirms, because a scheduled action runs at most once.
-import { AUDIENCE } from '@it/protocol'
+import { AUDIENCE, PUBLICATION } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
@@ -89,7 +89,7 @@ async function enqueue(
 /** Showings opened for a display before `epoch` are over, and tickets made for it before then open nothing. Answers with the job, for a caller that wants to know when the content service has confirmed. */
 export const revokeLater = (ctx: MutationCtx, args: { userId: Id<'users'>; displayId: string; epoch: number }) => enqueue(ctx, 'revoke', args.userId, args)
 /** How long after something is deleted an upload that was already under way could still land. */
-const GRANT_TAIL_MS = 20 * 60_000
+const GRANT_TAIL_MS = PUBLICATION.grantTailMs
 /**
  * Deletes stored bytes under a prefix, which begins with whose they are (`u/<person>/`): a
  * retired version, a deleted page, or everything one person has. Where a grant to upload there
@@ -167,11 +167,19 @@ export const run = internalAction({
       if (r.ok) {
         // Only a proper answer counts. One that cannot be read, or does not say what was asked,
         // is a failure, and the job is tried again.
-        const said = (await r.json().catch(() => null)) as { more?: unknown; epoch?: unknown } | null
-        if (job.op === 'delete' && typeof said?.more === 'boolean') outcome = said.more ? 'more' : 'done'
+        const said = (await r.json().catch(() => null)) as { more?: unknown; removed?: unknown; epoch?: unknown } | null
+        // A deletion that says there is more and that it removed nothing got nowhere. It is no
+        // step on the way, to be followed by the next at once: it waits as a failure does, so
+        // that what cannot be removed is not asked for without end and without a pause.
+        const stuck = job.op === 'delete' && said?.more === true && said.removed === 0
+        if (job.op === 'delete' && typeof said?.more === 'boolean' && !stuck) outcome = said.more ? 'more' : 'done'
         if (job.op === 'revoke' && typeof said?.epoch === 'number') outcome = 'done'
         if (outcome === 'failed')
-          log('content_job.failed', { jobId, op: job.op, try: job.attempts + 1, status: r.status, reason: 'unreadable_answer' }, 'error')
+          log(
+            'content_job.failed',
+            { jobId, op: job.op, try: job.attempts + 1, status: r.status, reason: stuck ? 'nothing_removed' : 'unreadable_answer' },
+            'error',
+          )
       }
     } catch (err) {
       // The content service could not be reached: tried again later

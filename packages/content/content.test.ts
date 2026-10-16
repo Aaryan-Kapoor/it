@@ -5,7 +5,20 @@
 
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import http from 'node:http'
 import type net from 'node:net'
@@ -1404,6 +1417,37 @@ describe('a version that was deleted', () => {
     expect((await stage(`u/${USER}/replayed/2/`, [entry('index.html', data)])).status).toBe(200)
   })
 
+  // What a folder lets its owner do is another thing on Windows, and whoever may do anything is stopped by none of it
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'whose folder cannot be removed is not answered as a deletion that got part of the way: the backend is told it failed, each time, until the folder can be',
+    async () => {
+      const own = make()
+      const on = own.content
+      began = lines.length
+      const prefix = `u/${USER}/stuck/1/`
+      // The folder above the version's, where what was declared is kept, may be read and not written: the version's own folder cannot be taken out of it
+      const above = path.join(own.settings.dir, 'manifest', 'u', USER, 'stuck')
+      try {
+        await seedFiles(prefix, { 'index.html': INDEX }, on)
+        chmodSync(above, 0o500)
+        for (let i = 0; i < 3; i++) {
+          const told = await control('delete', { prefix }, undefined, { on })
+          expect([told.status, told.buf.length]).toEqual([500, 0])
+        }
+        expect(wrote((e) => e.event === 'unexpected' && e.part === 'control')).toMatchObject({ kind: 'EACCES' })
+        // It is deleted all the same to whoever asks for it: nothing of it is shown or taken
+        expect((await redeem(ticket(newMount(), { p: prefix }), { on })).status).toBe(401)
+        expect((await upload('index.html', INDEX, { prefix, on })).status).toBe(403)
+        chmodSync(above, 0o700)
+        expect((await control('delete', { prefix }, undefined, { on })).json()).toEqual({ removed: 1, more: false })
+        expect(filesUnder(path.join(own.settings.dir, 'u', USER, 'stuck'))).toEqual([])
+      } finally {
+        chmodSync(above, 0o700)
+        await on.close()
+      }
+    },
+  )
+
   test('deleted at the very moment its files are being declared: nothing stays declared, and a message that comes after writes nothing at all', async () => {
     const own = make()
     const on = own.content
@@ -1431,6 +1475,112 @@ describe('a version that was deleted', () => {
       await on.close()
     }
   })
+
+  test('deleted with everything of its person’s while one of its files is arriving: at no moment is the file on the disk, for a service that ended just then to leave there for good', async () => {
+    const own = make()
+    const on = own.content
+    began = lines.length
+    const real = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).open
+    try {
+      const person = 'erased-late'
+      const prefix = `u/${person}/arriving/1/`
+      expect((await control('stage', { prefix, files: [entry('index.html', 'hello')] }, undefined, { on })).status).toBe(200)
+      // The upload has read what was declared, and found its file there. Before it writes anything, everything of the person's is deleted,
+      // and the backend is told so: from then it asks for nothing of theirs to be deleted again
+      const held = await atTheNextFolder()
+      const uploading = upload('index.html', 'hello', { prefix, on })
+      await held.reached
+      expect((await control('delete', { prefix: `u/${person}/` }, undefined, { on })).json()).toEqual({ removed: 1, more: false })
+      // Whatever the service opens from here on, it is looked at whether a file of the person's lies under the folder at that moment
+      let lay = false
+      vi.mocked(fsp.open).mockImplementation((async (...given: Parameters<typeof real>) => {
+        if (filesUnder(path.join(own.settings.dir, 'u')).length > 0) lay = true
+        return real(...given)
+      }) as typeof real)
+      held.goOn()
+      const uploaded = await uploading
+      expect([uploaded.status, uploaded.buf.length]).toEqual([403, 0])
+      expect(lay).toBe(false)
+      expect(filesUnder(path.join(own.settings.dir, 'u'))).toEqual([])
+      expect(existsSync(path.join(own.settings.dir, 'u', person))).toBe(false)
+      expect(arrivingUnder(path.join(own.settings.dir, 'tmp'))).toEqual([])
+    } finally {
+      vi.mocked(fsp.open).mockImplementation(real)
+      await on.close()
+    }
+  })
+
+  test.each([0, 3601])(
+    'two uploads arriving while their person is deleted leave no bytes in a recreated folder, even after waiting %i seconds',
+    async (delay) => {
+      clock.start()
+      const own = make()
+      const on = own.content
+      const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+      const pause = () => {
+        let release!: () => void
+        const promise = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return { promise, release }
+      }
+      const [firstWaiting, firstResume, secondWaiting, secondResume, secondMade, secondContinue] = Array.from({ length: 6 }, pause)
+      const uploads: ReturnType<typeof upload>[] = []
+      const found: string[] = []
+      const person = 'erased-two-uploads'
+      const prefix = `u/${person}/arriving/1/`
+      const below = path.join(own.settings.dir, 'u', person)
+      let deleted = false
+      let first = true
+      try {
+        expect((await control('stage', { prefix, files: [entry('index.html', 'private bytes')] }, undefined, { on })).status).toBe(200)
+        vi.mocked(fsp.open).mockImplementation((async (...given: Parameters<typeof real.open>) => {
+          // The first upload has checked its declaration, but has not yet written its temporary file.
+          if (first && String(given[0]).startsWith(path.join(own.settings.dir, 'tmp') + path.sep)) {
+            first = false
+            firstWaiting!.release()
+            await firstResume!.promise
+          }
+          // Opening the version folder follows the rename and precedes the upload handler's cleanup.
+          if (deleted) for (const file of filesUnder(below)) found.push(readFileSync(path.join(below, file), 'utf8'))
+          return real.open(...given)
+        }) as typeof real.open)
+        uploads.push(upload('index.html', 'private bytes', { prefix, on }))
+        await firstWaiting!.promise
+        vi.mocked(fsp.mkdir).mockImplementationOnce((async (...given: Parameters<typeof real.mkdir>) => {
+          secondWaiting!.release()
+          await secondResume!.promise
+          const made = await real.mkdir(...given)
+          secondMade!.release()
+          await secondContinue!.promise
+          return made
+        }) as typeof real.mkdir)
+        uploads.push(upload('index.html', 'private bytes', { prefix, on }))
+        await secondWaiting!.promise
+        expect((await control('delete', { prefix: `u/${person}/` }, undefined, { on })).json()).toEqual({ removed: 1, more: false })
+        deleted = true
+        // The second upload recreates the folder, then the first finishes before the second checks its declaration again.
+        secondResume!.release()
+        await secondMade!.promise
+        clock.pass(delay)
+        firstResume!.release()
+        expect((await uploads[0]!).status).toBe(403)
+        secondContinue!.release()
+        expect((await uploads[1]!).status).toBe(403)
+        expect(found).toEqual([])
+        expect(filesUnder(below)).toEqual([])
+        expect(arrivingUnder(path.join(own.settings.dir, 'tmp'))).toEqual([])
+      } finally {
+        firstResume!.release()
+        secondResume!.release()
+        secondContinue!.release()
+        vi.mocked(fsp.open).mockImplementation(real.open)
+        vi.mocked(fsp.mkdir).mockImplementation(real.mkdir)
+        await Promise.allSettled(uploads)
+        await on.close()
+      }
+    },
+  )
 
   test('deleted at the very moment one of its files is arriving: the file is not kept', async () => {
     const own = make()
@@ -1580,6 +1730,61 @@ describe('uploads', () => {
     expect((await upload('index.html', 'hello', { prefix, grant: await sign('it-upload', 'u/other/x/1/', { p: prefix }) })).status).toBe(401)
     expect((await upload('index.html', 'hello', { prefix, grant: await sign('it-upload', 'u/', { p: 'u/' }) })).status).toBe(401)
     expect((await upload('index.html', 'hello', { prefix, grant: await sign('it-upload', '../../x/1/', { p: '../../x/1/' }) })).status).toBe(401)
+  })
+
+  test('a version declared where files of an earlier publish of that number still lie has the files it declares and no others, and is found whole', async () => {
+    const prefix = `u/${USER}/put-back/2/`
+    await seedFiles(prefix, { 'index.html': 'the page as it was', 'old-asset.js': 'old()', 'kept.css': 'body{}' })
+    // The database was put back from a copy made before that publish, which the files are no part of: the next publish is given the same number
+    const files = [entry('index.html', 'the page as it is now'), entry('kept.css', 'body{}')]
+    expect((await stage(prefix, files)).status).toBe(200)
+    // What is declared again as it was is there still, and what is declared anew is written over what lay under its name
+    expect((await upload('index.html', 'the page as it is now', { prefix })).status).toBe(200)
+    expect((await control('verify', { prefix, files })).json()).toEqual({ ok: true, missing: [] })
+    // That a file was found there and removed is written down, by how many
+    expect(wrote((e) => e.event === 'control.stage' && e.prefix === prefix && e.left === 1)).toBeTruthy()
+    const { at } = await open({ p: prefix, v: '2' })
+    expect((await show(`${at}/v/2/index.html`)).text).toBe('the page as it is now')
+    expect((await show(`${at}/v/2/kept.css`)).text).toBe('body{}')
+    expect((await show(`${at}/v/2/old-asset.js`)).status).toBe(404)
+    expect((await control('delete', { prefix })).json()).toEqual({ removed: 3, more: false })
+  })
+
+  test.each(['old-asset.js', 'index.html'])('a stale upload cannot restore %s after its declaration is replaced', async (file) => {
+    const prefix = `u/${USER}/stale-replacement/2/`
+    const old = 'old bytes'
+    await seedFiles(prefix, { 'index.html': old, 'old-asset.js': old })
+    let send!: ReadableStreamDefaultController<Uint8Array>
+    let reading!: () => void
+    const reached = new Promise<void>((resolve) => {
+      reading = resolve
+    })
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          send = controller
+        },
+        pull() {
+          reading()
+        },
+      },
+      { highWaterMark: 0 },
+    )
+    const request = new Request(`${SITE}/upload/${file}`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${await grantFor(prefix)}`, 'content-length': String(old.length), 'x-it-sha256': sha256(old) },
+      body: stream,
+      duplex: 'half',
+    } as RequestInit)
+    const uploading = content.upload(request, { port: BASE, address: '127.0.0.1' })
+    await reached
+    const files = [entry('index.html', 'replacement')]
+    expect((await stage(prefix, files)).status).toBe(200)
+    expect((await upload('index.html', 'replacement', { prefix })).status).toBe(200)
+    send.enqueue(Buffer.from(old))
+    send.close()
+    expect((await uploading).status).toBe(403)
+    expect((await control('verify', { prefix, files })).json()).toEqual({ ok: true, missing: [] })
   })
 
   test('a grant allows exactly the files that were declared: that path, that size, those bytes', async () => {

@@ -85,11 +85,14 @@ export const _targets = internalQuery({
     // Nothing is sent for a person whose records are being erased, or are gone
     const owner = await ctx.db.get(n.userId)
     if (!owner || owner.deletedAt) return null
+    const artifact = n.artifactId ? await ctx.db.get(n.artifactId) : null
+    // Deletion removes the page at once, before its bounded notification cleanup finishes.
+    if (n.artifactId && !artifact) return null
     const displays = await ctx.db
       .query('displays')
       .withIndex('by_user', (q) => q.eq('userId', n.userId))
       .take(50)
-    const slug = n.artifactId ? ((await ctx.db.get(n.artifactId))?.slug ?? null) : null
+    const slug = artifact?.slug
     const quiet = Date.now() - QUIET_MS
     const already = new Set<string>(n.pushedTo ?? [])
     const targets = []
@@ -115,6 +118,7 @@ export const _still = internalQuery({
     if (!n || n.seenAt || n.dismissedAt || n.answeredAt) return false
     const owner = await ctx.db.get(n.userId)
     if (!owner || owner.deletedAt) return false
+    if (n.artifactId && !(await ctx.db.get(n.artifactId))) return false
     const d = await ctx.db.get(displayId)
     return Boolean(d && d.userId === n.userId && d.push?.endpoint === endpoint && (await paired(ctx, d)))
   },

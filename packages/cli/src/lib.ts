@@ -1379,18 +1379,18 @@ export async function overClashes<T>(
 }
 
 /** One call to the backend as this machine. A token that has just expired is replaced once. */
-export async function call<T = any>(kind: 'query' | 'mutation' | 'action', fn: unknown, args: Record<string, unknown> = {}): Promise<T> {
+export async function call<T = any>(kind: 'query' | 'mutation' | 'action', fn: unknown, args: Record<string, unknown> = {}, ending?: AbortSignal): Promise<T> {
   const attempt = async (force: boolean): Promise<T> => {
     // No call may hang for ever: a laptop that woke on another network would otherwise wait
     // minutes. An action does more than a query does (checking a whole upload, say) and is given longer.
     const limit = kind === 'action' ? 90_000 : 20_000
     const client = new ConvexHttpClient(backend().api, {
-      fetch: (input, init) => direct(input, { ...init, signal: AbortSignal.timeout(limit) }),
+      fetch: (input, init) => direct(input, { ...init, signal: ending ? AbortSignal.any([ending, AbortSignal.timeout(limit)]) : AbortSignal.timeout(limit) }),
       // What the backend's functions write down is not this program's to print: a backend may
       // send it along with each answer, and printed it would land in what an agent reads
       logger: false,
     })
-    client.setAuth(await token(force))
+    client.setAuth(await token(force, ending))
     return (client as any)[kind](fn, args) as Promise<T>
   }
   // Only what is one transaction is asked again after a clash: nothing of it was done. An action
