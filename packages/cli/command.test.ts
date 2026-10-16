@@ -175,6 +175,7 @@ async function backend(
   const asked: Asked[] = []
   const joined: Record<string, unknown>[] = []
   const uploads: { path: string; bytes: number }[] = []
+  const upload: { answer: () => number | Promise<number> } = { answer: () => 200 }
   const live: string[] = []
   const token = { asked: 0, answer: (): [status: number, body: unknown] => [200, { token: 'a-token', expires_in: 300 }] }
   const server = http.createServer((req, res) => {
@@ -193,7 +194,7 @@ async function backend(
         }
         if (req.method === 'PUT') {
           uploads.push({ path: req.url ?? '', bytes: Buffer.concat(chunks).length })
-          return json({})
+          return json({}, await upload.answer())
         }
         if (req.method === 'POST' && req.url === '/bridge/enroll') {
           const sent = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
@@ -225,6 +226,7 @@ async function backend(
     asked,
     joined,
     uploads,
+    upload,
     live,
     token,
     env: { IT_URL: url, IT_SITE_URL: url },
@@ -1003,7 +1005,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('a concurrent command keeps the receipt while the first begin is still being recorded', async () => {
+  test('a concurrent command leaves the receipt alone while the first begin is still being recorded', async () => {
     const m = machine()
     let release!: () => void
     let reached!: () => void
@@ -1031,12 +1033,12 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     try {
       await beginning
       const folder = path.join(m.it, 'publication-pending')
-      const file = path.join(folder, readdirSync(folder)[0]!)
+      const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
       const pending = readFileSync(file, 'utf8')
       const concurrent = await run(m, args, b.env)
-      expect(concurrent.code).toBe(1)
+      expect([concurrent.code, error(concurrent).code]).toEqual([1, 'busy'])
       expect(readFileSync(file, 'utf8')).toBe(pending)
-      expect(b.asked.filter((x) => x.path === 'publish:resume')).toHaveLength(3)
+      expect(b.asked.filter((x) => x.path === 'publish:resume')).toHaveLength(0)
       release()
       expect((await first).code).toBe(1)
       expect(readFileSync(file, 'utf8')).toBe(pending)
@@ -1045,6 +1047,51 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(b.asked.filter((x) => x.path === 'publish:begin')).toHaveLength(1)
       expect(b.asked.filter((x) => x.path === 'publish:abandon')).toEqual([])
       expect(b.asked.filter((x) => x.path === 'publish:resume').every((x) => x.args.operation === JSON.parse(pending).operation)).toBe(true)
+      expect(readdirSync(folder)).toEqual([])
+    } finally {
+      release()
+      await first
+      await b.close()
+    }
+  })
+
+  test('a concurrent command cannot abandon the publication while its uploader is still working', async () => {
+    const m = machine()
+    let reached!: () => void
+    let release!: () => void
+    const uploading = new Promise<void>((resolve) => (reached = resolve))
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let uploads = 0
+    let abandoned = false
+    const b = await backend(m, ({ path: fn }) => {
+      if (fn === 'publish:begin' || fn === 'publish:resume')
+        return { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:abandon') abandoned = true
+      if (fn === 'publish:finish')
+        return abandoned ? new Refusal({ code: 'conflict', message: 'That publication was abandoned.' }) : { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      return null
+    })
+    b.upload.answer = async () => {
+      if (++uploads !== 1) return 400
+      reached()
+      await held
+      return 200
+    }
+    const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+    const first = run(m, args, b.env)
+    try {
+      await uploading
+      const folder = path.join(m.it, 'publication-pending')
+      const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
+      const pending = readFileSync(file, 'utf8')
+      const concurrent = await run(m, args, b.env)
+      expect([concurrent.code, error(concurrent).code]).toEqual([1, 'busy'])
+      expect(readFileSync(file, 'utf8')).toBe(pending)
+      expect([uploads, abandoned]).toEqual([1, false])
+      release()
+      const done = await first
+      expect([done.code, printed(done).version]).toEqual([0, 1])
+      expect(b.asked.filter((x) => x.path.startsWith('publish:')).map((x) => x.path)).toEqual(['publish:begin', 'publish:finish'])
       expect(readdirSync(folder)).toEqual([])
     } finally {
       release()
@@ -1065,7 +1112,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect((await run(m, args, b.env)).code).toBe(1)
       const folder = path.join(m.it, 'publication-pending')
       expect(readdirSync(folder)).toHaveLength(1)
-      const file = path.join(folder, readdirSync(folder)[0]!)
+      const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
       const pending = readFileSync(file, 'utf8')
       expect((await run(m, args, b.env)).code).toBe(1)
       expect(readFileSync(file, 'utf8')).toBe(pending)
@@ -1103,7 +1150,7 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect((await run(m, args, b.env)).code).toBe(1)
       const folder = path.join(m.it, 'publication-pending')
       expect(readdirSync(folder)).toHaveLength(1)
-      const file = path.join(folder, readdirSync(folder)[0]!)
+      const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
       const pending = readFileSync(file, 'utf8')
       expect((await run(m, args, b.env)).code).toBe(1)
       expect(readFileSync(file, 'utf8')).toBe(pending)

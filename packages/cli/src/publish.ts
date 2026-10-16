@@ -21,6 +21,7 @@ import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN, PUBLICATION, uploadBudgetMs } from '@it/protocol'
 import { legacyEmptyLock } from './legacy-lock'
 import { api, call, direct, doorRefusal, inHome, machine, Problem, readJson, sessionAsked, sessionNote, throughDoor, writeFlushed, writePrivate } from './lib'
+import { aloneAt } from './serve/backend'
 import { makeOnce } from './serve/config'
 import { agentOf, filesBand, record, sizeBand } from './usage'
 
@@ -442,129 +443,144 @@ export async function publish(input: {
       )
       .digest('hex')}.json`,
   )
-  let resuming = existsSync(file)
-  if (!resuming) {
-    const temp = `${file}.${randomUUID()}.tmp`
-    writePrivate(temp, { operation: randomUUID(), at: Date.now() })
-    resuming = !makeOnce(temp, file)
-  }
-  const pending = readJson<{ operation: string; at: number }>(file)
-  if (!pending || !/^[a-f0-9-]{36}$/.test(pending.operation) || !Number.isFinite(pending.at))
-    throw new Problem(
-      `The publication record at ${file} cannot be read.`,
-      'record_unread',
-      'Keep the record and check the page before removing it and publishing again.',
-    )
-  if (Date.now() - pending.at >= PUBLICATION.receiptDays * 86_400_000)
-    throw new Problem('The saved publication is too old to reconcile.', 'conflict', `Check the page, then remove ${file} before publishing again.`)
-  const clear = () => {
-    if (readJson<{ operation: string }>(file)?.operation === pending.operation) rmSync(file, { force: true })
-  }
-  const uncertain = (err: unknown): err is Problem =>
-    err instanceof Problem && ['offline', 'timeout', 'unavailable', 'error', 'rate_limited'].includes(err.code)
-  const unresolved = (): never => {
-    throw new Problem(
-      'The publication could not be confirmed.',
-      'unavailable',
-      `Run the same publishing command again to recover this publication. If recovery keeps failing, wait for other publishing commands to end and check the page before removing ${file}.`,
-    )
-  }
-  const begin = async () => {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await call<{ artifactId: string; slug: string; version: number; upload: { url: string; grant: string } }>(
-          'action',
-          resuming ? api.publish.resume : api.publish.begin,
-          resuming ? { operation: pending.operation } : { ...request, operation: pending.operation },
-        )
-      } catch (err) {
-        // Another command can have saved the shared receipt before begin reaches the backend.
-        // A missing record is inconclusive, including after a begin whose answer was lost.
-        const missing = err instanceof Problem && err.code === 'not_found'
-        if (resuming && missing && attempt < 2) {
-          await new Promise((resolve) => setTimeout(resolve, 250))
-          continue
-        }
-        if (missing) return unresolved()
-        if (!uncertain(err)) clear()
-        throw err
+  // A receipt belongs to one active command. A concurrent command must not abandon its
+  // staging version or erase its recovery identity. The service lock also recovers a holder
+  // that exited without cleanup; an active holder is reported as busy before any remote work.
+  return aloneAt(
+    `${file}.lock`,
+    async () => {
+      let resuming = existsSync(file)
+      if (!resuming) {
+        const temp = `${file}.${randomUUID()}.tmp`
+        writePrivate(temp, { operation: randomUUID(), at: Date.now() })
+        resuming = !makeOnce(temp, file)
       }
-    }
-  }
-  const begun = await begin()
-  const remaining = Math.max(0, PUBLICATION.budgetMs - (Date.now() - pending.at))
-  const canceled = new AbortController()
-  const ending = AbortSignal.any([canceled.signal, AbortSignal.timeout(remaining)])
-  // A few at a time. Each file is checked against its declared size and checksum as it arrives.
-  // They go to the door, at the address this machine reaches it by.
-  const queue = [...input.files]
-  const to = throughDoor(begun.upload.url)
-  const worker = async () => {
-    for (let f = queue.shift(); f; f = queue.shift()) await put(to + f.entry.path.split('/').map(encodeURIComponent).join('/'), begun.upload.grant, f, ending)
-  }
-  const workers = begun.upload.grant ? Array.from({ length: Math.min(4, queue.length) }, worker) : []
-  try {
-    await Promise.all(workers)
-  } catch (err) {
-    // Given up on: It is told, so that this attempt stops counting at once against how many may be under way
-    queue.length = 0
-    canceled.abort()
-    await Promise.allSettled(workers)
-    await call('mutation', api.publish.abandon, { artifactId: begun.artifactId, version: begun.version }).catch(() => {})
-    clear()
-    throw err
-  }
-  type Finished = { slug: string; version: number; url: string; elsewhere?: boolean; took?: boolean }
-  const finish = async (): Promise<Finished> => {
-    for (let attempt = 0; ; attempt++) {
+      const pending = readJson<{ operation: string; at: number }>(file)
+      if (!pending || !/^[a-f0-9-]{36}$/.test(pending.operation) || !Number.isFinite(pending.at))
+        throw new Problem(
+          `The publication record at ${file} cannot be read.`,
+          'record_unread',
+          'Keep the record and check the page before removing it and publishing again.',
+        )
+      if (Date.now() - pending.at >= PUBLICATION.receiptDays * 86_400_000)
+        throw new Problem('The saved publication is too old to reconcile.', 'conflict', `Check the page, then remove ${file} before publishing again.`)
+      const clear = () => {
+        if (readJson<{ operation: string }>(file)?.operation === pending.operation) rmSync(file, { force: true })
+      }
+      const uncertain = (err: unknown): err is Problem =>
+        err instanceof Problem && ['offline', 'timeout', 'unavailable', 'error', 'rate_limited'].includes(err.code)
+      const unresolved = (): never => {
+        throw new Problem(
+          'The publication could not be confirmed.',
+          'unavailable',
+          `Run the same publishing command again to recover this publication. If recovery keeps failing, wait for other publishing commands to end and check the page before removing ${file}.`,
+        )
+      }
+      const begin = async () => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            return await call<{ artifactId: string; slug: string; version: number; upload: { url: string; grant: string } }>(
+              'action',
+              resuming ? api.publish.resume : api.publish.begin,
+              resuming ? { operation: pending.operation } : { ...request, operation: pending.operation },
+            )
+          } catch (err) {
+            // Another command can have saved the shared receipt before begin reaches the backend.
+            // A missing record is inconclusive, including after a begin whose answer was lost.
+            const missing = err instanceof Problem && err.code === 'not_found'
+            if (resuming && missing && attempt < 2) {
+              await new Promise((resolve) => setTimeout(resolve, 250))
+              continue
+            }
+            if (missing) return unresolved()
+            if (!uncertain(err)) clear()
+            throw err
+          }
+        }
+      }
+      const begun = await begin()
+      const remaining = Math.max(0, PUBLICATION.budgetMs - (Date.now() - pending.at))
+      const canceled = new AbortController()
+      const ending = AbortSignal.any([canceled.signal, AbortSignal.timeout(remaining)])
+      // A few at a time. Each file is checked against its declared size and checksum as it arrives.
+      // They go to the door, at the address this machine reaches it by.
+      const queue = [...input.files]
+      const to = throughDoor(begun.upload.url)
+      const worker = async () => {
+        for (let f = queue.shift(); f; f = queue.shift())
+          await put(to + f.entry.path.split('/').map(encodeURIComponent).join('/'), begun.upload.grant, f, ending)
+      }
+      const workers = begun.upload.grant ? Array.from({ length: Math.min(4, queue.length) }, worker) : []
       try {
-        return await call<Finished>('action', api.publish.finish, { artifactId: begun.artifactId, version: begun.version }, remaining > 0 ? ending : undefined)
+        await Promise.all(workers)
       } catch (err) {
-        // Completing again returns the original outcome, even if a later version is live.
-        // No upload or new version is needed after an answer was lost.
-        if (uncertain(err) && err.code !== 'rate_limited' && attempt < 2 && !ending.aborted) continue
-        if (uncertain(err)) return unresolved()
+        // Given up on: It is told, so that this attempt stops counting at once against how many may be under way
+        queue.length = 0
+        canceled.abort()
+        await Promise.allSettled(workers)
         await call('mutation', api.publish.abandon, { artifactId: begun.artifactId, version: begun.version }).catch(() => {})
         clear()
         throw err
       }
-    }
-  }
-  const done = await finish()
-  clear()
-  // Counted: which agent app, new or not, how large and of how many files in a few bands, and
-  // four things that are each so or not: whether it was given a state to start with, whether it
-  // sends anything back, whether it carries a picture, and whether it was brought up at once.
-  // Never its title or what is in it.
-  if (!input.itsOwn)
-    record('page.published', {
-      agent: agentOf(session?.harness),
-      change: done.version === 1 ? 'new' : 'update',
-      kind: 'custom',
-      size: sizeBand(bytes),
-      files: filesBand(input.files.length),
-      state: input.state !== undefined,
-      actions: sendsBack(input.files),
-      pictures: input.files.some((f) => /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(f.entry.path)),
-      shown: input.shown === true,
-    })
-  // Which conversation this was done as was a choice among the apps that had marked this
-  // command: said, so that a click going to another conversation is not a surprise. A new page,
-  // and one taken over, is that conversation's from now on; a later version of a page leaves
-  // it with the conversation that has it.
-  const note = sessionNote(
-    asked,
-    done.version === 1 || input.take ? `This ${NOUN.one} was given to` : `This ${NOUN.one} was published from`,
-    'publish it again with --take, and with IT_HARNESS and IT_SESSION set to your own app and conversation.',
+      type Finished = { slug: string; version: number; url: string; elsewhere?: boolean; took?: boolean }
+      const finish = async (): Promise<Finished> => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            return await call<Finished>(
+              'action',
+              api.publish.finish,
+              { artifactId: begun.artifactId, version: begun.version },
+              remaining > 0 ? ending : undefined,
+            )
+          } catch (err) {
+            // Completing again returns the original outcome, even if a later version is live.
+            // No upload or new version is needed after an answer was lost.
+            if (uncertain(err) && err.code !== 'rate_limited' && attempt < 2 && !ending.aborted) continue
+            if (uncertain(err)) return unresolved()
+            await call('mutation', api.publish.abandon, { artifactId: begun.artifactId, version: begun.version }).catch(() => {})
+            clear()
+            throw err
+          }
+        }
+      }
+      const done = await finish()
+      clear()
+      // Counted: which agent app, new or not, how large and of how many files in a few bands, and
+      // four things that are each so or not: whether it was given a state to start with, whether it
+      // sends anything back, whether it carries a picture, and whether it was brought up at once.
+      // Never its title or what is in it.
+      if (!input.itsOwn)
+        record('page.published', {
+          agent: agentOf(session?.harness),
+          change: done.version === 1 ? 'new' : 'update',
+          kind: 'custom',
+          size: sizeBand(bytes),
+          files: filesBand(input.files.length),
+          state: input.state !== undefined,
+          actions: sendsBack(input.files),
+          pictures: input.files.some((f) => /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(f.entry.path)),
+          shown: input.shown === true,
+        })
+      // Which conversation this was done as was a choice among the apps that had marked this
+      // command: said, so that a click going to another conversation is not a surprise. A new page,
+      // and one taken over, is that conversation's from now on; a later version of a page leaves
+      // it with the conversation that has it.
+      const note = sessionNote(
+        asked,
+        done.version === 1 || input.take ? `This ${NOUN.one} was given to` : `This ${NOUN.one} was published from`,
+        'publish it again with --take, and with IT_HARNESS and IT_SESSION set to your own app and conversation.',
+      )
+      // The page stays another conversation's, the one that made it: said, with what to do about it,
+      // or the agent tells its person to click and then never hears of it
+      const stays = done.elsewhere
+        ? `What is done on this ${NOUN.one} goes to another conversation, the one that made it, and not to this one. If the person is to be answered here, publish it again with --take.`
+        : done.took
+          ? `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
+          : undefined
+      const said = [stays, note].filter(Boolean).join(' ')
+      // The page's address is the site's as this machine reaches it
+      return { slug: done.slug, version: done.version, url: throughDoor(done.url), ...(said ? { note: said } : {}) }
+    },
+    0,
   )
-  // The page stays another conversation's, the one that made it: said, with what to do about it,
-  // or the agent tells its person to click and then never hears of it
-  const stays = done.elsewhere
-    ? `What is done on this ${NOUN.one} goes to another conversation, the one that made it, and not to this one. If the person is to be answered here, publish it again with --take.`
-    : done.took
-      ? `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
-      : undefined
-  const said = [stays, note].filter(Boolean).join(' ')
-  // The page's address is the site's as this machine reaches it
-  return { slug: done.slug, version: done.version, url: throughDoor(done.url), ...(said ? { note: said } : {}) }
 }

@@ -5876,6 +5876,54 @@ describe('publication transactions', () => {
     expect(await code(m.as.action(api.publish.begin, { ...request, title: 'Different request' }))).toBe('conflict')
   })
 
+  test('a failed preparation keeps a named publication available to recover', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const operation = 'preparation-can-be-retried'
+    content.stageOk = false
+    expect(await code(m.as.action(api.publish.begin, { slug: 'prepared', title: 'Prepared', files: page, operation }))).toBe('unavailable')
+    content.stageOk = true
+    const resumed = await m.as.action(api.publish.resume, { operation })
+    expect(resumed.version).toBe(1)
+    expect(await m.as.action(api.publish.finish, { artifactId: resumed.artifactId, version: resumed.version })).toMatchObject({ version: 1 })
+    expect(await totals(t)).toMatchObject({ stagingCount: 0, stagingBytes: 0 })
+  })
+
+  test('a delayed preparation failure cannot abandon a resumed publication', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    let reached!: () => void
+    let release!: () => void
+    const preparing = new Promise<void>((resolve) => (reached = resolve))
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const fetchContent = vi.mocked(fetch).getMockImplementation()!
+    let first = true
+    vi.mocked(fetch).mockImplementation(async (...args) => {
+      if (String(args[0]).endsWith('/control/stage') && first) {
+        first = false
+        reached()
+        await held
+        return new Response(null, { status: 503 })
+      }
+      return fetchContent(...args)
+    })
+    const operation = 'concurrent-preparation-failure'
+    const beginning = code(m.as.action(api.publish.begin, { slug: 'shared', title: 'Shared', files: page, operation }))
+    try {
+      await preparing
+      const resumed = await m.as.action(api.publish.resume, { operation })
+      release()
+      expect(await beginning).toBe('unavailable')
+      expect(await m.as.action(api.publish.finish, { artifactId: resumed.artifactId, version: resumed.version })).toMatchObject({ version: 1 })
+      expect(await totals(t)).toMatchObject({ stagingCount: 0, stagingBytes: 0 })
+    } finally {
+      release()
+      await beginning
+    }
+  })
+
   test('a recorded completion is recovered when new finishes have exhausted their rate limit', async () => {
     const t = backend()
     await person(t, 'alice')

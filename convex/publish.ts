@@ -363,7 +363,7 @@ export const begin = action({
       b.toString(16).padStart(2, '0'),
     ).join('')
     const r = await overClashes(() => ctx.runMutation(internal.publish._begin, { ...args, requestHash }))
-    return prepared(ctx, r, args.files)
+    return prepared(ctx, r, args.files, args.operation !== undefined)
   },
 })
 
@@ -418,6 +418,7 @@ async function prepared(
     result?: Doc<'publications'>['result']
   },
   files: Doc<'versions'>['files'],
+  recoverable = true,
 ): Promise<Prepared> {
   if (r.result)
     return {
@@ -434,7 +435,9 @@ async function prepared(
     await ctx.runAction(internal.content.stage, { prefix: r.prefix, files })
   } catch (err) {
     log('publish.unavailable', { step: 'stage', artifactId: r.artifactId, version: r.n, kind: kind(err) }, 'error')
-    await overClashes(() => ctx.runMutation(internal.publish._abandon, { versionId: r.versionId! }))
+    // A caller may have lost this reply and resumed the same named publication already.
+    // Keep its staging version for recovery or expiry; a late failure must not erase it.
+    if (!recoverable) await overClashes(() => ctx.runMutation(internal.publish._abandon, { versionId: r.versionId! }))
     throw new ConvexError({ code: 'unavailable', message: 'The page could not be prepared for upload. Try again in a moment.' })
   }
   const grant = await mint(
