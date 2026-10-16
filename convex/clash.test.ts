@@ -7,6 +7,9 @@
 // (lib/clash.ts). So every caller is to be answered: with what it asked for, or with a refusal
 // that says why. The stand-in backend the other tests here run on never gives up on a write,
 // which is why these start the program itself, in a folder and on ports of their own.
+// The 120 calls run in bursts of 40 because the backend program admits 64 concurrent actions
+// and answers with an uncoded error beyond that limit. Each burst still exceeds the largest
+// allowance of 30, so callers contend for the same record without exhausting action capacity.
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
 import os from 'node:os'
