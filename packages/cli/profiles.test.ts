@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, expect, test } from 'vitest'
@@ -65,9 +65,11 @@ test('OpenCode restores config, data, state and cache together and clears anothe
   expect(profileEnvironment('opencode', inline, {})).toMatch(/cannot safely restore/)
 })
 
-test('The resumed child receives the recorded profile even when its service uses another one.', async () => {
-  const first = folder(),
-    second = folder()
+test.each(['directory', 'symlink'])('The resumed child receives the recorded profile even when its service uses another one (%s).', async (kind) => {
+  const target = folder()
+  const first = kind === 'symlink' ? path.join(folder(), 'profile') : target
+  if (kind === 'symlink') symlinkSync(target, first, 'junction')
+  const second = folder()
   const env = profileEnvironment('codex', profileOf('codex', { CODEX_HOME: first }), { ...process.env, CODEX_HOME: second })
   expect(typeof env).toBe('object')
   if (typeof env === 'string') throw new Error(env)
@@ -83,7 +85,7 @@ test('The resumed child receives the recorded profile even when its service uses
     { env },
   )
   expect(result).toBeNull()
-  expect(JSON.parse(readFileSync(output, 'utf8'))).toEqual([first, first])
+  expect(JSON.parse(readFileSync(output, 'utf8'))).toEqual([first, realpathSync(first)])
 })
 
 test('Legacy and malformed profile records never fall back to the service’s profile.', () => {
