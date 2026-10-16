@@ -948,6 +948,21 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     },
   )
 
+  test('an uncertain legacy run without a run mark stays held when its leader is gone', async () => {
+    await start('socket', {}, (home) => {
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({
+          'codex:thread-1': { pid: process.pid, since: 'Thu Jan  1 00:00:00 1970', told: SINCE_TOLD, unsure: true, boot: wake.bootId() },
+        }),
+      )
+    })
+    expect((await local<{ held: { key: string }[] }>('/runs'))!.held.map((run) => run.key)).toEqual(['codex:thread-1'])
+    expect(readJson<Record<string, unknown>>(path.join(home, 'runs.json'))?.['codex:thread-1']).toMatchObject({ unsure: true })
+    expect(await local('/runs', { method: 'POST', body: { clear: true, of: ['codex:thread-1'] } })).toEqual({ cleared: 1 })
+    expect((await local<{ held: unknown[] }>('/runs'))!.held).toEqual([])
+  })
+
   test.skipIf(process.platform === 'win32')('recovery leaves a legacy run alive when its conservative checkpoint cannot be saved', async () => {
     const leader = spawn('sleep', ['300'], { detached: true, stdio: 'ignore' })
     const exited = new Promise((resolve) => leader.once('exit', resolve))

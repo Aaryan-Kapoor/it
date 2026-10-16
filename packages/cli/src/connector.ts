@@ -52,6 +52,7 @@ import {
   claudeWroteAt,
   codexHeld,
   endTree,
+  fromAnotherStart,
   identity,
   listsProcesses,
   mayWake,
@@ -1009,6 +1010,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       run: was.run,
     }).catch(() => 'unknown' as const)
     if (became === 'unknown') return false
+    // An older uncertain record may have no run mark. With its leader gone, there is then
+    // nothing by which to find a detached child missed before. Only a known reboot or the
+    // person's explicit clearance can settle that record.
+    if (was.unsure && !was.run && !fromAnotherStart(was.boot)) return false
     // The saved uncertainty makes recovery inspect the run again. Once that inspection has
     // accounted for its marked processes, a connector crash alone is no reason to hold it.
     const { unsure: _unsure, ...settled } = unsettled.get(key) ?? was
