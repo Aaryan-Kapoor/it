@@ -3168,7 +3168,7 @@ async function main(argv: string[]): Promise<void> {
       let took = false
       let notTaken: Problem | undefined
       if (mine) {
-        noteConversation(mine)
+        await noteConversation(mine)
         // A page that is not there is said by the showing itself, below. Anything else that kept
         // the page from being taken is said beside what was shown: the page is up, and what is
         // done on it still goes to the conversation that had it, which the agent has to know
