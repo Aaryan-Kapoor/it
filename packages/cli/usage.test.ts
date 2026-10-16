@@ -535,6 +535,8 @@ describe('turning it off', () => {
   })
   test('turned off by another program while a pass is sending, nothing more of that pass is sent', async () => {
     told()
+    // This tests an opt-out during a send, so disk speed must not expire the decision first.
+    ownClock()
     const posts: string[] = []
     const sender = usage.startSender({
       post: async (_a, body) => {
@@ -583,6 +585,8 @@ describe('turning it off', () => {
   })
   test('turned off and on again between two passes, nothing recorded before is sent, under the old id or the new', async () => {
     told()
+    // These sends test the current identity, not the time taken by the disk.
+    ownClock()
     const before = kept().installation!
     const stale = { ...aLine(), id: randomUUID() }
     // Some left by commands, and some the connector recorded itself
@@ -617,6 +621,7 @@ describe('turning it off', () => {
   })
   test('given a new id while a send is on its way, the send is given up and what it carried is never tried again', async () => {
     told()
+    ownClock()
     let given: AbortSignal | undefined
     const posts: string[] = []
     let now = 0
@@ -759,6 +764,7 @@ describe('turning it off', () => {
   })
   test('while the sender decides whether to send, a file in It’s folder says so, and it is gone once the request has begun', async () => {
     told()
+    ownClock()
     const deciding = path.join(home, 'telemetry-sending')
     const atSend: boolean[] = []
     const sender = usage.startSender({
@@ -911,6 +917,7 @@ describe('turning it off', () => {
   })
   test('left with no id while a send is on its way, what the send carried is dropped, and is not tried again though the same id comes back', async () => {
     told()
+    ownClock()
     const settings = readFileSync(settingsFile(), 'utf8')
     const posts: string[] = []
     let now = 0
