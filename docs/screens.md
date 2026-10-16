@@ -20,7 +20,7 @@ Someone with no pages is shown what It is for, and the way into the tour, which 
 
 It marks the pages the tour creates. Showing a tour step checks that mark and resets its state in the same transaction as publication; the menu keeps the latest list of steps seen. If the page or its state changes during upload, the tour refuses to replace it. Clearing the tour checks the marks and removes those pages in one transaction. Publishing ordinary content over a tour page, taking it with `it open`, or rolling it back removes its mark, so the tour leaves it alone. Answering a tour page by changing its state keeps the mark.
 
-A page without a mark is preserved even if its id, title and state match a tour page. This includes pages made by older tours. `it tour clear` lists them under `kept`, and showing a step with an occupied id stops without replacing it. Keep those pages, or ask the person before removing one with `it delete <id>`; that command deletes it for good. The tour never adopts an unmarked page automatically.
+Showing a step adopts a page made before tour marks only when its id, title and full state match that step, then marks it. This happens once: ordinary publication, takeover or rollback prevents later adoption even if the page still matches. A different id, title or state leaves the page alone and stops publication. Clearing the tour never adopts pages; it lists unmarked pages under `kept`. Keep a conflicting page, or ask the person before removing it with `it delete <id>`; that command deletes it for good.
 
 When a tour is over its agent takes the tour's pages away, and the screen goes back to your pages. From then on, with no pages, it shows a few things to ask an agent for, each to copy, and the way back into the tour.
 

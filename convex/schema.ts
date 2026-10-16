@@ -194,8 +194,8 @@ export default defineSchema({
 
   // A page. Its bytes are kept by the content service; this is everything else.
   artifacts: defineTable({
-    /** Set only by a tour publication. Ordinary publication, taking and rollback remove it. */
-    tour: v.optional(v.object({ name: v.string(), identity: v.string() })),
+    /** A tour's mark, null after ordinary publication, taking or rollback, and absent on unchecked legacy pages. */
+    tour: v.optional(v.union(v.null(), v.object({ name: v.string(), identity: v.string() }))),
     userId: v.id('users'),
     slug: v.string(),
     title: v.string(),

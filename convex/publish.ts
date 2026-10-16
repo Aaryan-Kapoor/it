@@ -16,12 +16,12 @@ import { quota, rateLimit } from './lib/limits'
 import { kind, log } from './lib/log'
 import { mint } from './lib/signing'
 import { bump, tally } from './lib/tally'
-import { isTourPage, pageState, startTourPage } from './lib/tourPages'
+import { adoptTourPage, isTourPage, pageState, startTourPage } from './lib/tourPages'
 import { fileEntry, session } from './schema'
 import { noteRevision } from './state'
 
 const beginArgs = {
-  /** Only the built-in tour asks for this. Existing unmarked pages are never adopted. */
+  /** Only the built-in tour asks for this. A matching legacy page may be adopted once. */
   tour: v.optional(v.string()),
   slug: v.optional(v.string()),
   title: v.string(),
@@ -181,7 +181,11 @@ export const _begin = internalMutation({
     const own = args.own === true && args.take !== true && args.session !== undefined
     const who = { machineId: machine._id, session: args.session, agent: args.agent?.slice(0, 60), take: args.take === true, ...(own ? { own: true } : {}) }
     let artifact = args.slug ? await artifactBySlug(ctx, user._id, args.slug) : null
-    if (artifact && args.tour !== undefined && !isTourPage(artifact, args.tour)) fail('conflict', TOUR_CONFLICT)
+    if (artifact && args.tour !== undefined && !isTourPage(artifact, args.tour)) {
+      const adopted = await adoptTourPage(ctx, artifact, args.tour, title, args.state!)
+      if (!adopted) fail('conflict', TOUR_CONFLICT)
+      artifact = adopted
+    }
     // Refused before anything is begun, and again when it is shown, in case two began it together
     if (artifact && own && (await anothers(ctx, artifact, who))) {
       log('publish.refused', { reason: 'anothers', userId: user._id, artifactId: artifact._id }, 'warn')
@@ -192,7 +196,7 @@ export const _begin = internalMutation({
       let slug = args.slug ?? slugify(title)
       if (!args.slug) while (mine.some((a) => a.slug === slug)) slug = `${slugify(title)}-${crypto.randomUUID().slice(0, 6)}`
       const id = await ctx.db.insert('artifacts', {
-        ...(args.tour === undefined ? {} : { tour: { name: args.tour, identity: crypto.randomUUID() } }),
+        tour: args.tour === undefined ? null : { name: args.tour, identity: crypto.randomUUID() },
         userId: user._id,
         slug,
         title,
@@ -450,7 +454,7 @@ export const _finish = internalMutation({
       (!owner || owner.revoked || ver.by.take || ver.by.own || a.currentVersion === undefined) &&
       (ver.by.machineId !== a.machineId || JSON.stringify(ver.by.session) !== JSON.stringify(a.session))
     await ctx.db.patch(a._id, {
-      tour: ver.tour === undefined ? undefined : { name: ver.tour.name, identity: ver.tour.identity },
+      tour: ver.tour === undefined ? null : { name: ver.tour.name, identity: ver.tour.identity },
       currentVersion: version,
       highestLive: version,
       bytes,

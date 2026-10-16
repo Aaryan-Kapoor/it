@@ -4,8 +4,32 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { write } from '../state'
 import { artifactBySlug } from './authz'
 
-/** A title, slug or state never proves that the tour made a page. */
+/** Once a page has been checked, only its mark gives the tour ownership. */
 export const isTourPage = (page: Doc<'artifacts'>, name: string): boolean => page.slug === `${TOUR.prefix}${name}` && page.tour?.name === name
+
+/** JSON object order is immaterial, but every key and value must match, including nested ones. */
+function sameState(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((value, i) => sameState(value, b[i]))
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(b)) return false
+  const other = new Map<string, unknown>(Object.entries(b))
+  return Object.keys(a).length === other.size && Object.entries(a).every(([key, value]) => other.has(key) && sameState(value, other.get(key)))
+}
+
+/**
+ * Old programs left no mark. Those pages may join the tour once, only when
+ * their id, title and entire state still match what the tour is publishing. Null records a
+ * page already handled by a current program, so taking it over cannot make it eligible again.
+ * The mark is written with the upload's version and state snapshot in the begin transaction.
+ */
+export async function adoptTourPage(ctx: MutationCtx, page: Doc<'artifacts'>, name: string, title: string, json: string): Promise<Doc<'artifacts'> | null> {
+  if (page.tour !== undefined || page.slug !== `${TOUR.prefix}${name}` || page.title !== title || page.currentVersion === undefined) return null
+  const state = await pageState(ctx, page._id)
+  if (!state || !sameState(parseJson(state.json), parseJson(json))) return null
+  const tour = { name, identity: crypto.randomUUID() }
+  await ctx.db.patch(page._id, { tour })
+  return { ...page, tour }
+}
 
 export function seenIn(state: unknown): string[] {
   const seen = state !== null && typeof state === 'object' && !Array.isArray(state) ? (state as Record<string, unknown>).seen : undefined

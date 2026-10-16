@@ -1446,7 +1446,71 @@ describe('tour page ownership', () => {
     return begun
   }
 
-  test('matching titles and state keys never adopt personal or unmarked legacy pages, including unfinished pages', async () => {
+  test('a legacy page with the same id, title and full state is adopted once and keeps its mark on later showings', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-match')
+    const old = await publish(m, 'tour-checklist', { title: 'A checklist', state: '{"note":"","added":[]}' })
+    // Earlier programs wrote no ownership field. A current ordinary publication is not a legacy page.
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    const adopted = await make(m, 'checklist', '{"added":[],"note":""}')
+    const mark = (await t.run((ctx) => ctx.db.get(old.artifactId)))!.tour
+    expect(mark).toEqual({ name: 'checklist', identity: expect.any(String) })
+    expect(adopted.artifactId).toBe(old.artifactId)
+    await m.as.mutation(api.state.patch, { slug: 'tour-checklist', patch: '{"note":"an answer"}' })
+    await make(m, 'checklist', '{"added":[],"note":""}')
+    expect((await t.run((ctx) => ctx.db.get(old.artifactId)))!.tour).toEqual(mark)
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({ deleted: ['tour-checklist'], kept: [], seen: 0 })
+  })
+
+  test.each([
+    { difference: 'id', slug: 'tour-menu', title: 'A checklist', state: '{"added":[],"note":""}' },
+    { difference: 'title', slug: 'tour-checklist', title: 'My checklist', state: '{"added":[],"note":""}' },
+    { difference: 'state value', slug: 'tour-checklist', title: 'A checklist', state: '{"added":["Umbrella"],"note":""}' },
+    { difference: 'state key', slug: 'tour-checklist', title: 'A checklist', state: '{"added":[],"note":"","extra":true}' },
+  ])('a legacy page with a different $difference is reported and left untouched', async ({ slug, title, state }) => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-different')
+    const old = await publish(m, slug, { title, state })
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    const before = await m.as.query(api.artifacts.get, { slug })
+    const beforeState = await m.as.query(api.state.get, { slug })
+    await expect(
+      m.as.action(api.publish.begin, { slug, title: 'A checklist', state: '{"added":[],"note":""}', files: page, tour: 'checklist' }),
+    ).rejects.toThrow(slug === 'tour-checklist' ? 'tour does not own' : 'known tour page id')
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({ deleted: [], kept: [slug], seen: 0 })
+    expect(await m.as.query(api.artifacts.get, { slug })).toEqual(before)
+    expect(await m.as.query(api.state.get, { slug })).toEqual(beforeState)
+    expect((await t.run((ctx) => ctx.db.get(old.artifactId)))!.tour).toBeUndefined()
+  })
+
+  test.each(['publish', 'take', 'rollback'])('a legacy page adopted once cannot be adopted again after an ordinary %s', async (how) => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-once')
+    const initial = { title: 'A checklist', state: '{"added":[],"note":""}' }
+    const old = await publish(m, 'tour-checklist', initial)
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    await make(m, 'checklist', initial.state)
+    if (how === 'publish') await publish(m, 'tour-checklist', initial)
+    else if (how === 'take') await m.as.mutation(api.artifacts.take, { slug: 'tour-checklist', session: SESSION })
+    else await m.as.mutation(api.artifacts.rollback, { slug: 'tour-checklist', version: old.version })
+    await expect(start(m, 'checklist', initial.state)).rejects.toThrow('tour does not own')
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({ deleted: [], kept: ['tour-checklist'], seen: 0 })
+  })
+
+  test('a state change while an adopted legacy page uploads refuses its stale reset', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-race')
+    const old = await publish(m, 'tour-checklist', { title: 'A checklist', state: '{"added":[],"note":""}' })
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    const pending = await start(m, 'checklist', '{"added":[],"note":""}')
+    await m.as.mutation(api.state.patch, { slug: 'tour-checklist', patch: '{"note":"keep this answer"}' })
+    const state = await m.as.query(api.state.get, { slug: 'tour-checklist' })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect((await m.as.query(api.artifacts.get, { slug: 'tour-checklist' })).version).toBe(old.version)
+    expect(await m.as.query(api.state.get, { slug: 'tour-checklist' })).toEqual(state)
+  })
+
+  test('matching titles and state keys never adopt personal or unfinished pages', async () => {
     const t = backend()
     const m = await machineOf(t, 'tour-legacy')
     const initial = { added: [{ text: 'Umbrella' }], note: 'the rain', extra: true }
