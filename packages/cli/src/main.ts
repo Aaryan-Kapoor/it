@@ -699,10 +699,23 @@ async function wait(a: Args) {
   const who = crypto.randomUUID()
   // The connector is told what this waits for: one page, or, with none named, this
   // conversation's clicks only. Everyone else's go on being delivered as usual.
+  /**
+   * What the connector handed back and this has printed. The connector keeps its copy of such
+   * a click until it is told so, and gives it again to a wait that has not said it: an answer
+   * of its that never arrived would otherwise be the last of that click.
+   */
+  const taken = new Set<string>()
+  // Only the latest 500 receipts are sent with an asking. Keep no more in a wait that may follow
+  // for days; an older click offered again is remembered anew, without being printed twice.
+  const take = (id: string) => {
+    taken.add(id)
+    if (taken.size > 500) taken.delete(taken.values().next().value!)
+  }
+  const got = () => (taken.size ? { got: [...taken] } : {})
   const announce = () =>
     local<{ sessions?: { harness: string; id: string }[]; clicks?: Listed[] }>('/waiting', {
       method: 'POST',
-      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }) },
+      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }), ...got() },
     })
   // The connector knows the ids this conversation had before it was last cleared: pages made
   // then are still recorded under them
@@ -764,7 +777,7 @@ async function wait(a: Args) {
     // wait after the first, with the other two taken from the connector and never said
     while (busy) await new Promise((resolve) => setTimeout(resolve, 20))
     if (!over) await printHandedBack().catch(() => {})
-    await local('/waiting', { method: 'POST', body: { id: who, done: true } })
+    await local('/waiting', { method: 'POST', body: { id: who, done: true, ...got() } })
     await client.close().catch(() => {})
     // A wait that was given something has its answer, whatever went wrong beside it
     await end(code === 1 && printedIds.size > 0 && !follow ? 0 : code)
@@ -794,8 +807,14 @@ async function wait(a: Args) {
   /** Prints what the connector handed back and has not been printed yet, and tells It of it. */
   const printHandedBack = async () => {
     for (const c of handedBack.splice(0)) {
-      if (printedIds.has(c.id)) continue
+      // What the connector gave again is what this already had, and is said to it as printed.
+      // Anything else only once it is: the connector lets go of its copy at that word
+      if (printedIds.has(c.id)) {
+        take(c.id)
+        continue
+      }
       await emit(printed(c))
+      take(c.id)
       printedIds.add(c.id)
       if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
       unreported.add(c.id)

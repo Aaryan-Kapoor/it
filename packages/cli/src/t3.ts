@@ -25,7 +25,7 @@ import { randomUUID } from 'node:crypto'
 import { readlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { readJson } from './lib'
+import { direct, directWebSocket, readJson } from './lib'
 
 /** The version of T3 Code's own protocol that this speaks. A server that speaks another refuses, and the click goes the way it went before. */
 const PROTOCOL = '2'
@@ -114,13 +114,18 @@ function issued(t3: T3): Promise<string | undefined> {
   })
 }
 
-/** Asks the server one thing over HTTP, as It's session. Nothing where it could not be asked or refused. */
+/**
+ * Asks the server one thing over HTTP, as It's session. Nothing where it could not be asked or
+ * refused. Asked on a connection of this program's own, as It's own backend is: the server is
+ * on this machine, and a proxy named in the environment would otherwise be handed the session
+ * and everything said under it.
+ */
 async function ask<T>(t3: T3, method: 'GET' | 'POST', pathname: string): Promise<T | undefined> {
   for (let tried = 0; tried < 2; tried++) {
     const token = await issued(t3)
     if (!token) return undefined
     try {
-      const answer = await fetch(`${t3.origin}${pathname}`, {
+      const answer = await direct(`${t3.origin}${pathname}`, {
         method,
         headers: { authorization: `Bearer ${token}`, 'x-t3-orchestration-protocol': PROTOCOL },
         signal: AbortSignal.timeout(ANSWER_MS),
@@ -157,17 +162,27 @@ interface ShellThread {
  * the conversation's folder is in, then those run by the same agent app, and among equals the
  * one that changed last. A thread that was archived or deleted is none of them.
  */
-export function likeliest(shell: { threads?: unknown; projects?: unknown }, of: { harness: string; cwd?: string }, most = LOOKED_INTO): string[] {
+export function likeliest(
+  shell: { threads?: unknown; projects?: unknown },
+  of: { harness: string; cwd?: string },
+  most = LOOKED_INTO,
+  platform: string = process.platform,
+): string[] {
   const roots = new Map<string, string>()
   for (const p of Array.isArray(shell.projects) ? (shell.projects as { id?: unknown; workspaceRoot?: unknown }[]) : [])
     if (typeof p?.id === 'string' && typeof p.workspaceRoot === 'string') roots.set(p.id, p.workspaceRoot)
-  // Windows takes either stroke between the parts of a folder's name, and T3 Code and an agent app need not write the same one
-  const strokes = process.platform === 'win32' ? ['\\', '/'] : [path.sep]
-  const within = (root: unknown) =>
-    typeof root === 'string' &&
-    root !== '' &&
-    of.cwd !== undefined &&
-    (of.cwd === root || (of.cwd.startsWith(root) && (strokes.some((s) => root.endsWith(s)) || strokes.includes(of.cwd[root.length]!))))
+  // Windows takes either stroke between the parts of a folder's name, and a letter in either
+  // case, and T3 Code and an agent app need not write the same: each is written one way before
+  // the two are compared
+  const windows = platform === 'win32'
+  const stroke = windows ? '\\' : path.sep
+  const plain = (folder: string) => (windows ? folder.replaceAll('/', '\\').toLowerCase() : folder)
+  const cwd = of.cwd === undefined ? undefined : plain(of.cwd)
+  const within = (root: unknown) => {
+    if (typeof root !== 'string' || !root || cwd === undefined) return false
+    const under = plain(root)
+    return cwd === under || (cwd.startsWith(under) && (under.endsWith(stroke) || cwd[under.length] === stroke))
+  }
   return (Array.isArray(shell.threads) ? (shell.threads as ShellThread[]) : [])
     .filter((t): t is ShellThread & { id: string } => typeof t?.id === 'string' && !t.deletedAt && !t.archivedAt)
     .map((t) => ({
@@ -196,18 +211,23 @@ export function holds(snapshot: unknown, ids: readonly string[]): boolean {
 
 /**
  * The thread of T3 Code that a conversation is held in: its id, null where T3 Code has no
- * thread of it, and nothing where T3 Code could not be asked. `ids` are the ids the agent app
+ * thread of it, and nothing where T3 Code could not be asked, of its threads or of any one of
+ * the likeliest that did not turn out to hold it. `ids` are the ids the agent app
  * has given the conversation, of which the thread carries the one it resumes from.
  */
 export async function t3ThreadOf(t3: T3, of: { harness: string; ids: readonly string[]; cwd?: string }): Promise<string | null | undefined> {
   const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell')
   if (!shell || !Array.isArray(shell.threads)) return undefined
+  let unread = false
   for (const id of likeliest(shell, of)) {
     const snapshot = await ask<unknown>(t3, 'GET', `/api/orchestration/threads/${encodeURIComponent(id)}/bounded`)
     // One thread that cannot be read says nothing of the others
-    if (snapshot !== undefined && holds(snapshot, of.ids)) return id
+    if (snapshot === undefined) unread = true
+    else if (holds(snapshot, of.ids)) return id
   }
-  return null
+  // And nothing of itself: it may be the one. Only where every thread was read is the
+  // conversation said to be in none, which whoever asked takes as so for hours
+  return unread ? undefined : null
 }
 
 /**
@@ -235,7 +255,8 @@ export async function t3Send(t3: T3, thread: string, text: string): Promise<stri
     }
     const timer = setTimeout(() => end('T3 Code did not answer in time'), ANSWER_MS)
     try {
-      socket = new WebSocket(at)
+      // Opened to the server itself, whatever proxy the environment names: it carries the message
+      socket = new (directWebSocket())(at)
     } catch {
       return end('T3 Code could not be reached')
     }

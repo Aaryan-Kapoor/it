@@ -242,6 +242,23 @@ export function written(stream: NodeJS.WriteStream, text: string): void {
   void gone.then(() => leaving.delete(gone))
 }
 /**
+ * Writes as `written` does, and says whether it was written, once it has left the process.
+ * For what nothing may be made of until whoever reads it has it: a hook that tells the
+ * connector an agent has a click does so only after the click's words are out of its hands.
+ */
+export function handed(stream: NodeJS.WriteStream, text: string): Promise<boolean> {
+  let out = true
+  const gone = new Promise<void>((resolve) => {
+    stream.write(text, (err) => {
+      out = !err
+      resolve()
+    })
+  })
+  leaving.add(gone)
+  void gone.then(() => leaving.delete(gone))
+  return gone.then(() => out)
+}
+/**
  * Resolves once everything written so far has left the process. Until then the process is kept
  * from ending by itself, which it could otherwise do with nothing else left for it to wait on.
  */

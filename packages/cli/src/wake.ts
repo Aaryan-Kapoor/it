@@ -416,8 +416,10 @@ export async function endTree(
   // Noted by a program that told a process's start another way than this one does: what has
   // the number now cannot be told to be it or not to be, and is neither ended nor forgotten
   if (!itself && now.has(pid) && of !== undefined && of.told !== SINCE_TOLD) return 'unknown'
-  // Another process has the number now: neither it nor its group is what was noted
-  if (!itself && now.has(pid)) return 'gone'
+  // Another process has the number now: neither it nor its group is what was noted, and
+  // neither is looked at or signalled. That says nothing of what the run left elsewhere,
+  // which is found below by the run's own name where the note carries one.
+  const reused = !itself && now.has(pid)
   let all: number[]
   let group = false
   // What is in its group and does not say whose it is: never signalled, and the run is not known to be over while any of it is there
@@ -427,7 +429,10 @@ export async function endTree(
   // is the run's all the same. No other run has the name, so what carries it is ended with it.
   const strays = of?.run ? marked(of.run) : []
   if (strays === null) return 'unknown'
-  if (itself) {
+  if (reused) {
+    if (!strays.length) return 'gone'
+    all = strays
+  } else if (itself) {
     const under = descendantsKnown(pid)
     if (under === null) return 'unknown'
     all = [...new Set([pid, ...under, ...strays])]
