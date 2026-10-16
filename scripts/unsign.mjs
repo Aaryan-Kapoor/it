@@ -20,6 +20,7 @@ const MACHO = 0xfeedfacf // a 64-bit file for one kind of machine
 const INTEL = 0x01000007
 const SEGMENT = 0x19
 const SIGNATURE = 0x1d
+const ENTRY = 0x80000028
 const EMBEDDED = 0xfade0cc0 // a signature as it lies in a file, which is a list of its parts
 const DIRECTORY = 0xfade0c02 // the part that holds the hashes
 const SHA256 = 2
@@ -41,6 +42,17 @@ const KEEPS = new Map([
   // where the functions start, the data among the code, the requirements of the libraries, the
   // linker's hints, the exported names and the chained fixups
   ...[0x1e, 0x26, 0x29, 0x2b, 0x2e, 0x80000033, 0x80000034].map((kind) => [kind, { 8: 1 }]),
+])
+
+// These commands keep all their data inside the load command itself. The values are their
+// minimum lengths, including the header. Accept only kinds whose meaning is known here: a
+// new command may name bytes outside itself, even when the dynamic linker may ignore it.
+const INLINE = new Map([
+  [0x0c, 24], // LC_LOAD_DYLIB: the library's name and versions
+  [0x0e, 12], // LC_LOAD_DYLINKER: the dynamic linker's name
+  [0x1b, 24], // LC_UUID: the program's identifier
+  [0x2a, 16], // LC_SOURCE_VERSION: the source version
+  [0x32, 24], // LC_BUILD_VERSION: the platform, SDK and build tools
 ])
 
 /** A Mach-O's header and its load commands in order, each with where it is. Throws where the bytes are no such file. */
@@ -86,15 +98,30 @@ function named(program, commands) {
 function kept(program, commands) {
   const stretches = []
   for (const [i, { at, kind, length }] of commands.entries()) {
+    const short = () => new Error(`load command ${i + 1} of ${commands.length} is shorter than its kind is`)
     if (kind === SEGMENT) {
-      if (length < 72) throw new Error(`load command ${i + 1} of ${commands.length} is shorter than its kind is`)
+      if (length < 72) throw short()
       const from = Number(program.readBigUInt64LE(at + 40))
       const size = Number(program.readBigUInt64LE(at + 48))
       stretches.push({ i, at, segment: program.toString('latin1', at + 8, at + 24).split('\0')[0], from, size, end: from + size })
+      continue
     }
-    for (const [place, each] of Object.entries(KEEPS.get(kind) ?? {})) {
+    // LC_MAIN names the first instruction by its file offset. It must remain in the file.
+    if (kind === ENTRY) {
+      if (length < 24) throw short()
+      stretches.push({ i, end: Number(program.readBigUInt64LE(at + 8)) + 1 })
+      continue
+    }
+    if (kind === SIGNATURE) continue // Its shape and range were checked by named().
+    if (INLINE.has(kind)) {
+      if (length < INLINE.get(kind)) throw short()
+      continue
+    }
+    const keeps = KEEPS.get(kind)
+    if (!keeps) throw new Error(`load command ${i + 1} of ${commands.length} has unsupported kind 0x${kind.toString(16)}`)
+    for (const [place, each] of Object.entries(keeps)) {
       const written = at + Number(place)
-      if (written + 8 > at + length) throw new Error(`load command ${i + 1} of ${commands.length} is shorter than its kind is`)
+      if (written + 8 > at + length) throw short()
       const size = program.readUInt32LE(written + 4) * each
       if (size) stretches.push({ i, end: program.readUInt32LE(written) + size })
     }
@@ -123,9 +150,10 @@ const within = (reading) => (program) => {
  * It throws, saying why, for any file it is not sure of: one that is not a 64-bit Mach-O for
  * one kind of machine, one whose signature is not named by the last load command or does not
  * end where the file and its `__LINKEDIT` segment end, and one in which another load command
- * names bytes that would be cut. It throws for a program for Apple silicon too, and does not
- * hand it back as it is: no Mac of that kind runs a program without a signature, so whoever
- * asks for that has taken one program for another, and is told so.
+ * names bytes that would be cut or has a kind this reader does not know. It throws for a
+ * program for Apple silicon too, and does not hand it back as it is: no Mac of that kind runs
+ * a program without a signature, so whoever asks for that has taken one program for another,
+ * and is told so.
  */
 export const unsign = within((program) => {
   const { machine, count, size, commands } = read(program)
