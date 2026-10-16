@@ -28,6 +28,7 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFi
 import { release as osRelease, userInfo } from 'node:os'
 import path from 'node:path'
 import { HARNESSES } from '@it/protocol'
+import { legacyEmptyLock } from './legacy-lock'
 import { inHome, Problem, VERSION, writeFlushed } from './lib'
 import { makeOnce } from './serve/config'
 
@@ -545,6 +546,8 @@ function discard(): void {
 // there, which is to say that none begins. A command that turns reporting on waits in the same
 // way once it has written the new id down, so that none begins under the old one either.
 const decidingFile = () => inHome('telemetry-sending')
+// The empty format had no age-based recovery. Allow ten minutes before reclaiming it.
+const LEGACY_DECISION_MS = 10 * 60_000
 interface DecisionOwner {
   pid: number
   holder: string
@@ -583,9 +586,9 @@ function decision(): (() => void) | null {
   try {
     if (!make(file)) {
       const left = decisionOwner(file)
-      // Empty markers from older programs and unreadable files stay until an explicit toggle.
-      if (!left || !decisionOwnerGone(left)) return null
-      let word = left.holder
+      const legacy = left ? undefined : legacyEmptyLock(file, LEGACY_DECISION_MS)
+      if (left ? !decisionOwnerGone(left) : !legacy) return null
+      let word = left?.holder ?? legacy!
       let held = false
       const abandoned: { file: string; holder: string }[] = []
       for (let attempt = 0; attempt < 20; attempt++) {
@@ -597,7 +600,7 @@ function decision(): (() => void) | null {
           try {
             // Only one recoverer may replace this dead owner's marker. If that recoverer
             // dies as well, the next takes a claim named for it before replacing anything.
-            if (decisionOwner(file)?.holder !== left.holder) return null
+            if (left ? decisionOwner(file)?.holder !== left.holder : legacyEmptyLock(file, LEGACY_DECISION_MS) !== legacy) return null
             writeFlushed(whole, JSON.stringify(owner))
             renameSync(whole, file)
             held = true

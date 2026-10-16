@@ -40,7 +40,9 @@ Turning reporting off also forgets the installation's id, and turning it on alwa
 
 A sender leaves a short-lived record in `telemetry-sending` while it decides whether to send. If it exits before removing that record, the next sender recovers it once the system confirms that its process has ended. A live process, or one that cannot be checked, keeps its record regardless of the file's age.
 
-An empty or unreadable record cannot identify its owner, so it stops reporting until you clear it. If you want reporting to resume, run `it telemetry off` and then `it telemetry on`. This discards waiting counts and starts a new reporting identity.
+An empty record carries no owner. Once it is more than ten minutes old, the next sender recovers it and sends the waiting counts under the same reporting identity. A younger empty record is left alone.
+
+A nonempty record that cannot be read still stops reporting until you clear it. If you want reporting to resume, run `it telemetry off` and then `it telemetry on`. This discards waiting counts and starts a new reporting identity.
 
 ## What is sent
 

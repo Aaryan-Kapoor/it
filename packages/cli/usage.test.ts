@@ -2,7 +2,7 @@
 // given up on. Every test has a folder of its own and a fresh copy of the module, which keeps
 // what is waiting to be sent in memory.
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs, { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import { syncBuiltinESMExports } from 'node:module'
@@ -1535,22 +1535,82 @@ await sendNow('installation.removed', { age: 'under 1 day' })
     }
   })
 
-  test('an older empty marker stays until reporting is explicitly turned off and on', async () => {
+  test.each([599_999, 600_000, 600_001])(
+    'recovers an empty legacy marker only after ten minutes, at %s milliseconds, preserving queued counts and identity',
+    async (age) => {
+      const modified = Math.floor(Date.now() / 1000) * 1000
+      told()
+      const before = kept()
+      for (let i = 0; i < 20; i++) published()
+      const queued = lines()
+      const deciding = path.join(home, 'telemetry-sending')
+      writeFileSync(deciding, '')
+      fs.utimesSync(deciding, modified / 1000, modified / 1000)
+      const now = vi.spyOn(Date, 'now').mockReturnValue(modified + age)
+      const clock = vi.spyOn(performance, 'now').mockReturnValue(0)
+      const posts: string[] = []
+      const sender = noting(posts)
+      try {
+        await sender.tick()
+        if (age <= 600_000) {
+          expect(posts).toEqual([])
+          expect(readFileSync(deciding, 'utf8')).toBe('')
+          now.mockReturnValue(modified + 600_001)
+          await sender.tick()
+        }
+        expect(kept()).toEqual(before)
+        expect(sent(posts)).toHaveLength(1)
+        expect(sent(posts)[0]!.installation).toBe(createHash('sha256').update(`it-usage:${before.installation}`).digest('hex'))
+        expect(sent(posts)[0]!.events).toEqual(queued.map(({ name, at, properties }) => expect.objectContaining({ name, at, properties })))
+        expect(existsSync(deciding)).toBe(false)
+      } finally {
+        sender.stop()
+        now.mockRestore()
+        clock.mockRestore()
+      }
+    },
+  )
+
+  test('leaves a nonempty unreadable telemetry marker alone regardless of its age', async () => {
     told()
-    const before = kept().installation
     const deciding = path.join(home, 'telemetry-sending')
-    writeFileSync(deciding, '')
-    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+    writeFileSync(deciding, '{')
+    fs.utimesSync(deciding, 0, 0)
+    const fetch = vi.spyOn(globalThis, 'fetch')
     try {
       await usage.sendNow('installation.removed', { age: 'under 1 day' })
       expect(fetch).not.toHaveBeenCalled()
-      expect(existsSync(deciding)).toBe(true)
-      usage.set(false)
-      usage.set(true)
-      expect(kept().installation).not.toBe(before)
-      await usage.sendNow('installation.removed', { age: 'under 1 day' })
-      expect(fetch).toHaveBeenCalledTimes(1)
-      expect(existsSync(deciding)).toBe(false)
+      expect(readFileSync(deciding, 'utf8')).toBe('{')
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  test.each(['live owner', 'younger empty file'])('leaves a %s that replaces a legacy telemetry marker before recovery takes its claim', async (kind) => {
+    told()
+    const deciding = path.join(home, 'telemetry-sending')
+    writeFileSync(deciding, '')
+    fs.utimesSync(deciding, 0, 0)
+    const replacement = kind === 'live owner' ? JSON.stringify({ pid: process.pid, holder: randomUUID() }) : ''
+    const fetch = vi.spyOn(globalThis, 'fetch')
+    let replaced = false
+    try {
+      await withFiles(
+        {
+          linkSync: (real) => (from: fs.PathLike, to: fs.PathLike) => {
+            if (String(to).startsWith(`${deciding}.after.`) && !replaced) {
+              replaced = true
+              rmSync(deciding)
+              writeFileSync(deciding, replacement)
+            }
+            return real(from, to)
+          },
+        },
+        () => usage.sendNow('installation.removed', { age: 'under 1 day' }),
+      )
+      expect(replaced).toBe(true)
+      expect(fetch).not.toHaveBeenCalled()
+      expect(readFileSync(deciding, 'utf8')).toBe(replacement)
     } finally {
       fetch.mockRestore()
     }
