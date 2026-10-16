@@ -118,6 +118,8 @@ What It does about it: the text is marked as coming from a page, a conversation 
 
 The Hermes add-on checks that a click still belongs to the conversation in its chat before handing it over. Hermes does not let the add-on make that check and the handover one operation. A switch after the last check can send the click to the replacement conversation. In the terminal, a `/resume` entered just after the check for waiting input can do this too. [Add-ons](add-ons.md#hermes-agent) describes these limits.
 
+Browser retries of a page click or typed message share its original identity and a server deadline of at most seven days. After that deadline, a missing receipt is refused rather than treated as new work. A saved request with no deadline can only confirm a receipt It still holds. A notification accepts one answer, and Stop names the run shown when it was pressed. Signing out or pairing again discards pending requests from the old pairing; queued requests cannot execute under the replacement pairing.
+
 ### It is not made for the public internet
 
 Do not forward a port to It, give it a public address, or put it where strangers can reach it. It has no encryption, it answers only to the machine's own names, and its limits on how fast a caller may try things are sized for one household.

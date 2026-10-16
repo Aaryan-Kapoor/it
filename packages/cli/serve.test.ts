@@ -1601,7 +1601,9 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     await browser.mutation(fn('displays:register'), { key: displayKey, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/144.0' })
     const press = async (slug: string, id: string) => {
       const page = (await browser.query(makeFunctionReference<'query'>('artifacts:get'), { slug })) as { id: string }
+      const { until } = (await browser.mutation(fn('actions:replayGrant'), {})) as { until: number }
       return browser.mutation(fn('actions:submit'), {
+        replayUntil: until,
         artifactId: page.id,
         displayKey,
         envelope: { v: 1, clientActionId: id, name: 'approve', payload: '{"n":1}', contentVersion: 1 },

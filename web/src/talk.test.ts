@@ -11,13 +11,15 @@ const NOW = Date.now()
 let page: Record<string, unknown>
 /** What the backend answers a typed message with: nothing, until the test lets it. */
 let answer: { accept: (said: { actionId: string }) => void; refuse: (why: unknown) => void } | null
+const messageMutation = vi.fn(
+  (_fn: unknown, _args: Record<string, unknown>) =>
+    new Promise<{ actionId: string }>((accept, refuse) => {
+      answer = { accept, refuse }
+    }),
+)
 const client = {
-  mutation: vi.fn(
-    (_fn: unknown, _args: Record<string, unknown>) =>
-      new Promise<{ actionId: string }>((accept, refuse) => {
-        answer = { accept, refuse }
-      }),
-  ),
+  mutation: (fn: unknown, args: Record<string, unknown>) =>
+    getFunctionName(fn as never) === 'actions:replayGrant' ? Promise.resolve({ until: Date.now() + 6 * 86400_000 }) : messageMutation(fn, args),
   connectionState: () => ({ isWebSocketConnected: true }),
   subscribeToConnectionState: () => () => {},
 }
@@ -64,7 +66,7 @@ beforeEach(() => {
   localStorage.setItem('it.display', 'a-display-key-000001')
   page = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, agent: 'claude-code', machine: 'the laptop', machineSeenAt: NOW, said: null }
   answer = null
-  client.mutation.mockClear()
+  messageMutation.mockClear()
 })
 afterEach(async () => {
   await act(async () => root.unmount())
@@ -81,8 +83,8 @@ describe('the box a person types to a page’s agent in', () => {
     expect(send().disabled).toBe(true)
     await type('make the board bigger')
     await act(async () => send().click())
-    expect(client.mutation).toHaveBeenCalledTimes(1)
-    const [fn, args] = client.mutation.mock.calls[0]!
+    expect(messageMutation).toHaveBeenCalledTimes(1)
+    const [fn, args] = messageMutation.mock.calls[0]!
     expect(getFunctionName(fn as never)).toBe('actions:message')
     expect(args).toMatchObject({ artifactId: 'page-1', displayKey: 'a-display-key-000001', text: 'make the board bigger' })
     expect(args.clientActionId).toMatch(/^typed-[0-9a-f]{24}$/)
@@ -102,8 +104,8 @@ describe('the box a person types to a page’s agent in', () => {
     expect(box()!.value).toBe('second message, typed while waiting')
     // And is a message of its own when it is sent
     await act(async () => send().click())
-    expect(client.mutation.mock.calls.map((c) => c[1].text)).toEqual(['first message', 'second message, typed while waiting'])
-    expect(client.mutation.mock.calls[1]![1].clientActionId).not.toBe(client.mutation.mock.calls[0]![1].clientActionId)
+    expect(messageMutation.mock.calls.map((c) => c[1].text)).toEqual(['first message', 'second message, typed while waiting'])
+    expect(messageMutation.mock.calls[1]![1].clientActionId).not.toBe(messageMutation.mock.calls[0]![1].clientActionId)
     await act(async () => answer!.accept({ actionId: 'a2' }))
     expect(box()!.value).toBe('')
   })
@@ -116,16 +118,16 @@ describe('the box a person types to a page’s agent in', () => {
     await type('another draft')
     await type('please try again')
     await act(async () => answer!.accept({ actionId: 'a1' }))
-    expect(client.mutation.mock.calls.map((c) => c[1].text)).toEqual(['please try again'])
+    expect(messageMutation.mock.calls.map((c) => c[1].text)).toEqual(['please try again'])
     expect(box()!.value).toBe('please try again')
     await act(async () => send().click())
-    expect(client.mutation.mock.calls.map((c) => c[1].text)).toEqual(['please try again', 'please try again'])
-    expect(client.mutation.mock.calls[1]![1].clientActionId).not.toBe(client.mutation.mock.calls[0]![1].clientActionId)
+    expect(messageMutation.mock.calls.map((c) => c[1].text)).toEqual(['please try again', 'please try again'])
+    expect(messageMutation.mock.calls[1]![1].clientActionId).not.toBe(messageMutation.mock.calls[0]![1].clientActionId)
     await act(async () => answer!.accept({ actionId: 'a2' }))
     expect(box()!.value).toBe('')
   })
 
-  test('a message on its way is said to be in this tab alone, and the site is not loaded afresh over it, until It has taken it', async () => {
+  test('a message is saved before sending, and automatic recovery waits for confirmation', async () => {
     vi.useFakeTimers()
     try {
       await shown()
@@ -135,11 +137,11 @@ describe('the box a person types to a page’s agent in', () => {
       await type('are you there')
       expect(outbox.anyUnsaved()).toBe(false)
       await act(async () => send().click())
-      expect(status()).toBe('Sending. What you typed is only in this tab, so keep it open')
+      expect(status()).toBe('Sending…')
       expect(outbox.anyUnsaved()).toBe(true)
       // A few seconds on with no answer, as when It cannot be reached, it is not said to be on its way
       await act(async () => void (await vi.advanceTimersByTimeAsync(4100)))
-      expect(status()).toBe('Not sent yet. What you typed is only in this tab, so keep it open')
+      expect(status()).toBe('Saved on this browser, not sent yet')
       expect(box()!.value).toBe('are you there')
       await act(async () => answer!.accept({ actionId: 'a1' }))
       expect(outbox.anyUnsaved()).toBe(false)
@@ -149,22 +151,49 @@ describe('the box a person types to a page’s agent in', () => {
     }
   })
 
-  test('keeps what was typed when it was refused, says why, and sends it again under the same id', async () => {
+  test('keeps refused words and sends a deliberate new attempt under a new id', async () => {
     await shown()
     await act(async () => opener().click())
     await type('hello')
     await act(async () => send().click())
-    const first = client.mutation.mock.calls[0]![1].clientActionId
-    await act(async () => answer!.refuse(new ConvexError({ code: 'rate_limited', message: 'Too fast. Try again in a moment.' })))
+    const first = messageMutation.mock.calls[0]![1].clientActionId
+    await act(async () => answer!.refuse(new ConvexError({ code: 'invalid', message: 'That message was refused.' })))
     expect(box()!.value).toBe('hello')
-    expect(host.querySelector('.page-talk .error')?.textContent).toBe('Too fast. Try again in a moment.')
+    expect(host.querySelector('.page-talk .error')?.textContent).toBe('That message was refused.')
     await act(async () => send().click())
-    expect(client.mutation.mock.calls[1]![1].clientActionId).toBe(first)
+    expect(messageMutation.mock.calls[1]![1].clientActionId).not.toBe(first)
     await act(async () => answer!.accept({ actionId: 'a1' }))
     // The next thing typed is another message
     await type('again')
     await act(async () => send().click())
-    expect(client.mutation.mock.calls[2]![1].clientActionId).not.toBe(first)
+    expect(messageMutation.mock.calls[2]![1].clientActionId).not.toBe(first)
+  })
+
+  test.each([false, true])('a message saved by another tab is readable without replacing local edits: %s', async (edited) => {
+    await shown()
+    await act(async () => opener().click())
+    if (edited) await type('My local draft')
+    const key = 'it.outbox.user-1.page-1.typed-other'
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        user: 'user-1',
+        artifactId: 'page-1',
+        at: Date.now(),
+        format: 2,
+        session: 'session-1',
+        envelope: { clientActionId: 'typed-other' },
+        operation: { kind: 'message', text: 'Saved in another tab' },
+        refused: 'Refused elsewhere',
+      }),
+    )
+    await act(async () => void window.dispatchEvent(new StorageEvent('storage', { key })))
+    expect(box()!.value).toBe(edited ? 'My local draft' : 'Saved in another tab')
+    if (edited) expect(host.textContent).toContain('Saved in another tab')
+    expect(send().disabled).toBe(false)
+    localStorage.removeItem(key)
+    await act(async () => void window.dispatchEvent(new StorageEvent('storage', { key })))
+    expect(box()!.value).toBe(edited ? 'My local draft' : '')
   })
 
   test('closes on Escape, which does not leave the page from there', async () => {

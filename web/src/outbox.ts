@@ -6,9 +6,10 @@
 // Each click is kept under a key of its own, named for the person and the page it belongs to.
 // So two tabs never overwrite each other's, two pages never overwrite each other's, and one
 // person's clicks are never sent, or thrown away, as someone else.
-import { type ActionEnvelope, LIMITS } from '@it/protocol'
+import { type ActionEnvelope, LIMITS, MESSAGE } from '@it/protocol'
 import type { ConvexReactClient } from 'convex/react'
 import { api, displayKey, type Id, letGoOf, note, refusal, timesLetGo, whenLetGo } from './lib'
+import { discardPending, hasPending, holdPending, watchPending } from './pending'
 
 const PREFIX = 'it.outbox.'
 /** How many clicks may be kept unsent in this browser for one person, and how many of those for one page. */
@@ -24,7 +25,14 @@ const HOLD_MS = 15_000
 const HOLD_EVERY_MS = 5_000
 /** What the site sends for a page: the page's envelope with its data as JSON text. */
 export type Sent = Omit<ActionEnvelope, 'payload'> & { payload: string }
+type Operation = { kind: 'message'; text: string } | { kind: 'answer'; id: string; action: string; display: string }
 interface Entry {
+  operation?: Operation
+  /** New entries record their pairing and server deadline before any action is dispatched. */
+  format?: 2
+  session?: string | null
+  replayUntil?: number
+  refused?: string
   user: string
   artifactId: string
   envelope: Sent
@@ -40,6 +48,9 @@ interface Entry {
 }
 
 const keyOf = (user: string, artifactId: string, id: string) => `${PREFIX}${user}.${artifactId}.${id}`
+// A request whose answer was lost must keep its original deadline even when storage refused it.
+// These bounded records contain no payload and stay until a settled answer or the pairing ends.
+const memoryGrants = new Map<string, { session: string | null; until: number }>()
 
 // Whatever shows what became of a click is told the moment what is kept here changes, so that
 // it never goes on saying what was true of the click before. Each change is counted, and the
@@ -50,6 +61,7 @@ function changed(): void {
   changes++
   for (const fn of watchers) fn()
 }
+watchPending(changed)
 /** Another tab of this browser has kept a click or let go of one, which the browser says to every other tab. */
 const elsewhere = (e: StorageEvent): void => {
   if (e.key === null || e.key.startsWith(PREFIX)) changed()
@@ -112,8 +124,52 @@ export function dropOld(): void {
   }
 }
 
-const send = (convex: ConvexReactClient, e: Entry) =>
-  convex.mutation(api.actions.submit, { artifactId: e.artifactId as Id<'artifacts'>, displayKey: displayKey(), envelope: e.envelope })
+async function send(convex: ConvexReactClient, e: Entry, key: string) {
+  if (e.format === 2 && e.session !== session) throw new Error('This browser’s pairing has ended.')
+  const began = thisPairing()
+  const mine = () => stillPairedFor(e.user, began)
+  if (!mine()) throw new Error('This browser’s pairing has ended.')
+  const expected = e.session ? { expectedSession: e.session } : {}
+  if (e.operation?.kind === 'answer')
+    return convex.mutation(api.notifications.answer, {
+      id: e.operation.id as Id<'notifications'>,
+      action: e.operation.action,
+      displayKey: e.operation.display,
+      ...expected,
+    })
+  // A legacy entry is never given a fresh deadline. The backend can confirm its old receipt,
+  // but cannot safely treat an unknown old identity as a new click.
+  if (e.format === 2 && e.replayUntil === undefined) {
+    const saved = memoryGrants.get(key)
+    if (!saved && localStorage.getItem(key) === null && memoryGrants.size >= MAX)
+      throw new Error('Too many requests could not be saved. Keep this tab open and retry them before sending more.')
+    const grant = saved?.session === session ? saved : await convex.mutation(api.actions.replayGrant, {})
+    if (!mine()) throw new Error('This browser’s pairing has ended.')
+    e.replayUntil = grant.until
+    // Save the grant before dispatch so a retry keeps the same deadline. If storage refuses
+    // the update, leave the original request untouched: nothing has been dispatched yet.
+    // A request that could not be saved at all keeps its grant only in this tab.
+    if (localStorage.getItem(key) === null) memoryGrants.set(key, { session, until: e.replayUntil! })
+    else {
+      try {
+        localStorage.setItem(key, JSON.stringify(e))
+      } catch {
+        throw new Error('This could not be saved. Try again when this browser has room.')
+      }
+    }
+  }
+  if (!mine()) throw new Error('This browser’s pairing has ended.')
+  const replay = { ...expected, ...(e.replayUntil === undefined ? {} : { replayUntil: e.replayUntil }) }
+  return e.operation?.kind === 'message'
+    ? convex.mutation(api.actions.message, {
+        artifactId: e.artifactId as Id<'artifacts'>,
+        displayKey: displayKey(),
+        clientActionId: e.envelope.clientActionId,
+        text: e.operation.text,
+        ...replay,
+      })
+    : convex.mutation(api.actions.submit, { artifactId: e.artifactId as Id<'artifacts'>, displayKey: displayKey(), envelope: e.envelope, ...replay })
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /** A refusal that says "not now" and nothing about the click itself: slow down, or the page's queue is full at the moment. */
@@ -146,6 +202,7 @@ let session: string | null = null
 let pairings = 0
 /** The pairing that is current now, for something that is starting to remember. */
 export const thisPairing = (): number => pairings
+export const thisSession = (): string | undefined => session ?? undefined
 /**
  * Whether this person is still the one this browser is paired for, and, given the pairing
  * something began under, whether it is still that pairing. Something begun as them, and still
@@ -154,16 +211,42 @@ export const thisPairing = (): number => pairings
 export const stillPairedFor = (user: string, since?: number): boolean => theirs(user) && (since === undefined || since === pairings)
 /** Whether this browser is paired for anyone now. */
 export const pairedForSomeone = (): boolean => pairedFor !== null
-export function outboxBelongsTo(user: string | null, under: string | null = null): void {
-  if (user !== pairedFor || under !== session) pairings++
+export function outboxBelongsTo(user: string | null, under: string | null = null, known = true): void {
+  if (!known) return
+  if (user === null) {
+    // On a cold start there was no in-memory pairing to replace. The backend's refusal still ends saved work.
+    for (const key of Object.keys(localStorage)) {
+      if (!key.startsWith(PREFIX)) continue
+      try {
+        const entry = JSON.parse(localStorage.getItem(key) ?? '') as Entry
+        if (entry.format !== 2 || entry.session !== null) localStorage.removeItem(key)
+      } catch {}
+    }
+    memoryGrants.clear()
+  }
+  const replaced = user !== pairedFor || under !== session
+  if (replaced) {
+    memoryGrants.clear()
+    pairings++
+    if (pairedFor !== null) {
+      discardPending(pairedFor)
+      for (const [key, entry] of entries(pairedFor)) {
+        if (entry.format !== 2 || entry.session !== null) localStorage.removeItem(key)
+      }
+    }
+  }
   session = under
-  if (user === pairedFor) return
+  if (user !== null) {
+    for (const [key, entry] of entries(user)) if (entry.format === 2 && entry.session !== under) localStorage.removeItem(key)
+  }
+  if (!replaced) return
   pairedFor = user
   // Whatever was going to be tried again later was for whoever was here before
   for (const r of retry.values()) clearTimeout(r.timer)
   retry.clear()
   // And what was being sent was being sent as them: if they come back, it is theirs to send again
   sending.clear()
+  draining.clear()
 }
 
 // One click, one sender, across every tab of this browser. Where the browser has locks that all
@@ -183,32 +266,68 @@ const unkept = new Map<string, number[]>()
 const unkeptKey = (user: string, artifactId: string) => `${user}.${artifactId}`
 /** How many of this person's clicks on one page are on their way with no copy kept in this browser. */
 export const unsaved = (user: string, artifactId: string) => unkept.get(unkeptKey(user, artifactId))?.length ?? 0
-// What a person typed to a page's agent is sent with no copy kept in this browser, and is in
-// the box and this tab alone until It has taken it. Noted for as long as it is on its way, when
-// each was sent, so that the page's bar says so and the site is not loaded afresh over it.
-const typed = new Map<string, number[]>()
-/** How many things typed to one page's agent are on their way, in this tab alone. */
-export const typedWaiting = (user: string, artifactId: string) => typed.get(unkeptKey(user, artifactId))?.length ?? 0
-/** Notes that something typed to a page's agent is on its way. Answers with what takes the note away, once It has taken the message or refused it. */
-export function typedOnItsWay(user: string, artifactId: string): () => void {
-  const key = unkeptKey(user, artifactId)
-  const at = Date.now()
-  typed.set(key, [...(typed.get(key) ?? []), at])
+/** Whether automatic recovery would interrupt a request still waiting for confirmation. */
+export const anyUnsaved = hasPending
+
+/** A pending typed message, including one restored after closing the tab. */
+export function pendingMessage(user: string, artifactId: string): { id: string; text: string; refused?: string } | null {
+  const entry = entries(user).find(([, e]) => e.artifactId === artifactId && e.operation?.kind === 'message')?.[1]
+  return entry?.operation?.kind === 'message' ? { id: entry.envelope.clientActionId, text: entry.operation.text, refused: entry.refused } : null
+}
+export function pendingAnswer(id: string): string | null {
+  if (!pairedFor) return null
+  const entry = entries(pairedFor).find(([, e]) => e.operation?.kind === 'answer' && e.operation.id === id && !e.refused)?.[1]
+  return entry?.operation?.kind === 'answer' ? entry.operation.action : null
+}
+/** A pre-upgrade click refused without a receipt stays visible until expiry or the pairing ends. */
+export function refusedClick(user: string, artifactId: string): string | null {
+  return entries(user).find(([, e]) => e.artifactId === artifactId && !e.operation && e.refused)?.[1].refused ?? null
+}
+
+/** A failed message stays readable until the person deliberately sends a new one. */
+export function dismissMessage(user: string, artifactId: string, id: string): void {
+  drop(keyOf(user, artifactId, id))
+}
+export function abandonOutbox(user: string): void {
+  if (pairedFor === user) outboxBelongsTo(null)
+  for (const [key] of entries(user)) localStorage.removeItem(key)
+  discardPending(user)
   changed()
-  let done = false
-  return () => {
-    if (done) return
-    done = true
-    const others = [...(typed.get(key) ?? [])]
-    const i = others.indexOf(at)
-    if (i >= 0) others.splice(i, 1)
-    if (others.length) typed.set(key, others)
-    else typed.delete(key)
-    changed()
+}
+export function message(convex: ConvexReactClient, user: string, artifactId: string, clientActionId: string, text: string) {
+  if (!text.trim() || text.length > LIMITS.messageText) return Promise.reject(new Error(`A message is 1 to ${LIMITS.messageText} characters.`))
+  return sendOperation(
+    convex,
+    user,
+    artifactId,
+    { v: 1, clientActionId, name: MESSAGE, payload: JSON.stringify({ text }), contentVersion: 0 },
+    { kind: 'message', text },
+  )
+}
+export function answerNotification(convex: ConvexReactClient, id: string, action: string) {
+  if (!pairedFor) return Promise.reject(new Error('This browser’s pairing has ended.'))
+  return sendOperation(
+    convex,
+    pairedFor,
+    `notification-${id}`,
+    { v: 1, clientActionId: `notification:${id}`, name: action, payload: '{}', contentVersion: 0 },
+    { kind: 'answer', id, action, display: displayKey() },
+  )
+}
+async function sendOperation(convex: ConvexReactClient, user: string, artifactId: string, envelope: Sent, operation: Operation) {
+  const key = keyOf(user, artifactId, envelope.clientActionId)
+  const pairing = thisPairing()
+  const release = holdPending(user)
+  const work = () => {
+    if (!stillPairedFor(user, pairing)) throw new Error('This browser’s pairing has ended.')
+    return sendNow(convex, user, artifactId, envelope, key, () => true, undefined, operation)
+  }
+  try {
+    return await (locks()?.request(key, {}, work) ?? work())
+  } finally {
+    release()
   }
 }
-/** Whether anything done on any page is on its way with no copy kept in this browser: it is in this tab alone, and loading the site afresh would lose it. */
-export const anyUnsaved = (): boolean => [...unkept.values(), ...typed.values()].some((made) => made.length > 0)
 
 // What was kept in this browser was let go of: everything, or what was one person's where the
 // browser is kept for another by now. What this tab holds of it in memory goes too: nothing of
@@ -221,7 +340,7 @@ whenLetGo((person, whole) => {
     retry.delete(user)
   }
   for (const key of [...unkept.keys()]) if (whole || (person !== null && key.startsWith(`${person}.`))) unkept.delete(key)
-  for (const key of [...typed.keys()]) if (whole || (person !== null && key.startsWith(`${person}.`))) typed.delete(key)
+  discardPending(whole ? undefined : (person ?? undefined))
   changed()
 })
 
@@ -259,10 +378,18 @@ export async function submit(
     throw new Error('That is not an action this page can send.')
   const key = keyOf(user, artifactId, envelope.clientActionId)
   const shared = locks()
-  // Held from here until the click is accepted, refused, or left behind for later
-  return shared
-    ? shared.request(key, {}, () => sendNow(convex, user, artifactId, envelope, key, stillThere, judge))
-    : sendNow(convex, user, artifactId, envelope, key, stillThere, judge)
+  const pairing = thisPairing()
+  const release = holdPending(user)
+  const work = () => {
+    if (!stillPairedFor(user, pairing)) throw new Error('This browser’s pairing has ended.')
+    return sendNow(convex, user, artifactId, envelope, key, stillThere, judge)
+  }
+  // Waiting for another tab's lock remains pending work under the original pairing.
+  try {
+    return (await (shared ? shared.request(key, {}, work) : work())) as { actionId: string }
+  } finally {
+    release()
+  }
 }
 
 async function sendNow(
@@ -273,17 +400,23 @@ async function sendNow(
   key: string,
   stillThere: () => boolean,
   judge?: () => Promise<boolean>,
-): Promise<{ actionId: string }> {
-  const mine = () => theirs(user)
+  operation?: Operation,
+): Promise<{ actionId: string | null }> {
+  const pairing = thisPairing()
+  const mine = () => stillPairedFor(user, pairing)
   if (!mine()) throw new Error('This browser’s pairing has ended.')
   // What is kept here for the person may be let go of while the click is on its way, and from
   // then on nothing of it is kept again: not by the hold, not for later, whatever becomes of the click
   const began = timesLetGo(user)
-  const letGo = () => timesLetGo(user) !== began
-  const entry: Entry = { user, artifactId, envelope, at: Date.now(), held: Date.now() + HOLD_MS }
+  const letGo = () => timesLetGo(user) !== began || entry.session !== session
+  if (sending.has(key)) throw new Error('This request is already waiting for confirmation.')
+  const prior = entries(user).find(([saved]) => saved === key)?.[1]
+  // Reusing an identity also reuses its payload and deadline, including legacy entries.
+  const entry: Entry = prior ?? { user, artifactId, envelope, operation, format: 2, session, at: Date.now() }
+  entry.held = Date.now() + HOLD_MS
   // Too many already unsent means something is wrong, and one more would only push an older one
   // out. One page may hold only part of what the browser keeps, so it cannot crowd out the rest.
-  const waiting = entries(user)
+  const waiting = entries(user).filter(([saved]) => saved !== key)
   if (waiting.length >= MAX || waiting.filter(([, e]) => e.artifactId === artifactId).length >= MAX_PER_PAGE)
     throw new Error('Too many actions are still waiting to be sent from this browser. Check the connection.')
   let kept = false
@@ -304,6 +437,7 @@ async function sendNow(
     unkept.set(unkeptKey(user, artifactId), [...(unkept.get(unkeptKey(user, artifactId)) ?? []), entry.at])
     changed()
   }
+  const release = holdPending(user)
   let keep = false
   // The hold is kept up for as long as this tab is sending the click, so that the tab beside it
   // leaves it alone however long that takes
@@ -311,7 +445,7 @@ async function sendNow(
     ? setInterval(() => {
         entry.held = Date.now() + HOLD_MS
         try {
-          if (!letGo() && localStorage.getItem(key) !== null) localStorage.setItem(key, JSON.stringify(entry))
+          if (!letGo() && mine() && localStorage.getItem(key) !== null) localStorage.setItem(key, JSON.stringify(entry))
         } catch {}
       }, HOLD_EVERY_MS)
     : undefined
@@ -331,10 +465,18 @@ async function sendNow(
         throw new Error('This browser’s pairing has ended.')
       }
       try {
-        return await send(convex, entry)
+        const result = await send(convex, entry, key)
+        memoryGrants.delete(key)
+        return result
       } catch (err) {
-        if (!mine() || (!stillThere() && !settled(err))) {
+        if (settled(err)) memoryGrants.delete(key)
+        if (!mine() || ((!stillThere() || operation !== undefined) && !settled(err))) {
           // Nobody was told what became of it: it stays, and is sent when it can be
+          keep = true
+          throw err
+        }
+        if (kept && operation?.kind === 'message' && settled(err)) {
+          entry.refused = refusal(err).message
           keep = true
           throw err
         }
@@ -344,11 +486,12 @@ async function sendNow(
       }
     }
   } finally {
+    release()
     clearInterval(holding)
     sending.delete(key)
     // Kept for later only while what is kept here is still kept: let go of meanwhile, the click went with the rest
-    const stays = kept && keep && !letGo()
-    if (kept && !stays) localStorage.removeItem(key)
+    const stays = kept && keep && !letGo() && (mine() || entry.session === null)
+    if (kept && !stays && !letGo() && (mine() || entry.session === null)) localStorage.removeItem(key)
     // Left behind for later: marked, so that the sending of what is left does not wait for a
     // page that has finished with it
     if (stays) {
@@ -379,6 +522,7 @@ const draining = new Map<string, { again: boolean }>()
  * and everything still left is tried again a while later, by itself.
  */
 export async function drain(convex: ConvexReactClient, user: string): Promise<void> {
+  dropOld()
   const running = draining.get(user)
   if (running) {
     running.again = true
@@ -386,7 +530,8 @@ export async function drain(convex: ConvexReactClient, user: string): Promise<vo
   }
   const state = { again: false }
   draining.set(user, state)
-  const mine = () => theirs(user)
+  const pairing = thisPairing()
+  const mine = () => stillPairedFor(user, pairing)
   const pending = retry.get(user)
   if (pending) clearTimeout(pending.timer)
   let troubled = false
@@ -408,7 +553,7 @@ export async function drain(convex: ConvexReactClient, user: string): Promise<vo
     const notNow = new Map<string, number>()
     const waits = (e: Entry) => (notNow.get(e.artifactId) ?? 0) > Date.now()
     for (let rounds = 0; rounds < 500 && mine(); rounds++) {
-      const left = entries(user).filter(([key]) => !passedBy(key))
+      const left = entries(user).filter(([key, e]) => !e.refused && !passedBy(key))
       const next = left.find(([, e]) => !waits(e))
       if (!next) {
         // Nothing can be sent this moment. If a page said when to come back, that is waited
@@ -465,15 +610,22 @@ export async function drain(convex: ConvexReactClient, user: string): Promise<vo
       else if (typeof outcome === 'number') notNow.set(entry.artifactId, Date.now() + outcome)
     }
   } finally {
-    draining.delete(user)
+    if (draining.get(user) === state) draining.delete(user)
   }
   if (!mine()) return
   if (state.again) return drain(convex, user)
   // Whatever is still here when the sending stops, for whatever reason, is tried again later:
   // as soon as a click left to its page is old enough, and otherwise less and less often, for
   // a display nobody is standing at
-  if (entries(user).length === 0) {
+  const remaining = entries(user)
+  if (remaining.every(([, e]) => e.refused)) {
     retry.delete(user)
+    if (remaining.length) {
+      // Refused messages expire without being sent again, even if this tab stays open.
+      const expires = Math.min(...remaining.map(([, e]) => e.at + MAX_AGE_MS + 1))
+      const wait = Math.max(1, Math.min(MAX_AGE_MS, expires - Date.now()))
+      retry.set(user, { wait, timer: setTimeout(() => void drain(convex, user), wait) })
+    }
     return
   }
   const wait = troubled || !fresh ? Math.min((pending?.wait ?? 2500) * 2, 300_000) : fresh + 100
@@ -487,7 +639,8 @@ export async function drain(convex: ConvexReactClient, user: string): Promise<vo
  * the browser is paired for someone else.
  */
 async function replay(convex: ConvexReactClient, user: string, key: string): Promise<'done' | 'trouble' | 'stop' | number> {
-  const mine = () => theirs(user)
+  const pairing = thisPairing()
+  const mine = () => stillPairedFor(user, pairing)
   let entry: Entry
   try {
     const raw = localStorage.getItem(key)
@@ -500,8 +653,13 @@ async function replay(convex: ConvexReactClient, user: string, key: string): Pro
   // Asked again here, and not only before the click's lock was asked for: the lock is given
   // later, and by then the browser may be paired for someone else, as whom this click must not be sent
   if (!mine()) return 'stop'
+  if (entry.format === 2 && entry.session !== session) {
+    drop(key)
+    return 'done'
+  }
+  const release = holdPending(user)
   try {
-    await send(convex, entry)
+    await send(convex, entry, key)
     // Removed only as the person who sent it: if the browser was paired for someone else
     // meanwhile, the answer was not about this person's click
     if (!mine()) return 'stop'
@@ -510,8 +668,10 @@ async function replay(convex: ConvexReactClient, user: string, key: string): Pro
   } catch (err) {
     if (!mine()) return 'stop'
     if (settled(err)) {
-      note('a saved click was refused for good, and was dropped', refusal(err).code)
-      drop(key)
+      note('a saved request was refused for good', refusal(err).code)
+      if (entry.operation?.kind === 'message' || (entry.format !== 2 && refusal(err).code === 'conflict'))
+        put(key, JSON.stringify({ ...entry, refused: refusal(err).message, held: undefined }))
+      else drop(key)
       return 'done'
     }
     // Told to slow down: waited out, and the same click is tried again
@@ -519,11 +679,13 @@ async function replay(convex: ConvexReactClient, user: string, key: string): Pro
     // Not paired at this moment, the backend in trouble, the page's queue full, or
     // something about this one entry: it waits, and the ones behind it are tried
     return 'trouble'
+  } finally {
+    release()
   }
 }
 
 /** How many of this person's clicks on one page have not been answered yet. */
-export const unsent = (user: string, artifactId: string) => entries(user).filter(([, e]) => e.artifactId === artifactId).length
+export const unsent = (user: string, artifactId: string) => entries(user).filter(([, e]) => e.artifactId === artifactId && !e.refused).length
 
 /**
  * How long after it was made a click is said to be on its way. A connection can be open and
@@ -538,8 +700,8 @@ const ON_ITS_WAY_MS = 4000
  * since does not make that one any more sent than it was.
  */
 export function onItsWayUntil(user: string, artifactId: string): number | null {
-  const kept = entries(user).filter(([, e]) => e.artifactId === artifactId)
+  const kept = entries(user).filter(([, e]) => e.artifactId === artifactId && !e.refused)
   if (kept.some(([key]) => !sending.has(key))) return null
-  const made = [...kept.map(([, e]) => e.at), ...(unkept.get(unkeptKey(user, artifactId)) ?? []), ...(typed.get(unkeptKey(user, artifactId)) ?? [])]
+  const made = [...kept.map(([, e]) => e.at), ...(unkept.get(unkeptKey(user, artifactId)) ?? [])]
   return made.length ? Math.min(...made) + ON_ITS_WAY_MS : null
 }

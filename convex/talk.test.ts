@@ -3,6 +3,7 @@
 // above the page in answer. What it must get right: the name the typed words are kept under is
 // the site's own, so that a page can never pass its own words off as the person's.
 import { LIMITS, MESSAGE } from '@it/protocol'
+import { getFunctionName } from 'convex/server'
 import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -47,6 +48,14 @@ async function withPage() {
     return { user: user._id as string, session: session as string, machine: machine._id as string, page }
   })
   const browser = t.withIdentity({ issuer: SITE, subject: user, kind: 'browser', sid: session, role: 'owner' })
+  const mutation = browser.mutation
+  browser.mutation = (async (fn, args) => {
+    if (['actions:submit', 'actions:message'].includes(getFunctionName(fn))) {
+      const { until } = await mutation(api.actions.replayGrant, {})
+      return mutation(fn, { ...args, replayUntil: until })
+    }
+    return mutation(fn, args)
+  }) as typeof mutation
   const agent = t.withIdentity({ issuer: SITE, subject: machine, kind: 'machine' })
   await browser.mutation(api.displays.register, { key: KEY, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/144.0.0.0 Safari/537.36' })
   const kept = () => t.run((ctx) => ctx.db.query('actions').collect())

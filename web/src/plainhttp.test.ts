@@ -15,6 +15,7 @@ const calls: string[] = []
 const answers: Record<string, () => unknown> = {}
 const ask = async (fn: unknown, _args?: unknown) => {
   const name = getFunctionName(fn as never)
+  if (name === 'actions:replayGrant') return { until: Date.now() + 6 * 86400_000 }
   calls.push(name)
   return answers[name]?.() ?? null
 }

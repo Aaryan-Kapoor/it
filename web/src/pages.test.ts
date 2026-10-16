@@ -2,6 +2,7 @@
 // backend. What it must get right: it speaks of the click just made the moment it is made, and
 // never goes on saying what became of the one before.
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -20,11 +21,12 @@ const told = new Set<() => void>()
 /** What the backend answers each click with, in the order they were sent: nothing, until the test lets it. */
 const answers: ((said: { actionId: string }) => void)[] = []
 const client = {
-  mutation: vi.fn(
-    () =>
-      new Promise<{ actionId: string }>((resolve) => {
-        answers.push(resolve)
-      }),
+  mutation: vi.fn((fn: unknown) =>
+    getFunctionName(fn as never) === 'actions:replayGrant'
+      ? Promise.resolve({ until: Date.now() + 6 * 86400_000 })
+      : new Promise<{ actionId: string }>((resolve) => {
+          answers.push(resolve)
+        }),
   ),
   connectionState: () => ({ isWebSocketConnected: connected }),
   subscribeToConnectionState: (fn: () => void) => {
@@ -33,8 +35,13 @@ const client = {
   },
 }
 /** What the backend is to answer each stop with, in the order they were asked: nothing, until the test lets it. */
-const stopsAsked: { answer: (said: { stopping: boolean }) => void; refuse: (why: unknown) => void }[] = []
-const askedToStop = () => new Promise<{ stopping: boolean }>((answer, refuse) => void stopsAsked.push({ answer, refuse }))
+const stopsAsked: {
+  input: { expectedRun?: string; expectedSession?: string }
+  answer: (said: { stopping: boolean }) => void
+  refuse: (why: unknown) => void
+}[] = []
+const askedToStop = (input: { expectedRun?: string; expectedSession?: string }) =>
+  new Promise<{ stopping: boolean }>((answer, refuse) => void stopsAsked.push({ input, answer, refuse }))
 const queries: { name: string; args: unknown }[] = []
 vi.mock('convex/react', () => ({
   useConvex: () => client,
@@ -725,13 +732,17 @@ describe('what the page’s bar says of the last thing the person did', () => {
   })
 
   test('a stop that was asked of one run of the conversation is not said of the next, which can be stopped in its turn', async () => {
-    Object.assign(PAGE, { run: { since: NOW - 60_000, stopping: false }, machineSeenAt: NOW })
+    Object.assign(PAGE, { run: { identity: 'original-run', since: NOW - 60_000, stopping: false }, machineSeenAt: NOW })
     await shown()
+    const { hasPending } = await import('./pending')
     await act(async () => stops()[0]!.click())
+    expect(hasPending()).toBe(true)
+    expect(stopsAsked[0]!.input).toMatchObject({ expectedRun: 'original-run', expectedSession: 'session-1' })
     await act(async () => stopsAsked[0]!.answer({ stopping: true }))
+    expect(hasPending()).toBe(false)
     expect(host.querySelector('.working')?.textContent).toBe('Stopping')
     // The machine reopens the conversation for something done since, before the page has heard that the first run ended
-    Object.assign(PAGE, { run: { since: NOW, stopping: false } })
+    Object.assign(PAGE, { run: { identity: 'next-run', since: NOW - 60_000, stopping: false } })
     await drawnAgain()
     expect(host.querySelector('.working')?.textContent).toContain('Working')
     expect(stops().length).toBe(1)
@@ -800,4 +811,30 @@ describe('Escape on a page', () => {
     await pressed()
     expect(location.pathname).toBe('/')
   })
+})
+
+test('a refused pre-upgrade request stays visible after reopening without being sent again', async () => {
+  const outbox = await shown()
+  const key = 'it.outbox.user-1.page-1.legacy-request'
+  const message = 'Reload It before sending new requests. This saved request has no replay deadline. Check what your agent received before sending it again.'
+  localStorage.setItem(key, JSON.stringify({ user: 'user-1', artifactId: 'page-1', envelope: envelope('legacy-request'), at: NOW - 60_000 }))
+  const mutation = vi.fn(async () => {
+    throw new ConvexError({ code: 'conflict', message })
+  })
+  const backend = { mutation, connectionState: () => ({ isWebSocketConnected: true }) } as never
+  await act(async () => outbox.drain(backend, 'user-1'))
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(message)
+  expect(outbox.unsent('user-1', 'page-1')).toBe(0)
+  await act(async () => root.unmount())
+  host.remove()
+  await shown()
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(message)
+  await act(async () => outbox.drain(backend, 'user-1'))
+  expect(mutation).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    vi.mocked(Date.now).mockReturnValue(NOW + 7 * 86400_000)
+    await outbox.drain(backend, 'user-1')
+  })
+  expect(localStorage.getItem(key)).toBeNull()
+  expect(host.querySelector('[role="alert"]')).toBeNull()
 })

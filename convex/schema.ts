@@ -61,6 +61,8 @@ export default defineSchema({
     lastSeenAt: v.number(),
     /** When the browser was last given its cookie, which lasts a year from then: at pairing, and again whenever it asks for a token with one more than a day old. */
     cookieAt: v.number(),
+    /** Server-issued replay deadlines. One per UTC day, at most seven active deadlines. */
+    replayUntil: v.optional(v.array(v.number())),
     /** Set when the session ends, however it ends. From then on the session is nobody. */
     endedAt: v.optional(v.number()),
     ...invitedBy,

@@ -1,10 +1,11 @@
 // Notifications: an agent speaking to the person outside any one page. They are stored, so
 // they survive a reload; a new one shows as a toast; all of them wait in the tray. The site's
 // own short words ("Link copied") are shown in the same place, and are kept nowhere.
-import { useMutation, useQuery } from 'convex/react'
+import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { IconBell } from './brand'
 import { ago, api, displayKey, type Id, navigate, refusal, useNow } from './lib'
+import { answerNotification, outboxChanges, pendingAnswer, watchOutbox } from './outbox'
 import { useDialogKeys } from './overlay'
 import { NOT_SECURE, notSecure } from './push'
 
@@ -52,11 +53,14 @@ const watchSaid = (fn: () => void) => {
 }
 
 function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast' | 'notif-item' }) {
-  const answer = useMutation(api.notifications.answer)
+  const convex = useConvex()
+  useSyncExternalStore(watchOutbox, outboxChanges)
   const [error, setError] = useState('')
-  // The answer that was pressed and that It has not said it has yet: no other is taken
-  // meanwhile, and it is said to be on its way, since it is kept nowhere but in this tab
-  const [sending, setSending] = useState<string | null>(null)
+  // The saved answer remains visible across tray remounts. An unstored request is kept in
+  // this component until its promise settles, and the recovery gate protects that interval.
+  const [inFlight, setSending] = useState<string | null>(null)
+  const saved = pendingAnswer(n.id)
+  const sending = saved ?? inFlight
   return (
     <>
       <p className={`note-text ${kind}-text`}>{n.text}</p>
@@ -73,7 +77,7 @@ function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast'
                 e.stopPropagation()
                 setError('')
                 setSending(b.action)
-                answer({ id: n.id as Id<'notifications'>, action: b.action, displayKey: displayKey() }).then(
+                answerNotification(convex, n.id, b.action).then(
                   () => {
                     setSending(null)
                     onDone?.()
@@ -100,7 +104,8 @@ function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast'
         )}
         {sending !== null && n.answer === null && (
           <span className="note-answered">
-            Sending “{n.buttons.find((b) => b.action === sending)?.label ?? sending}”… Keep this tab open until it says it was sent
+            “{n.buttons.find((b) => b.action === sending)?.label ?? sending}” is not confirmed yet.{' '}
+            {saved ? 'Saved on this browser and retried when It is back' : 'Keep this tab open until it is sent'}
           </span>
         )}
       </span>

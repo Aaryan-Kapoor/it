@@ -2684,6 +2684,9 @@ span.card-fallback {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+.page-nav .page-request-refused {
+  flex-basis: 100%;
+}
 .page-nav .status::before,
 .page-nav .working-dot {
   flex: none;

@@ -246,10 +246,12 @@ function connection(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): Conne
 }
 
 /** The reopened run of a page's conversation, where its machine says one is under way. */
-function running(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): { since: number; stopping: boolean } | null {
+function running(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): { since: number; stopping: boolean; identity: string } | null {
   if (!machine || machine.revoked || !a.session) return null
   const run = (machine.runs ?? []).find((r) => r.harness === a.session?.harness && r.sessionId === a.session?.id)
-  return run ? { since: run.since, stopping: run.stop === true } : null
+  return run
+    ? { since: run.since, stopping: run.stop === true, identity: JSON.stringify([machine._id, run.harness, run.sessionId, run.run ?? run.since]) }
+    : null
 }
 
 /** Why a page's conversation could not be reopened, where its machine last said that it could not. */
@@ -270,12 +272,16 @@ const STOPS_KEPT = 40
  * so no agent stops another.
  */
 export const stop = mutation({
-  args: { artifactId: v.id('artifacts') },
-  handler: async (ctx, { artifactId }) => {
-    const { user } = await requireBrowser(ctx)
+  args: { artifactId: v.id('artifacts'), expectedRun: v.optional(v.string()), expectedSession: v.optional(v.string()) },
+  handler: async (ctx, { artifactId, expectedRun, expectedSession }) => {
+    const { user } = await requireBrowser(ctx, expectedSession)
     const a = await ownArtifact(ctx, user._id, artifactId)
     const machine = a.machineId ? await ctx.db.get(a.machineId) : null
-    if (!machine || !running(machine, a)) return { stopping: false }
+    const run = running(machine, a)
+    if (!machine || !run) return { stopping: false }
+    if (expectedRun === undefined) fail('conflict', 'Reload It before stopping this agent, so the request names the run you saw.', { reload: true })
+    if (run.identity !== expectedRun) return { stopping: false }
+    if (run.stopping) return { stopping: true }
     const is = (r: { harness: string; sessionId: string }) => r.harness === a.session?.harness && r.sessionId === a.session?.id
     await ctx.db.patch(machine._id, {
       runs: (machine.runs ?? []).map((r) => (is(r) ? { ...r, stop: true } : r)),

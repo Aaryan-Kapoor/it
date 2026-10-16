@@ -153,9 +153,9 @@ export const dismiss = mutation({
 
 /** Pressing a notification's button records an ordinary click on its page: one inbox, one set of rules. */
 export const answer = mutation({
-  args: { id: v.id('notifications'), action: v.string(), displayKey: v.string() },
-  handler: async (ctx, { id, action, displayKey }) => {
-    const c = await requireBrowser(ctx)
+  args: { id: v.id('notifications'), action: v.string(), displayKey: v.string(), expectedSession: v.optional(v.string()) },
+  handler: async (ctx, { id, action, displayKey, expectedSession }) => {
+    const c = await requireBrowser(ctx, expectedSession)
     const { user } = c
     const n = await ctx.db.get(id)
     if (!n || n.userId !== user._id) fail('not_found', 'No such notification.')
@@ -165,6 +165,8 @@ export const answer = mutation({
     // is, to this one, no notification, whatever has become of it.
     if (n.displayId && n.displayId !== display._id) fail('not_found', 'No such notification.')
     if (n.answeredAt) return { actionId: null }
+    if (expectedSession === undefined)
+      fail('conflict', 'Reload It before answering this notification, so the request belongs to your current pairing.', { reload: true })
     // A notification has buttons only where it was sent about a page, and it then says which version and state of the page it was sent about
     if (!n.artifactId || n.contentVersion === undefined || n.stateRevision === undefined || !n.buttons?.some((b) => b.action === action))
       fail('invalid', 'That is not one of its buttons.')

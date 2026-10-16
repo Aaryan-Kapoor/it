@@ -4,7 +4,7 @@ import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { ref, resolveArtifact } from './artifacts'
-import { findDisplay, ownArtifact, requireBrowser, requireCaller } from './lib/authz'
+import { type Browser, findDisplay, ownArtifact, requireBrowser, requireCaller } from './lib/authz'
 import { counted } from './lib/counted'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
@@ -181,11 +181,48 @@ export const readdress = internalMutation({
   },
 })
 
+const DAY = 86_400_000
+/** Each browser may replay a saved request until a deadline issued by the backend. */
+export const replayGrant = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const c = await requireBrowser(ctx)
+    const now = Date.now()
+    const until = Math.floor(now / DAY) * DAY + 7 * DAY
+    const kept = (c.session.replayUntil ?? []).filter((at) => at > now)
+    if (!kept.includes(until)) await ctx.db.patch(c.session._id, { replayUntil: [...kept, until] })
+    return { until }
+  },
+})
+/**
+ * A deadline is fixed before dispatch and checked against server time. Handled actions remain
+ * for seven days after acceptance, so their receipt cannot disappear while a grant is valid.
+ * Old clients have no grant: an existing receipt can be confirmed, but an unknown old id
+ * cannot safely be accepted because its previous receipt may already have expired.
+ */
+async function replayAllowed(ctx: MutationCtx, c: Browser, artifactId: Id<'artifacts'>, clientActionId: string, until?: number) {
+  const existing = await ctx.db
+    .query('actions')
+    .withIndex('by_artifact_client', (q) => q.eq('artifactId', artifactId).eq('clientActionId', clientActionId))
+    .first()
+  if (existing) return
+  if (until === undefined)
+    fail(
+      'conflict',
+      'Reload It before sending new requests. This saved request has no replay deadline. Check what your agent received before sending it again.',
+      { reload: true },
+    )
+  if (until <= Date.now() || !(c.session.replayUntil ?? []).includes(until))
+    fail('conflict', 'This saved request is too old to retry safely. Check what your agent received before sending it again.')
+}
+
 /** A person acted on a page. The site sends this on the page's behalf, as the browser it is paired as. */
 export const submit = mutation({
   args: {
     artifactId: v.id('artifacts'),
     displayKey: v.string(),
+    replayUntil: v.optional(v.number()),
+    expectedSession: v.optional(v.string()),
     envelope: v.object({
       v: v.number(),
       clientActionId: v.string(),
@@ -197,13 +234,14 @@ export const submit = mutation({
       attended: v.optional(v.boolean()),
     }),
   },
-  handler: async (ctx, { artifactId, displayKey, envelope }) => {
-    const c = await requireBrowser(ctx)
+  handler: async (ctx, { artifactId, displayKey, envelope, replayUntil, expectedSession }) => {
+    const c = await requireBrowser(ctx, expectedSession)
     if (envelope.v !== PROTOCOL_VERSION) fail('invalid', 'This page speaks a version of the protocol the site does not.')
     const artifact = await ownArtifact(ctx, c.user._id, artifactId)
     // Which display it was made on is noted when that display is registered. A click is the
     // person's own whether or not it is: a display's record can be let go to make room while
     // its tab sleeps, and what the person did there before must not be lost for that.
+    await replayAllowed(ctx, c, artifactId, envelope.clientActionId, replayUntil)
     const display = await findDisplay(ctx, c, displayKey)
     const { actionId, duplicate } = await record(ctx, artifact, { ...envelope, ...(display ? { displayId: display._id } : {}) })
     // Counted: that something was sent from a page, and from what kind of screen. Never its name or what it carried
@@ -219,14 +257,22 @@ export const submit = mutation({
  * session of the browser's, and reaches It only through what the site sends for it.
  */
 export const message = mutation({
-  args: { artifactId: v.id('artifacts'), displayKey: v.string(), clientActionId: v.string(), text: v.string() },
-  handler: async (ctx, { artifactId, displayKey, clientActionId, text }) => {
-    const c = await requireBrowser(ctx)
+  args: {
+    artifactId: v.id('artifacts'),
+    displayKey: v.string(),
+    clientActionId: v.string(),
+    text: v.string(),
+    replayUntil: v.optional(v.number()),
+    expectedSession: v.optional(v.string()),
+  },
+  handler: async (ctx, { artifactId, displayKey, clientActionId, text, replayUntil, expectedSession }) => {
+    const c = await requireBrowser(ctx, expectedSession)
     const artifact = await ownArtifact(ctx, c.user._id, artifactId)
     const typed = text.trim()
     if (!typed) fail('invalid', 'There is nothing to send.')
     if (typed.length > LIMITS.messageText) fail('limit', `A message is at most ${LIMITS.messageText} characters.`)
     if (artifact.currentVersion === undefined) fail('invalid', 'This page has nothing published yet.')
+    await replayAllowed(ctx, c, artifactId, clientActionId, replayUntil)
     const display = await findDisplay(ctx, c, displayKey)
     const { actionId, duplicate } = await record(ctx, artifact, {
       ...(display ? { displayId: display._id } : {}),
