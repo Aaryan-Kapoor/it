@@ -1674,40 +1674,50 @@ function setUp(a: Args, was: boolean): void {
 }
 
 async function setup(a: Args, joined = false) {
-  markInstallation(home())
-  // Where this It was installed from, if that is not the usual place, is where it looks for newer versions
-  keepBase()
+  // Take the folder's setup lock first where one is needed, so concurrent setups keep their
+  // usual waiting message and allowance. Every path checks the program before its writes.
+  const current = <T>(run: () => Promise<T>) =>
+    withCurrentProgram(() => {
+      markInstallation(home())
+      // Where this It was installed from is where it looks for newer versions.
+      keepBase()
+      return run()
+    })
   if (a.flags.none && !enrolledHere()) {
     const leftBehind = !existsSync(settingsFile()) && (hasLeft() || holdsAddons())
     if (leftBehind || elsewhere()) {
-      await reconcile([], say)
-      if (leftBehind) {
-        // Noted, so that the folder is still known for what it is once its add-ons are out
-        noteLeft()
-        say(
-          'It is not set up in this folder, which holds only what an earlier use of It left there, so nothing was started. `it setup --none` here takes out the add-ons this folder had put in. To set It up on this machine, run `it setup`.',
-        )
-      }
-      const left = await detectAll()
-      return forPerson(a) ? tell(appsSaid(left, false)) : out({ harnesses: left, wanted: [] })
+      return current(async () => {
+        await reconcile([], say)
+        if (leftBehind) {
+          // Noted, so that the folder is still known for what it is once its add-ons are out
+          noteLeft()
+          say(
+            'It is not set up in this folder, which holds only what an earlier use of It left there, so nothing was started. `it setup --none` here takes out the add-ons this folder had put in. To set It up on this machine, run `it setup`.',
+          )
+        }
+        const left = await detectAll()
+        return forPerson(a) ? tell(appsSaid(left, false)) : out({ harnesses: left, wanted: [] })
+      })
     }
   }
-  if (elsewhere()) return settingUp(a, joined)
+  if (elsewhere()) return current(() => settingUp(a, joined))
   // Where the backend is this machine's own to run, a setup makes what It needs here and may
   // run the backend for as long as the setup takes: one at a time for a folder, and not while
   // the machine is joining an It on another computer. Whether the folder is to run an It is
   // decided again once the folder is this setup's alone. A machine that has joined an It
   // meanwhile keeps the identity it joined with: nothing is set up here over it.
-  return oneAtATime(() => {
-    const at = readJson<{ at?: string }>(inHome('machine.json'))?.at
-    if (at)
-      throw new Problem(
-        `This machine joined the It at ${at} while this setup was waiting, so no It was set up here.`,
-        'joined',
-        'Run `it setup` again to connect its agent apps to that It. To have It run on this machine instead, run `it logout` first, and then `it setup`.',
-      )
-    return settingUp(a, joined)
-  })
+  return oneAtATime(() =>
+    current(() => {
+      const at = readJson<{ at?: string }>(inHome('machine.json'))?.at
+      if (at)
+        throw new Problem(
+          `This machine joined the It at ${at} while this setup was waiting, so no It was set up here.`,
+          'joined',
+          'Run `it setup` again to connect its agent apps to that It. To have It run on this machine instead, run `it logout` first, and then `it setup`.',
+        )
+      return settingUp(a, joined)
+    }),
+  )
 }
 
 /** How long a setup waits for another that is at work in the same folder, which may itself be waiting for a person's answers. */
@@ -3147,7 +3157,7 @@ async function main(argv: string[]): Promise<void> {
       return status(a)
     case 'setup': {
       const was = enrolledHere() || existsSync(settingsFile())
-      await withCurrentProgram(() => setup(a))
+      await setup(a)
       return setUp(a, was)
     }
     case 'uninstall':

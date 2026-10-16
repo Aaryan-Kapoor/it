@@ -355,7 +355,8 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
       mkdirSync(path.join(data, 'addons'), { recursive: true })
       // This setup only removes absent add-ons. It never starts a service or a backend.
       writeFileSync(path.join(data, 'left.json'), '{"left":true}')
-      const run = () => {
+      const waiting = 'Another `it setup` or `it login` is at work in this folder. This one goes on when that one has finished.'
+      const run = (stopWhileWaiting = false) => {
         const child = spawn(process.execPath, [worker, program], {
           env: {
             PATH: path.join(folder, 'bin'),
@@ -366,11 +367,14 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
             IT_HARNESSES: 'none',
           },
           stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: 15_000,
+          timeout: stopWhileWaiting ? 5000 : 15_000,
         })
         let err = ''
         child.stdout.resume()
-        child.stderr.on('data', (bytes) => (err += bytes))
+        child.stderr.on('data', (bytes) => {
+          err += bytes
+          if (stopWhileWaiting && err.includes(waiting)) child.kill('SIGKILL')
+        })
         return new Promise<{ code: number | null; err: string }>((resolve, reject) => {
           child.once('error', reject)
           child.once('close', (code) => resolve({ code, err }))
@@ -382,7 +386,7 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
       for (const version of ['9.9.9', null]) {
         writeFileSync(here(), says(version))
         const ran = await run()
-        expect([ran.code, existsSync(path.join(data, 'releases.json'))], ran.err).toEqual([1, false])
+        expect([ran.code, existsSync(path.join(data, 'releases.json')), existsSync(path.join(data, 'installation.json'))], ran.err).toEqual([1, false, false])
         expect(ran.err).toContain('Run `it setup` again')
         expect(await aloneAt(lock, async () => true, 0)).toBe(true)
       }
@@ -401,9 +405,17 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
           expect(contender).toBe('busy')
         })
       } finally {
-        if (running) expect((await running).code).toBe(0)
+        if (running) {
+          expect((await running).code).toBe(0)
+          expect(existsSync(path.join(data, 'installation.json'))).toBe(true)
+        }
       }
       expect(await aloneAt(lock, async () => true, 0)).toBe(true)
+      // An ordinary setup waits on the folder first, so its existing waiting message and
+      // ten-minute wait still apply when another setup also owns the program lock.
+      rmSync(path.join(data, 'left.json'))
+      const queued = await aloneAt(lock, () => aloneAt(path.join(data, 'setup.lock'), () => run(true)))
+      expect(queued.err).toContain(waiting)
     },
   )
 
