@@ -1,7 +1,7 @@
 // Reopening a conversation that was closed: the command Claude Code is run with, where it is
 // run, how the click is given to it, and the note of each conversation's folder that says where.
 
-import { spawn } from 'node:child_process'
+import childProcess, { spawn } from 'node:child_process'
 import fs, {
   chmodSync,
   closeSync,
@@ -43,6 +43,68 @@ import {
   WAS_STOPPED,
   WOKEN,
 } from './src/wake'
+
+test('macOS reads the run marks once and checks all identities together on each Stop tick', async () => {
+  const platform = process.platform
+  const spawnSync = childProcess.spawnSync
+  const since = 'Fri Oct 16 09:00:00 2026'
+  const leader = 900_001
+  const reused = leader + 20
+  const live = new Set(Array.from({ length: 13 }, (_, n) => leader + n))
+  const checked: number[] = []
+  let listings = 0
+  const killed: number[] = []
+  const kill = vi.spyOn(process, 'kill').mockImplementation((pid) => {
+    killed.push(pid)
+    live.delete(Math.abs(pid))
+    return true
+  })
+  try {
+    Object.defineProperty(process, 'platform', { value: 'darwin' })
+    childProcess.spawnSync = new Proxy(spawnSync, {
+      apply(_target, _self, [file, args]) {
+        expect(file).toBe('/bin/ps')
+        let stdout = ''
+        if (args.includes('-E')) {
+          expect(args).toEqual(['-A', '-E', '-ww', '-o', 'pid=', '-o', 'lstart=', '-o', 'command='])
+          listings++
+          checked.push(0)
+          stdout = [...live, reused].map((pid) => `${pid} ${since} tool IT_RUN=batch-test`).join('\n')
+        } else if (args.includes('lstart=')) {
+          if (listings) checked[listings - 1]!++
+          const pids = String(args[args.indexOf('-p') + 1])
+            .split(',')
+            .map(Number)
+          stdout = pids
+            .filter((pid) => live.has(pid) || pid === reused)
+            .map((pid) => `${pid} ${pid === reused ? 'Fri Oct 16 09:00:01 2026' : since}`)
+            .join('\n')
+        } else if (args.includes('ppid=')) {
+          stdout = [...live]
+            .filter((pid) => pid !== leader)
+            .map((pid) => `${pid} ${leader}`)
+            .join('\n')
+        } else {
+          expect(args).toEqual(['-A', '-o', 'pid=', '-o', 'pgid='])
+          stdout = [...live].map((pid) => `${pid} ${leader}`).join('\n')
+        }
+        return { pid: 1, status: 0, signal: null, stdout, stderr: '', output: [null, stdout, ''] }
+      },
+    })
+    syncBuiltinESMExports()
+    expect(await endTree(leader, since, { harness: 'pi', session: 'batch', run: 'batch-test', told: SINCE_TOLD })).toBe('ended')
+    expect(live.size).toBe(0)
+    expect(killed).not.toContain(reused)
+    expect(killed).toContain(-leader)
+    expect(checked.length).toBeGreaterThanOrEqual(3)
+    expect(checked.every((count) => count === 1)).toBe(true)
+  } finally {
+    Object.defineProperty(process, 'platform', { value: platform })
+    childProcess.spawnSync = spawnSync
+    syncBuiltinESMExports()
+    kill.mockRestore()
+  }
+})
 
 let scratch: string
 let was: string | undefined
@@ -780,7 +842,21 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-endtree-'))
     const of = { harness: 'pi', session: 'conversation-7' }
     const left: number[] = []
+    const list = fs.readdirSync
     try {
+      // This test proves what happens to these real children. A whole-machine Linux scan
+      // can also find an unrelated, unreadable process of the same user and correctly say
+      // unknown. That made the expected ended/gone outcomes depend on other work running
+      // on the test machine. Keep the real stat and environment reads for our children;
+      // the separate unreadable-process test covers the uncertainty from that other case.
+      if (process.platform === 'linux') {
+        fs.readdirSync = new Proxy(list, {
+          apply(target, self, args) {
+            return args[0] === '/proc' ? left.map(String) : Reflect.apply(target, self, args)
+          },
+        })
+        syncBuiltinESMExports()
+      }
       // The run starts a command, and then ends by itself while the command goes on
       const orphan = async (env: Record<string, string>) => {
         const mark = path.join(folder, `its-command-${left.length}.pid`)
@@ -874,6 +950,8 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       expect(await endTree(anothers.pid, anothers.since, { ...of, session: 'conversation-8', boot: '00000000-0000-4000-8000-000000000000' })).toBe('gone')
       expect(alive(anothers.its)).toBe(true)
     } finally {
+      fs.readdirSync = list
+      syncBuiltinESMExports()
       for (const pid of left)
         try {
           process.kill(pid, 'SIGKILL')
@@ -881,4 +959,42 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       rmSync(folder, { recursive: true, force: true })
     }
   }, 60_000)
+
+  test.skipIf(process.platform !== 'linux')(
+    'an unrelated process whose environment cannot be read keeps a run uncertain until inspection succeeds',
+    async () => {
+      const candidate = process.pid
+      const list = fs.readdirSync
+      const read = fs.readFileSync
+      let readable = false
+      try {
+        fs.readdirSync = new Proxy(list, {
+          apply(target, self, args) {
+            return args[0] === '/proc' ? [String(candidate)] : Reflect.apply(target, self, args)
+          },
+        })
+        fs.readFileSync = new Proxy(read, {
+          apply(target, self, args) {
+            if (args[0] === `/proc/${candidate}/stat`) return `${candidate} (tool) ${['S', ...Array(18).fill('0'), '1'].join(' ')}`
+            if (args[0] === `/proc/${candidate}/environ`) {
+              if (!readable) throw Object.assign(new Error('the environment cannot be read'), { code: 'EACCES' })
+              return 'IT_RUN=another-run\0'
+            }
+            return Reflect.apply(target, self, args)
+          },
+        })
+        // This process's directory belongs to this user. Only its environment is unreadable, as with
+        // a process that has disabled inspection; it cannot be dismissed as another user's.
+        syncBuiltinESMExports()
+        const of = { harness: 'pi', session: 'unreadable', run: 'finished-run', told: SINCE_TOLD }
+        expect(await endTree(process.pid, 'tick 0', of)).toBe('unknown')
+        readable = true
+        expect(await endTree(process.pid, 'tick 0', of)).toBe('gone')
+      } finally {
+        fs.readdirSync = list
+        fs.readFileSync = read
+        syncBuiltinESMExports()
+      }
+    },
+  )
 })

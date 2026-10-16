@@ -422,57 +422,51 @@ export async function endTree(
     were = new Map([...now, ...(markedNow ?? [])].filter(([p]) => all.includes(p)))
   }
   for (const p of strays) if (were.get(p) !== markedNow!.get(p)) were.delete(p)
-  all = all.filter((p) => were.has(p))
   // A failed inspection cannot be undone by an empty later snapshot. A detached command may
   // have lost its mark while the system would not let us read it.
   const signalled = new Map<number, string>()
-  const left = (): number[] | null => {
+  const left = (): Map<number, string> => {
     const found = of?.run ? marked(of.run, since) : new Map<number, string>()
     if (found === null) uncertain = true
     else for (const [p, at] of found) were.set(p, at)
-    const still: number[] = []
+    // One identity snapshot for the whole tick. On macOS each call runs ps, so asking for
+    // every process separately would keep the connector from answering while Stop runs.
+    const is = processes([...were.keys()])
+    if (is === null) uncertain = true
+    const still = new Map<number, string>()
     for (const [p, at] of were) {
-      const is = processes([p])
-      if (is === null) uncertain = true
-      else if (is.get(p) === at) still.push(p)
+      if (is?.get(p) === at) still.set(p, at)
     }
     return still
   }
-  const signal = (how: 'SIGTERM' | 'SIGKILL', to: number[]) => {
+  const signal = (how: 'SIGTERM' | 'SIGKILL', to: Map<number, string>) => {
     // The leader's number may already belong to someone else. Its group is signalled only
     // while the leader itself still proves whose group it is.
     let groupSignalled = false
-    if (group && (how === 'SIGKILL' || signalled.get(pid) !== since) && processes([pid])?.get(pid) === since)
+    if (group && (how === 'SIGKILL' || signalled.get(pid) !== since) && to.get(pid) === since)
       try {
         process.kill(-pid, how)
         groupSignalled = true
       } catch {}
-    for (const p of to) {
+    for (const [p, at] of to) {
       if (groupSignalled && p === pid) {
         signalled.set(pid, since)
         continue
       }
-      const at = processes([p])
-      if (at === null) {
-        uncertain = true
-        continue
-      }
-      if (!at.has(p) || at.get(p) !== were.get(p)) continue
       try {
         process.kill(p, how)
-        signalled.set(p, at.get(p)!)
+        signalled.set(p, at)
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'ESRCH') uncertain = true
       }
     }
   }
-  signal('SIGTERM', all)
   // Look for inherited run marks throughout both stages, including after the leader exits.
   // Two empty looks allow a child that is still starting to expose its environment.
   let empty = 0
   for (let waited = 0; waited <= 7000; waited += 250) {
     const still = left()
-    if (still !== null && still.length === 0) {
+    if (still.size === 0) {
       if (++empty >= 2) {
         const members = inGroup(pid)
         if (members === null) return 'unknown'
@@ -484,7 +478,7 @@ export async function endTree(
       }
     } else {
       empty = 0
-      if (still) signal(waited >= 5000 ? 'SIGKILL' : 'SIGTERM', waited >= 5000 ? still : still.filter((p) => signalled.get(p) !== were.get(p)))
+      signal(waited >= 5000 ? 'SIGKILL' : 'SIGTERM', waited >= 5000 ? still : new Map([...still].filter(([p, at]) => signalled.get(p) !== at)))
     }
     if (waited < 7000) await new Promise((resolve) => setTimeout(resolve, 250))
   }
@@ -646,23 +640,14 @@ function marked(run: string, since: string): Map<number, string> | null {
       }
     }
   } else {
-    // With what each was started with after its words, which macOS shows of one's own processes
-    const said = ps(['-A', '-E', '-ww', '-o', 'pid=', '-o', 'command='])
+    // Read the identity and inherited marks together. Looking up each match again would
+    // start several ps commands per child; the caller checks all identities together before
+    // signalling, so a number reused since this listing is still left alone.
+    const said = ps(['-A', '-E', '-ww', '-o', 'pid=', '-o', 'lstart=', '-o', 'command='])
     if (said === null) return null
     for (const line of said.split('\n')) {
-      const m = /^\s*(\d+)\s(.*)$/.exec(line)
-      if (m && ` ${m[2]} `.includes(` ${mark} `)) {
-        const pid = Number(m[1])
-        const before = processes([pid])
-        if (before === null) return null
-        if (!before.has(pid)) continue
-        const checked = ps(['-E', '-ww', '-o', 'command=', '-p', String(pid)], [0, 1])
-        if (checked === null) return null
-        if (!` ${checked.replace(/\n/g, ' ')} `.includes(` ${mark} `)) continue
-        const after = processes([pid])
-        if (after === null) return null
-        if (before.get(pid) === after.get(pid)) found.set(pid, before.get(pid)!)
-      }
+      const m = /^\s*(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line)
+      if (m && ` ${m[3]} `.includes(` ${mark} `)) found.set(Number(m[1]), m[2]!)
     }
   }
   found.delete(process.pid)

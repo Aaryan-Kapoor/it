@@ -52,7 +52,6 @@ import {
   claudeWroteAt,
   codexHeld,
   endTree,
-  fromAnotherStart,
   identity,
   listsProcesses,
   mayWake,
@@ -926,6 +925,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const keepStopped = (): boolean => {
     try {
       if (over) return false
+      // Keep the latest 200 notices, as before: conversations that are never reopened must
+      // not make this file grow for the lifetime of the installation.
+      while (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)
       if (stoppedByPerson.size) writePrivate(stoppedFile(), [...stoppedByPerson])
       else rmSync(stoppedFile(), { force: true })
       pendingStops.clear()
@@ -1012,11 +1014,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       run: was.run,
     }).catch(() => 'unknown' as const)
     if (became === 'unknown') return false
-    // Ended once already without the system saying what of it was left: that its own process
-    // is gone now says nothing of what it had started and could not be seen. It stays held
-    // until this machine has been started again, which ends everything, or a person has
-    // looked and said so with `it runs clear`.
-    if (was.unsure && !fromAnotherStart(was.boot)) return false
+    // The saved uncertainty makes recovery inspect the run again. Once that inspection has
+    // accounted for its marked processes, a connector crash alone is no reason to hold it.
     const { unsure: _unsure, ...settled } = unsettled.get(key) ?? was
     unsettled.set(key, settled)
     was = settled
@@ -1112,7 +1111,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (over || reopenedNow.has(key) || pendingStops.has(key)) continue
         const held = unsettled.get(key)
         // A completed process tree held only for an unsaved notice can be released once the
-        // disk works again. Process uncertainty still needs reboot or explicit clearance.
+        // disk works again. Process uncertainty is checked before the next reopening.
         if (held && !held.unsure && (await settleOld(key, held))) keepRuns()
         if (over || unsettled.has(key)) continue
         await call('mutation', api.machines.runEnded, ended).then(
