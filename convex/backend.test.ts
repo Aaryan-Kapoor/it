@@ -1465,10 +1465,10 @@ describe('tour page ownership', () => {
     return begun
   }
 
-  test('a legacy page with the same id, title and full state is adopted once and keeps its mark on later showings', async () => {
+  test('a legacy page with the same id, title and state keys is adopted once and keeps its mark on later showings', async () => {
     const t = backend()
     const m = await machineOf(t, 'tour-legacy-match')
-    const old = await publish(m, 'tour-checklist', { title: 'A checklist', state: '{"note":"","added":[]}' })
+    const old = await publish(m, 'tour-checklist', { title: 'A checklist', state: '{"note":"the rain","added":[{"text":"Umbrella"}]}' })
     // Earlier programs wrote no ownership field. A current ordinary publication is not a legacy page.
     await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
     const adopted = await make(m, 'checklist', '{"added":[],"note":""}')
@@ -1488,10 +1488,29 @@ describe('tour page ownership', () => {
     expect(receipt).toMatchObject({ slug: 'tour-checklist', state: 'pending' })
   })
 
+  test('an old tour menu with progress is adopted once and keeps the steps already seen', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-progress')
+    const title = 'The It tour'
+    const old = await publish(m, 'tour-menu', { title, state: '{"status":"done","picked":"chess","seen":["chess"]}' })
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    const begun = await m.as.action(api.publish.begin, {
+      slug: 'tour-menu',
+      title,
+      files: page,
+      state: '{"seen":[],"picked":"","status":"open"}',
+      tour: 'menu',
+    })
+    await finish(m, begun)
+    expect(begun.artifactId).toBe(old.artifactId)
+    expect(await m.as.query(api.tour.seen, {})).toEqual({ seen: ['chess'] })
+    expect(JSON.parse((await m.as.query(api.state.get, { slug: 'tour-menu' })).json)).toEqual({ status: 'open', picked: '', seen: ['chess'] })
+  })
+
   test.each([
     { difference: 'id', slug: 'tour-menu', title: 'A checklist', state: '{"added":[],"note":""}' },
     { difference: 'title', slug: 'tour-checklist', title: 'My checklist', state: '{"added":[],"note":""}' },
-    { difference: 'state value', slug: 'tour-checklist', title: 'A checklist', state: '{"added":["Umbrella"],"note":""}' },
+    { difference: 'missing state key', slug: 'tour-checklist', title: 'A checklist', state: '{"added":[]}' },
     { difference: 'state key', slug: 'tour-checklist', title: 'A checklist', state: '{"added":[],"note":"","extra":true}' },
   ])('a legacy page with a different $difference is reported and left untouched', async ({ slug, title, state }) => {
     const t = backend()
