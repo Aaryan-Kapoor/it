@@ -5,7 +5,20 @@
 // It folder that hold only what the test put there.
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -450,7 +463,10 @@ describe.skipIf(process.platform === 'win32')('setup prerequisites and diagnosti
   })
 
   test('key generation uses its own accessible folder after the caller folder disappears and keeps distinct failure diagnostics', async () => {
-    const m = machine(false)
+    const actual = machine(false)
+    const m = { ...actual, it: path.join(actual.home, 'it-link') }
+    // A linked home also exercises the canonical paths returned under macOS temporary folders.
+    symlinkSync(actual.it, m.it, 'dir')
     const backend = path.join(m.home, 'backend')
     const marker = path.join(m.home, 'keygen-cwd')
     const prelude = path.join(m.home, 'remove-cwd.mjs')
@@ -471,7 +487,7 @@ describe.skipIf(process.platform === 'win32')('setup prerequisites and diagnosti
     try {
       const ran = await run(m, ['setup', '--none', '--no-service'], env, process.execPath, ['--import', pathToFileURL(prelude).href])
       expect(existsSync(marker), ran.err).toBe(true)
-      expect(readFileSync(marker, 'utf8')).toBe(path.join(m.it, 'backend'))
+      expect(readFileSync(marker, 'utf8')).toBe(realpathSync(path.join(m.it, 'backend')))
       const settings = path.join(m.it, 'service.json')
       expect(JSON.parse(readFileSync(settings, 'utf8')).adminKey).toMatch(/^it-[0-9a-f]+\|a-test-key$/)
       const kept = readFileSync(settings, 'utf8')
