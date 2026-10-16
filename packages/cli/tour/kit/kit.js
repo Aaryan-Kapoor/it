@@ -1,3 +1,4 @@
+/*navigation.js*/
 // What every page of the tour does the same way: it finds the agent's name, keeps its plate,
 // says under the card what each of the two did, and has the two buttons that go on. A page
 // tells the agent what was done with It.action and hears back through the page's state.
@@ -49,19 +50,34 @@ window.Tour = (() => {
   function rail() {
     var more = $('t-more'),
       next = $('t-next')
+    if (!more || !next) return
+    var navigation = window.TourNavigation(It, P.tour_id || null)
+    var attempt = 0
+    var pending = false
+    function lock() {
+      more.disabled = next.disabled = pending || !navigation.ready()
+    }
+    navigation.onState(lock)
+    lock()
     var go = (btn, name, waiting) => {
       if (!btn) return
       btn.addEventListener('click', () => {
+        if (!navigation.ready() || pending) return
+        var current = attempt = navigation.next()
+        pending = true
         var was = btn.textContent
         var back = () => {
-          more.disabled = next.disabled = false
+          if (attempt !== current) return
+          pending = false
+          lock()
           btn.textContent = was
         }
-        more.disabled = next.disabled = true
+        lock()
         btn.textContent = waiting
-        It.action(name, { from: P.tour_id || null, from_version: It.version }).then(
+        navigation.send(name, {}, current).then(
           () =>
             setTimeout(() => {
+              if (attempt !== current) return
               back()
               plate('has not answered', false)
             }, SLOW),

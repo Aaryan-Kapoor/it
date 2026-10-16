@@ -81,31 +81,41 @@
     </div>
   </main>
 <script>
+  /*navigation.js*/
   // Two ways on, each an ordinary action: the agent is what ends the tour, or goes back to its menu.
   (() => {
     function init() {
       var It = window.It || { state: {}, onState: () => () => {}, action: () => Promise.resolve() };
       var finish = document.getElementById("finish"), more = document.getElementById("more"), status = document.getElementById("status");
-      var slow = 0;
+      var slow = 0, attempt = 0, pending = false;
+      var navigation = window.TourNavigation(It, "done");
+      function lock() { finish.disabled = more.disabled = pending || !navigation.ready(); }
       function go(btn, name, waiting) {
         btn.addEventListener("click", () => {
-          finish.disabled = more.disabled = true;
+          if (!navigation.ready() || pending) return;
+          var current = attempt = navigation.next();
+          pending = true;
+          lock();
           status.textContent = waiting;
           clearTimeout(slow);
-          It.action(name, { from: "done", from_version: It.version }).then(() => {
+          navigation.send(name, {}, current).then(() => {
+            if (attempt !== current || !pending) return;
             // An agent that answers takes this page away, or opens it again. That It took the
             // press is neither: where the page is still waiting a while after, the buttons are given back
             slow = setTimeout(() => {
-              finish.disabled = more.disabled = false;
+              if (attempt !== current || !pending) return;
+              pending = false;
+              lock();
               status.textContent = ((window.__PARAMS || {}).agent || "Your agent") + " has not answered. Try again.";
             }, 40000);
-          }, () => { finish.disabled = more.disabled = false; status.textContent = "That did not go through. Try again."; });
+          }, () => { if (attempt !== current) return; pending = false; lock(); status.textContent = "That did not go through. Try again."; });
         });
       }
       go(finish, "finish", "Wrapping up");
       go(more, "menu", "One moment");
       // A page the agent has opened again takes what was sent from it as answered
-      It.onState(() => { if ((It.state || {}).status === "open") { clearTimeout(slow); finish.disabled = more.disabled = false; status.textContent = ""; } });
+      navigation.onState((answered) => { if (answered && (It.state || {}).status === "open") { clearTimeout(slow); pending = false; status.textContent = ""; } lock(); });
+      lock();
     }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
   })();

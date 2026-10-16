@@ -477,6 +477,54 @@ describe('the drum machine', () => {
     idle.close()
   })
 
+  test.each(['adding a hit', 'removing a hit', 'removing the last hit', 'undoing an edit'])(
+    'a reply to the previous beat is ignored during the pause after %s',
+    async (edit) => {
+      const page = await opened('drums', silent)
+      try {
+        tapped(page, 3, 0)
+        if (edit === 'removing a hit') tapped(page, 2, 4)
+        await page.advance(1500)
+        const first = page.sent[0]!.data.request
+        await page.sent[0]!.accept()
+        if (edit === 'removing the last hit') tapped(page, 3, 0)
+        else tapped(page, 2, 4)
+        if (edit === 'undoing an edit') tapped(page, 2, 4)
+        await page.advance(1400)
+        expect(page.sent).toHaveLength(1)
+        const stale = { request: first, pattern: ['x.......', '........', '........', '........'], note: 'Old beat' }
+        for (const theirs of [stale, stale.pattern]) {
+          await page.set({ theirs, note: 'Old beat' })
+          expect(page.$('.pad.theirs')).toBeNull()
+          expect(page.$('#play').getAttribute('data-on')).toBe('0')
+          expect(page.$('#t-did').classList.contains('in')).toBe(false)
+        }
+        await page.advance(100)
+        expect(page.sent).toHaveLength(2)
+        if (edit === 'removing the last hit') {
+          expect(page.sent[1]!.name).toBe('cleared')
+          await page.set({ theirs: stale })
+          expect(page.$('.pad.theirs')).toBeNull()
+          expect(page.$('#play').getAttribute('data-on')).toBe('0')
+          return
+        }
+        const next = page.sent[1]!.data.request
+        expect(next).not.toBe(first)
+        expect(page.sent[1]!.name).toBe('beat')
+        await page.set({ theirs: { request: next, pattern: ['..x.....', '........', '........', '........'], note: 'New beat' } })
+        expect(page.$('.pad[data-r="0"][data-c="2"]').classList.contains('theirs')).toBe(true)
+        expect(page.$('#t-did b').textContent).toBe('New beat')
+        expect(page.$('#play').getAttribute('data-on')).toBe('1')
+        await page.set({ theirs: stale })
+        expect(page.$('.pad[data-r="0"][data-c="0"]').classList.contains('theirs')).toBe(false)
+        expect(page.$('.pad[data-r="0"][data-c="2"]').classList.contains('theirs')).toBe(true)
+        expect(page.$('#t-did b').textContent).toBe('New beat')
+      } finally {
+        page.close()
+      }
+    },
+  )
+
   test.each(['last hit', 'clear button'])('a late reply cannot restore the pads after clearing with %s', async (how) => {
     const page = await opened('drums', silent)
     tapped(page, 3, 0)
@@ -497,22 +545,34 @@ describe('the drum machine', () => {
     page.close()
   })
 
-  test('a reply for a cleared beat stays ignored after the next beat was sent', async () => {
+  test.each(['last hit', 'clear button'])('a reply for a beat cleared with %s stays ignored after the next beat was sent', async (how) => {
     const page = await opened('drums', silent)
     tapped(page, 3, 0)
     await page.advance(1500)
     const first = page.sent[0]!.data.request
     await page.sent[0]!.accept()
-    page.$('#clear').click()
+    if (how === 'last hit') {
+      tapped(page, 3, 0)
+      await page.advance(1500)
+    } else page.$('#clear').click()
     tapped(page, 2, 4)
     await page.advance(1500)
     const next = page.sent.at(-1)!.data.request
     expect(typeof first).toBe('string')
     expect(next).not.toBe(first)
-    await page.set({ theirs: { request: first, pattern: ['x.......', '........', '........', '........'], note: 'Old beat' } })
-    expect(page.$('.pad.theirs')).toBeNull()
-    expect(page.$('#play').getAttribute('data-on')).toBe('0')
+    const stale = { request: first, pattern: ['x.......', '........', '........', '........'], note: 'Old beat' }
+    for (const theirs of [stale.pattern, stale]) {
+      await page.set({ theirs, note: 'Old beat' })
+      expect(page.$('.pad.theirs')).toBeNull()
+      expect(page.$('#play').getAttribute('data-on')).toBe('0')
+      expect(page.$('#t-did').classList.contains('in')).toBe(false)
+    }
     await page.set({ theirs: { request: next, pattern: ['..x.....', '........', '........', '........'], note: 'New beat' } })
+    expect(page.$('.pad[data-r="0"][data-c="2"]').classList.contains('theirs')).toBe(true)
+    expect(page.$('#t-did b').textContent).toBe('New beat')
+    expect(page.$('#play').getAttribute('data-on')).toBe('1')
+    await page.set({ theirs: stale })
+    expect(page.$('.pad[data-r="0"][data-c="0"]').classList.contains('theirs')).toBe(false)
     expect(page.$('.pad[data-r="0"][data-c="2"]').classList.contains('theirs')).toBe(true)
     expect(page.$('#t-did b').textContent).toBe('New beat')
     page.close()
