@@ -358,7 +358,12 @@ export async function fetchNewer(
     // and is left as it is unless what was fetched is newer than that too.
     return await aloneAt(lock, async () => {
       const there = await saysItIs(program)
-      if (there && !newer(is, there)) {
+      if (!there)
+        throw new Problem(
+          'The installed program was removed or could not be read before this update could replace it. The update was cancelled.',
+          'upgrade_program',
+        )
+      if (!newer(is, there)) {
         // Another home may have installed this program. This home still needs its matching
         // legal files, but a newer program must never receive this older release's files.
         if (there === is) putLegal()

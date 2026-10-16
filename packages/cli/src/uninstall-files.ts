@@ -5,7 +5,7 @@ import { HARNESSES } from '@it/protocol'
 import { ADDONS } from './addons.generated'
 import { INSTALLATION_FILE } from './installation'
 import { home, Problem } from './lib'
-import { aloneAt, holderRuns } from './serve/backend'
+import { aloneAt, holderRuns, startOf } from './serve/backend'
 import { addonHookCommand, itHomeWritten } from './setup'
 
 /** These are individual files It reserves in a marked home. No directory is removed recursively. */
@@ -116,6 +116,10 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
     const at = directory(relative)
     return at ? readdirSync(at) : []
   }
+  const abandoned = (pid: string): boolean => {
+    const number = Number(pid)
+    return Number.isSafeInteger(number) && number > 0 && startOf(number) === null
+  }
   const empty = (relative: string) => {
     const at = directory(relative)
     if (!at) return
@@ -158,6 +162,10 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
   for (const release of children('backend/bin')) {
     if (!new RegExp(`^${RELEASE}$`).test(release)) continue
     for (const file of ['convex-local-backend', 'convex-local-backend.exe']) remove(`backend/bin/${release}/${file}`)
+    for (const file of children(`backend/bin/${release}`)) {
+      const part = /^convex-local-backend(?:\.exe)?\.(\d+)\.part$/.exec(file)
+      if (part && abandoned(part[1]!)) remove(`backend/bin/${release}/${file}`)
+    }
     empty(`backend/bin/${release}`)
   }
   for (const file of ['content.sqlite', 'content.sqlite-wal', 'content.sqlite-shm', 'content.sqlite-journal']) remove(`content-data/${file}`)
@@ -197,7 +205,13 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
   }
   if (!keepAddons) {
     for (const name of ['it', 'it.exe', 'it.cmd', 'it-here', 'it-here.cmd', 'it-service.cmd']) remove(`bin/${name}`)
-    for (const name of children('bin')) if (/^it\.old\.\d+\.exe$/.test(name)) remove(`bin/${name}`)
+    for (const name of children('bin')) {
+      if (/^it\.old\.\d+\.exe$/.test(name)) remove(`bin/${name}`)
+      // A download is staged before taking the program lock. Keep it while its updater
+      // is alive; that updater checks the installed program again before replacement.
+      const staged = /^\.it-upgrade-(\d+)(?:\.exe)?(?:\.\1\.part)?$/.exec(name)
+      if (staged && abandoned(staged[1]!)) remove(`bin/${name}`)
+    }
     remove('addons/asked-for.json')
     const homes = [...new Set([folder, path.resolve(home())])]
     for (const id of HARNESSES) {

@@ -12,6 +12,7 @@ import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { type Problem, VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
+import { removeInstallationFiles, withInstallationLock } from './src/uninstall-files'
 import { fetchNewer, keepBase, LOOKS_EVERY_MS, latest, programName, releases, watch, watched, watching } from './src/upgrade'
 
 describe('which version is newer', () => {
@@ -214,6 +215,30 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     await other
     expect(done).toMatchObject({ to: '9.9.9' })
     expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
+  })
+
+  test.each(['removed', 'unreadable'])('an upgrade is cancelled when the installed program is %s before replacement', async (changed) => {
+    let changing: Promise<void> | undefined
+    const result = await fetchNewer({
+      program: here(),
+      say: (line) => {
+        if (!line.startsWith('Downloaded')) return
+        changing = withInstallationLock(folder, async () => {
+          // The download has finished. Uninstall takes the lock before the updater can
+          // replace the program, while the updater's staged file is still in use.
+          expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(true)
+          if (changed === 'removed') removeInstallationFiles(folder, false)
+          else writeFileSync(here(), says(null))
+        })
+      },
+    }).catch((err) => err)
+    await changing
+    expect(result).toMatchObject({ code: 'upgrade_program' })
+    if (changed === 'removed') expect(existsSync(here())).toBe(false)
+    else expect(readFileSync(here(), 'utf8')).toBe(says(null))
+    expect(existsSync(path.join(folder, 'LICENSE.md'))).toBe(false)
+    expect(existsSync(path.join(folder, 'THIRD_PARTY_NOTICES.md'))).toBe(false)
+    expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(false)
   })
 
   test.each([

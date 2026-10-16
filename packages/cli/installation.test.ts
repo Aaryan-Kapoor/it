@@ -223,6 +223,42 @@ describe('installation ownership', () => {
       expect(readFileSync(path.join(kept, 'logs', name), 'utf8')).toBe('mine')
   })
 
+  test.each(['upgrade', 'backend'])('cleanup removes abandoned %s downloads and preserves live or unknown files', (kind) => {
+    const dead = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    const directory = kind === 'upgrade' ? 'bin' : 'backend/bin/precompiled-2026-01-01-1234567'
+    const names = (pid: number) =>
+      kind === 'upgrade'
+        ? [`.it-upgrade-${pid}`, `.it-upgrade-${pid}.exe`, `.it-upgrade-${pid}.${pid}.part`, `.it-upgrade-${pid}.exe.${pid}.part`]
+        : [`convex-local-backend.${pid}.part`, `convex-local-backend.exe.${pid}.part`]
+    const clean = folder()
+    markInstallation(clean)
+    for (const name of names(dead)) put(clean, `${directory}/${name}`)
+    expect(removeInstallationFiles(clean, false)).toEqual([])
+    expect(existsSync(clean)).toBe(false)
+
+    const kept = folder()
+    markInstallation(kept)
+    const unknown = [...names(process.pid), ...names(dead).map((name) => `${name}.notes`), `${names(dead)[0]}/notes`]
+    if (kind === 'backend') unknown.push('../personal/convex-local-backend.123.part')
+    for (const name of unknown) put(kept, `${directory}/${name}`, 'mine')
+    expect(removeInstallationFiles(kept, false)).toEqual([kind === 'upgrade' ? 'bin' : 'backend'])
+    for (const name of unknown) expect(readFileSync(path.join(kept, directory, name), 'utf8')).toBe('mine')
+  })
+
+  test.skipIf(process.platform === 'win32')('cleanup preserves linked upgrade and backend downloads and their targets', () => {
+    const at = folder()
+    const outside = put(folder(), 'mine', 'mine')
+    const dead = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    const files = [`bin/.it-upgrade-${dead}`, `backend/bin/precompiled-2026-01-01-1234567/convex-local-backend.${dead}.part`]
+    for (const file of files) {
+      mkdirSync(path.dirname(path.join(at, file)), { recursive: true })
+      symlinkSync(outside, path.join(at, file))
+    }
+    removeInstallationFiles(at, false)
+    for (const file of files) expect(lstatSync(path.join(at, file)).isSymbolicLink()).toBe(true)
+    expect(readFileSync(outside, 'utf8')).toBe('mine')
+  })
+
   test.each([false, true])('cleanup removes dead upgrade locks and their sidecars, with unknown files: %s', async (unknown) => {
     const at = folder()
     markInstallation(at)
