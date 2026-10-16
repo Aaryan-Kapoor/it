@@ -35,6 +35,7 @@ import {
   currentSession,
   forgetMachine,
   harnessEnv,
+  home,
   joinLine,
   notReached,
   overClashes,
@@ -2137,10 +2138,13 @@ describe('add-ons carried by the CLI', () => {
         mkdirSync(physical)
         symlinkSync(physical, installation, 'junction')
       }
+      markInstallation(installation)
       const program = path.join(installation, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
       mkdirSync(path.dirname(program), { recursive: true })
       writeFileSync(program, 'installed program')
-      markInstallation(installation)
+      // Each fixture starts from an explicit home before testing discovery without it.
+      process.env.IT_HOME = installation
+      expect(home()).toBe(installation)
       delete process.env.IT_HOME
       process.execPath = program
       process.argv.splice(0, process.argv.length, program)

@@ -5323,6 +5323,7 @@ describe.skipIf(process.platform === 'win32')('`it setup --none`, which connects
     mkdirSync(path.join(m.it, 'bin'))
     mkdirSync(path.join(m.it, 'addons'))
     writeFileSync(path.join(m.it, 'LICENSE.md'), 'the terms')
+    writeFileSync(path.join(m.it, INSTALLATION_FILE), INSTALLATION)
     const ran = await run(m, ['setup', '--none', '--no-service'], noProgram(m))
     expect([ran.code, error(ran).code]).toEqual([1, 'backend_program'])
     expect(ran.err).not.toContain(NOTHING_STARTED)
