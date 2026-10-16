@@ -180,7 +180,7 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
     const stage = directory(name)
     const owner = installationFile(folder, `${name}/owner`)
     if (!stage || !owner) continue
-    const held = /^([1-9]\d*) ([^\r\n]+)\n/.exec(readFileSync(owner, 'utf8'))
+    const held = /^([1-9]\d*) ([^\r\n]+)\n$/.exec(readFileSync(owner, 'utf8'))
     if (held && held[2] === os.hostname() && abandoned(held[1]!) && !children(name).some((file) => file.startsWith('old.'))) {
       rmSync(stage, { recursive: true, force: true })
     }
