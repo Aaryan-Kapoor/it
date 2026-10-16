@@ -492,7 +492,14 @@ class _Bridge:
         self._stop.set()
 
     def _addon(self):
-        return {"api": 1, "version": ADDON_VERSION, "delivery": callable(getattr(self._ctx, "inject_message", None)), "idle": False, "missing": [] if callable(getattr(self._ctx, "inject_message", None)) else ["submit"]}
+        delivery = callable(getattr(self._ctx, "inject_message", None))
+        return {
+            "api": 1,
+            "version": ADDON_VERSION,
+            "delivery": delivery,
+            "idle": False,
+            "missing": [] if delivery else ["submit"],
+        }
 
     def _run(self):
         while not self._stop.wait(POLL_SECONDS):

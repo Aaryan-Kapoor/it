@@ -15,6 +15,8 @@ interface Loaded {
 
 /** This is the local add-on contract, separate from the machine and page protocols. */
 export const ADDON_API = 1
+// Add-ons report every second. Thirty seconds allows for delayed polling, while letting a
+// closed app stop holding back Auto-wake even when it could not report that it was closing.
 const RECENT_MS = 30_000
 
 export class AddonRuntimes {
@@ -65,6 +67,9 @@ export class AddonRuntimes {
               }
     this.loaded.set(`${harness}:${instance}`, { at: now, runtime, idle: v.idle === true })
     for (const [key, entry] of this.loaded) if (now - entry.at >= RECENT_MS) this.loaded.delete(key)
+    // Keep room for 100 simultaneous app instances, but bound memory and the work of reading
+    // their status if a faulty add-on keeps reporting a new instance id. Evicted instances
+    // must still hold back Auto-wake until their reports expire.
     while (this.loaded.size > 100) {
       const [key, entry] = this.loaded.entries().next().value!
       const app = key.slice(0, key.indexOf(':'))

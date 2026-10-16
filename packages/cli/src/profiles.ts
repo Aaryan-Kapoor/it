@@ -64,8 +64,11 @@ export function readProfile(harness: string, value: unknown): Profile | undefine
   }
 }
 
-/** No automatic fallback for an old, missing or removed profile. A live add-on can record it afresh. */
+/** Restore a recorded profile without substituting the service's profile if it is gone. */
 export function profileEnvironment(harness: string, value: unknown, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv | string {
+  // Conversations recorded before profiles were kept used the service's own environment.
+  // Keep that behaviour until the conversation records its profile by publishing or reporting again.
+  if (value === undefined) return { ...base }
   const profile = readProfile(harness, value)
   if (!profile) return 'its app profile is not recorded; open the conversation and publish its page again'
   if (profile.unsupported) return 'its app profile uses settings It cannot safely restore; open the conversation to receive its clicks'

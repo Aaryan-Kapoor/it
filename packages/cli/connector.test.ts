@@ -27,7 +27,7 @@ const stand = vi.hoisted(() => ({
   /** What a call answers, when the test wants something other than the usual. Undefined leaves it to the usual. */
   answer: null as null | ((name: string, args: any) => unknown),
   /** Every time Codex's own command was started, and how the test ends it. */
-  codex: [] as { args: string[]; end: (err?: unknown) => void }[],
+  codex: [] as { args: string[]; env?: NodeJS.ProcessEnv; end: (err?: unknown) => void }[],
   /** The Codex conversations that no Codex has open. Every other one is open somewhere, as it is in a window. */
   closed: new Set<string>(),
   unknown: new Set<string>(),
@@ -75,8 +75,8 @@ vi.mock('./src/wake', async (original) => ({
 }))
 vi.mock('node:child_process', async (original) => ({
   ...(await original<typeof import('node:child_process')>()),
-  execFile: (_bin: string, args: string[], _options: unknown, done: (err: unknown) => void) => {
-    stand.codex.push({ args, end: (err) => done(err ?? null) })
+  execFile: (_bin: string, args: string[], options: { env?: NodeJS.ProcessEnv }, done: (err: unknown) => void) => {
+    stand.codex.push({ args, env: options.env, end: (err) => done(err ?? null) })
   },
 }))
 vi.mock('./src/setup', () => ({ detectAll: async () => stand.found, newerProgramSeen: () => false, reconcile: async () => {} }))
@@ -506,14 +506,56 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect((await waitingFor(1))?.ok).toBe(true)
   })
 
-  test('A legacy conversation with no profile is never looked up under the connector’s profile.', async () => {
+  test('A legacy conversation with no profile receives its click through Codex’s queue in the service’s environment.', async () => {
+    stand.profiles = false
+    await start('socket', {}, (home) => {
+      writeFileSync(path.join(home, 'conversations.json'), JSON.stringify({ 'codex:thread-1': { cwd: home, at: Date.now() } }))
+    })
+    offered(click(1))
+    await until(() => stand.codex.length === 1)
+    expect(stand.codex[0]!.args).toContain('--thread=thread-1')
+    expect(stand.codex[0]!.env?.CODEX_HOME).toBe(process.env.CODEX_HOME)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    expect(conversationProfile({ harness: 'codex', id: 'thread-1' })).toBeUndefined()
+  })
+
+  test('Auto-wake reopens a legacy conversation with no profile in the service’s environment and gives it the click.', async () => {
+    stand.profiles = false
+    await start('socket', {}, (home) => {
+      writeFileSync(path.join(home, 'conversations.json'), JSON.stringify({ 'codex:thread-1': { cwd: home, at: Date.now() } }))
+      const bin = path.join(home, 'bin')
+      mkdirSync(bin)
+      writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\nprintf \'%s\' "$CODEX_HOME" > "$IT_HOME/profile-used"\ncat > "$IT_HOME/given"\n', { mode: 0o755 })
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    })
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    expect(readFileSync(path.join(home, 'profile-used'), 'utf8')).toBe(process.env.CODEX_HOME)
+    expect(readFileSync(path.join(home, 'given'), 'utf8')).toContain('[action click-1]')
+    expect(stand.codex).toEqual([])
+    expect(conversationProfile({ harness: 'codex', id: 'thread-1' })).toBeUndefined()
+  })
+
+  test.each(['open', 'closed'])('A Codex conversation that is %s and whose recorded profile is gone is neither queued nor reopened.', async (state) => {
     standIn()
     stand.profiles = false
     await start()
+    const session = { harness: 'codex', id: 'thread-1' }
+    noteConversation(session, home)
+    const profile = process.env.CODEX_HOME!
+    rmSync(profile, { recursive: true })
+    process.env.CODEX_HOME = path.join(home, 'another-profile')
+    mkdirSync(process.env.CODEX_HOME)
+    if (state === 'closed') stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
     offered(click(1))
     await pass(2)
     expect(stand.codex).toEqual([])
-    expect(conversationProfile({ harness: 'codex', id: 'thread-1' })).toBeUndefined()
+    expect(stand.calls.filter((c) => c.name === 'delivery:claim' || c.name === 'machines:runBegan')).toEqual([])
+    expect(conversationProfile(session)).toMatchObject({ paths: { CODEX_HOME: profile } })
   })
 
   test('an incompatible build keeps an authenticated session move without listening for clicks', async () => {

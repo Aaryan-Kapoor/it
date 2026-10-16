@@ -90,8 +90,13 @@ test.each(['directory', 'symlink'])('The resumed child receives the recorded pro
   expect(realpathSync(cwd)).toBe(realpathSync(first))
 })
 
-test('Legacy and malformed profile records never fall back to the service’s profile.', () => {
-  expect(profileEnvironment('codex', undefined, { CODEX_HOME: folder() })).toMatch(/not recorded/)
+test.each(['codex', 'claude-code', 'pi', 'hermes', 'opencode'])('A legacy %s conversation keeps the service’s own environment.', (app) => {
+  const env = { CODEX_HOME: folder(), OPENCODE_CONFIG_CONTENT: 'the service configuration', PATH: '/bin' }
+  expect(profileEnvironment(app, undefined, env)).toEqual(env)
+})
+
+test('Malformed profile records never fall back to the service’s profile.', () => {
+  expect(profileEnvironment('codex', { version: 1, paths: { CODEX_HOME: null } }, { CODEX_HOME: folder() })).toMatch(/not recorded/)
   expect(readProfile('codex', { version: 1, paths: { CODEX_HOME: null } })).toBeUndefined()
   expect(readProfile('codex', { version: 1, paths: { CODEX_HOME: folder(), SECRET_KEY: 'no' } })).toBeUndefined()
   expect(readProfile('codex', { version: 1, paths: { CODEX_HOME: '../another' } })).toBeUndefined()
