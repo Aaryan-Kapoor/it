@@ -34,7 +34,7 @@ The background service looks for the file every five seconds. When it finds repo
 
 Once `it telemetry off` has returned, no new request begins. A request that had already begun is given up within five seconds, and may have arrived by then. `it telemetry on` returns only once the new id is written down and no request can begin under the old one. A `telemetry-off` made by hand is found at the service's next look.
 
-Turning reporting off also forgets the installation's id, and turning it on always makes a new one, even when reporting was on already. Every event remembers which id it was recorded under, and an event recorded under any id but the current one is never sent. So nothing recorded before you turned reporting off is sent after you turn it on again.
+Turning reporting off also forgets the installation's id, and turning it on always makes a new one, even when reporting was on already. Every event remembers which id it was recorded under, and an event recorded under any id but the current one is never sent. So nothing recorded before you turned reporting off is sent after you turn it on again. What happens between a screen and It is noted by the backend first, without an id, and taken from it by the service a few times a minute. The service counts none of those notes that waited there when it started, or that waited when it found the id to be another than the last time it took them: either may be from before you turned reporting off, so a few counts from the moments around a start are given up for that.
 
 ### When a sender stops unexpectedly
 

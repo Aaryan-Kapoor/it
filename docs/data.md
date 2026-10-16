@@ -1,17 +1,20 @@
 # What It keeps
 
-Everything It keeps is in one folder, `~/.it`, which only your user can look inside. `IT_HOME` names another folder for it. That folder is the only copy of your pages and of the record of what was done on them, and nothing of them is kept off the machine. The one other place It keeps anything is the browsers you pair, and [What a paired browser keeps](#what-a-paired-browser-keeps) says what.
+Everything It keeps is in one folder, `~/.it`, which only your user can look inside. `IT_HOME` names another folder for it. Without that variable, an installed standalone command finds its home above its real `bin` directory; a source or package command uses `~/.it`. That folder is the only copy of your pages and of the record of what was done on them, and nothing of them is kept off the machine. The one other place It keeps anything is the browsers you pair, and [What a paired browser keeps](#what-a-paired-browser-keeps) says what.
 
 ## Where everything is kept
 
 | In `~/.it` | What it is |
 |---|---|
+| `installation.json` | The record that identifies an installation and its custom home. An unreadable record is kept as `installation.json.unreadable` and cannot authorise removal |
 | `service.json` | It's settings: the port, whether the network is on, and the secrets It runs its backend with. Whoever can read this file can do anything to what It holds |
 | `backend/` | The backend's database and the files it stores, the backend program as it was fetched, in `bin/`, and the copies of the database that It keeps before a newer version changes it, in folders whose names begin with `before-` |
 | `content/`, `content-data/` | The files of every version of every page, and the small database of the part of It that serves them |
 | `machine.json`, `token.json` | This machine's identity and its key, and the short-lived token the key last earned |
 | `push.json` | The keys It signs notifications with, made the first time one is needed |
 | `connector.json`, `journal.jsonl` and the files beside them | How the add-ons reach It on this machine, and its record of each click it handed to an agent, by ids alone |
+| `conversations.json`, `heard.json`, `aliases.json` | What It notes of your conversations on this machine: the folder each was held in when it published a page, which is where a closed one is reopened; which of them an add-on has been heard from in; and which carried on under another id after it was cleared. They are sent nowhere |
+| `conversation-notes-erasing` | A mark that conversation notes still need removing after erasure. It names nobody and stays until cleanup succeeds, including across service restarts |
 | `runs.json`, `cut-off.json`, `stopped.json` | Auto-wake's own notes: which conversations It has reopened and that are running now, each with its process's number, when it started and which start of the machine that was, so that a service that starts again can find and end them; and which conversations are owed the word, the next time they are reopened, that a turn of theirs was cut off or stopped. `runs.json.unreadable` is such a note that could not be read, kept as it was: It then reopens nothing until `it runs clear` is run |
 | `releases.json`, `updates-off` | Where this It looks for a newer version, where it was installed from another place than the usual one, and whether you have told it not to look |
 | `was.json` | On a machine that joined an It and left with `it logout`: which machine it was, so that its pages come along if it joins again |
@@ -24,9 +27,11 @@ Everything It keeps is in one folder, `~/.it`, which only your user can look ins
 
 A machine that joined an It on another computer runs no backend and holds no pages, so its folder has no `service.json`, no `backend/`, no `content/` and no `push.json`.
 
+When you confirm `it uninstall`, It deletes its own subfolders whole, including all databases, copies, page files and logs. Only the top level uses a list of recognised files, to leave unrelated files alone if `IT_HOME` named the wrong folder. [Stopping and removing It](install.md#stopping-and-removing-it) describes the ownership checks and what stays when removal cannot finish.
+
 Three things about the folder are worth knowing.
 
-- **It never moves, replaces or deletes a database.** One that the backend program cannot open is left exactly where it is: It stops, and says what it found. Under `backend/` it removes, renames and writes over nothing that it did not make, whatever it is called. [When something does not work](troubleshooting.md) says what each such stop means.
+- **While running or updating, It never moves, replaces or deletes a database it cannot identify.** One that the backend program cannot open is left exactly where it is: It stops, and says what it found. While running or updating, It removes, renames and writes over nothing under `backend/` that it did not make, whatever it is called. [When something does not work](troubleshooting.md) says what each such stop means.
 - **The folder has to be on a disk of the computer's own.** A memory stick or a network share may not let It make its settings and its locks in the way it needs, and there It stops with `home_unfit`: name a folder on the computer's own disk with `IT_HOME`.
 - **On Linux and macOS the folder's path can be at most 85 bytes long.** In a folder with a longer one the connector, which hands clicks to your agents, does not start, and says `home_too_long`.
 
@@ -115,10 +120,12 @@ Erasing everything, in the site's settings, makes each browser let go of all of 
 
 The site's settings can erase everything It holds and leave It installed. Afterwards It is as it was before it was first set up: every browser is unpaired and every machine forgotten, and `it setup` followed by `it site` begins again.
 
-Erasing ends what every display and machine can do at once, and then removes every page, its files and every record of them, with the copies of the database that It had kept from before an update when it was told of the erasing. Each paired browser lets go of what it kept, as [What a paired browser keeps](#what-a-paired-browser-keeps) says. Some things stay:
+Erasing ends what every display and machine can do at once, and then removes every page, its files and every record of them, with the copies of the database that It had kept from before an update when it was told of the erasing. On the computer It runs on, what It had noted of your conversations goes as well: `conversations.json`, which has the folder each was held in, `heard.json`, `aliases.json`, `journal.jsonl`, `cut-off.json` and `stopped.json`. The service removes these notes again once its connector has stopped, since the connector may write them from memory as it ends. If removal fails, the service keeps it pending on disk and retries before starting another connector, even after a service restart. Each paired browser lets go of what it kept, as [What a paired browser keeps](#what-a-paired-browser-keeps) says. Some things stay:
 
 - What was removed stays inside the database's file for about an hour more, and traces of it can stay in the file's unused space after that, as [How long things are kept](#how-long-things-are-kept) says. For about an hour after a task has run, the backend program also keeps its note of it, which holds the id of a record of It's own and no person's.
 - A copy of the database that It makes before the backend program has run for about two and a half hours since everything was erased still holds what was erased, as the database's own file does for that long. It removes such a copy once that time is over, whether or not a later copy exists, so the way back that copy gave lasts only until then.
 - The content service keeps two notes, by ids alone, so that nothing from before can be used: that every display was signed out, which it clears away the next time a page is shown more than a day later, and that the files were deleted, which it clears away the next time something is deleted more than an hour later.
 - The program stays, with its settings, its keys and its log, which holds ids and counts and nothing that was on a page.
+- `runs.json` stays for as long as a turn that It reopened may still be running: it names that conversation and its process, which is what keeps It from reopening the conversation a second time beside it, and it goes when the turn has ended.
+- A computer that had joined keeps its own notes of its conversations, the folders in `conversations.json` among them. It is told that It no longer knows it, and not why. `it uninstall` there removes them with everything else, and so does deleting those files.
 - A copy of the folder that you made yourself, and the records you downloaded, are yours to remove.

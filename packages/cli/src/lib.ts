@@ -26,6 +26,7 @@ import { ConvexError } from 'convex/values'
 import { importJWK, type JWK, SignJWT } from 'jose'
 import { agentAppsAbove } from './ancestry'
 import { CODEX_SHUT_SAID } from './codex-settings'
+import { installationHome } from './installation'
 import { added, shellEnv } from './shell-env'
 
 export const VERSION = '0.1.22'
@@ -48,7 +49,7 @@ export class Problem extends Error {
 // from where the shell stands is read from there once and for all: a file's address made from
 // it is then the same file when it is written into a service or a launcher, which start from
 // somewhere else.
-export const home = () => (process.env.IT_HOME ? path.resolve(process.env.IT_HOME) : path.join(os.homedir(), '.it'))
+export const home = () => (process.env.IT_HOME ? path.resolve(process.env.IT_HOME) : (installationHome() ?? path.join(os.homedir(), '.it')))
 export const inHome = (...parts: string[]) => path.join(home(), ...parts)
 
 /**

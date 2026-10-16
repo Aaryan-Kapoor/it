@@ -1,14 +1,18 @@
 // A newer It: learning that one is out, and putting it in place of the one that is here. A
 // stand-in for the place releases are kept is on this machine, laid out as a release is, and
 // what stands for the program is a script that says its version as the program does.
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { newer } from '@it/protocol'
+import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { type Problem, VERSION } from './src/lib'
+import { aloneAt } from './src/serve/backend'
+import { removeInstallationFiles, withInstallationLock } from './src/uninstall-files'
 import { fetchNewer, keepBase, LOOKS_EVERY_MS, latest, programName, releases, watch, watched, watching } from './src/upgrade'
 
 describe('which version is newer', () => {
@@ -137,21 +141,206 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
   })
 
-  test('is put in place of the program that is here, with its terms and notices, once it matches its checksum, starts, and says it is newer', async () => {
-    const said: string[] = []
-    const done = await fetchNewer({ program: here(), say: (line) => said.push(line) })
-    expect(done).toEqual({ from: VERSION, to: '9.9.9', program: here() })
+  test.each([false, true])(
+    'is put in place of the program that is here, with its terms and notices, once it matches its checksum, starts, and says it is newer, through a linked folder too (%s)',
+    async (linked) => {
+      const named = path.join(folder, 'linked')
+      if (linked) symlinkSync(folder, named, 'dir')
+      const program = linked ? path.join(named, 'bin', 'it') : here()
+      const said: string[] = []
+      const done = await fetchNewer({ program, say: (line) => said.push(line) })
+      expect(done).toEqual({ from: VERSION, to: '9.9.9', program })
+      expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
+      expect(statSync(here()).mode & 0o111).not.toBe(0)
+      expect(readFileSync(path.join(folder, 'LICENSE.md'), 'utf8')).toBe('the terms of 9.9.9\n')
+      expect(readFileSync(path.join(folder, 'THIRD_PARTY_NOTICES.md'), 'utf8')).toBe('the notices of 9.9.9\n')
+      expect(said).toEqual([
+        `It 9.9.9 is out, and this is ${VERSION}.`,
+        'Downloaded, and checked against its checksum.',
+        `Installed in ${path.dirname(program)}.`,
+      ])
+      // Nothing of the fetching is left beside it
+      expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(false)
+    },
+  )
+
+  test.each([false, true])(
+    'is not put over a newer one that another update put in place while this one was being fetched, through a linked folder too (%s)',
+    async (linked) => {
+      const named = path.join(folder, 'linked')
+      if (linked) symlinkSync(folder, named, 'dir')
+      const program = linked ? path.join(named, 'bin', 'it') : here()
+      release('9.9.8')
+      const said: string[] = []
+      const done = await fetchNewer({
+        program,
+        say: (line) => {
+          said.push(line)
+          // While this update has 9.9.8 in hand, another, asked for elsewhere, puts 9.9.9 in place
+          if (line.startsWith('Downloaded')) {
+            writeFileSync(here(), says('9.9.9'), { mode: 0o755 })
+            writeFileSync(path.join(folder, 'LICENSE.md'), 'the terms of 9.9.9\n')
+          }
+        },
+      })
+      // What is there stays, with its terms, and it is what this update says is there now
+      expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
+      expect(readFileSync(path.join(folder, 'LICENSE.md'), 'utf8')).toBe('the terms of 9.9.9\n')
+      expect(done).toEqual({ from: VERSION, to: '9.9.9', program })
+      expect(said.at(-1)).toBe('It 9.9.9 was put in place by another update meanwhile, and is left as it is.')
+      expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(false)
+      // One that put the very same version there is left as it is too
+      release('9.9.9')
+      expect(await fetchNewer({ program })).toEqual({ from: VERSION, to: '9.9.9', program })
+    },
+  )
+
+  test('is put in place by one update at a time: an update waits for another that is putting its program in place, and then looks at what that one left', async () => {
+    release('9.9.8')
+    let other: Promise<void> | undefined
+    let finished = false
+    const done = await fetchNewer({
+      program: here(),
+      say: (line) => {
+        if (!line.startsWith('Downloaded')) return
+        // Another update has this program to itself at this moment, and takes a while to put 9.9.9 in place.
+        other = aloneAt(`${here()}.upgrade.lock`, async () => {
+          await new Promise((resolve) => setTimeout(resolve, 700))
+          writeFileSync(here(), says('9.9.9'), { mode: 0o755 })
+          finished = true
+        })
+      },
+    })
+    expect(finished).toBe(true)
+    await other
+    expect(done).toMatchObject({ to: '9.9.9' })
     expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
-    expect(statSync(here()).mode & 0o111).not.toBe(0)
-    expect(readFileSync(path.join(folder, 'LICENSE.md'), 'utf8')).toBe('the terms of 9.9.9\n')
-    expect(readFileSync(path.join(folder, 'THIRD_PARTY_NOTICES.md'), 'utf8')).toBe('the notices of 9.9.9\n')
-    expect(said).toEqual([
-      `It 9.9.9 is out, and this is ${VERSION}.`,
-      'Downloaded, and checked against its checksum.',
-      `Installed in ${path.join(folder, 'bin')}.`,
-    ])
-    // Nothing of the fetching is left beside it
+  })
+
+  test.each(['removed', 'unreadable'])('an upgrade is cancelled when the installed program is %s before replacement', async (changed) => {
+    let changing: Promise<void> | undefined
+    const result = await fetchNewer({
+      program: here(),
+      say: (line) => {
+        if (!line.startsWith('Downloaded')) return
+        changing = withInstallationLock(folder, async () => {
+          // The download has finished. Uninstall takes the lock before the updater can
+          // replace the program, while the updater's staged file is still in use.
+          expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(true)
+          if (changed === 'removed') removeInstallationFiles(folder, false)
+          else writeFileSync(here(), says(null))
+        })
+      },
+    }).catch((err) => err)
+    await changing
+    expect(result).toMatchObject({ code: 'upgrade_program' })
+    if (changed === 'removed') expect(existsSync(here())).toBe(false)
+    else expect(readFileSync(here(), 'utf8')).toBe(says(null))
+    expect(existsSync(path.join(folder, 'LICENSE.md'))).toBe(false)
+    expect(existsSync(path.join(folder, 'THIRD_PARTY_NOTICES.md'))).toBe(false)
     expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(false)
+  })
+
+  test.each([
+    { through: 'its own path', secondVersion: '9.9.8' },
+    { through: 'a linked folder', secondVersion: '9.9.8' },
+    { through: 'its own path', secondVersion: '9.9.9' },
+    { through: 'a linked folder', secondVersion: '9.9.9' },
+  ])('two data folders share one update lock through $through when the second fetches $secondVersion', async ({ through, secondVersion }) => {
+    const homes = ['newer-home', 'older-home'].map((name) => path.join(folder, name))
+    for (const home of homes) mkdirSync(home)
+    writeFileSync(path.join(homes[1]!, 'LICENSE.md'), 'the earlier terms\n')
+    const linked = path.join(folder, 'linked-bin')
+    symlinkSync(path.dirname(here()), linked, 'dir')
+    const otherProgram = through === 'a linked folder' ? path.join(linked, 'it') : here()
+    const worker = path.join(folder, 'updater.mjs')
+    await build({
+      stdin: {
+        contents: `
+          import child from 'node:child_process'
+          import { writeFileSync } from 'node:fs'
+          import { syncBuiltinESMExports } from 'node:module'
+          import path from 'node:path'
+          const execFile = child.execFile
+          child.execFile = (file, args, options, done) => {
+            const candidate = path.basename(file).startsWith('.it-upgrade-')
+            if (!candidate) writeFileSync(path.join(process.env.IT_HOME, 'attempted'), '')
+            return execFile(file, args, options, (...answer) => {
+              done(...answer)
+              if (candidate) setImmediate(() => writeFileSync(path.join(process.env.IT_HOME, 'validated'), ''))
+            })
+          }
+          syncBuiltinESMExports()
+          const { fetchNewer } = await import('./src/upgrade')
+          console.log(JSON.stringify(await fetchNewer({ program: process.argv[2] })))
+        `,
+        resolveDir: __dirname,
+        loader: 'ts',
+      },
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      target: 'node22',
+      outfile: worker,
+      banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
+      loader: { '.md': 'text', '.txt': 'text' },
+      logLevel: 'silent',
+    })
+    const runs: Promise<{ code: number | null; out: string; err: string }>[] = []
+    const run = (home: string, program: string) => {
+      const child = spawn(process.execPath, [worker, program], {
+        env: { ...process.env, IT_HOME: home },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let out = ''
+      let err = ''
+      child.stdout.on('data', (bytes) => (out += bytes))
+      child.stderr.on('data', (bytes) => (err += bytes))
+      const ended = new Promise<{ code: number | null; out: string; err: string }>((resolve, reject) => {
+        child.once('error', reject)
+        child.once('close', (code) => resolve({ code, out, err }))
+      })
+      runs.push(ended)
+      return ended
+    }
+    const until = async (file: string) => {
+      for (const end = Date.now() + 10_000; !existsSync(file); ) {
+        if (Date.now() >= end) throw new Error(`the updater did not reach ${path.basename(file)}`)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+    }
+    writeFileSync(here(), `${says(VERSION)}: > "$IT_HOME/probing"\nwhile [ ! -f "$IT_HOME/release" ]; do sleep 0.02; done\n`)
+    try {
+      const newer = run(homes[0]!, here())
+      await until(path.join(homes[0]!, 'probing'))
+      release(secondVersion)
+      const older = run(homes[1]!, otherProgram)
+      // The candidate's callback has run and its continuations have had their turn. An updater
+      // with a separate lock has started its destination probe by then, and is held there too.
+      await until(path.join(homes[1]!, 'validated'))
+      const bothProbed = existsSync(path.join(homes[1]!, 'attempted'))
+      if (bothProbed) await until(path.join(homes[1]!, 'probing'))
+      writeFileSync(path.join(homes[0]!, 'release'), '')
+      const first = await newer
+      writeFileSync(path.join(homes[1]!, 'release'), '')
+      const second = await older
+      expect([first.code, first.err, second.code, second.err]).toEqual([0, '', 0, ''])
+      expect([bothProbed, JSON.parse(first.out).to, JSON.parse(second.out).to, readFileSync(here(), 'utf8')]).toEqual([false, '9.9.9', '9.9.9', says('9.9.9')])
+      for (const [file, text] of [
+        ['LICENSE.md', 'the terms'],
+        ['THIRD_PARTY_NOTICES.md', 'the notices'],
+      ]) {
+        expect(readFileSync(path.join(homes[0]!, file!), 'utf8')).toBe(`${text} of 9.9.9\n`)
+        if (secondVersion === '9.9.9') expect(readFileSync(path.join(homes[1]!, file!), 'utf8')).toBe(`${text} of 9.9.9\n`)
+      }
+      if (secondVersion === '9.9.8') {
+        expect(readFileSync(path.join(homes[1]!, 'LICENSE.md'), 'utf8')).toBe('the earlier terms\n')
+        expect(existsSync(path.join(homes[1]!, 'THIRD_PARTY_NOTICES.md'))).toBe(false)
+      }
+    } finally {
+      for (const home of homes) writeFileSync(path.join(home, 'release'), '')
+      await Promise.allSettled(runs)
+    }
   })
 
   test('is not fetched at all where this is the newest there is', async () => {
@@ -159,6 +348,101 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     expect(await fetchNewer({ program: here() })).toBeNull()
     expect(asked).toEqual(['/latest/download/latest.json'])
   })
+
+  test.each([false, true])(
+    'standalone setup checks its installed version and holds the program lock through its writes, through a linked folder too (%s)',
+    async (linked) => {
+      const named = path.join(folder, 'linked-bin')
+      if (linked) symlinkSync(path.dirname(here()), named, 'dir')
+      const program = linked ? path.join(named, 'it') : here()
+      const worker = path.join(folder, 'setup.mjs')
+      await build({
+        stdin: {
+          contents: `
+          // Run the real setup command as though it were the standalone program.
+          Object.defineProperty(process, 'execPath', { value: process.argv[2] })
+          process.argv = [process.execPath, process.execPath, 'setup', '--none', '--no-service']
+          await import('./src/main')
+        `,
+          resolveDir: __dirname,
+          loader: 'ts',
+        },
+        bundle: true,
+        platform: 'node',
+        format: 'esm',
+        target: 'node22',
+        outfile: worker,
+        banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
+        loader: { '.md': 'text', '.txt': 'text' },
+        logLevel: 'silent',
+      })
+      const data = path.join(folder, 'setup-home')
+      mkdirSync(path.join(data, 'addons'), { recursive: true })
+      // This setup only removes absent add-ons. It never starts a service or a backend.
+      writeFileSync(path.join(data, 'left.json'), '{"left":true}')
+      const waiting = 'Another `it setup` or `it login` is at work in this folder. This one goes on when that one has finished.'
+      const run = (stopWhileWaiting = false) => {
+        const child = spawn(process.execPath, [worker, program], {
+          env: {
+            PATH: path.join(folder, 'bin'),
+            HOME: folder,
+            IT_HOME: data,
+            IT_INSTALL_BASE: process.env.IT_INSTALL_BASE,
+            IT_TELEMETRY_ENABLED: 'false',
+            IT_HARNESSES: 'none',
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: stopWhileWaiting ? 5000 : 15_000,
+        })
+        let err = ''
+        child.stdout.resume()
+        child.stderr.on('data', (bytes) => {
+          err += bytes
+          if (stopWhileWaiting && err.includes(waiting)) child.kill('SIGKILL')
+        })
+        return new Promise<{ code: number | null; err: string }>((resolve, reject) => {
+          child.once('error', reject)
+          child.once('close', (code) => resolve({ code, err }))
+        })
+      }
+      const lock = `${realpathSync(program)}.upgrade.lock`
+      // A replacement that landed before setup took the lock must stop the old setup before
+      // even its release settings are written, including when the version cannot be checked.
+      for (const version of ['9.9.9', null]) {
+        writeFileSync(here(), says(version))
+        const ran = await run()
+        expect([ran.code, existsSync(path.join(data, 'releases.json')), existsSync(path.join(data, 'installation.json'))], ran.err).toEqual([1, false, false])
+        expect(ran.err).toContain('Run `it setup` again')
+        expect(await aloneAt(lock, async () => true, 0)).toBe(true)
+      }
+      writeFileSync(here(), says(VERSION))
+      let running: ReturnType<typeof run> | undefined
+      try {
+        await aloneAt(path.join(data, 'addons', 'setup.lock'), async () => {
+          running = run()
+          for (const end = Date.now() + 10_000; !existsSync(path.join(data, 'releases.json')); ) {
+            if (Date.now() >= end) throw new Error('Setup did not reach its first write.')
+            await new Promise((resolve) => setTimeout(resolve, 20))
+          }
+          // Setup has passed its version check and is waiting to reconcile add-ons. An
+          // updater from any data home must still be unable to replace its executable.
+          const contender = await aloneAt(lock, async () => 'replaced', 0).catch((err: Problem) => err.code)
+          expect(contender).toBe('busy')
+        })
+      } finally {
+        if (running) {
+          expect((await running).code).toBe(0)
+          expect(existsSync(path.join(data, 'installation.json'))).toBe(true)
+        }
+      }
+      expect(await aloneAt(lock, async () => true, 0)).toBe(true)
+      // An ordinary setup waits on the folder first, so its existing waiting message and
+      // ten-minute wait still apply when another setup also owns the program lock.
+      rmSync(path.join(data, 'left.json'))
+      const queued = await aloneAt(lock, () => aloneAt(path.join(data, 'setup.lock'), () => run(true)))
+      expect(queued.err).toContain(waiting)
+    },
+  )
 
   test('leaves the program that is here exactly as it was where anything about it is wrong: its checksum, a file the release does not list, a program that does not start, or one that says it is no newer', async () => {
     const untouched = () => expect(readFileSync(here(), 'utf8')).toBe(says(VERSION))
