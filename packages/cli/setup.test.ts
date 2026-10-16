@@ -1762,7 +1762,7 @@ describe('managed plugin and marketplace ownership', () => {
     let installed = false
     fake.execFile.mockImplementation((...args: unknown[]) => {
       const [called, words] = args as [string, string[]]
-      if (called === bin && words.join(' ') === install) {
+      if (called === bin && words.map((word) => word.replace(/^"(.*)"$/, '$1')).join(' ') === install) {
         installed = true
         expect(under(dir)).toEqual(Object.keys(addon.files).sort())
       }
