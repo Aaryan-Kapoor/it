@@ -1335,6 +1335,8 @@ describe('sending', () => {
     ['fails later', () => Promise.reject(new Error('no network'))],
   ])('a send that %s is a try that failed: five tries, and the batch is dropped', async (_how, fail) => {
     told()
+    // The decision's safety clock must stay still while this test advances its retry clock.
+    ownClock()
     let now = 0
     const tries: number[] = []
     const sender = usage.startSender({
