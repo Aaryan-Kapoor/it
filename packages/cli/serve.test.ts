@@ -1124,20 +1124,25 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     // nothing of where It is, which port it counts from or which backend program it runs
     const child = spawn(runtime, [it, ...args], {
       cwd: elsewhere ?? folder,
-      env: elsewhere
-        ? { PATH: commands, HOME: elsewhere, IT_HOME: elsewhere, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', IT_SHELL_ENV: 'off', ...env }
-        : {
-            PATH: commands,
-            HOME: folder,
-            IT_HOME: folder,
-            IT_PORT: process.env.IT_PORT!,
-            IT_BACKEND_BIN: program!,
-            IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage',
-            IT_HARNESSES: 'none',
-            // The shell of whoever runs these tests is not asked what it would give a program
-            IT_SHELL_ENV: 'off',
-            ...env,
-          },
+      env: {
+        // These fixtures use the same folder for HOME and IT_HOME. Bun must keep its
+        // compilation cache elsewhere so the first setup still receives an empty folder.
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.join(scratch, 'bun-cache'),
+        ...(elsewhere
+          ? { PATH: commands, HOME: elsewhere, IT_HOME: elsewhere, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', IT_SHELL_ENV: 'off', ...env }
+          : {
+              PATH: commands,
+              HOME: folder,
+              IT_HOME: folder,
+              IT_PORT: process.env.IT_PORT!,
+              IT_BACKEND_BIN: program!,
+              IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage',
+              IT_HARNESSES: 'none',
+              // The shell of whoever runs these tests is not asked what it would give a program
+              IT_SHELL_ENV: 'off',
+              ...env,
+            }),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     children.push(child)
