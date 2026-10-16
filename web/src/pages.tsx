@@ -301,6 +301,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               wakes={page.wake}
               mayWake={owner}
               connection={(page as { connection?: PageConnection | null }).connection}
+              harness={page.session?.harness ?? page.agent}
               agent={agentName(page.agent)}
               stoppedAt={page.stoppedAt}
               wakeFailed={page.wakeFailed}
@@ -654,6 +655,7 @@ function ActionStatus({
   wakes,
   mayWake,
   connection,
+  harness,
   agent,
   stoppedAt,
   wakeFailed,
@@ -674,6 +676,8 @@ function ActionStatus({
   /** Whether this browser may switch that on: one paired as the person's own. */
   mayWake: boolean
   connection?: PageConnection | null
+  /** The owning app is known even where its conversations cannot be reopened. */
+  harness: string | null
   agent: string | null
   /** When a person last stopped the page's agent, if they have. */
   stoppedAt: number | null
@@ -723,17 +727,16 @@ function ActionStatus({
   const waiting = Math.max(stillWaiting.length, recent ? pending || 0 : 0)
   // New backends report the owning app to both roles. Older ones expose inventory only to
   // owners, so that fallback is asked only while something waits and the page names its app.
-  const machines = useQuery(api.machines.list, connection === undefined && mayWake && wakes && stillWaiting.length > 0 ? {} : 'skip') as
-    | { id: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[]
+  const fallback = connection === undefined && mayWake && harness !== null && stillWaiting.length > 0
+  const machines = useQuery(api.machines.list, fallback ? {} : 'skip') as
+    | { id: string; name: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[]
     | undefined
-  const readiness =
+  // Older backends give the machine's ID only with wake details. Otherwise its name must
+  // identify exactly one machine; two machines with the same name cannot be told apart here.
+  const matches = machines?.filter((m) => (wakes ? m.id === wakes.machineId : machine !== null && m.name === machine))
+  const readiness: PageConnection | undefined =
     connection ??
-    (wakes && machines
-      ? reportedConnection(
-          wakes.harness,
-          machines.find((m) => m.id === wakes.machineId),
-        )
-      : undefined)
+    (fallback ? (reportedConnection(harness, matches?.length === 1 ? matches[0] : undefined) ?? { harness, state: 'unknown', queue: false }) : undefined)
   // The bar speaks of the last thing that is still waiting, where anything is: that something
   // done after it was dealt with does not make it so. Otherwise of the last thing done.
   const last = stillWaiting[0] ?? recent?.[0]
