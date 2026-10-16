@@ -86,6 +86,4 @@ The user can allow It to reopen this conversation after it has been closed, when
 
 When the user asks for the It tour, run `it tour` and follow what it prints, its rules first. It shows pages that come with It, so do not write pages of your own for it unless the tour tells you to.
 
-An explicit `--agent <name>` on `create` or `update` changes the label when this conversation owns the page. Omitting it keeps the label. Updating another conversation's page does not change its label unless you take it with `--take`. Automatic continuation under an earlier local conversation id succeeds only while the page still has the owner that was checked.
-
-`it open` checks the display and changes the page's owner in the same operation that shows it. If no requested display can show it, the owner stays as it was. A publication has thirty minutes, including retries. If its answer cannot be confirmed, run the identical command again when It can be reached. It recovers that publication's result before making another version.
+Publication retries, owner labels and automatic continuation are covered in `it help page`.
