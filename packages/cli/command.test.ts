@@ -21,6 +21,7 @@ import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
+import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
 import { instanceName } from './src/serve/config'
 import { bases, holdBase } from './test-ports'
@@ -4006,6 +4007,65 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
 })
 
 describe.skipIf(process.platform === 'win32')('a second machine', () => {
+  test.each([
+    { standalone: false, pauseAt: '/cli/config' },
+    { standalone: false, pauseAt: '/bridge/enroll' },
+    { standalone: true, pauseAt: '/cli/config' },
+    { standalone: true, pauseAt: '/bridge/enroll' },
+  ])('login keeps uninstall out while waiting for $pauseAt, standalone: $standalone', async ({ standalone, pauseAt }) => {
+    const m = machine(false)
+    writeFileSync(path.join(m.it, INSTALLATION_FILE), INSTALLATION)
+    mkdirSync(path.join(m.it, 'bin'))
+    const installed = path.join(m.it, 'bin', 'it')
+    writeFileSync(installed, `#!/bin/sh\nprintf '{"version":"${VERSION}"}\\n'\n`, { mode: 0o755 })
+    const preload = path.join(m.home, 'standalone.cjs')
+    writeFileSync(preload, `Object.defineProperty(process, 'execPath', { value: ${JSON.stringify(installed)} }); process.argv[1] = process.execPath\n`)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    let reached!: () => void
+    let release!: () => void
+    const requested = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const server = http.createServer(async (req, res) => {
+      req.resume()
+      if (req.url === pauseAt) {
+        reached()
+        await waiting
+      }
+      const answer = req.url === '/cli/config' ? { protocol: 1, issuer: 'http://127.0.0.1:23001' } : { machine: 'machine-2' }
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(answer))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    const joining = run(m, ['login', '--url', url, '--code', 'invite', '--no-setup'], {}, process.execPath, standalone ? ['--require', preload] : [])
+    try {
+      await Promise.race([
+        requested,
+        joining.then((ran) => {
+          throw new Error(ended(ran))
+        }),
+      ])
+      if (standalone) await expect(aloneAt(`${installed}.upgrade.lock`, async () => 'overlapped', 0)).rejects.toMatchObject({ code: 'busy' })
+      const removing = await run(m, ['uninstall', '--yes'])
+      expect(error(removing).code).toBe('busy')
+      expect(existsSync(installed)).toBe(true)
+      expect(readFileSync(path.join(m.it, INSTALLATION_FILE), 'utf8')).toBe(INSTALLATION)
+      release()
+      expect((await joining).code).toBe(0)
+      expect(JSON.parse(readFileSync(path.join(m.it, 'machine.json'), 'utf8')).id).toBe('machine-2')
+      const removed = await run(m, ['uninstall', '--yes'])
+      expect(printed(removed).removed).toBe(true)
+      expect(existsSync(m.it)).toBe(false)
+    } finally {
+      release()
+      await joining
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
   test('`it login` joins with an invite: it sends the invite, a name and the public half of a key it made, and keeps the private half', async () => {
     const m = machine(false)
     const b = await backend(m)

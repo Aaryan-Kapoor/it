@@ -221,20 +221,20 @@ function saysItIs(program: string): Promise<string | null> {
 }
 
 /**
- * A standalone setup owns the program lock itself, since restarting the service may end
+ * A standalone setup or login owns the program lock itself, since restarting the service may end
  * the updater that started it. No update can replace the program while setup writes its
- * service definition and add-ons. A setup overtaken before it takes the lock refuses to
+ * service definition and add-ons, or login saves its machine record. A command overtaken before it takes the lock refuses to
  * write with stale code. Script builds are updated outside this mechanism.
  */
-export async function withCurrentProgram<T>(run: () => Promise<T>): Promise<T> {
+export async function withCurrentProgram<T>(run: () => Promise<T>, command: 'setup' | 'login' = 'setup'): Promise<T> {
   const program = standalone()
   if (!program) return run()
   return aloneAt(`${realpathSync(program)}.upgrade.lock`, async () => {
     if ((await saysItIs(program)) !== VERSION)
       throw new Problem(
-        'This setup cannot confirm that it is running the installed version of It.',
+        `This ${command} cannot confirm that it is running the installed version of It.`,
         'upgrade_program',
-        'Run `it setup` again with the installed program.',
+        `Run \`it ${command}\` again with the installed program.`,
       )
     return run()
   })

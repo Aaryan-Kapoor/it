@@ -43,6 +43,7 @@ import { local } from './connector'
 import * as flow from './flow'
 import { hook } from './hooks'
 import { legacyInstallation, markedInstallation, markInstallation } from './installation'
+import { withInstallerLock } from './installer-lock'
 import {
   api,
   askConnectorWith,
@@ -3047,13 +3048,19 @@ async function main(argv: string[]): Promise<void> {
       // The folder is this command's alone while it joins, as it is a setup's while that sets It
       // up here. What the folder is, is looked at again once it is: a setup that was at work in
       // the meantime has made it the folder of an It that runs on this machine
-      const done = await oneAtATime(async () => {
-        refused()
-        markedInstallation(home())
-        const joined = await login(asked)
-        markInstallation(home())
-        return joined
-      }).catch(said)
+      // The installer and program locks also keep uninstall out until the network replies
+      // and the joined machine's records have been written.
+      const done = await oneAtATime(() =>
+        withInstallerLock(home(), () =>
+          withCurrentProgram(async () => {
+            refused()
+            markedInstallation(home())
+            const joined = await login(asked)
+            markInstallation(home())
+            return joined
+          }, 'login'),
+        ),
+      ).catch(said)
       say(`\nThis machine has joined as "${done.name}".`)
       if (done.waitsFor !== undefined) say(joinedBefore(done.waitsFor))
       // The key just made is in It's folder. In a person's own profile that is theirs alone. A
