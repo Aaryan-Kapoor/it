@@ -383,7 +383,34 @@ describe('the Pi add-on', () => {
     expect(acks().map((a) => a.body)).toEqual([{ ids: [c.id] }])
   })
 
-  it('does not start a turn in a one-shot run that has finished, or ask the connector for it', async () => {
+  it('keeps reporting through a refusal backoff longer than the runtime retention window', async () => {
+    await connect()
+    const p = pi('session-long-backoff')
+    p.state.refuses = true
+    const c = click('approve')
+    offered = [c]
+    standIn()
+    p.start()
+    await settled()
+    // Each lost message is given ten seconds to arrive, followed by 5, 10, 20 and 40 seconds of backoff.
+    for (const delay of [5, 10, 20]) {
+      await second(10 + delay)
+    }
+    expect(p.sent).toHaveLength(4)
+    await second(10)
+    asked = []
+    await second(35)
+    expect(polls()).toEqual([])
+    expect(asked.filter((a) => a.path === '/addon')).toHaveLength(35)
+    expect(p.sent).toHaveLength(4)
+    expect(acks()).toEqual([])
+    p.state.refuses = false
+    await second(5)
+    expect(p.sent).toHaveLength(5)
+    expect(acks().map((a) => a.body)).toEqual([{ ids: [c.id] }])
+  })
+
+  it('reports its loaded code without taking clicks in a one-shot run that has finished', async () => {
     await connect()
     const p = pi('session-eight')
     p.state.mode = 'print'
@@ -392,12 +419,13 @@ describe('the Pi add-on', () => {
     p.start()
     await settled()
     await second(2)
-    expect(questions.put).toBe(0)
-    expect(asked).toEqual([])
+    expect(polls()).toEqual([])
+    expect(asked.map((a) => a.path)).toEqual(['/addon', '/addon', '/addon'])
+    expect(asked[0]?.body).toMatchObject({ harness: 'pi', addon: { api: 1, delivery: true } })
     expect(p.sent).toEqual([])
   })
 
-  it('does not ask the connector while no model is chosen, so the click is left for whatever else could take it', async () => {
+  it('keeps reporting while no model is chosen and leaves clicks available', async () => {
     await connect()
     const p = pi('session-no-model')
     p.state.model = undefined
@@ -408,9 +436,13 @@ describe('the Pi add-on', () => {
     // Pi would refuse the message. Asking would have the connector set the click aside for this add-on all the same.
     await settled()
     await second(2)
-    expect(questions.put).toBe(0)
-    expect(asked).toEqual([])
+    expect(polls()).toEqual([])
+    expect(asked.map((a) => a.path)).toEqual(['/addon', '/addon', '/addon'])
+    expect(asked[0]?.body).toMatchObject({ harness: 'pi', addon: { api: 1, delivery: true } })
     expect(p.sent).toEqual([])
+    await second(35)
+    expect(asked.filter((a) => a.path === '/addon')).toHaveLength(38)
+    expect(polls()).toEqual([])
     // The person chooses a model: from the next check on the conversation is asked about, and gets its click
     p.state.model = { id: 'stand-in' }
     await second()

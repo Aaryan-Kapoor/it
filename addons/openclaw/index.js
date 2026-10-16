@@ -471,12 +471,13 @@ function make(api) {
       if (unsaved || (moved && now - savedAt > SAVE_MS)) save()
       // Asking tells the connector that someone is listening, so nothing is asked unless a click could be handed over
       const rt = host()
-      if (!rt || !sessions.size) {
+      const eligible = [...sessions].filter(([, s]) => now >= s.leftUntil)
+      if (!rt || !eligible.length) {
         await tell('/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
         return
       }
       // One that is being left alone is not asked about until its while is up
-      await Promise.all([...sessions].filter(([, s]) => now >= s.leftUntil).map(([key, s]) => checkOne(rt, key, s).catch(() => {})))
+      await Promise.all(eligible.map(([key, s]) => checkOne(rt, key, s).catch(() => {})))
     } finally {
       checking = false
     }

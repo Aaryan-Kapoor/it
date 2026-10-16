@@ -276,7 +276,7 @@ export default function (pi) {
 
   /**
    * Whether a click could be handed to Pi now, or will be once what Pi is doing has finished.
-   * While it could not, the connector is not asked at all. Asking tells the connector that this
+   * While it could not, only the loaded host is reported. Asking for clicks tells the connector that this
    * conversation is listening, and it then sets the conversation's clicks aside for this
    * add-on, where nothing else (`it wait`, for one) can have them.
    */
@@ -332,7 +332,10 @@ export default function (pi) {
       session = id
       file = kept
       settle()
-      if (!open()) return
+      if (!open()) {
+        await ask('/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
+        return
+      }
       // The connector is told of each change of id, in the order they happened. One is
       // forgotten only once the connector has taken it, so it is told on a later check if not
       // now, and an id that changes again meanwhile takes nothing away from the one before.
