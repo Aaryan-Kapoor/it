@@ -44,9 +44,26 @@ it tour show next
 
 The menu also has **That's enough for now**, which arrives as **`done`**: go to the ending.
 
-A page gives its buttons back to the person when it is still on the screen forty seconds after one was pressed, and they may press again. So `next` and `menu` carry `from`, the page they were pressed on, and so do `pick`, `done` and `finish`. All five carry `from_version`, the version of that showing. Before acting on `pick`, `next`, `menu`, `done` or `finish`, compare `tour-<from>` and `from_version` with that `id` and `version`. Act only when both match. If those fields are not shown in the message, run `it action <the action's id>`: its `page` and `version` identify the showing.
+A page gives its buttons back to the person when it is still on the screen forty seconds after one was pressed, and they may press again. So `next` and `menu` carry `from`, the page they were pressed on, and so do `pick`, `done` and `finish`. All five carry `from_version`, the version of that showing. Before acting on `pick`, `next`, `menu`, `done` or `finish`, compare `tour-<from>` and `from_version` with that `id` and `version`. Act only when both match, except for a newer attempt from the menu showing kept below. If those fields are not shown in the message, run `it action <the action's id>`: its `page` and `version` identify the showing, and its `data` holds the attempt and choice.
 
-Once you show another page, build what they named or clear the tour, discard every queued request from the showing you left, even if you later return to the same page. A later showing has a new version. A queued retry must never show a page again, restart a game or end the tour after the person has gone on.
+Each menu `pick` and `done` carries `attempt`, an increasing number for that showing, starting at 1. The person's latest choice wins. For each new menu showing, keep a record `{ version: <the menu's version>, attempt: 0, choice: null }`. Keep this record after showing a choice, building what they named or showing the ending in response to that menu. A higher attempt from that same showing replaces its earlier choice even when the menu is no longer current. If several menu actions are already available, process only the highest `attempt` and acknowledge the others without showing their choices. If chess arrives first and drums later with a higher attempt, show drums; if drums arrives first, ignore chess when it arrives.
+
+Apply this decision rule to menu actions. `menu` is that retained record, `name` is the action name and `data` is what the action carried. A false result means acknowledge without navigating. A true result means show the requested choice or ending, then acknowledge. Increasing the attempt even for an identical choice keeps older choices from replacing it. An identical choice must not restart a page already shown. If showing the choice fails, set `menu.choice` back to `null` so a fresh attempt can try again.
+
+```js
+function takeMenuAttempt(menu, name, data) {
+  if (!menu || data.from !== "menu" || data.from_version !== menu.version) return false;
+  if (name !== "pick" && name !== "done") return false;
+  if (!Number.isSafeInteger(data.attempt) || data.attempt <= menu.attempt) return false;
+  menu.attempt = data.attempt;
+  const choice = JSON.stringify([name, data.choice || null, data.text || null]);
+  if (choice === menu.choice) return false;
+  menu.choice = choice;
+  return true;
+}
+```
+
+Acknowledge every handled, older or identical menu action with `it ack <the action's id>`. Forget the record when another menu is shown, navigation from a destination is accepted, or the tour is cleared. Requests from those retired showings are discarded and acknowledged, even if you later return to the same page. For navigation outside the retained menu showing, discard every queued request from the showing you left. A later showing has a new version, and a queued retry must never restart it.
 
 ## The whiteboard
 
