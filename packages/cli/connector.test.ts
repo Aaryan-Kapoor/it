@@ -492,6 +492,25 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   }
   const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
 
+  test('queue acceptance keeps its receipt privately before waiting for the backend confirmation', async () => {
+    standIn()
+    await start()
+    stand.answer = (name) => (name === 'delivery:handedOff' ? Promise.reject({ code: 'offline' }) : undefined)
+    offered(click(1))
+    await until(() => stand.codex.length === 1)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    const records = JSON.parse(readFileSync(path.join(home, 'delivery-receipts.json'), 'utf8'))
+    const claim = stand.calls.find((c) => c.name === 'delivery:claim')!.args
+    expect(records).toEqual([{ id: 'click-1', receipt: { token: claim.token, session: claim.for }, route: 'queue' }])
+    const journal = readFileSync(path.join(home, 'journal.jsonl'), 'utf8')
+    expect(journal).not.toContain(claim.token)
+    expect(journal).not.toContain(claim.for.id)
+    stand.answer = null
+    await pass()
+    await until(() => JSON.parse(readFileSync(path.join(home, 'delivery-receipts.json'), 'utf8')).length === 0)
+  })
+
   test('one that stood in line for a place is left for the waiter once its place comes', async () => {
     await start()
     // Three commands may run at once, so the fourth click waits for one of them to end
@@ -1953,15 +1972,75 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     await until(() => asked('delivery:handedOff').includes('click-5'))
   })
 
+  test('accepted add-on receipts stay private while confirmation is unavailable and are retired when it answers', async () => {
+    standIn()
+    await start()
+    const session = { harness: 'pi', id: 'private-conversation-identity' }
+    await local('/session', { method: 'POST', body: { harness: session.harness, session: session.id } })
+    stand.watching.get('delivery:inbox')!([
+      { id: 'private-click', artifact: 'plan', title: 'Private title', name: 'approve', payload: '{}', at: Date.now(), attended: true, session },
+    ])
+    await until(() => stand.calls.some((c) => c.name === 'delivery:claim'))
+    await settled()
+    const given = await local<{ clicks: { id: string; receipt: { token: string } }[] }>(`/clicks?receipts=1&harness=pi&session=${session.id}`)
+    expect(given?.clicks).toHaveLength(1)
+    stand.answer = (name) => (name === 'delivery:handedOff' ? Promise.reject({ code: 'offline' }) : undefined)
+    const receipt = given!.clicks[0]!.receipt
+    expect(await local('/ack', { method: 'POST', body: { receipts: [{ id: 'private-click', receipt }] } })).toEqual({ ok: true, acked: 1 })
+    const stored = () => JSON.parse(readFileSync(path.join(home, 'delivery-receipts.json'), 'utf8'))
+    const journal = readFileSync(path.join(home, 'journal.jsonl'), 'utf8')
+    for (const privateValue of [session.id, receipt.token, 'Private title']) {
+      expect(journal).not.toContain(privateValue)
+      expect(said.join('\n')).not.toContain(privateValue)
+    }
+    for (const row of journal
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line)))
+      expect(Object.keys(row).sort()).toEqual(['event', 'id', 't'])
+    expect(stored()).toEqual([{ id: 'private-click', receipt, route: 'addon' }])
+    stand.answer = null
+    await pass()
+    await until(() => stored().length === 0)
+  })
+
+  test('an accepted receipt is confirmed before startup returns old claims, even when its click is outside the inbox', async () => {
+    const receipt = { token: 'saved-claim', session: { harness: 'pi', id: 'conversation-1' } }
+    await start('socket', {}, (home) =>
+      writeFileSync(path.join(home, 'delivery-receipts.json'), JSON.stringify([{ id: 'outside-inbox', receipt, route: 'addon' }])),
+    )
+    await until(() => stand.calls.some((c) => c.name === 'delivery:giveBackBatch'))
+    const confirmation = stand.calls.findIndex((c) => c.name === 'delivery:handedOff')
+    const recovery = stand.calls.findIndex((c) => c.name === 'delivery:giveBackBatch')
+    expect(confirmation).toBeGreaterThanOrEqual(0)
+    expect(confirmation).toBeLessThan(recovery)
+    expect(stand.calls[confirmation]!.args).toEqual({ id: 'outside-inbox', receipt, route: 'addon' })
+    expect(JSON.parse(readFileSync(path.join(home, 'delivery-receipts.json'), 'utf8'))).toEqual([])
+  })
+
+  test('a private record that cannot be written prevents a claim and never offers the click to an add-on', async () => {
+    await start()
+    mkdirSync(path.join(home, `delivery-receipts.json.${process.pid}.tmp`))
+    const session = { harness: 'pi', id: 'conversation-1' }
+    await local('/session', { method: 'POST', body: { harness: session.harness, session: session.id } })
+    stand.watching.get('delivery:inbox')!([
+      { id: 'unsaved-click', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now(), attended: true, session },
+    ])
+    await until(() => said.some((line) => line.startsWith('delivery:')))
+    expect(stand.calls.some((c) => c.name === 'delivery:claim')).toBe(false)
+    expect(await local('/clicks?receipts=1&harness=pi&session=conversation-1')).toEqual({ clicks: [] })
+  })
+
   test('a receipt saved before restart cannot acknowledge a newly served claim on the same machine', async () => {
     const session = { harness: 'pi', id: 'conversation-1' }
     const old = { token: 'before-restart', session }
-    await start('socket', {}, (home) =>
-      writeFileSync(path.join(home, 'journal.jsonl'), `${JSON.stringify({ event: 'queued', id: 'click-restart', receipt: old })}\n`),
-    )
     stand.answer = (name, args) => {
       if (name === 'delivery:handedOff' && args.receipt?.token === old.token) return Promise.reject({ code: 'conflict' })
     }
+    await start('socket', {}, (home) =>
+      writeFileSync(path.join(home, 'delivery-receipts.json'), JSON.stringify([{ id: 'click-restart', route: 'queue', receipt: old }])),
+    )
     await local('/session', { method: 'POST', body: { harness: session.harness, session: session.id } })
     stand.watching.get('delivery:inbox')!([
       { id: 'click-restart', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now(), attended: true, session },

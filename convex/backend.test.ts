@@ -1681,11 +1681,15 @@ describe('clicks and their delivery', () => {
   })
 
   test('old delivery clients fail closed while an explicit manual acknowledgement still works', async () => {
-    const { m, click } = await setup()
+    const { t, m, click } = await setup()
     const id = (await click('receipt-0002')).actionId
     expect(await code(m.raw.mutation(api.delivery.claim, { ids: [id] }))).toBe('conflict')
     await m.raw.mutation(api.delivery.claim, { ids: [id], token: 'current-attempt', for: SESSION })
+    expect(await m.raw.mutation(api.delivery.renew, { ids: [id] })).toEqual([])
+    await m.raw.mutation(api.delivery.release, { id })
+    expect(await m.raw.mutation(api.delivery.park, { id, for: SESSION, all: true })).toBe(true)
     expect(await code(m.raw.mutation(api.delivery.handedOff, { id, route: 'addon' }))).toBe('conflict')
+    expect(await t.run((ctx) => ctx.db.get(id))).toMatchObject({ delivery: 'leased', claim: { token: 'current-attempt', session: SESSION } })
     expect((await m.raw.mutation(api.delivery.handedOff, { id, route: 'manual' })).already).toBe(false)
     await m.raw.mutation(api.delivery.settle, { id, outcome: 'succeeded' })
   })
@@ -1956,9 +1960,10 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.delivery.claim, { ids: [first] })
     const later = await t.run(async (ctx) => {
       const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
-      await ctx.db.patch(base.artifactId, { stoppedThrough: Date.now() })
+      // This branch numbers clicks and Stop. A timestamp-only cutoff cannot stop a numbered click.
+      await ctx.db.patch(base.artifactId, { stoppedThrough: Date.now(), stoppedSequence: base.sequence! })
       for (let i = 1; i < 64; i++) await ctx.db.insert('actions', { ...base, clientActionId: `stopped-${i}` })
-      return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', createdAt: Date.now() + 1 })
+      return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', sequence: base.sequence! + 1, createdAt: Date.now() + 1 })
     })
     expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: false })
     expect(await t.run((ctx) => ctx.db.get(first))).toMatchObject({ delivery: 'handed_off', route: 'stopped' })

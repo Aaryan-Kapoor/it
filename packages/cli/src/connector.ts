@@ -15,6 +15,7 @@ import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renam
 import http from 'node:http'
 import path from 'node:path'
 import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, MARK, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
+import { DeliveryReceipts, type Receipt } from './delivery-receipts'
 import {
   api,
   ask,
@@ -64,10 +65,7 @@ import {
   WOKEN,
 } from './wake'
 
-export interface Receipt {
-  token: string
-  session: { harness: string; id: string } | null
-}
+export type { Receipt } from './delivery-receipts'
 
 /** A click as the backend offers it: its data as JSON text, and the conversation it is for. */
 interface Offered {
@@ -168,7 +166,7 @@ const stoppedFile = () => inHome('stopped.json')
 const a = (word: string) => `${/^[aeiou]/i.test(word) ? 'an' : 'a'} ${word}`
 const lockFile = () => inHome('connector.lock')
 
-function journalWrite(event: string, id: string, receipt?: Receipt): void {
+function journalWrite(event: string, id: string): void {
   try {
     // Cut down to its last records once it is large, into a file beside it that then takes its
     // place: cut down where it lies, a disk that filled in the middle left it with nothing
@@ -179,7 +177,7 @@ function journalWrite(event: string, id: string, receipt?: Receipt): void {
     }
     // Begun on a line of its own, whatever the record before it ended with: one that was cut
     // short, by a crash or a full disk, would otherwise take this one with it
-    appendFileSync(journalFile(), `\n${JSON.stringify({ t: Date.now(), event, id, receipt })}\n`, { mode: 0o600 })
+    appendFileSync(journalFile(), `\n${JSON.stringify({ t: Date.now(), event, id })}\n`, { mode: 0o600 })
   } catch {}
 }
 /** What the journal holds, in the order it was written. A line that cannot be read, as one cut short is, is passed over and says nothing of the lines after it. */
@@ -198,22 +196,6 @@ function journalled(): { event: string; id: string }[] {
   }
   return out
 }
-/** Clicks the journal says a harness's queue accepted, but which were never confirmed to It. */
-function queuedButUnconfirmed(): Map<string, Receipt> {
-  const out = new Map<string, Receipt>()
-  try {
-    for (const line of readFileSync(journalFile(), 'utf8').split('\n')) {
-      if (!line) continue
-      const e = JSON.parse(line) as { event: string; id: string; receipt?: Receipt }
-      // "queueing" is only the intent. If nothing follows it, the command may never have run,
-      // so the click is sent again: a repeat can be told apart by its id, a loss cannot be undone.
-      if ((e.event === 'queued' || e.event === 'acked') && e.receipt?.token) out.set(e.id, e.receipt)
-      if (e.event === 'confirmed') out.delete(e.id)
-    }
-  } catch {}
-  return out
-}
-
 /**
  * Clicks the journal says this machine claimed, with nothing after to say what became of them.
  * A connector that ended in the middle left them leased, which is to say out of what It offers
@@ -489,7 +471,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     )
   const held = new Map<string, Held>()
   /** Handed to an agent, and not yet confirmed to It: confirmed again and again until it is. */
-  const toConfirm = new Map<string, { route: string; receipt?: Receipt }>()
+  const receipts = new DeliveryReceipts(inHome('delivery-receipts.json'))
+  receipts.importJournal(journalFile())
+  receipts.discardReservations()
+  const toConfirm = new Map(receipts.confirmations().map((r) => [r.id, { route: r.route!, receipt: r.receipt }]))
   /**
    * For usage reporting, which counts a delivery once It has confirmed it: when the click was
    * made, which harness it was for, and whether it joined a running turn or started one.
@@ -717,7 +702,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
   const queues = new Map<string, Promise<void>>()
-  const unconfirmed = queuedButUnconfirmed()
   /**
    * What the connector before this one left claimed is given back before anything is taken,
    * and nothing is taken until It has offered it again: taken first, a click made after one of
@@ -778,7 +762,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
   async function confirmEach(): Promise<void> {
     for (const [id, { route, receipt }] of toConfirm) {
       try {
+        if (over) return
+        receipts.accept([{ id, route, receipt }])
         const done = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route, receipt })
+        if (over) return
+        receipts.forget(id, receipt)
         journal('confirmed', id)
         toConfirm.delete(id)
         const how = counting.get(id)
@@ -788,6 +776,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
       } catch (err) {
         // Another machine took it over, or it is gone: either way it is not this one's to confirm
         if (/conflict|not_found/.test(String((err as { code?: string }).code))) {
+          if (over) return
+          try {
+            receipts.forget(id, receipt)
+          } catch {
+            continue
+          }
           toConfirm.delete(id)
           counting.delete(id)
         }
@@ -907,8 +901,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * cleared them for an erase, or another connector may have them by now.
    */
   let over = false
-  const journal = (event: string, id: string, receipt?: Receipt): void => {
-    if (!over) journalWrite(event, id, receipt)
+  const journal = (event: string, id: string): void => {
+    if (over) return
+    journalWrite(event, id)
+    if (['released', 'lost', 'parked', 'stopped'].includes(event)) {
+      try {
+        receipts.forgetReservation(id)
+      } catch {
+        seldom('receipts', 'could not retire a private delivery receipt; it remains reserved')
+      }
+    }
   }
   /**
    * Why this machine and the It it joined do not fit, while they do not: the two speak
@@ -1341,7 +1343,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
   async function claimClicks(clicks: Offered[], session: { harness: string; id: string }): Promise<string[]> {
     const token = randomUUID()
     for (const c of clicks) c.receipt = { token, session }
-    return call<string[]>('mutation', api.delivery.claim, { ids: clicks.map((c) => c.id), for: session, token })
+    if (over) return []
+    receipts.reserve(clicks.map((c) => ({ id: c.id, receipt: c.receipt! })))
+    try {
+      const held = await call<string[]>('mutation', api.delivery.claim, { ids: clicks.map((c) => c.id), for: session, token })
+      if (!over) for (const c of clicks) if (!held.includes(c.id)) receipts.forget(c.id, c.receipt)
+      return held
+    } catch (err) {
+      if (!over) for (const c of clicks) receipts.forget(c.id, c.receipt)
+      throw err
+    }
   }
   async function queueNow(click: Offered, reopening: boolean, t3?: { server: T3; thread: string }): Promise<void> {
     click = { ...click }
@@ -1629,10 +1640,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // waiter has it and says so to It itself, so there is nothing to try again or set aside
       if (!handed && sent.toWaiter) return
       if (handed) {
+        if (!over) {
+          try {
+            receipts.accept([click, ...withIt].map((c) => ({ id: c.id, route: 'queue', receipt: c.receipt! })))
+          } catch {
+            seldom('receipts', 'could not save accepted delivery receipts; confirmation will retry')
+          }
+        }
         if (refused === STOPPED) say(`${a(harness)} conversation (${short(line)}) was stopped by the person`)
         for (const c of [click, ...withIt]) {
-          journal('queued', c.id, c.receipt)
-          toConfirm.set(c.id, { route: 'queue', receipt: c.receipt })
+          journal('queued', c.id)
+          toConfirm.set(c.id, { route: 'queue', receipt: c.receipt! })
           // The queue, or the reopening, starts a turn in a conversation that was not working
           counting.set(c.id, { at: c.at, harness, path: 'woke' })
           if (c !== click) {
@@ -1787,6 +1805,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
     routing = true
     try {
       if (givingBack === 'due') {
+        // Confirm accepted deliveries before startup recovery returns their claims.
+        await confirmAll()
+        if (toConfirm.size) {
+          soon(1000)
+          return
+        }
         const asked = await recoverBatch()
         if (asked === null) {
           // An expired lease is still hidden until the backend requeues it. Only a complete
@@ -1898,13 +1922,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
       await returnAll()
       for (const click of [...inbox].map((c) => ({ ...c })).sort((a, b) => a.at - b.at)) {
         if (taken(click)) continue
-        if (unconfirmed.has(click.id)) {
-          // Its harness's queue took it before a restart; all that was missing was telling It
-          const receipt = unconfirmed.get(click.id)!
-          unconfirmed.delete(click.id)
-          toConfirm.set(click.id, { route: 'queue', receipt })
-          continue
-        }
         if (!click.session || awaited(click, now)) continue
         // A click for an app that is not connected is left where it is, for the person and `it wait`
         if (!chosen(click.session.harness)) continue
@@ -2356,6 +2373,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
         : []
       // An add-on that knows says whether the click started a turn or joined one that was
       // running. One that does not say is taken to have been heard at once.
+      if (over) return [503, { error: 'the connector has stopped' }]
+      receipts.accept(ids.map((id) => ({ id, route: 'addon', receipt: held.get(id)!.click.receipt! })))
       const woke = body.woke === true
       // One report is one turn, however many clicks it carried: counted as one waking
       if (woke && ids.length) record('agent.woken', { result: 'resumed', agent: agentOf(held.get(ids[0]!)!.click.session?.harness) })
@@ -2364,8 +2383,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
         counting.set(clickId, { at: click.at, harness: click.session?.harness, path: woke ? 'woke' : 'heard' })
         if (counting.size > 2000) counting.delete(counting.keys().next().value!)
         held.delete(clickId)
-        toConfirm.set(clickId, { route: 'addon', receipt: click.receipt })
-        journal('acked', clickId, click.receipt)
+        toConfirm.set(clickId, { route: 'addon', receipt: click.receipt! })
+        journal('acked', clickId)
       }
       void confirmAll()
       return [200, { ok: true, acked: ids.length }]
