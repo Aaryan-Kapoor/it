@@ -634,7 +634,11 @@ async function takeLock(
       throw err
     }
     if (!still()) {
-      rmSync(after, { force: true })
+      // Another holder already replaced this lock. Its cleanup may still have the stale
+      // claim open on Windows; that claim cannot authorise replacing the new lock.
+      try {
+        rmSync(after, { force: true })
+      } catch {}
       continue
     }
     put(file, me)

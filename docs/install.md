@@ -25,7 +25,13 @@ Run at a terminal, the command says what it did in a few lines and goes straight
 
 The programs are built for five systems: Linux and macOS on Intel and ARM chips, and Windows on Intel. Three variables change what the scripts do. `IT_HOME` names another folder than `~/.it` for everything It keeps. `IT_VERSION` names a release other than the latest, by its tag. `IT_INSTALL_NO_PATH`, set to anything, leaves your PATH alone.
 
-To have a computer join an It that runs on another one, give the install script the joining as its arguments: `curl -fsSL https://itcan.do/install.sh | sh -s -- login --url <address> --code <code>`, which is the line that It's site shows under Machines, "Add a machine". The program is installed and then joins, and no It is set up on that computer. [Agents on another computer](agents.md#agents-on-another-computer) has the rest.
+To have a computer join an It that runs on another one, give the install script the joining as its arguments. On macOS and Linux, use `curl -fsSL https://itcan.do/install.sh | sh -s -- login --url <address> --code <code>`, which is the line that It's site shows under Machines, "Add a machine". In PowerShell, use:
+
+```powershell
+& ([scriptblock]::Create((irm https://itcan.do/install.ps1))) login --url '<address>' --code '<code>'
+```
+
+Replace the address and code with the ones the other computer shows. Keep each argument separate, and quote values that contain spaces. The program is installed and then joins, and no local It is set up on that computer. If joining fails, the installed program stays and the script says that joining failed. Run `it login` again with a new code. [Agents on another computer](agents.md#agents-on-another-computer) has the rest.
 
 ## The first run
 
@@ -62,7 +68,7 @@ From the first run on, It starts by itself, and you do not start it again. The b
 
 - On Linux it is a systemd user unit, `it.service`. `it setup` also asks the system to keep your services running while you are logged out, so that It starts when the computer starts and not only when you log in. Where the system refuses that, It stops when you log out, and `it setup` says so.
 - On macOS it is a launchd agent, `dev.it`, which starts when you log in. It is registered with your login at the Mac's own screen. On a Mac that is reached only over SSH there is no such login to register it with, and `it setup` says that it could not be registered.
-- On Windows it is a scheduled task named `it`, which starts when you log on. Windows keeps its tasks by name for the whole computer, and It registers its own under that one name, so only one account of a computer can have It start by itself this way. A second account sets It up with `--no-service` and starts `it serve` itself. When It is taken off, only a task that is started in that It's own folder is stopped and removed, and any other task of the name is left as it is.
+- On Windows it is a scheduled task named `it-<account SID>`, which starts when that account logs on. Each Windows account has its own task. Setup moves a task named `it` to the account's name only when its principal is that account and its action is It's launcher, including one in a previous installation folder. It asks each owned installation to stop and waits before replacing either task. Removal takes away only tasks for the current installation folder. Tasks belonging to another account or another Task Scheduler folder are left alone. Each account still needs its own It folder and ports.
 
 There is one background service for each user of a computer, under that one name, whatever folder It lives in. Setting It up in a second folder, named with `IT_HOME`, registers the service for that folder in place of the first, unless `--no-service` is given.
 
@@ -131,7 +137,7 @@ To remove It altogether, run `it uninstall`. It asks first, because every page I
 2. It asks an `it serve` you started yourself in that folder to stop, and with it a backend program that an It which died had left running there. If It cannot establish that the backend is gone, including when a backend folder has unreadable settings, uninstall ends and keeps the folder and add-ons for a retry. Another service cannot start in the folder while it is being removed.
 3. It takes It's add-on out of every agent app, as `it setup --none` does.
 4. It takes `~/.it/bin` off your PATH. The install script added it with a comment, `# It`, and one line in your shell's profile, and those lines are removed; a profile that held nothing else was made by the installer and is removed too. On Windows the folder is on the PATH that Windows keeps for your account, and it is taken off there, with every other entry left as it was kept.
-5. It deletes `~/.it`. Everything It kept goes with it, the program included. Where the folder is a link to another one, the folder it leads to is deleted, and then the link. On Windows, where a program that is running cannot delete its own file, the program first moves itself out of the folder to where Windows keeps temporary files, says where, and leaves Windows one line to run the next time you sign in, which deletes it there. You can delete it yourself before then.
+5. It deletes `~/.it`. Everything It kept goes with it, the program included. Where the folder is a link to another one, the folder it leads to is deleted, and then the link. On Windows, where a program that is running cannot delete its own file, the program first moves itself out of the folder to where Windows keeps temporary files, says where, and asks Windows to delete it the next time you sign in. The path is kept as a literal value under `HKEY_CURRENT_USER\Software\It\PendingRemoval` until that deletion succeeds. If the request cannot be registered, It says to delete the file yourself. You can also delete it yourself before signing in again, or if it remains afterwards.
 
 Where an add-on could not be taken out, because its agent app could not be run at that moment, It says so, deletes everything else, and keeps two folders: `~/.it/addons`, which holds its note of where it put the add-on, and `~/.it/bin`, which holds the program. Running `~/.it/bin/it uninstall` again once the app can be run takes the add-on out and deletes what was kept. Deleting `~/.it` yourself leaves the add-on in the app.
 

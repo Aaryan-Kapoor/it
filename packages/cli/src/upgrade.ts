@@ -15,11 +15,11 @@
 // matches its checksum, that starts on this system, and that says of itself that it is newer.
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, realpathSync, renameSync, rmSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeSync } from 'node:fs'
 import path from 'node:path'
 import { INSTALL, newer } from '@it/protocol'
 import { ask, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
-import { aloneAt } from './serve/backend'
+import { aloneAt, startOf } from './serve/backend'
 
 /** No program is anywhere near this large, and nothing else of a release is near the second. */
 const PROGRAM_MOST = 400 * 1024 * 1024
@@ -377,12 +377,23 @@ export async function fetchNewer(
       // Windows does not let a program that is running be written over, and does let it be given
       // another name: the one that is running goes on under that name until it ends
       if (process.platform === 'win32') {
+        const started = startOf(process.pid)
+        if (!started || !/^[0-9]+$/.test(started))
+          throw new Problem('The process start time could not be read, so the installed program was left unchanged.', 'upgrade_program')
         // One that is still running cannot be removed, and is left for the next time
         for (const old of readdirSync(dir).filter((f) => /^it\.old\.\d+\.exe$/.test(f)))
           try {
             rmSync(path.join(dir, old), { force: true })
           } catch {}
         const aside = path.join(dir, `it.old.${Date.now()}.exe`)
+        const recovery = `${program}.recovery.json`
+        put(
+          recovery,
+          Buffer.from(
+            JSON.stringify({ file: path.basename(aside), sha256: createHash('sha256').update(readFileSync(program)).digest('hex'), pid: process.pid, started }),
+          ),
+          0o600,
+        )
         renameSync(program, aside)
         try {
           renameSync(fresh, program)
@@ -391,6 +402,7 @@ export async function fetchNewer(
           renameSync(aside, program)
           throw err
         }
+        rmSync(recovery, { force: true })
       } else renameSync(fresh, program)
       putLegal()
       say(`Installed in ${dir}.`)

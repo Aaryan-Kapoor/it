@@ -3,7 +3,7 @@
 // another, the processes above the command say which of the two is the inner one, which the
 // environment cannot: it holds the marks of both, the same whichever way round they are.
 import { execFileSync } from 'node:child_process'
-import { closeSync, openSync, readFileSync, readSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import type { Harness } from '@it/protocol'
 
 /** A process, as far as this needs to know it: what started it, and the first words of its command line, of which the first is the program itself. */
@@ -161,6 +161,13 @@ export function psTable(text: string): Map<number, Proc> {
   }
   return table
 }
+const scriptFile = (file: string): boolean => {
+  try {
+    return statSync(file).isFile()
+  } catch {
+    return false
+  }
+}
 /**
  * Adds, to processes read by `psTable`, the words after the program, from what
  * `ps -o pid= -o args=` printed. There the words of a command line come run together, so the
@@ -177,11 +184,14 @@ export function psWords(table: Map<number, Proc>, text: string): void {
     if (!m || !proc || !program || !m[2]!.startsWith(program)) continue
     proc.argv = [program, ...m[2]!.slice(program.length).split(/\s+/).filter(Boolean).slice(0, 15)]
     const script = scriptOf(proc.argv)
-    // A path after a launcher-shaped prefix may still be the rest of a script path containing spaces.
+    const after = script === undefined ? [] : proc.argv.slice(proc.argv.indexOf(script) + 1)
+    // A path argument does not make an existing launcher uncertain. A longer file name
+    // containing spaces still can; where neither file can be checked, keep the uncertainty.
     const continuedPath =
       script !== undefined &&
       /(?:^|\/)\.?bin\/[^/]+$/.test(script) &&
-      proc.argv.slice(proc.argv.indexOf(script) + 1).some((word) => !word.startsWith('-') && word.includes('/'))
+      after.some((word) => !word.startsWith('-') && word.includes('/')) &&
+      (!scriptFile(script) || after.some((_, i) => scriptFile([script, ...after.slice(0, i + 1)].join(' '))))
     if (RUNTIME.test(named(program)) && (!agentApp(proc) || continuedPath)) proc.unknownScript = true
     else delete proc.unknownScript
   }

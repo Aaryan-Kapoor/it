@@ -138,3 +138,11 @@ If It says "Reload It before sending new requests", reload the site to use the s
 If an update cannot load its backend functions, It keeps serving with the functions already loaded. The site shows this beside its pages and on Machines. Some pages or controls may fail because the site and functions differ. In an owner browser, the warning points to `it status` on the machine It runs on for the reason. After resolving the reported problem, restart It to retry loading the functions. `it service logs` shows what the service met. A paired screen shows the warning and asks you to open your owner browser.
 
 Machines compares the running versions already reported by the host and joined machines. A joined machine can say it is behind before its next release check. That alone does not offer an update: a release must also have been found by that machine.
+
+## The Windows command is missing after an interrupted update
+
+If an install or update was stopped while it was replacing `it.exe`, run the install command again. That restores the command without removing your pages or settings. Do not choose a program from the files named `it.old.*.exe` yourself.
+
+A service registered by this version can restore the exact previous program recorded by an interrupted install or update. It checks the writer's process number and creation time, so an unrelated process that later receives the same number does not prevent recovery. Once the writer has stopped, it checks that the file matches the recorded checksum before giving it the `it.exe` name again. It leaves a program already at that name alone. A missing or unreadable record, or a file that does not match it, needs the installer again.
+
+An older service launcher has no recovery step. Once the command is available, run `it service install` to refresh that launcher. A terminal command cannot repair its own missing executable, and a computer with no background service also needs the installer run again.

@@ -3,16 +3,21 @@
 // what stands for the program is a script that says its version as the program does.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import * as fs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { newer } from '@it/protocol'
 import { build } from 'esbuild'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { type Problem, VERSION } from './src/lib'
+import * as backend from './src/serve/backend'
 import { aloneAt } from './src/serve/backend'
 import { fetchNewer, keepBase, LOOKS_EVERY_MS, latest, programName, releases, watch, watched, watching } from './src/upgrade'
+
+vi.mock('node:fs', async (original) => ({ ...(await original<typeof import('node:fs')>()) }))
+vi.mock('./src/serve/backend', async (original) => ({ ...(await original<typeof import('./src/serve/backend')>()) }))
 
 describe('which version is newer', () => {
   test('is told by the three numbers, and never by a version that is not written as three', () => {
@@ -331,6 +336,44 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     release(VERSION)
     expect(await fetchNewer({ program: here() })).toBeNull()
     expect(asked).toEqual(['/latest/download/latest.json'])
+  })
+
+  test.each(['134365824000000001', undefined, null])('Windows replacement records its writer start time before moving the program (%s)', async (started) => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    const rename = fs.renameSync
+    const note = `${here()}.recovery.json`
+    const identity = vi.spyOn(backend, 'startOf').mockReturnValue(started)
+    const move = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (from === here()) throw new Error('interrupted before the first rename')
+      return rename(from, to)
+    })
+    try {
+      const result = await fetchNewer({
+        program: here(),
+        say: (line) => {
+          // Fetch and validate the executable for this test machine, then exercise the
+          // Windows replacement with the process identity supplied by its system API.
+          if (line.startsWith('Downloaded')) Object.defineProperty(process, 'platform', { value: 'win32' })
+        },
+      }).catch((err) => err)
+      if (started) {
+        expect(result.message).toBe('interrupted before the first rename')
+        expect(JSON.parse(readFileSync(note, 'utf8'))).toEqual({
+          file: expect.stringMatching(/^it\.old\.\d+\.exe$/),
+          sha256: createHash('sha256').update(says(VERSION)).digest('hex'),
+          pid: process.pid,
+          started,
+        })
+      } else {
+        expect(result).toMatchObject({ code: 'upgrade_program', message: expect.stringMatching(/process start time/) })
+        expect(existsSync(note)).toBe(false)
+      }
+      expect(readFileSync(here(), 'utf8')).toBe(says(VERSION))
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+      move.mockRestore()
+      identity.mockRestore()
+    }
   })
 
   test.each([false, true])(

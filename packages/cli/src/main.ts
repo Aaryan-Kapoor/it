@@ -82,12 +82,14 @@ import {
   textOf,
   translate,
   VERSION,
+  WINDOWS_CLEANUP,
   why,
-  writePrivate,
+  windowsDeletionCommand,
   windowsPathCommand,
   windowsPathHas,
   windowsPathRemoval,
   withoutTables,
+  writePrivate,
   written,
 } from './lib'
 import { joinedBefore, login, runsItsOwn } from './login'
@@ -1359,11 +1361,15 @@ function stepOutOf(folder: string): { at: string; deletedLater: boolean } | unde
     }
     let deletedLater = false
     try {
-      // A file's name on Windows has no quotation mark in it, so the name between two is the name
-      const line = `cmd.exe /d /c del /f /q "${at}"`
-      deletedLater =
-        spawnSync('reg.exe', ['add', RUN_ONCE, '/v', `ItRemoved${process.pid}`, '/t', 'REG_SZ', '/d', line, '/f'], { windowsHide: true, timeout: 15_000 })
-          .status === 0
+      const entry = `ItRemoved${process.pid}-${Date.now().toString(36)}`
+      const line = windowsDeletionCommand(entry)
+      if (line !== undefined) {
+        const reg = (args: string[]) => spawnSync('reg.exe', args, { windowsHide: true, timeout: 15_000 }).status === 0
+        if (reg(['add', WINDOWS_CLEANUP, '/v', entry, '/t', 'REG_SZ', '/d', at, '/f'])) {
+          deletedLater = reg(['add', RUN_ONCE, '/v', entry, '/t', 'REG_SZ', '/d', line, '/f'])
+          if (!deletedLater) reg(['delete', WINDOWS_CLEANUP, '/v', entry, '/f'])
+        }
+      }
     } catch {}
     return { at, deletedLater }
   }
@@ -1515,7 +1521,10 @@ async function uninstall(a: Args) {
         // Where an add-on is still to be taken out, the folder keeps what that takes and nothing else:
         // everything It held for the person goes all the same, and the program stays where it is.
         const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
-        if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
+        if (stepped?.deletedLater)
+          say(
+            `The program moved itself to ${stepped.at} to do this, and Windows was asked to delete it from there the next time you sign in. If it remains, delete it yourself.`,
+          )
         else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
         const retried = process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}
         takenOff = true

@@ -58,6 +58,16 @@ export const inHome = (...parts: string[]) => path.join(home(), ...parts)
  */
 export const psQuote = (v: string) => `'${v.replace(/['\u2018\u2019\u201a\u201b]/g, '$&$&')}'`
 
+/** The private queue of literal paths Windows removes after uninstall has ended. */
+export const WINDOWS_CLEANUP = 'HKCU\\Software\\It\\PendingRemoval'
+/** The RunOnce command carries only the queue entry's name, never the executable's path. */
+export function windowsDeletionCommand(entry: string): string | undefined {
+  if (!/^ItRemoved[0-9]+[a-z0-9-]*$/.test(entry)) return undefined
+  const script = `$k='HKCU:\\Software\\It\\PendingRemoval';$n='${entry}';try{[IO.File]::Delete((gpv -LiteralPath $k -Name $n));rp -LiteralPath $k -Name $n}catch{exit 1}`
+  const line = `powershell.exe -NoProfile -NonInteractive -Command "${script}"`
+  return line.length <= 260 ? line : undefined
+}
+
 /**
  * The line that puts a folder first on the PATH Windows keeps for this account, for a person
  * to run in PowerShell. That PATH is read and written as it is kept, with a name such as
