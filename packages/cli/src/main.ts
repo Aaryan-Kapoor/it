@@ -8,12 +8,9 @@ import { execFile, spawn, spawnSync } from 'node:child_process'
 import {
   appendFileSync,
   chmodSync,
-  closeSync,
   existsSync,
-  fchmodSync,
-  fsyncSync,
+  lstatSync,
   mkdirSync,
-  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -53,6 +50,7 @@ import {
   backendAt,
   basePort,
   call,
+  changeWhole,
   direct,
   doorRefusal,
   elsewhere,
@@ -69,6 +67,7 @@ import {
   machine,
   NOT_RUNNING,
   noteLeft,
+  noteWas,
   notKnown,
   notSetUp,
   Problem,
@@ -80,6 +79,7 @@ import {
   shutIn,
   siteAddress,
   textOf,
+  translate,
   VERSION,
   WINDOWS_CLEANUP,
   why,
@@ -88,10 +88,9 @@ import {
   windowsPathHas,
   windowsPathRemoval,
   withoutTables,
-  writeAll,
   written,
 } from './lib'
-import { login, runsItsOwn } from './login'
+import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { gather, noteConversation, publish } from './publish'
 import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
@@ -157,6 +156,25 @@ async function chosen(wanted: string[]): Promise<string[]> {
   )
   return said?.wakes ?? []
 }
+/**
+ * The apps It reopens closed conversations of on this machine as things stand, asked before a
+ * setup chooses anything. Null where It cannot be asked.
+ */
+const wokenNow = (): Promise<Set<string> | null> =>
+  call<{ wakes?: { harness: string }[] } | null>('query', api.machines.me).then(
+    (me) => new Set((me?.wakes ?? []).map((w) => w.harness)),
+    () => null,
+  )
+/**
+ * Of the apps that It reopens closed conversations of once a setup has chosen, those it does
+ * so for because of this setup: it did not before, by It's own word. That is what the person
+ * is told of, and not whether the app's add-on was installed already: a machine that was
+ * enrolled anew in the place of the one it was has its add-ons as they were, and reopening
+ * comes on for it with the choice all the same. Where It could not be asked how things stood,
+ * it is taken to have come on for the apps that were not connected before.
+ */
+const cameOn = (woken: string[], before: Set<string> | null, connected: Set<Harness>): string[] =>
+  woken.filter((id) => (before ? !before.has(id) : !connected.has(id as Harness)))
 /**
  * What setup says, once, of the apps it has just connected that It reopens closed
  * conversations of: reopening is on from the start, and it runs an agent with nobody
@@ -224,6 +242,16 @@ async function piped(): Promise<string | undefined> {
 // ---------- pages ----------
 
 async function source(a: Args) {
+  // The three say where one page is, and a command given two of them would have to choose which
+  // it meant: an agent that changed `--html` for `--file` and left the first in would publish
+  // the page it had meant to replace. So nothing is read and nothing published
+  const given = ['file', 'dir', 'html'].filter((name) => text(a, name) !== undefined).map((name) => `--${name}`)
+  if (given.length > 1)
+    throw new Problem(
+      `A ${NOUN.one} is published from one source, and this command was given ${given.slice(0, -1).join(', ')} and ${given.at(-1)}.`,
+      'invalid',
+      'Give one of --file, --dir and --html, or pipe HTML in with none of them.',
+    )
   const html = text(a, 'html') ?? (text(a, 'file') || text(a, 'dir') ? undefined : await piped())
   return gather({ html, file: text(a, 'file'), dir: text(a, 'dir') })
 }
@@ -353,22 +381,36 @@ async function create(a: Args) {
     if (!(err instanceof Problem) || err.code !== 'anothers' || slug === undefined) throw err
     const theirs = await call<Made>('query', api.artifacts.get, { slug }).catch(() => null)
     // The same conversation, under the id its app gave it before it was cleared or carried on: the page is its own
-    if (theirs?.session && carriedOn(theirs.session)) done = await publish({ ...page, take: true })
+    if (theirs?.session && carriedOn(theirs.session, theirs.machineId)) done = await publish({ ...page, take: true })
     else throw anothers(slug, theirs)
   }
   await published(done, a, done.version === 1)
 }
 
 /** What is known of a page that a conversation meant to make and that is another's. */
-type Made = { title?: string; agent?: string | null; machine?: string | null; updatedAt?: number; session?: { harness: string; id: string } | null }
+type Made = {
+  title?: string
+  agent?: string | null
+  machine?: string | null
+  machineId?: string | null
+  updatedAt?: number
+  session?: { harness: string; id: string } | null
+}
 /**
  * Whether a conversation is the one this command runs in, under an id it had before: an agent
  * app that clears a conversation, or carries it on, gives it a new id, and the connector on
  * this machine keeps which id became which.
+ *
+ * It is asked of a page the backend has just said is another conversation's. One under the very
+ * id this conversation has is therefore on another machine, where a conversation that was
+ * copied there has the same id: it is another's, and so is any page the backend says is on
+ * another machine than this, whatever became of its id here. Taking a page from another machine
+ * is for whoever says so, with --take or `it open`.
  */
-function carriedOn(was: { harness: string; id: string }): boolean {
+function carriedOn(was: { harness: string; id: string }, onMachine?: string | null): boolean {
   const now = sessionAsked()?.session
-  if (!now || now.harness !== was.harness) return false
+  if (!now || now.harness !== was.harness || now.id === was.id) return false
+  if (typeof onMachine !== 'string' || onMachine !== readJson<{ id?: string }>(inHome('machine.json'))?.id) return false
   const became = readJson<Record<string, string>>(inHome('aliases.json')) ?? {}
   let key = `${was.harness}:${was.id}`
   for (let hops = 0; hops < 10 && typeof became[key] === 'string'; hops++) key = became[key]!
@@ -473,9 +515,19 @@ async function tourWhenAsked(a: Args) {
   const seconds = text(a, 'timeout') === undefined ? 100 : Number(text(a, 'timeout'))
   if (!Number.isFinite(seconds) || seconds <= 0) throw new Problem('--timeout is a number of seconds.', 'invalid')
   const harness = sessionAsked()?.session.harness
-  const until = Date.now() + seconds * 1000
+  const until = performance.now() + seconds * 1000
   for (;;) {
-    const { asked } = await call<{ asked: boolean }>('mutation', api.tour.wait, harness ? { harness } : {})
+    const answer = await call<{ asked: boolean }>('mutation', api.tour.wait, harness ? { harness } : {}).catch((err) => {
+      if (
+        err instanceof Problem &&
+        err.code === 'conflict' &&
+        err.message === 'The person said on the site that they want no tour, so there is nothing to wait for. Give the tour when they ask you for it.'
+      )
+        return null
+      throw err
+    })
+    if (answer === null) return out({ skipped: true, hint: 'The person skipped the tour.' })
+    const { asked } = answer
     if (asked) {
       // What the person does on the tour's first page may come before this agent's first wait
       // for it. The connector is told now that this conversation waits for each thing in turn,
@@ -488,7 +540,7 @@ async function tourWhenAsked(a: Args) {
       }
       return written(process.stdout, tourForOneThatWaited(GUIDE))
     }
-    const left = until - Date.now()
+    const left = until - performance.now()
     if (left <= 0) break
     await new Promise((r) => setTimeout(r, Math.min(TOUR_ASK_EVERY_MS, left)))
   }
@@ -497,6 +549,18 @@ async function tourWhenAsked(a: Args) {
     timedOut: true,
     hint: 'Nobody has pressed "Take the tour" on the site yet. Run this again to go on waiting. If the person has not opened the pairing link yet, that comes first.',
   })
+}
+
+/**
+ * Whether a page that has one of the tour's ids is the tour's own, which is asked before it is
+ * written over and before it is deleted. The id proves nothing: a person may have a page of
+ * their own called `tour-chess`. So it is told by what the tour gives its page of that name,
+ * taken together: the title, and a state that keeps each thing the tour's page keeps.
+ */
+function isTours(name: string, title: unknown, state: unknown): boolean {
+  const its = tourPage(name)
+  const keeps = typeof state === 'object' && state !== null && !Array.isArray(state) ? state : {}
+  return title === its.title && Object.keys(JSON.parse(its.state) as Record<string, unknown>).every((key) => Object.hasOwn(keeps, key))
 }
 
 /**
@@ -515,21 +579,40 @@ async function tour(a: Args) {
   if (a.flags.wait === true && what === undefined) return tourWhenAsked(a)
   if (what === undefined) return written(process.stdout, GUIDE)
   const menu = `${TOUR_PREFIX}${TOUR_MENU}`
-  // What the menu holds of what has been seen. Nothing where there is no menu yet, or it says nothing of it
-  const seenSoFar = (): Promise<string[]> =>
-    call<{ json: string }>('query', api.state.get, { slug: menu })
-      .then((s) => {
-        const said = (JSON.parse(s.json) as { seen?: unknown }).seen
-        return Array.isArray(said) ? [...new Set(said.filter((name): name is string => typeof name === 'string' && TOUR_STEPS.includes(name)))] : []
-      })
-      .catch(() => [])
+  // The title and state are read together just before a change. The backend has no conditional tour mutation.
+  const tourState = async (slug: string): Promise<Record<string, unknown> | undefined> => {
+    const [page, state] = await Promise.all([call<{ title?: string } | null>('query', api.artifacts.get, { slug }).catch(() => null), keptBy(slug)])
+    if (!page) return undefined
+    if (isTours(slug.slice(TOUR_PREFIX.length), page.title, state)) return state as Record<string, unknown>
+    await written(process.stderr, `${slug} is not a page the tour made, so it was left as it is.\n`)
+    return undefined
+  }
+  const seenIn = (state: Record<string, unknown> | undefined): string[] => {
+    const said = state?.seen
+    return Array.isArray(said) ? [...new Set(said.filter((name): name is string => typeof name === 'string' && TOUR_STEPS.includes(name)))] : []
+  }
+  const seenSoFar = async (): Promise<string[]> => seenIn(await tourState(menu))
+  // What a page keeps as its state, or nothing where that cannot be read.
+  const keptBy = (slug: string): Promise<unknown> =>
+    call<{ json: string }>('query', api.state.get, { slug }).then(
+      (s) => parseJson(s.json),
+      () => undefined,
+    )
   if (what === 'clear') {
-    const pages = await call<{ slug: string }[]>('query', api.artifacts.list)
+    const pages = await call<{ slug: string; title?: string }[]>('query', api.artifacts.list)
     const gone: string[] = []
-    // The tour's own pages, each by its whole id, and no other page whose id only begins as theirs do
+    // The tour's own pages, each by its whole id, and no other page whose id only begins as theirs do.
+    // Nor one that has such an id and is not the tour's by what is in it: that is the person's own, and stays
     const its = new Set(NAMES.map((name) => `${TOUR_PREFIX}${name}`))
-    const had = pages.some((p) => its.has(p.slug)) ? await seenSoFar() : undefined
-    for (const { slug } of pages.filter((p) => its.has(p.slug))) {
+    const tours: string[] = []
+    const kept: string[] = []
+    for (const p of pages.filter((p) => its.has(p.slug))) (isTours(p.slug.slice(TOUR_PREFIX.length), p.title, await keptBy(p.slug)) ? tours : kept).push(p.slug)
+    const had = tours.length ? await seenSoFar() : undefined
+    for (const slug of tours) {
+      if ((await tourState(slug)) === undefined) {
+        kept.push(slug)
+        continue
+      }
       await call('mutation', api.artifacts.remove, { slug })
       gone.push(slug)
     }
@@ -538,7 +621,15 @@ async function tour(a: Args) {
     // And It is told that a tour is over, so that the site no longer leads someone with no pages
     // into one. An It from before it kept that refuses this, which changes nothing
     if (had) await call('mutation', api.tour.done, {}).catch(() => {})
-    return out({ deleted: gone })
+    return out({
+      deleted: gone,
+      ...(kept.length
+        ? {
+            kept,
+            hint: `${kept.join(', ')} ${kept.length === 1 ? 'has the id of a page of the tour and is not a page' : 'have the ids of pages of the tour and are not pages'} the tour made, so ${kept.length === 1 ? 'it was' : 'they were'} left as ${kept.length === 1 ? 'it is' : 'they are'}.`,
+          }
+        : {}),
+    })
   }
   if (what !== 'show') throw new Problem(`It does not know what to do with "${what}".`, 'invalid', `Usage: it ${USAGE}`)
   const asked = need(a._[1], `which page of the tour (${NAMES.join(', ')}, or next)`, USAGE)
@@ -553,14 +644,28 @@ async function tour(a: Args) {
   // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
-  // The page is this conversation's from now on, whoever showed it last
+  // A page that has this id already and is not the tour's by what is in it is the person's own:
+  // nothing is published over it. An id that was only begun under holds no page yet
+  const there = await call<{ title?: string; version?: number | null } | null>('query', api.artifacts.get, { slug: made.slug }).catch((err) => {
+    if (err instanceof Problem && err.code === 'not_found') return null
+    throw err
+  })
+  if (there && typeof there.version === 'number' && !isTours(name, there.title, await keptBy(made.slug)))
+    throw new Problem(
+      `There is already a ${NOUN.one} with the id ${made.slug}${there.title ? `, ${named(there.title)}` : ''}, and it is not one the tour made. Nothing was published.`,
+      'conflict',
+      `The tour shows this ${NOUN.one} under that id and no other, and would replace what is there. Show another of the tour’s pages, or tell the person which ${NOUN.one} is in the way and ask them whether it may be deleted: \`it delete ${made.slug}\` deletes it for good.`,
+    )
+  // The page is this conversation's from now on, whoever showed it last. An agent app that does
+  // not say which conversation it is in has none to take the page for: it publishes the page all
+  // the same, and waits for what is done on it by the page's id, as the tour tells it to
   const done = await publish({
     slug: made.slug,
     title: made.title,
     files: gather({ html: made.html }),
     agent: text(a, 'agent'),
     state: made.state,
-    take: true,
+    take: by !== undefined,
     itsOwn: true,
   })
   // Counted as a page of the tour that was shown, by its name, which is It's own
@@ -568,11 +673,21 @@ async function tour(a: Args) {
   // And it starts as it was first made, whatever a tour before this one left in it. The menu
   // alone keeps something: which things have been seen
   const fresh = JSON.parse(made.state) as Record<string, unknown>
-  await call('mutation', api.state.patch, { slug: made.slug, patch: JSON.stringify(name === TOUR_MENU ? { ...fresh, seen } : fresh), replace: true })
+  const current = await tourState(made.slug)
+  if (current !== undefined)
+    await call('mutation', api.state.patch, {
+      slug: made.slug,
+      patch: JSON.stringify(name === TOUR_MENU ? { ...fresh, seen: seenIn(current) } : fresh),
+      replace: true,
+    })
   // A thing that is shown has been seen from now on, which the menu is told where there is one:
   // it is there unless the agent began somewhere else, and then nothing is kept
-  if (TOUR_STEPS.includes(name) && !seen.includes(name))
-    await call('mutation', api.state.patch, { slug: menu, patch: JSON.stringify({ seen: [...seen, name] }) }).catch(() => {})
+  if (TOUR_STEPS.includes(name)) {
+    const current = await tourState(menu)
+    const latest = seenIn(current)
+    if (current !== undefined && !latest.includes(name))
+      await call('mutation', api.state.patch, { slug: menu, patch: JSON.stringify({ seen: [...latest, name] }) }).catch(() => {})
+  }
   a.flags.open = true
   await published(done, a)
 }
@@ -692,8 +807,17 @@ async function wait(a: Args) {
   if (unsure) say(JSON.stringify({ note: unsure }))
   // It is asked once before anything is waited for, as a wait on a named page asks for its page:
   // where It cannot be reached at all, that is said now, and not taken for a wait in which nothing happened
-  /** Asks It what is waiting for this, as it stands now. Throws where It cannot be asked. */
-  const waitingNow = () => (slug ? call<Listed[]>('query', api.delivery.waiting, { slug }) : call<Listed[]>('query', api.delivery.waitingFor, { session: me! }))
+  /**
+   * Asks It what is waiting for this, as it stands now. Throws where It cannot be asked. With no
+   * page named that is asked of each id the conversation is known by, the ones it had before it
+   * was cleared among them once the connector has said them: a page made under an earlier id is
+   * still recorded under it, and what is done on it waits there.
+   */
+  const waitingNow = async (ids = [me!]): Promise<Listed[]> => {
+    if (slug) return call<Listed[]>('query', api.delivery.waiting, { slug })
+    const each = await Promise.all(ids.map((session) => call<Listed[]>('query', api.delivery.waitingFor, { session })))
+    return [...new Map(each.flat().map((c) => [c.id, c])).values()].sort((x, y) => x.at - y.at)
+  }
   if (!slug) await waitingNow()
   const who = crypto.randomUUID()
   // The connector is told what this waits for: one page, or, with none named, this
@@ -766,7 +890,11 @@ async function wait(a: Args) {
     await local('/waiting', { method: 'POST', body: { id: who, done: true } })
     await client.close().catch(() => {})
     // A wait that was given something has its answer, whatever went wrong beside it
-    await end(code === 1 && printedIds.size > 0 && !follow ? 0 : code)
+    const last = code === 1 && printedIds.size > 0 && !follow ? 0 : code
+    // Counted here, where a wait ends: it never comes back to where the other commands are
+    // counted. One that was ended by a signal, as a wait that follows is, ended as it was meant to
+    counted(last === 0 || last === 130 ? undefined : 'error')
+    await end(last)
   }
   const report = async () => {
     for (const id of unreported) {
@@ -869,8 +997,13 @@ async function wait(a: Args) {
         void onClicks(latest)
       },
       (err) => {
-        say(`wait: ${err.message}`)
-        void finish(1)
+        // What It refuses here (a page that was deleted while it was waited on, say) is said
+        // as every command says a refusal: in JSON, with its code, so that whatever reads this
+        // can tell one from another as it can before a wait has begun
+        void translate(err).catch((p: Problem) => {
+          say(JSON.stringify({ error: { code: p.code, message: p.message, ...(p.hint ? { hint: p.hint } : {}) } }))
+          void finish(1)
+        })
       },
     )
   if (slug) watch('page', api.delivery.waiting, { slug })
@@ -903,7 +1036,7 @@ async function wait(a: Args) {
       busy = true
       let there: Listed[]
       try {
-        there = (await waitingNow()).filter((c) => !printedIds.has(c.id) && mine(c))
+        there = (await waitingNow(sessions)).filter((c) => !printedIds.has(c.id) && mine(c))
       } catch (err) {
         busy = false
         if (ending || printedOne()) return
@@ -937,7 +1070,16 @@ async function wait(a: Args) {
       await emit({ timedOut: true })
       void finish(0)
     }
-    setTimeout(() => void timeUp(), seconds * 1000)
+    // A timer of the runtime counts no further than some twenty-four days, and one given more
+    // rings at once: a wait told to go on for a month would say in its first moment that nothing
+    // had happened. So the time is waited out a day at most at a time, until it is up
+    const until = performance.now() + seconds * 1000
+    const later = (): void => {
+      const left = until - performance.now()
+      if (left <= 0) return void timeUp()
+      setTimeout(later, Math.min(left, 86_400_000))
+    }
+    later()
   }
   for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => void finish(130))
   await new Promise(() => {})
@@ -1186,6 +1328,40 @@ function stepOutOf(folder: string): { at: string; deletedLater: boolean } | unde
   return undefined
 }
 
+/**
+ * Whether a folder is It's own, which is asked before the whole of it is deleted. A name proves
+ * nothing: many a project has a folder called `addons`, or a `service.json`. So it is told by
+ * what It alone writes, read and found to be that: its settings, the identity this machine was
+ * given, or the note it keeps of an add-on it put into an agent app. Or by the program asking
+ * being the one in the folder's own `bin`, which is all an install that stopped early leaves.
+ */
+function holdsIt(folder: string, program: string = process.execPath): boolean {
+  const read = (...at: string[]) => {
+    const kept = readJson<Record<string, unknown>>(path.join(folder, ...at))
+    return kept && typeof kept === 'object' && !Array.isArray(kept) ? kept : undefined
+  }
+  const settings = read('service.json')
+  if (typeof settings?.instanceSecret === 'string' && typeof settings.adminKey === 'string') return true
+  const machine = read('machine.json')
+  if (typeof machine?.id === 'string' && typeof machine.key === 'object' && machine.key !== null) return true
+  if (HARNESSES.some((id) => Array.isArray(read('addons', `${id}.json`)?.installs))) return true
+  try {
+    const bin = path.join(folder, 'bin')
+    const executable = path.join(bin, process.platform === 'win32' ? 'it.exe' : 'it')
+    return (
+      lstatSync(executable).isFile() &&
+      realpathSync(bin) === path.join(realpathSync(folder), 'bin') &&
+      path.dirname(realpathSync(executable)) === realpathSync(bin) &&
+      realpathSync(executable) === realpathSync(program)
+    )
+  } catch {
+    return false
+  }
+}
+
+/** Whether this command has taken It off the machine. Nothing is counted after that: the folder a count is kept in is gone, or holds only what taking an add-on out later needs. */
+let takenOff = false
+
 async function uninstall(a: Args) {
   const folder = home()
   const said: string[] = []
@@ -1194,10 +1370,7 @@ async function uninstall(a: Args) {
     if (forPerson(a)) tell([line])
   }
   // Only a folder that is It's is ever removed: one a variable names by mistake is left alone
-  const its = ['service.json', 'machine.json', 'addons', path.join('bin', process.platform === 'win32' ? 'it.exe' : 'it')].some((name) =>
-    existsSync(path.join(folder, name)),
-  )
-  if (!its) throw new Problem(`${folder} does not hold It, so there is nothing here to take off this machine.`, 'invalid')
+  if (!holdsIt(folder)) throw new Problem(`${folder} does not hold It, so there is nothing here to take off this machine.`, 'invalid')
   // Never the person's own folder, and never the whole disk, however the path to either is
   // spelled: asked of the folders themselves, since a link somewhere along the way makes the
   // same folder read as another. Where that cannot be asked, nothing is removed.
@@ -1258,12 +1431,21 @@ async function uninstall(a: Args) {
       async () => {
         removing = true
         if (heard.length) say('The backend program that an It which had died left running here is stopped.')
-        // The add-ons go only after no backend program has the folder.
+        // 1. The add-ons, each from where this folder put it. One that could not be taken out is
+        // taken out by running this again, which needs the note It keeps of where it put the add-on,
+        // and the program: so those are kept, and said, with how it is run once its PATH is gone
+        const program = path.join(folder, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
+        let kept = false
         for (const id of HARNESSES) {
           if (!existsSync(stampFile(id))) continue
           const gone = await disconnect(id, say).catch(() => false)
           if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
-          else left.push(`${KNOWN[id].label} still has It’s add-on, which could not be taken out. Its own command for add-ons removes it.`)
+          else {
+            kept = true
+            left.push(
+              `${KNOWN[id].label} still has It’s add-on, which could not be taken out. What It noted of where it put the add-on is kept in ${path.join(folder, 'addons')}, with the program: once ${KNOWN[id].label} can be run from here, run \`${program} uninstall\`${process.env.IT_HOME ? `, with IT_HOME set to ${folder} as it is now` : ''}, which takes the add-on out and deletes the folder. To leave the add-on where it is, delete ${folder} yourself.`,
+            )
+          }
         }
         // 3. Its line in the shell's profile, with the comment above it
         const bin = path.join(folder, 'bin')
@@ -1288,20 +1470,36 @@ async function uninstall(a: Args) {
         // 5. Its folder, the program in it included. A program that is running may delete its own
         // file on every system but Windows, where it steps out of the folder first. What the service
         // held open there a moment ago may be held a moment longer, and is tried again.
-        const stepped = process.platform === 'win32' ? stepOutOf(folder) : undefined
+        const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
         if (stepped?.deletedLater)
           say(
             `The program moved itself to ${stepped.at} to do this, and Windows was asked to delete it from there the next time you sign in. If it remains, delete it yourself.`,
           )
         else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+        const retried = process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}
+        takenOff = true
+        // Where the folder that was named is a link to the one It is kept in, deleting it deletes
+        // the link and leaves everything It held where it was, pages and keys and all, with It said
+        // to be gone. So the folder the link leads to is deleted, which is the one that was looked at
+        // above and found to be It's and not the person's own, and then the link.
+        let linked = false
+        try {
+          linked = lstatSync(folder).isSymbolicLink()
+        } catch {}
         try {
           // A start that read these settings before uninstall must refuse once the inner lock goes.
           rmSync(path.join(folder, 'service.json'), { force: true })
-          rmSync(folder, { recursive: true, force: true, ...(process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}) })
+          if (!kept) {
+            rmSync(linked ? real : folder, { recursive: true, force: true, ...retried })
+            if (linked) rmSync(folder, { force: true })
+          } else
+            for (const name of readdirSync(folder))
+              if (name !== 'addons' && name !== 'bin') rmSync(path.join(folder, name), { recursive: true, force: true, ...retried })
         } catch (err) {
           left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
         }
-        if (existsSync(folder) && !left.some((line) => line.startsWith(folder))) left.push(`${folder} could not be deleted whole. Delete it to finish.`)
+        if (!kept && (existsSync(folder) || existsSync(real)) && !left.some((line) => line.startsWith(folder)))
+          left.push(`${existsSync(real) ? real : folder} could not be deleted whole. Delete it to finish.`)
       },
     )
   } catch (err) {
@@ -1325,37 +1523,8 @@ async function uninstall(a: Args) {
 /**
  * Takes the installer's line out of every shell profile it may have put it in, with the comment
  * and the blank line it wrote above it, and says which files it was in. A profile that held
- * nothing else was made by the installer, and goes too.
+ * nothing else is removed unless it is a link, whose target is left empty.
  */
-/**
- * Puts new text in the place of a file's, whole or not at all: written beside the file with
- * every byte on the disk, under the file's own permissions, and only then given its name. A
- * file that is a link is written where the link leads. These are the person's own files, with
- * their own settings in them beside It's line, and a disk that fills or a program that is ended
- * half way must leave them as they were.
- */
-function replaceWhole(file: string, text: string): void {
-  const target = realpathSync(file)
-  const part = `${target}.it-${process.pid}.part`
-  const mode = statSync(target).mode & 0o777
-  try {
-    const out = openSync(part, 'w', mode)
-    try {
-      // Every byte, or an error: a disk that is nearly full takes a part of what it is given
-      // and says so without failing, and a part is not what is given the file's name
-      writeAll(out, Buffer.from(text))
-      // The permissions the file had, whatever this program's own mask would have left of them
-      fchmodSync(out, mode)
-      fsyncSync(out)
-    } finally {
-      closeSync(out)
-    }
-    renameSync(part, target)
-  } finally {
-    rmSync(part, { force: true })
-  }
-}
-
 /** The files a shell reads when it starts, each with the line the install script writes into it to put a folder on the PATH. */
 function profileLines(bin: string): Map<string, string> {
   const dirs = [process.env.ZDOTDIR, os.homedir()].filter((d): d is string => typeof d === 'string' && d !== '')
@@ -1393,31 +1562,32 @@ function unlisted(bin: string): { changed: string[]; failed: { file: string; why
   const changed: string[] = []
   const failed: { file: string; why: string }[] = []
   for (const [file, line] of files) {
-    let text: string
+    /** The profile without the line, nothing where the line is not in it, and null where nothing else is. */
+    const without = (text: string): string | null | undefined => {
+      const kept: string[] = []
+      let found = false
+      for (const l of text.split('\n')) {
+        if (l !== line) {
+          kept.push(l)
+          continue
+        }
+        found = true
+        // The comment the installer wrote above it, and the blank line above that
+        if (kept.at(-1) === '# It') kept.pop()
+        if (kept.at(-1) === '') kept.pop()
+      }
+      if (!found) return undefined
+      const after = kept.join('\n')
+      return after.trim() === '' ? null : after.endsWith('\n') || !text.endsWith('\n') ? after : `${after}\n`
+    }
+    // A profile that is not there, or cannot be read, is not known to hold the line
     try {
-      text = readFileSync(file, 'utf8')
+      readFileSync(file, 'utf8')
     } catch {
       continue
     }
-    const lines = text.split('\n')
-    const kept: string[] = []
-    let found = false
-    for (const l of lines) {
-      if (l !== line) {
-        kept.push(l)
-        continue
-      }
-      found = true
-      // The comment the installer wrote above it, and the blank line above that
-      if (kept.at(-1) === '# It') kept.pop()
-      if (kept.at(-1) === '') kept.pop()
-    }
-    if (!found) continue
-    const after = kept.join('\n')
     try {
-      if (after.trim() === '') rmSync(file, { force: true })
-      else replaceWhole(file, after.endsWith('\n') || !text.endsWith('\n') ? after : `${after}\n`)
-      changed.push(file)
+      if (changeWhole(file, without)) changed.push(file)
     } catch (err) {
       failed.push({ file, why: (err as NodeJS.ErrnoException).code ?? 'an error' })
     }
@@ -1472,11 +1642,14 @@ function crumbs(folder: string): void {
     } catch {}
   if (anothers(path.join(codexHome, 'plugins', 'cache', 'it'))) return
   try {
-    const file = path.join(codexHome, 'config.toml')
-    const text = readFileSync(file, 'utf8')
-    // A table of its own for each hook, holding the one line that says it was trusted
-    const without = withoutTables(text, (header) => /^\[hooks\.state\."it-bridge@it:[^"]*"\]/.test(header)).replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
-    if (without !== text) replaceWhole(file, without.replace(/\n{3,}/g, '\n\n'))
+    // Codex saves this file itself, when the person trusts a project or a plugin's hooks, and
+    // may do so while this is at work: the change is made to what the file holds at the moment
+    // it is replaced, so that nothing Codex saved meanwhile is taken back
+    changeWhole(path.join(codexHome, 'config.toml'), (text) => {
+      // A table of its own for each hook, holding the one line that says it was trusted
+      const without = withoutTables(text, (header) => /^\[hooks\.state\."it-bridge@it:[^"]*"\]/.test(header)).replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
+      return without === text ? undefined : without.replace(/\n{3,}/g, '\n\n')
+    })
   } catch {}
   try {
     rmSync(path.join(codexHome, 'plugins', 'cache', 'it'), { recursive: true, force: true })
@@ -1734,7 +1907,11 @@ async function settingUpLed(a: Args, begunAlready = false) {
     flow.step('This machine').done(me.name)
 
     // ---------- the agent apps
-    const found = await detectAll()
+    // Said for as long as they are looked for: each app is asked which version it is and what
+    // it has installed, and one that is slow to answer is waited for, up to a minute for each
+    // thing asked. With nothing drawn meanwhile, the screen stood still under a step that was done
+    const looking = flow.step('Agent apps', 'looking for them on this machine')
+    const found = await detectAll().finally(() => looking.clear())
     const usable = found.filter((h) => supported(h.id) && h.addon !== 'too_old')
     let wanted: Harness[]
     const only = text(a, 'only')
@@ -1768,6 +1945,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
     const apps = flow.step('Agent apps', found.length ? 'connecting' : '')
     const connectedBefore = new Set(found.filter((h) => h.addon === 'connected').map((h) => h.id))
     // The backend is told of the choice before anything is changed on this machine, as in `settingUp`
+    // Asked only where an app is chosen: with none, reopening comes on for none
+    const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
     await reconcile(wanted, quiet)
     woken ??= await chosen(wanted)
@@ -1787,14 +1966,18 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // What decides whether Codex's first page appears at all is said by itself, and first
     const shut = codexShut(after)
     if (shut) left.push(shut)
-    // That reopening is on for what was just connected, said once: not again each time setup is run
-    const waking = wakesSaid(woken.filter((id) => !connectedBefore.has(id as Harness) && on.some((h) => h.id === id)))
+    // That reopening came on with this setup, said once: not again each time setup is run
+    const waking = wakesSaid(cameOn(woken, wokenBefore, connectedBefore).filter((id) => on.some((h) => h.id === id)))
     if (waking) left.push(waking)
     for (const h of after) {
       if (h.addon === 'needs_approval' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !connectedBefore.has(h.id)) left.push(`${KNOWN[h.id].label}: ${AFTER[h.id]}`)
       // An app that was found and whose add-on is held back is named, with how to ask for it: left unsaid, its user is told that no app was found
       else if (h.addon === 'unavailable' && h.detail && whyHeldBack(h.id)) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
+      // And one that is too old for It is named with the version It needs and what to do. The
+      // list to choose from says as much of it, and is not shown where no app can be connected:
+      // someone whose only agent app is too old was told that none was found that It can connect, and no more
+      else if (h.addon === 'too_old' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
     }
 
     // Registered is not yet running. The connector itself is asked, and given a little while to answer
@@ -1963,6 +2146,7 @@ async function joinedInstead(a: Args): Promise<boolean> {
         const done = await login(asked)
         flow.line()
         flow.line(`${flow.green('✓')} ${'Joined'.padEnd(20)} ${flow.dim(`as “${done.name}”`)}`)
+        if (done.waitsFor !== undefined) flow.line(flow.dim(joinedBefore(done.waitsFor)))
         return true
       } catch (err) {
         if (!(err instanceof Problem)) throw err
@@ -2054,6 +2238,8 @@ async function settingUp(a: Args, joined: boolean) {
     // would otherwise take out again, by the choice from before, what is being connected here.
     // Where the backend cannot be reached, what is on this machine is put right all the same,
     // so that an add-on the person chose to remove is removed, and the failure is said after
+    // Asked only where an app is chosen: with none, reopening comes on for none
+    const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
     await reconcile(wanted, say)
     woken ??= await chosen(wanted)
@@ -2096,9 +2282,9 @@ async function settingUp(a: Args, joined: boolean) {
     // What decides whether Codex's first page appears at all is said by itself, and first.
     const shut = codexShut(after)
     if (shut) say(`\n${shut}`)
-    // That reopening is on for what was just connected, said once: not again each time setup is run
+    // That reopening came on with this setup, said once: not again each time setup is run
     const waking = wakesSaid(
-      woken.filter((id) => !before.has(id as Harness) && after.some((h) => h.id === id && (h.addon === 'connected' || h.addon === 'needs_approval'))),
+      cameOn(woken, wokenBefore, before).filter((id) => after.some((h) => h.id === id && (h.addon === 'connected' || h.addon === 'needs_approval'))),
     )
     if (waking) say(`\n${waking}`)
     for (const h of after) {
@@ -2189,11 +2375,13 @@ async function networkAsItStands(running: boolean): Promise<ReturnType<typeof ne
  * asks as the service itself does, with the key in It's settings, so that it needs nothing of
  * this machine's enrolment.
  */
-async function doorStands(config: { port: number; adminKey: string }): Promise<{ on: boolean; wanted: boolean } | undefined> {
+async function doorStands(config: { port: number; adminKey: string }): Promise<{ on: boolean; wanted: boolean; tailnet?: boolean } | undefined> {
   const said = (await asAdmin({ api: backendAt(config.port).api, adminKey: config.adminKey }, 'network:current', {}).catch(() => undefined)) as
-    | { on?: unknown; wanted?: unknown }
+    | { on?: unknown; wanted?: unknown; tailnet?: unknown }
     | undefined
-  return typeof said?.on === 'boolean' && typeof said.wanted === 'boolean' ? { on: said.on, wanted: said.wanted } : undefined
+  return typeof said?.on === 'boolean' && typeof said.wanted === 'boolean'
+    ? { on: said.on, wanted: said.wanted, ...(typeof said.tailnet === 'boolean' ? { tailnet: said.tailnet } : {}) }
+    : undefined
 }
 
 /**
@@ -2212,11 +2400,16 @@ async function turnNetwork(
    * Waits until the running service has looked at a setting and said so, and gives how its
    * door then stands. Nothing when no service is running to be waited for.
    */
-  const taken = async (setting: boolean) => {
+  const taken = async (setting: boolean, policy?: boolean) => {
     if (!running) return undefined
     const until = Date.now() + TAKEN_MS
     let stands = await doorStands(config)
-    while (stands !== undefined && stands.wanted !== setting && Date.now() < until) {
+    while (
+      stands !== undefined &&
+      (stands.wanted !== setting ||
+        (stands.tailnet !== undefined && ((!setting && stands.on) || (setting && stands.on && policy !== undefined && stands.tailnet !== policy)))) &&
+      Date.now() < until
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 200))
       stands = await doorStands(config)
     }
@@ -2229,14 +2422,16 @@ async function turnNetwork(
     noteNetwork(false)
     stands = await taken(false)
   }
-  // Whom the door answers changes with nothing else changing when only the tailnet is turned
-  // to or from. The service opens its door anew for that at its next look, which is waited out
   const onlyWhom = running && on && config.network && (config.tailnet === true) !== tailnet
   noteNetwork(on, tailnet)
   // The service that is running takes it by itself. With none running there is nothing to wait for.
-  stands = await taken(on)
-  if (onlyWhom) await new Promise((resolve) => setTimeout(resolve, 2500))
-  if (stands !== undefined && stands.wanted !== on)
+  stands = await taken(on, tailnet)
+  // Older backends report no applied policy. They keep the earlier wait for a change in whom the door answers.
+  if (onlyWhom && stands?.tailnet === undefined) await new Promise((resolve) => setTimeout(resolve, 2500))
+  if (
+    stands !== undefined &&
+    (stands.wanted !== on || (stands.tailnet !== undefined && ((!on && stands.on) || (on && stands.on && stands.tailnet !== tailnet))))
+  )
     throw new Problem(
       `The network is turned ${on ? 'on' : 'off'} in It’s settings, and the service that is running has not taken that.`,
       'not_taken',
@@ -2557,9 +2752,10 @@ const HELP = `it ${VERSION}: put a live ${NOUN.one} on any display you own, and 
 Pages
   it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open] [--on "<display>"]
   it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open] [--on "<display>"]
-                                 Both take [--agent <name>], a label for who made it, and
+                                 Both take [--agent <name>], a label for who made it,
+                                 which a ${NOUN.one} keeps until another conversation has it, and
                                  [--take], which gives the ${NOUN.one} to this conversation.
-                                 Without it, create makes nothing under an id that is
+                                 Without --take, create makes nothing under an id that is
                                  another conversation's ${NOUN.one}, and says whose it is.
   it list | it read <id> | it delete <id> | it rollback <id> <version>
 
@@ -2860,6 +3056,7 @@ async function main(argv: string[]): Promise<void> {
         return login(asked)
       }).catch(said)
       say(`\nThis machine has joined as "${done.name}".`)
+      if (done.waitsFor !== undefined) say(joinedBefore(done.waitsFor))
       // The key just made is in It's folder. In a person's own profile that is theirs alone. A
       // folder they named instead is as private as they made it, on Windows, where a file has
       // its folder's permissions and this program cannot give it others.
@@ -2879,6 +3076,9 @@ async function main(argv: string[]): Promise<void> {
       // The machine is taken off the person's machines first. If It cannot be told, the key
       // is kept: a key thrown away here would leave the machine among them with nobody able
       // to use it, and its pages with nowhere to send their clicks.
+      // What this machine was at the It it joined is written down before It is told that it
+      // leaves: where that cannot be written, nothing has been done yet, and this can be run again
+      noteWas()
       if (enrolledHere() && !a.flags.force) {
         try {
           await call('mutation', api.machines.leave)
@@ -3087,7 +3287,25 @@ async function main(argv: string[]): Promise<void> {
           },
         )
       }
-      const shown = shownAs(await show(slug, a))
+      const taken = `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
+      let shown: ReturnType<typeof shownAs>
+      try {
+        shown = shownAs(await show(slug, a))
+      } catch (err) {
+        if (!took || !(err instanceof Problem)) throw err
+        // The page was made this conversation's a moment ago, and that stands whatever became of
+        // showing it. Told only that there is no such display, an agent takes it that nothing was
+        // changed, while what is done on the page, where it is still up, now comes to it
+        process.exitCode = 1
+        return out({
+          id: slug,
+          shownOn: [],
+          notShown: { code: err.code, message: err.message, ...(err.hint ? { hint: err.hint } : {}) },
+          note: taken,
+          hint: `The ${NOUN.one} was not shown, and \`notShown\` says why. It was made this conversation’s before that, and stays so. Run \`it open ${slug}\` again to show it.`,
+          ...(guessed ? { session: guessed } : {}),
+        })
+      }
       if (notTaken) {
         process.exitCode = 1
         return out({
@@ -3101,7 +3319,7 @@ async function main(argv: string[]): Promise<void> {
       return out({
         id: slug,
         ...shown,
-        ...(took ? { note: `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.` } : {}),
+        ...(took ? { note: taken } : {}),
         ...(guessed ? { session: guessed } : {}),
       })
     }
@@ -3230,7 +3448,7 @@ const began = Date.now()
 function counted(code?: string): void {
   try {
     const cmd = process.argv[2]
-    if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'serve') return
+    if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'serve' || takenOff) return
     const harness = sessionAsked()?.session.harness
     const by = harness
       ? (HARNESSES as readonly string[]).includes(harness)
@@ -3245,7 +3463,9 @@ function counted(code?: string): void {
 main(process.argv.slice(2)).then(
   () => {
     clearInterval(whileItRuns)
-    counted()
+    // A command that did a part of what it was asked, said which part it did not, and set how it
+    // ends has not ended well: it is counted by how it ends, and not by its having come back
+    counted(process.exitCode ? (process.exitCode === 2 ? 'invalid' : 'error') : undefined)
     if (!['wait', 'serve'].includes(process.argv[2] ?? '')) process.exitCode ??= 0
     return left()
   },
