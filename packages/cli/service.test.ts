@@ -1,5 +1,6 @@
 // What the background service is given when it is registered, and what is kept of it when it
 // is registered again: checked on the definitions themselves, with no system asked to take one.
+import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -340,7 +341,7 @@ process.exit(/exit 0\\s*$/.test(script) ? 0 : missing ? 1 : 0)
   test('only a task that is started in this folder is stopped and taken away: another account’s It, or something else of the person’s that is called `it`, is left as it is', () => {
     const script = windowsRemoval("C:\\Users\\O'Neil\\.it\\bin\\")
     // The task is asked for once, and everything that changes it comes after the look at where it is started, inside it
-    const task = "Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq 'it' }"
+    const task = "Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq 'it' }"
     expect(script).toBe(
       `$task = ${task}; if ($task -and (([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq 'C:\\Users\\O''Neil\\.it\\bin')) { Stop-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName 'it' -Confirm:$false -ErrorAction SilentlyContinue; if (${task}) { 'Windows still has the task'; exit 3 } }; exit 0`,
     )
@@ -348,6 +349,43 @@ process.exit(/exit 0\\s*$/.test(script) ? 0 : missing ? 1 : 0)
     expect(windowsRemoval('C:/Users/Ada/.it/bin')).toContain("-ieq 'C:\\Users\\Ada\\.it\\bin'))")
     expect(windowsScript('C:\\Users\\Ada\\.it\\bin', 'it-service.cmd')).toContain("-WorkingDirectory 'C:\\Users\\Ada\\.it\\bin'")
   })
+
+  test.skipIf(process.platform !== 'win32').each(['absent', 'another folder', 'this folder'])(
+    'does not confuse tasks in different scheduler folders when removing It (%s)',
+    (root) => {
+      // These functions replace the scheduler cmdlets, so no installed task is changed.
+      // The other folder's task deliberately comes first and uses this installation's launcher.
+      const script = `
+$script:tasks = @(
+  [pscustomobject]@{ TaskName = 'it'; TaskPath = '\\Other\\'; Actions = @([pscustomobject]@{ WorkingDirectory = 'C:\\it\\bin' }) }
+  ${root === 'absent' ? '' : `[pscustomobject]@{ TaskName = 'it'; TaskPath = '\\'; Actions = @([pscustomobject]@{ WorkingDirectory = '${root === 'this folder' ? 'C:\\it\\bin' : 'C:\\elsewhere\\bin'}' }) }`}
+)
+function Get-ScheduledTask {
+  [CmdletBinding()] param([string]$TaskPath, [string]$TaskName)
+  $script:tasks | Where-Object { (!$TaskPath -or $_.TaskPath -eq $TaskPath) -and (!$TaskName -or $_.TaskName -eq $TaskName) }
+}
+function Stop-ScheduledTask {
+  [CmdletBinding()] param([string]$TaskName, [string]$TaskPath = '\\')
+  "stopped $TaskPath$TaskName"
+}
+function Unregister-ScheduledTask {
+  [CmdletBinding(SupportsShouldProcess)] param([string]$TaskName, [string]$TaskPath = '\\')
+  "removed $TaskPath$TaskName"
+  $script:tasks = @($script:tasks | Where-Object { $_.TaskName -ne $TaskName -or $_.TaskPath -ne $TaskPath })
+}
+${windowsRemoval('C:\\it\\bin')}
+`
+      const ran = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 30_000,
+      })
+      expect(ran.error).toBeUndefined()
+      expect(ran.status).toBe(0)
+      expect(ran.stderr).toBe('')
+      expect(ran.stdout.trim().split(/\r?\n/).filter(Boolean)).toEqual(root === 'this folder' ? ['stopped \\it', 'removed \\it'] : [])
+    },
+  )
 })
 
 test('a backend cannot start while uninstall removes its folder, even after the inner lock has gone', async () => {
