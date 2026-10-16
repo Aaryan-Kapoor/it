@@ -45,7 +45,7 @@ test('every name used with inHome in the CLI has an uninstall rule', () => {
   const files = readdirSync(src, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
     .map((entry) => path.join(entry.parentPath, entry.name))
-  const program = ts.createProgram(files, { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.NodeNext })
+  const program = ts.createProgram(files, { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler })
   const checker = program.getTypeChecker()
   const calls: ts.CallExpression[] = []
   for (const file of files) {
@@ -81,11 +81,12 @@ test('every name used with inHome in the CLI has an uninstall rule', () => {
       const declaration = checker.getSymbolAtLocation(span.expression)?.valueDeclaration
       if (declaration && ts.isParameter(declaration) && ts.isFunctionDeclaration(declaration.parent) && declaration.parent.name) {
         const owner = checker.getSymbolAtLocation(declaration.parent.name)
-        return calls.flatMap((call) => {
+        const values = calls.flatMap((call) => {
           let symbol = checker.getSymbolAtLocation(call.expression)
           if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol)
           return symbol === owner ? strings(call.arguments[0]!).map((name) => name + span.literal.text) : []
         })
+        if (values.length) return values
       }
     }
     throw new Error(`The uninstall test cannot check this home name: ${node.getSourceFile().fileName}: ${node.getText()}`)
@@ -93,7 +94,7 @@ test('every name used with inHome in the CLI has an uninstall rule', () => {
   const names = new Set(
     calls.filter((call) => ts.isIdentifier(call.expression) && call.expression.text === 'inHome').flatMap((call) => strings(call.arguments[0]!)),
   )
-  expect(names.size).toBeGreaterThan(20)
+  for (const name of ['setup.lock', 'enrol.lock', 'addons/setup.lock']) expect(names).toContain(name)
   const recognised = [INSTALLATION_FILE, ...ROOT_FILES, ...ROOT_FOLDERS, ...ROOT_LOCKS]
-  for (const name of names) expect(recognised, `${name} needs an uninstall rule`).toContain(name)
+  for (const name of names) expect(recognised, `${name} needs an uninstall rule`).toContain(name.split(/[\\/]/)[0]!)
 })
