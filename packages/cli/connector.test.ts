@@ -1558,6 +1558,20 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:claim')).toEqual(['click-6', 'click-60'])
   })
 
+  test('a queued click is not repeated to a waiter when a new turn also changes the conversation id', async () => {
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    await turn(7, true)
+    await takenByTheQueue(7)
+    // Codex has advanced the queued click into a turn and reports the new conversation id with it.
+    expect(await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-60', was: 'thread-6', busy: true } })).toEqual({ ok: true })
+    expect((await waitingFor(60))?.clicks).toBeUndefined()
+    // Another conversation is still in its earlier turn, so its waiter can still have its queued click.
+    expect((await waitingFor(7))?.clicks?.map((c) => c.id)).toEqual(['click-7'])
+    expect(called('delivery:handedOff')).toEqual(['click-6', 'click-7'])
+  })
+
   test('a waiter that says it has a click while Codex’s command for it is still to answer is not given it again once the command has', async () => {
     await start()
     expect(await turn(6, true)).toEqual({ ok: true })
@@ -2273,6 +2287,32 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     offered({ ...click(11), id: 'click-11-next' })
     for (let i = 0; i < 5 && stand.t3.sent.length < 3; i++) await pass()
     expect(stand.t3.sent[2]).toEqual({ thread: 't3-thread-k', text: '[It] "A page" (page-11): approve, with details [action click-11-next]' })
+  })
+
+  test('a conversation that let a mark time out keeps receiving the short line after its id changes', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-11', 't3-thread-k')
+    standIn(true)
+    await start()
+    await heard(11)
+    offered(click(11))
+    for (let i = 0; i < 5 && stand.t3.sent.length < 1; i++) await pass()
+    expect(stand.t3.sent).toEqual([{ thread: 't3-thread-k', text: MARK }])
+    await until(() => called('delivery:handedOff').includes('click-11'))
+    offered()
+    await pass(21)
+    await until(() => stand.t3.sent.length === 2)
+    expect(stand.t3.sent[1]!.text).toContain('[action click-11]')
+    expect(await behindMarks(11)).toEqual([])
+
+    expect(await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-110', was: 'thread-11' } })).toEqual({ ok: true })
+    stand.t3.threads.set('thread-110', 't3-thread-k')
+    offered(click(110))
+    // The next click goes as the short line without another mark or another wait for a hook.
+    for (let i = 0; i < 5 && stand.t3.sent.length < 3; i++) await pass()
+    await until(() => stand.t3.sent.length === 3)
+    expect(stand.t3.sent[2]).toEqual({ thread: 't3-thread-k', text: '[It] "A page" (page-110): approve, with details [action click-110]' })
+    expect(await behindMarks(110)).toEqual([])
   })
 
   test('once the person has disconnected the app, no hook of it is handed what a mark stood for, and no short line follows the mark', async () => {
