@@ -2081,8 +2081,10 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
 import path from 'node:path'
 import { syncBuiltinESMExports } from 'node:module'
 const remove = fs.rmSync
+// Uninstall uses the real folder, including where the system's temporary folder is a link.
+const locked = fs.realpathSync(path.join(process.env.IT_HOME, 'backend', 'pages.sqlite3'))
 fs.rmSync = (file, options) => {
-  if (String(file) === path.join(process.env.IT_HOME, 'backend', 'pages.sqlite3')) {
+  if (String(file) === locked) {
     throw Object.assign(new Error('the backend file is locked'), { code: 'EBUSY' })
   }
   return remove(file, options)
