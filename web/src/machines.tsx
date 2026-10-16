@@ -328,7 +328,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
             const wanted = m.wanted.includes(h.id)
             const fixed = h.addon === 'unavailable' || h.addon === 'too_old'
             const is = standing(h, wanted, online)
-            // Only for an app It can reopen a closed conversation of, and only while it is connected
+            // Only for a selected app It can reopen a closed conversation of
             const couldWake = wanted && !fixed && (WAKES as readonly string[]).includes(h.id)
             // And only on a machine of a system It reopens conversations on
             const wakeable = couldWake && wakesOn(m.system)
@@ -366,6 +366,8 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                       aria-checked={wakes}
                       aria-label={`Auto-wake ${LABEL[h.id] ?? h.id}`}
                       checked={wakes}
+                      // A connection failure must not stop the owner from turning existing permission off.
+                      disabled={!wakes && h.addon !== 'connected' && h.addon !== 'needs_approval'}
                       onChange={(e) => act(wake({ machineId, harness: h.id, on: e.target.checked }))}
                     />
                     <span className="wake-name">Auto-wake</span>
