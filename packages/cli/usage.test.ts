@@ -1697,6 +1697,8 @@ describe('sending', () => {
   })
   test('the request says only that it is It, and its version', async () => {
     told()
+    // Check the real request's headers without disk speed expiring the send decision.
+    vi.useFakeTimers({ toFake: ['performance'] })
     const seen: http.IncomingHttpHeaders[] = []
     const server = http.createServer((req, res) => {
       seen.push(req.headers)
@@ -1721,6 +1723,8 @@ describe('sending', () => {
   })
   test('an answer that points to another address is a send that failed, and nothing is sent on to that address', async () => {
     told()
+    // Both requests must reach the server regardless of how long the decision's disk work takes.
+    vi.useFakeTimers({ toFake: ['performance'] })
     const reached: string[] = []
     const listen = async (name: string, answer: (res: http.ServerResponse) => void) => {
       const server = http.createServer((req, res) => {
