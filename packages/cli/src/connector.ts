@@ -1912,7 +1912,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     routing = true
     try {
       await retireLostClaims()
-      await recovery.pruneWaiters(Date.now(), (key) => sessions.has(follow(key)) && !turnRunning(follow(key), Date.now()))
+      await recovery.pruneWaiters(Date.now(), (key, restored) => (!restored || sessions.has(follow(key))) && !turnRunning(follow(key), Date.now()))
       if (givingBack === 'due') {
         const asked = await recoverBatch()
         if (asked === null) {
@@ -2409,7 +2409,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     if (req.method === 'POST' && url.pathname === '/waiting') {
       if (recovery.erased) return [200, { ok: true, clicks: [] }]
-      await recovery.pruneWaiters(Date.now(), (key) => sessions.has(follow(key)) && !turnRunning(follow(key), Date.now()))
+      await recovery.pruneWaiters(Date.now(), (key, restored) => (!restored || sessions.has(follow(key))) && !turnRunning(follow(key), Date.now()))
       const who = String(body.id ?? '')
       if (!who) return [400, { error: 'say who is waiting' }]
       // What the waiter says it has printed, of what was kept for a turn that waits, is let go of

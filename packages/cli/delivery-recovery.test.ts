@@ -329,3 +329,14 @@ test('a queued retirement cannot remove a newer claim saved while it was waiting
   await Promise.all([newer, retire])
   expect(open().targets.get('action')).toBe('codex:new')
 })
+
+test('a mark that would exceed the byte bound falls back without replacing the existing record', async () => {
+  const store = open()
+  expect(await store.addMark(copy.key, { id: 'old', texts: ['x'.repeat(15_999_000)], at: 1 })).toBe(true)
+  const before = readFileSync(store.file, 'utf8')
+  expect(await store.addMark('codex:other', { id: 'new', texts: ['x'.repeat(2_000)], at: 2 })).toBe(false)
+  expect(readFileSync(store.file, 'utf8')).toBe(before)
+  expect(store.marks.has('codex:other')).toBe(false)
+  await store.claim(['new'], 'codex:other')
+  expect([...open().returning]).toEqual(['new'])
+})

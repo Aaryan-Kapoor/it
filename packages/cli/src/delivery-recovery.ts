@@ -225,10 +225,10 @@ export class DeliveryRecovery {
    * A missing session after restart says nothing about its turn. Restored copies keep the
    * existing one-day lookback, while a turn heard to end releases its copies immediately.
    */
-  pruneWaiters(now = Date.now(), ended: (key: string) => boolean = () => false): Promise<void> {
+  pruneWaiters(now = Date.now(), ended: (key: string, restored: boolean) => boolean = () => false): Promise<void> {
     return this.change((data) => {
       for (const [id, copy] of data.waiters)
-        if (ended(copy.key) || (this.restoredWaiters.has(id) && now - copy.click.at >= WAKE_BACK_MS)) data.waiters.delete(id)
+        if (ended(copy.key, this.restoredWaiters.has(id)) || (this.restoredWaiters.has(id) && now - copy.click.at >= WAKE_BACK_MS)) data.waiters.delete(id)
     })
   }
 
@@ -324,11 +324,16 @@ export class DeliveryRecovery {
 
   async addMark(key: string, entry: MarkCopy): Promise<boolean> {
     let added = false
-    await this.change((data) => {
-      if ([...data.marks.values()].reduce((n, marks) => n + marks.length, 0) >= RECEIPTS_MOST) return
-      data.marks.set(key, [...(data.marks.get(key) ?? []), entry])
-      added = true
-    })
+    await this.change(
+      (data) => {
+        if ([...data.marks.values()].reduce((n, marks) => n + marks.length, 0) >= RECEIPTS_MOST) return
+        data.marks.set(key, [...(data.marks.get(key) ?? []), entry])
+        added = true
+      },
+      () => {
+        added = false
+      },
+    )
     return added
   }
 
@@ -398,7 +403,7 @@ export class DeliveryRecovery {
   }
 
   /** Serial changes share immutable entries; failed saves never publish their draft. */
-  private change(change: (data: typeof this.data) => void): Promise<void> {
+  private change(change: (data: typeof this.data) => void, whenFull?: () => void): Promise<void> {
     const saved = this.pending.then(async () => {
       if (this.stopped) throw new Error('delivery recovery is closed')
       const before = this.data
@@ -431,8 +436,12 @@ export class DeliveryRecovery {
         pieces = this.pieces(data)
         bytes = pieces.reduce((n, part) => n + Buffer.byteLength(part), 0)
       }
-      if (bytes > BYTES || data.waiters.size > WAITERS_MOST || data.accepted.size > RECEIPTS_MOST || data.returning.size > CLAIMS_MOST)
+      if (bytes > BYTES || data.waiters.size > WAITERS_MOST || data.accepted.size > RECEIPTS_MOST || data.returning.size > CLAIMS_MOST) {
+        // A mark that cannot fit uses the normal short line. Its failed draft must not
+        // discard existing copies or keep an unrelated conversation from receiving a click.
+        if (whenFull) return whenFull()
         throw new Error('delivery recovery is full')
+      }
       await writePrivateAsync(this.file, pieces, () => !this.stopped)
       if (this.stopped) throw new Error('delivery recovery is closed')
       this.data = data

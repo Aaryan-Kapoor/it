@@ -1451,6 +1451,24 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:handedOff')).toEqual(['click-6'])
   })
 
+  test('a live copy is removed when its quiet turn and its remembered session have both expired', async () => {
+    standIn()
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_600_001)
+    try {
+      // Both timers become due before the queued recovery write runs. The session is gone,
+      // but this connector made the copy itself and knows the turn it was kept behind.
+      vi.advanceTimersByTime(60_000)
+      await settled()
+      expect((await waitingFor(6, true))?.clicks).toBeUndefined()
+      expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   test('asking again for an unanswered copy keeps its first receipt without rewriting the record', async () => {
     await start()
     await turn(6, true)
