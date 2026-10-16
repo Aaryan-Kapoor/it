@@ -154,9 +154,9 @@ esac
 command -v curl >/dev/null 2>&1 || { say "Install curl first." >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || { say "Install sha256sum or shasum first." >&2; exit 1; }
 # Where CI is set, every download says so, and itcan.do counts it apart from a person's. CI is
-# read as the program reads it: set to anything but nothing, 0, false, no or off. Given nothing
-# after the colon, curl sends no such header at all.
-case "$(printf '%s' "${CI:-}" | tr 'A-Z' 'a-z')" in
+# read as the program reads it: without the spaces or quotes around it, and set to anything but
+# nothing, 0, false, no or off. Given nothing after the colon, curl sends no such header at all.
+case "$(printf '%s' "${CI:-}" | tr 'A-Z' 'a-z' | sed -e "s/^[[:space:]\"']*//" -e "s/[[:space:]\"']*\$//")" in
   '' | 0 | false | no | off) ci= ;;
   *) ci=1 ;;
 esac

@@ -397,6 +397,8 @@ try {
   for (const [name, ci, marked] of [
     ['ci-set', 'true', true],
     ['ci-false', 'false', false],
+    // Read as the program reads it, without the spaces and quotes around it
+    ['ci-quoted', ` "False" `, false],
     ['ci-unset', undefined, false],
   ]) {
     asked.length = 0
