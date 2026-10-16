@@ -512,6 +512,25 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     }
   })
 
+  test('answers a hook while its conversation note waits for another writer, then keeps the note after the writer finishes', async () => {
+    await start()
+    const lock = path.join(home, 'conversations.json.lock')
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, holder: 'a'.repeat(16) }))
+    const wait = vi.spyOn(Atomics, 'wait').mockImplementation(() => {
+      throw new Error('a hook must not block the connector')
+    })
+    const session = { harness: 'codex', id: 'waiting-for-note' }
+    try {
+      expect(await local('/session', { method: 'POST', body: { harness: session.harness, session: session.id, folder: home } })).toMatchObject({ ok: true })
+      expect(wait).not.toHaveBeenCalled()
+      expect(conversationFolder(session)).toBeUndefined()
+    } finally {
+      rmSync(lock, { force: true })
+      wait.mockRestore()
+    }
+    await until(() => conversationFolder(session) === home)
+  })
+
   test('what the connector before it wrote down of the turns it cut off is kept until each conversation has been told, however often the connector is started again', async () => {
     const noted = () => JSON.parse(readFileSync(path.join(home, 'cut-off.json'), 'utf8'))
     await start('socket', {}, (home) => writeFileSync(path.join(home, 'cut-off.json'), JSON.stringify(['pi:conversation-1'])))
