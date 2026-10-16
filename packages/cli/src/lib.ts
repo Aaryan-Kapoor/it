@@ -51,7 +51,13 @@ export class Problem extends Error {
 // from where the shell stands is read from there once and for all: a file's address made from
 // it is then the same file when it is written into a service or a launcher, which start from
 // somewhere else.
-export const home = () => (process.env.IT_HOME ? path.resolve(process.env.IT_HOME) : (installationHome() ?? path.join(os.homedir(), '.it')))
+let resolvedHome: { setting: string | undefined; folder: string } | undefined
+export const home = () => {
+  const setting = process.env.IT_HOME
+  if (!resolvedHome || resolvedHome.setting !== setting)
+    resolvedHome = { setting, folder: setting ? path.resolve(setting) : (installationHome() ?? path.join(os.homedir(), '.it')) }
+  return resolvedHome.folder
+}
 export const inHome = (...parts: string[]) => path.join(home(), ...parts)
 
 /**

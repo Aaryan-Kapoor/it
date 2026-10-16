@@ -9,16 +9,24 @@ export const INSTALLATION = '{"product":"It","format":1,"about":"This folder hol
 
 const saidUnread = new Set<string>()
 
-/** A damaged record is kept aside, but never proves that a folder belongs to It. */
-export function markedInstallation(folder: string): boolean {
+/** Reading a path must not move a damaged record; explicit ownership checks keep it aside. */
+function installationRecord(folder: string): boolean | undefined {
   const file = path.join(folder, INSTALLATION_FILE)
   try {
     const stat = lstatSync(file, { throwIfNoEntry: false })
-    if (!stat) return false
+    if (!stat) return undefined
     if (stat.isFile() && stat.size <= 1024 && readFileSync(file, 'utf8') === INSTALLATION) return true
   } catch {
     // A record that cannot be opened gives no more proof than one with the wrong bytes.
   }
+  return false
+}
+
+/** A damaged record is kept aside, but never proves that a folder belongs to It. */
+export function markedInstallation(folder: string): boolean {
+  const marked = installationRecord(folder)
+  if (marked !== false) return marked === true
+  const file = path.join(folder, INSTALLATION_FILE)
   let kept = INSTALLATION_FILE
   let reason = ''
   try {
@@ -71,7 +79,7 @@ export function installationHome(program = process.execPath, script = program ==
   // A missing or unreadable marker gives no proof. The program in its own bin can still
   // be recognised with its installed terms, including after an older updater replaced it.
   // A bare program copied to /usr/local/bin keeps the usual default home.
-  if (!markedInstallation(folder) && !legacyInstallation(folder, real, script)) return undefined
+  if (!installationRecord(folder) && !legacyInstallation(folder, real, script)) return undefined
   // A folder junction is the same installation, but its spelling is what PATH and the
   // service registration retain. An executable symlink alone never assigns another home.
   const named = path.resolve(program)

@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS, LICENSE } from './src/addons.generated'
+import * as installation from './src/installation'
 import { INSTALLATION, INSTALLATION_FILE, installationHome, legacyInstallation, markedInstallation, markInstallation } from './src/installation'
 import { home } from './src/lib'
 import { aloneAt } from './src/serve/backend'
@@ -39,6 +40,9 @@ describe('installation ownership', () => {
     const said = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(installationHome(program)).toBe(at)
     expect(installationHome(program)).toBe(at)
+    expect(readFileSync(path.join(at, INSTALLATION_FILE), 'utf8')).toBe('{')
+    expect(said).not.toHaveBeenCalled()
+    expect(markedInstallation(at)).toBe(false)
     expect(readFileSync(path.join(at, `${INSTALLATION_FILE}.unreadable`), 'utf8')).toBe('{')
     expect(said).toHaveBeenCalledTimes(1)
     expect(said.mock.calls[0]![0]).toContain('installation.json.unreadable')
@@ -101,6 +105,24 @@ describe('installation ownership', () => {
       process.execPath = original
       process.argv[1] = originalScript!
     }
+  })
+
+  test('home discovers the installation once and reuses it until IT_HOME changes', () => {
+    const at = folder()
+    vi.stubEnv('IT_HOME', at)
+    expect(home()).toBe(at)
+    const discover = vi.spyOn(installation, 'installationHome').mockReturnValue(at)
+    vi.stubEnv('IT_HOME', '')
+    expect(home()).toBe(at)
+    discover.mockReturnValue(undefined)
+    expect(home()).toBe(at)
+    expect(home()).toBe(at)
+    expect(discover).toHaveBeenCalledTimes(1)
+    vi.stubEnv('IT_HOME', path.join(at, 'another'))
+    expect(home()).toBe(path.join(at, 'another'))
+    vi.stubEnv('IT_HOME', '')
+    expect(home()).toBe(path.join(os.homedir(), '.it'))
+    expect(discover).toHaveBeenCalledTimes(2)
   })
 
   test('source and package invocations use the default home without IT_HOME', () => {
