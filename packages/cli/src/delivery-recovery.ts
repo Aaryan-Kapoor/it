@@ -316,9 +316,12 @@ export class DeliveryRecovery {
     })
   }
 
-  accept(ids: readonly string[], sent: { id: string; printed?: boolean; given?: Given }): Promise<void> {
+  accept(ids: readonly string[], sent: { id: string; printed?: boolean; given?: Given }, waiting?: { clicks: readonly Offered[]; key: string }): Promise<void> {
     return this.change((data) => {
       for (const id of ids) data.accepted.add(id)
+      if (waiting) {
+        for (const click of waiting.clicks) if (!data.waiters.has(click.id)) data.waiters.set(click.id, { click, key: waiting.key })
+      }
       const copy = data.waiters.get(sent.id)
       if (sent.printed) data.waiters.delete(sent.id)
       else if (copy && sent.given && copy.given?.who !== sent.given.who) data.waiters.set(sent.id, { ...copy, given: sent.given })

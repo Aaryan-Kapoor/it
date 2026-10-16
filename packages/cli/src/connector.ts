@@ -1770,9 +1770,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // that handoff into a refusal or release the rest of its batch for redelivery.
         if (!recovery.stopped) {
           try {
+            // A turn may have begun while the queue command was running. The click then
+            // waits behind it, so keep its waiter copy with the acceptance receipt as well.
             await recovery.accept(
               [click, ...withIt].map((c) => c.id),
               { id: click.id, printed: sent.printed, given: sent.given },
+              !reopening && turnRunning(follow(key), Date.now()) ? { clicks: [click, ...withIt], key: follow(key) } : undefined,
             )
           } catch (err) {
             seldom('recovery', `could not keep the delivery receipt (${why(err)}); confirming the accepted clicks`)

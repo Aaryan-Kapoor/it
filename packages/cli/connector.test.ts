@@ -2132,6 +2132,29 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:handedOff')).toEqual(['click-6', 'click-7'])
   })
 
+  test.each([false, true])('a turn begun while Codex is taking a click keeps its waiter copy, unless already printed: %s', async (printedEarly) => {
+    standIn()
+    await start()
+    await turn(6, false)
+    offered(click(6))
+    await until(() => stand.codex.length === 1)
+    // The queue command has started against an idle conversation. A new turn starts before
+    // it accepts the click, which now waits behind that turn in Codex's queue.
+    await turn(6, true)
+    if (printedEarly) {
+      expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+      expect((await waitingFor(6))?.clicks).toBeUndefined()
+    }
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-6'))
+    offered()
+    await settled()
+    expect(readJson<{ waiters: [string, unknown][] }>(path.join(home, 'delivery-recovery.json'))!.waiters.map(([id]) => id)).toEqual(
+      printedEarly ? [] : ['click-6'],
+    )
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(printedEarly ? undefined : ['click-6'])
+  })
+
   test('a waiter that says it has a click while Codex’s command for it is still to answer is not given it again once the command has', async () => {
     await start()
     expect(await turn(6, true)).toEqual({ ok: true })
