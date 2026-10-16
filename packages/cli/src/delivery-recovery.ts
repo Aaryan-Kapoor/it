@@ -381,15 +381,22 @@ export class DeliveryRecovery {
     return text
   }
 
+  private waiterText(id: string, copy: WaitCopy): string {
+    let text = this.encoded.get(copy)
+    if (text === undefined) {
+      text = `[${JSON.stringify(id)},{"key":${JSON.stringify(copy.key)},"click":${this.encode(copy.click)}${copy.given ? `,"given":${this.encode(copy.given)}` : ''}}]`
+      this.encoded.set(copy, text)
+    }
+    return text
+  }
+
   private pieces(data: typeof this.data): string[] {
     // Payloads and mark text are encoded once. Building the surrounding JSON needs only
     // small strings, even when the private record is near its byte bound.
     const parts = [JSON.stringify({ version: 1, machine: this.machine, person: data.person }).slice(0, -1), ',"waiters":[']
     for (const [id, copy] of data.waiters) {
       if (parts.at(-1) !== ',"waiters":[') parts.push(',')
-      parts.push(
-        `[${JSON.stringify(id)},{"key":${JSON.stringify(copy.key)},"click":${this.encode(copy.click)}${copy.given ? `,"given":${this.encode(copy.given)}` : ''}}]`,
-      )
+      parts.push(this.waiterText(id, copy))
     }
     parts.push('],"marks":[')
     for (const [key, marks] of data.marks) {
@@ -431,10 +438,12 @@ export class DeliveryRecovery {
         return
       let pieces = this.pieces(data)
       let bytes = pieces.reduce((n, part) => n + Buffer.byteLength(part), 0)
+      let evicted = false
       while (bytes > BYTES && oldest.length) {
-        data.waiters.delete(oldest.shift()![0])
-        pieces = this.pieces(data)
-        bytes = pieces.reduce((n, part) => n + Buffer.byteLength(part), 0)
+        const [id, copy] = oldest.shift()!
+        data.waiters.delete(id)
+        bytes -= Buffer.byteLength(this.waiterText(id, copy)) + (data.waiters.size ? 1 : 0)
+        evicted = true
       }
       if (bytes > BYTES || data.waiters.size > WAITERS_MOST || data.accepted.size > RECEIPTS_MOST || data.returning.size > CLAIMS_MOST) {
         // A mark that cannot fit uses the normal short line. Its failed draft must not
@@ -442,6 +451,9 @@ export class DeliveryRecovery {
         if (whenFull) return whenFull()
         throw new Error('delivery recovery is full')
       }
+      // Rebuild only once after eviction; scanning the whole record for each removed
+      // copy would make a full record expensive precisely when it needs to shed copies.
+      if (evicted) pieces = this.pieces(data)
       await writePrivateAsync(this.file, pieces, () => !this.stopped)
       if (this.stopped) throw new Error('delivery recovery is closed')
       this.data = data
