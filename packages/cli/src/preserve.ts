@@ -54,6 +54,10 @@ export function checkHardLinks(file: string, probe: string): void {
 /** Unresolved originals never expire. Twenty slots bound disk use before a person must review them. */
 export const ORIGINAL_LIMIT = 20
 
+function markedFor(note: string, owner: string): boolean {
+  return lstatSync(note, { throwIfNoEntry: false })?.isFile() === true && readFileSync(note, 'utf8') === owner
+}
+
 /** Identifies this file's recovery folder, or finishes reserving an empty one after an interruption. */
 function recoveryFolder(file: string, create: boolean): { target: string; dir: string } | undefined {
   const target = path.join(realpathSync(path.dirname(file)), path.basename(file))
@@ -79,8 +83,7 @@ function recoveryFolder(file: string, create: boolean): { target: string; dir: s
       if (!(err instanceof Error && 'code' in err && err.code === 'EEXIST')) throw err
     }
   }
-  const marked = lstatSync(note, { throwIfNoEntry: false })
-  if (!marked?.isFile() || readFileSync(note, 'utf8') !== owner) throw unrecognised()
+  if (!markedFor(note, owner)) throw unrecognised()
   return { target, dir }
 }
 
@@ -123,14 +126,20 @@ function removeEmptyRecovery(dir: string): void {
   const entries = readdirSync(dir)
   if (entries.length !== 1 || entries[0] !== 'owner.json') return
   const note = path.join(dir, 'owner.json')
-  const owner = readFileSync(note)
+  const owner = readFileSync(note, 'utf8')
   tryFile(() => unlinkSync(note))
   try {
     tryFile(() => rmdirSync(dir))
   } catch (err) {
     // A simultaneous change may have reserved a slot. Put its ownership marker back and
     // leave the new original alone; recovery folders are never removed recursively.
-    writeFileSync(note, owner, { flag: 'wx', mode: 0o600 })
+    try {
+      writeFileSync(note, owner, { flag: 'wx', mode: 0o600 })
+    } catch (restored) {
+      // The new reservation can already have restored the same marker. Its exclusive
+      // write won; accepting that marker must not turn our completed change into a failure.
+      if (!(restored instanceof Error && 'code' in restored && restored.code === 'EEXIST' && markedFor(note, owner))) throw restored
+    }
     if (!(err instanceof Error && 'code' in err && err.code === 'ENOTEMPTY')) throw err
   }
 }

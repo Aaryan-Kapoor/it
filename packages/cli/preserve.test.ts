@@ -24,7 +24,7 @@ import { keepOriginal, ORIGINAL_LIMIT, putAbsent, restoreAbsent } from './src/pr
 
 let folder: string
 let file: string
-const original = { renameSync: fs.renameSync, linkSync: fs.linkSync, unlinkSync: fs.unlinkSync, mkdirSync: fs.mkdirSync }
+const original = { renameSync: fs.renameSync, linkSync: fs.linkSync, unlinkSync: fs.unlinkSync, mkdirSync: fs.mkdirSync, rmdirSync: fs.rmdirSync }
 beforeEach(() => {
   folder = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-preserve-')))
   file = path.join(folder, 'settings')
@@ -189,6 +189,25 @@ test('finishes initializing an empty recovery folder left by an interrupted chan
   expect(changeWhole(file, () => 'after')).toBe(true)
   expect(readFileSync(file, 'utf8')).toBe('after')
   expect(existsSync(`${file}.it-recovery`)).toBe(false)
+})
+
+test('accepts a valid ownership marker recreated by another preservation during cleanup', () => {
+  writeFileSync(file, 'before')
+  const dir = `${file}.it-recovery`
+  let saved: string | undefined
+  fs.rmdirSync = (at, options) => {
+    if (at === dir && !existsSync(path.join(dir, 'owner.json'))) {
+      saved = keepOriginal(file)
+      restoreAbsent(saved, file)
+    }
+    return original.rmdirSync(at, options)
+  }
+  syncBuiltinESMExports()
+  expect(changeWhole(file, () => 'after')).toBe(true)
+  expect(saved).toBe(copy())
+  expect(readFileSync(file, 'utf8')).toBe('after')
+  expect(readFileSync(copy(), 'utf8')).toBe('after')
+  expect(JSON.parse(readFileSync(path.join(dir, 'owner.json'), 'utf8'))).toEqual({ itRecovery: 1, target: file })
 })
 
 test('leaves an unmarked nonempty recovery folder and the original untouched', () => {
