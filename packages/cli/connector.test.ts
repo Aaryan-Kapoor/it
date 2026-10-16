@@ -39,7 +39,7 @@ const stand = vi.hoisted(() => ({
     running: false,
     threads: new Map<string, string>(),
     slow: false,
-    asked: [] as { ids: string[]; answer: (thread: string | null | undefined) => void }[],
+    asked: [] as { ids: string[]; answer: (thread: string | null | undefined | Error | { status: 'limited' }, progressed?: boolean) => void }[],
     sent: [] as { thread: string; text: string }[],
     /** What T3 Code says where it will not take a message, and what it refused. */
     refusing: null as string | null,
@@ -51,9 +51,14 @@ const stand = vi.hoisted(() => ({
 vi.mock('./src/t3', () => ({
   t3Server: () => (stand.t3.running ? { origin: 'http://127.0.0.1:1', home: '/no-t3-code', program: 't3' } : undefined),
   t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }) =>
-    new Promise<string | null | undefined>((answer) => {
+    new Promise<{ thread: string | null | undefined | Error | { status: 'limited' }; progressed: boolean }>((resolve) => {
+      const answer = (thread: string | null | undefined | Error | { status: 'limited' }, progressed = true) => resolve({ thread, progressed })
       stand.t3.asked.push({ ids: [...of.ids], answer })
       if (!stand.t3.slow) answer(of.ids.map((id) => stand.t3.threads.get(id)).find((thread) => thread !== undefined) ?? null)
+    }).then(({ thread, progressed }) => {
+      if (thread instanceof Error) throw thread
+      if (typeof thread === 'object' && thread !== null) return thread
+      return thread === undefined ? { status: 'incomplete', progressed } : thread === null ? { status: 'absent' } : { status: 'found', thread }
     }),
   t3Send: async (_t3: unknown, thread: string, text: string) => {
     if (stand.t3.refusing !== null) {
@@ -1179,10 +1184,91 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   })
 
   const turn = (n: number, busy: boolean) => local('/session', { method: 'POST', body: { harness: 'codex', session: `thread-${n}`, busy } })
+
+  test.each([-60_000, 60_000])('a first observation is fresh for a running Codex turn when the host clock differs by %i milliseconds', async (skew) => {
+    await start()
+    await turn(6, true)
+    offered({ ...click(6), at: Date.now() + skew })
+    await until(() => called('delivery:claim').includes('click-6'))
+    expect(stand.codex).toEqual([])
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-6'))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+  })
+
+  test('new clicks stay fresh after the observation table fills with clicks taken elsewhere', async () => {
+    standIn()
+    await start()
+    // An unconnected app leaves the observations here without this connector confirming any.
+    const elsewhere = Array.from({ length: 5000 }, (_, n) => ({ ...click(n + 100), session: { harness: 'other', id: 'elsewhere' } }))
+    offered(...elsewhere)
+    await pass()
+    offered()
+    await pass()
+    expect(called('delivery:handedOff')).toEqual([])
+    await turn(6, true)
+    offered(click(6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    expect(stand.codex).toEqual([])
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-6'))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+  })
+
+  test('repeated offers keep their first observation after the local wall clock is corrected backwards', async () => {
+    await start()
+    await turn(6, true)
+    const first = { ...click(6), at: Date.now() + 60_000 }
+    const elapsed = performance.now()
+    // The first claim loses a race, so the same click is offered again later.
+    stand.answer = (name) => (name === 'delivery:claim' ? [] : undefined)
+    offered(first)
+    await until(() => called('delivery:claim').includes('click-6'))
+    await settled()
+    stand.answer = null
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() - 120_000)
+    const monotonic = vi.spyOn(performance, 'now').mockReturnValue(elapsed + 9_000)
+    try {
+      offered(first)
+      await until(() => stand.codex.length === 1)
+      expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-6'))?.clicks).toEqual([])
+    } finally {
+      wall.mockRestore()
+      monotonic.mockRestore()
+    }
+  })
+
+  test.each([
+    { harness: 'codex', id: 'thread-6' },
+    { harness: 'pi', id: 'thread-7' },
+  ])('a pending click gets a fresh hook window when its page moves from $harness:$id to another conversation', async (session) => {
+    standIn()
+    await start()
+    await turn(7, true)
+    stand.closed.add('thread-6')
+    const first = { ...click(6), session }
+    const elapsed = performance.now()
+    offered(first)
+    await pass()
+    expect(called('delivery:claim')).toEqual([])
+    // The same click is offered to the new owner after its old hook window has expired.
+    const monotonic = vi.spyOn(performance, 'now').mockReturnValue(elapsed + 9_000)
+    try {
+      offered({ ...first, session: { harness: 'codex', id: 'thread-7' } })
+      await until(() => called('delivery:claim').includes('click-6'))
+      expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-7'))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+      expect(stand.codex).toEqual([])
+    } finally {
+      monotonic.mockRestore()
+    }
+  })
+
+  /** The first observation happened before the routing pass, which now runs past its hook window. */
+  const offeredEarlier = (...clicks: ReturnType<typeof click>[]) => {
+    const time = vi.spyOn(performance, 'now').mockReturnValueOnce(performance.now() - 9_000)
+    offered(...clicks)
+    time.mockRestore()
+  }
   /** Offers a click, lets Codex's command take it, and waits until It has been told so. */
   const takenByTheQueue = async (n: number) => {
     const commands = stand.codex.length
-    offered(click(n))
+    offeredEarlier(click(n))
     await until(() => stand.codex.length === commands + 1)
     stand.codex[commands]!.end()
     await until(() => called('delivery:handedOff').includes(`click-${n}`))
@@ -1230,7 +1316,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     for (let i = 0; i < 34; i++) {
       const commands = stand.codex.length
       ids.push(`click-big-${i}`)
-      offered({ ...click(6), id: ids[i]!, payload: carried })
+      offeredEarlier({ ...click(6), id: ids[i]!, payload: carried })
       await until(() => stand.codex.length === commands + 1, 30_000).catch(sofar('Codex’s command', i))
       stand.codex[commands]!.end()
       await until(() => called('delivery:handedOff').includes(ids[i]!), 30_000).catch(sofar('telling It', i))
@@ -1420,7 +1506,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     // The earlier click's claim is not answered yet: it is in neither of Codex's hands nor behind the turn
     let answerClaim: (ids: string[]) => void = () => {}
     stand.answer = (name, args) => (name === 'delivery:claim' && args.ids.includes('click-6') ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
-    offered(click(6))
+    offeredEarlier(click(6))
     await until(() => called('delivery:claim').includes('click-6'))
     offered(click(6), { ...click(6), id: 'click-6-later', at: Date.now() })
     await new Promise((r) => setTimeout(r, 300))
@@ -1435,7 +1521,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await turn(6, true)
     let answerClaim: (ids: string[]) => void = () => {}
     stand.answer = (name, args) => (name === 'delivery:claim' && args.ids.includes('click-6') ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
-    offered(click(6))
+    offeredEarlier(click(6))
     await until(() => called('delivery:claim').includes('click-6'))
     try {
       expect(await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-60', was: 'thread-6', busy: true } })).toEqual({ ok: true })
@@ -1473,7 +1559,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   test('a waiter that says it has a click while Codex’s command for it is still to answer is not given it again once the command has', async () => {
     await start()
     expect(await turn(6, true)).toEqual({ ok: true })
-    offered(click(6))
+    offeredEarlier(click(6))
     await until(() => stand.codex.length === 1)
     // Codex's command has been started and has not answered: the waiter of the running turn is given the click meanwhile
     expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
@@ -2292,6 +2378,179 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.t3.asked.length).toBe(1)
   })
 
+  test('a search at its read limit uses the fallback route and starts afresh only after six hours', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    stand.t3.asked[0]!.answer({ status: 'limited' })
+    await until(() => stand.codex.length === 1)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-3'))
+    offered({ ...click(3), id: 'before-next-search' })
+    await until(() => stand.codex.length === 2)
+    expect(stand.t3.asked).toHaveLength(1)
+    stand.codex[1]!.end()
+    await until(() => called('delivery:handedOff').includes('before-next-search'))
+    offered()
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 3_600_000 + 1000)
+    try {
+      offered({ ...click(3), id: 'after-search-limit' })
+      await until(() => stand.t3.asked.length === 2)
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(stand.codex).toHaveLength(2)
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
+  test('an incomplete thread search continues before using another route, also with Auto-wake off', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    stand.t3.asked[0]!.answer(undefined)
+    await until(() => stand.t3.asked.length === 2)
+    expect(stand.codex).toEqual([])
+    stand.t3.asked[1]!.answer('t3-thread-c')
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+    expect(stand.codex).toEqual([])
+    expect(stand.calls.some((c) => c.name === 'machines:runStarted')).toBe(false)
+  })
+
+  test.each(['unread', 'failed'] as const)('a persistently %s search backs off up to a minute and resets when a batch makes progress', async (failure) => {
+    standIn(true)
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    let now = Date.now()
+    const wall = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      offered(click(3))
+      await until(() => stand.t3.asked.length === 1)
+      // Continuation must obey its retry time even after the original click leaves the inbox.
+      offered()
+      await settled()
+      const advance = async (ms: number) => {
+        now += ms
+        await vi.advanceTimersByTimeAsync(ms)
+        offered()
+        await settled()
+      }
+      const retry = async (delay: number, progressed = false) => {
+        const count = stand.t3.asked.length
+        stand.t3.asked.at(-1)!.answer(failure === 'failed' && !progressed ? new Error('unavailable') : undefined, progressed)
+        await settled()
+        await advance(delay - 1)
+        expect(stand.t3.asked).toHaveLength(count)
+        await advance(1)
+        expect(stand.t3.asked).toHaveLength(count + 1)
+      }
+      for (const delay of [300, 600, 1200, 2400, 4800, 9600, 19_200, 38_400, 60_000, 60_000]) await retry(delay)
+      // Finite batches continue quickly; a successful batch clears earlier failures.
+      await retry(300, true)
+      await retry(300, true)
+      await retry(300)
+      await retry(600)
+      stand.t3.asked.at(-1)!.answer('t3-thread-c')
+      await settled()
+      offered({ ...click(3), id: 'after-recovery' })
+      await advance(10)
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(stand.codex).toEqual([])
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
+  test('a long discovery backoff does not delay another conversation’s shorter routing timer', async () => {
+    standIn(true)
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    let now = Date.now()
+    let elapsed = 0
+    const wall = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const advance = async (ms: number) => {
+      now += ms
+      elapsed += ms
+      await vi.advanceTimersByTimeAsync(ms)
+      await settled()
+    }
+    try {
+      offered(click(3))
+      await until(() => stand.t3.asked.length === 1)
+      offered()
+      await settled()
+      for (const delay of [300, 600, 1200, 2400, 4800, 9600, 19_200, 38_400]) {
+        const asked = stand.t3.asked.length
+        stand.t3.asked.at(-1)!.answer(undefined, false)
+        await settled()
+        await advance(delay + 10)
+        expect(stand.t3.asked).toHaveLength(asked + 1)
+      }
+      // Move just past a heartbeat, so the new click's settle pass must run before the next
+      // one-second fallback. The stalled search now asks for another pass a minute away.
+      await advance(1000 - (elapsed % 1000))
+      stand.t3.asked.at(-1)!.answer(undefined, false)
+      await settled()
+      offered({ ...click(4), at: now })
+      await until(() => stand.t3.asked.at(-1)?.ids.includes('thread-4') === true)
+      stand.t3.asked.at(-1)!.answer('t3-thread-d')
+      await settled()
+      await advance(10)
+      expect(stand.t3.sent).toEqual([])
+      await advance(300)
+      expect(stand.t3.sent).toHaveLength(1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-d')
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
+  test('another incomplete batch does not restart the delivery wait', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    stand.t3.asked[0]!.answer(undefined)
+    await until(() => stand.t3.asked.length === 2)
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6_000)
+    try {
+      stand.t3.asked[1]!.answer(undefined)
+      await until(() => stand.codex.length === 1)
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
+  test('an incomplete search finishes after its click left the inbox through the fallback route', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    await until(() => stand.codex.length === 1, 12_000)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-3'))
+    offered()
+    stand.t3.asked[0]!.answer(undefined)
+    await until(() => stand.t3.asked.length === 2)
+    stand.t3.asked[1]!.answer('t3-thread-c')
+    await settled()
+    offered({ ...click(3), id: 'click-after-search' })
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.codex.length).toBe(1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+  }, 30_000)
+
   test('a T3 Code that does not say which thread holds a conversation is waited for only so long: the click then goes into Codex’s queue, and what T3 Code says in the end holds for the next', async () => {
     withT3Code()
     stand.t3.slow = true
@@ -2328,7 +2587,9 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     // Two things done on two pages of the one conversation, which go to the thread together
     const first = click(4)
     const second = { ...click(5, 4), id: 'click-5' }
+    const time = vi.spyOn(performance, 'now').mockReturnValueOnce(performance.now() - 9_000)
     offered(first, second)
+    time.mockRestore()
     await until(() => stand.t3.sent.length >= 1)
     expect(stand.t3.sent[0]!.text).toBe(
       '[It] "A page" (page-4): approve, with details [action click-4]\n[It] "A page" (page-5): approve, with details [action click-5]',

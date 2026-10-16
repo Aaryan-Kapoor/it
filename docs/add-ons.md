@@ -129,6 +129,10 @@ For this It asks three things of the T3 Code server on the same machine, and not
 
 Where T3 Code is running, the first click for a Codex conversation waits for T3 Code to say whether it has a thread of it, which took between a fifth of a second and two seconds where it was measured, and what it said is kept. T3 Code is given five seconds to say. Past that the click is not kept waiting for it and goes the way it would without T3 Code, and what T3 Code says in the end holds for the clicks that come after. Where T3 Code is not running, or does not take the click, the click goes the way it would without T3 Code: into Codex's queue where some Codex has the conversation open, and otherwise the conversation is reopened as any closed one is, if Auto-wake is on for its agent app. Either way that turn runs where T3 Code does not show it.
 
+The search starts with the likeliest active threads and reads at most 96 thread snapshots, in passes of up to 24, using one listing. Failed reads count towards that limit and stay retryable while the search has room. It remembers that a conversation has no thread only after every listed active candidate has been read successfully. Archived and deleted threads are excluded.
+
+A search that reaches the limit stops without deciding that the conversation has no thread. Another search can begin six hours later. A matching thread beyond the limit can still be missed, and the click then goes through the same fallback routes as when T3 Code is unavailable.
+
 T3 Code shows Claude's reply to a click that the add-on handed over, and not the click's text; a click that was put to the thread is shown as the message it is. Delivery in the middle of a turn is not proven inside a T3 Code thread, for Claude Code or for Codex.
 
 ### Pi
