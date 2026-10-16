@@ -215,16 +215,18 @@ describe('what the service tells the backend of how it stands', () => {
     'whether It starts by itself and whether usage counts are sent are each said as they are at that moment, and differently as soon as they are different',
     () => {
       const user = mkdtempSync(path.join(os.tmpdir(), 'it-stands-'))
-      const kept = { PATH: process.env.PATH, off: process.env.IT_TELEMETRY_ENABLED, track: process.env.DO_NOT_TRACK }
+      const kept = { PATH: process.env.PATH, off: process.env.IT_TELEMETRY_ENABLED, track: process.env.DO_NOT_TRACK, ci: process.env.CI }
       const homedir = vi.spyOn(os, 'homedir').mockReturnValue(user)
       const said = () => {
         const { background, usage } = standsAs({ network: false }, false, 21000)
         return { background, usage }
       }
       try {
-        // Nothing where this runs turns usage reporting off, and systemd, asked, says that the service is enabled
+        // Nothing where this runs turns usage reporting off, and systemd, asked, says that the service is enabled. CI is
+        // among what would, where nothing names an address to report to, as under Bun, which does not read vitest's settings
         delete process.env.IT_TELEMETRY_ENABLED
         delete process.env.DO_NOT_TRACK
+        delete process.env.CI
         mkdirSync(path.join(user, 'commands'))
         writeFileSync(path.join(user, 'commands', 'systemctl'), '#!/bin/sh\ncase " $* " in *" is-enabled "*) echo enabled ;; esac\nexit 0\n', { mode: 0o755 })
         process.env.PATH = path.join(user, 'commands')
@@ -251,6 +253,7 @@ describe('what the service tells the backend of how it stands', () => {
         process.env.PATH = kept.PATH
         if (kept.off !== undefined) process.env.IT_TELEMETRY_ENABLED = kept.off
         if (kept.track !== undefined) process.env.DO_NOT_TRACK = kept.track
+        if (kept.ci !== undefined) process.env.CI = kept.ci
         rmSync(user, { recursive: true, force: true })
       }
     },
