@@ -62,6 +62,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
   vi.useRealTimers()
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
   browser.reconfigure({ url: HOME })
 })
@@ -254,5 +255,50 @@ describe('erasing everything', () => {
     expect(door).not.toHaveBeenCalled()
     // The site is not left believing this browser is on its way out
     expect(isLeaving()).toBe(false)
+  })
+})
+
+describe('taking a copy of the records', () => {
+  test.each([false, true])('receipts are paginated before completeness is claimed, including a failed last batch: %s', async (fail) => {
+    const { Settings } = await import('./settings')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    const blobs: Blob[] = []
+    vi.stubGlobal('URL', {
+      createObjectURL: (blob: Blob) => {
+        blobs.push(blob)
+        return 'blob:export'
+      },
+      revokeObjectURL: vi.fn(),
+    })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    answers['account:exportStart'] = () => ({ owner: 'user-1', exportedAt: 1000, displays: [], pages: [] })
+    answers['account:exportMachines'] = () => ({ machines: [], next: null })
+    answers['account:exportNotifications'] = () => ({ notifications: [], next: null })
+    answers['account:exportDeletions'] = ({ cursor }) => {
+      if (cursor === null) return { deletions: [{ job: 'one', title: 'Plan', state: 'pending' }], next: 'next-receipt' }
+      if (fail) throw new Error('The receipts could not be read.')
+      return { deletions: [{ job: 'two', title: 'Trip', state: 'completed', completedAt: 2000 }], next: null }
+    }
+    await show(createElement(Settings, { user: 'user-1', owner: true, display: DISPLAYS[0]!, onSignOut: vi.fn() }))
+    await press('Download my data')
+    expect(calls.filter((c) => c.fn === 'account:exportDeletions').map((c) => c.args)).toEqual([
+      { owner: 'user-1', cursor: null },
+      { owner: 'user-1', cursor: 'next-receipt' },
+    ])
+    expect(blobs).toHaveLength(fail ? 0 : 1)
+    if (!fail) {
+      const text = await new Promise<string>((resolve) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.readAsText(blobs[0]!)
+      })
+      expect(JSON.parse(text)).toMatchObject({
+        complete: true,
+        deletions: [
+          { job: 'one', title: 'Plan', state: 'pending' },
+          { job: 'two', title: 'Trip', state: 'completed', completedAt: 2000 },
+        ],
+      })
+    }
   })
 })

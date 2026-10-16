@@ -1,7 +1,7 @@
 // The person's pages: the grid of all of them, and one of them shown.
 import { ALIVE, LIMITS, NOUN, WAKE_BACK_MS } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { copy, IconBack, IconLink, IconPin, IconSay, IconSend, IconStop, IconX, Mark } from './brand'
 import { agentName, ago, api, displayKey, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
@@ -60,10 +60,11 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
   }, [pages, query, sort, filter])
 
   if (pages === undefined) return <main className="grid-view" role="status" />
-  if (pages.length === 0) return <Empty owner={owner} />
+  if (pages.length === 0) return owner ? <DeletionStatus empty /> : <Empty owner={false} />
   const act = (p: Promise<unknown>) => p.catch((err) => say(refusal(err).message, 'error'))
   return (
     <main className="grid-view">
+      {owner && <DeletionStatus />}
       <div className="grid-toolbar">
         {/* biome-ignore lint/a11y/useSemanticElements: a row of toggles, which a fieldset would draw a box around */}
         <div className="grid-toolbar-left" role="group" aria-label="Filter by agent app">
@@ -155,7 +156,10 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
                     className="card-action card-action--danger"
                     title="Delete"
                     aria-label="Delete"
-                    onClick={() => confirm(`Delete “${p.title}”? This removes it from every display.`) && act(remove({ artifactId: p.id as Id<'artifacts'> }))}
+                    onClick={() =>
+                      confirm(`Delete “${p.title}”? It will leave every display. Its files may still answer until deletion is confirmed.`) &&
+                      act(remove({ artifactId: p.id as Id<'artifacts'> }))
+                    }
                   >
                     <IconX />
                   </button>
@@ -188,15 +192,100 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
   )
 }
 
+/** Deletion receipts live on the backend, so closing a tab cannot hide unfinished cleanup. */
+export class DeletionStatus extends Component<{ empty?: boolean }, { error: unknown }> {
+  override state = { error: null as unknown }
+  static getDerivedStateFromError(error: unknown) {
+    return { error }
+  }
+  override render() {
+    if (!this.state.error) return <DeletionReceipts empty={this.props.empty} />
+    // Structured refusals still belong to the site's existing error and pairing flows.
+    if (refusal(this.state.error).code !== 'error') throw this.state.error
+    const notice = (
+      <section className="deletion-status" aria-label="Page deletions">
+        <p className="deletion-line" role="status">
+          Deletion status is unavailable. Completion cannot be confirmed.
+        </p>
+        <button type="button" className="grid-empty-reset" onClick={() => this.setState({ error: null })}>
+          Try again
+        </button>
+      </section>
+    )
+    // A backend can retain earlier functions while the site is newer. A missing receipt
+    // query must not replace the page grid with an error or claim that cleanup finished.
+    return this.props.empty ? (
+      <main className="grid-view">
+        {notice}
+        <p className="grid-empty">No pages to show. Ask your agent to make a page.</p>
+      </main>
+    ) : (
+      notice
+    )
+  }
+}
+
+function DeletionReceipts({ empty = false }: { empty?: boolean }) {
+  const deletions = useQuery(api.deletions.list)
+  const [showCompleted, setShowCompleted] = useState(false)
+  if (empty && deletions === undefined) return <main className="grid-view" role="status" />
+  if (!deletions?.length) return empty ? <Empty owner={true} /> : null
+  const pending = deletions.filter((d) => d.state !== 'completed')
+  const completed = deletions.filter((d) => d.state === 'completed')
+  const status = (
+    <section className="deletion-status" aria-label="Page deletions">
+      <div aria-live="polite">
+        {pending.length === 100 && <p className="deletion-line">Showing the oldest 100 unfinished deletions.</p>}
+        {pending.map((d) => (
+          <p className="deletion-line" key={d.job}>
+            <strong>{d.title}</strong> {d.state === 'retrying' ? 'could not be fully deleted yet. It will retry.' : 'is being deleted.'}{' '}
+            <span className="muted">Its files may still answer until deletion is confirmed.</span>
+          </p>
+        ))}
+      </div>
+      {completed.length > 0 && (
+        <>
+          <button type="button" className="grid-empty-reset" aria-expanded={showCompleted} onClick={() => setShowCompleted((show) => !show)}>
+            {showCompleted ? 'Hide completed deletions' : `Completed deletions (${completed.length})`}
+          </button>
+          {showCompleted &&
+            completed.map((d) => (
+              <p className="deletion-line" key={d.job}>
+                {d.title}: deletion confirmed.
+              </p>
+            ))}
+        </>
+      )}
+    </section>
+  )
+  if (empty && pending.length === 0) return <Empty owner={true} notice={status} />
+  return empty ? (
+    <main className="grid-view">
+      {status}
+      <p className="grid-empty">No pages to show. Ask your agent to make a page.</p>
+    </main>
+  ) : (
+    status
+  )
+}
+
 /**
  * What someone with no pages is shown. Until they have had the tour, or said they want none,
  * the way into it. After that, things to ask an agent for: the tour's own screen does not come
  * back when its pages are taken away at the end of it.
  */
-function Empty({ owner }: { owner: boolean }) {
+function Empty({ owner, notice }: { owner: boolean; notice?: ReactNode }) {
   const tour = useTour()
   if (!tour.known) return <main className="grid-view" role="status" />
-  return tour.done && !tour.waiting && !tour.coming ? <Starters owner={owner} /> : <Welcome owner={owner} />
+  if (tour.done && !tour.waiting && !tour.coming) return <Starters owner={owner} notice={notice} />
+  return notice ? (
+    <main className="grid-view">
+      {notice}
+      <p className="grid-empty">No pages to show. Ask your agent to make a page.</p>
+    </main>
+  ) : (
+    <Welcome owner={owner} />
+  )
 }
 
 /**

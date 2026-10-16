@@ -407,6 +407,14 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
         },
         (n) => n,
       )
+      parts.push('\n],\n"deletions": [')
+      await list(
+        async (cursor) => {
+          const b = await convex.query(api.account.exportDeletions, { owner, cursor })
+          return { items: b.deletions, next: b.next }
+        },
+        (d) => d,
+      )
       // Said last, and only when every piece was read
       parts.push('\n],\n"complete": true\n}\n')
       const url = URL.createObjectURL(new Blob(parts, { type: 'application/json' }))

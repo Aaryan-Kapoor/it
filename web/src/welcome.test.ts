@@ -20,7 +20,8 @@ vi.mock('convex/react', () => ({
     asked.push(getFunctionName(fn as never))
     return getFunctionName(fn as never) === 'tour:ask' ? { waiting: waitingWhenAsked, by: 'claude-code' } : null
   },
-  useQuery: (fn: unknown, args: unknown) => (args === 'skip' ? undefined : { 'tour:get': tour, 'machines:list': machines }[getFunctionName(fn as never)]),
+  useQuery: (fn: unknown, args: unknown) =>
+    args === 'skip' ? undefined : { 'tour:get': tour, 'machines:list': machines, 'deletions:list': [] }[getFunctionName(fn as never)],
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 

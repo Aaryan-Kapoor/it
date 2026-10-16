@@ -180,7 +180,7 @@ async function backend(
     const chunks: Buffer[] = []
     req
       .on('data', (c: Buffer) => chunks.push(c))
-      .on('end', () => {
+      .on('end', async () => {
         const json = (value: unknown, status = 200) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
         if (req.method === 'GET' && req.url === '/cli/config') return json({ protocol: 1, issuer: 'http://127.0.0.1:23001' })
         // Asked how it is, it says that it is It, as the backend does
@@ -203,7 +203,7 @@ async function backend(
         const call = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as { path: string; args: [Record<string, unknown>] }
         const one = { path: call.path, args: call.args?.[0] ?? {} }
         asked.push(one)
-        const said = answer(one)
+        const said = await answer(one)
         if (said instanceof Refusal) return json({ status: 'error', errorMessage: 'refused', errorData: said.data, logLines: [] })
         json({ status: 'success', value: said ?? null, logLines: [] })
       })
@@ -592,12 +592,79 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     const b = await backend(m, (asked) =>
       asked.path === 'artifacts:list'
         ? [{ slug: 'tour-menu' }, { slug: 'tour-of-my-project' }, { slug: 'plan' }, { slug: 'tour-whiteboard' }, { slug: 'tour-' }]
-        : null,
+        : asked.path === 'artifacts:remove'
+          ? { job: asked.args.slug }
+          : asked.path === 'deletions:get'
+            ? { job: asked.args.job, state: 'completed' }
+            : null,
     )
     try {
       const cleared = await run(m, ['tour', 'clear'], b.env)
       expect([cleared.code, printed(cleared)]).toEqual([0, { deleted: ['tour-menu', 'tour-whiteboard'] }])
       expect(b.asked.filter((x) => x.path === 'artifacts:remove').map((x) => x.args.slug)).toEqual(['tour-menu', 'tour-whiteboard'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('deleting a page prints success only after content cleanup is confirmed, and status only queries', async () => {
+    const m = machine()
+    let state = 'retrying'
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:remove'
+        ? { job: 'delete-1' }
+        : { job: 'delete-1', state, attempts: 1, nextAt: 5000, completedAt: state === 'completed' ? 6000 : null },
+    )
+    try {
+      const waiting = printed(await run(m, ['delete', 'plan'], b.env))
+      expect(waiting).toMatchObject({ requested: 'plan', job: 'delete-1', state: 'retrying' })
+      expect(waiting).not.toHaveProperty('deleted')
+      state = 'completed'
+      const done = printed(await run(m, ['delete', 'plan', '--status'], b.env))
+      expect(done).toMatchObject({ deleted: 'plan', state: 'completed' })
+      expect(b.asked.filter((x) => x.path === 'artifacts:remove')).toHaveLength(1)
+      expect(b.asked.filter((x) => x.path === 'deletions:get').map((x) => x.args)).toEqual([{ job: 'delete-1' }, { slug: 'plan' }])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a slow status request is cancelled within the deletion deadline after an earlier poll', async () => {
+    const m = machine()
+    let polls = 0
+    let requestedAt = 0
+    const b = await backend(m, async (asked) => {
+      if (asked.path === 'artifacts:remove') {
+        requestedAt = performance.now()
+        return { job: 'delete-1' }
+      }
+      if (asked.path === 'deletions:get' && ++polls === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        return { job: 'delete-1', state: 'pending', attempts: 0, nextAt: null, completedAt: null }
+      }
+      return new Promise(() => {})
+    })
+    try {
+      const ran = await run(m, ['delete', 'plan'], b.env)
+      const elapsed = performance.now() - requestedAt
+      expect(ran.code).toBe(0)
+      expect(printed(ran)).toMatchObject({ requested: 'plan', job: 'delete-1', state: 'pending' })
+      expect(printed(ran)).not.toHaveProperty('deleted')
+      expect(polls).toBe(2)
+      expect(elapsed).toBeGreaterThanOrEqual(4900)
+      expect(elapsed).toBeLessThan(8000)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('an earlier backend that gives no deletion receipt cannot be reported as completed', async () => {
+    const m = machine()
+    const b = await backend(m, () => null)
+    try {
+      const result = printed(await run(m, ['delete', 'plan'], b.env))
+      expect(result).toMatchObject({ requested: 'plan', state: 'pending' })
+      expect(result).not.toHaveProperty('deleted')
     } finally {
       await b.close()
     }

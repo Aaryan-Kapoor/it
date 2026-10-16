@@ -3,6 +3,7 @@
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
 import { ALIVE, describeClick, LEASE_MS, LIMITS, QUOTA, STORE_KEY } from '@it/protocol'
+import type { FunctionReturnType } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
@@ -3812,6 +3813,66 @@ describe('notifications', () => {
 })
 
 describe('leaving', () => {
+  test('an export includes every retained deletion receipt, with cleanup timestamps, only for its owner', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const bob = await person(t, 'bob')
+    const screen = await paired(t, 'alice', 'screen', 'export-screen-key-001')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan')
+    const { job } = await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    const start = await alice.browser.mutation(api.account.exportStart, {})
+    expect(start.pages).toEqual([])
+    const original = (await t.run((ctx) => ctx.db.get(job)))!
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 230; i++) {
+        await ctx.db.insert('deletions', {
+          userId: alice.user,
+          artifactId: p.artifactId,
+          slug: `gone-${i}`,
+          title: `Gone ${i}`,
+          requestedAt: 1000 + i,
+          attempts: i % 3,
+          ...(i % 3 === 1 ? { failedAt: 2000 + i, nextAt: 3000 + i } : {}),
+          ...(i % 3 === 2 ? { contentAt: 2000 + i, recordsAt: 3000 + i, completedAt: 3000 + i } : {}),
+        })
+      }
+      await ctx.db.insert('deletions', { userId: bob.user, artifactId: p.artifactId, slug: 'private', title: 'Another person', requestedAt: 1000, attempts: 0 })
+    })
+    const all = []
+    let cursor: string | null = null
+    for (let i = 0; i < 10; i++) {
+      const batch: FunctionReturnType<typeof api.account.exportDeletions> = await alice.browser.query(api.account.exportDeletions, {
+        owner: start.owner,
+        cursor,
+      })
+      all.push(...batch.deletions)
+      if (batch.next === null) break
+      cursor = batch.next
+    }
+    expect(all).toHaveLength(231)
+    expect(all[0]).toEqual({
+      job,
+      artifactId: p.artifactId,
+      slug: 'plan',
+      title: original.title,
+      requestedAt: original.requestedAt,
+      state: 'pending',
+      attempts: 0,
+      contentAt: null,
+      recordsAt: null,
+      completedAt: null,
+      failedAt: null,
+      nextAt: null,
+    })
+    expect(all.find((d) => d.slug === 'gone-1')).toMatchObject({ state: 'retrying', failedAt: 2001, nextAt: 3001 })
+    expect(all.find((d) => d.slug === 'gone-2')).toMatchObject({ state: 'completed', contentAt: 2002, recordsAt: 3002, completedAt: 3002 })
+    expect(all.some((d) => d.slug === 'private')).toBe(false)
+    expect(await code(bob.browser.query(api.account.exportDeletions, { owner: start.owner, cursor: null }))).toBe('not_found')
+    expect(await code(screen.browser.query(api.account.exportDeletions, { owner: start.owner, cursor: null }))).toBe('forbidden')
+    expect(await code(m.as.query(api.account.exportDeletions, { owner: start.owner, cursor: null }))).toBe('forbidden')
+  })
+
   test("an export holds the person's pages, state and history in pieces, and is rate limited", async () => {
     const t = backend()
     const alice = await person(t, 'alice')
@@ -4143,6 +4204,81 @@ describe('leaving', () => {
         (await ctx.db.query('versions').collect()).length,
       ]),
     ).toEqual([0, 0, 0])
+  })
+
+  test('deletion receipts distinguish requested, failed and confirmed cleanup without treating a missing receipt as success', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const bob = await person(t, 'bob')
+    const screen = await browserOf(t, 'alice', 'screen')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    content.failNext = 1
+    const { job } = await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'pending', completedAt: null })
+    expect(await code(screen.browser.query(api.deletions.get, { job }))).toBe('forbidden')
+    expect(await code(screen.browser.query(api.deletions.list, {}))).toBe('forbidden')
+    expect(await code(bob.browser.query(api.deletions.get, { job }))).toBe('not_found')
+    for (let i = 0; i < 4; i++) await runWhatIsDue(t)
+    expect(await alice.browser.query(api.deletions.get, { job })).toMatchObject({
+      state: 'retrying',
+      attempts: 1,
+      nextAt: Date.now() + 5000,
+      completedAt: null,
+    })
+    // A restart loses an action in progress. Its durable job is restarted by the periodic sweep.
+    vi.clearAllTimers()
+    vi.setSystemTime(Date.now() + 3 * 60_000)
+    expect(await t.mutation(internal.content.kick, {})).toBe(1)
+    for (let i = 0; i < 4; i++) await runWhatIsDue(t)
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'completed', completedAt: Date.now() })
+    expect(await alice.browser.query(api.deletions.list, {})).toHaveLength(1)
+    // Reusing a page name neither completes nor deletes a new incarnation of that page.
+    await publish(m, 'plan')
+    expect(await m.as.query(api.deletions.get, { slug: 'plan' })).toMatchObject({ job, state: 'completed' })
+    expect(await m.as.query(api.artifacts.get, { slug: 'plan' })).toMatchObject({ slug: 'plan' })
+    await t.run((ctx) => ctx.db.delete(job))
+    expect(await code(m.as.query(api.deletions.get, { job }))).toBe('not_found')
+  })
+
+  test('content confirmation alone does not complete a deletion whose records remain', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    const { job } = await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    vi.clearAllTimers()
+    const contentJob = await t.run((ctx) =>
+      ctx.db
+        .query('contentJobs')
+        .filter((q) => q.eq(q.field('deletionId'), job))
+        .first(),
+    )
+    await t.action(internal.content.run, { jobId: contentJob!._id })
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'pending', completedAt: null })
+    const receipt = await t.run((ctx) => ctx.db.get(job))
+    await t.mutation(internal.retention.purgeArtifact, { artifactId: receipt!.artifactId, deletionId: job })
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'completed' })
+  })
+
+  test('completed deletion receipts expire after a week, while unfinished ones stay until erasure', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'finished')
+    const done = await m.as.mutation(api.artifacts.remove, { slug: 'finished' })
+    await settle(t)
+    await publish(m, 'waiting')
+    const pending = await m.as.mutation(api.artifacts.remove, { slug: 'waiting' })
+    vi.clearAllTimers()
+    vi.setSystemTime(Date.now() + 8 * 86_400_000)
+    await t.mutation(internal.retention.sweepRecords, {})
+    expect(await t.run((ctx) => ctx.db.get(done.job))).toBeNull()
+    expect(await t.run((ctx) => ctx.db.get(pending.job))).not.toBeNull()
+    await t.run((ctx) => ctx.db.patch(alice.user as never, { deletedAt: Date.now() }))
+    await t.mutation(internal.retention.purgeErased, {})
+    await settle(t)
+    expect(await t.run((ctx) => ctx.db.query('deletions').collect())).toEqual([])
   })
 
   test('an answer from the content service that cannot be read is not taken for "done"', async () => {

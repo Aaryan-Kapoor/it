@@ -3743,3 +3743,14 @@ form.row-main {
     animation: none;
   }
 }
+
+.deletion-status {
+  margin: 1rem auto;
+  padding: 1rem;
+  max-width: 80rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+}
+.deletion-line {
+  margin: 0.5rem 0;
+}

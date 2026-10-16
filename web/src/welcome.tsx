@@ -2,7 +2,7 @@
 // another as the launch film draws them, and beside them the sentence that gets a person
 // started, to give to their agent.
 import { useMutation, useQuery } from 'convex/react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
 import type { Playing } from './film/play'
 import { agentName, api, navigate, refusal, useNow } from './lib'
@@ -177,12 +177,13 @@ function To({ href, children }: { href: string; children: string }) {
  * What a person who has no pages and has had the tour is shown: a few things to ask an agent
  * for, each to copy, and the way back into the tour.
  */
-export function Starters({ owner }: { owner: boolean }) {
+export function Starters({ owner, notice }: { owner: boolean; notice?: ReactNode }) {
   const apps = useApps(owner)
   const [tour, setTour] = useState(false)
   return (
     <main className="starters">
       <div className="starters-in">
+        {notice}
         <h2 className="starters-h">Nothing here yet</h2>
         <p className="starters-lede">
           Your agent makes a page when you ask for something to see or to use. Say what you want in its chat, in your own words. A few to start from:

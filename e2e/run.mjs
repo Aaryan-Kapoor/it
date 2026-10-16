@@ -4287,13 +4287,14 @@ try {
   const [download] = await Promise.all([page.waitForEvent('download', { timeout: 30_000 }), page.getByRole('button', { name: 'Download my data' }).click()])
   const exported = JSON.parse(readFileSync(await download.path(), 'utf8'))
   check(
-    'an export holds the pages with their state, the machines, the revoked one among them, and the displays, and says it is complete',
+    'an export holds the pages with their state, the machines, the revoked one among them, the displays and retained deletion receipts, and says it is complete',
     exported.complete === true &&
       exported.pages.some((p) => p.slug === `${slug}-b` && p.state.k === `${PRIVATE_MARK}v`) &&
       exported.pages.some((p) => p.slug === slug && p.state.status === DEPLOYING) &&
       exported.machines.some((m) => m.name === BOX && m.revoked === true) &&
       exported.machines.some((m) => m.name === OTHER && m.revoked === false) &&
-      exported.displays.some((d) => d.name === WALL),
+      exported.displays.some((d) => d.name === WALL) &&
+      exported.deletions.some((d) => d.slug === sslug && d.state === 'completed' && d.completedAt !== null),
     JSON.stringify(exported).slice(0, 300),
   )
   const before = (await it(A, ['displays'])).length
@@ -4712,6 +4713,11 @@ try {
       )) &&
       (await three.page.locator('.hello').count()) === 0,
     `on the menu: ${onTourMenu}; now at ${new URL(three.page.url()).pathname}`,
+  )
+  await three.page.getByRole('button', { name: /^Completed deletions/ }).click()
+  check(
+    'the completed tour deletion can still be opened beside the suggestions',
+    (await three.page.locator('.deletion-line').filter({ hasText: 'deletion confirmed.' }).count()) > 0,
   )
   // Ending every other browser never ends the one that asks. That browser adds a machine, and
   // the browser everything was erased from is paired again with a code that machine asks for,

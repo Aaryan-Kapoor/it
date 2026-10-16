@@ -60,7 +60,7 @@ describe('the agent skill', () => {
         const flag = /^[[(]?(--[a-z-]+)/.exec(word)?.[1]
         if (flag) flags.set(words[1]!, (flags.get(words[1]!) ?? new Set()).add(flag))
       }
-    expect([...flags.keys()].sort()).toEqual(['ack', 'action', 'actions', 'create', 'notify', 'open', 'patch', 'update', 'wait'])
+    expect([...flags.keys()].sort()).toEqual(['ack', 'action', 'actions', 'create', 'delete', 'notify', 'open', 'patch', 'update', 'wait'])
     for (const [command, taken] of flags) {
       // What the program's own help says of that command
       const said = help
