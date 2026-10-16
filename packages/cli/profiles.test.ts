@@ -85,7 +85,9 @@ test.each(['directory', 'symlink'])('The resumed child receives the recorded pro
     { env },
   )
   expect(result).toBeNull()
-  expect(JSON.parse(readFileSync(output, 'utf8'))).toEqual([first, realpathSync(first)])
+  const [profile, cwd]: [string, string] = JSON.parse(readFileSync(output, 'utf8'))
+  expect(profile).toBe(first)
+  expect(realpathSync(cwd)).toBe(realpathSync(first))
 })
 
 test('Legacy and malformed profile records never fall back to the service’s profile.', () => {
