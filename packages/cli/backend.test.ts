@@ -1043,7 +1043,7 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     expect(await refusal(nothingLeft(() => {}))).toBe('settings')
   }, 300_000)
 
-  test('`it uninstall` stops an orphaned backend before removing its database and preserves unrecognised storage', async () => {
+  test('`it uninstall` stops an orphaned backend before removing its database and storage', async () => {
     markInstallation(folder)
     makeConfig()
     const left = await orphan()
@@ -1059,11 +1059,12 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
         timeout: 120_000,
       })
       expect(ran.status, ran.stderr || String(ran.error ?? '')).toBe(0)
-      const told = JSON.parse(ran.stdout) as { removed: boolean; said: string[]; left: string[] }
-      expect([told.removed, told.said]).toEqual([false, ['The backend program that an It which had died left running here is stopped.']])
-      expect(told.left.join(' ')).toContain('files It could not safely remove: backend')
+      const told: { removed: boolean; said: string[]; left?: string[] } = JSON.parse(ran.stdout)
+      expect([told.removed, told.said]).toEqual([true, ['The backend program that an It which had died left running here is stopped.']])
+      expect(told.left).toBeUndefined()
       expect([startOf(left), existsSync(database()), existsSync(inBackend('lock'))]).toEqual([null, false, false])
-      expect(within(inBackend('storage'))).toEqual(storage)
+      expect(existsSync(inBackend('storage'))).toBe(false)
+      expect(existsSync(folder)).toBe(false)
     } finally {
       if (startOf(left) !== null) process.kill(left, 'SIGKILL')
     }
