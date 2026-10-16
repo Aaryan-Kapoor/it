@@ -55,7 +55,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   update: ['id', 'file', 'dir', 'html', 'title', 'agent', 'open', 'on', 'take'],
   list: [],
   read: [],
-  delete: [],
+  delete: ['status'],
   rollback: [],
   set: ['if-revision'],
   patch: ['replace', 'if-revision'],
