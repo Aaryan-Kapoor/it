@@ -10,6 +10,8 @@ import { api, displayKey, type Id } from './lib'
 
 /** How many cards show their page at once. The rest show their cover until one of these leaves the screen. */
 const AT_ONCE = 9
+/** How long after a picture was shown afresh, because its showing ran out, before it is shown afresh for that again. */
+const AFRESH_EVERY_MS = 60_000
 const showing = new Set<symbol>()
 const waiting = new Set<() => void>()
 const letGo = (me: symbol) => {
@@ -100,6 +102,8 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
     if (!address) return
     let channel: MessageChannel | null = null
     let answered = ''
+    /** The showing afresh that a picture which ran out too soon after the last one is waiting for. */
+    let later: ReturnType<typeof setTimeout> | undefined
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frame.current?.contentWindow) return
       const said = e.data as { type?: unknown; doc?: unknown } | null
@@ -111,10 +115,15 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
       mine.onmessage = (m) => {
         const asked = m.data as { type?: unknown; requestId?: unknown } | null
         if (asked?.type === 'it:lapsed') {
-          if (Date.now() - lapsedAt.current > 60_000) {
+          // One that ran out so soon after the last was begun is shown afresh when that while
+          // has passed, and is not let go by: a document says that its showing is over only once
+          const afresh = () => {
             lapsedAt.current = Date.now()
             setAgain((n) => n + 1)
           }
+          const wait = Math.min(lapsedAt.current + AFRESH_EVERY_MS - Date.now(), AFRESH_EVERY_MS)
+          if (wait < 0) afresh()
+          else later ??= setTimeout(afresh, wait)
           return
         }
         if (asked?.type !== 'it:action' && asked?.type !== 'it:store') return
@@ -127,6 +136,7 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
     window.addEventListener('message', onMessage)
     return () => {
       window.removeEventListener('message', onMessage)
+      clearTimeout(later)
       channel?.port1.close()
     }
   }, [address])

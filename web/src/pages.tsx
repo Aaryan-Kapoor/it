@@ -7,8 +7,9 @@ import { copy, IconBack, IconLink, IconPin, IconSay, IconSend, IconStop, IconX, 
 import { agentName, ago, api, displayKey, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
-import { onItsWayUntil, outboxChanges, unsaved, unsent, watchOutbox } from './outbox'
+import { onItsWayUntil, outboxChanges, typedOnItsWay, typedWaiting, unsaved, unsent, watchOutbox } from './outbox'
 import { Preview } from './preview'
+import { type PageConnection, reportedConnection } from './readiness'
 import { useSession } from './session'
 import { Starters, useTour, Welcome } from './welcome'
 
@@ -198,7 +199,7 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
 function Empty({ owner }: { owner: boolean }) {
   const tour = useTour()
   if (!tour.known) return <main className="grid-view" role="status" />
-  return tour.done && !tour.waiting && !tour.coming ? <Starters owner={owner} /> : <Welcome owner={owner} />
+  return tour.done && !tour.waiting && !tour.coming ? <Starters owner={owner} /> : <Welcome owner={owner} tour={tour} />
 }
 
 /**
@@ -218,8 +219,9 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
   }, [page, slug])
   /** What the page's own script last failed with, and which version of the page that was. */
   const [fault, setFault] = useState<{ of: string; message: string; agentTold: boolean } | null>(null)
-  /** Whether the box to type to the page's agent in is open. */
+  /** Whether the box to type to the page's agent in is open, and the button that opens it. */
   const [talking, setTalking] = useState(false)
+  const talkButton = useRef<HTMLButtonElement>(null)
   // Whether something done here is with the page's agent, or on its way to it, and not yet
   // answered: shown as a line that moves under the bar, which is seen where the few words
   // beside the title are not
@@ -231,9 +233,11 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
       document.title = 'It'
     }
   }, [page])
-  // Escape goes back, from wherever on the site's own part of the screen the keyboard is
+  // Escape goes back, from wherever on the site's own part of the screen the keyboard is. With
+  // something open over the page, the notifications among them, it closes that and no more
   useEffect(() => {
-    const key = (e: KeyboardEvent) => e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.modal-overlay, .finder-overlay') && navigate('/')
+    const key = (e: KeyboardEvent) =>
+      e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.modal-overlay, .finder-overlay, .notif-panel') && navigate('/')
     document.addEventListener('keydown', key)
     return () => document.removeEventListener('keydown', key)
   }, [])
@@ -296,8 +300,11 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               machineGone={page.machineGone === true}
               machinePaused={page.machinePaused ?? null}
               pending={page.pending}
-              // Only the owner may switch reopening on, and only for an agent app It can reopen
-              wakes={owner ? page.wake : null}
+              // Whether a closed conversation is reopened is said to every browser alike. Only the owner may switch it on
+              wakes={page.wake}
+              mayWake={owner}
+              connection={(page as { connection?: PageConnection | null }).connection}
+              harness={page.session?.harness ?? page.agent}
               agent={agentName(page.agent)}
               stoppedAt={page.stoppedAt}
               wakeFailed={page.wakeFailed}
@@ -308,6 +315,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
         <div className="page-nav-actions">
           {page.version !== null && (
             <button
+              ref={talkButton}
               type="button"
               className="nav-action"
               aria-pressed={talking}
@@ -334,11 +342,16 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
         <Talk
           // Another page is another box: what was being typed to one agent is not sent to the next
           key={page.id}
+          user={user}
           artifactId={page.id as Id<'artifacts'>}
           agent={agentName(page.agent)}
           said={page.said ?? null}
           open={talking}
-          onClose={() => setTalking(false)}
+          // Closed from the box, with Escape: the keyboard goes back to the button that opened it
+          onClose={() => {
+            setTalking(false)
+            talkButton.current?.focus()
+          }}
         />
       )}
       {page.version === null ? (
@@ -390,12 +403,14 @@ export const SAID_FOR_MS = 30 * 60_000
  * word, or to read one.
  */
 function Talk({
+  user,
   artifactId,
   agent,
   said,
   open,
   onClose,
 }: {
+  user: string
   artifactId: Id<'artifacts'>
   agent: string | null
   said: { text: string; at: number } | null
@@ -408,6 +423,7 @@ function Talk({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const box = useRef<HTMLInputElement>(null)
+  const edits = useRef(0)
   // One id for what is in the box until it has been taken, so that sending it twice over a
   // connection that dropped is one message. Not `randomUUID`, which a browser offers only to a
   // site it reached securely
@@ -424,16 +440,22 @@ function Talk({
   const send = async () => {
     const typed = text.trim()
     if (!typed || sending) return
+    // The box can be typed in while this is on its way. An edit back to the same words is still
+    // a draft of its own, so it is cleared only where nothing has been typed since.
+    const sent = edits.current
     setSending(true)
     setError('')
+    // Nothing of it is kept in this browser: said on the page's bar until It has it, and the site is not loaded afresh over it
+    const taken = typedOnItsWay(user, artifactId)
     try {
       await convex.mutation(api.actions.message, { artifactId, displayKey: displayKey(), clientActionId: id.current, text: typed })
       id.current = fresh()
-      setText('')
+      if (edits.current === sent) setText('')
     } catch (err) {
       // Left in the box, to be sent again: nothing of it is kept anywhere else
       setError(refusal(err).message)
     } finally {
+      taken()
       setSending(false)
     }
   }
@@ -474,7 +496,10 @@ function Talk({
             autoComplete="off"
             maxLength={LIMITS.messageText}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              edits.current++
+              setText(e.target.value)
+            }}
             onKeyDown={(e) => {
               // Escape closes the box, and does not leave the page as it does anywhere else on the bar
               if (e.key !== 'Escape') return
@@ -536,11 +561,18 @@ function Working({
   const now = useNow(1_000)
   useSyncExternalStore(watchOutbox, outboxChanges)
   // Something done here that this browser would not store is lost with the tab, whatever the agent is doing: said beside the rest
-  const keepOpen = unsaved(user, artifactId) > 0 && (
-    <span className="status" data-tone="wait">
-      Not sent yet. This browser could not save it, so keep this tab open
-    </span>
-  )
+  const keepOpen =
+    typedWaiting(user, artifactId) > 0 ? (
+      <span className="status" data-tone="wait">
+        Not sent yet. What you typed is only in this tab, so keep it open
+      </span>
+    ) : (
+      unsaved(user, artifactId) > 0 && (
+        <span className="status" data-tone="wait">
+          Not sent yet. This browser could not save it, so keep this tab open
+        </span>
+      )
+    )
   // That it is working is the machine's own word, and is as good as the machine is there to
   // give it: one that has gone quiet, or said it was stopping, may have ended the run or may
   // not, and cannot be told to stop until it is back. Said as that, and not as work going on.
@@ -624,6 +656,9 @@ function ActionStatus({
   machinePaused,
   pending,
   wakes,
+  mayWake,
+  connection,
+  harness,
   agent,
   stoppedAt,
   wakeFailed,
@@ -641,6 +676,11 @@ function ActionStatus({
   pending: number
   /** Where the page's agent app can have a closed conversation reopened: the machine that would, and whether that is switched on there. */
   wakes: { machineId: string; harness: string; on: boolean } | null
+  /** Whether this browser may switch that on: one paired as the person's own. */
+  mayWake: boolean
+  connection?: PageConnection | null
+  /** The owning app is known even where its conversations cannot be reopened. */
+  harness: string | null
   agent: string | null
   /** When a person last stopped the page's agent, if they have. */
   stoppedAt: number | null
@@ -688,9 +728,28 @@ function ActionStatus({
   // where more wait than the last few show
   const stillWaiting = recent?.filter((a) => a.delivery !== 'handed_off') ?? []
   const waiting = Math.max(stillWaiting.length, recent ? pending || 0 : 0)
+  // New backends report the owning app to both roles. Older ones expose inventory only to
+  // owners, so that fallback is asked only while something waits and the page names its app.
+  const fallback = connection === undefined && mayWake && harness !== null && stillWaiting.length > 0
+  const machines = useQuery(api.machines.list, fallback ? {} : 'skip') as
+    | { id: string; name: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[]
+    | undefined
+  // Older backends give the machine's ID only with wake details. Otherwise its name must
+  // identify exactly one machine; two machines with the same name cannot be told apart here.
+  const matches = machines?.filter((m) => (wakes ? m.id === wakes.machineId : machine !== null && m.name === machine))
+  const readiness: PageConnection | undefined =
+    connection ??
+    (fallback ? (reportedConnection(harness, matches?.length === 1 ? matches[0] : undefined) ?? { harness, state: 'unknown', queue: false }) : undefined)
   // The bar speaks of the last thing that is still waiting, where anything is: that something
   // done after it was dealt with does not make it so. Otherwise of the last thing done.
   const last = stillWaiting[0] ?? recent?.[0]
+  // What was typed to the agent is never kept here, and is in this tab alone until It has it
+  if (typedWaiting(user, artifactId) > 0)
+    return (
+      <span className="status" data-tone="wait">
+        {onItsWay ? 'Sending' : 'Not sent yet'}. What you typed is only in this tab, so keep it open
+      </span>
+    )
   // Sent with no copy kept here, because this browser would not store one: closing the tab now would lose it
   if (unsaved(user, artifactId) > 0)
     return (
@@ -796,7 +855,39 @@ function ActionStatus({
   // A conversation is reopened only for what was done in the last day. For anything older the
   // switch would change nothing, so it is not offered, and the bar says what would bring it
   const tooOld = now - last.at > WAKE_BACK_MS
-  const offer = wakes && !wakes.on && slow && !busy && !tooOld
+  const offer = mayWake && wakes && readiness?.state === 'connected' && !wakes.on && slow && !busy && !tooOld
+  // Its app is not connected on that machine. The machine hands nothing to such an app and
+  // reopens no conversation of it, whatever Auto-wake is set to, so opening the conversation
+  // brings nothing and neither would waking it: said as that, with where it is put right
+  if (readiness?.state === 'disconnected' && slow)
+    return (
+      <span className="status" data-tone="wait">
+        {`Sent${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Its agent app'} is not connected on ${machine ?? 'its machine'}, and gets it once it is connected there, under Machines`}
+      </span>
+    )
+  if (readiness && readiness.state !== 'connected' && slow) {
+    const app = agent ?? 'Its agent app'
+    const prefix = `Sent${waiting > 1 ? ` (${waiting})` : ''}. `
+    const reason =
+      readiness.state === 'needs_approval'
+        ? readiness.queue
+          ? `${app}'s hooks need approval. Its open conversation can still receive queued clicks. Open the app to review the hooks`
+          : `${app}'s add-on needs approval. Open the app to review it`
+        : readiness.state === 'connecting'
+          ? `${app} is still connecting on ${machine ?? 'its machine'}. Check Machines if it does not finish`
+          : readiness.state === 'too_old'
+            ? `${app} needs an update before It can connect it. Check Machines`
+            : readiness.state === 'unavailable'
+              ? `${app}'s add-on is unavailable on ${machine ?? 'its machine'}. Check Machines`
+              : readiness.state === 'error'
+                ? `${app}'s add-on could not connect on ${machine ?? 'its machine'}. Check Machines`
+                : `It has not confirmed ${app}'s connection on ${machine ?? 'its machine'}. Check Machines`
+    return (
+      <span className="status" data-tone="wait">
+        {prefix + reason}
+      </span>
+    )
+  }
   // Tried, and it could not be reopened: said as that, with why where it is asked for
   if (wakeFailed && wakeFailed.at >= last.at)
     return (

@@ -98,13 +98,19 @@ export async function copy(text: string): Promise<boolean> {
     // write to. The older way still works there, from a field that holds the text
     const field = Object.assign(document.createElement('textarea'), { value: text })
     field.className = 'offscreen'
+    // Choosing what is in the field takes the keyboard to it, and the field then goes: the
+    // keyboard is put back where it was, on the button that was pressed, whether or not it copied
+    const before = document.activeElement
     document.body.append(field)
-    field.select()
     let ok = false
     try {
+      field.select()
       ok = document.execCommand('copy')
-    } catch {}
-    field.remove()
+    } catch {
+    } finally {
+      field.remove()
+      if (before instanceof HTMLElement && before.isConnected) before.focus()
+    }
     return ok
   }
 }
