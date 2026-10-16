@@ -151,11 +151,14 @@ jobs:
         run: echo "::warning::The first run left no backend program on this system, so the tests that start it are skipped in what follows, and the job fails for the first run all the same"
       - if: ${{ !cancelled() }}
         run: npm test
-      # Two steps, so that a system where the door's tests fail under Bun still says whether the
-      # content service's pass there
+      # Separate processes, so that a failure in one suite does not prevent the others from
+      # running, and each reports its own result.
       - name: The door, its notifications and what It asks of itself, under Bun
         if: ${{ !cancelled() }}
-        run: bun test ./packages/cli/door.test.ts ./packages/cli/export.test.ts ./packages/cli/push.test.ts ./packages/cli/direct.test.ts
+        run: bun test ./packages/cli/door.test.ts ./packages/cli/push.test.ts ./packages/cli/direct.test.ts
+      - name: Streamed record downloads, under Bun
+        if: ${{ !cancelled() }}
+        run: bun test ./packages/cli/export.test.ts
       # On Linux alone: on macOS Bun's own test runner ends with a fault of Bun's in the middle
       # of these, and the standalone program's first run, which is what they stand for, is run
       # there by the job that starts the programs
