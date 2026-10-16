@@ -290,6 +290,38 @@ describe('installation ownership', () => {
     expect(readdirSync(path.join(at, 'bin'))).toEqual([expect.stringMatching(/\.upgrade\.lock\.[0-9a-f]{16}\.tmp$/)])
   })
 
+  test.each([false, true])('cleanup removes abandoned command locks, with unknown and live records: %s', async (unknown) => {
+    const at = folder()
+    markInstallation(at)
+    let live: any
+    await aloneAt(path.join(at, 'connector.lock'), async () => {
+      live = JSON.parse(readFileSync(path.join(at, 'connector.lock'), 'utf8'))
+    })
+    const pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    const dead = JSON.stringify({ ...live, pid })
+    const removed: string[] = []
+    for (const lock of ['connector.lock', 'setup.lock', 'enrol.lock', 'addons/setup.lock']) {
+      for (const suffix of ['', `.after.${live.holder}`, `.${live.holder}.tmp`, `.after.${live.holder}.${live.holder}.tmp`])
+        removed.push(put(at, lock + suffix, dead))
+    }
+    const kept = ['connector.lock.notes', 'setup.lock.after.1234567890abcdef', 'addons/setup.lock.notes']
+    const activeOwner = { ...live, holder: 'b'.repeat(16) }
+    const active = `enrol.lock.${activeOwner.holder}.tmp`
+    if (unknown) {
+      for (const name of kept) put(at, name, 'mine')
+      put(at, active, JSON.stringify(activeOwner))
+    }
+    const left = removeInstallationFiles(at, false)
+    for (const file of removed) expect(existsSync(file)).toBe(false)
+    if (unknown) {
+      for (const name of kept) expect(readFileSync(path.join(at, name), 'utf8')).toBe('mine')
+      expect(readFileSync(path.join(at, active), 'utf8')).toBe(JSON.stringify(activeOwner))
+    } else {
+      expect(left).toEqual([])
+      expect(existsSync(at)).toBe(false)
+    }
+  })
+
   test('an unrecognised program lock stops uninstall before any installation file is removed', async () => {
     const at = folder()
     markInstallation(at)

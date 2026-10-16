@@ -43,7 +43,12 @@ const ROOT_FILES = [
 const DATABASE_FILES = ['db.sqlite3', 'db.sqlite3-wal', 'db.sqlite3-shm', 'db.sqlite3-journal', 'data.json']
 const RELEASE = 'precompiled-\\d{4}-\\d{2}-\\d{2}-[0-9a-f]{7,40}'
 const COPY = new RegExp(`^(before-(?:${RELEASE}(?:-functions-[0-9a-f]{12})?|functions-[0-9a-f]{12}))(?:\\.[0-9a-f]{16}\\.(?:part|old))?$`)
-const PROGRAM_LOCK = /^it(?:\.exe)?\.upgrade\.lock(?:\.after\.(?:[0-9a-f]{16}|unread-\d+-\d+))?(?:\.[0-9a-f]{16}\.tmp)?$/
+const LOCK_SUFFIX = /^(?:\.after\.(?:[0-9a-f]{16}|unread-\d+-\d+))?(?:\.[0-9a-f]{16}\.tmp)?$/
+const LOCKS: Record<string, string[]> = {
+  '': ['connector.lock', 'setup.lock', 'enrol.lock'],
+  addons: ['setup.lock'],
+  bin: ['it.upgrade.lock', 'it.exe.upgrade.lock'],
+}
 const lockRecord = (value: any): value is { pid: number; started: string; where: string; holder: string } =>
   Number.isInteger(value?.pid) &&
   value.pid > 0 &&
@@ -181,10 +186,14 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
   remove('logs/it.log')
   remove('logs/it.log.1')
   for (const name of children('logs')) if (/^reopened-\d+-\d+\.txt$/.test(name)) remove(`logs/${name}`)
-  for (const name of children('bin')) {
-    if (!PROGRAM_LOCK.test(name)) continue
-    const owner = json(`bin/${name}`)
-    if (lockRecord(owner) && !holderRuns(owner)) remove(`bin/${name}`)
+  for (const [directory, names] of Object.entries(LOCKS)) {
+    for (const name of directory ? children(directory) : readdirSync(folder)) {
+      const lock = names.find((base) => name.startsWith(base) && LOCK_SUFFIX.test(name.slice(base.length)))
+      if (!lock) continue
+      const relative = directory ? `${directory}/${name}` : name
+      const owner = json(relative)
+      if (lockRecord(owner) && !holderRuns(owner)) remove(relative)
+    }
   }
   if (!keepAddons) {
     for (const name of ['it', 'it.exe', 'it.cmd', 'it-here', 'it-here.cmd', 'it-service.cmd']) remove(`bin/${name}`)
