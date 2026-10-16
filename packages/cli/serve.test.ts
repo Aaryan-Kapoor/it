@@ -50,7 +50,7 @@ const closed = (server: net.Server | http.Server) => new Promise<void>((resolve)
  */
 const ports = bases(24_000, 40)
 
-const KEPT = ['IT_HOME', 'IT_PORT', 'IT_BACKEND_BIN', 'IT_URL', 'IT_SITE_URL'] as const
+const KEPT = ['IT_HOME', 'IT_PORT', 'IT_BACKEND_BIN', 'IT_URL', 'IT_SITE_URL', 'IT_TELEMETRY_URL'] as const
 let before: Record<string, string | undefined>
 let folder: string
 /** Each test has an It folder of its own and a base port of its own, and nothing of whoever runs the tests. */
@@ -59,6 +59,9 @@ beforeEach(async () => {
   folder = mkdtempSync(path.join(os.tmpdir(), 'it-serve-'))
   process.env.IT_HOME = folder
   process.env.IT_PORT = String(await ports.next())
+  // Bun does not read vitest's reporting address. These tests use the same local destination,
+  // which also lets the reporting-reset cases run when CI disables ordinary usage reporting.
+  process.env.IT_TELEMETRY_URL = 'http://127.0.0.1:9/usage'
   if (program) process.env.IT_BACKEND_BIN = program
   delete process.env.IT_URL
   delete process.env.IT_SITE_URL
