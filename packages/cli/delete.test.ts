@@ -32,3 +32,25 @@ test('an absent status receipt is an error and never a confirmation', async () =
   await expect(deletePage('plan', true)).rejects.toThrow('No deletion record')
   expect(asking.mock.calls.map(([kind]) => kind)).toEqual(['query'])
 })
+
+test('one deadline cancels a stalled status poll, including time spent on earlier polls', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] })
+  let ending: AbortSignal | undefined
+  asking.mockResolvedValueOnce({ job: 'receipt-1' }).mockResolvedValueOnce({ job: 'receipt-1', state: 'pending', attempts: 0, nextAt: null, completedAt: null })
+  asking.mockImplementationOnce((_kind, _fn, _args, signal?: AbortSignal) => {
+    ending = signal
+    return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true }))
+  })
+  let result: unknown
+  void deletePage('plan').then((value) => {
+    result = value
+  })
+  await vi.advanceTimersByTimeAsync(4999)
+  expect(result).toBeUndefined()
+  await vi.advanceTimersByTimeAsync(1)
+  expect(result).toMatchObject({ job: 'receipt-1', state: 'pending' })
+  expect(result).not.toHaveProperty('deleted')
+  expect(ending?.aborted).toBe(true)
+  expect(asking).toHaveBeenCalledTimes(3)
+  expect(vi.getTimerCount()).toBe(0)
+})

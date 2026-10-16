@@ -19,24 +19,31 @@ export async function deletePage(slug: string, status = false) {
   if (!status && !job)
     return { ...pending, hint: 'Deletion was requested, but this backend cannot confirm completion. Start It with the current backend functions.' }
   const until = performance.now() + 5000
-  while (true) {
-    let receipt: Receipt
-    try {
-      receipt = await call<Receipt>('query', api.deletions.get, job ? { job } : { slug })
-    } catch (err) {
-      if (status) throw err
-      return { ...pending, hint: `Completion could not be checked. ${hint}` }
+  const ending = new AbortController()
+  const timer = setTimeout(() => ending.abort(new DOMException('Deletion status took too long.', 'TimeoutError')), 5000)
+  try {
+    while (true) {
+      if (ending.signal.aborted || performance.now() >= until) return pending
+      let receipt: Receipt
+      try {
+        receipt = await call<Receipt>('query', api.deletions.get, job ? { job } : { slug }, ending.signal)
+      } catch (err) {
+        if (status) throw err
+        return { ...pending, hint: `Completion could not be checked. ${hint}` }
+      }
+      const result = {
+        requested: slug,
+        job: receipt.job,
+        state: receipt.state,
+        attempts: receipt.attempts,
+        nextAt: receipt.nextAt,
+        completedAt: receipt.completedAt,
+      }
+      if (receipt.state === 'completed') return { ...result, deleted: slug }
+      if (status || receipt.state === 'retrying' || performance.now() >= until) return { ...result, hint }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(0, until - performance.now()))))
     }
-    const result = {
-      requested: slug,
-      job: receipt.job,
-      state: receipt.state,
-      attempts: receipt.attempts,
-      nextAt: receipt.nextAt,
-      completedAt: receipt.completedAt,
-    }
-    if (receipt.state === 'completed') return { ...result, deleted: slug }
-    if (status || receipt.state === 'retrying' || performance.now() >= until) return { ...result, hint }
-    await new Promise((resolve) => setTimeout(resolve, 250))
+  } finally {
+    clearTimeout(timer)
   }
 }

@@ -180,7 +180,7 @@ async function backend(
     const chunks: Buffer[] = []
     req
       .on('data', (c: Buffer) => chunks.push(c))
-      .on('end', () => {
+      .on('end', async () => {
         const json = (value: unknown, status = 200) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
         if (req.method === 'GET' && req.url === '/cli/config') return json({ protocol: 1, issuer: 'http://127.0.0.1:23001' })
         // Asked how it is, it says that it is It, as the backend does
@@ -203,7 +203,7 @@ async function backend(
         const call = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as { path: string; args: [Record<string, unknown>] }
         const one = { path: call.path, args: call.args?.[0] ?? {} }
         asked.push(one)
-        const said = answer(one)
+        const said = await answer(one)
         if (said instanceof Refusal) return json({ status: 'error', errorMessage: 'refused', errorData: said.data, logLines: [] })
         json({ status: 'success', value: said ?? null, logLines: [] })
       })
@@ -624,6 +624,35 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(done).toMatchObject({ deleted: 'plan', state: 'completed' })
       expect(b.asked.filter((x) => x.path === 'artifacts:remove')).toHaveLength(1)
       expect(b.asked.filter((x) => x.path === 'deletions:get').map((x) => x.args)).toEqual([{ job: 'delete-1' }, { slug: 'plan' }])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a slow status request is cancelled within the deletion deadline after an earlier poll', async () => {
+    const m = machine()
+    let polls = 0
+    let requestedAt = 0
+    const b = await backend(m, async (asked) => {
+      if (asked.path === 'artifacts:remove') {
+        requestedAt = performance.now()
+        return { job: 'delete-1' }
+      }
+      if (asked.path === 'deletions:get' && ++polls === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        return { job: 'delete-1', state: 'pending', attempts: 0, nextAt: null, completedAt: null }
+      }
+      return new Promise(() => {})
+    })
+    try {
+      const ran = await run(m, ['delete', 'plan'], b.env)
+      const elapsed = performance.now() - requestedAt
+      expect(ran.code).toBe(0)
+      expect(printed(ran)).toMatchObject({ requested: 'plan', job: 'delete-1', state: 'pending' })
+      expect(printed(ran)).not.toHaveProperty('deleted')
+      expect(polls).toBe(2)
+      expect(elapsed).toBeGreaterThanOrEqual(4900)
+      expect(elapsed).toBeLessThan(8000)
     } finally {
       await b.close()
     }
