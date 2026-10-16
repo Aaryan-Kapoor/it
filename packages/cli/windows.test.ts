@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { psQuote, WINDOWS_CLEANUP, windowsDeletionCommand } from './src/lib'
+import { startOf } from './src/serve/backend'
 import {
   PS_QUIET,
   windowsLauncher,
@@ -90,10 +91,11 @@ describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows Po
     const note = `${program}.recovery.json`
     const bytes = 'the previous checked program'
     const digest = createHash('sha256').update(bytes).digest('hex')
-    const record = (changes = {}) => writeFileSync(note, JSON.stringify({ file: path.basename(previous), sha256: digest, pid: 2147483646, ...changes }))
+    const record = (changes = {}) =>
+      writeFileSync(note, JSON.stringify({ file: path.basename(previous), sha256: digest, pid: 2147483646, started: '1', ...changes }))
     try {
       writeFileSync(previous, bytes)
-      record({ pid: process.pid })
+      record({ pid: process.pid, started: startOf(process.pid) })
       expect(powershell(windowsRecovery(program)).status).not.toBe(0)
       expect(existsSync(program)).toBe(false)
       record({ sha256: '0'.repeat(64) })
@@ -117,6 +119,35 @@ describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows Po
     }
   })
 
+  test('recovery ignores a live process whose PID was reused after the writer stopped', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-reused-pid-'))
+    const program = path.join(folder, 'it.exe')
+    const previous = path.join(folder, 'it.old.123.exe')
+    const note = `${program}.recovery.json`
+    const bytes = 'the previous checked program'
+    const started = startOf(process.pid)
+    expect(started).toMatch(/^[0-9]+$/)
+    try {
+      writeFileSync(previous, bytes)
+      const record = { file: path.basename(previous), sha256: createHash('sha256').update(bytes).digest('hex'), pid: process.pid, started }
+      writeFileSync(note, JSON.stringify(record))
+      const waiting = powershell(windowsRecovery(program))
+      expect(waiting.status).not.toBe(0)
+      expect(waiting.stderr).toContain('An install or update is still running')
+      expect(existsSync(program)).toBe(false)
+      // The process is still alive, but the record names a previous holder of its PID.
+      record.started = (BigInt(started!) - 1n).toString()
+      writeFileSync(note, JSON.stringify(record))
+      const recovered = powershell(windowsRecovery(program))
+      expect(recovered.status, recovered.stderr).toBe(0)
+      expect(readFileSync(program, 'utf8')).toBe(bytes)
+      expect(existsSync(previous)).toBe(false)
+      expect(existsSync(note)).toBe(false)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test('a writer killed after moving the previous program leaves a recoverable file', async () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-interrupted-'))
     const program = path.join(folder, 'it.exe')
@@ -126,7 +157,7 @@ describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows Po
     const move = `
 $ErrorActionPreference = 'Stop'
 $p = ${psQuote(program)}
-$r = @{ file = 'it.old.456.exe'; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLower(); pid = $PID }
+$r = @{ file = 'it.old.456.exe'; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLower(); pid = $PID; started = (Get-Process -Id $PID).StartTime.ToFileTimeUtc().ToString() }
 [IO.File]::WriteAllText($p + '.recovery.json', (ConvertTo-Json $r -Compress))
 [IO.File]::Move($p, ${psQuote(old)})
 [IO.File]::WriteAllText(${psQuote(reached)}, 'moved')

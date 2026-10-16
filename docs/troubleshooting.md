@@ -126,6 +126,6 @@ A page that a conversation made belongs to that conversation until another one b
 
 If an install or update was stopped while it was replacing `it.exe`, run the install command again. That restores the command without removing your pages or settings. Do not choose a program from the files named `it.old.*.exe` yourself.
 
-A service registered by this version can restore the exact previous program recorded by an interrupted install or update. It checks that the writer has stopped and that the file matches the recorded checksum before giving it the `it.exe` name again. It leaves a program already at that name alone. A missing or unreadable record, or a file that does not match it, needs the installer again.
+A service registered by this version can restore the exact previous program recorded by an interrupted install or update. It checks the writer's process number and creation time, so an unrelated process that later receives the same number does not prevent recovery. Once the writer has stopped, it checks that the file matches the recorded checksum before giving it the `it.exe` name again. It leaves a program already at that name alone. A missing or unreadable record, or a file that does not match it, needs the installer again.
 
 An older service launcher has no recovery step. Once the command is available, run `it service install` to refresh that launcher. A terminal command cannot repair its own missing executable, and a computer with no background service also needs the installer run again.

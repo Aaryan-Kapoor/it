@@ -272,7 +272,7 @@
       if ((Get-Kind $place.At) -ne 'nothing') {
         if ($place.At -eq $target -and (Get-Kind $target) -eq 'file') {
           # A service may restore only this exact previous program after this installer dies.
-          $record = ConvertTo-Json @{ file = [IO.Path]::GetFileName($place.Old); sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash.ToLower(); pid = $PID } -Compress
+          $record = ConvertTo-Json @{ file = [IO.Path]::GetFileName($place.Old); sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash.ToLower(); pid = $PID; started = (Get-Process -Id $PID).StartTime.ToFileTimeUtc().ToString() } -Compress
           $note = "$target.recovery.json"
           $part = "$note.$PID"
           $bytes = (New-Object Text.UTF8Encoding $false).GetBytes($record)

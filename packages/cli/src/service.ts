@@ -240,8 +240,9 @@ if (Test-Path -LiteralPath $program) { exit 0 }
 $note = $program + '.recovery.json'
 if (-not (Test-Path -LiteralPath $note)) { throw 'It is missing. Run the installer again.' }
 $record = Get-Content -Raw -LiteralPath $note | ConvertFrom-Json
-if ($record.file -cnotmatch '^it\\.old\\.[0-9]+\\.exe$' -or $record.sha256 -cnotmatch '^[a-f0-9]{64}$' -or ($record.pid -isnot [int] -and $record.pid -isnot [long]) -or $record.pid -le 1) { throw 'The recovery record cannot be read. Run the installer again.' }
-if (Get-Process -Id $record.pid -ErrorAction SilentlyContinue) { throw 'An install or update is still running.' }
+if ($record.file -cnotmatch '^it\\.old\\.[0-9]+\\.exe$' -or $record.sha256 -cnotmatch '^[a-f0-9]{64}$' -or ($record.pid -isnot [int] -and $record.pid -isnot [long]) -or $record.pid -le 1 -or $record.started -isnot [string] -or $record.started -cnotmatch '^[0-9]+$') { throw 'The recovery record cannot be read. Run the installer again.' }
+$writer = Get-Process -Id $record.pid -ErrorAction SilentlyContinue
+if ($writer -and $writer.StartTime.ToFileTimeUtc().ToString() -ceq $record.started) { throw 'An install or update is still running.' }
 $old = Join-Path ([IO.Path]::GetDirectoryName($program)) $record.file
 $item = Get-Item -Force -LiteralPath $old
 if (($item.Attributes -band ([IO.FileAttributes]::ReparsePoint -bor [IO.FileAttributes]::Directory)) -ne 0 -or (Get-FileHash -Algorithm SHA256 -LiteralPath $old).Hash -ine $record.sha256) { throw 'The previous program does not match its recovery record. Run the installer again.' }
