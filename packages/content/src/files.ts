@@ -60,6 +60,8 @@ export interface Files {
     file: string,
     body: ReadableStream<Uint8Array> | null,
     declared: Declared,
+    /** Moves the file synchronously while deletion is excluded, or returns false without moving it. */
+    allowed: (move: () => void) => boolean,
   ): Promise<'ok' | 'bytes_differ' | 'size_differs' | 'cut_short' | 'no_folder'>
   remove(prefix: string, file: string): Promise<void>
   declare(prefix: string, files: ({ path: string } & Declared)[]): Promise<void>
@@ -69,6 +71,8 @@ export interface Files {
   stored(prefix: string): Promise<Map<string, number>>
   /** The SHA-256 of a stored file as it is on disk now, by the name it is kept under. */
   checksum(prefix: string, name: string): Promise<string | null>
+  /** Removes every file stored under a version but the ones kept under these names, and says how many it removed. */
+  only(prefix: string, names: Set<string>): Promise<number>
   /** Removes what was declared under a prefix and then what was stored, at most `most` files of them. `more` says whether any are left. */
   clear(prefix: string, most: number): Promise<{ removed: number; more: boolean }>
   /** Lets go of the folder: what was still arriving here is cleared away. */
@@ -234,9 +238,13 @@ export function createFiles(folder: string): Files {
 
   /**
    * Writes a file whole or not at all: under another name first, and then moved into place.
-   * Answers whether it was placed, was not written whole, or had no folder left to be placed in.
+   * Answers whether it was placed, was not written whole, or its version was no longer writable.
    */
-  async function place(to: string, write: (handle: FileHandle) => Promise<boolean>): Promise<'placed' | 'not_whole' | 'no_folder'> {
+  async function place(
+    to: string,
+    allowed: ((move: () => void) => boolean) | undefined,
+    write: (handle: FileHandle) => Promise<boolean>,
+  ): Promise<'placed' | 'not_whole' | 'no_folder'> {
     const temp = path.join(arriving, randomUUID())
     const handle = await open(temp, 'wx', 0o600)
     // Until the file is in its place, whatever becomes of it, what was written under the other
@@ -253,7 +261,9 @@ export function createFiles(folder: string): Files {
       }
       if (!whole) return 'not_whole'
       try {
-        await rename(temp, to)
+        if (allowed) {
+          if (!allowed(() => renameSync(temp, to))) return 'no_folder'
+        } else await rename(temp, to)
       } catch (err) {
         if (gone(err)) return 'no_folder'
         throw err
@@ -304,11 +314,29 @@ export function createFiles(folder: string): Files {
       })
       left.files -= 1
     }
-    // An upload that is arriving at this moment may have put a file back: then the folder stays, with that file in it
+    // An upload that is arriving at this moment may have put a file back: then the folder stays,
+    // with that file in it, and there is more to remove. A folder that cannot be removed for any
+    // other reason is the disk's trouble and is thrown, as a file's is: said to be more to
+    // remove, it would be asked for again at once, and without end, with nothing ever removed.
     return rmdir(dir).then(
       () => true,
-      (err) => gone(err),
+      (err) => {
+        if (gone(err)) return true
+        if (['ENOTEMPTY', 'EEXIST'].includes((err as { code?: string }).code ?? '')) return false
+        throw err
+      },
     )
+  }
+
+  /** Removes a version's folder and the folders it is in, as far up as they are empty. */
+  async function emptied(from: string): Promise<void> {
+    for (let dir = from; dir.startsWith(path.join(root, 'u') + path.sep); dir = path.dirname(dir)) {
+      const went = await rmdir(dir).then(
+        () => true,
+        () => false,
+      )
+      if (!went) break
+    }
   }
 
   return {
@@ -328,14 +356,23 @@ export function createFiles(folder: string): Files {
       }
     },
 
-    async write(prefix, file, body, declared) {
+    async write(prefix, file, body, declared, allowed) {
       const to = kept(prefix, file)
       // Looked at before the folder is made, so that none is made through a link, and after
       await there(path.dirname(to))
       await mkdir(path.dirname(to), { recursive: true, mode: 0o700 })
       if (!(await there(path.dirname(to)))) return 'no_folder'
+      // The folder may have been made just now for a version that is deleted already, with
+      // everything of its person's: whoever sends the file read what was declared before that.
+      // So what was declared is looked for once more, now that the folder is there. Without it
+      // nothing is written, and the folders just made go again. Deletion is checked again
+      // when the file is moved into place, since another upload can recreate this folder.
+      if (!(await there(manifestFolder(prefix))) || !(await isFile(path.join(manifestFolder(prefix), 'files.json')))) {
+        await emptied(path.dirname(to))
+        return 'no_folder'
+      }
       let fault: 'bytes_differ' | 'size_differs' | 'cut_short' = 'cut_short'
-      const placed = await place(to, async (handle) => {
+      const placed = await place(to, allowed, async (handle) => {
         const hash = createHash('sha256')
         let size = 0
         const reader = body?.getReader()
@@ -363,7 +400,7 @@ export function createFiles(folder: string): Files {
         else return true
         return false
       })
-      // With no folder left to put it in, the version was deleted while the file was arriving
+      // The folder or permission to put the file in it can go while its bytes are arriving.
       return placed === 'placed' ? 'ok' : placed === 'no_folder' ? 'no_folder' : fault
     },
 
@@ -373,14 +410,7 @@ export function createFiles(folder: string): Files {
       await unlink(at).catch((err) => {
         if (!gone(err)) throw err
       })
-      // And the folders it was in, as far up as they are now empty
-      for (let dir = path.dirname(at); dir.startsWith(path.join(root, 'u') + path.sep); dir = path.dirname(dir)) {
-        const emptied = await rmdir(dir).then(
-          () => true,
-          () => false,
-        )
-        if (!emptied) break
-      }
+      await emptied(path.dirname(at))
     },
 
     async declare(prefix, files) {
@@ -389,7 +419,7 @@ export function createFiles(folder: string): Files {
       await mkdir(path.dirname(to), { recursive: true, mode: 0o700 })
       if (!(await there(path.dirname(to)))) throw new Error('what was declared could not be kept')
       const text = JSON.stringify(files)
-      const placed = await place(to, async (handle) => {
+      const placed = await place(to, undefined, async (handle) => {
         await handle.writeFile(text)
         return true
       })
@@ -439,6 +469,28 @@ export function createFiles(folder: string): Files {
         hash.update(value)
       }
       return hash.digest('hex')
+    },
+
+    async only(prefix, names) {
+      const dir = versionFolder(prefix)
+      if (!(await there(dir))) return 0
+      let found: string[]
+      try {
+        found = await readdir(dir)
+      } catch (err) {
+        if (gone(err)) return 0
+        throw err
+      }
+      let removed = 0
+      for (const name of found) {
+        // What counts as stored is a file, as `stored` has it: nothing else there is looked for when a version is checked
+        if (names.has(name) || !(await isFile(path.join(dir, name)))) continue
+        await unlink(path.join(dir, name)).catch((err) => {
+          if (!gone(err)) throw err
+        })
+        removed += 1
+      }
+      return removed
     },
 
     async clear(prefix, most) {

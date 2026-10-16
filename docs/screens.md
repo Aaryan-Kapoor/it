@@ -32,7 +32,9 @@ An agent can answer in the same place. `it say <id> "<text>"` puts a line of its
 
 A browser that is used stays paired. Its pairing ends when you end it, or a year after the browser last used it. The Displays page lists every paired browser, the ones that show no display among them, with when each was paired, by whose code, and when it was last used. Each has a button that ends it, and "End all others" ends every one but the browser you are reading on.
 
-Forgetting a display ends the pairing of the browser that showed it. Ending a browser in any of these ways ends everything that came from it as well: the screens that were paired with its codes, the machines that joined with them, and whatever came from those. The site says how many before you confirm. Signing out in a browser ends its own pairing and nothing else, so what that browser let in stays.
+Forgetting a display ends the pairing of the browser that showed it. If that display has been paired again, forgetting it or ending its current browser also ends what its earlier pairings let in. Ending a browser in any of these ways ends everything that came from it as well: the screens that were paired with its codes, the machines that joined with them, and whatever came from those. The site says how many before you confirm. Signing out in a browser ends its own pairing and nothing else, so what that browser let in stays. Its display stays listed as not paired, and forgetting that display then ends what the browser let in, which the site says before you confirm.
+
+A display keeps its eight most recent earlier pairings. Pairing it again beyond that ends what the oldest pairing let in before that pairing is dropped. If an unused display is removed to make room for another, what its earlier pairings let in ends then. The browser making either request stays paired.
 
 At most fifty browsers are paired at once: when one more is paired, the one that has gone longest unused is ended to make room, and it too is ended alone.
 

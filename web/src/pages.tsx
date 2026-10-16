@@ -208,7 +208,7 @@ function Empty({ owner }: { owner: boolean }) {
 export const wasShown = new Set<string>()
 
 export function PageView({ slug, user, owner }: { slug: string; user: string; owner: boolean }) {
-  const page = useQuery(api.artifacts.get, { slug })
+  const page = useQuery(api.artifacts.get, { slug, history: false })
   const now = useNow()
   useEffect(() => {
     if (page) wasShown.add(slug)
