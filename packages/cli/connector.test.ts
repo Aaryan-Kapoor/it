@@ -13,6 +13,7 @@ import { MARK, PROTOCOL_VERSION } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { conversationFolder, noteConversation } from './src/publish'
+import * as wake from './src/wake'
 
 const stand = vi.hoisted(() => ({
   /** What the connector watches the backend for, by the name of the function, and how to tell it something new. */
@@ -29,6 +30,8 @@ const stand = vi.hoisted(() => ({
   codex: [] as { args: string[]; end: (err?: unknown) => void }[],
   /** The Codex conversations that no Codex has open. Every other one is open somewhere, as it is in a window. */
   closed: new Set<string>(),
+  failedWrites: new Set<string>(),
+  savedRuns: [] as Record<string, unknown>[],
   /**
    * T3 Code as a test has it, which is not running unless the test says so: the thread each
    * conversation is held in, by the conversation's id; every time it was asked which thread
@@ -91,6 +94,11 @@ vi.mock('./src/lib', async (original) => {
   const real = await original<typeof import('./src/lib')>()
   return {
     ...real,
+    writePrivate: (...args: Parameters<typeof real.writePrivate>) => {
+      if (stand.failedWrites.has(path.basename(args[0]))) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+      real.writePrivate(...args)
+      if (path.basename(args[0]) === 'runs.json') stand.savedRuns.push(JSON.parse(JSON.stringify(args[1])))
+    },
     live: () => ({
       onUpdate: (fn: any, args: unknown, heard: (value: any) => void) => {
         stand.watching.set(getFunctionName(fn), heard)
@@ -167,9 +175,10 @@ async function start(
   apps: { wanted?: string[]; found?: typeof stand.found } = {},
   /** What is put into the folder before the connector starts in it. */
   first: (home: string) => void = () => {},
+  existing?: string,
 ): Promise<ConnectorInfo> {
   stand.found = apps.found ?? CONNECTED
-  home = mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
+  home = existing ?? mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
   // Every folder a test starts a connector in is taken away when the test is over, and not only the last
   made.push(home)
   process.env.IT_HOME = home
@@ -210,6 +219,8 @@ afterEach(async () => {
   said.length = 0
   stand.codex.length = 0
   stand.closed.clear()
+  stand.failedWrites.clear()
+  stand.savedRuns.length = 0
   stand.answer = null
   // A lookup a test left unanswered is answered, so that nothing of it outlasts the test
   for (const asked of stand.t3.asked) asked.answer(null)
@@ -799,6 +810,199 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(said.some((line) => line.includes('was stopped by the person'))).toBe(true)
   }, 90_000)
 
+  test.skipIf(process.platform === 'win32').each([false, true])(
+    'a Stop whose notice cannot be saved keeps its evidence through a restart with run writes failing %s',
+    async (failRun) => {
+      const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(bin, folder)
+      const command = path.join(bin, 'codex')
+      writeFileSync(command, `#!/bin/sh\ncat > ${bin}/given\nexec sleep 120\n`, { mode: 0o755 })
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      const on = { wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] }
+      stand.watching.get('machines:me')!(on)
+      offered(click(1))
+      await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0)
+      const run = stand.calls.find((c) => c.name === 'machines:runBegan')!.args.run
+      stand.failedWrites.add('stopped.json')
+      if (failRun) stand.failedWrites.add('runs.json')
+      stand.watching.get('machines:me')!({ ...on, runs: [{ harness: 'codex', sessionId: 'thread-1', stop: true, run }] })
+      await until(async () => (await local<{ held: unknown[] }>('/runs'))!.held.length === 1)
+      expect(stand.calls.filter((c) => c.name === 'machines:runEnded')).toEqual([])
+      expect(readJson<Record<string, unknown>>(path.join(home, 'runs.json'))?.['codex:thread-1']).toMatchObject(failRun ? { unsure: true } : { stopped: true })
+      const previousHome = home
+      await stop?.()
+      stop = null
+      stand.failedWrites.clear()
+      stand.calls.length = 0
+      stand.watching.clear()
+      writeFileSync(command, `#!/bin/sh\ncat > ${bin}/next\nexit 0\n`, { mode: 0o755 })
+      await start('socket', {}, () => {}, previousHome)
+      if (!failRun) {
+        expect(readJson(path.join(home, 'stopped.json'))).toEqual(['codex:thread-1'])
+        expect(existsSync(path.join(home, 'runs.json'))).toBe(false)
+      }
+      stand.watching.get('machines:me')!({ ...on, runs: [{ harness: 'codex', sessionId: 'thread-1', stop: true, run }] })
+      expect((await local<{ held: unknown[] }>('/runs'))!.held).toEqual([])
+      await until(() => stand.calls.some((c) => c.name === 'machines:runEnded' && c.args.run === run))
+      offered({ ...click(1), id: 'click-after-stop' })
+      await until(() => existsSync(path.join(bin, 'next')) && readFileSync(path.join(bin, 'next'), 'utf8').length > 0)
+      const given = readFileSync(path.join(bin, 'next'), 'utf8')
+      expect(given).toContain(WAS_STOPPED)
+      expect(given).toContain('[action click-after-stop]')
+      expect(given).not.toContain('[action click-1]')
+    },
+    30_000,
+  )
+
+  test.skipIf(process.platform !== 'linux').each([false, true])(
+    'failed run and cutoff writes preserve the record, and restart holds it only while inspection still fails: %s',
+    async (inspectionFails) => {
+      const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(bin, folder)
+      writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexec sleep 120\n`, { mode: 0o755 })
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      const on = { wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] }
+      stand.watching.get('machines:me')!(on)
+      offered(click(1))
+      await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0)
+      const file = path.join(home, 'runs.json')
+      const original = readFileSync(file, 'utf8')
+      const record = JSON.parse(original)['codex:thread-1'] as { pid: number; unsure: boolean }
+      expect(record.unsure).toBe(true)
+      const previousHome = home
+      const read = fs.readdirSync
+      try {
+        stand.failedWrites.add('runs.json')
+        stand.failedWrites.add('cut-off.json')
+        fs.readdirSync = ((where: unknown, ...args: unknown[]) => {
+          if (where === '/proc') throw Object.assign(new Error('inspection failed'), { code: 'EIO' })
+          return (read as any)(where, ...args)
+        }) as typeof fs.readdirSync
+        syncBuiltinESMExports()
+        await stop?.()
+        stop = null
+        expect(readFileSync(file, 'utf8')).toBe(original)
+        stand.failedWrites.clear()
+        stand.calls.length = 0
+        stand.watching.clear()
+        if (!inspectionFails) {
+          fs.readdirSync = read
+          syncBuiltinESMExports()
+        }
+        await start('socket', {}, () => {}, previousHome)
+        if (inspectionFails) {
+          expect((await local<{ held: { key: string }[] }>('/runs'))!.held.map((r) => r.key)).toEqual(['codex:thread-1'])
+          expect(readJson<Record<string, unknown>>(file)?.['codex:thread-1']).toMatchObject({ unsure: true })
+          stand.watching.get('machines:me')!(on)
+          offered({ ...click(1), id: 'new-click' })
+          await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'))
+          expect(stand.calls.filter((c) => c.name === 'machines:runBegan')).toEqual([])
+          expect(await local('/runs', { method: 'POST', body: { clear: true, of: ['codex:thread-1'] } })).toEqual({ cleared: 1 })
+        } else {
+          expect(existsSync(file)).toBe(false)
+          expect(readJson(path.join(home, 'cut-off.json'))).toEqual(['codex:thread-1'])
+        }
+        expect((await local<{ held: unknown[] }>('/runs'))!.held).toEqual([])
+      } finally {
+        fs.readdirSync = read
+        syncBuiltinESMExports()
+        stand.failedWrites.clear()
+        // The test ends the process whose inspection it made fail, by that process's own id.
+        if (identity([record.pid]).has(record.pid)) process.kill(record.pid, 'SIGTERM')
+        await until(() => !identity([record.pid]).has(record.pid))
+      }
+    },
+    30_000,
+  )
+
+  test.each(['ended', 'gone', 'unknown'] as const)(
+    'a run saved before a connector crash is held only when recovery answers unknown, rather than %s',
+    async (outcome) => {
+      const ended = vi.spyOn(wake, 'endTree').mockResolvedValue(outcome)
+      try {
+        await start('socket', {}, (home) => {
+          writeFileSync(
+            path.join(home, 'runs.json'),
+            JSON.stringify({ 'codex:thread-1': { pid: 900_001, since: 'tick 1', told: SINCE_TOLD, run: 'interrupted-run', unsure: true } }),
+          )
+        })
+        expect(ended).toHaveBeenCalledWith(900_001, 'tick 1', {
+          harness: 'codex',
+          session: 'thread-1',
+          run: 'interrupted-run',
+          told: SINCE_TOLD,
+          boot: undefined,
+        })
+        expect((await local<{ held: unknown[] }>('/runs'))!.held).toHaveLength(outcome === 'unknown' ? 1 : 0)
+        expect(existsSync(path.join(home, 'runs.json'))).toBe(outcome === 'unknown')
+        if (outcome !== 'unknown') expect(readJson(path.join(home, 'cut-off.json'))).toEqual(['codex:thread-1'])
+      } finally {
+        ended.mockRestore()
+      }
+    },
+  )
+
+  test('an uncertain legacy run without a run mark stays held when its leader is gone', async () => {
+    await start('socket', {}, (home) => {
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({
+          'codex:thread-1': { pid: process.pid, since: 'Thu Jan  1 00:00:00 1970', told: SINCE_TOLD, unsure: true, boot: wake.bootId() },
+        }),
+      )
+    })
+    expect((await local<{ held: { key: string }[] }>('/runs'))!.held.map((run) => run.key)).toEqual(['codex:thread-1'])
+    expect(readJson<Record<string, unknown>>(path.join(home, 'runs.json'))?.['codex:thread-1']).toMatchObject({ unsure: true })
+    expect(await local('/runs', { method: 'POST', body: { clear: true, of: ['codex:thread-1'] } })).toEqual({ cleared: 1 })
+    expect((await local<{ held: unknown[] }>('/runs'))!.held).toEqual([])
+  })
+
+  test.skipIf(process.platform === 'win32')('recovery leaves a legacy run alive when its conservative checkpoint cannot be saved', async () => {
+    const leader = spawn('sleep', ['300'], { detached: true, stdio: 'ignore' })
+    const exited = new Promise((resolve) => leader.once('exit', resolve))
+    const record = { 'codex:thread-1': { pid: leader.pid!, since: identity([leader.pid!]).get(leader.pid!)!, told: SINCE_TOLD } }
+    try {
+      await start('socket', {}, (home) => {
+        writeFileSync(path.join(home, 'runs.json'), JSON.stringify(record))
+        stand.failedWrites.add('runs.json')
+      })
+      expect(identity([leader.pid!]).has(leader.pid!)).toBe(true)
+      expect(readJson(path.join(home, 'runs.json'))).toEqual(record)
+      expect((await local<{ held: unknown[] }>('/runs'))!.held).toHaveLength(1)
+    } finally {
+      stand.failedWrites.clear()
+      if (identity([leader.pid!]).has(leader.pid!)) leader.kill('SIGKILL')
+      await exited
+    }
+  })
+
+  test.skipIf(process.platform !== 'linux')('a known reboot releases uncertainty while keeping the Stop notice', async () => {
+    await start('socket', {}, (home) => {
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({
+          'codex:thread-1': {
+            pid: process.pid,
+            since: identity([process.pid]).get(process.pid),
+            told: SINCE_TOLD,
+            boot: '00000000-0000-4000-8000-000000000000',
+            unsure: true,
+            stopped: true,
+          },
+        }),
+      )
+    })
+    expect((await local<{ held: unknown[] }>('/runs'))!.held).toEqual([])
+    expect(existsSync(path.join(home, 'runs.json'))).toBe(false)
+    expect(readJson(path.join(home, 'stopped.json'))).toEqual(['codex:thread-1'])
+  })
+
   test('a conversation that a connector which died left running is ended, with what it had started, before anything is handed out, and is told that its turn was cut off', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
@@ -833,6 +1037,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     // By the time it is up, both the agent and its command are gone, and this program, whose number the other note held, is not
     expect([alive(left.pid!), alive(its), alive(process.pid)]).toEqual([false, false, true])
     expect(existsSync(path.join(home, 'runs.json'))).toBe(false)
+    // The first recovery checkpoint still names every run that has not been examined.
+    expect(Object.keys(stand.savedRuns[0]!)).toEqual(['codex:thread-1', 'codex:thread-2'])
     expect(said.some((line) => /^a codex conversation \([0-9a-f]{8}\) was still running from before this started/.test(line))).toBe(true)
     // Reopened for the same thing, it is told that its turn was cut off
     stand.closed.add('thread-1')
@@ -1104,6 +1310,23 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(noted()).toEqual(['codex:thread-2'])
     await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-2', busy: true } })
     expect(existsSync(path.join(home, 'stopped.json'))).toBe(false)
+  })
+
+  test('only the latest 200 stopped conversations are kept, including after a restart', async () => {
+    const keys = Array.from({ length: 205 }, (_, n) => `codex:stopped-${n}`)
+    await start('socket', {}, (home) => writeFileSync(path.join(home, 'stopped.json'), JSON.stringify(keys.slice(0, 200))))
+    stand.watching.get('machines:me')!({
+      wanted: ['codex'],
+      runs: keys.slice(200).map((key) => ({ harness: 'codex', sessionId: key.slice(6), stop: true })),
+    })
+    expect(readJson(path.join(home, 'stopped.json'))).toEqual(keys.slice(5))
+    const previousHome = home
+    await stop?.()
+    stop = null
+    stand.watching.clear()
+    await start('socket', {}, () => {}, previousHome)
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'stopped-204', busy: true } })
+    expect(readJson(path.join(home, 'stopped.json'))).toEqual(keys.slice(5, -1))
   })
 
   test('asked to stop, the connector tells It that its machine is going, so that its pages wait for the machine at once', async () => {
