@@ -12,6 +12,7 @@ import {
   existsSync,
   fchmodSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -261,6 +262,11 @@ function putInPlace(data: Buffer, to: string, before?: () => string | undefined,
     } finally {
       closeSync(made)
     }
+    // Check publication support before moving any existing entry, including a person's
+    // file or directory. Probe with the staged file because directories cannot be linked.
+    const probe = `${part}.link-check`
+    linkSync(part, probe)
+    rmSync(probe)
     // Publish at a free name after preserving what occupied it.
     const original = before?.()
     try {

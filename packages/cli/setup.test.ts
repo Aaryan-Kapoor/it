@@ -315,6 +315,31 @@ afterEach(() => {
 })
 
 describe('an add-on whose files It copies into an app’s folder', () => {
+  test.each(['file', 'directory'])('leaves a user-owned %s in place when its filesystem cannot make hard links', async (kind) => {
+    const folder = folderOf('opencode')
+    const plugin = path.join(folder, 'plugins/it-bridge.js')
+    const original = kind === 'directory' ? path.join(plugin, 'notes.txt') : plugin
+    put(original, "the person's own content")
+    const files = under(folder)
+    const link = fs.linkSync
+    fs.linkSync = () => {
+      throw Object.assign(new Error('hard links are unsupported'), { code: 'ENOTSUP' })
+    }
+    syncBuiltinESMExports()
+    try {
+      expect(await connect('opencode', () => {})).toMatchObject({ addon: 'error', detail: expect.stringContaining('hard links are unsupported') })
+    } finally {
+      fs.linkSync = link
+      syncBuiltinESMExports()
+    }
+    expect(read(original)).toBe("the person's own content")
+    expect(under(folder)).toEqual(files)
+    expect(noted('opencode').installs[0]!.files ?? []).toEqual([])
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(read(original)).toBe("the person's own content")
+    expect(under(folder)).toEqual(files)
+  })
+
   test.each([
     { id: 'opencode' as const, files: ['plugins/it-bridge.js', 'skills/it/SKILL.md'] },
     { id: 'hermes' as const, files: ['plugins/it-bridge/__init__.py', 'plugins/it-bridge/plugin.yaml', 'skills/it/SKILL.md'] },
