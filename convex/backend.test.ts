@@ -3424,6 +3424,34 @@ describe('displays and machines', () => {
     },
   )
 
+  test('page readiness follows a changed protocol minimum for the queue', async () => {
+    vi.doMock('@it/protocol', async () => ({
+      ...(await vi.importActual<typeof import('@it/protocol')>('@it/protocol')),
+      CODEX_MIN_VERSION: '0.161.0',
+    }))
+    vi.resetModules()
+    try {
+      const t = backend()
+      const alice = await person(t, 'alice')
+      const m = await machineOf(t, 'alice')
+      await publish(m, 'plan', { session: { harness: 'codex', id: 'page-conversation' } })
+      for (const [version, queue] of [
+        ['0.160.0', false],
+        ['0.161.0', true],
+      ] as const) {
+        await t.run((ctx) => ctx.db.patch(m.id, { wanted: ['codex'], harnesses: [{ id: 'codex', addon: 'connected', version }] }))
+        expect((await alice.browser.query(api.artifacts.get, { slug: 'plan', history: false })).connection).toEqual({
+          harness: 'codex',
+          state: 'connected',
+          queue,
+        })
+      }
+    } finally {
+      vi.doUnmock('@it/protocol')
+      vi.resetModules()
+    }
+  })
+
   test('page readiness accepts old machine records and is absent without an owning session or live machine', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

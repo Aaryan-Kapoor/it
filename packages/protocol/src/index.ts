@@ -161,6 +161,11 @@ export function newer(version: string | null | undefined, than: string | null | 
 export const HARNESSES = ['claude-code', 'codex', 'openclaw', 'hermes', 'opencode', 'pi'] as const
 export type Harness = (typeof HARNESSES)[number]
 /**
+ * The first Codex that reports which conversations are open, so a click can tell whether its
+ * queue will take it. Setup and the page's queue capability use this same minimum.
+ */
+export const CODEX_MIN_VERSION = '0.160.0'
+/**
  * The agent apps a closed conversation of which It can reopen for a click: the ones with a
  * command of their own for carrying a conversation on without a window. Each is reopened only
  * on a machine where the person has switched that on for it.

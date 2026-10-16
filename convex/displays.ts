@@ -26,6 +26,12 @@ import { endSession, signOutDisplay } from './sessions'
 const KEY = /^[A-Za-z0-9_-]{16,128}$/
 /** A display that has not been seen for this long has closed the site, and opens it anew when it comes back. */
 const AWAY_MS = 600_000
+/**
+ * Eight earlier pairings per display keep removal counts to at most 200 historical roots
+ * across the 25 displays. Before an older pairing leaves this list, what it let in is ended,
+ * so the bound never leaves invited access that forgetting the display cannot reach.
+ */
+const PREVIOUS_PAIRINGS = 8
 
 /** "Chrome on Linux", from what the browser says about itself. */
 function generatedName(ua: string): string {
@@ -73,7 +79,11 @@ export const register = mutation({
         // display so that forgetting it also ends what those pairings let in.
         const holder = await ctx.db.get(existing.sessionId)
         if (holder && holder.endedAt === undefined) fail('not_found', 'This display is not registered.')
-        await ctx.db.patch(existing._id, { sessionId: session._id, previousSessions: [...(existing.previousSessions ?? []), existing.sessionId] })
+        const previous = [...(existing.previousSessions ?? []), existing.sessionId]
+        await ctx.db.patch(existing._id, { sessionId: session._id, previousSessions: previous.slice(-PREVIOUS_PAIRINGS) })
+        // The browser registering now may descend from an earlier pairing. It stays paired,
+        // just as the browser asking to end every other session does.
+        for (const id of previous.slice(0, -PREVIOUS_PAIRINGS)) await endSession(ctx, id, 'forgotten', session._id)
       }
       return view(existing)
     }
@@ -105,14 +115,13 @@ export const register = mutation({
       // they still use, and be unable to add one. Room is made by letting one go: first one that nobody
       // gave a name or turned notifications on for and that is not open now (it has not been
       // for ten minutes), and failing that any display that has not been open for a month.
-      // Such a browser loses nothing: if it comes back still paired, it is simply registered again.
+      // A browser that comes back still paired is simply registered again. What its earlier
+      // pairings let in ends now, since deleting the display would lose the way to end it later.
       // The one to go is one the caller may act for, which for a screen is a display of its own
       // and no other: letting a display go signs it out, and a screen that could make room among
       // all of them would sign out the owner's by registering itself anew.
       const leastRecent = (of: typeof mine) => of.reduce((a, b) => (a.lastSeenAt <= b.lastSeenAt ? a : b))
-      // Earlier pairings are retained only on the display. Keep it until explicit removal,
-      // which follows that ancestry, rather than losing access the owner must still be able to end.
-      const itsOwn = mine.filter((d) => speaksFor(c, d) && !d.previousSessions?.length)
+      const itsOwn = mine.filter((d) => speaksFor(c, d))
       const passing = itsOwn.filter((d) => !d.name && !d.push && now - d.lastSeenAt > 600_000)
       const oldest = itsOwn.length ? leastRecent(itsOwn) : null
       const going = passing.length ? leastRecent(passing) : oldest && now - oldest.lastSeenAt >= 30 * 86_400_000 ? oldest : null
@@ -120,6 +129,7 @@ export const register = mutation({
       else {
         await signOutDisplay(ctx, going)
         await ctx.db.delete(going._id)
+        for (const id of going.previousSessions ?? []) await endSession(ctx, id, 'forgotten', session._id)
         letGo = going._id
         log('display.let_go', { userId: user._id, displayId: going._id, idleMs: now - going.lastSeenAt })
       }

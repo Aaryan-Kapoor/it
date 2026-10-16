@@ -1002,46 +1002,73 @@ describe('what ending a paired browser takes with it', () => {
     expect(await alive(h.machine)).toBe(true)
   })
 
-  test.each([false, true])('quota eviction keeps earlier pairings of a reclaimed display when named is %s', async (named) => {
-    const h = await household()
-    const key = 'the-reclaimed-display-key'
-    const display = await register(h.laptop, key)
-    await endOf(h.t, h.laptop)
-    const back = await ownerOf(h.t, h.machine)
-    await register(back, key)
-    const age = named ? 31 * 86_400_000 : 11 * 60_000
-    await h.t.run(async (ctx) => {
-      const current = (await ctx.db.get(display.id))!
-      await ctx.db.patch(display.id, { name: named ? 'Reclaimed' : undefined, lastSeenAt: Date.now() - age })
-      await ctx.db.patch(h.display.id, { name: 'In use', lastSeenAt: Date.now() })
-      for (let i = 2; i < QUOTA.displays; i++)
-        await ctx.db.insert('displays', {
-          userId: current.userId,
-          sessionId: h.desk.session as typeof current.sessionId,
-          key: `quota-filler-display-${i}`,
-          generatedName: 'Browser',
-          name: `Kept ${i}`,
-          createdAt: Date.now(),
-          lastSeenAt: Date.now(),
-          epoch: 0,
-        })
-    })
-    const before = await displayOf(h.t, key)
-    const pairing = await living(h)
-    expect(await code(register(h.desk, 'the-next-display-key-01'))).toBe('limit')
-    expect(await displayOf(h.t, key)).toEqual(before)
-    expect(await living(h)).toEqual(pairing)
-    expect(await alive(back)).toBe(true)
-    // An ordinary display can still make room, even though the reclaimed one is older.
-    await h.t.run((ctx) => ctx.db.patch(h.display.id, { name: named ? 'Old display' : undefined, lastSeenAt: Date.now() - age + 1000 }))
-    expect(await code(register(h.desk, 'the-next-display-key-01'))).toBe('ok')
-    expect(await h.t.run((ctx) => ctx.db.get(h.display.id))).toBeNull()
-    expect(await displayOf(h.t, key)).toEqual(before)
-    // Ending the current browser still reaches everything invited by its earlier pairing.
-    await h.desk.browser.mutation(api.sessions.end, { session: back.session as never })
-    expect(await living(h)).toEqual(['desk', 'hall'])
-    expect(await alive(back)).toBe(false)
-  })
+  test.each([false, true].flatMap((named) => ['owner', 'screen'].map((role) => ({ named, role }))))(
+    'a $role registers a new display at the quota of re-paired displays when named is $named',
+    async ({ named, role }) => {
+      const h = await household()
+      const key = 'the-reclaimed-display-key'
+      const display = await register(h.laptop, key)
+      await endOf(h.t, h.laptop)
+      const back = role === 'screen' ? h.kitchen : await ownerOf(h.t, h.machine)
+      await register(back, key)
+      const age = named ? 31 * 86_400_000 : 11 * 60_000
+      await h.t.run(async (ctx) => {
+        const current = (await ctx.db.get(display.id))!
+        await ctx.db.patch(display.id, { name: named ? 'Reclaimed' : undefined, lastSeenAt: Date.now() - age })
+        await ctx.db.patch(h.display.id, { name: 'In use', lastSeenAt: Date.now(), previousSessions: current.previousSessions })
+        for (let i = 2; i < QUOTA.displays; i++)
+          await ctx.db.insert('displays', {
+            userId: current.userId,
+            sessionId: current.sessionId,
+            previousSessions: current.previousSessions,
+            key: `quota-filler-display-${i}`,
+            generatedName: 'Browser',
+            name: `Kept ${i}`,
+            createdAt: Date.now(),
+            lastSeenAt: Date.now(),
+            epoch: 0,
+          })
+      })
+      expect(await code(register(role === 'screen' ? back : h.desk, 'the-next-display-key-01'))).toBe('ok')
+      expect(await displayOf(h.t, key)).toBeNull()
+      expect(await h.desk.browser.query(api.displays.list, {})).toHaveLength(QUOTA.displays)
+      expect(await living(h)).toEqual(role === 'screen' ? ['kitchen', 'desk', 'hall'] : ['desk', 'hall'])
+      expect(await waitingStill(h)).toEqual([401, 401])
+      expect(await alive(back)).toBe(true)
+      expect(await alive(h.machine)).toBe(true)
+      await settle(h.t)
+      expect(content.some((c) => c.op === 'revoke' && c.body.displayId === display.id)).toBe(true)
+      // Making room does not ban the key: a browser that is still paired can come back.
+      await h.t.run((ctx) => ctx.db.patch(h.display.id, { name: undefined, lastSeenAt: Date.now() - age }))
+      expect((await register(back, key)).id).not.toBe(display.id)
+    },
+  )
+
+  test.each(['owner', 'screen'] as const)(
+    'eight earlier pairings are kept and older invited access ends when the display is paired again with role %s',
+    async (role) => {
+      const h = await household()
+      const key = 'the-often-paired-display-key'
+      const display = await register(h.laptop, key)
+      let current = h.laptop
+      const previous: string[] = []
+      for (let n = 0; n < 9; n++) {
+        previous.push(current.session)
+        await endOf(h.t, current)
+        current = n === 8 && role === 'screen' ? h.kitchen : await ownerOf(h.t, h.machine)
+        expect((await register(current, key)).id).toBe(display.id)
+        expect(await alive(current)).toBe(true)
+        expect((await displayOf(h.t, key))?.previousSessions).toEqual(previous.slice(-8))
+        if (n < 8) expect(await alive(h.second.as)).toBe(true)
+      }
+      expect(await alive(h.second.as)).toBe(false)
+      expect(await alive(h.third.as)).toBe(false)
+      expect(await alive(h.agent)).toBe(false)
+      expect(await alive(h.agentsScreen)).toBe(false)
+      expect(await alive(h.desk)).toBe(true)
+      expect(await alive(h.machine)).toBe(true)
+    },
+  )
 
   test('removal counts follow the earlier pairings of a descendant display', async () => {
     const h = await household()
