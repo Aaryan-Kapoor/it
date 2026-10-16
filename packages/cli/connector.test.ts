@@ -3645,6 +3645,34 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.t3.sent[0]).toEqual({ thread: 't3-thread-j', text: MARK })
   })
 
+  test.each([false, true])('an unanswered Codex mark retries in its recorded profile unless that profile has gone: %s', async (gone) => {
+    standIn(true)
+    await start()
+    const profile = path.join(home, 'conversation-profile')
+    mkdirSync(profile)
+    await noteConversation({ harness: 'codex', id: 'thread-11' }, home, { version: 1, paths: { CODEX_HOME: profile } })
+    const held = vi.spyOn(wake, 'codexHeld').mockImplementation((_thread, folder) => folder === profile)
+    try {
+      await heard(11)
+      offered(click(11))
+      await pass(2)
+      expect(stand.codex).toHaveLength(1)
+      expect(stand.codex[0]!.args).toContain(`--message=${MARK}`)
+      stand.codex[0]!.end()
+      await until(() => called('delivery:handedOff').includes('click-11'))
+      offered()
+      if (gone) rmSync(profile, { recursive: true })
+      await pass(21)
+      expect(stand.codex).toHaveLength(gone ? 1 : 2)
+      if (!gone) {
+        expect(stand.codex[1]!.env?.CODEX_HOME).toBe(profile)
+        expect(stand.codex[1]!.args).toContain('--message=[It] "A page" (page-11): approve, with details [action click-11]')
+      }
+    } finally {
+      held.mockRestore()
+    }
+  })
+
   test('a mark that no hook asks about is followed by the short line, so that the agent is told after all, and the conversation is given no mark again', async () => {
     withT3Code()
     stand.t3.threads.set('thread-11', 't3-thread-k')

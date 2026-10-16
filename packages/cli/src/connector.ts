@@ -712,7 +712,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!fallback) return
       const keyNow = follow(where() ?? key)
       // A fallback never reopens a closed Codex conversation. Its next hook can still read the note.
-      if (fallback.via === 'codex' && !codexHeld(threadOf(keyNow))) return
+      if (fallback.via === 'codex' && !codexOpen(keyNow)) return
       const server = fallback.via === 't3' ? t3Server() : undefined
       const tried = copy.retry?.attempts ?? 0
       const next = MARK_AGAIN_MS[tried]
@@ -726,13 +726,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // The disk may have taken time. A hook, disconnection or shutdown that arrived
       // meanwhile takes precedence over sending the fallback whose attempt was reserved.
       if (closing || unfitting || recovery.stopped || !kept() || !chosen(harness) || !connected(harness)) return
-      if (fallback.via === 'codex' && !codexHeld(threadOf(follow(where() ?? key)))) return
+      if (fallback.via === 'codex' && !codexOpen(follow(where() ?? key))) return
       void (
         fallback.via === 't3'
           ? server
             ? t3Send(server, fallback.thread, fallback.text)
             : Promise.resolve('T3 Code could not be reached')
-          : codexQueue(threadOf(follow(where() ?? key)), fallback.text)
+          : codexPut(threadOf(follow(where() ?? key)), fallback.text)
       )
         .catch(() => 'it could not be sent')
         .then(async (refused) => {
@@ -1585,6 +1585,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: threadOf(key) }), harnessEnv())
     return typeof env === 'string' ? null : codexHeld(threadOf(key), env.CODEX_HOME)
   }
+  const codexPut = (thread: string, text: string) => {
+    const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: thread }), harnessEnv())
+    return typeof env === 'string' ? Promise.resolve(env) : codexQueue(thread, text, env)
+  }
   async function queueNow(click: Offered, reopening: boolean, offered: Offered[], t3?: { server: T3; thread: string }): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
     const receiptSlots: string[] = []
@@ -1809,12 +1813,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
       // hook of It's hands the agent the rest, and otherwise one short line for each click
       const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
-      const put = (text: string) => {
-        if (t3) return t3Send(t3.server, t3.thread, text)
-        const thread = threadOf(follow(key))
-        const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: thread }), harnessEnv())
-        return typeof env === 'string' ? Promise.resolve(env) : codexQueue(thread, text, env)
-      }
+      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexPut(threadOf(follow(key)), text))
       if (!reopening && turnRunning(follow(key), Date.now())) {
         await recovery.keepWaiters([click, ...withIt], follow(key))
       }
