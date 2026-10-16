@@ -29,6 +29,13 @@ test('uninstall removes whole owned subfolders and keeps unknown entries only at
   expect(readFileSync(path.join(at, 'notes'), 'utf8')).toBe('mine')
 })
 
+test('the protection page distinguishes whole subfolder removal from unknown top-level files', () => {
+  const docs = readFileSync(path.join(import.meta.dirname, '../../docs/what-it-protects.md'), 'utf8')
+  const removal = docs.split('\n').find((line) => line.startsWith('Uninstall requires'))!
+  expect(removal).toMatch(/subfolders whole/)
+  expect(removal).toMatch(/top level.*recognised files.*unknown files/)
+})
+
 test('a failed add-on removal keeps its whole folder and program while the data folders go', () => {
   const at = folder()
   markInstallation(at)
