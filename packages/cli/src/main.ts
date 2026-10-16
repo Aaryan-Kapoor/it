@@ -1546,6 +1546,8 @@ function setUp(a: Args, was: boolean): void {
 }
 
 async function setup(a: Args, joined = false) {
+  const only = text(a, 'only')
+  if (only !== undefined && !a.flags.none) appsNamed(only)
   // Take the folder's setup lock first where one is needed, so concurrent setups keep their
   // usual waiting message and allowance. Every path checks the program before its writes.
   const current = <T>(run: () => Promise<T>) =>
@@ -1554,6 +1556,7 @@ async function setup(a: Args, joined = false) {
       keepBase()
       return run()
     })
+
   if (a.flags.none && !enrolledHere()) {
     const leftBehind = !existsSync(settingsFile()) && (hasLeft() || holdsAddons())
     if (leftBehind || elsewhere()) {
@@ -1772,18 +1775,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
     const usable = found.filter((h) => supported(h.id) && h.addon !== 'too_old')
     let wanted: Harness[]
     const only = text(a, 'only')
-    if (only !== undefined) {
-      wanted = only
-        .split(',')
-        .map((part) => part.trim())
-        .filter(Boolean) as Harness[]
-      const bad = wanted.filter((id) => !(HARNESSES as readonly string[]).includes(id))
-      if (bad.length) throw new Problem(`Not an agent app It knows: ${bad.join(', ')}`, 'invalid', `It knows: ${HARNESSES.join(', ')}`)
-      // Asked for by name and held back: refused in words, with nothing changed. Carried on with,
-      // it would connect nothing and take out every app that was not named, the one asked for among them.
-      const held = wanted.map((id) => whyHeldBack(id)).find((why) => why !== undefined)
-      if (held) throw new Problem(held, 'invalid')
-    } else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
+    if (only !== undefined) wanted = appsNamed(only)
+    else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
     // Nothing is asked where there is nothing to choose: no app was found, or none that It can connect
     else if (!usable.length) wanted = []
     else {
@@ -2012,8 +2005,31 @@ async function joinedInstead(a: Args): Promise<boolean> {
   }
 }
 
+/**
+ * The agent apps that `--only` names. A name It does not know is refused, and so is an app
+ * whose add-on is held back and that nobody has asked for: in words, with nothing changed.
+ * Carried on with, such a setup would connect nothing and take out every app that was not
+ * named, the one asked for among them.
+ */
+function appsNamed(only: string): Harness[] {
+  const wanted = only
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean) as Harness[]
+  const bad = wanted.filter((id) => !(HARNESSES as readonly string[]).includes(id))
+  if (bad.length) throw new Problem(`Not an agent app It knows: ${bad.join(', ')}`, 'invalid', `It knows: ${HARNESSES.join(', ')}`)
+  const held = wanted.map((id) => whyHeldBack(id)).find((why) => why !== undefined)
+  if (held) throw new Problem(held, 'invalid')
+  return wanted
+}
+
 /** The whole of a setup, once it is known that something is to be set up here: see `setup`. */
 async function settingUp(a: Args, joined: boolean) {
+  // What `--only` names is looked at before anything is begun. A first run fetches the backend
+  // program, makes this machine's settings and starts It, and one that was then refused for
+  // what it was asked to connect would have done all of that and changed what it said it had not.
+  const only = text(a, 'only')
+  if (only !== undefined && !a.flags.none) appsNamed(only)
   // Said already by the question of where It is, where that was asked
   const asked = !joined && led(a) && !existsSync(settingsFile()) && !enrolledHere()
   if (asked && (await joinedInstead(a))) return settingUp(a, true)
@@ -2048,20 +2064,9 @@ async function settingUp(a: Args, joined: boolean) {
     let wanted: Harness[]
     /** What is said of the apps that were found and left unconnected because nobody was there to be asked. */
     let unasked: string | undefined
-    const only = text(a, 'only')
     if (a.flags.none) wanted = []
-    else if (only !== undefined) {
-      wanted = only
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean) as Harness[]
-      const bad = wanted.filter((id) => !(HARNESSES as readonly string[]).includes(id))
-      if (bad.length) throw new Problem(`Not an agent app It knows: ${bad.join(', ')}`, 'invalid', `It knows: ${HARNESSES.join(', ')}`)
-      // Asked for by name and held back: refused in words, with nothing changed. Carried on with,
-      // it would connect nothing and take out every app that was not named, the one asked for among them.
-      const held = wanted.map((id) => whyHeldBack(id)).find((why) => why !== undefined)
-      if (held) throw new Problem(held, 'invalid')
-    } else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
+    else if (only !== undefined) wanted = appsNamed(only)
+    else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
     else if (!process.stdin.isTTY) {
       // Nobody is here to be asked. What the person chose before stays chosen, and what is
       // connected stays connected: It is asked first, so that nothing is changed where it cannot be

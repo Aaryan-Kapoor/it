@@ -88,7 +88,7 @@ const folderOf = (bin: string, env: NodeJS.ProcessEnv = process.env): string =>
     codex: env.CODEX_HOME ?? path.join(person, '.codex'),
     pi: env.PI_CODING_AGENT_DIR ?? path.join(person, '.pi'),
     opencode: path.join(env.XDG_CONFIG_HOME ?? path.join(person, '.config'), 'opencode'),
-    openclaw: env.OPENCLAW_STATE_DIR ?? path.join(person, '.openclaw'),
+    openclaw: env.OPENCLAW_STATE_DIR ?? path.join(env.OPENCLAW_HOME ?? person, '.openclaw'),
     hermes: env.HERMES_HOME ?? path.join(person, '.hermes'),
   })[bin]!
 
@@ -101,8 +101,9 @@ function standIn(bin: string, words: string[], env: NodeJS.ProcessEnv): string {
   // An app makes its settings folder when it is first asked to keep something there
   mkdirSync(folder, { recursive: true })
   kept[bin] ??= new Map()
-  if (!kept[bin].has(folder)) kept[bin].set(folder, {})
-  const has = kept[bin].get(folder)!
+  const key = bin === 'openclaw' ? realpathSync.native(folder) : folder
+  if (!kept[bin].has(key)) kept[bin].set(key, {})
+  const has = kept[bin].get(key)!
   if (bin === 'claude') {
     // Claude Code keeps a copy of the plugin, and says where
     const copy = path.join(folder, 'plugins/cache/it/it-bridge/0.1.0')
@@ -507,6 +508,60 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(existsSync(stampFile('opencode'))).toBe(false)
   })
 
+  test('an install that is stopped the moment a file is in its place, before anything more can be written down, has a note of that file all the same, and it is taken out with the rest', async () => {
+    const folder = folderOf('opencode')
+    const skill = path.join(folder, 'skills/it/SKILL.md')
+    // The program is stopped once the skill is where OpenCode finds it: nothing it would have
+    // put in place after that, a note or a file, is put in place
+    const real = fs.renameSync
+    let stopped = false
+    fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
+      if (stopped) throw new Error('the program was stopped before this')
+      real(from, to)
+      if (path.resolve(String(to)) === skill) stopped = true
+    }) as typeof fs.renameSync
+    syncBuiltinESMExports()
+    try {
+      await connect('opencode', () => {}).catch(() => {})
+    } finally {
+      fs.renameSync = real
+      syncBuiltinESMExports()
+    }
+    expect(stopped).toBe(true)
+    expect(read(skill)).toBe(SKILL)
+    expect(noted('opencode').installs[0]!.version).toBe('installing')
+    // A program started afresh is asked to take the add-on out, and leaves nothing of it for an agent to find
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(under(folder)).toEqual([])
+    expect(existsSync(stampFile('opencode'))).toBe(false)
+  })
+
+  test('a file of the person’s own that stood where an install was stopped before it reached that file is still theirs, and stays when the add-on is taken out', async () => {
+    const folder = folderOf('opencode')
+    const plugin = path.join(folder, 'plugins/it-bridge.js')
+    const skill = path.join(folder, 'skills/it/SKILL.md')
+    put(skill, 'a skill of the person’s own')
+    // Stopped once the plugin is in its place, with the skill not yet come to
+    const real = fs.renameSync
+    let stopped = false
+    fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
+      if (stopped) throw new Error('the program was stopped before this')
+      real(from, to)
+      if (path.resolve(String(to)) === plugin) stopped = true
+    }) as typeof fs.renameSync
+    syncBuiltinESMExports()
+    try {
+      await connect('opencode', () => {}).catch(() => {})
+    } finally {
+      fs.renameSync = real
+      syncBuiltinESMExports()
+    }
+    expect(stopped).toBe(true)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(under(folder)).toEqual(['skills/it/SKILL.md'])
+    expect(read(skill)).toBe('a skill of the person’s own')
+  })
+
   test('the note of an installation says where it was made and names every file written, with a checksum of each, and is the person’s alone to read', async () => {
     vi.stubEnv('XDG_CONFIG_HOME', path.join(tmp, 'settings'))
     const folder = folderOf('opencode')
@@ -589,6 +644,50 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
     // The plugin itself was taken out by the app's own command
     expect((await statusOf(id))!.addon).toBe('not_connected')
   })
+  test.each(APPS)(
+    'the skill stays in $label for as long as the plugin does: it is not taken out while the app’s own command will not let the plugin go, or cannot say whether it has',
+    async ({ id, bin, label }) => {
+      const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+      await connect(id, () => {})
+      // The app will not take the plugin out just now: its settings are in use, say
+      failing = [`${bin} ${bin === 'claude' ? `plugin uninstall ${ID}` : `plugin remove ${ID}`}`]
+      const { said, say } = lines()
+      expect(await disconnect(id, say)).toBe(false)
+      expect(kept[bin]!.get(folderOf(bin))!.on).toBe(true)
+      expect(read(skill)).toBe(SKILL)
+      expect(said).toContain(`${label}: removal has not been confirmed, so the companion files and installation note are kept for another try`)
+      // Asked for again meanwhile, the add-on is whole and nothing has to be put back
+      expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+      expect(read(skill)).toBe(SKILL)
+      // Nor is it taken out while the app cannot be asked whether the plugin is still there
+      failing = [`${bin} ${bin === 'claude' ? 'plugin list --json' : 'plugin list --marketplace it'}`]
+      expect(await disconnect(id, () => {})).toBe(false)
+      expect(read(skill)).toBe(SKILL)
+      // Once the plugin is seen to be gone, the skill goes with it
+      failing = []
+      expect(await disconnect(id, () => {})).toBe(true)
+      expect(existsSync(path.dirname(skill))).toBe(false)
+      expect(existsSync(stampFile(id))).toBe(false)
+    },
+  )
+  test.each(APPS)(
+    'a skill that is gone from $label while the plugin is still there, as an It from before left it after a removal that failed, is put back when $label is connected again',
+    async ({ id, bin, label }) => {
+      const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+      await connect(id, () => {})
+      rmSync(skill)
+      const { said, say } = lines()
+      expect((await connect(id, say)).addon).toMatch(/^(connected|needs_approval)$/)
+      expect(said).toEqual([`connecting ${label}`])
+      expect(read(skill)).toBe(SKILL)
+      // A skill the person has changed is theirs, and is no reason to put anything in again
+      writeFileSync(skill, `${SKILL}\nA line of the person’s own.\n`)
+      const again = lines()
+      await connect(id, again.say)
+      expect(again.said).toEqual([])
+      expect(read(skill)).toContain('A line of the person’s own.')
+    },
+  )
   test.each(APPS)(
     'an add-on of $label that an It from before installed, with the skill inside the plugin, is replaced by one with the skill beside it',
     async ({ id, bin }) => {
@@ -741,7 +840,7 @@ describe('what It writes and removes in an app’s folder', () => {
   })
 
   test.skipIf(!permissionsHold)(
-    'is noted only once it has been written: an install that stops at its first file has a note of none, and its removal takes nothing away',
+    'is not left noted when it could not be written: an install that stops at its first file has a note of none, and its removal takes nothing away',
     async () => {
       const folder = folderOf('opencode')
       const skill = path.join(folder, 'skills/it/SKILL.md')
@@ -929,6 +1028,38 @@ describe('where an add-on was installed', () => {
     expect([...kept.pi!.get(first)!.packages!]).toEqual([])
   })
 
+  test.each([
+    ['claude-code', 'claude', 'unknown'],
+    ['claude-code', 'claude', 'present'],
+    ['codex', 'codex', 'unknown'],
+    ['codex', 'codex', 'present'],
+  ] as const)('keeps %s ownership until companion cleanup follows a temporarily %s report of %s', async (id, bin, state) => {
+    await connect(id, () => {})
+    const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+    const real = fake.execFile.getMockImplementation()!
+    let removed = false
+    let interrupted = false
+    fake.execFile.mockImplementation(
+      (command: string, given: string[], options: { env: NodeJS.ProcessEnv }, done: (err: Error | null, out: string, err2: string) => void) => {
+        const words = given.map((word) => word.replace(/^"(.*)"$/, '$1')).join(' ')
+        if (command === bin && /plugin (uninstall|remove) /.test(words)) removed = true
+        if (removed && !interrupted && words.startsWith('plugin list')) {
+          interrupted = true
+          return state === 'unknown'
+            ? done(new Error('briefly unavailable'), '', '')
+            : done(null, bin === 'claude' ? JSON.stringify([{ id: ID, enabled: true }]) : `${ID}  installed, enabled`, '')
+        }
+        return real(command, given, options, done)
+      },
+    )
+    expect(await disconnect(id, () => {})).toBe(false)
+    expect(existsSync(skill)).toBe(true)
+    expect(existsSync(stampFile(id))).toBe(true)
+    fake.execFile.mockImplementation(real)
+    expect(await disconnect(id, () => {})).toBe(true)
+    expect(existsSync(skill)).toBe(false)
+  })
+
   test('may have been deleted since, add-on and all: the app is then asked nothing about that folder, and the note of the installation goes', async () => {
     const first = path.join(tmp, 'first')
     vi.stubEnv('CLAUDE_CONFIG_DIR', first)
@@ -981,6 +1112,303 @@ describe('where an add-on was installed', () => {
     fake.execFile.mockImplementation(real)
     expect(await disconnect('claude-code', () => {})).toBe(true)
     expect(existsSync(stampFile('claude-code'))).toBe(false)
+  })
+})
+
+// OpenClaw names a conversation `agent:main:main` in every folder it keeps its settings in, and
+// the add-on in each asks the one connector by that name alone. Connected in two, each would be
+// handed what was done on the other's pages.
+describe('OpenClaw, which gives a conversation the same name in every folder it keeps its settings in', () => {
+  const root = (folder: string) => path.join(folder, 'extensions/it-bridge')
+
+  test('is connected in one of them only: asked for in a second, it is refused with how to move it, and nothing is put there', async () => {
+    const first = path.join(tmp, 'first')
+    const second = path.join(tmp, 'second')
+    vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    vi.stubEnv('OPENCLAW_STATE_DIR', second)
+    const found = (await statusOf('openclaw'))!
+    expect(found.addon).toBe('unavailable')
+    // What is said of it may be shown on the site, and names no folder
+    expect(found.detail).toMatch(/^It’s add-on is already in another folder that OpenClaw keeps its settings in, and it is connected in one only/)
+    expect(found.detail).toMatch(/untick OpenClaw in `it setup`, which takes the add-on out of that folder, and then run `it setup` again from here\.$/)
+    expect(found.detail).not.toContain(tmp)
+    ran = []
+    const { said, say } = lines()
+    expect(await connect('openclaw', say)).toEqual(found)
+    expect(said).toEqual([`OpenClaw: ${found.detail}`])
+    expect(commands('openclaw').filter((words) => /install|enable/.test(words))).toEqual([])
+    expect(existsSync(root(second))).toBe(false)
+    expect(noted('openclaw').installs.map((i) => i.env)).toEqual([{ OPENCLAW_STATE_DIR: first }])
+    // The first is as it was, and the connector's log is told the same without the folder being named
+    expect(existsSync(root(first))).toBe(true)
+    const log = lines()
+    await connect('openclaw', log.say, true)
+    expect(log.said).toEqual(['OpenClaw: its add-on is in another of its settings folders already, and was not put into this one'])
+    // Taken out, which is done from wherever OpenClaw is pointed now, it is connected in the second
+    expect(await disconnect('openclaw', () => {})).toBe(true)
+    expect(existsSync(root(first))).toBe(false)
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    expect(noted('openclaw').installs.map((i) => i.env)).toEqual([{ OPENCLAW_STATE_DIR: second }])
+  })
+
+  test.each(['a trailing slash', 'a link', 'another spelling', 'another spelling after the clock moved backward'])(
+    'a cleanup retried after a partial upgrade keeps the add-on when the older place names the retained folder by %s',
+    async (spelling) => {
+      const folder = path.join(tmp, 'profile')
+      vi.stubEnv('OPENCLAW_STATE_DIR', folder)
+      await connect('openclaw', () => {})
+      const [current] = noted('openclaw').installs
+      const alias = spelling === 'a trailing slash' ? `${folder}/` : spelling === 'a link' ? path.join(tmp, 'profile-link') : `${folder}/../profile`
+      if (spelling === 'a link') symlinkSync(folder, alias, 'junction')
+      // The older record survived a failed removal, and the retained record has the upgraded payload.
+      const retained = { ...current, at: spelling.includes('backward') ? 500 : 2000, env: { OPENCLAW_STATE_DIR: alias } }
+      put(stampFile('openclaw'), JSON.stringify({ installs: [{ ...current, version: 'older', at: 1000 }, retained] }))
+      vi.stubEnv('OPENCLAW_STATE_DIR', alias)
+      ran = []
+      expect((await connect('openclaw', () => {}, true)).addon).toBe('connected')
+      expect(commands('openclaw').filter((words) => /uninstall|install|enable/.test(words))).toEqual([])
+      expect(existsSync(root(folder))).toBe(true)
+      expect(noted('openclaw').installs).toEqual([retained])
+      expect((await statusOf('openclaw'))!.addon).toBe('connected')
+      vi.stubEnv('OPENCLAW_STATE_DIR', folder)
+      expect((await connect('openclaw', () => {})).addon).toBe('connected')
+      expect(noted('openclaw').installs).toEqual([retained])
+    },
+  )
+
+  test.each(['the app cannot be asked', 'the folder cannot be resolved'])(
+    'no add-on is removed when two recorded places cannot be compared because %s',
+    async (closed) => {
+      const first = path.join(tmp, 'first')
+      const second = path.join(tmp, 'second')
+      vi.stubEnv('OPENCLAW_STATE_DIR', first)
+      await connect('openclaw', () => {})
+      const [one] = noted('openclaw').installs
+      rmSync(stampFile('openclaw'))
+      vi.stubEnv('OPENCLAW_STATE_DIR', second)
+      await connect('openclaw', () => {})
+      const [two] = noted('openclaw').installs
+      const installs = [
+        { ...one, at: 1000 },
+        { ...two, at: 2000 },
+      ]
+      put(stampFile('openclaw'), JSON.stringify({ installs }))
+      if (closed === 'the app cannot be asked') failing = ['openclaw plugins inspect it-bridge --json']
+      else
+        vi.spyOn(fs.realpathSync, 'native').mockImplementation(() => {
+          throw Object.assign(new Error('the folder cannot be looked at'), { code: 'EACCES' })
+        })
+      ran = []
+      const result = await connect('openclaw', () => {}, true)
+      expect(result.addon).toBe('error')
+      expect(result.detail).toContain('no add-on was removed')
+      expect(result.detail).toContain('A second profile may still receive and answer clicks')
+      expect((await statusOf('openclaw'))!).toMatchObject({ addon: 'error', detail: result.detail })
+      expect(commands('openclaw').filter((words) => /uninstall|install|enable/.test(words))).toEqual([])
+      expect(existsSync(root(first))).toBe(true)
+      expect(existsSync(root(second))).toBe(true)
+      expect(noted('openclaw').installs).toEqual(installs)
+    },
+  )
+
+  test.each(['older', 'newer'])('retires a confirmed absent %s profile without removing the remaining add-on', async (absent) => {
+    const first = path.join(tmp, 'first')
+    const second = path.join(tmp, 'second')
+    vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    await connect('openclaw', () => {})
+    const [one] = noted('openclaw').installs
+    rmSync(stampFile('openclaw'))
+    vi.stubEnv('OPENCLAW_STATE_DIR', second)
+    await connect('openclaw', () => {})
+    const [two] = noted('openclaw').installs
+    const installs = [
+      { ...one, at: 1000 },
+      { ...two, at: 2000 },
+    ]
+    put(stampFile('openclaw'), JSON.stringify({ installs }))
+    const gone = absent === 'older' ? first : second
+    const retained = absent === 'older' ? second : first
+    rmSync(root(gone), { recursive: true })
+    expect(existsSync(gone)).toBe(true)
+    vi.stubEnv('OPENCLAW_STATE_DIR', retained)
+    ran = []
+    expect((await connect('openclaw', () => {}, true)).addon).toBe('connected')
+    expect(noted('openclaw').installs).toEqual([installs[absent === 'older' ? 1 : 0]])
+    expect(commands('openclaw').filter((words) => /uninstall|install|enable/.test(words))).toEqual([])
+    expect(existsSync(root(retained))).toBe(true)
+    expect((await statusOf('openclaw'))!.addon).toBe('connected')
+  })
+
+  test('a missing optional OpenClaw config file is not proof that the installed profile is gone', async () => {
+    const config = path.join(tmp, 'openclaw-custom.json')
+    writeFileSync(config, '{}')
+    vi.stubEnv('OPENCLAW_CONFIG_PATH', config)
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    rmSync(config)
+    vi.stubEnv('OPENCLAW_STATE_DIR', path.join(tmp, 'second-state'))
+    expect((await connect('openclaw', () => {})).addon).toBe('unavailable')
+    expect(noted('openclaw').installs).toHaveLength(1)
+    expect(existsSync(root(path.join(person, '.openclaw')))).toBe(true)
+  })
+
+  test.each([false, true])('a deleted default OpenClaw profile stays gone when connecting another, with an optional config override %s', async (config) => {
+    if (config) vi.stubEnv('OPENCLAW_CONFIG_PATH', path.join(tmp, 'optional.json'))
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    const first = folderOf('openclaw')
+    rmSync(first, { recursive: true })
+    const second = path.join(tmp, 'second-state')
+    vi.stubEnv('OPENCLAW_STATE_DIR', second)
+    ran = []
+    expect((await statusOf('openclaw'))!.addon).toBe('not_connected')
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    expect(existsSync(first)).toBe(false)
+    expect(ran.filter((r) => folderOf(r.bin, r.env) === first)).toEqual([])
+    expect(noted('openclaw').installs.map((i) => i.env?.OPENCLAW_STATE_DIR)).toEqual([second])
+  })
+
+  test.each([false, true])('a deleted default OpenClaw profile stays gone when disconnecting, with an optional config override %s', async (config) => {
+    if (config) vi.stubEnv('OPENCLAW_CONFIG_PATH', path.join(tmp, 'optional.json'))
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    const first = folderOf('openclaw')
+    rmSync(first, { recursive: true })
+    ran = []
+    expect(await disconnect('openclaw', () => {})).toBe(true)
+    expect(commands('openclaw')).toEqual(['--version'])
+    expect(existsSync(first)).toBe(false)
+    expect(existsSync(stampFile('openclaw'))).toBe(false)
+  })
+
+  test('an OpenClaw record with no saved environment is not taken to mean the default profile', async () => {
+    const state = path.join(tmp, 'explicit-state')
+    vi.stubEnv('OPENCLAW_STATE_DIR', state)
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    writeFileSync(stampFile('openclaw'), 'unreadable')
+    failing = ['openclaw plugins inspect it-bridge --json', 'openclaw plugins uninstall it-bridge --force']
+    expect(existsSync(path.join(person, '.openclaw'))).toBe(false)
+    expect(await disconnect('openclaw', () => {})).toBe(false)
+    expect(readFileSync(stampFile('openclaw'), 'utf8')).toBe('unreadable')
+    expect(existsSync(root(state))).toBe(true)
+  })
+
+  test.each([false, true])('a surviving OpenClaw home does not recreate a removed state directory with an explicit override %s', async (explicit) => {
+    const home = path.join(tmp, 'openclaw-home')
+    const first = explicit ? path.join(tmp, 'explicit-state') : path.join(home, '.openclaw')
+    mkdirSync(home, { recursive: true })
+    vi.stubEnv('OPENCLAW_HOME', home)
+    if (explicit) vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    await connect('openclaw', () => {})
+    rmSync(first, { recursive: true })
+    vi.stubEnv('OPENCLAW_STATE_DIR', path.join(tmp, 'second-state'))
+    ran = []
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    expect(existsSync(home)).toBe(true)
+    expect(existsSync(first)).toBe(false)
+    expect(ran.filter((r) => folderOf(r.bin, r.env) === first)).toEqual([])
+    expect(noted('openclaw').installs).toHaveLength(1)
+  })
+
+  test('a folder it was connected in that has been deleted since does not stand in the way of another', async () => {
+    const first = path.join(tmp, 'first')
+    vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    await connect('openclaw', () => {})
+    rmSync(first, { recursive: true })
+    vi.stubEnv('OPENCLAW_STATE_DIR', path.join(tmp, 'second'))
+    ran = []
+    expect((await statusOf('openclaw'))!.addon).toBe('not_connected')
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    expect(existsSync(first)).toBe(false)
+    expect(ran.filter((r) => r.env.OPENCLAW_STATE_DIR === first)).toEqual([])
+    expect(noted('openclaw').installs).toHaveLength(1)
+  })
+
+  test.each([
+    { background: false, from: 'retained' },
+    { background: false, from: 'older' },
+    { background: true, from: 'retained' },
+    { background: true, from: 'older' },
+  ])(
+    'a failed removal is reported and retried from the $from profile with background logging $background until the other add-on is gone',
+    async ({ background, from }) => {
+      const first = path.join(tmp, 'first')
+      const second = path.join(tmp, 'second')
+      vi.stubEnv('IT_HARNESSES', 'openclaw')
+      vi.stubEnv('OPENCLAW_STATE_DIR', first)
+      await connect('openclaw', () => {})
+      const [one] = noted('openclaw').installs
+      rmSync(stampFile('openclaw'))
+      vi.stubEnv('OPENCLAW_STATE_DIR', second)
+      await connect('openclaw', () => {})
+      const [two] = noted('openclaw').installs
+      const installs = [
+        { ...one, version: 'older', at: 1000 },
+        { ...two, at: 2000 },
+      ]
+      put(stampFile('openclaw'), JSON.stringify({ installs }))
+      vi.stubEnv('OPENCLAW_STATE_DIR', from === 'retained' ? second : first)
+      failing = ['openclaw plugins uninstall it-bridge --force']
+      const detail =
+        'It has not finished taking its add-on out of the other OpenClaw profiles. A second profile may still receive and answer clicks on your OpenClaw pages, including new pages. Run `it setup` again to retry; the background service will retry as well.'
+      const { said, say } = lines()
+      ran = []
+      expect(await connect('openclaw', say, background)).toMatchObject({ addon: 'error', detail })
+      expect((await statusOf('openclaw'))!).toMatchObject({ addon: 'error', detail })
+      expect(said).toContain(`OpenClaw: ${detail}`)
+      expect(said.every((line) => !line.includes(tmp))).toBe(true)
+      expect(existsSync(root(first))).toBe(true)
+      expect(existsSync(root(second))).toBe(true)
+      expect(noted('openclaw').installs).toEqual(installs)
+      expect(commands('openclaw').filter((words) => /install|enable/.test(words) && !words.includes('uninstall'))).toEqual([])
+      const attempted = () => commands('openclaw').filter((words) => words === 'plugins uninstall it-bridge --force').length
+      expect(attempted()).toBe(1)
+      await reconcile(['openclaw'], say, background)
+      expect(attempted()).toBe(2)
+      expect((await statusOf('openclaw'))!.addon).toBe('error')
+      failing = []
+      await reconcile(['openclaw'], say, background)
+      expect(attempted()).toBe(3)
+      expect(existsSync(root(first))).toBe(false)
+      expect(existsSync(root(second))).toBe(true)
+      expect(noted('openclaw').installs).toEqual([installs[1]])
+      vi.stubEnv('OPENCLAW_STATE_DIR', second)
+      const after = (await statusOf('openclaw'))!
+      expect(after.addon).toBe('connected')
+      expect(after.detail).toBeUndefined()
+    },
+  )
+
+  test('where an It from before connected it in two, it is taken out of all but the one it was put into last, wherever setup is run from', async () => {
+    const first = path.join(tmp, 'first')
+    const second = path.join(tmp, 'second')
+    // As an It from before left things: the add-on in both folders, and a note of each
+    vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    await connect('openclaw', () => {})
+    const [one] = noted('openclaw').installs
+    rmSync(stampFile('openclaw'))
+    vi.stubEnv('OPENCLAW_STATE_DIR', second)
+    await connect('openclaw', () => {})
+    const [two] = noted('openclaw').installs
+    const installs = [
+      { ...one, at: 2000 },
+      { ...two, at: 1000 },
+    ]
+    put(stampFile('openclaw'), JSON.stringify({ installs }))
+
+    // Run where OpenClaw is pointed at the first folder, which is the one that gives way
+    vi.stubEnv('OPENCLAW_STATE_DIR', first)
+    const { said, say } = lines()
+    expect((await connect('openclaw', say)).addon).toBe('unavailable')
+    expect(said[0]).toBe(
+      'OpenClaw: It’s add-on was in more than one of the folders OpenClaw keeps its settings in, where each could be handed what was done on the other’s pages. It will try to take the add-on out of all but the one it was put into last.',
+    )
+    expect(existsSync(root(first))).toBe(false)
+    expect(existsSync(root(second))).toBe(true)
+    expect(noted('openclaw').installs.map((i) => i.env)).toEqual([{ OPENCLAW_STATE_DIR: second }])
+    // And where it is pointed at the second, it is connected as before, with nothing put in again
+    vi.stubEnv('OPENCLAW_STATE_DIR', second)
+    ran = []
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    expect(commands('openclaw').filter((words) => /install|enable/.test(words))).toEqual([])
   })
 })
 
