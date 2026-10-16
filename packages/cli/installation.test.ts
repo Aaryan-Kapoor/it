@@ -420,6 +420,32 @@ describe('installation ownership', () => {
     expect(markedInstallation(at)).toBe(true)
   })
 
+  test('uninstall removes downloads left by a dead local installer', () => {
+    const at = folder()
+    markInstallation(at)
+    const dead = execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' })
+    put(at, '.install.abandoned/owner', `${dead} ${os.hostname()}\n`)
+    put(at, '.install.abandoned/program')
+    expect(removeInstallationFiles(at, false)).toEqual([])
+    expect(existsSync(at)).toBe(false)
+  })
+
+  test.each(['live', 'foreign', 'malformed', 'missing', 'recovery'])('uninstall keeps staging downloads it cannot remove safely (%s)', (kind) => {
+    const at = folder()
+    markInstallation(at)
+    const dead = execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' })
+    const stage = '.install.kept'
+    if (kind !== 'missing') {
+      const record = `${kind === 'live' ? process.pid : dead} ${kind === 'foreign' ? 'another-machine' : os.hostname()}\n`
+      put(at, `${stage}/owner`, kind === 'malformed' ? 'mine' : record)
+    }
+    put(at, `${stage}/program`)
+    if (kind === 'recovery') put(at, `${stage}/old.license`, 'original terms')
+    expect(removeInstallationFiles(at, false)).toEqual([stage])
+    expect(readFileSync(path.join(at, stage, 'program'), 'utf8')).toBe('data')
+    if (kind === 'recovery') expect(readFileSync(path.join(at, stage, 'old.license'), 'utf8')).toBe('original terms')
+  })
+
   test('uninstall recovers an abandoned standalone installer lock and removes the installation', async () => {
     const at = folder()
     markInstallation(at)

@@ -1,4 +1,5 @@
 import { lstatSync, readdirSync, readFileSync, rmdirSync, rmSync, unlinkSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { INSTALLATION_FILE } from './installation'
 import { withInstallerLock } from './installer-lock'
@@ -171,6 +172,18 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
   for (const name of readdirSync(folder)) {
     const sidecar = /^(.*)\.([1-9]\d*)\.tmp$/.exec(name)
     if (sidecar && records.includes(sidecar[1]!) && abandoned(sidecar[2]!)) remove(name)
+    // The shell installer records the process and machine that made each staging folder.
+    // Apply its own cleanup rule here too: only a dead local owner proves the downloads
+    // are abandoned. An old.* file may be the only copy of something moved aside, so a
+    // folder holding one stays for the person to recover, as it does on the next install.
+    if (!name.startsWith('.install.')) continue
+    const stage = directory(name)
+    const owner = installationFile(folder, `${name}/owner`)
+    if (!stage || !owner) continue
+    const held = /^([1-9]\d*) ([^\r\n]+)\n/.exec(readFileSync(owner, 'utf8'))
+    if (held && held[2] === os.hostname() && abandoned(held[1]!) && !children(name).some((file) => file.startsWith('old.'))) {
+      rmSync(stage, { recursive: true, force: true })
+    }
   }
   for (const [directory, names] of Object.entries(LOCKS)) {
     for (const name of directory ? children(directory) : readdirSync(folder)) {
