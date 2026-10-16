@@ -182,7 +182,7 @@ async function backend(
       .on('data', (c: Buffer) => chunks.push(c))
       .on('end', () => {
         const json = (value: unknown, status = 200) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
-        if (req.method === 'GET' && req.url === '/cli/config') return json({ protocol: 1, issuer: 'http://127.0.0.1:23001' })
+        if (req.method === 'GET' && req.url === '/cli/config') return json({ protocol: 2, issuer: 'http://127.0.0.1:23001' })
         // Asked how it is, it says that it is It, as the backend does
         if (req.method === 'GET' && req.url === '/health') return json({ ok: true, it: true })
         if (req.method === 'POST' && req.url === '/bridge/token') {
@@ -549,6 +549,29 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(JSON.parse(await hooked({ ...turn, hook_event_name: 'Stop' }))).toEqual({ decision: 'block', reason: behindMark([words]) })
       // And with nothing behind a mark and no click, a turn ends as it did before
       expect(await hooked({ ...turn, hook_event_name: 'Stop' })).toBe('')
+      // The connector is told that the agent has it only once the words have left the hook.
+      // Here they are more than a pipe holds and nobody reads them yet, as when Codex is slow
+      // to: a hook that died now would have handed over a part, and the whole is still kept
+      const many = Array.from({ length: 40 }, (_, i) => `${words} ${i} ${'x'.repeat(8000)}`)
+      for (const event of ['UserPromptSubmit', 'PostToolUse']) {
+        behind = many
+        taken.length = 0
+        const slow = spawn(process.execPath, [program, 'hook', 'codex'], {
+          cwd: m.home,
+          env: { PATH: m.bin, HOME: m.home, IT_HOME: m.it, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage' },
+          stdio: ['pipe', 'pipe', 'ignore'],
+        })
+        const over = new Promise((resolve) => slow.on('close', resolve))
+        slow.stdin.end(JSON.stringify({ ...turn, hook_event_name: event, prompt: MARK }))
+        await new Promise((resolve) => setTimeout(resolve, 2500))
+        expect([event, taken, behind.length]).toEqual([event, [], 40])
+        // Read, it is all there, and only now is it said to be had
+        let out = ''
+        slow.stdout.on('data', (c) => (out += c))
+        await over
+        expect(JSON.parse(out).hookSpecificOutput.additionalContext).toBe(behindMark(many))
+        expect(taken.length).toBe(40)
+      }
     } finally {
       await new Promise((resolve) => connector.close(resolve))
     }
@@ -1649,7 +1672,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       background: expect.objectContaining({ registered: false }),
       harnesses: [],
       version: expect.any(String),
-      protocol: 1,
+      protocol: 2,
       hint: 'It is not running on this machine. Start it with `it serve`, or run `it setup` to keep it running in the background.',
     })
     // Nothing of where the backend listens, which a person can do nothing with
@@ -2677,8 +2700,8 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
       }
     }
     // A newer It: this machine is the one to update. An older one: the machine It runs on. Neither is joined, and no key is made
-    expect(await versions(2)).toEqual([2, 'Update It on this machine, with `it upgrade` or the install command. Then join again.', false, false])
-    expect(await versions(0)).toEqual([
+    expect(await versions(3)).toEqual([2, 'Update It on this machine, with `it upgrade` or the install command. Then join again.', false, false])
+    expect(await versions(1)).toEqual([
       2,
       'Update It on the machine it runs on, with `it upgrade` there or the Update button on its Machines page. Then join again.',
       false,
@@ -3039,7 +3062,7 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
           const json = (value: unknown, status = 200) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
           if (req.url === '/cli/config') {
             configRead.push(Date.now())
-            return json({ protocol: 1, issuer })
+            return json({ protocol: 2, issuer })
           }
           if (req.url === '/bridge/token') {
             const { proof } = JSON.parse(Buffer.concat(pieces).toString('utf8')) as { proof: string }
@@ -3079,7 +3102,7 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
           .on('end', () =>
             res
               .writeHead(req.url === '/cli/config' ? 200 : 401, { 'content-type': 'application/json' })
-              .end(JSON.stringify(req.url === '/cli/config' ? { protocol: 1, issuer } : { error: 'The proof does not verify.', reason: 'signature' })),
+              .end(JSON.stringify(req.url === '/cli/config' ? { protocol: 2, issuer } : { error: 'The proof does not verify.', reason: 'signature' })),
           )
       })
       await new Promise<void>((r) => refusing.listen(0, '127.0.0.1', r))

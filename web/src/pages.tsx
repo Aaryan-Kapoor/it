@@ -297,6 +297,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               wakes={owner ? page.wake : null}
               agent={agentName(page.agent)}
               stoppedAt={page.stoppedAt}
+              stoppedSequence={page.stoppedSequence}
               wakeFailed={page.wakeFailed}
               answeredAt={page.answeredAt ?? null}
             />
@@ -623,6 +624,7 @@ function ActionStatus({
   wakes,
   agent,
   stoppedAt,
+  stoppedSequence,
   wakeFailed,
   answeredAt,
 }: {
@@ -641,6 +643,7 @@ function ActionStatus({
   agent: string | null
   /** When a person last stopped the page's agent, if they have. */
   stoppedAt: number | null
+  stoppedSequence?: number | null
   /** Why the page's conversation could not be reopened, the last time that was tried and did not work. */
   wakeFailed: { at: number; why: string } | null
   /** When the page's agent last changed the page, by publishing it or writing its state. */
@@ -728,13 +731,22 @@ function ActionStatus({
   // (Not of something its agent had already said was done, or could not be done: a stop that
   // came after that, on this page or another of the conversation's, changed nothing about it)
   const settled = last.delivery === 'handed_off' && last.route !== 'stopped' && (last.outcome === 'succeeded' || last.outcome === 'failed')
-  if (stoppedAt !== null && last.at <= stoppedAt && !settled) {
+  if (
+    (stoppedSequence != null
+      ? last.sequence === undefined || last.sequence <= stoppedSequence
+      : last.sequence === undefined && stoppedAt !== null && last.at <= stoppedAt) &&
+    !settled
+  ) {
     // Everything of that conversation's that was waiting went with the stop, and is said to have.
     // Each is counted by when it was dropped: what an earlier stop of the same conversation
     // dropped was done before this one too, and is none of this one's. (Functions from before
     // they said when leave only the hour before the stop to go by)
     const dropped = (recent ?? []).filter(
-      (x) => x.route === 'stopped' && x.at <= stoppedAt && (x.handedAt == null ? stoppedAt - x.at < 3_600_000 : x.handedAt >= stoppedAt),
+      (x) =>
+        x.route === 'stopped' &&
+        (stoppedSequence != null
+          ? x.stoppedSequence === stoppedSequence
+          : stoppedAt !== null && x.at <= stoppedAt && (x.handedAt == null ? stoppedAt - x.at < 3_600_000 : x.handedAt >= stoppedAt)),
     ).length
     return <span className="status">{dropped > 1 ? `Stopped, with ${dropped - 1} more that ${dropped === 2 ? 'was' : 'were'} waiting` : 'Stopped'}</span>
   }

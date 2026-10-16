@@ -277,6 +277,16 @@ describe('the Pi add-on', () => {
     expect(acks()[0]).toMatchObject({ method: 'POST', token: TOKEN, body: { ids: [c.id] } })
   })
 
+  it('echoes the claim receipt supplied by the connector', async () => {
+    await connect()
+    const receipt = { token: 'this-claim', session: { harness: 'pi', id: 'session-receipt' } }
+    const c = { ...click('approve'), receipt }
+    offered = [c]
+    pi('session-receipt').start()
+    await until(() => acks().length > 0)
+    expect(acks()[0]!.body).toEqual({ ids: [c.id], receipts: [{ id: c.id, receipt }] })
+  })
+
   it('gives several clicks as one message, one line each', async () => {
     await connect()
     const [a, b] = [click('approve'), click('reject')]
@@ -520,7 +530,7 @@ describe('the Pi add-on', () => {
     expect(p.conversation).toEqual([])
     honest = true
     await until(() => seen.some((s) => s.startsWith('POST /ack')))
-    expect(seen[0]).toBe('GET /clicks?harness=pi&session=session-port undefined true')
+    expect(seen[0]).toBe('GET /clicks?receipts=1&harness=pi&session=session-port undefined true')
     expect(p.conversation).toEqual([c.text])
   })
 

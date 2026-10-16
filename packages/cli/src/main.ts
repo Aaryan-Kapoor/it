@@ -33,10 +33,10 @@ import {
   type Harness,
   isSlug,
   LIMITS,
+  MACHINE_PROTOCOL_VERSION,
   MESSAGE,
   NOUN,
   newer,
-  PROTOCOL_VERSION,
   parseJson,
   withoutFiles,
 } from '@it/protocol'
@@ -625,6 +625,7 @@ function page(p: Record<string, unknown>): Record<string, unknown> {
 
 /** A click as the backend lists it: what it carried is JSON text. */
 interface Listed {
+  receipt?: { token: string; session: { harness: string; id: string } | null }
   id: string
   artifact: string
   title: string
@@ -696,10 +697,17 @@ async function wait(a: Args) {
   const who = crypto.randomUUID()
   // The connector is told what this waits for: one page, or, with none named, this
   // conversation's clicks only. Everyone else's go on being delivered as usual.
+  /**
+   * What the connector handed back and this has printed. The connector keeps its copy of such
+   * a click until it is told so, and gives it again to a wait that has not said it: an answer
+   * of its that never arrived would otherwise be the last of that click.
+   */
+  const taken = new Set<string>()
+  const got = () => (taken.size ? { got: [...taken].slice(-500) } : {})
   const announce = () =>
     local<{ sessions?: { harness: string; id: string }[]; clicks?: Listed[] }>('/waiting', {
       method: 'POST',
-      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }) },
+      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }), ...got() },
     })
   // The connector knows the ids this conversation had before it was last cleared: pages made
   // then are still recorded under them
@@ -739,7 +747,7 @@ async function wait(a: Args) {
    * it was already waiting when this began. That last is known from what the backend first
    * offered, and not by comparing this machine's clock with the backend's.
    */
-  const made = new Map<string, { at: number; harness: string | undefined; wasWaiting: boolean }>()
+  const made = new Map<string, { receipt?: Listed['receipt']; at: number; harness: string | undefined; wasWaiting: boolean }>()
   /** Whether the first list of what is waiting has been looked at. What is in it was made before this began. */
   let looked = false
   let busy = false
@@ -761,14 +769,14 @@ async function wait(a: Args) {
     // wait after the first, with the other two taken from the connector and never said
     while (busy) await new Promise((resolve) => setTimeout(resolve, 20))
     if (!over) await printHandedBack().catch(() => {})
-    await local('/waiting', { method: 'POST', body: { id: who, done: true } })
+    await local('/waiting', { method: 'POST', body: { id: who, done: true, ...got() } })
     await client.close().catch(() => {})
     // A wait that was given something has its answer, whatever went wrong beside it
     await end(code === 1 && printedIds.size > 0 && !follow ? 0 : code)
   }
   const report = async () => {
     for (const id of unreported) {
-      const ok = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route: 'waiter' }).then(
+      const ok = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route: 'waiter', receipt: made.get(id)?.receipt }).then(
         (done) => {
           const c = made.get(id)
           // Counted or not, it is finished with: a wait that goes on for days keeps nothing of it
@@ -791,12 +799,18 @@ async function wait(a: Args) {
   /** Prints what the connector handed back and has not been printed yet, and tells It of it. */
   const printHandedBack = async () => {
     for (const c of handedBack.splice(0)) {
-      if (printedIds.has(c.id)) continue
+      // What the connector gave again is what this already had, and is said to it as printed.
+      // Anything else only once it is: the connector lets go of its copy at that word
+      if (printedIds.has(c.id)) {
+        taken.add(c.id)
+        continue
+      }
       await emit(printed(c))
+      taken.add(c.id)
       printedIds.add(c.id)
       if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
       unreported.add(c.id)
-      made.set(c.id, { at: c.at, harness: c.session?.harness, wasWaiting: false })
+      made.set(c.id, { receipt: c.receipt, at: c.at, harness: c.session?.harness, wasWaiting: false })
     }
     await report()
   }
@@ -820,14 +834,23 @@ async function wait(a: Args) {
       const fresh = clicks.filter((c) => !printedIds.has(c.id) && mine(c))
       if (fresh.length) {
         const got = new Set<string>()
-        if (slug) for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: fresh.map((c) => c.id) })) got.add(id)
+        if (slug) {
+          const token = crypto.randomUUID()
+          for (const c of fresh) c.receipt = { token, session: null }
+          for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: fresh.map((c) => c.id), token })) got.add(id)
+        }
         // Waiting for its own conversation's clicks, each is claimed for the conversation it
         // was offered for: a page that has changed hands meanwhile keeps its click for its new owner
-        else for (const c of fresh) for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: [c.id], for: c.session! })) got.add(id)
+        else
+          for (const c of fresh) {
+            const token = crypto.randomUUID()
+            c.receipt = { token, session: c.session }
+            for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: [c.id], for: c.session!, token })) got.add(id)
+          }
         for (const c of fresh.filter((x) => got.has(x.id))) {
           // The wait ended while this was being asked for: it is given back, and not printed after the last word
           if (ending || over) {
-            await call('mutation', api.delivery.release, { id: c.id }).catch(() => {})
+            await call('mutation', api.delivery.release, { id: c.id, receipt: c.receipt }).catch(() => {})
             continue
           }
           came = 'printed'
@@ -836,7 +859,7 @@ async function wait(a: Args) {
           printedIds.add(c.id)
           if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
           unreported.add(c.id)
-          made.set(c.id, { at: c.at, harness: c.session?.harness, wasWaiting: !looked })
+          made.set(c.id, { receipt: c.receipt, at: c.at, harness: c.session?.harness, wasWaiting: !looked })
         }
         await report()
       }
@@ -2356,7 +2379,7 @@ async function status(a: Args) {
     background: service.status(),
     harnesses: await detectAll(),
     version: VERSION,
-    protocol: PROTOCOL_VERSION,
+    protocol: MACHINE_PROTOCOL_VERSION,
     // A newer version that this machine has learned is out, where it looks for one
     ...(newerOut ? { update: { latest: newerOut, how: 'Run `it upgrade`.' } } : {}),
     ...(hint && !blocked ? { hint } : {}),
@@ -2645,7 +2668,7 @@ async function main(argv: string[]): Promise<void> {
     case 'version':
     case '--version':
     case '-v':
-      return out({ version: VERSION, protocol: PROTOCOL_VERSION })
+      return out({ version: VERSION, protocol: MACHINE_PROTOCOL_VERSION })
     case 'telemetry': {
       const to = a._[0]
       if (to !== undefined && to !== 'on' && to !== 'off' && to !== 'status')

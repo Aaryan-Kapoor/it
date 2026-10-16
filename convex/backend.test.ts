@@ -3,6 +3,7 @@
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
 import { ALIVE, describeClick, LEASE_MS, LIMITS, QUOTA, STORE_KEY } from '@it/protocol'
+import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
@@ -191,7 +192,28 @@ async function machineOf(t: T, who: string, name = 'laptop', replaces?: string) 
   if ('error' in made) throw new Error(made.error)
   // It has said which system it runs, as a connector does in the first report it makes
   await t.run((ctx) => ctx.db.patch(made.machineId, { system: 'linux' }))
-  return { id: made.machineId, as: t.withIdentity({ issuer: SITE, subject: made.machineId, kind: 'machine' }) }
+  const as = t.withIdentity({ issuer: SITE, subject: made.machineId, kind: 'machine' })
+  const raw = { ...as }
+  const receipts = new Map<string, { token: string; session: { harness: string; id: string } | null }>()
+  // The test machine retains each claim's receipt as the real connector does.
+  as.mutation = (async (fn: any, input: any) => {
+    const name = getFunctionName(fn)
+    const args = { ...input }
+    if (name === 'delivery:claim' && args.token === undefined) args.token = crypto.randomUUID()
+    if (name === 'delivery:renew' && args.receipts === undefined)
+      args.receipts = args.ids.filter((id: string) => receipts.has(id)).map((id: string) => ({ id, receipt: receipts.get(id) }))
+    if (['delivery:release', 'delivery:handedOff', 'delivery:park'].includes(name) && args.receipt === undefined) args.receipt = receipts.get(args.id)
+    const answer = await raw.mutation(fn, args)
+    if (name === 'delivery:claim') for (const id of answer as string[]) receipts.set(id, { token: args.token, session: args.for ?? null })
+    return answer
+  }) as typeof as.mutation
+  as.query = (async (fn: any, input: any) => {
+    const args = { ...input }
+    if (getFunctionName(fn) === 'delivery:lost' && args.receipts === undefined)
+      args.receipts = args.ids.filter((id: string) => receipts.has(id)).map((id: string) => ({ id, receipt: receipts.get(id) }))
+    return raw.query(fn, args)
+  }) as typeof as.query
+  return { id: made.machineId, as, raw }
 }
 async function publish(machine: { as: ReturnType<T['withIdentity']> }, slug: string, extra: Record<string, unknown> = {}) {
   const begun = await machine.as.action(api.publish.begin, { slug, title: `Title of ${slug}`, files: page, ...extra })
@@ -1633,6 +1655,170 @@ describe('clicks and their delivery', () => {
     return { t, alice, m, p, click, counts }
   }
 
+  test('each delivery attempt has its own receipt, including a retry whose claim answer was lost', async () => {
+    const { t, m, click } = await setup()
+    const id = (await click('receipt-0001')).actionId
+    const first = { token: 'first-attempt', session: SESSION }
+    const second = { token: 'second-attempt', session: SESSION }
+    const claim = (token: string) => m.raw.mutation(api.delivery.claim, { ids: [id], for: SESSION, token })
+    expect(await claim(first.token)).toEqual([id])
+    expect(await claim(first.token)).toEqual([id])
+    await vi.advanceTimersByTimeAsync(LEASE_MS + 1)
+    expect(await claim(first.token)).toEqual([])
+    expect(await claim(second.token)).toEqual([id])
+    expect(await m.raw.mutation(api.delivery.renew, { ids: [id], receipts: [{ id, receipt: first }] })).toEqual([])
+    expect(await m.raw.query(api.delivery.lost, { ids: [id], receipts: [{ id, receipt: first }] })).toEqual([id])
+    await m.raw.mutation(api.delivery.release, { id, receipt: first })
+    expect(await code(m.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt: first }))).toBe('conflict')
+    expect(await t.run((ctx) => ctx.db.get(id))).toMatchObject({ delivery: 'leased', claim: second })
+    expect(
+      await code(m.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt: { ...second, session: { ...SESSION, id: 'another-conversation' } } })),
+    ).toBe('conflict')
+    const result = await m.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt: second })
+    expect(result.already).toBe(false)
+    expect((await m.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt: second })).already).toBe(true)
+    expect(await code(m.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt: first }))).toBe('conflict')
+  })
+
+  test.each(['expired', 'reaped', 'legacy-reaped'] as const)('a matching saved receipt confirms its original attempt after it is %s', async (state) => {
+    const { t, m, click, counts } = await setup()
+    const other = await machineOf(t, 'alice', 'other')
+    const id = (await click('saved-receipt')).actionId
+    const receipt = { token: 'saved-claim', session: SESSION }
+    await m.raw.mutation(api.delivery.claim, { ids: [id], for: SESSION, token: receipt.token })
+    if (state === 'legacy-reaped') await t.run((ctx) => ctx.db.patch(id, { claim: receipt }))
+    await vi.advanceTimersByTimeAsync(LEASE_MS + 1)
+    if (state !== 'expired') {
+      await t.mutation(internal.delivery.reap, {})
+      expect((await t.run((ctx) => ctx.db.get(id)))?.delivery).toBe('pending')
+    }
+    expect(await code(other.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt }))).toBe('conflict')
+    expect((await m.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt })).already).toBe(false)
+    expect((await m.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt })).already).toBe(true)
+    expect(await counts()).toEqual([0, 0])
+  })
+
+  test('a reaped waiter receipt belongs to the borrowing machine, not the machine that owns the page', async () => {
+    const { t, m, click } = await setup()
+    const borrower = await machineOf(t, 'alice', 'borrower')
+    const id = (await click('borrowed-receipt')).actionId
+    const receipt = { token: 'borrowed-claim', session: null }
+    await borrower.raw.mutation(api.delivery.claim, { ids: [id], token: receipt.token })
+    await vi.advanceTimersByTimeAsync(LEASE_MS + 1)
+    await t.mutation(internal.delivery.reap, {})
+    expect(await code(m.raw.mutation(api.delivery.handedOff, { id, route: 'waiter', receipt }))).toBe('conflict')
+    expect((await borrower.raw.mutation(api.delivery.handedOff, { id, route: 'waiter', receipt })).already).toBe(false)
+  })
+
+  test('old delivery clients fail closed while an explicit manual acknowledgement still works', async () => {
+    const { t, m, click } = await setup()
+    const id = (await click('receipt-0002')).actionId
+    expect(await code(m.raw.mutation(api.delivery.claim, { ids: [id] }))).toBe('conflict')
+    await m.raw.mutation(api.delivery.claim, { ids: [id], token: 'current-attempt', for: SESSION })
+    expect(await m.raw.mutation(api.delivery.renew, { ids: [id] })).toEqual([])
+    await m.raw.mutation(api.delivery.release, { id })
+    expect(await m.raw.mutation(api.delivery.park, { id, for: SESSION, all: true })).toBe(true)
+    expect(await code(m.raw.mutation(api.delivery.handedOff, { id, route: 'addon' }))).toBe('conflict')
+    expect(await t.run((ctx) => ctx.db.get(id))).toMatchObject({ delivery: 'leased', claim: { token: 'current-attempt', session: SESSION } })
+    expect((await m.raw.mutation(api.delivery.handedOff, { id, route: 'manual' })).already).toBe(false)
+    await m.raw.mutation(api.delivery.settle, { id, outcome: 'succeeded' })
+  })
+
+  test('a late receipt cannot confirm a claim after the page changes conversation', async () => {
+    const { t, m, click } = await setup()
+    const id = (await click('receipt-0003')).actionId
+    const receipt = { token: 'old-claim', session: SESSION }
+    await m.raw.mutation(api.delivery.claim, { ids: [id], token: receipt.token, for: SESSION })
+    await m.raw.mutation(api.delivery.release, { id, receipt })
+    const next = { harness: 'pi', id: 'new-conversation' }
+    await publish(m, 'plan', { session: next, take: true })
+    await settle(t)
+    await m.raw.mutation(api.delivery.claim, { ids: [id], token: 'new-claim', for: next })
+    expect(await code(m.raw.mutation(api.delivery.handedOff, { id, route: 'queue', receipt }))).toBe('conflict')
+    expect(await t.run((ctx) => ctx.db.get(id))).toMatchObject({ delivery: 'leased', claim: { token: 'new-claim', session: next } })
+  })
+
+  for (const returnFirst of [true, false])
+    test(`a return supersedes a failed delivery across parking batches, return first: ${returnFirst}`, async () => {
+      const { t, m, p, click } = await setup()
+      const id = (await click('return-0001')).actionId
+      const receipt = { token: 'failed-attempt', session: SESSION }
+      await t.run(async (ctx) => {
+        const original = (await ctx.db.get(id))!
+        const { _id, _creationTime, ...fields } = original
+        for (let n = 0; n < 121; n++) await ctx.db.insert('actions', { ...fields, clientActionId: `return-copy-${n}` })
+        await ctx.db.patch(p.artifactId, { waiting: 122 })
+      })
+      await m.raw.mutation(api.delivery.claim, { ids: [id], for: SESSION, token: receipt.token })
+      if (returnFirst) {
+        await m.raw.mutation(api.delivery.unpark, { for: SESSION })
+        expect(await m.raw.mutation(api.delivery.park, { id, for: SESSION, all: true, receipt, generation: 0 })).toBe('returned')
+      } else {
+        expect(await m.raw.mutation(api.delivery.park, { id, for: SESSION, all: true, receipt, generation: 0 })).toBe(true)
+        await t.mutation(internal.delivery.parkRest, { machineId: m.id, harness: SESSION.harness, sessionId: SESSION.id, generation: 0 })
+        await m.raw.mutation(api.delivery.unpark, { for: SESSION })
+      }
+      await settle(t)
+      const rows = await t.run((ctx) => ctx.db.query('actions').collect())
+      expect(rows).toHaveLength(122)
+      expect(rows.every((x) => x.machineId === m.id && x.parkedBy === undefined && x.delivery === 'pending')).toBe(true)
+    })
+
+  test('a click submitted in the same millisecond after Stop remains deliverable', async () => {
+    const { alice, m, p, click } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: SESSION.harness, on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    const earlier = (await click('same-ms-old')).actionId
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    const later = (await click('same-ms-new')).actionId
+    expect(await m.as.mutation(api.delivery.claim, { ids: [earlier, later], for: SESSION })).toEqual([later])
+  })
+
+  test('a Stop cleanup saved before sequence support cannot cancel a numbered click', async () => {
+    const { t, m, p, click } = await setup()
+    const id = (await click('legacy-cutoff')).actionId
+    const row = await t.run((ctx) => ctx.db.get(id))
+    await t.mutation(internal.artifacts.dropRest, {
+      userId: row!.userId,
+      machineId: m.id,
+      session: SESSION,
+      at: Date.now() + 3_600_000,
+      artifactId: p.artifactId,
+    })
+    expect((await t.run((ctx) => ctx.db.get(id)))?.delivery).toBe('pending')
+  })
+
+  test('Stop orders old rows and numbered clicks before later clicks across a backward clock and cleanup batches', async () => {
+    const { t, alice, m, p, click } = await setup()
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: SESSION.harness, on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    const old = (await click('causal-old')).actionId
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...fields } = (await ctx.db.get(old))!
+      for (let n = 0; n < 120; n++)
+        await ctx.db.insert('actions', {
+          ...fields,
+          sequence: n % 2 ? undefined : fields.sequence,
+          createdAt: Date.now() + 3_600_000,
+          clientActionId: `causal-copy-${n}`,
+        })
+      await ctx.db.patch(p.artifactId, { waiting: 121 })
+    })
+    const at = Date.now()
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    vi.setSystemTime(at - 3_600_000)
+    const fresh = (await click('causal-new')).actionId
+    await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })
+    await settle(t)
+    expect(await m.as.mutation(api.delivery.claim, { ids: [fresh], for: SESSION })).toEqual([fresh])
+    const rows = await t.run((ctx) => ctx.db.query('actions').collect())
+    expect(rows.filter((x) => x._id !== fresh).every((x) => x.delivery === 'handed_off' && x.route === 'stopped')).toBe(true)
+    expect((await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId }))[0]!.id).toBe(fresh)
+    expect((await alice.browser.query(api.artifacts.get, { artifactId: p.artifactId })).stoppedSequence).toBeLessThan(
+      rows.find((x) => x._id === fresh)!.sequence!,
+    )
+  })
+
   test('the same click sent twice is one click, and a page cannot shadow another page’s click by reusing its id', async () => {
     const { alice, m, click } = await setup()
     const a = await click('click-0001')
@@ -1711,6 +1897,107 @@ describe('clicks and their delivery', () => {
     expect(await inbox(other)).toEqual([])
     expect((await other.as.query(api.delivery.waiting, { slug: 'plan' })).length).toBe(1)
     expect(await m.as.mutation(api.delivery.claim, { ids: [actionId] })).toEqual([actionId])
+  })
+
+  test('a connector that starts is given back what its machine still holds, at once and in the order it was made, and nothing another machine holds', async () => {
+    const { t, m, click } = await setup()
+    const other = await machineOf(t, 'alice', 'server')
+    const first = (await click('click-0001')).actionId
+    const second = (await click('click-0002')).actionId
+    const borrowed = (await click('click-0003')).actionId
+    // The connector claimed the first and ended before it had handed it over. Another machine holds one of its own
+    expect(await m.as.mutation(api.delivery.claim, { ids: [first] })).toEqual([first])
+    expect(await other.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([borrowed])
+    // Until the lease runs out, the one made after it is all that is offered
+    expect((await inbox(m)).map((c) => c.id)).toEqual([second])
+    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([first])
+    expect((await inbox(m)).map((c) => c.id)).toEqual([first, second])
+    // The other machine's is still its own, and a second asking gives back nothing more
+    expect(await m.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([])
+    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([])
+    // It is a machine's to ask, and nobody else's
+    const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
+    expect(await code(browser.mutation(api.delivery.giveBack, {}))).not.toBe('ok')
+  })
+
+  test('more than four thousand leases held by another machine cannot hide this machine’s lease when it starts', async () => {
+    const { t, m, click } = await setup()
+    const other = await machineOf(t, 'alice', 'server')
+    const first = (await click('click-0001')).actionId
+    expect(await m.as.mutation(api.delivery.claim, { ids: [first] })).toEqual([first])
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
+      for (let i = 0; i < 4001; i++)
+        await ctx.db.insert('actions', { ...base, clientActionId: `foreign-${i}`, leaseMachineId: other.id, leaseExpiresAt: Date.now() })
+    })
+    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([first])
+    expect((await inbox(m)).map((c) => c.id)).toEqual([first])
+    expect(await m.as.mutation(api.delivery.claim, { ids: [first] })).toEqual([first])
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [first], done: true })
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query('actions')
+          .filter((q) => q.eq(q.field('delivery'), 'leased'))
+          .collect(),
+      ),
+    ).toHaveLength(4001)
+  })
+
+  test('recovery visits more than five hundred maximum-size leases in bounded batches, oldest first', async () => {
+    const { t, m, click } = await setup()
+    const first = (await click('click-0001')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [first] })
+    const ids = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
+      const payload = JSON.stringify('x'.repeat(LIMITS.actionPayloadBytes - 2))
+      const createdAt = Date.now() - 10_000
+      await ctx.db.patch(first, { payload, createdAt })
+      const ids = [first]
+      for (let i = 1; i < 513; i++)
+        ids.push(
+          await ctx.db.insert('actions', {
+            ...base,
+            clientActionId: `recover-${i}`,
+            payload,
+            createdAt: createdAt + i,
+            // Lease expiry is unrelated to when the person acted.
+            leaseExpiresAt: Date.now() + 1000 - i,
+          }),
+        )
+      return ids
+    })
+    const back = []
+    for (let i = 0; i < 9; i++) {
+      const batch = await m.as.mutation(api.delivery.giveBackBatch, {})
+      expect(batch.back.length).toBeLessThanOrEqual(64)
+      expect(batch.done).toBe(i === 8)
+      back.push(...batch.back)
+    }
+    expect(back).toEqual(ids)
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: true })
+    // An older connector still gets its array answer with the same 500-action ceiling.
+    for (let i = 0; i < ids.length; i += 50) await m.as.mutation(api.delivery.claim, { ids: ids.slice(i, i + 50) })
+    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual(ids.slice(0, 500))
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: ids.slice(500), done: true })
+    const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
+    expect(await code(browser.mutation(api.delivery.giveBackBatch, {}))).not.toBe('ok')
+  })
+
+  test('a full recovery batch of stopped clicks does not hide a later lease or revive a stopped click', async () => {
+    const { t, m, click } = await setup()
+    const first = (await click('click-0001')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [first] })
+    const later = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
+      // This branch numbers clicks and Stop. A timestamp-only cutoff cannot stop a numbered click.
+      await ctx.db.patch(base.artifactId, { stoppedThrough: Date.now(), stoppedSequence: base.sequence! })
+      for (let i = 1; i < 64; i++) await ctx.db.insert('actions', { ...base, clientActionId: `stopped-${i}` })
+      return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', sequence: base.sequence! + 1, createdAt: Date.now() + 1 })
+    })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: false })
+    expect(await t.run((ctx) => ctx.db.get(first))).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [later], done: true })
   })
 
   test('a connector keeps a click it is still delivering by renewing, and cannot renew what it has lost', async () => {
@@ -3064,7 +3351,7 @@ describe('displays and machines', () => {
   test('the first machine is enrolled by the service, on a backend that holds nothing, and that makes the one person', async () => {
     const t = backend()
     expect(await t.run(async (ctx) => [(await ctx.db.query('users').collect()).length, (await ctx.db.query('machines').collect()).length])).toEqual([0, 0])
-    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE })
+    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 2, issuer: SITE })
     const key = await aKeyPair()
     const made = await t.mutation(internal.bridge.enroll, { subject: 'owner', name: 'this machine', publicKey: key.publicKey })
     if ('error' in made) throw new Error(made.error)
@@ -4318,6 +4605,9 @@ describe('cases at the edges', () => {
     expect(await t.run((ctx) => ctx.db.get(actionId))).toMatchObject({ delivery: 'leased', leaseMachineId: server.id, machineId: laptop.id })
     // Once nobody holds it, it can be set aside
     await server.as.mutation(api.delivery.release, { id: actionId })
+    expect(await laptop.as.mutation(api.delivery.park, { id: actionId })).toBe(true)
+    expect((await t.run((ctx) => ctx.db.get(actionId)))?.machineId).toBe(laptop.id)
+    await laptop.as.mutation(api.delivery.claim, { ids: [actionId] })
     expect(await laptop.as.mutation(api.delivery.park, { id: actionId })).toBe(true)
     expect((await t.run((ctx) => ctx.db.get(actionId)))?.machineId).toBeUndefined()
   })

@@ -192,7 +192,7 @@ async function tick(seconds = 1) {
   }
 }
 const acks = () => asked.filter((a) => a.path === '/ack').flatMap((a) => a.body.ids as string[])
-const clicksPath = (session: string) => `/clicks?harness=openclaw&session=${encodeURIComponent(session)}`
+const clicksPath = (session: string) => `/clicks?receipts=1&harness=openclaw&session=${encodeURIComponent(session)}`
 
 beforeEach(async () => {
   // Only the plugin's once-a-second clock and the time of day are stand-ins. The connector is asked for real.

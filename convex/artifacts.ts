@@ -8,7 +8,7 @@ import { artifactBySlug, ownArtifact, requireBrowser, requireCaller, requireMach
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
-import { bump } from './lib/tally'
+import { bump, nextSequence } from './lib/tally'
 import { session } from './schema'
 
 export const prefixOf = (userId: Id<'users'>, artifactId: Id<'artifacts'>, n?: number) => `u/${userId}/${artifactId}/${n === undefined ? '' : `${n}/`}`
@@ -116,6 +116,7 @@ export const get = query({
       // And when a person last stopped it, so that the page can say so of what was done before
       // then. The page keeps that moment itself, and goes on saying it when it has changed
       // conversation or machine since: what was dropped by the stop was stopped, and did not fail.
+      stoppedSequence: a.stoppedSequence ?? null,
       stoppedAt:
         Math.max(
           a.stoppedThrough ?? 0,
@@ -276,9 +277,13 @@ export const stop = mutation({
     const machine = a.machineId ? await ctx.db.get(a.machineId) : null
     if (!machine || !running(machine, a)) return { stopping: false }
     const is = (r: { harness: string; sessionId: string }) => r.harness === a.session?.harness && r.sessionId === a.session?.id
+    if (running(machine, a)?.stopping) return { stopping: true }
+    const sequence = await nextSequence(ctx, user._id)
     await ctx.db.patch(machine._id, {
       runs: (machine.runs ?? []).map((r) => (is(r) ? { ...r, stop: true } : r)),
-      stops: [...(machine.stops ?? []).filter((r) => !is(r)), { harness: a.session!.harness, sessionId: a.session!.id, at: Date.now() }].slice(-STOPS_KEPT),
+      stops: [...(machine.stops ?? []).filter((r) => !is(r)), { harness: a.session!.harness, sessionId: a.session!.id, at: Date.now(), sequence }].slice(
+        -STOPS_KEPT,
+      ),
     })
     // What was still waiting for that conversation goes with the stop: the person stopped the
     // agent, and did not mean it to take up, an hour later, what they had done before that.
@@ -302,15 +307,29 @@ export const stop = mutation({
         .withIndex('by_machine', (q) => q.eq('machineId', machine._id))
         .collect()
     ).filter((p) => p._id !== a._id && p.session !== undefined && is({ harness: p.session.harness, sessionId: p.session.id }))
-    for (const p of [a, ...pages]) await ctx.db.patch(p._id, { stoppedThrough: at })
-    const dropped = await dropWaiting(ctx, user._id, machine._id, a.session!, at, a._id)
+    for (const p of [a, ...pages]) await ctx.db.patch(p._id, { stoppedThrough: at, stoppedSequence: sequence })
+    const dropped = await dropWaiting(ctx, user._id, machine._id, a.session!, at, a._id, sequence)
     if (dropped.more)
-      await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId: user._id, machineId: machine._id, session: a.session!, at, artifactId: a._id })
+      await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, {
+        userId: user._id,
+        machineId: machine._id,
+        session: a.session!,
+        at,
+        artifactId: a._id,
+        sequence,
+      })
     // And what waits on each of its other pages, read by the page in a step of its own: a click
     // there may be addressed to nobody for the moment, and is then found no other way
     for (const p of pages)
       if ((p.waiting ?? 0) > 0)
-        await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId: user._id, machineId: machine._id, session: a.session!, at, artifactId: p._id })
+        await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, {
+          userId: user._id,
+          machineId: machine._id,
+          session: a.session!,
+          at,
+          artifactId: p._id,
+          sequence,
+        })
     const waiting = { length: dropped.count }
     log('run.stop_asked', { userId: user._id, artifactId, dropped: waiting.length })
     return { stopping: true }
@@ -343,6 +362,7 @@ async function dropWaiting(
   at: number,
   /** The page the stop was asked from: everything that waits on it from before the stop goes, however it is addressed. */
   artifactId?: Id<'artifacts'>,
+  sequence?: number,
 ): Promise<{ count: number; more: boolean }> {
   let count = 0
   // How many of them still counted as waiting for the person: all but those of a page that has
@@ -362,7 +382,7 @@ async function dropWaiting(
       }
       const batch = await ctx.db
         .query('actions')
-        .withIndex('by_user_route', (q) =>
+        .withIndex(sequence === undefined ? 'by_user_route' : 'by_user_route_sequence', (q) =>
           q
             .eq('userId', userId)
             .eq('delivery', delivery)
@@ -371,14 +391,16 @@ async function dropWaiting(
             .eq('machineId', addressed)
             .eq('parkedBy', aside)
             // Made after the stop: the person did that knowing the agent was stopped, and it is kept
-            .lte('createdAt', at),
+            .lte(sequence === undefined ? 'createdAt' : 'sequence', sequence ?? at),
         )
+        .filter((q) => (sequence === undefined ? q.eq(q.field('sequence'), undefined) : q.eq(1, 1)))
         .take(room)
       if (batch.length === room) more = true
       for (const x of batch) {
         await ctx.db.patch(x._id, {
           delivery: 'handed_off',
           route: 'stopped',
+          stoppedSequence: sequence,
           handedAt: Date.now(),
           outcome: 'failed',
           leaseMachineId: undefined,
@@ -406,13 +428,20 @@ async function dropWaiting(
       }
       const batch = await ctx.db
         .query('actions')
-        .withIndex('by_artifact_delivery', (q) => q.eq('artifactId', artifactId).eq('delivery', delivery).lte('createdAt', at))
+        .withIndex(sequence === undefined ? 'by_artifact_delivery' : 'by_artifact_delivery_sequence', (q) =>
+          q
+            .eq('artifactId', artifactId)
+            .eq('delivery', delivery)
+            .lte(sequence === undefined ? 'createdAt' : 'sequence', sequence ?? at),
+        )
+        .filter((q) => (sequence === undefined ? q.eq(q.field('sequence'), undefined) : q.eq(1, 1)))
         .take(room)
       if (batch.length === room) more = true
       for (const x of batch) {
         await ctx.db.patch(x._id, {
           delivery: 'handed_off',
           route: 'stopped',
+          stoppedSequence: sequence,
           handedAt: Date.now(),
           outcome: 'failed',
           leaseMachineId: undefined,
@@ -432,10 +461,17 @@ async function dropWaiting(
 
 /** The rest of what a stop drops, a step at a time, until none that was waiting at the stop is left. */
 export const dropRest = internalMutation({
-  args: { userId: v.id('users'), machineId: v.id('machines'), session, at: v.number(), artifactId: v.optional(v.id('artifacts')) },
-  handler: async (ctx, { userId, machineId, session: of, at, artifactId }) => {
-    const dropped = await dropWaiting(ctx, userId, machineId, of, at, artifactId)
-    if (dropped.more) await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId, machineId, session: of, at, artifactId })
+  args: {
+    userId: v.id('users'),
+    machineId: v.id('machines'),
+    session,
+    at: v.number(),
+    artifactId: v.optional(v.id('artifacts')),
+    sequence: v.optional(v.number()),
+  },
+  handler: async (ctx, { userId, machineId, session: of, at, artifactId, sequence }) => {
+    const dropped = await dropWaiting(ctx, userId, machineId, of, at, artifactId, sequence)
+    if (dropped.more) await ctx.scheduler.runAfter(0, internal.artifacts.dropRest, { userId, machineId, session: of, at, artifactId, sequence })
     return null
   },
 })

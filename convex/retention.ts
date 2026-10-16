@@ -99,7 +99,7 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
   // With each record goes what was kept under its id to hold it to a pace, and, for a machine,
   // the proofs it has used: none of it is left for the hourly cleaning to come to. A showing's
   // record is among what goes here, though its display and its page are gone already.
-  for (const table of ['displays', 'machines', 'sessions', 'invites', 'mounts'] as const) {
+  for (const table of ['displays', 'machines', 'sessions', 'invites', 'mounts', 'deliveryReturns'] as const) {
     const rows = await ctx.db
       .query(table)
       .withIndex('by_user', (q: any) => q.eq('userId', userId))

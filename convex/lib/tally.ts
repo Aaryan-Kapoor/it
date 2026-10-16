@@ -35,3 +35,12 @@ export async function bump(ctx: MutationCtx, userId: Id<'users'>, by: Partial<Ta
   if (t) await ctx.db.patch(t._id, next)
   else await ctx.db.insert('tallies', { userId, ...next })
 }
+
+/** Orders a click or Stop against every earlier one in the same transaction. */
+export async function nextSequence(ctx: MutationCtx, userId: Id<'users'>): Promise<number> {
+  const t = await row(ctx, userId)
+  const sequence = (t?.sequence ?? 0) + 1
+  if (t) await ctx.db.patch(t._id, { sequence })
+  else await ctx.db.insert('tallies', { userId, ...ZERO, sequence })
+  return sequence
+}

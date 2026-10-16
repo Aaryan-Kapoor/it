@@ -1163,7 +1163,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
         .on('data', (piece: Buffer) => pieces.push(piece))
         .on('end', async () => {
           const json = (value: unknown) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value))
-          if (req.url === '/cli/config') return json({ protocol: 1, issuer: 'http://127.0.0.1:1' })
+          if (req.url === '/cli/config') return json({ protocol: 2, issuer: 'http://127.0.0.1:1' })
           asked.push(JSON.parse(Buffer.concat(pieces).toString('utf8')))
           await held
           json({ machine: 'machine-far' })
@@ -1485,7 +1485,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
       // Pi's add-on asks the connector for its conversation's clicks, as the add-on does, and is given the one that was pressed
       const { socket, token } = JSON.parse(readFileSync(path.join(other, 'connector.json'), 'utf8')) as { socket: string; token: string }
       const given = async () => {
-        const answered = await ask({ path: socket }, { path: '/clicks?harness=pi&session=conversation-1', headers: { 'x-it-token': token } })
+        const answered = await ask({ path: socket }, { path: '/clicks?harness=pi&session=conversation-1&receipts=1', headers: { 'x-it-token': token } })
         return (JSON.parse(answered.body.toString('utf8')) as { clicks: { id: string; artifact: string }[] }).clicks
       }
       expect(await until(async () => (await given()).some((click) => click.id === pressed.actionId && click.artifact === 'heard'))).toBe(true)

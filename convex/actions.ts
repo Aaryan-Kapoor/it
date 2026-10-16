@@ -9,7 +9,7 @@ import { counted } from './lib/counted'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
-import { bump, tally } from './lib/tally'
+import { bump, nextSequence, tally } from './lib/tally'
 
 /** Stores a click. Shared by the page's own actions and by a notification's buttons. */
 export async function record(
@@ -86,6 +86,7 @@ export async function record(
     title,
     attended: input.attended,
     createdAt: Date.now(),
+    sequence: await nextSequence(ctx, artifact.userId),
     delivery: 'pending',
     ...to,
   })
@@ -114,23 +115,37 @@ export async function noLongerWaiting(ctx: MutationCtx, x: Doc<'actions'>): Prom
  * now: a page that has changed hands since takes its waiting clicks along a step at a time,
  * and one made before the stop is stopped whichever of the two it is found under.
  */
+/** Numbered rows never compare clocks. Only history from before numbering uses its old cutoff. */
+export function beforeStop(x: Pick<Doc<'actions'>, 'sequence' | 'createdAt'>, at?: number, sequence?: number): boolean {
+  if (sequence !== undefined) return x.sequence === undefined || x.sequence <= sequence
+  return x.sequence === undefined && at !== undefined && x.createdAt <= at
+}
 export async function stoppedSince(ctx: QueryCtx, x: Doc<'actions'>): Promise<boolean> {
   const noted = async (machineId: Id<'machines'> | undefined, harness: string | undefined, sessionId: string | undefined) => {
     if (!machineId || !harness || !sessionId) return false
     const machine = await ctx.db.get(machineId)
-    return (machine?.stops ?? []).some((s) => s.harness === harness && s.sessionId === sessionId && s.at >= x.createdAt)
+    return (machine?.stops ?? []).some((s) => s.harness === harness && s.sessionId === sessionId && beforeStop(x, s.at, s.sequence))
   }
   // The page itself keeps when it was last stopped from, which stands whoever it belongs to by now
   const page = await ctx.db.get(x.artifactId)
-  if ((page?.stoppedThrough ?? 0) >= x.createdAt) return true
+  if (page && beforeStop(x, page.stoppedThrough, page.stoppedSequence)) return true
   if (await noted(x.machineId ?? x.parkedBy, x.harness, x.sessionId)) return true
   return noted(page?.machineId, page?.session?.harness, page?.session?.id)
 }
 /** Marks a click as stopped with its conversation, as the stop itself does for what it reaches: handed over to nobody, and waiting no more. */
 export async function dropStopped(ctx: MutationCtx, x: Doc<'actions'>): Promise<void> {
+  const page = await ctx.db.get(x.artifactId)
+  const machineId = x.machineId ?? x.parkedBy ?? page?.machineId
+  const machine = machineId ? await ctx.db.get(machineId) : null
+  const sequence =
+    Math.max(
+      page?.stoppedSequence ?? 0,
+      ...(machine?.stops ?? []).filter((s) => s.harness === x.harness && s.sessionId === x.sessionId).map((s) => s.sequence ?? 0),
+    ) || undefined
   await ctx.db.patch(x._id, {
     delivery: 'handed_off',
     route: 'stopped',
+    stoppedSequence: sequence,
     handedAt: Date.now(),
     outcome: 'failed',
     leaseMachineId: undefined,
@@ -252,13 +267,15 @@ export const forArtifact = query({
     const a = await resolveArtifact(ctx, c.user._id, args)
     const recent = await ctx.db
       .query('actions')
-      .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
+      .withIndex('by_artifact_sequence', (q) => q.eq('artifactId', a._id))
       .order('desc')
       .take(30)
     return recent.map((x) => ({
       id: x._id,
       name: x.name,
       at: x.createdAt,
+      sequence: x.sequence,
+      stoppedSequence: x.stoppedSequence,
       delivery: x.delivery,
       route: x.route ?? null,
       outcome: x.outcome ?? null,

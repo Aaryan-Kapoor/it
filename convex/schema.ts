@@ -30,7 +30,13 @@ export default defineSchema({
   // A person's running totals, kept apart from the person's own record (see lib/tally.ts):
   // clicks not yet handed to an agent, and publishes begun and not finished, by number and by
   // the bytes they declared. Both of the latter count against the quota.
-  tallies: defineTable({ userId: v.id('users'), waiting: v.number(), stagingCount: v.number(), stagingBytes: v.number() }).index('by_user', ['userId']),
+  tallies: defineTable({
+    userId: v.id('users'),
+    waiting: v.number(),
+    stagingCount: v.number(),
+    stagingBytes: v.number(),
+    sequence: v.optional(v.number()),
+  }).index('by_user', ['userId']),
 
   // How things stand with the tour an agent gives of It, kept apart from the person's own
   // record as their totals are. Every function reads that record to know who is asking, and an
@@ -167,7 +173,7 @@ export default defineSchema({
       v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number(), stop: v.optional(v.boolean()), run: v.optional(v.string()) })),
     ),
     /** The last few conversations a person stopped, and when: what was waiting for one by then is not reopened for. */
-    stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number() }))),
+    stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), sequence: v.optional(v.number()) }))),
     /** The last few conversations that could not be reopened, when, and why in the connector's own words: never what a command printed. */
     fails: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), why: v.string() }))),
     /** When it was last written down that this machine, revoked, asked for a token: said once an hour and not each time. */
@@ -182,6 +188,10 @@ export default defineSchema({
     .index('by_revoked', ['revoked', 'revokedAt'])
     .index('by_machine', ['byMachine', 'revoked'])
     .index('by_session', ['bySession', 'revoked']),
+
+  deliveryReturns: defineTable({ userId: v.id('users'), machineId: v.id('machines'), harness: v.string(), sessionId: v.string(), generation: v.number() })
+    .index('by_user', ['userId'])
+    .index('by_machine_session', ['machineId', 'harness', 'sessionId']),
 
   projects: defineTable({
     userId: v.id('users'),
@@ -214,6 +224,7 @@ export default defineSchema({
     waiting: v.optional(v.number()),
     /** When a person last stopped the agent from this page: what was done on the page up to then is delivered to nobody, whoever the page belongs to by now. */
     stoppedThrough: v.optional(v.number()),
+    stoppedSequence: v.optional(v.number()),
     /** What the page's agent last said above the page, in its own words, and when. */
     said: v.optional(v.object({ text: v.string(), at: v.number() })),
   })
@@ -285,6 +296,9 @@ export default defineSchema({
     /** Whether the person was at the page when it was sent. The site says; the page cannot. */
     attended: v.optional(v.boolean()),
     createdAt: v.number(),
+    /** Transactional order shared with Stop. Rows without it precede every numbered Stop. */
+    sequence: v.optional(v.number()),
+    stoppedSequence: v.optional(v.number()),
     /** Where the click is on its way to the agent. */
     delivery: v.union(v.literal('pending'), v.literal('leased'), v.literal('handed_off')),
     /** Where it should go: the machine and conversation that own the page. Never changed by delivery. */
@@ -295,7 +309,11 @@ export default defineSchema({
     leaseMachineId: v.optional(v.id('machines')),
     /** The machine that gave up delivering it by itself. Until its page changes hands it is left out of what connectors are offered, and still waits for `it wait` and the site. */
     parkedBy: v.optional(v.id('machines')),
+    parkedGeneration: v.optional(v.number()),
     leaseExpiresAt: v.optional(v.number()),
+    /** The identity and destination of this delivery attempt, retained for idempotent receipts. */
+    claim: v.optional(v.object({ token: v.string(), session: v.union(session, v.null()), machineId: v.optional(v.id('machines')) })),
+    claimGeneration: v.optional(v.number()),
     route: v.optional(v.string()),
     /** The machine that said it was handed over, where a machine did: a machine that was at work on it and did not hand it over itself has lost it to that one. */
     handedBy: v.optional(v.id('machines')),
@@ -308,14 +326,19 @@ export default defineSchema({
     .index('by_harness', ['machineId', 'delivery', 'harness', 'createdAt'])
     .index('by_artifact', ['artifactId', 'createdAt'])
     .index('by_artifact_delivery', ['artifactId', 'delivery', 'createdAt'])
+    .index('by_artifact_delivery_sequence', ['artifactId', 'delivery', 'sequence'])
+    .index('by_artifact_sequence', ['artifactId', 'sequence'])
+    .index('by_user_route_sequence', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'sequence'])
     .index('by_user_delivery', ['userId', 'delivery', 'createdAt'])
     .index('by_user_session', ['userId', 'delivery', 'harness', 'sessionId', 'createdAt'])
     // One person's clicks for one conversation by whose they are to deliver, oldest first: with
     // no machine and not set aside, they are the ones any of the person's machines may take
     .index('by_user_route', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'createdAt'])
+    .index('by_parked_generation', ['userId', 'delivery', 'harness', 'sessionId', 'parkedBy', 'parkedGeneration'])
     .index('by_delivery_created', ['delivery', 'createdAt'])
     .index('by_delivery_handed', ['delivery', 'handedAt'])
-    .index('by_delivery_lease', ['delivery', 'leaseExpiresAt']),
+    .index('by_delivery_lease', ['delivery', 'leaseExpiresAt'])
+    .index('by_lease_machine', ['leaseMachineId', 'delivery', 'createdAt']),
 
   // One showing of a page on a display. Each gets one ticket.
   mounts: defineTable({

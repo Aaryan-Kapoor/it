@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { behindMark, MARK, WHEN } from '@it/protocol'
 import { type Delivered, local } from './connector'
-import { textOf, written } from './lib'
+import { handed, textOf, written } from './lib'
 import { hookSeenFile } from './setup'
 
 async function stdin(): Promise<Record<string, any>> {
@@ -70,11 +70,14 @@ async function codex(): Promise<void> {
     // and only what has waited past its time goes with a message of theirs.
     const behind = await marked(typeof ev.prompt === 'string' && !ev.prompt.includes(MARK))
     if (!behind.texts.length) return
-    written(process.stdout, JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: behindMark(behind.texts) } }))
-    await behind.taken()
+    // Said, and only once it is out of this process is the connector told that the agent has
+    // it: one that dies with part of it still to be written has handed over nothing, and what
+    // the mark stood for is then still kept for the next hook
+    const said = JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: behindMark(behind.texts) } })
+    if (await handed(process.stdout, said)) await behind.taken()
     return
   }
-  const got = await local<{ clicks: Delivered[] }>(`/clicks?harness=codex&session=${encodeURIComponent(session)}`, {
+  const got = await local<{ clicks: Delivered[] }>(`/clicks?receipts=1&harness=codex&session=${encodeURIComponent(session)}`, {
     method: 'POST',
     body: { ...from, busy: true },
   })
@@ -93,16 +96,25 @@ async function codex(): Promise<void> {
     ? `[It] ${several ? 'These arrived' : 'This arrived'} while you were working. ${several ? 'Each is a separate action with an id of its own' : 'It is a separate action with an id of its own'}, to be answered as well as what you were already doing, and not instead of it:\n${clicks.map((c) => c.text).join('\n')}`
     : ''
   const text = [behind.texts.length ? behindMark(behind.texts) : '', arrived].filter(Boolean).join('\n\n')
-  // Said first, then confirmed: if this process dies in between, the click is offered again,
-  // and its id in the text lets the agent see that it is the same one
-  written(
+  // Said first, and confirmed once it has left this process: if the process dies before then,
+  // the click is offered again, and its id in the text lets the agent see that it is the same one
+  const out = await handed(
     process.stdout,
     JSON.stringify(
       event === 'PostToolUse' ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: text } } : { decision: 'block', reason: text },
     ),
   )
+  if (!out) return
   await behind.taken()
-  if (clicks.length) await local('/ack', { method: 'POST', body: { ids: clicks.map((c) => c.id), woke: false } })
+  if (clicks.length)
+    await local('/ack', {
+      method: 'POST',
+      body: {
+        ids: clicks.map((c) => c.id),
+        ...(clicks.some((c) => c.receipt) ? { receipts: clicks.map((c) => ({ id: c.id, receipt: c.receipt })) } : {}),
+        woke: false,
+      },
+    })
 }
 
 export async function hook(harness: string): Promise<void> {

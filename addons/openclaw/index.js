@@ -227,7 +227,10 @@ function make(api) {
   function gave(clicks) {
     for (const c of clicks) given.add(c.id)
     if (given.size > 2000) for (const id of [...given].slice(0, 1000)) given.delete(id)
-    void tell('/ack', { ids: clicks.map((c) => c.id) })
+    void tell('/ack', {
+      ids: clicks.map((c) => c.id),
+      ...(clicks.some((c) => c.receipt) ? { receipts: clicks.map((c) => ({ id: c.id, receipt: c.receipt })) } : {}),
+    })
   }
 
   /**
@@ -377,13 +380,17 @@ function make(api) {
   }
 
   async function checkOne(rt, key, s) {
-    const got = await tell(`/clicks?harness=${HARNESS}&session=${encodeURIComponent(key)}`)
+    const got = await tell(`/clicks?receipts=1&harness=${HARNESS}&session=${encodeURIComponent(key)}`)
     // The conversation may have been dropped, or dropped and seen again, while the connector was answering
     if (!got || !Array.isArray(got.clicks) || sessions.get(key) !== s) return
     const clicks = got.clicks.filter((c) => c && typeof c.id === 'string' && typeof c.text === 'string' && c.text)
     const again = clicks.filter((c) => given.has(c.id))
     // Offered something the agent already has: the earlier report of it was lost, so it is sent again
-    if (again.length) void tell('/ack', { ids: again.map((c) => c.id) })
+    if (again.length)
+      void tell('/ack', {
+        ids: again.map((c) => c.id),
+        ...(again.some((c) => c.receipt) ? { receipts: again.map((c) => ({ id: c.id, receipt: c.receipt })) } : {}),
+      })
     const fresh = clicks.filter((c) => !given.has(c.id))
     if (fresh.length && !s.handing && Date.now() >= s.notBefore) handOver(rt, key, s, fresh)
   }
