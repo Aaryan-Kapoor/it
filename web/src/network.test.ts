@@ -213,19 +213,31 @@ describe('what is said of an agent app on a machine', () => {
   })
   const notes = () => [...host.querySelectorAll('.check-note')].map((note) => note.textContent)
 
-  test('an installed add-on is said to be connected, and to be offline while its machine is not heard from', async () => {
+  test('a loaded add-on is distinguished from an incompatible loaded build and an unverified installation', async () => {
+    const installed = [{ id: 'pi', addon: 'connected', runtime: { state: 'incompatible', detail: 'Restart the agent app to load its new add-on.' } }]
+    watched['machines:list'] = [machine(Date.now(), installed, ['pi'])]
+    const { Machines } = await import('./machines')
+    await show(createElement(Machines))
+    expect(notes()).toEqual(['Add-on needs attention'])
+    expect(host.textContent).toContain('Restart the agent app')
+    installed[0]!.runtime = { state: 'active', detail: 'The loaded add-on reports the required delivery APIs.' }
+    await act(async () => root.render(createElement(Machines)))
+    expect(notes()).toEqual(['Add-on loaded'])
+  })
+
+  test('an installed add-on stays unverified until loaded code reports, and is offline while its machine is not heard from', async () => {
     const connected = [{ id: 'claude-code', version: '2.1.0', addon: 'connected' }]
     watched['machines:list'] = [machine(Date.now(), connected, ['claude-code'])]
     const { Machines } = await import('./machines')
     await show(createElement(Machines))
-    expect(notes()).toEqual(['Connected'])
+    expect(notes()).toEqual(['Installed, not verified'])
     await act(async () => root.unmount())
     host.remove()
     // The same machine, last heard from an hour ago
     watched['machines:list'] = [machine(Date.now() - 3_600_000, connected, ['claude-code'])]
     await show(createElement(Machines))
     // Its add-on is installed, and nothing is handed to a conversation there until the machine is online
-    expect(notes()).toEqual(['Connected, offline'])
+    expect(notes()).toEqual(['Installed, offline'])
   })
 
   test('a machine is online while it goes on saying so, off once it has been quiet for a minute and a half or its connector has said it was stopping, and the one It runs on is marked', async () => {
@@ -239,21 +251,21 @@ describe('what is said of an agent app on a machine', () => {
     ]
     await show(createElement(Machines))
     expect(said()).toEqual(['Online', 'It runs on this machine', 'Online'])
-    expect(notes()).toEqual(['Connected', 'Connected'])
+    expect(notes()).toEqual(['Installed, not verified', 'Installed, not verified'])
     await act(async () => root.unmount())
     host.remove()
     // Quiet for longer than three of the times it says it is alive
     watched['machines:list'] = [machine(Date.now() - 101_000, connected, ['claude-code'])]
     await show(createElement(Machines))
     expect(said()).toEqual(['Last seen 2 min ago'])
-    expect(notes()).toEqual(['Connected, offline'])
+    expect(notes()).toEqual(['Installed, offline'])
     await act(async () => root.unmount())
     host.remove()
     // Heard from a moment ago, and then its connector said it was stopping
     watched['machines:list'] = [{ ...machine(Date.now() - 5000, connected, ['claude-code']), off: true }]
     await show(createElement(Machines))
     expect(said()).toEqual(['Last seen just now'])
-    expect(notes()).toEqual(['Connected, offline'])
+    expect(notes()).toEqual(['Installed, offline'])
   })
 
   test('a newer It that a machine has learned is out is said under its name, with the button that has the machine put it in place, the machine It runs on first', async () => {

@@ -360,22 +360,22 @@ describe('whether some Codex has a conversation open', () => {
     writeFileSync(lock('thread-open'), '')
     const held = openSync(lock('thread-open'), 'r')
     try {
-      expect(codexHeld('thread-open', codexHome)).toBe(true)
+      expect(codexHeld('thread-open', codexHome)).toBe(process.platform === 'win32' ? null : true)
     } finally {
       closeSync(held)
     }
     // Left behind by a Codex that was ended without warning: where the system says who has a file
     // open, that is not taken for an open conversation. Elsewhere the file is all there is to go by.
     writeFileSync(lock('thread-left'), '')
-    expect(codexHeld('thread-left', codexHome)).toBe(process.platform !== 'linux' && process.platform !== 'darwin')
+    expect(codexHeld('thread-left', codexHome)).toBe(process.platform === 'linux' || process.platform === 'darwin' ? false : null)
     // What was found is good for a moment only: closed a moment later, it is found closed
     const t = Date.now()
     writeFileSync(lock('thread-then'), '')
     const then = openSync(lock('thread-then'), 'r')
-    expect(codexHeld('thread-then', codexHome, t)).toBe(true)
+    expect(codexHeld('thread-then', codexHome, t)).toBe(process.platform === 'win32' ? null : true)
     closeSync(then)
     rmSync(lock('thread-then'))
-    expect(codexHeld('thread-then', codexHome, t + 500)).toBe(true)
+    expect(codexHeld('thread-then', codexHome, t + 500)).toBe(process.platform === 'win32' ? null : true)
     expect(codexHeld('thread-then', codexHome, t + 2000)).toBe(false)
     // An id that is not one Codex makes names no file at all
     expect(codexHeld('../thread-open', codexHome)).toBe(false)
@@ -682,6 +682,18 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       // By its own name it is found and ended
       expect(await endTree(leader.pid!, leaderSince, { ...of, told: SINCE_TOLD, run: 'a-run-of-its-own' })).toBe('ended')
       await until(() => !alive(stray))
+      // Nor is such a command lost sight of where another process has the run's number by now.
+      // That process is not the run, and neither it nor its group is touched: here it is this
+      // very test. What carries the run's name is ended all the same.
+      const later = spawn('sleep', ['300'], { detached: true, stdio: 'ignore', env: { ...process.env, IT_RUN: 'a-run-whose-number-was-reused' } })
+      later.unref()
+      left.push(later.pid!)
+      await until(() => alive(later.pid!))
+      const reused = { ...of, told: SINCE_TOLD }
+      expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970', { ...reused, run: 'another-run' })).toBe('gone')
+      expect(alive(later.pid!)).toBe(true)
+      expect(await endTree(process.pid, 'Thu Jan  1 00:00:00 1970', { ...reused, run: 'a-run-whose-number-was-reused' })).toBe('ended')
+      await until(() => !alive(later.pid!))
       // Started as a reopened run is, with the two marks, which what it starts carries on
       const ours = await orphan({ IT_HARNESS: of.harness, IT_SESSION: of.session })
       expect(alive(ours.its)).toBe(true)

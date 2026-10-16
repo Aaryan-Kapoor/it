@@ -15,6 +15,19 @@
 // Claude Code 2.1.287, a call left open when a turn ends delays the host's next message until
 // it returns. Ownership, retries and receipts live in the connector.
 const HARNESS = 'claude-code'
+const ADDON_VERSION = 'IT_ADDON_BUILD'
+const INSTANCE = Math.random().toString(36).slice(2)
+const addon = ($) => ({
+  api: 1,
+  version: ADDON_VERSION,
+  delivery: typeof $?.session?.id === 'function' && typeof $?.prompt?.submit === 'function' && typeof $?.clock?.every === 'function',
+  idle: true,
+  missing: [
+    ...(typeof $?.session?.id === 'function' ? [] : ['session']),
+    ...(typeof $?.prompt?.submit === 'function' ? [] : ['submit']),
+    ...(typeof $?.clock?.every === 'function' ? [] : ['clock']),
+  ],
+})
 // What Claude is told of It as a part of its own instructions, which this add-on adds: when a
 // page is the answer. The skill says how, and Claude reads it only once it has decided to use
 // It. The same words as every add-on that says them, kept in It's protocol as `WHEN`.
@@ -149,6 +162,7 @@ async function proxied($) {
 
 const ask = ($, path, body) => within($, 3000, asking($, path, body))
 async function asking($, path, body) {
+  if (path === '/session' || path.startsWith('/clicks?')) body = { ...body, instance: INSTANCE, addon: addon($) }
   const c = await find($)
   if (!c) return null
   try {
@@ -254,6 +268,10 @@ async function check($) {
 }
 
 async function checkOnce($) {
+  if (!addon($).delivery) {
+    await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon($) })
+    return
+  }
   const began = generation
   const id = await $.session.id()
   // The same conversation after /clear carries on under a new id, and pages made under the old
@@ -360,12 +378,16 @@ export function register(on) {
     return entered
   })
   on('session.start', async ($, e, next) => {
-    running = false
-    // One timer, however often a session starts in this process
-    if (!ticking) {
+    // Keep reporting a missing delivery API for as long as this process stays open.
+    if (!ticking && typeof $.clock?.every === 'function') {
       ticking = true
       $.clock.every(1000, () => check($).catch(() => {}))
     }
+    if (!addon($).delivery) {
+      await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon($) })
+      return next(e)
+    }
+    running = false
     return next(e)
   })
   on('session.end', async (_$, e, next) => {

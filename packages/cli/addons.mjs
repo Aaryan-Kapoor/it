@@ -91,6 +91,7 @@ for (const id of readdirSync(root).sort()) {
   if (LICENSE_AT[id]) files[LICENSE_AT[id]] = license
   if (HOME_AT[id]) files[HOME_AT[id]] = homeNote
   const version = createHash('sha256').update(JSON.stringify(files)).digest('hex').slice(0, 12)
+  for (const name of Object.keys(files)) files[name] = files[name].replaceAll('IT_ADDON_BUILD', version)
   addons[id] = { version, files }
 }
 writeFileSync(

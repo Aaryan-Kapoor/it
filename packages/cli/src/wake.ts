@@ -212,6 +212,7 @@ export function carryOn(
   /** `run` is this run's own name, which no other run of the conversation has: what the run starts carries it on, and is found by it wherever it goes. */
   marks: { harness: string; session: string; run?: string },
   opts: {
+    env?: NodeJS.ProcessEnv
     patience?: number
     signal?: AbortSignal
     said?: (words: string) => void
@@ -250,7 +251,7 @@ export function carryOn(
         // was started, and an app that believes PWD over the folder it is in (OpenCode does)
         // would hold the conversation in one folder and wait for it in another, and never end.
         env: {
-          ...Object.fromEntries(Object.entries(harnessEnv()).filter(([k]) => k !== 'OLDPWD')),
+          ...Object.fromEntries(Object.entries(opts.env ?? harnessEnv()).filter(([k]) => k !== 'OLDPWD')),
           PWD: cwd,
           IT_HARNESS: marks.harness,
           IT_SESSION: marks.session,
@@ -416,8 +417,10 @@ export async function endTree(
   // Noted by a program that told a process's start another way than this one does: what has
   // the number now cannot be told to be it or not to be, and is neither ended nor forgotten
   if (!itself && now.has(pid) && of !== undefined && of.told !== SINCE_TOLD) return 'unknown'
-  // Another process has the number now: neither it nor its group is what was noted
-  if (!itself && now.has(pid)) return 'gone'
+  // Another process has the number now: neither it nor its group is what was noted, and
+  // neither is looked at or signalled. That says nothing of what the run left elsewhere,
+  // which is found below by the run's own name where the note carries one.
+  const reused = !itself && now.has(pid)
   let all: number[]
   let group = false
   // What is in its group and does not say whose it is: never signalled, and the run is not known to be over while any of it is there
@@ -427,7 +430,10 @@ export async function endTree(
   // is the run's all the same. No other run has the name, so what carries it is ended with it.
   const strays = of?.run ? marked(of.run) : []
   if (strays === null) return 'unknown'
-  if (itself) {
+  if (reused) {
+    if (!strays.length) return 'gone'
+    all = strays
+  } else if (itself) {
     const under = descendantsKnown(pid)
     if (under === null) return 'unknown'
     all = [...new Set([pid, ...under, ...strays])]
@@ -757,7 +763,7 @@ export class Budget {
   }
 }
 
-const heldAsked = new Map<string, { at: number; held: boolean }>()
+const heldAsked = new Map<string, { at: number; held: boolean | null }>()
 /**
  * Whether some Codex on this machine has a conversation open: in its window, in an editor or
  * another app that runs Codex, or for the minute after it was closed. Such a Codex takes a
@@ -771,13 +777,13 @@ const heldAsked = new Map<string, { at: number; held: boolean }>()
  * long as the conversation is open in some Codex. A Codex that was ended without warning
  * leaves its file behind, so where the system says who has a file open, that is asked too.
  */
-export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), now = Date.now()): boolean {
+export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), now = Date.now()): boolean | null {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(thread)) return false
   const lock = path.join(codexHome, 'thread-writer-locks', `${thread}.lock`)
   // Asked for every action that waits, on every pass: what was found is good for a moment
   const asked = heldAsked.get(lock)
   if (asked && now - asked.at < 1500) return asked.held
-  const held = existsSync(lock) && openSomewhere(lock) !== false
+  const held = existsSync(lock) ? openSomewhere(lock) : false
   if (heldAsked.size > 500) heldAsked.clear()
   heldAsked.set(lock, { at: now, held })
   return held

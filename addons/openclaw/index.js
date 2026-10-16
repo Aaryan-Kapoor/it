@@ -25,6 +25,8 @@ import { createHash, createHmac, randomBytes } from 'node:crypto'
 import net from 'node:net'
 import { connectorInfo, homeAtSetup, loadSessions, saveSessions } from './home.js'
 
+const ADDON_VERSION = 'IT_ADDON_BUILD'
+const INSTANCE = randomBytes(12).toString('hex')
 const HARNESS = 'openclaw'
 const EVERY_MS = 1000 // the connector stops counting a conversation as listening after 5 seconds
 const ANSWER_MS = 1500 // how long the connector may stay silent before it is given up on
@@ -230,7 +232,20 @@ function make(api) {
     return connector
   }
 
+  const addon = () => ({
+    api: 1,
+    version: ADDON_VERSION,
+    delivery: host() !== null,
+    idle: true,
+    missing: [
+      ...(typeof api.runtime?.channel?.inbound?.dispatch === 'function' ? [] : ['dispatch']),
+      ...(typeof api.runtime?.agent?.session?.getSessionEntry === 'function' ? [] : ['session']),
+      ...(typeof api.runtime?.config?.current === 'function' ? [] : ['settings']),
+    ],
+  })
   async function tell(route, body) {
+    if (route === '/session' || route.startsWith('/clicks?')) body = { ...body, instance: INSTANCE, addon: addon() }
+
     const c = find()
     if (!c) return null
     const answer = await ask(c, route, body)
@@ -456,9 +471,13 @@ function make(api) {
       if (unsaved || (moved && now - savedAt > SAVE_MS)) save()
       // Asking tells the connector that someone is listening, so nothing is asked unless a click could be handed over
       const rt = host()
-      if (!rt || !sessions.size) return
+      const eligible = [...sessions].filter(([, s]) => now >= s.leftUntil)
+      if (!rt || !eligible.length) {
+        await tell('/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
+        return
+      }
       // One that is being left alone is not asked about until its while is up
-      await Promise.all([...sessions].filter(([, s]) => now >= s.leftUntil).map(([key, s]) => checkOne(rt, key, s).catch(() => {})))
+      await Promise.all(eligible.map(([key, s]) => checkOne(rt, key, s).catch(() => {})))
     } finally {
       checking = false
     }

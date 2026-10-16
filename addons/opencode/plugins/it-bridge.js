@@ -29,6 +29,8 @@ import path from 'node:path'
 // `it setup` put this add-on in place. `it setup` fills it in. The IT_HOME variable comes first.
 const IT_HOME_AT_SETUP = null
 
+const ADDON_VERSION = 'IT_ADDON_BUILD'
+const INSTANCE = randomBytes(12).toString('hex')
 const HARNESS = 'opencode'
 // What the agent is told of It among its own instructions, which this add-on adds: when a page
 // is the answer. The skill says how, and an agent reads it only once it has decided to use It.
@@ -193,7 +195,16 @@ export const ItBridge = async ({ client }) => {
    * none at all, one that took too long or was too long, or one over a port that was not sealed
    * with the token.
    */
+  const addon = () => ({
+    api: 1,
+    version: ADDON_VERSION,
+    delivery: typeof client?.session?.get === 'function' && typeof client?.session?.promptAsync === 'function',
+    idle: false,
+    missing: [...(typeof client?.session?.get === 'function' ? [] : ['session']), ...(typeof client?.session?.promptAsync === 'function' ? [] : ['submit'])],
+  })
   async function ask(pathname, body) {
+    if (pathname === '/session' || pathname.startsWith('/clicks?')) body = { ...body, instance: INSTANCE, addon: addon() }
+
     const c = await find()
     if (!c) return null
     const text = body === undefined ? undefined : JSON.stringify(body)
@@ -407,6 +418,11 @@ export const ItBridge = async ({ client }) => {
     if (asking) return
     asking = true
     try {
+      if (!addon().delivery || ![...sessions.values()].some((s) => s.agent)) {
+        await ask('/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
+        return
+      }
+      let polled = false
       for (const s of [...sessions.values()]) {
         // Asking tells the connector that someone is listening, and it then sets the
         // conversation's clicks aside for this add-on. So a conversation is only asked about
@@ -415,13 +431,22 @@ export const ItBridge = async ({ client }) => {
         // And one that has refused twice running is not asked about while it is being left
         // alone: asking would keep its click set aside here, where `it wait` and the site
         // cannot have it.
-        if (sessions.get(s.id) === s && s.agent && !(s.tries >= 2 && Date.now() < s.notBefore)) await check(s)
+        if (sessions.get(s.id) === s && s.agent && !(s.tries >= 2 && Date.now() < s.notBefore)) {
+          polled = true
+          await check(s)
+        }
       }
+      // Backoff releases the clicks, not the evidence that this host is still open.
+      if (!polled) await ask('/addon', { harness: HARNESS, instance: INSTANCE, addon: addon() })
     } catch {
     } finally {
       asking = false
     }
   }
+
+  // No supported event identifies a selected saved session. Report the host without guessing one.
+  timer = setInterval(() => void round(), EVERY_MS)
+  timer.unref?.()
 
   return {
     // Said last among the agent's instructions, once, each time OpenCode puts them together

@@ -23,6 +23,7 @@ interface Harness {
   version?: string
   addon: string
   detail?: string
+  runtime?: { state: string; version?: string; idle?: boolean; detail: string }
 }
 interface Machine {
   id: string
@@ -61,7 +62,15 @@ function standing(h: Harness, wanted: boolean, online: boolean): { word: string;
   if (wanted && h.addon !== 'connected') return { word: online ? 'Connecting…' : 'Connects when online', tone: 'wait' }
   if (!wanted && h.addon === 'connected') return { word: online ? 'Disconnecting…' : 'Disconnects when online', tone: 'wait' }
   if (h.addon !== 'connected') return { word: 'Off' }
-  return online ? { word: 'Connected', tone: 'ok' } : { word: 'Connected, offline', tone: 'wait' }
+  if (!online) return { word: 'Installed, offline', tone: 'wait' }
+  if (h.runtime?.state === 'incompatible') return { word: 'Add-on needs attention', tone: 'bad', detail: h.runtime.detail }
+  if (h.runtime?.state === 'active' && h.runtime.idle === false) return { word: 'Open a conversation', tone: 'wait', detail: h.runtime.detail }
+  if (h.runtime?.state === 'active') return { word: 'Add-on loaded', tone: 'ok', detail: h.runtime.detail }
+  return {
+    word: 'Installed, not verified',
+    tone: 'wait',
+    detail: h.runtime?.detail ?? 'No loaded add-on has reported its delivery APIs yet. Open the app and its conversation.',
+  }
 }
 
 export function Machines() {
@@ -363,9 +372,13 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                     <span className="wake-name">Auto-wake</span>
                     {/* Said where it can be read, and not only where a pointer rests: it is on from the start, and it runs an agent with nobody there */}
                     <span className="row-sub">
-                      {wakes
-                        ? 'On. When you use a page whose conversation is closed, It reopens it and runs this agent here with nobody watching'
-                        : 'Off. A click waits until you open its conversation again'}
+                      {wakes && h.runtime?.state === 'incompatible'
+                        ? 'On, waiting for the add-on to be repaired'
+                        : wakes && h.runtime?.idle === false
+                          ? 'On, waiting while this app is open'
+                          : wakes
+                            ? 'On. When you use a page whose conversation is closed, It reopens it and runs this agent here with nobody watching'
+                            : 'Off. A click waits until you open its conversation again'}
                     </span>
                   </label>
                 )}

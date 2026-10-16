@@ -1525,6 +1525,106 @@ describe('clicks and their delivery', () => {
     expect(await m.as.mutation(api.delivery.claim, { ids: [actionId] })).toEqual([actionId])
   })
 
+  test('a connector that starts is given back what its machine still holds, at once and in the order it was made, and nothing another machine holds', async () => {
+    const { t, m, click } = await setup()
+    const other = await machineOf(t, 'alice', 'server')
+    const first = (await click('click-0001')).actionId
+    const second = (await click('click-0002')).actionId
+    const borrowed = (await click('click-0003')).actionId
+    // The connector claimed the first and ended before it had handed it over. Another machine holds one of its own
+    expect(await m.as.mutation(api.delivery.claim, { ids: [first] })).toEqual([first])
+    expect(await other.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([borrowed])
+    // Until the lease runs out, the one made after it is all that is offered
+    expect((await inbox(m)).map((c) => c.id)).toEqual([second])
+    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([first])
+    expect((await inbox(m)).map((c) => c.id)).toEqual([first, second])
+    // The other machine's is still its own, and a second asking gives back nothing more
+    expect(await m.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([])
+    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([])
+    // It is a machine's to ask, and nobody else's
+    const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
+    expect(await code(browser.mutation(api.delivery.giveBack, {}))).not.toBe('ok')
+  })
+
+  test('more than four thousand leases held by another machine cannot hide this machine’s lease when it starts', async () => {
+    const { t, m, click } = await setup()
+    const other = await machineOf(t, 'alice', 'server')
+    const first = (await click('click-0001')).actionId
+    expect(await m.as.mutation(api.delivery.claim, { ids: [first] })).toEqual([first])
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
+      for (let i = 0; i < 4001; i++)
+        await ctx.db.insert('actions', { ...base, clientActionId: `foreign-${i}`, leaseMachineId: other.id, leaseExpiresAt: Date.now() })
+    })
+    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([first])
+    expect((await inbox(m)).map((c) => c.id)).toEqual([first])
+    expect(await m.as.mutation(api.delivery.claim, { ids: [first] })).toEqual([first])
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [first], done: true })
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query('actions')
+          .filter((q) => q.eq(q.field('delivery'), 'leased'))
+          .collect(),
+      ),
+    ).toHaveLength(4001)
+  })
+
+  test('recovery visits more than five hundred maximum-size leases in bounded batches, oldest first', async () => {
+    const { t, m, click } = await setup()
+    const first = (await click('click-0001')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [first] })
+    const ids = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
+      const payload = JSON.stringify('x'.repeat(LIMITS.actionPayloadBytes - 2))
+      const createdAt = Date.now() - 10_000
+      await ctx.db.patch(first, { payload, createdAt })
+      const ids = [first]
+      for (let i = 1; i < 513; i++)
+        ids.push(
+          await ctx.db.insert('actions', {
+            ...base,
+            clientActionId: `recover-${i}`,
+            payload,
+            createdAt: createdAt + i,
+            // Lease expiry is unrelated to when the person acted.
+            leaseExpiresAt: Date.now() + 1000 - i,
+          }),
+        )
+      return ids
+    })
+    const back = []
+    for (let i = 0; i < 9; i++) {
+      const batch = await m.as.mutation(api.delivery.giveBackBatch, {})
+      expect(batch.back.length).toBeLessThanOrEqual(64)
+      expect(batch.done).toBe(i === 8)
+      back.push(...batch.back)
+    }
+    expect(back).toEqual(ids)
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: true })
+    // An older connector still gets its array answer with the same 500-action ceiling.
+    for (let i = 0; i < ids.length; i += 50) await m.as.mutation(api.delivery.claim, { ids: ids.slice(i, i + 50) })
+    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual(ids.slice(0, 500))
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: ids.slice(500), done: true })
+    const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
+    expect(await code(browser.mutation(api.delivery.giveBackBatch, {}))).not.toBe('ok')
+  })
+
+  test('a full recovery batch of stopped clicks does not hide a later lease or revive a stopped click', async () => {
+    const { t, m, click } = await setup()
+    const first = (await click('click-0001')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [first] })
+    const later = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
+      await ctx.db.patch(base.artifactId, { stoppedThrough: Date.now() })
+      for (let i = 1; i < 64; i++) await ctx.db.insert('actions', { ...base, clientActionId: `stopped-${i}` })
+      return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', createdAt: Date.now() + 1 })
+    })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: false })
+    expect(await t.run((ctx) => ctx.db.get(first))).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [later], done: true })
+  })
+
   test('a connector keeps a click it is still delivering by renewing, and cannot renew what it has lost', async () => {
     const { t, m: laptop, click } = await setup()
     const { actionId: id } = await click('click-0001')

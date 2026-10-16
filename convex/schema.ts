@@ -1,6 +1,12 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 
+export const addonRuntime = v.object({
+  state: v.union(v.literal('active'), v.literal('inactive'), v.literal('unverified'), v.literal('incompatible')),
+  version: v.optional(v.string()),
+  idle: v.optional(v.boolean()),
+  detail: v.string(),
+})
 export const session = v.object({ harness: v.string(), id: v.string() })
 export const fileEntry = v.object({ path: v.string(), size: v.number(), sha256: v.string() })
 export const button = v.object({ label: v.string(), action: v.string() })
@@ -154,7 +160,11 @@ export default defineSchema({
     /** When its connector said it was stopping, if it has and has not been heard from since: the machine is off from then, and not only once it has been quiet for a while. */
     offAt: v.optional(v.number()),
     /** What the connector found installed, and what the person asked to be connected. */
-    harnesses: v.optional(v.array(v.object({ id: v.string(), version: v.optional(v.string()), addon: v.string(), detail: v.optional(v.string()) }))),
+    harnesses: v.optional(
+      v.array(
+        v.object({ id: v.string(), version: v.optional(v.string()), addon: v.string(), detail: v.optional(v.string()), runtime: v.optional(addonRuntime) }),
+      ),
+    ),
     wanted: v.optional(v.array(v.string())),
     /** The agent apps whose closed conversations may be reopened on this machine for a click, and since when. The person's alone to say, from a browser of their own. */
     wakes: v.optional(v.array(v.object({ harness: v.string(), since: v.number() }))),
@@ -311,7 +321,8 @@ export default defineSchema({
     .index('by_user_route', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'createdAt'])
     .index('by_delivery_created', ['delivery', 'createdAt'])
     .index('by_delivery_handed', ['delivery', 'handedAt'])
-    .index('by_delivery_lease', ['delivery', 'leaseExpiresAt']),
+    .index('by_delivery_lease', ['delivery', 'leaseExpiresAt'])
+    .index('by_lease_machine', ['leaseMachineId', 'delivery', 'createdAt']),
 
   // One showing of a page on a display. Each gets one ticket.
   mounts: defineTable({

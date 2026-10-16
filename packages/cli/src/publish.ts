@@ -6,6 +6,7 @@ import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readd
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN } from '@it/protocol'
 import { api, call, direct, doorRefusal, inHome, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
+import { type Profile, profileOf } from './profiles'
 import { agentOf, filesBand, record, sizeBand } from './usage'
 
 interface Gathered {
@@ -144,12 +145,17 @@ const CONVERSATIONS = 300
  * has been closed is reopened from the folder it was held in, and only this machine knows which
  * that was. The note is kept here and sent nowhere.
  */
-export function noteConversation(session: { harness: string; id: string }, cwd = process.cwd()): void {
+export function noteConversation(
+  session: { harness: string; id: string },
+  cwd = process.cwd(),
+  profile: Profile | null | undefined = profileOf(session.harness),
+): void {
   try {
-    const kept = readJson<Record<string, { cwd: string; at: number }>>(conversationsFile()) ?? {}
+    const kept = readJson<Record<string, { cwd: string; at: number; profile?: Profile }>>(conversationsFile()) ?? {}
     const key = `${session.harness}:${session.id}`
-    if (kept[key]?.cwd === cwd) return
-    kept[key] = { cwd, at: Date.now() }
+    const selected = profile ?? kept[key]?.profile
+    if (kept[key]?.cwd === cwd && JSON.stringify(kept[key]?.profile) === JSON.stringify(selected)) return
+    kept[key] = { cwd, at: Date.now(), ...(selected ? { profile: selected } : {}) }
     const newest = Object.entries(kept)
       .filter(([, noted]) => typeof noted?.cwd === 'string' && typeof noted.at === 'number')
       .sort((a, b) => b[1].at - a[1].at)
@@ -159,6 +165,11 @@ export function noteConversation(session: { harness: string; id: string }, cwd =
     // A note that cannot be kept keeps nothing from being published
   }
 }
+/** The recorded profile stays local, alongside the working folder. */
+export function conversationProfile(session: { harness: string; id: string }): unknown {
+  return readJson<Record<string, { profile?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]?.profile
+}
+
 /** The folder a conversation was last known to be working in, if it is still there. */
 export function conversationFolder(session: { harness: string; id: string }): string | undefined {
   const cwd = readJson<Record<string, { cwd?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]?.cwd

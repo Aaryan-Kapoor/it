@@ -549,6 +549,29 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(JSON.parse(await hooked({ ...turn, hook_event_name: 'Stop' }))).toEqual({ decision: 'block', reason: behindMark([words]) })
       // And with nothing behind a mark and no click, a turn ends as it did before
       expect(await hooked({ ...turn, hook_event_name: 'Stop' })).toBe('')
+      // The connector is told that the agent has it only once the words have left the hook.
+      // Here they are more than a pipe holds and nobody reads them yet, as when Codex is slow
+      // to: a hook that died now would have handed over a part, and the whole is still kept
+      const many = Array.from({ length: 40 }, (_, i) => `${words} ${i} ${'x'.repeat(8000)}`)
+      for (const event of ['UserPromptSubmit', 'PostToolUse']) {
+        behind = many
+        taken.length = 0
+        const slow = spawn(process.execPath, [program, 'hook', 'codex'], {
+          cwd: m.home,
+          env: { PATH: m.bin, HOME: m.home, IT_HOME: m.it, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage' },
+          stdio: ['pipe', 'pipe', 'ignore'],
+        })
+        const over = new Promise((resolve) => slow.on('close', resolve))
+        slow.stdin.end(JSON.stringify({ ...turn, hook_event_name: event, prompt: MARK }))
+        await new Promise((resolve) => setTimeout(resolve, 2500))
+        expect([event, taken, behind.length]).toEqual([event, [], 40])
+        // Read, it is all there, and only now is it said to be had
+        let out = ''
+        slow.stdout.on('data', (c) => (out += c))
+        await over
+        expect(JSON.parse(out).hookSpecificOutput.additionalContext).toBe(behindMark(many))
+        expect(taken.length).toBe(40)
+      }
     } finally {
       await new Promise((resolve) => connector.close(resolve))
     }
@@ -2010,15 +2033,18 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
       expect(held.err).toContain('has not yet been tried in a chat channel')
       expect(held.err).toContain('run `IT_EXPERIMENTAL=openclaw it setup` once')
       expect(b.asked.filter((x) => x.path === 'machines:choose')).toEqual([])
-      // Connected, the app is said to be, and nothing is left to advise
+      // Installation is reported separately from proof that the app loaded its add-on
       expect((await run(m, ['setup', '--only', 'pi', '--no-service'])).code).toBe(0)
-      expect((await atTerminal(m, ['status'])).shown.split('\n').slice(2, 4)).toEqual(['Pi is connected.', NOT_REGISTERED])
+      expect((await atTerminal(m, ['status'])).shown.split('\n').slice(2, 4)).toEqual([
+        "Pi's add-on is installed. Its loaded code has not been verified.",
+        NOT_REGISTERED,
+      ])
       // When It does not know the machine any more, that and what to do about it come first, and the machine is not said to be enrolled
       knows = false
       expect((await atTerminal(m, ['status'])).shown.split('\n').slice(0, 3)).toEqual([
         'It does not know this machine any more: it was revoked on the site, or everything It held was erased there. Run `it logout`, then join again with `it login`.',
         `The It this machine joined is running, and its site is at ${b.url}.`,
-        'Pi is connected.',
+        "Pi's add-on is installed. Its loaded code has not been verified.",
       ])
     } finally {
       await b.close()
@@ -2308,7 +2334,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
           'Looking for agent apps on this machine…',
           '  Pi 0.82.0',
           'connecting Pi',
-          'Pi is connected.',
+          "Pi's add-on is installed. Its loaded code has not been verified.",
           '',
           'Pi: If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.',
           '',

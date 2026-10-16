@@ -30,6 +30,7 @@ let hosts: ReturnType<typeof fakeOpenClaw>[]
 let homeBefore: string | undefined
 /** Everything the stand-in connector was sent, word for word: the first line, the headers and the body of each request. */
 let received: string[]
+let runtimes: any[]
 /** How the stand-in connector seals its answers over a port: as the real one does, with another token, or not at all. */
 let sealing: 'right' | 'wrong' | 'none'
 /** Other stand-ins a test started, which are closed when it ends. */
@@ -57,7 +58,8 @@ function fakeConnector(listenOn: string | number): Promise<http.Server> {
         }
         const body = text ? JSON.parse(text) : null
         const url = new URL(req.url ?? '/', 'http://it')
-        asked.push({ path: req.url ?? '', body })
+        if (url.pathname === '/addon') runtimes.push(body)
+        else asked.push({ path: req.url ?? '', body })
         if (url.pathname === '/ack') for (const k of Object.keys(offered)) offered[k] = offered[k]!.filter((c) => !body.ids.includes(c.id))
         const answer = JSON.stringify(url.pathname === '/clicks' ? { clicks: offered[url.searchParams.get('session') ?? ''] ?? [] } : { ok: true })
         const seal = overPort && sealing !== 'none' ? { 'x-it-mac': sealed(sealing === 'right' ? TOKEN : 'b'.repeat(48), `200\n${answer}`) } : {}
@@ -207,6 +209,7 @@ beforeEach(async () => {
   asked = []
   hosts = []
   received = []
+  runtimes = []
   sealing = 'right'
   others = []
   server = await fakeConnector(path.join(home, 'connector.sock'))
@@ -550,8 +553,9 @@ describe('the OpenClaw add-on', () => {
     await settle()
     expect(host.warnings.length).toBe(3)
     expect(acks()).toEqual([])
-    // Asking would keep the click set aside for this add-on, so nothing is asked while it is left alone
+    // Only host reports are sent while the conversation is left alone, so its click stays available.
     asked = []
+    runtimes = []
     await tick(3)
     // A turn that is still running goes on running commands. They are told which conversation
     // they are in, and the click is not sent three more times because of them.
@@ -562,6 +566,8 @@ describe('the OpenClaw add-on', () => {
     await tick(3)
     expect(asked).toEqual([])
     expect(host.turns.length).toBe(3)
+    expect(runtimes).toHaveLength(9)
+    expect(runtimes[0]).toMatchObject({ harness: 'openclaw', addon: { api: 1, delivery: true } })
     // It is not forgotten: a gateway that was restarting takes work again a moment later, and the
     // click must not wait for the agent to happen to run a command in that conversation
     expect(Object.keys(JSON.parse(readFileSync(path.join(home, 'openclaw-sessions.json'), 'utf8')))).toEqual([MAIN])
@@ -580,9 +586,11 @@ describe('the OpenClaw add-on', () => {
     host.turns[5]!.refuse()
     await settle()
     asked = []
+    runtimes = []
     vi.setSystemTime(Date.now() + 9 * 60 * 1000)
     await tick(3)
     expect(asked).toEqual([])
+    expect(runtimes).toHaveLength(3)
     vi.setSystemTime(Date.now() + 2 * 60 * 1000)
     await tick()
     expect(host.turns.length).toBe(7)

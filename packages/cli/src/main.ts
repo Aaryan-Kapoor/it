@@ -171,7 +171,7 @@ function appsSaid(found: HarnessStatus[], advise = true, withCodex = true): stri
   if (!found.length) return ['No agent app was found on this machine.']
   const lines = found.map((h) => {
     const app = KNOWN[h.id].label
-    if (h.addon === 'connected') return `${app} is connected.`
+    if (h.addon === 'connected') return h.runtime ? `${app}: ${h.runtime.detail}` : `${app}'s add-on is installed. Its loaded code has not been verified.`
     if (h.addon === 'needs_approval') return `${app} is connected, and one thing is left for you to do: ${h.detail}`
     return `${app} is not connected${h.detail && h.addon !== 'not_connected' ? `: ${h.detail}` : '.'}`
   })
@@ -696,10 +696,17 @@ async function wait(a: Args) {
   const who = crypto.randomUUID()
   // The connector is told what this waits for: one page, or, with none named, this
   // conversation's clicks only. Everyone else's go on being delivered as usual.
+  /**
+   * What the connector handed back and this has printed. The connector keeps its copy of such
+   * a click until it is told so, and gives it again to a wait that has not said it: an answer
+   * of its that never arrived would otherwise be the last of that click.
+   */
+  const taken = new Set<string>()
+  const got = () => (taken.size ? { got: [...taken].slice(-500) } : {})
   const announce = () =>
     local<{ sessions?: { harness: string; id: string }[]; clicks?: Listed[] }>('/waiting', {
       method: 'POST',
-      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }) },
+      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }), ...got() },
     })
   // The connector knows the ids this conversation had before it was last cleared: pages made
   // then are still recorded under them
@@ -761,7 +768,7 @@ async function wait(a: Args) {
     // wait after the first, with the other two taken from the connector and never said
     while (busy) await new Promise((resolve) => setTimeout(resolve, 20))
     if (!over) await printHandedBack().catch(() => {})
-    await local('/waiting', { method: 'POST', body: { id: who, done: true } })
+    await local('/waiting', { method: 'POST', body: { id: who, done: true, ...got() } })
     await client.close().catch(() => {})
     // A wait that was given something has its answer, whatever went wrong beside it
     await end(code === 1 && printedIds.size > 0 && !follow ? 0 : code)
@@ -791,8 +798,14 @@ async function wait(a: Args) {
   /** Prints what the connector handed back and has not been printed yet, and tells It of it. */
   const printHandedBack = async () => {
     for (const c of handedBack.splice(0)) {
-      if (printedIds.has(c.id)) continue
+      // What the connector gave again is what this already had, and is said to it as printed.
+      // Anything else only once it is: the connector lets go of its copy at that word
+      if (printedIds.has(c.id)) {
+        taken.add(c.id)
+        continue
+      }
       await emit(printed(c))
+      taken.add(c.id)
       printedIds.add(c.id)
       if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
       unreported.add(c.id)
@@ -2348,6 +2361,8 @@ async function status(a: Args) {
   const blocked = found === 'not let ask'
   const learned = (machine as { latest?: unknown } | null | undefined)?.latest
   const newerOut = typeof learned === 'string' && newer(learned, VERSION) ? learned : null
+  const connector = blocked ? { running: null } : ((await connectorHealth()) ?? { running: false })
+  const runtimes = connector.addons as Record<string, HarnessStatus['runtime']> | undefined
   const stands = {
     ...(blocked ? { blocked: true, hint } : {}),
     running: blocked ? null : running,
@@ -2356,9 +2371,9 @@ async function status(a: Args) {
     site: siteAddress() ?? null,
     network: await networkAsItStands(running && !blocked),
     ...(database ? { database } : {}),
-    connector: blocked ? { running: null } : ((await connectorHealth()) ?? { running: false }),
+    connector,
     background: service.status(),
-    harnesses: await detectAll(),
+    harnesses: (await detectAll()).map((h) => ({ ...h, ...(runtimes?.[h.id] ? { runtime: runtimes[h.id] } : {}) })),
     version: VERSION,
     protocol: PROTOCOL_VERSION,
     // A newer version that this machine has learned is out, where it looks for one
