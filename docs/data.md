@@ -36,7 +36,7 @@ A copy of the whole folder, made while It is stopped, is a backup of everything:
 
 The copies It keeps under `backend/`, in folders whose names begin with `before-`, are not a backup. They are on the same disk as what they copy, they hold the database and not the files of your pages, only the two made last are kept, the ones there are when you erase everything go with it, and one made soon after an erasing is removed a few hours later. They are there for one thing, which the next section describes.
 
-The site's settings can download the records It holds. That download is a record and not a backup: it has each page's state and history and the names and checksums of its files, it does not have the files, and nothing of It reads it back in. With each page It also keeps the name of the folder the page was published from, and of that folder's repository where it has one. Nothing shows that name and the download does not hold it; it goes when the page's owner erases everything. The same settings say what It keeps and for how long, and what is so of the computer It runs on: whether It starts by itself there, which ports it uses, and whether usage counts are sent.
+The site's settings can download the records It holds, including retained page deletion receipts and their cleanup timestamps. That download is a record and not a backup: it has each page's state and history and the names and checksums of its files, it does not have the files, and nothing of It reads it back in. With each page It also keeps the name of the folder the page was published from, and of that folder's repository where it has one. Nothing shows that name and the download does not hold it; it goes when the page's owner erases everything. The same settings say what It keeps and for how long, and what is so of the computer It runs on: whether It starts by itself there, which ports it uses, and whether usage counts are sent.
 
 ## A newer It on the same data
 
@@ -74,7 +74,7 @@ One thing follows a moment later, and not at once: the address of a showing that
 
 A browser that signs itself out waits a few seconds to hear that it was told, and says so where it was not. The Pages screen shows pending deletions and failed attempts, and says completion is confirmed only when the page's records are removed and the content service confirms its files are gone.
 
-`it delete <id>` checks for that confirmation for five seconds while It answers. Its JSON contains `deleted` only when confirmed; otherwise it reports `pending` or `retrying`. `it delete <id> --status` checks the latest deletion of that id without deleting anything. Receipts remain available after a restart, and an unknown or expired receipt is never treated as success.
+`it delete <id>` waits up to five seconds for that confirmation after the request is accepted, including time waiting for replies. Its JSON contains `deleted` only when confirmed; otherwise it reports `pending` or `retrying`. `it delete <id> --status` checks the latest deletion of that id without deleting anything. Receipts remain available after a restart, and an unknown or expired receipt is never treated as success.
 
 A defensive cleanup runs again after twenty minutes for uploads that were under way. Uploads cannot restore a deleted page after the first cleanup is confirmed.
 

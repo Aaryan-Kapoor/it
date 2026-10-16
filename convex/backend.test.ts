@@ -3,6 +3,7 @@
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
 import { ALIVE, describeClick, LEASE_MS, LIMITS, QUOTA, STORE_KEY } from '@it/protocol'
+import type { FunctionReturnType } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
@@ -3812,6 +3813,66 @@ describe('notifications', () => {
 })
 
 describe('leaving', () => {
+  test('an export includes every retained deletion receipt, with cleanup timestamps, only for its owner', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const bob = await person(t, 'bob')
+    const screen = await paired(t, 'alice', 'screen', 'export-screen-key-001')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan')
+    const { job } = await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    const start = await alice.browser.mutation(api.account.exportStart, {})
+    expect(start.pages).toEqual([])
+    const original = (await t.run((ctx) => ctx.db.get(job)))!
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 230; i++) {
+        await ctx.db.insert('deletions', {
+          userId: alice.user,
+          artifactId: p.artifactId,
+          slug: `gone-${i}`,
+          title: `Gone ${i}`,
+          requestedAt: 1000 + i,
+          attempts: i % 3,
+          ...(i % 3 === 1 ? { failedAt: 2000 + i, nextAt: 3000 + i } : {}),
+          ...(i % 3 === 2 ? { contentAt: 2000 + i, recordsAt: 3000 + i, completedAt: 3000 + i } : {}),
+        })
+      }
+      await ctx.db.insert('deletions', { userId: bob.user, artifactId: p.artifactId, slug: 'private', title: 'Another person', requestedAt: 1000, attempts: 0 })
+    })
+    const all = []
+    let cursor: string | null = null
+    for (let i = 0; i < 10; i++) {
+      const batch: FunctionReturnType<typeof api.account.exportDeletions> = await alice.browser.query(api.account.exportDeletions, {
+        owner: start.owner,
+        cursor,
+      })
+      all.push(...batch.deletions)
+      if (batch.next === null) break
+      cursor = batch.next
+    }
+    expect(all).toHaveLength(231)
+    expect(all[0]).toEqual({
+      job,
+      artifactId: p.artifactId,
+      slug: 'plan',
+      title: original.title,
+      requestedAt: original.requestedAt,
+      state: 'pending',
+      attempts: 0,
+      contentAt: null,
+      recordsAt: null,
+      completedAt: null,
+      failedAt: null,
+      nextAt: null,
+    })
+    expect(all.find((d) => d.slug === 'gone-1')).toMatchObject({ state: 'retrying', failedAt: 2001, nextAt: 3001 })
+    expect(all.find((d) => d.slug === 'gone-2')).toMatchObject({ state: 'completed', contentAt: 2002, recordsAt: 3002, completedAt: 3002 })
+    expect(all.some((d) => d.slug === 'private')).toBe(false)
+    expect(await code(bob.browser.query(api.account.exportDeletions, { owner: start.owner, cursor: null }))).toBe('not_found')
+    expect(await code(screen.browser.query(api.account.exportDeletions, { owner: start.owner, cursor: null }))).toBe('forbidden')
+    expect(await code(m.as.query(api.account.exportDeletions, { owner: start.owner, cursor: null }))).toBe('forbidden')
+  })
+
   test("an export holds the person's pages, state and history in pieces, and is rate limited", async () => {
     const t = backend()
     const alice = await person(t, 'alice')

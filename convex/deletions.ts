@@ -5,7 +5,7 @@ import { requireMachineOrOwner, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
 
 /** A receipt is kept after its jobs finish, so absence never means success. */
-const receipt = (d: Doc<'deletions'>) => ({
+export const receipt = (d: Doc<'deletions'>) => ({
   job: d._id,
   slug: d.slug,
   title: d.title,
