@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { type Problem, VERSION } from './src/lib'
 import * as backend from './src/serve/backend'
 import { aloneAt } from './src/serve/backend'
+import { removeInstallationFiles, withInstallationLock } from './src/uninstall-files'
 import { fetchNewer, keepBase, LOOKS_EVERY_MS, latest, programName, releases, watch, watched, watching } from './src/upgrade'
 
 vi.mock('node:fs', async (original) => ({ ...(await original<typeof import('node:fs')>()) }))
@@ -230,6 +231,30 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     expect(readFileSync(here(), 'utf8')).toBe(says('9.9.9'))
   })
 
+  test.each(['removed', 'unreadable'])('an upgrade is cancelled when the installed program is %s before replacement', async (changed) => {
+    let changing: Promise<void> | undefined
+    const result = await fetchNewer({
+      program: here(),
+      say: (line) => {
+        if (!line.startsWith('Downloaded')) return
+        changing = withInstallationLock(folder, async () => {
+          // The download has finished. Uninstall takes the lock before the updater can
+          // replace the program, while the updater's staged file is still in use.
+          expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(true)
+          if (changed === 'removed') removeInstallationFiles(folder, false)
+          else writeFileSync(here(), says(null))
+        })
+      },
+    }).catch((err) => err)
+    await changing
+    expect(result).toMatchObject({ code: 'upgrade_program' })
+    if (changed === 'removed') expect(existsSync(here())).toBe(false)
+    else expect(readFileSync(here(), 'utf8')).toBe(says(null))
+    expect(existsSync(path.join(folder, 'LICENSE.md'))).toBe(false)
+    expect(existsSync(path.join(folder, 'THIRD_PARTY_NOTICES.md'))).toBe(false)
+    expect(existsSync(path.join(folder, 'bin', `.it-upgrade-${process.pid}`))).toBe(false)
+  })
+
   test.each([
     { through: 'its own path', secondVersion: '9.9.8' },
     { through: 'a linked folder', secondVersion: '9.9.8' },
@@ -438,7 +463,7 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
       for (const version of ['9.9.9', null]) {
         writeFileSync(here(), says(version))
         const ran = await run()
-        expect([ran.code, existsSync(path.join(data, 'releases.json'))], ran.err).toEqual([1, false])
+        expect([ran.code, existsSync(path.join(data, 'releases.json')), existsSync(path.join(data, 'installation.json'))], ran.err).toEqual([1, false, false])
         expect(ran.err).toContain('Run `it setup` again')
         expect(await aloneAt(lock, async () => true, 0)).toBe(true)
       }
@@ -457,7 +482,10 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
           expect(contender).toBe('busy')
         })
       } finally {
-        if (running) expect((await running).code).toBe(0)
+        if (running) {
+          expect((await running).code).toBe(0)
+          expect(existsSync(path.join(data, 'installation.json'))).toBe(true)
+        }
       }
       expect(await aloneAt(lock, async () => true, 0)).toBe(true)
       // An ordinary setup waits on the folder first, so its existing waiting message and

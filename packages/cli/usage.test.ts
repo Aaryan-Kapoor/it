@@ -1455,6 +1455,8 @@ await sendNow('installation.removed', { age: 'under 1 day' })
 describe('sending', () => {
   test('a command that exits leaves a line, and the connector sends it with what it recorded itself', async () => {
     told()
+    // Batch age follows the supplied clock; disk speed must not expire the send decision.
+    vi.useFakeTimers({ toFake: ['performance'] })
     published()
     expect(lines()).toHaveLength(1)
     const posts: string[] = []
@@ -1696,6 +1698,8 @@ describe('sending', () => {
   })
   test('the request says only that it is It, and its version', async () => {
     told()
+    // Check the real request's headers without disk speed expiring the send decision.
+    vi.useFakeTimers({ toFake: ['performance'] })
     const seen: http.IncomingHttpHeaders[] = []
     const server = http.createServer((req, res) => {
       seen.push(req.headers)
@@ -1720,6 +1724,8 @@ describe('sending', () => {
   })
   test('an answer that points to another address is a send that failed, and nothing is sent on to that address', async () => {
     told()
+    // Both requests must reach the server regardless of how long the decision's disk work takes.
+    vi.useFakeTimers({ toFake: ['performance'] })
     const reached: string[] = []
     const listen = async (name: string, answer: (res: http.ServerResponse) => void) => {
       const server = http.createServer((req, res) => {
@@ -1791,6 +1797,8 @@ describe('sending', () => {
   })
   test('an event taken from the file is sent under an id made as it is taken, and never under what the line gave as its id', async () => {
     told()
+    // Test event identity across retries without disk speed expiring a send decision.
+    vi.useFakeTimers({ toFake: ['performance'] })
     const good = aLine()
     const installation = kept().installation!
     // An id that is the installation's own, and one that ends in the tag, which is never sent
@@ -2130,6 +2138,8 @@ describe('what cannot be trusted', () => {
   })
   test('however many files stand in It’s folder, a pass and a turning off touch only the two they know by name', async () => {
     told()
+    // Test the file and batch bounds without disk speed expiring a send decision.
+    vi.useFakeTimers({ toFake: ['performance'] })
     const good = aLine()
     const one = Array.from({ length: 400 }, () => `${JSON.stringify({ ...good, id: randomUUID() })}\n`).join('')
     for (let i = 0; i < 300; i++) writeFileSync(`${spool()}.${10_000 + i}`, '')

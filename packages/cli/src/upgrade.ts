@@ -222,20 +222,20 @@ function saysItIs(program: string): Promise<string | null> {
 }
 
 /**
- * A standalone setup owns the program lock itself, since restarting the service may end
+ * A standalone setup or login owns the program lock itself, since restarting the service may end
  * the updater that started it. No update can replace the program while setup writes its
- * service definition and add-ons. A setup overtaken before it takes the lock refuses to
+ * service definition and add-ons, or login saves its machine record. A command overtaken before it takes the lock refuses to
  * write with stale code. Script builds are updated outside this mechanism.
  */
-export async function withCurrentProgram<T>(run: () => Promise<T>): Promise<T> {
+export async function withCurrentProgram<T>(run: () => Promise<T>, command: 'setup' | 'login' = 'setup'): Promise<T> {
   const program = standalone()
   if (!program) return run()
   return aloneAt(`${realpathSync(program)}.upgrade.lock`, async () => {
     if ((await saysItIs(program)) !== VERSION)
       throw new Problem(
-        'This setup cannot confirm that it is running the installed version of It.',
+        `This ${command} cannot confirm that it is running the installed version of It.`,
         'upgrade_program',
-        'Run `it setup` again with the installed program.',
+        `Run \`it ${command}\` again with the installed program.`,
       )
     return run()
   })
@@ -367,7 +367,12 @@ export async function fetchNewer(
     // and is left as it is unless what was fetched is newer than that too.
     return await aloneAt(lock, async () => {
       const there = await saysItIs(program)
-      if (there && !newer(is, there)) {
+      if (!there)
+        throw new Problem(
+          'The installed program was removed or could not be read before this update could replace it. The update was cancelled.',
+          'upgrade_program',
+        )
+      if (!newer(is, there)) {
         // Another home may have installed this program. This home still needs its matching
         // legal files, but a newer program must never receive this older release's files.
         if (there === is) putLegal()

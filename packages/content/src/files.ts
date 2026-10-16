@@ -156,11 +156,8 @@ function holderOf(tmp: string, name: string): number | undefined {
   }
 }
 
-export function createFiles(folder: string): Files {
-  const root = path.resolve(folder)
-  const tmp = path.join(root, 'tmp')
-  mkdirSync(tmp, { recursive: true, mode: 0o700 })
-  if (!lstatSync(tmp).isDirectory()) throw linked()
+/** Removes only upload staging folders recognised by their holder note. The caller checks the path to tmp. */
+export function removeAbandonedUploads(tmp: string): void {
   // More than one service may have the folder open: one that is starting while the one before
   // it has not yet stopped. So each keeps what is arriving at it in a folder of its own, named
   // after the program that made it. What a service that has ended left there never became a
@@ -171,6 +168,14 @@ export function createFiles(folder: string): Files {
     if (pid === undefined || (pid === process.pid ? OPEN_HERE.has(name) : running(pid))) continue
     rmSync(path.join(tmp, name), { recursive: true, force: true })
   }
+}
+
+export function createFiles(folder: string): Files {
+  const root = path.resolve(folder)
+  const tmp = path.join(root, 'tmp')
+  mkdirSync(tmp, { recursive: true, mode: 0o700 })
+  if (!lstatSync(tmp).isDirectory()) throw linked()
+  removeAbandonedUploads(tmp)
   const own = `${process.pid}-${randomUUID()}`
   OPEN_HERE.add(own)
   const arriving = path.join(tmp, own)

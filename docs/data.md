@@ -1,11 +1,12 @@
 # What It keeps
 
-Everything It keeps is in one folder, `~/.it`, which only your user can look inside. `IT_HOME` names another folder for it. That folder is the only copy of your pages and of the record of what was done on them, and nothing of them is kept off the machine. The one other place It keeps anything is the browsers you pair, and [What a paired browser keeps](#what-a-paired-browser-keeps) says what.
+Everything It keeps is in one folder, `~/.it`, which only your user can look inside. `IT_HOME` names another folder for it. Without that variable, an installed standalone command finds its home above its real `bin` directory; a source or package command uses `~/.it`. That folder is the only copy of your pages and of the record of what was done on them, and nothing of them is kept off the machine. The one other place It keeps anything is the browsers you pair, and [What a paired browser keeps](#what-a-paired-browser-keeps) says what.
 
 ## Where everything is kept
 
 | In `~/.it` | What it is |
 |---|---|
+| `installation.json` | The record that identifies an installation and its custom home. An unreadable record is kept as `installation.json.unreadable` and cannot authorise removal |
 | `service.json` | It's settings: the port, whether the network is on, and the secrets It runs its backend with. Whoever can read this file can do anything to what It holds |
 | `backend/` | The backend's database and the files it stores, the backend program as it was fetched, in `bin/`, and the copies of the database that It keeps before a newer version changes it, in folders whose names begin with `before-` |
 | `content/`, `content-data/` | The files of every version of every page, and the small database of the part of It that serves them |
@@ -26,9 +27,11 @@ Everything It keeps is in one folder, `~/.it`, which only your user can look ins
 
 A machine that joined an It on another computer runs no backend and holds no pages, so its folder has no `service.json`, no `backend/`, no `content/` and no `push.json`.
 
+When you confirm `it uninstall`, It deletes its own subfolders whole, including all databases, copies, page files and logs. Only the top level uses a list of recognised files, to leave unrelated files alone if `IT_HOME` named the wrong folder. [Stopping and removing It](install.md#stopping-and-removing-it) describes the ownership checks and what stays when removal cannot finish.
+
 Three things about the folder are worth knowing.
 
-- **It never moves, replaces or deletes a database.** One that the backend program cannot open is left exactly where it is: It stops, and says what it found. Under `backend/` it removes, renames and writes over nothing that it did not make, whatever it is called. [When something does not work](troubleshooting.md) says what each such stop means.
+- **While running or updating, It never moves, replaces or deletes a database it cannot identify.** One that the backend program cannot open is left exactly where it is: It stops, and says what it found. While running or updating, It removes, renames and writes over nothing under `backend/` that it did not make, whatever it is called. [When something does not work](troubleshooting.md) says what each such stop means.
 - **The folder has to be on a disk of the computer's own.** A memory stick or a network share may not let It make its settings and its locks in the way it needs, and there It stops with `home_unfit`: name a folder on the computer's own disk with `IT_HOME`.
 - **On Linux and macOS the folder's path can be at most 85 bytes long.** In a folder with a longer one the connector, which hands clicks to your agents, does not start, and says `home_too_long`.
 

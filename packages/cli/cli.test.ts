@@ -1663,6 +1663,15 @@ describe('background service definitions', () => {
           say('disabled')
           expect([system, definedFor()]).toEqual([system, 'another folder'])
           say('enabled')
+          const alias = path.join(user, `linked-${system}`)
+          symlinkSync(mine, alias, 'dir')
+          process.env.IT_HOME = alias
+          write()
+          process.env.IT_HOME = mine
+          expect([installedHere(), definedFor()]).toEqual([true, 'this folder'])
+          rmSync(alias)
+          symlinkSync(other, alias, 'dir')
+          expect([installedHere(), definedFor()]).toEqual([false, 'another folder'])
         }
       })
     } finally {
@@ -2115,6 +2124,41 @@ describe('add-ons carried by the CLI', () => {
     expect(itHomeWritten('HARNESS = "hermes"\nIT_HOME_AT_SETUP = None\n', '/srv/it')).toBe('HARNESS = "hermes"\nIT_HOME_AT_SETUP = "/srv/it"\n')
     // In the usual place nothing is written
     expect(itHomeWritten(js, null)).toBe(js)
+  })
+  test.each([false, true])('generated add-ons retain a custom installation discovered without IT_HOME, through an alias: %s', async (alias) => {
+    const { itHomeWritten, unpack } = await import('./src/setup')
+    const { markInstallation } = await import('./src/installation')
+    const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-discovered-addons-'))
+    const before = { home: process.env.IT_HOME, argv: [...process.argv], program: process.execPath }
+    try {
+      const installation = alias ? path.join(scratch, 'alias') : scratch
+      if (alias) {
+        const physical = path.join(scratch, 'physical')
+        mkdirSync(physical)
+        symlinkSync(physical, installation, 'junction')
+      }
+      const program = path.join(installation, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
+      mkdirSync(path.dirname(program), { recursive: true })
+      writeFileSync(program, 'installed program')
+      markInstallation(installation)
+      delete process.env.IT_HOME
+      process.execPath = program
+      process.argv.splice(0, process.argv.length, program)
+      expect(itHomeWritten('const IT_HOME_AT_SETUP = null')).toBe(`const IT_HOME_AT_SETUP = ${JSON.stringify(installation)}`)
+      for (const id of ['pi', 'claude-code', 'hermes', 'opencode', 'openclaw'] as const) {
+        const dir = unpack(id)
+        const sources = readdirSync(dir, { recursive: true }).filter((file) => /\.(?:js|mjs|py)$/.test(String(file)))
+        const embedded = sources.map((file) => readFileSync(path.join(dir, String(file)), 'utf8')).filter((text) => text.includes('IT_HOME_AT_SETUP'))
+        expect(embedded.length).toBeGreaterThan(0)
+        expect(embedded.every((text) => text.includes(`IT_HOME_AT_SETUP = ${JSON.stringify(installation)}`))).toBe(true)
+      }
+    } finally {
+      if (before.home === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before.home
+      process.execPath = before.program
+      process.argv.splice(0, process.argv.length, ...before.argv)
+      rmSync(scratch, { recursive: true, force: true })
+    }
   })
   test('an add-on counts as removed only when its harness says it is gone', async () => {
     const { disconnect, stampFile } = await import('./src/setup')

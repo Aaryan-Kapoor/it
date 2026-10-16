@@ -426,7 +426,7 @@ export function shim(): string {
  * the usual one, it is written into the add-on here: the harness may be started later from
  * somewhere that was never told.
  */
-export function itHomeWritten(text: string, elsewhere = process.env.IT_HOME ? path.resolve(process.env.IT_HOME) : null): string {
+export function itHomeWritten(text: string, elsewhere = home() !== path.join(os.homedir(), '.it') ? home() : null): string {
   if (!elsewhere) return text
   return text
     .replace(/^const IT_HOME_AT_SETUP = null$/m, () => `const IT_HOME_AT_SETUP = ${JSON.stringify(elsewhere)}`)
@@ -470,6 +470,19 @@ function retireUnpacked(dir: string, files: string[]): void {
   }
 }
 
+/** Formats the fixed launcher address exactly as the host reads it. */
+export function addonHookCommand(id: Harness, it: string): string {
+  // The launcher's address, written so that a shell reads it as one word whatever is in it:
+  // a space, an apostrophe, a dollar sign. On Windows a harness may hand a hook to cmd or to
+  // PowerShell, and the two read an address in quotes differently: PowerShell takes it for a
+  // piece of text, not for a command to run. An address with nothing in it that needs quotes
+  // is written without them, which both read alike. One that needs them is written as cmd reads it.
+  const windows = process.platform === 'win32'
+  const plain = windows ? /^[A-Za-z0-9_:.~\\/-]+$/ : /^[A-Za-z0-9_@%+=:,./-]+$/
+  const quoted = plain.test(it) ? it : windows ? `"${it}"` : `'${it.replace(/'/g, `'\\''`)}'`
+  return `${quoted} hook ${id}`
+}
+
 /** Writes an add-on's files where the harness will install them from. */
 export function unpack(id: Harness): string {
   const addon = ADDONS[id]
@@ -484,15 +497,7 @@ export function unpack(id: Harness): string {
   }
   retireUnpacked(dir, Object.keys(addon.files))
   const it = shim()
-  // The launcher's address, written so that a shell reads it as one word whatever is in it:
-  // a space, an apostrophe, a dollar sign. On Windows a harness may hand a hook to cmd or to
-  // PowerShell, and the two read an address in quotes differently: PowerShell takes it for a
-  // piece of text, not for a command to run. An address with nothing in it that needs quotes
-  // is written without them, which both read alike. One that needs them is written as cmd reads it.
-  const windows = process.platform === 'win32'
-  const plain = windows ? /^[A-Za-z0-9_:.~\\/-]+$/ : /^[A-Za-z0-9_@%+=:,./-]+$/
-  const quoted = plain.test(it) ? it : windows ? `"${it}"` : `'${it.replace(/'/g, `'\\''`)}'`
-  const command = `${quoted} hook ${id}`
+  const command = addonHookCommand(id, it)
   for (const [rel, text] of Object.entries(addon.files)) {
     const file = path.join(dir, ...rel.split('/'))
     makeWithin(home(), path.dirname(file))
@@ -1657,7 +1662,12 @@ export async function disconnect(
   say: (line: string) => void,
   // What does the removing, and whether the harness can be run at all: given by the tests. And
   // which installations are to go, where it is not all of them: the rest stay on record
-  how: { adapter?: Pick<Adapter, 'remove' | 'present' | 'note' | 'preflight'>; runnable?: () => Promise<boolean>; only?: (was: Installation) => boolean } = {},
+  how: {
+    adapter?: Pick<Adapter, 'remove' | 'present' | 'note' | 'preflight'>
+    runnable?: () => Promise<boolean>
+    only?: (was: Installation) => boolean
+    keepLocalFiles?: boolean
+  } = {},
   forLog = false,
 ): Promise<boolean> {
   const label = KNOWN[id].label
@@ -1763,7 +1773,7 @@ export async function disconnect(
   }
   if (left.length) return false
   rmSync(stampFile(id), { force: true })
-  rmSync(addonDir(id), { recursive: true, force: true })
+  if (!how.keepLocalFiles) rmSync(addonDir(id), { recursive: true, force: true })
   rmSync(hookSeenFile(id), { force: true })
   return true
 }

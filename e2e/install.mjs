@@ -20,6 +20,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -467,7 +468,7 @@ try {
     check('nothing is left behind in the folder but the program', readdirSync(path.join(one.folder, 'bin')).join() === 'it')
     check(
       'and beside it only the terms, the notices, and the note of where it was downloaded from, since that was not the usual place',
-      readdirSync(one.folder).sort().join() === 'LICENSE.md,THIRD_PARTY_NOTICES.md,bin,releases.json',
+      readdirSync(one.folder).sort().join() === 'LICENSE.md,THIRD_PARTY_NOTICES.md,bin,installation.json,releases.json',
       readdirSync(one.folder).join(' '),
     )
     check(
@@ -1471,6 +1472,84 @@ try {
     elsewhere.code === 0 && existsSync(elsewhere.it) && elsewhere.it.includes('kept here'),
     elsewhere.said,
   )
+  const freshEnv = { ...plainEnv(), HOME: elsewhere.home, USERPROFILE: elsewhere.home }
+  const discovered = await run(elsewhere.it, ['updates', 'off'], freshEnv, elsewhere.home)
+  check(
+    'a new terminal without IT_HOME finds the custom installation from its executable',
+    discovered.status === 0 && existsSync(path.join(elsewhere.folder, 'updates-off')) && !existsSync(path.join(elsewhere.home, '.it', 'updates-off')),
+    discovered.said,
+  )
+  const override = path.join(elsewhere.home, 'explicit')
+  const explicit = await run(elsewhere.it, ['updates', 'off'], { ...freshEnv, IT_HOME: override }, elsewhere.home)
+  check('an explicit IT_HOME wins over the installed executable', explicit.status === 0 && existsSync(path.join(override, 'updates-off')), explicit.said)
+  if (!windows) {
+    const alias = path.join(elsewhere.home, 'alias')
+    symlinkSync(elsewhere.it, alias)
+    const linked = await run(alias, ['updates', 'on'], freshEnv, elsewhere.home)
+    check(
+      'a symlink to the command still uses its real installation',
+      linked.status === 0 && !existsSync(path.join(elsewhere.folder, 'updates-off')),
+      linked.said,
+    )
+  }
+  rmSync(path.join(elsewhere.folder, 'installation.json'))
+  const legacy = await run(elsewhere.it, ['updates', 'off'], freshEnv, elsewhere.home)
+  check(
+    'a legacy standalone installation also finds its custom home after an upgrade',
+    legacy.status === 0 && existsSync(path.join(elsewhere.folder, 'updates-off')),
+    legacy.said,
+  )
+  const beforeMarkerFailure = readFileSync(elsewhere.it)
+  writeFileSync(path.join(elsewhere.folder, 'installation.json'), '{broken')
+  const damagedMarker = await install('elsewhere', { IT_HOME: elsewhere.folder, IT_VERSION: 'other' })
+  check(
+    'an unreadable installation record prevents replacement of the installed program',
+    damagedMarker.code !== 0 &&
+      readFileSync(elsewhere.it).equals(beforeMarkerFailure) &&
+      readFileSync(path.join(elsewhere.folder, 'installation.json'), 'utf8') === '{broken',
+    damagedMarker.said,
+  )
+  if (!windows) {
+    // The service commands are stand-ins, so this never asks the user's service manager to change anything.
+    const commands = path.join(tmp, 'uninstall-commands')
+    mkdirSync(commands)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) writeFileSync(path.join(commands, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    for (const legacy of [false, true]) {
+      const name = legacy ? 'legacy-removal' : 'custom-removal'
+      const installed = await install(name, { IT_HOME: path.join(tmp, name, 'custom') })
+      if (legacy) rmSync(path.join(installed.folder, 'installation.json'))
+      writeFileSync(
+        path.join(installed.folder, 'service.json'),
+        JSON.stringify({ port: 21000, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' }),
+      )
+      mkdirSync(path.join(installed.folder, 'backend'))
+      writeFileSync(path.join(installed.folder, 'backend', 'db.sqlite3'), 'pages')
+      writeFileSync(path.join(installed.folder, 'keep.txt'), 'mine')
+      mkdirSync(path.join(installed.home, '.it'))
+      writeFileSync(path.join(installed.home, '.it', 'keep.txt'), 'default home')
+      const off = await run(
+        installed.it,
+        ['uninstall', '--yes'],
+        { ...plainEnv(), HOME: installed.home, PATH: `${commands}:${process.env.PATH}` },
+        installed.home,
+      )
+      let result
+      try {
+        result = JSON.parse(off.said)
+      } catch {}
+      check(
+        `${legacy ? 'a legacy' : 'a marked'} custom installation uninstalls from a fresh terminal and keeps unknown files and the default home`,
+        off.status === 0 &&
+          typeof result?.folder === 'string' &&
+          realpathSync(result.folder) === realpathSync(installed.folder) &&
+          result?.removed === false &&
+          !existsSync(path.join(installed.folder, 'backend', 'db.sqlite3')) &&
+          readFileSync(path.join(installed.folder, 'keep.txt'), 'utf8') === 'mine' &&
+          readFileSync(path.join(installed.home, '.it', 'keep.txt'), 'utf8') === 'default home',
+        off.said,
+      )
+    }
+  }
   const sums = await install('crlf', { IT_VERSION: 'crlf' })
   check('checksums written with Windows line endings are read all the same', sums.code === 0 && existsSync(sums.it), sums.said)
 

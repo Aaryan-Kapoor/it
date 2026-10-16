@@ -34,6 +34,9 @@ import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { BOOLEAN } from './src/args'
+import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
+import { VERSION } from './src/lib'
+import { aloneAt } from './src/serve/backend'
 import { instanceName } from './src/serve/config'
 import { bases, holdBase } from './test-ports'
 
@@ -73,7 +76,8 @@ const RUNS = process.platform === 'linux' ? 'active' : 'running'
 const SAYS_IT_RUNS =
   '*" is-active "*) echo active ;; *" is-enabled "*) echo enabled ;; *" bootout "*) printf off > "$0.state" ;; *" bootstrap "*) printf on > "$0.state" ;; *" print "*) state=on; [ ! -f "$0.state" ] || read -r state < "$0.state"; [ "$state" != off ] || exit 113; echo "state = running" ;;'
 /** The base ports a test here takes when it has something listen where It would: each from a block of this file's own, and held until the test gives it back. */
-const ports = bases(26_000, 20)
+// Keep absent-site probes below Linux's ephemeral ports, which other connections can take after a block is checked.
+const ports = bases(27_000, 20)
 /** The port the site is said to be at, on a machine that has It's settings. Nothing listens there. */
 const SITE_PORT = 21000
 const SITE = `http://localhost:${SITE_PORT}`
@@ -88,6 +92,7 @@ function machine(enrolled = true, here = false) {
   const bin = path.join(home, 'commands')
   mkdirSync(it)
   mkdirSync(bin)
+  if (enrolled || here) writeFileSync(path.join(it, INSTALLATION_FILE), INSTALLATION)
   if (enrolled) writeFileSync(path.join(it, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'test', key: {} }))
   if (here) writeFileSync(path.join(it, 'service.json'), JSON.stringify({ port: SITE_PORT }))
   return { home, it, bin }
@@ -1672,6 +1677,58 @@ describe.skipIf(process.platform === 'win32' || process.platform !== 'linux')('a
     expect((await run(refused.m, ['service', 'uninstall'])).code).toBe(0)
     expect(refused.asked()).not.toMatch(/disable-linger/)
   })
+
+  test.each([false, true])('the linger note follows the service to another installation, including an earlier replacement: %s', async (earlier) => {
+    const system = withSystem(false)
+    const m = system.m
+    const settings = JSON.stringify({ port: SITE_PORT, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' })
+    writeFileSync(path.join(m.it, 'service.json'), settings)
+    expect((await run(m, ['service', 'install'])).code).toBe(0)
+    const oldNote = path.join(m.it, 'linger-by-it')
+    expect(readFileSync(oldNote, 'utf8')).toBe('')
+    const loginctl = path.join(m.bin, 'loginctl')
+    writeFileSync(loginctl, readFileSync(loginctl, 'utf8').replace('Linger=no', 'Linger=yes'))
+    const next = path.join(m.home, 'second-it')
+    mkdirSync(next)
+    writeFileSync(path.join(next, INSTALLATION_FILE), INSTALLATION)
+    writeFileSync(path.join(next, 'machine.json'), readFileSync(path.join(m.it, 'machine.json')))
+    writeFileSync(path.join(next, 'service.json'), settings)
+    const installed = await run(m, ['service', 'install'], { IT_HOME: next })
+    expect([installed.code, installed.err]).toEqual([0, ''])
+    const nextNote = path.join(next, 'linger-by-it')
+    if (earlier) {
+      // Older versions replaced the definition but left the note in the earlier home.
+      rmSync(nextNote, { force: true })
+      writeFileSync(oldNote, '')
+    } else {
+      expect(existsSync(oldNote)).toBe(false)
+      expect(readFileSync(nextNote, 'utf8')).toBe('')
+    }
+    const removed = await run(m, ['uninstall', '--yes'])
+    expect([removed.code, printed(removed).removed, existsSync(m.it)]).toEqual([0, true, false])
+    expect(readFileSync(nextNote, 'utf8')).toBe('')
+    expect(system.asked()).not.toMatch(/disable-linger/)
+    const last = await run(m, ['uninstall', '--yes'], { IT_HOME: next })
+    expect([last.code, printed(last).removed, existsSync(next)]).toEqual([0, true, false])
+    expect(system.asked()).toMatch(/loginctl disable-linger/)
+  })
+
+  test.each([false, true])('a modified linger note is kept without changing the account, linked: %s', async (linked) => {
+    const system = withSystem(false)
+    const m = system.m
+    expect((await run(m, ['service', 'install'])).code).toBe(0)
+    const note = path.join(m.it, 'linger-by-it')
+    const outside = path.join(m.home, 'mine')
+    writeFileSync(outside, 'mine')
+    if (linked) {
+      rmSync(note)
+      symlinkSync(outside, note)
+    } else writeFileSync(note, 'mine')
+    expect((await run(m, ['service', 'uninstall'])).code).toBe(0)
+    expect(readFileSync(note, 'utf8')).toBe('mine')
+    expect(readFileSync(outside, 'utf8')).toBe('mine')
+    expect(system.asked()).not.toMatch(/disable-linger/)
+  })
 })
 
 describe.skipIf(process.platform !== 'linux')('a service registered where IT_UPDATE_CHECK says not to look for a newer version', () => {
@@ -1695,6 +1752,44 @@ describe.skipIf(process.platform !== 'linux')('a service registered where IT_UPD
 })
 
 describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
+  test('a failed data removal restores the service settings so that uninstall can be tried again', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'launchctl', 'loginctl']) writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    const settings = path.join(m.it, 'service.json')
+    writeFileSync(
+      settings,
+      JSON.stringify({ port: await ports.next(), network: false, instanceSecret: 'ab'.repeat(32), adminKey: 'fixture', sessionSecret: 'fixture' }),
+    )
+    const original = readFileSync(settings, 'utf8')
+    const database = path.join(m.it, 'backend', 'db.sqlite3')
+    mkdirSync(path.dirname(database), { recursive: true })
+    writeFileSync(database, 'the retained database')
+    const preload = path.join(m.home, 'busy-database.mjs')
+    writeFileSync(
+      preload,
+      `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const remove = fs.rmSync;
+fs.rmSync = (file, options) => {
+  if (String(file) === ${JSON.stringify(database)}) throw Object.assign(new Error('The database is busy.'), { code: 'EBUSY' });
+  return remove(file, options);
+};
+syncBuiltinESMExports();
+`,
+    )
+    const env = { PATH: `${m.bin}:/usr/bin:/bin` }
+    try {
+      const failed = await run(m, ['uninstall', '--yes'], env, process.execPath, ['--import', pathToFileURL(preload).href])
+      expect([failed.code, printed(failed).removed]).toEqual([0, false])
+      expect(readFileSync(settings, 'utf8')).toBe(original)
+      expect(readFileSync(database, 'utf8')).toBe('the retained database')
+      const retried = await run(m, ['uninstall', '--yes'], env)
+      expect([retried.code, printed(retried).removed, existsSync(m.it)]).toEqual([0, true, false])
+    } finally {
+      await ports.release()
+    }
+  })
+
   test.each(['no task', 'refused', 'silent refusal', 'unavailable', 'an empty error'])(
     'on Windows, uninstall with no service or lock handles a scheduler that says %s in words',
     async (answer) => {
@@ -1714,19 +1809,24 @@ child.spawnSync = (file, args, opts) => {
 require('node:module').syncBuiltinESMExports()
 `,
         )
-      if (answer !== 'unavailable')
-        writeFileSync(
-          path.join(m.bin, 'powershell.exe'),
-          `#!${process.execPath}
+      writeFileSync(
+        path.join(m.bin, 'powershell.exe'),
+        `#!${process.execPath}
 const script = Buffer.from(process.argv.at(-1), 'base64').toString('utf16le')
+if (script.includes('[IO.FileStream]')) {
+  console.log('locked')
+  process.stdin.resume()
+  process.stdin.once('data', () => process.exit(0))
+} else {
 if (script.includes('[Microsoft.Win32.Registry]')) { console.log('absent'); process.exit(0) }
 if (!script.includes('Stop-ScheduledTask')) process.exit(1)
 const answer = ${JSON.stringify(answer)}
 if (answer === 'refused') console.error('The scheduler refused access')
 process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
+}
 `,
-          { mode: 0o755 },
-        )
+        { mode: 0o755 },
+      )
       const done = await run(m, ['uninstall', '--yes'], {}, process.execPath, ['--require', preload])
       if (answer === 'no task') {
         expect([done.code, printed(done).removed, existsSync(m.it)]).toEqual([0, true, false])
@@ -1740,6 +1840,29 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
       }
     },
   )
+
+  test('on Windows, uninstall keeps the installation when the installer lock cannot be acquired', async () => {
+    const m = machine()
+    const preload = path.join(m.home, 'windows.cjs')
+    writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })\n")
+    const done = await run(m, ['uninstall', '--yes'], {}, process.execPath, ['--require', preload])
+    expect(error(done).code).toBe('busy')
+    expect(readFileSync(path.join(m.it, INSTALLATION_FILE), 'utf8')).toBe(INSTALLATION)
+    expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)
+  })
+
+  test('`it uninstall` refuses a live standalone installer before changing its service or files', async () => {
+    const m = machine(true, true)
+    mkdirSync(path.join(m.it, '.installing'))
+    const owner = `${process.pid} ${os.hostname()}\n`
+    writeFileSync(path.join(m.it, '.installing', 'owner'), owner)
+    const done = await run(m, ['uninstall', '--yes'])
+    expect(error(done).code).toBe('busy')
+    expect(readFileSync(path.join(m.it, '.installing', 'owner'), 'utf8')).toBe(owner)
+    expect(readFileSync(path.join(m.it, INSTALLATION_FILE), 'utf8')).toBe(INSTALLATION)
+    expect(existsSync(path.join(m.it, 'service.json'))).toBe(true)
+    expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)
+  })
 
   test.each([false, true])('preserves its database and profile when an orphan cannot be identified or its settings cannot be read (%s)', async (unreadable) => {
     const m = machine()
@@ -1887,7 +2010,7 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
     mkdirSync(path.join(m.it, 'addons', 'pi'), { recursive: true })
     mkdirSync(path.join(m.it, 'backend'))
     writeFileSync(path.join(m.it, 'bin', 'it'), '#!/bin/sh\n')
-    writeFileSync(path.join(m.it, 'backend', 'pages.sqlite3'), 'the pages')
+    writeFileSync(path.join(m.it, 'backend', 'db.sqlite3'), 'the pages')
     const note = JSON.stringify({ installs: [{ version: '0.1.0', at: 1, by: '0.1.22', env: {} }] })
     writeFileSync(path.join(m.it, 'addons', 'pi.json'), note)
     writeFileSync(path.join(m.home, 'pi-has'), `${path.join(m.it, 'addons', 'pi')}\n`)
@@ -1895,7 +2018,7 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
     const said = printed(first)
     expect([first.code, said.removed, said.left.length]).toEqual([0, false, 1])
     // Everything else It kept is gone, the pages and this machine's identity among it
-    expect(readdirSync(m.it).sort()).toEqual(['addons', 'bin'])
+    expect(readdirSync(m.it).sort()).toEqual(['addons', 'bin', 'installation.json'])
     expect(readFileSync(path.join(m.it, 'addons', 'pi.json'), 'utf8')).toBe(note)
     // And it says how the add-on is taken out later, by the program's whole name, since the folder is off the PATH by now
     expect(said.left[0]).toContain('Pi still has It’s add-on, which could not be taken out')
@@ -1923,7 +2046,7 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
     mkdirSync(path.dirname(real))
     execFileSync('mv', [m.it, real])
     mkdirSync(path.join(real, 'backend'))
-    writeFileSync(path.join(real, 'backend', 'pages.sqlite3'), 'the pages')
+    writeFileSync(path.join(real, 'backend', 'db.sqlite3'), 'the pages')
     symlinkSync(real, m.it)
     const done = await run(m, ['uninstall', '--yes'])
     expect([done.code, printed(done).removed, existsSync(real), readdirSync(m.home).includes('.it')]).toEqual([0, true, false, false])
@@ -1950,6 +2073,187 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
       expect([ran.code, existsSync(path.join(project, 'unrelated.txt'))]).toEqual([2, true])
       expect(error(ran).code).toBe('invalid')
     }
+  })
+
+  test.skipIf(process.platform !== 'linux')('`it uninstall` preserves every file when its registered service refuses to stop', async () => {
+    const m = machine(true, true)
+    const unit = path.join(m.home, '.config', 'systemd', 'user', 'it.service')
+    mkdirSync(path.dirname(unit), { recursive: true })
+    writeFileSync(unit, `[Service]\nEnvironment="IT_HOME=${m.it}"\nExecStart=${m.it}/bin/it serve --log "${m.it}/logs/it.log"\n`)
+    writeFileSync(path.join(m.bin, 'systemctl'), '#!/bin/sh\ncase " $* " in *" disable "*) exit 1 ;; esac\nexit 0\n')
+    chmodSync(path.join(m.bin, 'systemctl'), 0o755)
+    mkdirSync(path.join(m.it, 'backend'))
+    writeFileSync(path.join(m.it, 'backend', 'db.sqlite3'), 'pages')
+    const profile = `# It\nexport PATH='${path.join(m.it, 'bin')}':"$PATH"\n`
+    writeFileSync(path.join(m.home, '.profile'), profile)
+    const refused = await run(m, ['uninstall', '--yes'])
+    expect(refused.code).toBe(1)
+    expect(refused.err).toContain('Nothing else was changed')
+    expect(readFileSync(path.join(m.it, 'backend', 'db.sqlite3'), 'utf8')).toBe('pages')
+    expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)
+    expect(existsSync(path.join(m.it, INSTALLATION_FILE))).toBe(true)
+    expect(existsSync(unit)).toBe(true)
+    expect(readFileSync(path.join(m.home, '.profile'), 'utf8')).toBe(profile)
+  })
+
+  test('`it uninstall` refuses unrelated JSON records and preserves unknown files in a marked installation', async () => {
+    const m = machine(true, true)
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify({ port: SITE_PORT, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' }),
+    )
+    writeFileSync(path.join(m.it, 'runs.json.unreadable'), '{')
+    mkdirSync(path.join(m.it, 'logs'))
+    writeFileSync(path.join(m.it, 'logs', 'reopened-123-4.txt'), 'interrupted run')
+    mkdirSync(path.join(m.it, 'bin'))
+    const installed = path.join(m.it, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
+    writeFileSync(installed, 'installed program')
+    const lock = `${installed}.upgrade.lock`
+    let owner: any
+    await aloneAt(lock, async () => {
+      owner = JSON.parse(readFileSync(lock, 'utf8'))
+    })
+    owner.pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    writeFileSync(lock, JSON.stringify(owner))
+    writeFileSync(path.join(m.it, 'bin', `.it-upgrade-${owner.pid}`), 'interrupted update')
+    mkdirSync(path.join(m.it, '.installing'))
+    writeFileSync(path.join(m.it, '.installing', 'owner'), `${owner.pid} ${os.hostname()}\n`)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    const project = path.join(m.home, 'project')
+    mkdirSync(path.join(project, 'addons'), { recursive: true })
+    writeFileSync(path.join(project, 'addons', 'pi.json'), '{"installs":[]}')
+    writeFileSync(path.join(project, 'machine.json'), '{"id":"project","key":{}}')
+    writeFileSync(path.join(project, 'service.json'), '{"instanceSecret":"other","adminKey":"other"}')
+    writeFileSync(path.join(project, 'valuable.txt'), 'mine')
+    const refused = await run(m, ['uninstall', '--yes'], { IT_HOME: project })
+    expect(refused.code).toBe(2)
+    expect(readFileSync(path.join(project, 'valuable.txt'), 'utf8')).toBe('mine')
+    writeFileSync(path.join(project, 'installation.json'), '{')
+    const damaged = await run(m, ['uninstall', '--yes'], { IT_HOME: project })
+    expect(damaged.code).toBe(2)
+    expect(damaged.err).toContain('installation.json.unreadable')
+    expect(damaged.err).toContain('does not hold It')
+    expect(readFileSync(path.join(project, 'valuable.txt'), 'utf8')).toBe('mine')
+    expect(readFileSync(path.join(project, 'installation.json.unreadable'), 'utf8')).toBe('{')
+    expect(readFileSync(path.join(project, 'addons', 'pi.json'), 'utf8')).toBe('{"installs":[]}')
+    writeFileSync(path.join(m.it, 'valuable.txt'), 'mine')
+    mkdirSync(path.join(m.it, 'backend'))
+    writeFileSync(path.join(m.it, 'backend', 'db.sqlite3'), 'pages')
+    writeFileSync(path.join(m.it, 'backend', 'notes.txt'), 'mine')
+    const backendBin = path.join(m.it, 'backend', 'bin', 'precompiled-2026-01-01-1234567')
+    mkdirSync(backendBin, { recursive: true })
+    writeFileSync(path.join(backendBin, `convex-local-backend.${owner.pid}.part`), 'interrupted download')
+    const removed = await run(m, ['uninstall', '--yes'])
+    expect(printed(removed).removed).toBe(false)
+    expect(printed(removed).left.join(' ')).toContain('may include page data or backups')
+    expect(existsSync(path.join(m.it, 'backend', 'db.sqlite3'))).toBe(false)
+    expect(existsSync(path.join(m.it, 'machine.json'))).toBe(false)
+    expect(existsSync(path.join(m.it, 'runs.json.unreadable'))).toBe(false)
+    expect(existsSync(path.join(m.it, 'backend', 'lock'))).toBe(false)
+    expect(existsSync(path.join(m.it, 'backend', 'bin'))).toBe(false)
+    expect(existsSync(path.join(m.it, 'logs'))).toBe(false)
+    expect(existsSync(path.join(m.it, 'bin'))).toBe(false)
+    expect(existsSync(path.join(m.it, '.installing'))).toBe(false)
+    expect(readFileSync(path.join(m.it, 'valuable.txt'), 'utf8')).toBe('mine')
+    expect(existsSync(path.join(m.it, 'backend'))).toBe(false)
+  })
+
+  test.skipIf(process.platform !== 'linux')('`it uninstall` validates the program lock before changing its service', async () => {
+    const m = machine(true, true)
+    const unit = path.join(m.home, '.config', 'systemd', 'user', 'it.service')
+    mkdirSync(path.dirname(unit), { recursive: true })
+    const definition = `[Service]\nEnvironment="IT_HOME=${m.it}"\nExecStart=${m.it}/bin/it serve --log "${m.it}/logs/it.log"\n`
+    writeFileSync(unit, definition)
+    writeFileSync(path.join(m.bin, 'systemctl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    mkdirSync(path.join(m.it, 'bin'))
+    const installed = path.join(m.it, 'bin', 'it')
+    writeFileSync(installed, 'installed program')
+    writeFileSync(`${installed}.upgrade.lock`, 'mine')
+    const refused = await run(m, ['uninstall', '--yes'])
+    expect(refused.err).toContain('not a recognised lock record')
+    expect(readFileSync(unit, 'utf8')).toBe(definition)
+    expect(readFileSync(installed, 'utf8')).toBe('installed program')
+    expect(readFileSync(`${installed}.upgrade.lock`, 'utf8')).toBe('mine')
+    expect(existsSync(path.join(m.it, INSTALLATION_FILE))).toBe(true)
+  })
+
+  test('`it uninstall` keeps add-ons intact when a manually started service has not stopped', async () => {
+    const m = machine(true)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    }
+    writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.2.27\n', { mode: 0o755 })
+    const plugin = path.join(m.home, '.config', 'opencode', 'plugins', 'it.js')
+    mkdirSync(path.dirname(plugin), { recursive: true })
+    writeFileSync(plugin, 'owned add-on')
+    const record = JSON.stringify({
+      installs: [{ version: '0.1.0', at: 1, env: {}, files: [{ path: plugin, sha256: createHash('sha256').update('owned add-on').digest('hex') }] }],
+    })
+    mkdirSync(path.join(m.it, 'addons'))
+    writeFileSync(path.join(m.it, 'addons', 'opencode.json'), record)
+    writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ pid: process.pid }))
+    // The live test process stands for the manual service. Only the command's clock advances,
+    // so the stop deadline is exercised without waiting thirty seconds or signalling it.
+    const clock = path.join(m.home, 'clock.mjs')
+    writeFileSync(clock, 'let now = Date.now(); Date.now = () => (now += 31000);')
+    const refused = await run(m, ['uninstall', '--yes'], {}, process.execPath, ['--import', pathToFileURL(clock).href])
+    expect(refused.code).toBe(1)
+    expect(refused.err).toContain('still stopping')
+    expect(readFileSync(plugin, 'utf8')).toBe('owned add-on')
+    expect(readFileSync(path.join(m.it, 'addons', 'opencode.json'), 'utf8')).toBe(record)
+    expect(existsSync(path.join(m.it, INSTALLATION_FILE))).toBe(true)
+  })
+
+  test.each(['invalid', 'offline'])('a %s login does not claim an unrelated folder', async (failure) => {
+    const m = machine(false)
+    writeFileSync(path.join(m.it, 'unknown.txt'), 'personal')
+    const result = await run(m, ['login', '--url', failure === 'invalid' ? 'not-an-address' : 'http://127.0.0.1:1', '--code', 'wrong', '--no-setup'])
+    expect(result.code).not.toBe(0)
+    expect(existsSync(path.join(m.it, INSTALLATION_FILE))).toBe(false)
+    expect(readFileSync(path.join(m.it, 'unknown.txt'), 'utf8')).toBe('personal')
+  })
+
+  test('a refused invite keeps its pending key without claiming an unrelated folder', async () => {
+    const m = machine(false)
+    const server = await backend(
+      m,
+      () => null,
+      () => [401, {}],
+    )
+    try {
+      const result = await run(m, ['login', '--url', server.url, '--code', 'wrong', '--no-setup'])
+      expect(error(result).code).toBe('unauthenticated')
+      expect(existsSync(path.join(m.it, 'machine.pending.json'))).toBe(true)
+      expect(existsSync(path.join(m.it, INSTALLATION_FILE))).toBe(false)
+    } finally {
+      await server.close()
+    }
+  })
+
+  test.skipIf(process.platform === 'win32')('uninstall recognizes installer PATH lines through an alias of its real home', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    mkdirSync(path.join(m.it, 'bin'))
+    const alias = path.join(m.home, "linked It's folder")
+    symlinkSync(m.it, alias)
+    const bin = path.join(alias, 'bin')
+    const posix = `export PATH='${bin.replaceAll("'", `'\\''`)}':"$PATH"`
+    const word = `'${bin.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`
+    const fish = `contains -- ${word} $PATH; or set -gx PATH ${word} $PATH`
+    const fishFile = path.join(m.home, '.config/fish/conf.d/it.fish')
+    mkdirSync(path.dirname(fishFile), { recursive: true })
+    writeFileSync(path.join(m.home, '.bashrc'), `keep-this\n\n# It\n${posix}\n`)
+    writeFileSync(fishFile, `# It\n${fish}\n`)
+    const result = await run(m, ['uninstall', '--yes'])
+    expect(result.code).toBe(0)
+    expect(readFileSync(path.join(m.home, '.bashrc'), 'utf8')).toBe('keep-this\n')
+    expect(existsSync(fishFile)).toBe(false)
   })
 
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
@@ -2023,18 +2327,19 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
     const named = await run(m, ['uninstall', '--yes'], { IT_HOME: project })
     expect([named.code, existsSync(path.join(project, 'valuable.txt')), existsSync(path.join(project, 'addons', 'theme'))]).toEqual([2, true, true])
     expect(named.err).toContain('does not hold It')
-    // One that holds no more of It than its note of an add-on is It's all the same, and goes
+    // An empty add-on record alone cannot authorize deleting a folder.
     const begun = mkdtempSync(path.join(scratch, 'begun-'))
     mkdirSync(path.join(begun, 'addons'))
     writeFileSync(path.join(begun, 'addons', 'pi.json'), '{"installs": []}')
     const little = await run(m, ['uninstall', '--yes'], { IT_HOME: begun })
-    expect([little.code, existsSync(begun)]).toEqual([0, false])
+    expect([little.code, existsSync(begun)]).toEqual([2, true])
     // Nor the person's own folder, though a variable names it by a path that goes through a link, and though something of It's is in it
     const ana = path.join(scratch, 'people', 'ana')
     mkdirSync(path.join(ana, 'bin'), { recursive: true })
     writeFileSync(path.join(ana, 'bin', 'it'), '')
     writeFileSync(path.join(ana, 'machine.json'), '{"id": "a-machine", "name": "ana", "key": {}}')
     writeFileSync(path.join(ana, 'personal.txt'), 'mine')
+    writeFileSync(path.join(ana, INSTALLATION_FILE), INSTALLATION)
     symlinkSync(path.join(scratch, 'people'), path.join(scratch, 'mnt'))
     const own = await run(m, ['uninstall', '--yes'], { HOME: ana, IT_HOME: path.join(scratch, 'mnt', 'ana') })
     expect([own.code, existsSync(path.join(ana, 'personal.txt')), existsSync(path.join(ana, 'bin', 'it'))]).toEqual([2, true, true])
@@ -3463,7 +3768,6 @@ describe.skipIf(process.platform === 'win32')('a command that waits for somethin
     )
 })
 
-
 describe.skipIf(process.platform === 'win32' || !python)('what a person at a terminal is told', () => {
   const NOT_RUNNING = 'It is not running on this machine. Start it with `it serve`, or run `it setup` to keep it running in the background.'
   const NOT_REGISTERED = 'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.'
@@ -4260,6 +4564,89 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
 })
 
 describe.skipIf(process.platform === 'win32')('a second machine', () => {
+  test.each([false, true])('login checks a damaged installation record before joining, with an earlier unreadable record: %s', async (earlier) => {
+    const m = machine(false)
+    writeFileSync(path.join(m.it, INSTALLATION_FILE), '{')
+    if (earlier) writeFileSync(path.join(m.it, `${INSTALLATION_FILE}.unreadable`), 'earlier record')
+    const b = await backend(m)
+    try {
+      const ran = await run(m, ['login', '--url', b.url, '--code', 'invite', '--no-setup'])
+      if (earlier) {
+        expect(error(ran).code).toBe('record_unread')
+        expect(b.joined).toEqual([])
+        expect(existsSync(path.join(m.it, 'machine.json'))).toBe(false)
+        expect(existsSync(path.join(m.it, 'machine.pending.json'))).toBe(false)
+        expect(readFileSync(path.join(m.it, INSTALLATION_FILE), 'utf8')).toBe('{')
+      } else {
+        expect(ran.code, ran.err).toBe(0)
+        expect(b.joined).toHaveLength(1)
+        expect(readFileSync(path.join(m.it, INSTALLATION_FILE), 'utf8')).toBe(INSTALLATION)
+      }
+      expect(readFileSync(path.join(m.it, `${INSTALLATION_FILE}.unreadable`), 'utf8')).toBe(earlier ? 'earlier record' : '{')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test.each([
+    { standalone: false, pauseAt: '/cli/config' },
+    { standalone: false, pauseAt: '/bridge/enroll' },
+    { standalone: true, pauseAt: '/cli/config' },
+    { standalone: true, pauseAt: '/bridge/enroll' },
+  ])('login keeps uninstall out while waiting for $pauseAt, standalone: $standalone', async ({ standalone, pauseAt }) => {
+    const m = machine(false)
+    writeFileSync(path.join(m.it, INSTALLATION_FILE), INSTALLATION)
+    mkdirSync(path.join(m.it, 'bin'))
+    const installed = path.join(m.it, 'bin', 'it')
+    writeFileSync(installed, `#!/bin/sh\nprintf '{"version":"${VERSION}"}\\n'\n`, { mode: 0o755 })
+    const preload = path.join(m.home, 'standalone.cjs')
+    writeFileSync(preload, `Object.defineProperty(process, 'execPath', { value: ${JSON.stringify(installed)} }); process.argv[1] = process.execPath\n`)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    let reached!: () => void
+    let release!: () => void
+    const requested = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const server = http.createServer(async (req, res) => {
+      req.resume()
+      if (req.url === pauseAt) {
+        reached()
+        await waiting
+      }
+      const answer = req.url === '/cli/config' ? { protocol: 1, issuer: 'http://127.0.0.1:23001' } : { machine: 'machine-2' }
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(answer))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    const joining = run(m, ['login', '--url', url, '--code', 'invite', '--no-setup'], {}, process.execPath, standalone ? ['--require', preload] : [])
+    try {
+      await Promise.race([
+        requested,
+        joining.then((ran) => {
+          throw new Error(ended(ran))
+        }),
+      ])
+      if (standalone) await expect(aloneAt(`${installed}.upgrade.lock`, async () => 'overlapped', 0)).rejects.toMatchObject({ code: 'busy' })
+      const removing = await run(m, ['uninstall', '--yes'])
+      expect(error(removing).code).toBe('busy')
+      expect(existsSync(installed)).toBe(true)
+      expect(readFileSync(path.join(m.it, INSTALLATION_FILE), 'utf8')).toBe(INSTALLATION)
+      release()
+      expect((await joining).code).toBe(0)
+      expect(JSON.parse(readFileSync(path.join(m.it, 'machine.json'), 'utf8')).id).toBe('machine-2')
+      const removed = await run(m, ['uninstall', '--yes'])
+      expect(printed(removed).removed).toBe(true)
+      expect(existsSync(m.it)).toBe(false)
+    } finally {
+      release()
+      await joining
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
   test('`it login` joins with an invite: it sends the invite, a name and the public half of a key it made, and keeps the private half', async () => {
     const m = machine(false)
     const b = await backend(m)
@@ -4289,6 +4676,7 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
         { code: 'invalid', message: 'This machine has already joined an It.', hint: 'Run `it logout` to leave it first.' },
       ])
       expect(b.joined).toHaveLength(1)
+      expect(readFileSync(path.join(m.it, 'installation.json'), 'utf8')).toBe(INSTALLATION)
     } finally {
       await b.close()
     }
@@ -4799,6 +5187,24 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
 })
 
 describe.skipIf(process.platform === 'win32')('`it setup --none`, which connects no agent app', () => {
+  test('source setup holds the folder lock while changing a joined machine', async () => {
+    const m = machine()
+    const held: boolean[] = []
+    const b = await backend(m, (asked) => {
+      held.push(existsSync(path.join(m.it, 'setup.lock')))
+      return asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : null
+    })
+    try {
+      const ran = await run(m, ['setup', '--none', '--no-service'], b.env)
+      expect(ran.code, ran.err).toBe(0)
+      expect(held.length).toBeGreaterThan(0)
+      expect(held.every(Boolean)).toBe(true)
+      expect(existsSync(path.join(m.it, 'setup.lock'))).toBe(false)
+    } finally {
+      await b.close()
+    }
+  })
+
   /** A backend program that is not there: a first run asks for it before anything else, and ends saying so. */
   // A first run looks first at whether It could have its ports, so these are given ports that nothing has: an It of the
   // developer's own may be running at the usual ones

@@ -31,6 +31,8 @@ import { withTags } from './page'
 import { createRecords, type Records } from './records'
 import { RUNTIME, RUNTIME_VERSION } from './runtime.generated'
 
+export { removeAbandonedUploads } from './files'
+
 export interface ContentSettings {
   /** Where page files are kept. */
   dir: string
