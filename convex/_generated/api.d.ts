@@ -16,6 +16,7 @@ import type * as config from "../config.js";
 import type * as content from "../content.js";
 import type * as counted from "../counted.js";
 import type * as crons from "../crons.js";
+import type * as deletions from "../deletions.js";
 import type * as delivery from "../delivery.js";
 import type * as displays from "../displays.js";
 import type * as http from "../http.js";
@@ -57,6 +58,7 @@ declare const fullApi: ApiFromModules<{
   content: typeof content;
   counted: typeof counted;
   crons: typeof crons;
+  deletions: typeof deletions;
   delivery: typeof delivery;
   displays: typeof displays;
   http: typeof http;

@@ -359,6 +359,25 @@ export default defineSchema({
     .index('by_user_target', ['userId', 'displayId', 'dismissedAt', 'createdAt'])
     .index('by_created', ['createdAt']),
 
+  // A page's deletion receipt stays until seven days after confirmed completion.
+  deletions: defineTable({
+    userId: v.id('users'),
+    artifactId: v.id('artifacts'),
+    slug: v.string(),
+    title: v.string(),
+    requestedAt: v.number(),
+    attempts: v.number(),
+    contentAt: v.optional(v.number()),
+    recordsAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    failedAt: v.optional(v.number()),
+    nextAt: v.optional(v.number()),
+  })
+    .index('by_user', ['userId'])
+    .index('by_user_slug', ['userId', 'slug'])
+    .index('by_user_completed', ['userId', 'completedAt'])
+    .index('by_completed', ['completedAt']),
+
   // Things the content service has been asked to do and has not yet confirmed: ending a
   // display's sessions, deleting stored bytes. Kept until it says done, and tried again until then.
   contentJobs: defineTable({
@@ -371,6 +390,8 @@ export default defineSchema({
     userId: v.id('users'),
     /** For the last step of erasing everything: the person's record, to remove once their bytes are gone. */
     thenDeleteUser: v.optional(v.id('users')),
+    /** The receipt confirmed by the first complete deletion of this page's files. */
+    deletionId: v.optional(v.id('deletions')),
   })
     .index('by_next', ['nextAt'])
     .index('by_user', ['userId'])

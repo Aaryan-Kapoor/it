@@ -145,6 +145,7 @@ beforeEach(() => {
   watched = {
     'displays:mine': DISPLAY,
     'artifacts:list': [],
+    'deletions:list': [],
     'notifications:list': [],
     // Nobody has had the tour, and no agent is waiting to give it: the first screen has the sentence to give one
     'tour:get': { waitingUntil: null, by: null, askedAt: null, takenAt: null, doneAt: null },

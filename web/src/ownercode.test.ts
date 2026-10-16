@@ -55,7 +55,7 @@ vi.mock('convex/react', () => ({
   useConvex: () => client,
   useConvexAuth: () => ({ isLoading: false, isAuthenticated: true }),
   useMutation: (fn: unknown) => (args: unknown) => client.mutation(fn, args),
-  useQuery: (fn: unknown) => ({ 'displays:mine': DISPLAY, 'artifacts:list': [], 'notifications:list': [] })[getFunctionName(fn as never)],
+  useQuery: (fn: unknown) => ({ 'displays:mine': DISPLAY, 'artifacts:list': [], 'deletions:list': [], 'notifications:list': [] })[getFunctionName(fn as never)],
 }))
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
