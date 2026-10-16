@@ -153,9 +153,16 @@ case "${BASE}" in
 esac
 command -v curl >/dev/null 2>&1 || { say "Install curl first." >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || { say "Install sha256sum or shasum first." >&2; exit 1; }
+# Where CI is set, every download says so, and itcan.do counts it apart from a person's. CI is
+# read as the program reads it: set to anything but nothing, 0, false, no or off. Given nothing
+# after the colon, curl sends no such header at all.
+case "$(printf '%s' "${CI:-}" | tr 'A-Z' 'a-z')" in
+  '' | 0 | false | no | off) ci= ;;
+  *) ci=1 ;;
+esac
 fetch() {
-  if [ "${plain}" = 1 ]; then curl -fsS --noproxy '*' --max-redirs 0 "$1" -o "$2"
-  else curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 "$1" -o "$2"
+  if [ "${plain}" = 1 ]; then curl -fsS --noproxy '*' --max-redirs 0 -H "X-It-CI:${ci}" "$1" -o "$2"
+  else curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 -H "X-It-CI:${ci}" "$1" -o "$2"
   fi
   # What curl leaves is an ordinary file. Anything else there is not a download, and is not read
   if [ ! -f "$2" ] || [ -L "$2" ]; then

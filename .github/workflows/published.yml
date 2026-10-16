@@ -25,6 +25,11 @@ jobs:
     name: Installed from itcan.do (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    # What the It installed here reports goes to an address on the runner where nothing listens:
+    # it is tried and taken away again, and is nobody's installation. The address is carried into
+    # the background service as well, which is what sends.
+    env:
+      IT_TELEMETRY_URL: http://127.0.0.1:9/usage
     strategy:
       fail-fast: false
       matrix:
@@ -39,15 +44,17 @@ jobs:
             program: it-darwin-x64
           - os: windows-latest
             program: it-windows-x64.exe
+    # The one line says that it comes from CI, so that itcan.do counts the fetch apart from a
+    # person's. What it is sent is the same.
     steps:
       - name: The one line from the page, on macOS and Linux
         if: runner.os != 'Windows'
-        run: curl -fsSL https://itcan.do/install.sh | sh
+        run: curl -fsSL -H 'X-It-CI: 1' https://itcan.do/install.sh | sh
       # In the PowerShell that Windows comes with, which is the one a person has
       - name: The one line from the page, on Windows
         if: runner.os == 'Windows'
         shell: powershell
-        run: irm https://itcan.do/install.ps1 | iex
+        run: irm -Headers @{ 'X-It-CI' = '1' } https://itcan.do/install.ps1 | iex
       - name: Where it was put
         run: |
           if [ "$RUNNER_OS" = Windows ]; then echo "IT=$HOME/.it/bin/it.exe" >> "$GITHUB_ENV"; else echo "IT=$HOME/.it/bin/it" >> "$GITHUB_ENV"; fi
