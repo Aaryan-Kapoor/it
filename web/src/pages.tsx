@@ -6,7 +6,7 @@ import { copy, IconBack, IconLink, IconPin, IconSay, IconSend, IconStop, IconX, 
 import { agentName, ago, api, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
-import { dismissMessage, message, onItsWayUntil, outboxChanges, pendingMessage, thisSession, unsaved, unsent, watchOutbox } from './outbox'
+import { dismissMessage, message, onItsWayUntil, outboxChanges, pendingMessage, refusedClick, thisSession, unsaved, unsent, watchOutbox } from './outbox'
 import { holdPending } from './pending'
 import { Preview } from './preview'
 import { type PageConnection, reportedConnection } from './readiness'
@@ -276,6 +276,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
             {fault.message}
           </span>
         )}
+        <RefusedClick user={user} artifactId={page.id} />
         {/* What became of what was done on the page is said aloud too, to whoever cannot see it change */}
         <span className="page-nav-said" role="status">
           {page.run ? (
@@ -368,6 +369,17 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
       )}
     </main>
   )
+}
+
+/** A saved click from before an upgrade could not be confirmed and must not disappear silently. */
+function RefusedClick({ user, artifactId }: { user: string; artifactId: string }) {
+  useSyncExternalStore(watchOutbox, outboxChanges)
+  const refused = refusedClick(user, artifactId)
+  return refused ? (
+    <span className="status page-request-refused" data-tone="bad" role="alert">
+      {refused}
+    </span>
+  ) : null
 }
 
 /** How long after something was done on a page it is still shown as under way, where nothing has come of it. */

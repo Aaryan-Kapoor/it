@@ -63,7 +63,9 @@ async function render(fails: () => boolean) {
     if (fails()) throw new Error('Temporary connection failure')
     return createElement('p', {}, 'The page recovered')
   }
-  await act(async () => root!.render(createElement(Guard, null, createElement(Child))))
+  const draw = () => act(async () => root!.render(createElement(Guard, null, createElement(Child))))
+  await draw()
+  return draw
 }
 
 test('a failed inner view recovers without a press once its pending request settles', async () => {
@@ -98,4 +100,17 @@ test('a persistently failing inner view stops after four increasingly spaced ret
   const retry = [...host!.querySelectorAll('button')].find((button) => button.textContent === 'Try again')!
   await act(async () => retry.click())
   expect(attempted).toBeGreaterThan(stopped)
+})
+
+test('each recovered view gets a fresh retry budget for a later failure on the same path', async () => {
+  let broken = true
+  const draw = await render(() => broken)
+  for (let episode = 0; episode < 6; episode++) {
+    expect(host!.textContent).toContain('That did not work')
+    broken = false
+    await act(async () => vi.advanceTimersByTimeAsync(1000))
+    expect(host!.textContent).toBe('The page recovered')
+    broken = true
+    await draw()
+  }
 })

@@ -219,7 +219,7 @@ export function outboxBelongsTo(user: string | null, under: string | null = null
       if (!key.startsWith(PREFIX)) continue
       try {
         const entry = JSON.parse(localStorage.getItem(key) ?? '') as Entry
-        if (entry.format === 2 && entry.session !== null) localStorage.removeItem(key)
+        if (entry.format !== 2 || entry.session !== null) localStorage.removeItem(key)
       } catch {}
     }
     memoryGrants.clear()
@@ -279,6 +279,11 @@ export function pendingAnswer(id: string): string | null {
   const entry = entries(pairedFor).find(([, e]) => e.operation?.kind === 'answer' && e.operation.id === id && !e.refused)?.[1]
   return entry?.operation?.kind === 'answer' ? entry.operation.action : null
 }
+/** A pre-upgrade click refused without a receipt stays visible until expiry or the pairing ends. */
+export function refusedClick(user: string, artifactId: string): string | null {
+  return entries(user).find(([, e]) => e.artifactId === artifactId && !e.operation && e.refused)?.[1].refused ?? null
+}
+
 /** A failed message stays readable until the person deliberately sends a new one. */
 export function dismissMessage(user: string, artifactId: string, id: string): void {
   drop(keyOf(user, artifactId, id))
@@ -663,7 +668,8 @@ async function replay(convex: ConvexReactClient, user: string, key: string): Pro
     if (!mine()) return 'stop'
     if (settled(err)) {
       note('a saved request was refused for good', refusal(err).code)
-      if (entry.operation?.kind === 'message') put(key, JSON.stringify({ ...entry, refused: refusal(err).message, held: undefined }))
+      if (entry.operation?.kind === 'message' || (entry.format !== 2 && refusal(err).code === 'conflict'))
+        put(key, JSON.stringify({ ...entry, refused: refusal(err).message, held: undefined }))
       else drop(key)
       return 'done'
     }

@@ -1197,6 +1197,7 @@ export class Guard extends Component<{ children: ReactNode; shown?: string }, { 
     return shown !== undefined && wasShown.has(shown) && refusal(this.state.error).code === 'not_found'
   }
   override componentDidUpdate() {
+    if (!this.state.error) this.retries = 0
     if (this.state.error && this.gone()) {
       wasShown.delete(this.props.shown!)
       navigate('/')

@@ -331,10 +331,16 @@ describe('the outbox', () => {
     }
   })
 
-  test('a cold unpaired start discards saved work only after the pairing has been answered', () => {
+  test.each(['legacy', 'session-bound'] as const)('a cold unpaired start discards %s work only after the pairing has been answered', (kind) => {
     outboxBelongsTo(null)
     const key = 'it.outbox.alice.page1.old-session-click'
-    const saved = { user: 'alice', artifactId: 'page1', envelope: envelope('old-session-click'), format: 2, session: 'ended-session', at: Date.now() }
+    const saved = {
+      user: 'alice',
+      artifactId: 'page1',
+      envelope: envelope('old-session-click'),
+      ...(kind === 'session-bound' ? { format: 2, session: 'ended-session' } : {}),
+      at: Date.now(),
+    }
     localStorage.setItem(key, JSON.stringify(saved))
     outboxBelongsTo(null, null, false)
     expect(localStorage.getItem(key)).not.toBeNull()

@@ -2,6 +2,7 @@
 // backend. What it must get right: it speaks of the click just made the moment it is made, and
 // never goes on saying what became of the one before.
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -810,4 +811,30 @@ describe('Escape on a page', () => {
     await pressed()
     expect(location.pathname).toBe('/')
   })
+})
+
+test('a refused pre-upgrade request stays visible after reopening without being sent again', async () => {
+  const outbox = await shown()
+  const key = 'it.outbox.user-1.page-1.legacy-request'
+  const message = 'Reload It before sending new requests. This saved request has no replay deadline. Check what your agent received before sending it again.'
+  localStorage.setItem(key, JSON.stringify({ user: 'user-1', artifactId: 'page-1', envelope: envelope('legacy-request'), at: NOW - 60_000 }))
+  const mutation = vi.fn(async () => {
+    throw new ConvexError({ code: 'conflict', message })
+  })
+  const backend = { mutation, connectionState: () => ({ isWebSocketConnected: true }) } as never
+  await act(async () => outbox.drain(backend, 'user-1'))
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(message)
+  expect(outbox.unsent('user-1', 'page-1')).toBe(0)
+  await act(async () => root.unmount())
+  host.remove()
+  await shown()
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(message)
+  await act(async () => outbox.drain(backend, 'user-1'))
+  expect(mutation).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    vi.mocked(Date.now).mockReturnValue(NOW + 7 * 86400_000)
+    await outbox.drain(backend, 'user-1')
+  })
+  expect(localStorage.getItem(key)).toBeNull()
+  expect(host.querySelector('[role="alert"]')).toBeNull()
 })
