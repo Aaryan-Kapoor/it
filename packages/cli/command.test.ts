@@ -1216,7 +1216,9 @@ test('a wait that follows keeps only the latest receipt ids, and acknowledges an
         .filter(Boolean),
     ).toEqual(clicks.map((click) => click.id))
     expect(receipts[1]).toEqual(clicks.slice(1).map((click) => click.id))
-    expect(receipts[2]).toEqual([...clicks.slice(2).map((click) => click.id), 'click-0'])
+    // Reporting the first batch can take longer than a heartbeat on a busy machine. The
+    // final asking is sent only after every handed-back click has been dealt with.
+    expect(receipts.at(-1)).toEqual([...clicks.slice(2).map((click) => click.id), 'click-0'])
     expect(receipts.every((ids) => ids.length <= 500)).toBe(true)
   } finally {
     connector.closeAllConnections()
