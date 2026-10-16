@@ -1118,7 +1118,17 @@ const listenNode: Listen = (address, port, door, api, patience) => {
       .catch(() => res.destroy())
       // Inside the standalone program nothing tells for certain whether a body has arrived, so
       // there the connection of any request that says it carries one is closed once it is answered.
-      .finally(() => (!whole || (said && standalone)) && req.socket.destroy())
+      .finally(() => {
+        if (whole && !(said && standalone)) return
+        // `finish` means the runtime accepted the answer, not that the socket flushed it.
+        // Ending the writable side lets those bytes go before FIN. Destroying it here can
+        // discard them on Windows under Bun. A caller that keeps sending still has a limit.
+        const socket = req.socket
+        if (socket.destroyed) return
+        const late = setTimeout(() => socket.destroy(), UNREAD_MS)
+        socket.once('close', () => clearTimeout(late))
+        socket.end()
+      })
   }
   // A request that expects something other than to be told to go on is answered as the request it is
   server.on('request', (req, res) => answer(req, res)).on('checkExpectation', (req, res) => answer(req, res))
