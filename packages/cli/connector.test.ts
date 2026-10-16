@@ -39,7 +39,7 @@ const stand = vi.hoisted(() => ({
     running: false,
     threads: new Map<string, string>(),
     slow: false,
-    asked: [] as { ids: string[]; answer: (thread: string | null | undefined) => void }[],
+    asked: [] as { ids: string[]; answer: (thread: string | null | undefined | Error, progressed?: boolean) => void }[],
     sent: [] as { thread: string; text: string }[],
     /** What T3 Code says where it will not take a message, and what it refused. */
     refusing: null as string | null,
@@ -51,10 +51,14 @@ const stand = vi.hoisted(() => ({
 vi.mock('./src/t3', () => ({
   t3Server: () => (stand.t3.running ? { origin: 'http://127.0.0.1:1', home: '/no-t3-code', program: 't3' } : undefined),
   t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }) =>
-    new Promise<string | null | undefined>((answer) => {
+    new Promise<{ thread: string | null | undefined | Error; progressed: boolean }>((resolve) => {
+      const answer = (thread: string | null | undefined | Error, progressed = true) => resolve({ thread, progressed })
       stand.t3.asked.push({ ids: [...of.ids], answer })
       if (!stand.t3.slow) answer(of.ids.map((id) => stand.t3.threads.get(id)).find((thread) => thread !== undefined) ?? null)
-    }).then((thread) => (thread === undefined ? { status: 'incomplete' } : thread === null ? { status: 'absent' } : { status: 'found', thread })),
+    }).then(({ thread, progressed }) => {
+      if (thread instanceof Error) throw thread
+      return thread === undefined ? { status: 'incomplete', progressed } : thread === null ? { status: 'absent' } : { status: 'found', thread }
+    }),
   t3Send: async (_t3: unknown, thread: string, text: string) => {
     if (stand.t3.refusing !== null) {
       stand.t3.refused.push({ thread, text })
@@ -2401,6 +2405,52 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
     expect(stand.codex).toEqual([])
     expect(stand.calls.some((c) => c.name === 'machines:runStarted')).toBe(false)
+  })
+
+  test.each(['unread', 'failed'] as const)('a persistently %s search backs off up to a minute and resets when a batch makes progress', async (failure) => {
+    standIn(true)
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    let now = Date.now()
+    const wall = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      offered(click(3))
+      await until(() => stand.t3.asked.length === 1)
+      // Continuation must obey its retry time even after the original click leaves the inbox.
+      offered()
+      await settled()
+      const advance = async (ms: number) => {
+        now += ms
+        await vi.advanceTimersByTimeAsync(ms)
+        offered()
+        await settled()
+      }
+      const retry = async (delay: number, progressed = false) => {
+        const count = stand.t3.asked.length
+        stand.t3.asked.at(-1)!.answer(failure === 'failed' && !progressed ? new Error('unavailable') : undefined, progressed)
+        await settled()
+        await advance(delay - 1)
+        expect(stand.t3.asked).toHaveLength(count)
+        await advance(1)
+        expect(stand.t3.asked).toHaveLength(count + 1)
+      }
+      for (const delay of [300, 600, 1200, 2400, 4800, 9600, 19_200, 38_400, 60_000, 60_000]) await retry(delay)
+      // Finite batches continue quickly; a successful batch clears earlier failures.
+      await retry(300, true)
+      await retry(300, true)
+      await retry(300)
+      await retry(600)
+      stand.t3.asked.at(-1)!.answer('t3-thread-c')
+      await settled()
+      offered({ ...click(3), id: 'after-recovery' })
+      await advance(10)
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(stand.codex).toEqual([])
+    } finally {
+      wall.mockRestore()
+    }
   })
 
   test('another incomplete batch does not restart the delivery wait', async () => {

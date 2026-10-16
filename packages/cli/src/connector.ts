@@ -543,7 +543,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const t3Asked = new Map<string, number>()
   const t3Searches = new Map<string, T3Search>()
   const t3Pending = new Map<string, { harness: string; id: string }>()
-  const t3RetryAt = new Map<string, number>()
+  const t3Retries = new Map<string, { at: number; delay: number }>()
   const t3Refused = new Map<string, number>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
   /** How long a conversation that is in no thread of T3 Code is taken to be in none. */
@@ -580,40 +580,45 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (known?.thread) return { server, thread: known.thread }
     if (known && now - known.at < T3_AGAIN_MS) return undefined
     const waiting = () => steady() - (t3Asked.get(key) ?? steady()) < T3_ASKED_MS
-    if (steady() < (t3RetryAt.get(key) ?? 0)) return waiting() ? 'asking' : undefined
+    if (steady() < (t3Retries.get(key)?.at ?? 0)) return waiting() ? 'asking' : undefined
     if (t3Known.size + t3Searches.size > 2000) {
       t3Known.clear()
       t3Asked.clear()
       t3Searches.clear()
       t3Pending.clear()
-      t3RetryAt.clear()
+      t3Retries.clear()
     }
     t3Known.set(key, 'asking')
     if (!t3Asked.has(key)) t3Asked.set(key, steady())
-    const search = t3Searches.get(key) ?? { pending: [], read: new Map() }
+    const search = t3Searches.get(key) ?? { pending: [], read: new Map(), attempted: new Set() }
     t3Searches.set(key, search)
     t3Pending.set(key, session)
     // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
     const ids = [...new Set([session.id, threadOf(key)])]
     void t3ThreadOf(server, { harness: session.harness, ids, cwd: conversationFolder(session) }, search)
-      .catch(() => ({ status: 'incomplete' as const }))
+      .catch(() => ({ status: 'incomplete' as const, progressed: false }))
       .then((result) => {
         if (t3Searches.get(key) !== search) return
+        let again = 10
         if (result.status === 'incomplete') {
           // More candidates, unread answers and expired budgets are not evidence of absence.
           // Keep the first deadline while continuing through later batches on subsequent passes.
           t3Known.delete(key)
-          t3RetryAt.set(key, steady() + 300)
+          // New batches keep moving. Repeated failures wait longer, up to a minute, until
+          // another candidate is reached or read successfully. A later failure starts afresh.
+          const delay = result.progressed ? 0 : Math.min((t3Retries.get(key)?.delay || 150) * 2, 60_000)
+          t3Retries.set(key, { at: steady() + (delay || 300), delay })
+          again = (delay || 300) + 10
         } else {
           t3Asked.delete(key)
           t3Searches.delete(key)
           t3Pending.delete(key)
-          t3RetryAt.delete(key)
+          t3Retries.delete(key)
           const thread = result.status === 'found' ? result.thread : null
           t3Known.set(key, { thread, at: Date.now() })
           if (thread) say(`${a(session.harness)} conversation (${short(session.id)}) is held in a thread of T3 Code`)
         }
-        soon(result.status === 'incomplete' ? 310 : 10)
+        soon(again)
       })
     return waiting() ? 'asking' : undefined
   }

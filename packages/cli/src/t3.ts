@@ -217,9 +217,11 @@ export interface T3Search {
   scope?: string
   pending: string[]
   read: Map<string, string>
+  /** Candidates already attempted, so another failed read is not counted as progress. */
+  attempted: Set<string>
 }
 
-export type T3ThreadResult = { status: 'found'; thread: string } | { status: 'absent' } | { status: 'incomplete' }
+export type T3ThreadResult = { status: 'found'; thread: string } | { status: 'absent' } | { status: 'incomplete'; progressed: boolean }
 
 /**
  * Looks through another batch of active threads. An unread thread goes behind those still
@@ -229,7 +231,7 @@ export type T3ThreadResult = { status: 'found'; thread: string } | { status: 'ab
 export async function t3ThreadOf(
   t3: T3,
   of: { harness: string; ids: readonly string[]; cwd?: string },
-  search: T3Search = { pending: [], read: new Map() },
+  search: T3Search = { pending: [], read: new Map(), attempted: new Set() },
   signal: AbortSignal = AbortSignal.timeout(DISCOVERY_MS),
 ): Promise<T3ThreadResult> {
   const scope = JSON.stringify([t3.home, t3.origin, of.harness, [...of.ids].sort(), of.cwd])
@@ -237,14 +239,16 @@ export async function t3ThreadOf(
     search.scope = scope
     search.pending = []
     search.read.clear()
+    search.attempted.clear()
   }
   const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell', signal)
-  if (!shell || !Array.isArray(shell.threads)) return { status: 'incomplete' }
+  if (!shell || !Array.isArray(shell.threads)) return { status: 'incomplete', progressed: false }
   const ranked = likeliest(shell, of)
   const active = new Set(ranked)
   const versions = new Map<string, string>()
   for (const t of shell.threads as ShellThread[]) if (typeof t?.id === 'string') versions.set(t.id, typeof t.updatedAt === 'string' ? t.updatedAt : '')
   for (const [id, version] of search.read) if (!active.has(id) || versions.get(id) !== version) search.read.delete(id)
+  for (const id of search.attempted) if (!active.has(id)) search.attempted.delete(id)
   search.pending = search.pending.filter((id) => active.has(id))
   const pending = new Set(search.pending)
   for (const id of ranked) {
@@ -252,9 +256,12 @@ export async function t3ThreadOf(
     search.pending.push(id)
     pending.add(id)
   }
+  let progressed = false
   const count = Math.min(LOOKED_INTO, search.pending.length)
   for (let i = 0; i < count && !signal.aborted; i++) {
     const id = search.pending.shift()!
+    if (!search.attempted.has(id)) progressed = true
+    search.attempted.add(id)
     const snapshot = await ask<{ projection?: { providerThreads?: unknown } }>(
       t3,
       'GET',
@@ -263,9 +270,12 @@ export async function t3ThreadOf(
     )
     if (!Array.isArray(snapshot?.projection?.providerThreads)) search.pending.push(id)
     else if (holds(snapshot, of.ids)) return { status: 'found', thread: id }
-    else search.read.set(id, versions.get(id)!)
+    else {
+      search.read.set(id, versions.get(id)!)
+      progressed = true
+    }
   }
-  return { status: search.pending.length ? 'incomplete' : 'absent' }
+  return search.pending.length ? { status: 'incomplete', progressed } : { status: 'absent' }
 }
 
 /**
