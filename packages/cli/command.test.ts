@@ -942,16 +942,14 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
 
   test('each command is counted by its own name, who ran it and how it ended, and never by what was typed after it', async () => {
     const m = machine()
-    const b = await backend(m, (asked) =>
-      asked.path === 'tour:clear'
-        ? { deleted: ['tour-menu'], kept: [], seen: 2 }
-        : asked.path === 'artifacts:list'
-          ? [{ slug: 'tour-menu', title: 'The It tour' }]
-          : asked.path === 'artifacts:get'
-            ? { title: 'The It tour', version: 1 }
-            : asked.path === 'state:get'
-              ? { json: '{"status":"open","picked":"","seen":["chess","drums"]}' }
-              : null,
+    const b = await backend(m, ({ path: fn, args }) =>
+      fn === 'tour:clear'
+        ? { requested: [{ slug: 'tour-menu', job: 'tour-delete' }], kept: [], seen: 2 }
+        : fn === 'deletions:get'
+          ? { state: 'completed', job: args.job }
+          : fn === 'artifacts:list'
+            ? [{ slug: 'tour-menu', title: 'The It tour' }]
+            : null,
     )
     try {
       await run(m, ['list'], b.env)
