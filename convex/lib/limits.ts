@@ -84,9 +84,10 @@ export async function rateLimit(ctx: MutationCtx, rule: Rule, who: string, cost 
   // same again the next time, so the line is left with the scheduler, which a failed call's
   // requests never reach.
   const left = tokens - cost
-  // When a large correction moves the last warning into the future, start its minute again.
-  // Save that new time even when this call leaves enough tokens to write no warning.
-  const saidAt = row && ahead > SET_BACK_MS && row.saidAt !== undefined && row.saidAt > now ? now : row?.saidAt
+  // Older versions restarted the count but kept the warning's old time, leaving it beyond the
+  // count's timestamp. Save its new time even when this call leaves enough tokens to write no warning.
+  const warningAhead = (row?.saidAt ?? now) - now
+  const saidAt = warningAhead > 0 && (ahead > SET_BACK_MS || warningAhead > ahead) ? now : row?.saidAt
   const say = left < cost && now - (saidAt ?? 0) >= 60_000
   if (row) await ctx.db.patch(row._id, { who, tokens: left, updatedAt: counted, saidAt: say ? now : saidAt })
   const limit = row?._id ?? (await ctx.db.insert('rateLimits', { key, who, tokens: left, updatedAt: now, ...(say ? { saidAt: now } : {}) }))

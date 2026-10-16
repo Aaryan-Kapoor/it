@@ -5707,7 +5707,12 @@ describe('what is written down', () => {
     }
   })
 
-  test.each([0, 3_600_000])('limit warnings remain one minute apart after a %i millisecond clock correction', async (setBack) => {
+  test.each([
+    { correction: 'no clock change', setBack: 0, recovered: false },
+    { correction: 'a one-hour clock correction', setBack: 3_600_000, recovered: false },
+    { correction: 'a clock correction handled by a previous version', setBack: 3_600_000, recovered: true },
+    { correction: 'a previous correction with its old warning now only three milliseconds ahead', setBack: 3, recovered: true },
+  ])('limit warnings remain one minute apart after $correction', async ({ setBack, recovered }) => {
     const out = written()
     try {
       const t = backend()
@@ -5722,7 +5727,14 @@ describe('what is written down', () => {
       const correctedAt = Date.now() - setBack
       vi.setSystemTime(correctedAt)
       if (setBack) {
-        // A large correction starts a fresh bucket. Its first call leaves one token and writes no warning.
+        if (recovered) {
+          // An older version restarted the count thirty seconds ago but kept the warning's old time.
+          await t.run(async (ctx) => {
+            const row = (await ctx.db.query('rateLimits').collect()).find((row) => row.key === `export:${alice.user}`)!
+            await ctx.db.patch(row._id, { tokens: 1, updatedAt: correctedAt - 30_000 })
+          })
+        }
+        // The bucket has two tokens after reset or refill. This call leaves one and writes no warning.
         await ask()
         const count = await t.run(async (ctx) => (await ctx.db.query('rateLimits').collect()).find((row) => row.key === `export:${alice.user}`))
         expect(count).toMatchObject({ tokens: 1, updatedAt: correctedAt, saidAt: correctedAt })
@@ -5775,7 +5787,7 @@ describe('what is written down', () => {
       const t = backend()
       await person(t, 'alice')
       const m = await machineOf(t, 'alice')
-      await publish(m, 'plan')
+      const p = await publish(m, 'plan')
       // Each write stores about 480 KB, and the page may store 8192 KB at once
       const big = JSON.stringify({ text: 'x'.repeat(480 * 1024) })
       let wrote = 0
@@ -5785,6 +5797,13 @@ describe('what is written down', () => {
       expect(wrote).toBeLessThan(30)
       // It was said before the first refusal, by the last write that was taken, though plenty was left by the count of one
       expect(out.of('limit.reached').map((e) => e.rule)).toContain('stateKilobytesPage')
+      const count = () => t.run(async (ctx) => (await ctx.db.query('rateLimits').collect()).find((row) => row.key === `stateKilobytesPage:${p.artifactId}`))
+      const warned = (await count())!
+      expect(warned.saidAt).toBe(warned.updatedAt)
+      // A smaller write that arrived out of order can still fit, but must not move the warning backwards.
+      vi.setSystemTime(warned.updatedAt - 3)
+      await m.as.mutation(api.state.patch, { slug: 'plan', patch: '{"text":"small"}', replace: true })
+      expect(await count()).toMatchObject({ updatedAt: warned.updatedAt, saidAt: warned.saidAt })
     } finally {
       out.stop()
     }
