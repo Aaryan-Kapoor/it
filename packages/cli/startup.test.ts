@@ -6,6 +6,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { Problem } from './src/lib'
 import { program } from './src/serve/backend'
+import { readConfig } from './src/serve/config'
 import { recoverStartup, resetStartup, STARTUP_WAITS, startupKey, startupStatus } from './src/serve/startup'
 
 describe('a background service that cannot start', () => {
@@ -178,6 +179,26 @@ describe('a background service that cannot start', () => {
       expect(startupStatus()).toMatchObject({ failures: 1, code, paused: true })
     }
     expect(readFileSync(path.join(folder, 'service.json'), 'utf8')).toBe('settings left intact')
+  })
+
+  test('pauses for an invalid configured port and starts again once the port is corrected', async () => {
+    const config = { port: 39001, network: false, instanceSecret: '0'.repeat(64), adminKey: 'test', sessionSecret: 'test' }
+    writeFileSync(path.join(folder, 'service.json'), JSON.stringify(config))
+    process.env.IT_PORT = 'not-a-port'
+    const run = vi.fn(async (ready: () => void) => {
+      expect(readConfig()).toEqual(config)
+      ready()
+      return false
+    })
+    expect(await recoverStartup(run, options())).toBe(false)
+    expect(startupStatus()).toMatchObject({ failures: 1, code: 'invalid', paused: true, retryAt: null })
+    expect(await recoverStartup(run, options())).toBe(false)
+    expect(run).toHaveBeenCalledOnce()
+    process.env.IT_PORT = '39001'
+    expect(await recoverStartup(run, options())).toBe(false)
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(startupStatus()).toBeUndefined()
+    expect(JSON.parse(readFileSync(path.join(folder, 'service.json'), 'utf8'))).toEqual(config)
   })
 
   test('retries changed settings, a replaced custom backend, and an explicit manual start', async () => {

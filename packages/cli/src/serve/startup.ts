@@ -113,6 +113,7 @@ export function startupStatus() {
 
 // These failures already say that a person must change something before another attempt.
 const needsChange = new Set([
+  'invalid',
   'settings',
   'not_set_up',
   'backend_releases',
