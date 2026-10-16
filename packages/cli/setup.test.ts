@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
 import { CODEX_RULE_FILE, CODEX_SHUT_SAID } from './src/codex-settings'
 import { shutIn, VERSION } from './src/lib'
+import { keepOriginal, ORIGINAL_LIMIT, restoreAbsent } from './src/preserve'
 import { startOf } from './src/serve/backend'
 import {
   AFTER,
@@ -439,7 +440,7 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(commands('hermes')).not.toContain('plugins remove it-bridge')
   })
 
-  test('Hermes is disabled and its copied files are kept for recovery, without deleting the plugin folder', async () => {
+  test('Hermes is disabled and its unchanged copied files are removed without keeping recovery folders', async () => {
     const folder = folderOf('hermes')
     expect((await connect('hermes', () => {})).addon).toBe('connected')
     expect(under(folder)).toEqual([
@@ -455,7 +456,7 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(commands('hermes')).toContain('plugins disable it-bridge')
     expect(commands('hermes')).not.toContain('plugins remove it-bridge')
     expect(under(folder)).toEqual(['plugins/it-bridge/__pycache__/__init__.cpython-312.pyc'])
-    expect(read(path.join(folder, 'skills/it/SKILL.md.it-recovery/1/original'))).toBe(SKILL)
+    expect(existsSync(path.join(folder, 'skills/it'))).toBe(false)
     // Hermes's own skills folder is never removed
     expect(existsSync(path.join(folder, 'skills'))).toBe(true)
   })
@@ -540,7 +541,7 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(read(`${plugin}.set-aside-by-it-2`)).toBe('changed again')
   })
 
-  test('a newer version preserves replaced and obsolete files for recovery', async () => {
+  test('a newer version replaces and removes unchanged files without keeping recovery copies', async () => {
     const folder = folderOf('opencode')
     const plugin = path.join(folder, 'plugins/it-bridge.js')
     await connect('opencode', () => {})
@@ -562,11 +563,54 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect((await connect('opencode', say)).addon).toBe('connected')
     expect(under(folder)).toEqual(['plugins/it-bridge.js', 'skills/it/SKILL.md', 'skills/it/it-home.json'])
     expect(read(plugin)).toContain('The It add-on for OpenCode')
-    expect(read(`${plugin}.it-recovery/1/original`)).toBe('another version')
-    expect(read(`${gone}.it-recovery/1/original`)).toBe('a file of another version')
-    expect(said.join('\n')).toContain(`${plugin}.it-recovery`)
-    expect(said.join('\n')).toContain(`${gone}.it-recovery`)
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+    expect(existsSync(`${gone}.it-recovery`)).toBe(false)
+    expect(said.join('\n')).not.toContain('it-recovery')
     expect(noted('opencode').installs.map((i) => i.version)).toEqual([ADDONS.opencode!.version])
+  })
+
+  test('thirty successive updates of an unchanged owned file leave no recovery folders', async () => {
+    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    await connect('opencode', () => {})
+    for (let release = 1; release <= 30; release++) {
+      const text = `the installed plugin at release ${release}`
+      writeFileSync(plugin, text)
+      const before = noted('opencode')
+      before.installs[0]!.version = `release-${release}`
+      before.installs[0]!.files!.find((f) => f.path === plugin)!.sha256 = sha(text)
+      writeFileSync(stampFile('opencode'), JSON.stringify(before))
+      expect((await connect('opencode', () => {})).addon).toBe('connected')
+      expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+    }
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+  })
+
+  test.each([false, true])('removal clears leftover owned originals and keeps a personal recovery edit when present is %s', async (edited) => {
+    await connect('opencode', () => {})
+    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    const saved = keepOriginal(plugin)
+    restoreAbsent(saved, plugin)
+    mkdirSync(path.join(`${plugin}.it-recovery`, '2'))
+    if (edited) writeFileSync(saved, 'the person saved this during an interrupted update')
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(edited)
+    if (edited) expect(read(saved)).toBe('the person saved this during an interrupted update')
+  })
+
+  test('an update clears unchanged originals from failed attempts before reserving a recovery slot', async () => {
+    await connect('opencode', () => {})
+    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    writeFileSync(plugin, 'the previous version')
+    const before = noted('opencode')
+    before.installs[0]!.version = 'previous-version'
+    before.installs[0]!.files!.find((f) => f.path === plugin)!.sha256 = sha('the previous version')
+    writeFileSync(stampFile('opencode'), JSON.stringify(before))
+    for (let attempt = 0; attempt < ORIGINAL_LIMIT; attempt++) restoreAbsent(keepOriginal(plugin), plugin)
+    expect((await connect('opencode', () => {})).addon).toBe('connected')
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
   })
 
   test.each(['an earlier plugin', 'a personal edit'])('keeps ownership of an obsolete file recreated with %s during preservation', async (recreated) => {
@@ -649,7 +693,19 @@ describe('an add-on whose files It copies into an app’s folder', () => {
   test('reports recovery counts without paths or contents in service logs', async () => {
     await connect('opencode', () => {})
     const { said, say } = lines()
-    expect(await disconnect('opencode', say, {}, true)).toBe(true)
+    const file = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    const rename = fs.renameSync
+    fs.renameSync = (from, to) => {
+      if (from === file) writeFileSync(file, 'a last-moment personal save')
+      return rename(from, to)
+    }
+    syncBuiltinESMExports()
+    try {
+      expect(await disconnect('opencode', say, {}, true)).toBe(true)
+    } finally {
+      fs.renameSync = rename
+      syncBuiltinESMExports()
+    }
     expect(said.join('\n')).toContain('originals were kept for recovery')
     expect(said.join('\n')).not.toContain(tmp)
   })
@@ -811,7 +867,7 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
     expect(said.filter((line) => /set aside|kept beside|had not put there/.test(line))).toEqual([])
     expect(under(path.dirname(skill))).toEqual(['SKILL.md'])
     expect(await disconnect(id, () => {})).toBe(true)
-    expect(read(`${skill}.it-recovery/1/original`)).toBe(SKILL)
+    expect(existsSync(`${skill}.it-recovery`)).toBe(false)
     expect(existsSync(stampFile(id))).toBe(false)
   })
   test.each(APPS)('where $label is told to keep its settings elsewhere, the skill goes there', async ({ id, bin, variable }) => {
@@ -824,7 +880,7 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
     vi.stubEnv(variable, '')
     delete process.env[variable]
     expect(await disconnect(id, () => {})).toBe(true)
-    expect(read(path.join(elsewhere, 'skills/it/SKILL.md.it-recovery/1/original'))).toBe(SKILL)
+    expect(existsSync(path.join(elsewhere, 'skills/it'))).toBe(false)
   })
   test.each(APPS)(
     'a skill of that name the person had in $label is kept under another name, and what they keep beside it is left alone',
@@ -880,7 +936,7 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
       failing = []
       expect(await disconnect(id, () => {})).toBe(true)
       expect(existsSync(skill)).toBe(false)
-      expect(read(`${skill}.it-recovery/1/original`)).toBe(SKILL)
+      expect(existsSync(`${skill}.it-recovery`)).toBe(false)
       expect(existsSync(stampFile(id))).toBe(false)
     },
   )
@@ -2164,6 +2220,35 @@ describe('what a person is told about an app', () => {
 describe('on Windows', () => {
   const platform = process.platform
   afterEach(() => Object.defineProperty(process, 'platform', { value: platform }))
+
+  test('background reconciliation leaves a busy file for another attempt without waiting on the connector', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    await connect('opencode', () => {})
+    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    const installed = read(plugin)
+    const rename = fs.renameSync
+    const wait = vi.spyOn(Atomics, 'wait')
+    fs.renameSync = (from, to) => {
+      if (from === plugin) throw Object.assign(new Error('scanner has the file open'), { code: 'EBUSY' })
+      return rename(from, to)
+    }
+    syncBuiltinESMExports()
+    const { said, say } = lines()
+    try {
+      await reconcile([], say, true)
+    } finally {
+      fs.renameSync = rename
+      syncBuiltinESMExports()
+    }
+    expect(wait).not.toHaveBeenCalled()
+    expect(read(plugin)).toBe(installed)
+    expect(existsSync(stampFile('opencode'))).toBe(true)
+    expect(said.join('\n')).toContain('the note of the add-on is kept')
+    await reconcile([], say, true)
+    expect(existsSync(plugin)).toBe(false)
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+    expect(existsSync(stampFile('opencode'))).toBe(false)
+  })
 
   test.each(['EPERM', 'EACCES', 'EBUSY'])('retries %s when removing a hard-link probe before setting aside a user file', async (code) => {
     Object.defineProperty(process, 'platform', { value: 'win32' })

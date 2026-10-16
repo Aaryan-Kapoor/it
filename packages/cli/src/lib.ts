@@ -26,7 +26,7 @@ import { ConvexError } from 'convex/values'
 import { importJWK, type JWK, SignJWT } from 'jose'
 import { agentAppsAbove } from './ancestry'
 import { CODEX_SHUT_SAID } from './codex-settings'
-import { keepOriginal, putAbsent, restoreAbsent } from './preserve'
+import { keepOriginal, putAbsent, removeOriginal, restoreAbsent } from './preserve'
 import { added, shellEnv } from './shell-env'
 
 export const VERSION = '0.1.22'
@@ -201,7 +201,8 @@ export function writeFlushed(file: string, text: string): void {
  * before replacement are retried. The original is then moved to a recovery folder, and the
  * new file is published only if nobody has recreated its name. This is not a transaction with
  * other programs: the file is briefly absent, and an interrupted change leaves the original
- * in recovery. A symlink is kept, and its target is handled this way instead.
+ * in recovery. A confirmed change drops its original. A symlink is kept, and its target is
+ * handled this way instead.
  */
 export function changeWhole(file: string, change: (text: string) => string | null | undefined, kept: (original: string) => void = () => {}): boolean {
   for (let tries = 1; ; tries++) {
@@ -252,8 +253,10 @@ export function changeWhole(file: string, change: (text: string) => string | nul
         stillNamed()
       ) {
         const original = keepOriginal(target)
-        kept(original)
         try {
+          // A save caught by the move was not part of the text we changed. Leave it for
+          // recovery and report the change unfinished instead of deleting that save later.
+          if (readFileSync(original, 'utf8') !== text) throw new Error('Another program saved the original')
           if (after !== null) putAbsent(part, target)
           else {
             try {
@@ -263,10 +266,13 @@ export function changeWhole(file: string, change: (text: string) => string | nul
               if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
             }
           }
+          if (readFileSync(original, 'utf8') !== text) throw new Error('Another program saved the original')
         } catch (err) {
           restoreAbsent(original, target)
+          kept(original)
           throw new Error(`${file} could not be ${after === null ? 'removed' : 'replaced'}. Its original is kept at ${original}`, { cause: err })
         }
+        removeOriginal(original)
         return true
       }
     } finally {

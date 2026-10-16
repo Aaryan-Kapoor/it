@@ -30,7 +30,7 @@ import { HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
 import { ADDONS, LICENSE } from './addons.generated'
 import { codexConfig } from './codex-settings'
 import { harnessEnv, home, inHome, Problem, readJson, VERSION, writePrivate } from './lib'
-import { checkHardLinks, keepOriginal, putAbsent, restoreAbsent } from './preserve'
+import { checkHardLinks, keepOriginal, putAbsent, removeOriginal, removeOwnOriginals, restoreAbsent, withoutFileWait } from './preserve'
 import { alone as oneAtATime } from './serve/backend'
 
 export type AddonState = 'connected' | 'not_connected' | 'needs_approval' | 'too_old' | 'unavailable' | 'error'
@@ -706,6 +706,13 @@ function putFiles(
   // one writes, from the moment it has been written and no sooner
   const mine = new Map((was?.files ?? []).map((f) => [f.path, f.sha256]))
   const noted = () => [...mine].map(([file, sha256]) => ({ path: file, sha256 }))
+  const finished = (original: string, sha256: string) => {
+    const saved = lookAt(root, original)
+    if (saved.is === 'file' && saved.sha256 === sha256) {
+      removeOriginal(original)
+      recovery.splice(recovery.indexOf(original), 1)
+    }
+  }
   try {
     const files = wanted()
     const look = (file: string) => {
@@ -724,17 +731,20 @@ function putFiles(
       makeWithin(root, path.dirname(f.to))
       const mode = now.is === 'file' ? statSync(f.to).mode & 0o777 : undefined
       const previous = mine.get(f.to)
+      let original: string | undefined
       try {
         putInPlace(
           f.data,
           f.to,
           () => {
             if (now.is === 'none') return undefined
+            if (own) removeOwnOriginals(f.to, now.sha256)
             // Moving the actual entry captures a save after the checksum, even an atomic save.
             const name = own ? keepOriginal(f.to) : aside(f.to)
             if (!own) renameSync(f.to, name)
             mine.delete(f.to)
             ;(own ? recovery : kept).push(name)
+            if (own) original = name
             return name
           },
           mode,
@@ -752,14 +762,18 @@ function putFiles(
       }
       mine.set(f.to, f.sha256)
       wrote(noted())
+      if (original && previous) finished(original, previous)
     }
     // A file noted as put there that this add-on does not have is taken away, where it is still as it was put
     for (const [file, sha256] of [...mine]) {
       if (files.some((f) => f.to === file)) continue
       const now = lookAt(root, file)
       if (now.is === 'file' && now.sha256 === sha256) {
-        recovery.push(keepOriginal(file))
+        removeOwnOriginals(file, sha256)
+        const original = keepOriginal(file)
+        recovery.push(original)
         if (look(file).is !== 'none') throw new Error(`${file} was recreated by another program, so its removal is unfinished`)
+        finished(original, sha256)
       }
       if (now.is !== 'closed') mine.delete(file)
     }
@@ -778,16 +792,28 @@ function leaveAs(left: Left, file: string, now: Found): void {
 function takeFiles(root: string, files: Put[]): Left {
   const left: Left = { changed: [], closed: [], outside: [] }
   for (const f of files) {
-    const now = lookAt(root, f.path)
-    if (now.is !== 'file' || now.sha256 !== f.sha256) leaveAs(left, f.path, now)
-    else
-      try {
-        left.recovery ??= []
-        left.recovery.push(keepOriginal(f.path))
-        leaveAs(left, f.path, lookAt(root, f.path))
-      } catch (err) {
-        if (!absent(err)) left.closed.push(f.path)
+    try {
+      const now = lookAt(root, f.path)
+      if (now.is === 'outside' || now.is === 'closed') {
+        leaveAs(left, f.path, now)
+        continue
       }
+      removeOwnOriginals(f.path, f.sha256)
+      if (now.is !== 'file' || now.sha256 !== f.sha256) leaveAs(left, f.path, now)
+      else {
+        const original = keepOriginal(f.path)
+        const after = lookAt(root, f.path)
+        leaveAs(left, f.path, after)
+        const saved = lookAt(root, original)
+        if (after.is === 'none' && saved.is === 'file' && saved.sha256 === f.sha256) removeOriginal(original)
+        else {
+          left.recovery ??= []
+          left.recovery.push(original)
+        }
+      }
+    } catch (err) {
+      if (!absent(err)) left.closed.push(f.path)
+    }
   }
   return left
 }
@@ -1617,6 +1643,11 @@ let reconciling: Promise<void> = Promise.resolve()
  * in the words of a harness's own installer or of an error, which can hold a path or a name.
  */
 export function reconcile(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog = false): Promise<void> {
+  if (forLog) return withoutFileWait(() => reconcileWithFiles(chosen, say, forLog))
+  return reconcileWithFiles(chosen, say, forLog)
+}
+
+function reconcileWithFiles(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog: boolean): Promise<void> {
   // One run's failure (the lock could not be had, say) is that run's alone: the next still runs
   reconciling = reconciling
     .catch(() => {})

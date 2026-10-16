@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   chmodSync,
   constants,
@@ -7,6 +8,7 @@ import {
   linkSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
@@ -18,14 +20,26 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 
-/** Retries the sharing violations a scanner can cause on Windows, without replacing a name. */
+const noWait = new AsyncLocalStorage<boolean>()
+
+/** Background reconciliation leaves busy files for another attempt rather than blocking clicks. */
+export function withoutFileWait<T>(change: () => T): T {
+  return noWait.run(true, change)
+}
+
+/**
+ * Retries Windows scanner sharing violations only in the CLI. Three seconds allows a short
+ * scan to finish without leaving a command waiting on a persistently locked file. Background
+ * reconciliation disables this wait for its whole asynchronous run, including restoration.
+ */
 function tryFile(change: () => void): void {
   for (let tries = 0; ; tries++) {
     try {
       change()
       return
     } catch (err) {
-      if (process.platform !== 'win32' || tries >= 30 || !['EPERM', 'EACCES', 'EBUSY'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err
+      if (noWait.getStore() || process.platform !== 'win32' || tries >= 30 || !['EPERM', 'EACCES', 'EBUSY'].includes((err as NodeJS.ErrnoException).code ?? ''))
+        throw err
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
     }
   }
@@ -37,8 +51,33 @@ export function checkHardLinks(file: string, probe: string): void {
   tryFile(() => unlinkSync(probe))
 }
 
-/** Originals are never expired. A full folder stops the next change until its owner reviews it. */
+/** Unresolved originals never expire. Twenty slots bound disk use before a person must review them. */
 export const ORIGINAL_LIMIT = 20
+
+/** Identifies only the recovery folder made for this file, never a folder or link placed there by someone else. */
+function recoveryFolder(file: string, create: boolean): { target: string; dir: string } | undefined {
+  const target = path.join(realpathSync(path.dirname(file)), path.basename(file))
+  const dir = `${target}.it-recovery`
+  const note = path.join(dir, 'owner.json')
+  const owner = JSON.stringify({ itRecovery: 1, target })
+  if (create) {
+    try {
+      mkdirSync(dir, { mode: 0o700 })
+      writeFileSync(note, owner, { flag: 'wx', mode: 0o600 })
+    } catch (err) {
+      if (!(err instanceof Error && 'code' in err && err.code === 'EEXIST')) throw err
+    }
+  } else if (!lstatSync(dir, { throwIfNoEntry: false })) return undefined
+  if (
+    !lstatSync(dir).isDirectory() ||
+    lstatSync(dir).isSymbolicLink() ||
+    !lstatSync(note).isFile() ||
+    lstatSync(note).isSymbolicLink() ||
+    readFileSync(note, 'utf8') !== owner
+  )
+    throw new Error(`${dir} is not a recovery folder It made. Move it away before trying again`)
+  return { target, dir }
+}
 
 /**
  * Moves the file itself, including a last-moment save or a symlink, into a private recovery
@@ -46,24 +85,7 @@ export const ORIGINAL_LIMIT = 20
  * with an open handle can still save into this original after it has moved.
  */
 export function keepOriginal(file: string): string {
-  const target = path.join(realpathSync(path.dirname(file)), path.basename(file))
-  const dir = `${target}.it-recovery`
-  const note = path.join(dir, 'owner.json')
-  const owner = JSON.stringify({ itRecovery: 1, target })
-  try {
-    mkdirSync(dir, { mode: 0o700 })
-    writeFileSync(note, owner, { flag: 'wx', mode: 0o600 })
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
-    if (
-      !lstatSync(dir).isDirectory() ||
-      lstatSync(dir).isSymbolicLink() ||
-      !lstatSync(note).isFile() ||
-      lstatSync(note).isSymbolicLink() ||
-      readFileSync(note, 'utf8') !== owner
-    )
-      throw new Error(`${dir} is not a recovery folder It made. Move it away before trying again`)
-  }
+  const { target, dir } = recoveryFolder(file, true)!
   if (process.platform !== 'win32') chmodSync(dir, 0o700)
   // Reserve one of a fixed number of slots by making its folder, so simultaneous changes
   // cannot overwrite a copy or exceed the limit. An interrupted reservation also uses a slot.
@@ -89,6 +111,50 @@ export function keepOriginal(file: string): string {
     }
   }
   throw new Error(`${dir} has ${ORIGINAL_LIMIT} recovery slots in use. Review its originals and remove the numbered folders you no longer need, then try again`)
+}
+
+/** Removes the empty recovery folder too, so ordinary updates leave nothing beside an add-on. */
+function removeEmptyRecovery(dir: string): void {
+  const entries = readdirSync(dir)
+  if (entries.length !== 1 || entries[0] !== 'owner.json') return
+  const note = path.join(dir, 'owner.json')
+  const owner = readFileSync(note)
+  tryFile(() => unlinkSync(note))
+  try {
+    tryFile(() => rmdirSync(dir))
+  } catch (err) {
+    // A simultaneous change may have reserved a slot. Put its ownership marker back and
+    // leave the new original alone; recovery folders are never removed recursively.
+    writeFileSync(note, owner, { flag: 'wx', mode: 0o600 })
+    if (!(err instanceof Error && 'code' in err && err.code === 'ENOTEMPTY')) throw err
+  }
+}
+
+/** Drops an original once the caller has confirmed it is no longer needed to undo the change. */
+export function removeOriginal(original: string): void {
+  tryFile(() => unlinkSync(original))
+  const slot = path.dirname(original)
+  tryFile(() => rmdirSync(slot))
+  removeEmptyRecovery(path.dirname(slot))
+}
+
+/** Removal also clears originals left by interrupted changes, but only when their bytes are still It's own. */
+export function removeOwnOriginals(file: string, sha256: string): void {
+  const recovery = recoveryFolder(file, false)
+  if (!recovery) return
+  for (const entry of readdirSync(recovery.dir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^[1-9]\d*$/.test(entry.name)) continue
+    const slot = path.join(recovery.dir, entry.name)
+    // A process can stop after reserving a slot and before moving its original into it.
+    if (readdirSync(slot).length === 0) {
+      tryFile(() => rmdirSync(slot))
+      continue
+    }
+    const original = path.join(slot, 'original')
+    if (!lstatSync(original, { throwIfNoEntry: false })?.isFile()) continue
+    if (createHash('sha256').update(readFileSync(original)).digest('hex') === sha256) removeOriginal(original)
+  }
+  if (lstatSync(recovery.dir, { throwIfNoEntry: false })) removeEmptyRecovery(recovery.dir)
 }
 
 /** Publishes only at an unused name. A writer that recreated it after preservation wins. */

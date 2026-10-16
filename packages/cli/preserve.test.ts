@@ -36,6 +36,21 @@ afterEach(() => {
 })
 const copy = () => path.join(`${file}.it-recovery`, '1', 'original')
 
+test.each([false, true])('drops a shared settings original after a confirmed change when removing is %s', (removing) => {
+  writeFileSync(file, 'private setting\nIt\n')
+  const kept: string[] = []
+  expect(
+    changeWhole(
+      file,
+      () => (removing ? null : 'private setting\n'),
+      (name) => kept.push(name),
+    ),
+  ).toBe(true)
+  expect(existsSync(`${file}.it-recovery`)).toBe(false)
+  expect(kept).toEqual([])
+  if (!removing) expect(readFileSync(file, 'utf8')).toBe('private setting\n')
+})
+
 test.each([false, true])('keeps a save at the final move recoverable when removing is %s', (removing) => {
   writeFileSync(file, 'It\n')
   fs.renameSync = (from, to) => {
@@ -44,16 +59,16 @@ test.each([false, true])('keeps a save at the final move recoverable when removi
   }
   syncBuiltinESMExports()
   const kept: string[] = []
-  expect(
+  expect(() =>
     changeWhole(
       file,
       () => (removing ? null : 'changed\n'),
       (name) => kept.push(name),
     ),
-  ).toBe(true)
+  ).toThrow(/original is kept/)
   expect(kept).toEqual([copy()])
   expect(readFileSync(copy(), 'utf8')).toBe('It\nlast external save\n')
-  expect(removing ? !existsSync(file) : readFileSync(file, 'utf8') === 'changed\n').toBe(true)
+  expect(readFileSync(file, 'utf8')).toBe('It\nlast external save\n')
 })
 
 test('keeps an atomic editor save made immediately before the original moves', () => {
@@ -67,7 +82,8 @@ test('keeps an atomic editor save made immediately before the original moves', (
     return original.renameSync(from, to)
   }
   syncBuiltinESMExports()
-  changeWhole(file, () => 'updated')
+  expect(() => changeWhole(file, () => 'updated')).toThrow(/original is kept/)
+  expect(readFileSync(file, 'utf8')).toBe('atomic save')
   expect(readFileSync(copy(), 'utf8')).toBe('atomic save')
 })
 
@@ -75,11 +91,12 @@ test('keeps writes through an already open handle in the recovery original', () 
   writeFileSync(file, 'before')
   const handle = openSync(file, 'w')
   try {
-    changeWhole(
-      file,
-      () => 'updated',
-      () => writeFileSync(handle, 'late handle save'),
-    )
+    fs.linkSync = (from, to) => {
+      if (to === file && !existsSync(file)) writeFileSync(handle, 'late handle save')
+      return original.linkSync(from, to)
+    }
+    syncBuiltinESMExports()
+    expect(() => changeWhole(file, () => 'updated')).toThrow(/original is kept/)
     expect(readFileSync(file, 'utf8')).toBe('updated')
     expect(readFileSync(copy(), 'utf8')).toBe('late handle save')
   } finally {
@@ -146,11 +163,10 @@ test('leaves an empty directory recreated at the final restoration step untouche
   expect(readFileSync(path.join(saved, 'notes.txt'), 'utf8')).toBe('original content')
 })
 
-test('retains twenty originals without expiring any and refuses the next change', () => {
+test('retains twenty unresolved originals without expiring any and refuses the next change', () => {
   for (let n = 0; n < ORIGINAL_LIMIT; n++) {
     writeFileSync(file, String(n))
-    expect(changeWhole(file, () => 'updated')).toBe(true)
-    expect(changeWhole(file, (text) => text)).toBe(false)
+    keepOriginal(file)
   }
   writeFileSync(file, 'newest')
   expect(() => changeWhole(file, () => 'over limit')).toThrow(/20 recovery slots/)
@@ -167,7 +183,7 @@ test('leaves an unrecognized recovery folder and the original untouched', () => 
   expect(readFileSync(file, 'utf8')).toBe('before')
 })
 
-test.skipIf(process.platform === 'win32')('preserves a linked profile and the modes of its target and original', () => {
+test.skipIf(process.platform === 'win32')('preserves a linked profile and its permissions without retaining a successful change', () => {
   writeFileSync(file, 'before')
   chmodSync(file, 0o640)
   const profile = path.join(folder, '.profile')
@@ -177,8 +193,7 @@ test.skipIf(process.platform === 'win32')('preserves a linked profile and the mo
   expect(lstatSync(profile).ino).toBe(link)
   expect(readFileSync(profile, 'utf8')).toBe('')
   expect(statSync(file).mode & 0o777).toBe(0o640)
-  expect(statSync(copy()).mode & 0o777).toBe(0o640)
-  expect(statSync(`${file}.it-recovery`).mode & 0o777).toBe(0o700)
+  expect(existsSync(`${file}.it-recovery`)).toBe(false)
 })
 
 test.skipIf(process.platform === 'win32').each([false, true])('moves and restores a symlink when hard links follow symlinks is %s', (follows) => {
@@ -234,13 +249,12 @@ test('leaves the installed file in place when its filesystem cannot make hard li
 
 test('reports incomplete removal when another writer recreates the file after preservation', () => {
   writeFileSync(file, 'installed')
-  expect(() =>
-    changeWhole(
-      file,
-      () => null,
-      () => writeFileSync(file, 'new save'),
-    ),
-  ).toThrow(/could not be removed/)
+  fs.renameSync = (from, to) => {
+    original.renameSync(from, to)
+    if (from === file) writeFileSync(file, 'new save')
+  }
+  syncBuiltinESMExports()
+  expect(() => changeWhole(file, () => null)).toThrow(/could not be removed/)
   expect(readFileSync(file, 'utf8')).toBe('new save')
   expect(readFileSync(copy(), 'utf8')).toBe('installed')
 })

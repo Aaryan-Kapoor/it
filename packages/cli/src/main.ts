@@ -1633,7 +1633,7 @@ function crumbs(folder: string, say: (line: string) => void): void {
   if (anothers(path.join(codexHome, 'plugins', 'cache', 'it'))) return
   try {
     // Codex saves this file itself, when the person trusts a project or a plugin's hooks, and
-    // may do so while this is at work. The original is retained for recovery.
+    // may do so while this is at work. Only an unfinished change keeps its original for recovery.
     changeWhole(
       path.join(codexHome, 'config.toml'),
       (text) => {
