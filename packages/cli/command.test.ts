@@ -20,7 +20,8 @@ const AFTER_SETUP =
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
-import { bases } from './test-ports'
+import { instanceName } from './src/serve/config'
+import { bases, holdBase } from './test-ports'
 
 // Every test here starts the program, and some start it a dozen times over. Each is given the
 // time that takes on a machine that is busy with other things as well.
@@ -57,7 +58,7 @@ const RUNS = process.platform === 'linux' ? 'active' : 'running'
 /** The answers of a stand-in for the system's commands that has the service registered and running: systemd's to `is-active` and `is-enabled`, and launchd's to `print`. */
 const SAYS_IT_RUNS = '*" is-active "*) echo active ;; *" is-enabled "*) echo enabled ;; *" print "*) echo "state = running" ;;'
 /** The base ports a test here takes when it has something listen where It would: each from a block of this file's own, and held until the test gives it back. */
-const ports = bases(16_000, 20)
+const ports = bases(26_000, 20)
 /** The port the site is said to be at, on a machine that has It's settings. Nothing listens there. */
 const SITE_PORT = 21000
 const SITE = `http://localhost:${SITE_PORT}`
@@ -677,6 +678,122 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
   })
 })
 
+describe('a network change taken by the running service', () => {
+  async function changing(answer: (read: number, network: boolean) => unknown, initialTailnet = true) {
+    const m = machine(true, true)
+    const held = await holdBase(58_000, 10)
+    const settings = () => JSON.parse(readFileSync(path.join(m.it, 'service.json'), 'utf8')) as { network: boolean }
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify({
+        port: held.base,
+        network: true,
+        tailnet: initialTailnet,
+        instanceSecret: 'a'.repeat(64),
+        adminKey: 'it-000000000000|made-up',
+        sessionSecret: 'made-up',
+      }),
+    )
+    let reads = 0
+    const answering = (port: number) =>
+      new Promise<http.Server>((resolve) => {
+        const server = http.createServer((req, res) => {
+          req.resume().on('end', () => {
+            if (req.url === '/health') return res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true,"it":true}')
+            const value = answer(++reads, settings().network)
+            const body =
+              value instanceof Refusal
+                ? { status: 'error', errorData: value.data, errorMessage: 'refused', logLines: [] }
+                : { status: 'success', value, logLines: [] }
+            res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+          })
+        })
+        server.listen(port, '127.0.0.1', () => resolve(server))
+      })
+    const servers = await Promise.all([held.base, held.base + PORTS.backendApi].map(answering))
+    const clock = path.join(m.home, 'network-clock.mjs')
+    // Only the network's polling waits move this clock, so requests still take their usual time.
+    writeFileSync(
+      clock,
+      "import os from 'node:os'; os.networkInterfaces = () => ({tailscale0:[{address:'100.64.0.1',family:'IPv4',internal:false}]}); let offset = 0; const now = Date.now; Date.now = () => now() + offset; const later = setTimeout; globalThis.setTimeout = (run, ms, ...args) => later(() => { if (ms === 200) offset += 5000; run(...args) }, ms === 200 || ms === 2500 ? 1 : ms)\n",
+    )
+    return {
+      settings,
+      reads: () => reads,
+      run: (to = 'on') => run(m, ['network', to], {}, process.execPath, ['--import', pathToFileURL(clock).href]),
+      close: async () => {
+        await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
+        await held.release()
+      },
+    }
+  }
+
+  test('looks again until the service reports the requested policy, though networking was on already', async () => {
+    const door = await changing((read) => ({ on: true, wanted: true, tailnet: read < 4 }))
+    try {
+      const ran = await door.run()
+      expect([ran.code, printed(ran).network, door.reads()]).toEqual([0, true, 4])
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('narrowing access waits for the service to report the tailnet policy', async () => {
+    const door = await changing((read) => ({ on: true, wanted: true, tailnet: read >= 4 }), false)
+    try {
+      const ran = await door.run('tailscale')
+      expect([ran.code, printed(ran).network, door.reads()]).toEqual([0, true, 4])
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('says that the network could not listen and leaves it off where reopening the door falls back to this machine', async () => {
+    const door = await changing((read, network) => ({ on: read < 3 && network, wanted: network, tailnet: read < 3 }))
+    try {
+      const ran = await door.run()
+      expect(ran.code).toBe(1)
+      expect([ran.code, ran.out, error(ran).code, door.settings().network]).toEqual([1, '', 'cannot_listen', false])
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('says that the running service has not taken a policy it still reports differently', async () => {
+    const door = await changing(() => ({ on: true, wanted: true, tailnet: true }))
+    try {
+      const ran = await door.run()
+      expect([ran.code, ran.out, error(ran).code]).toEqual([1, '', 'not_taken'])
+      expect(door.reads()).toBeGreaterThan(2)
+    } finally {
+      await door.close()
+    }
+  })
+
+  for (const report of ['unsaid', 'unavailable'])
+    test(`reports an unconfirmed network setting where the applied policy is ${report}`, async () => {
+      const door = await changing(() =>
+        report === 'unsaid' ? { on: true, wanted: true } : new Refusal({ code: 'unavailable', message: 'The report is not available.' }),
+      )
+      try {
+        const ran = await door.run()
+        expect([ran.code, ran.out, error(ran).code, door.settings().network]).toEqual([1, '', 'not_confirmed', true])
+        expect(door.reads()).toBe(2)
+      } finally {
+        await door.close()
+      }
+    })
+  test('network off waits for actual closure even when an older report has no policy', async () => {
+    const door = await changing((read, network) => ({ on: read < 4, wanted: network }))
+    try {
+      const ran = await door.run('off')
+      expect([ran.code, printed(ran).network, door.reads()]).toEqual([0, false, 4])
+    } finally {
+      await door.close()
+    }
+  })
+})
+
 describe.skipIf(process.platform === 'win32' || !python)('the lists a person asks for at a terminal', () => {
   test('`it list`, `it displays` and `it whoami` are said in lines a person can read, and are JSON for a program and for an agent', async () => {
     const m = machine()
@@ -729,14 +846,20 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
 })
 
 describe.skipIf(process.platform === 'win32' || process.platform !== 'linux')('an account that stays after logout because It asked', () => {
-  /** A machine whose system answers, notes every asking, and says whether the account stays after logout as the test has it. */
-  const withSystem = (stays: boolean) => {
+  /**
+   * A machine whose system answers, notes every asking, and says whether the account stays after
+   * logout as the test has it. `unsaid` is a system that fails to say, and `refused` one that
+   * says it does not stay and will not have it turned on.
+   */
+  const withSystem = (stays: boolean | 'unsaid' | 'refused') => {
     const m = machine(true, true)
     const asked = path.join(m.home, 'asked.txt')
+    const says = stays === 'unsaid' ? 'exit 1' : `echo Linger=${stays === true ? 'yes' : 'no'}`
+    const turnsOn = stays === 'refused' ? '*" enable-linger "*) exit 1 ;; ' : ''
     for (const name of ['systemctl', 'loginctl']) {
       writeFileSync(
         path.join(m.bin, name),
-        `#!/bin/sh\necho "${name} $*" >> ${JSON.stringify(asked)}\ncase " $* " in *" show-user "*) echo Linger=${stays ? 'yes' : 'no'} ;; ${SAYS_IT_RUNS} esac\nexit 0\n`,
+        `#!/bin/sh\necho "${name} $*" >> ${JSON.stringify(asked)}\ncase " $* " in *" show-user "*) ${says} ;; ${turnsOn}${SAYS_IT_RUNS} esac\nexit 0\n`,
       )
       chmodSync(path.join(m.bin, name), 0o755)
     }
@@ -755,9 +878,119 @@ describe.skipIf(process.platform === 'win32' || process.platform !== 'linux')('a
     expect((await run(theirs.m, ['service', 'uninstall'])).code).toBe(0)
     expect(theirs.asked()).not.toMatch(/disable-linger/)
   })
+  test('is taken for It’s doing only where the system said that it did not stay before and then let It turn that on', async () => {
+    // The system would not say whether it stayed, as one that is slow to answer does not: it may have, for the person’s own services
+    const unsaid = withSystem('unsaid')
+    expect((await run(unsaid.m, ['service', 'install'])).code).toBe(0)
+    expect(unsaid.asked()).toMatch(/loginctl enable-linger/)
+    expect(existsSync(path.join(unsaid.m.it, 'linger-by-it'))).toBe(false)
+    expect((await run(unsaid.m, ['service', 'uninstall'])).code).toBe(0)
+    expect(unsaid.asked()).not.toMatch(/disable-linger/)
+    // It did not stay, and It was not let turn that on: whoever turns it on later did so themselves
+    const refused = withSystem('refused')
+    expect((await run(refused.m, ['service', 'install'])).code).toBe(0)
+    expect(existsSync(path.join(refused.m.it, 'linger-by-it'))).toBe(false)
+    expect((await run(refused.m, ['service', 'uninstall'])).code).toBe(0)
+    expect(refused.asked()).not.toMatch(/disable-linger/)
+  })
+})
+
+describe.skipIf(process.platform !== 'linux')('a service registered where IT_UPDATE_CHECK says not to look for a newer version', () => {
+  test('does not look, since that is written down for it as `it updates off` writes it, until `it updates on` is run', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'loginctl']) {
+      writeFileSync(path.join(m.bin, name), `#!/bin/sh\ncase " $* " in ${SAYS_IT_RUNS} esac\nexit 0\n`)
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    // Registered without the variable, nothing is written down
+    expect((await run(m, ['service', 'install'])).code).toBe(0)
+    expect(printed(await run(m, ['updates']))).toEqual({ on: true })
+    // The service is started by the system, with none of what this shell has: so what the shell said is kept in It's folder
+    expect((await run(m, ['service', 'install'], { IT_UPDATE_CHECK: 'false' })).code).toBe(0)
+    expect(existsSync(path.join(m.it, 'updates-off'))).toBe(true)
+    expect(printed(await run(m, ['updates']))).toEqual({ on: false, because: 'it updates off' })
+    // And is the person's to turn back on, which a copy of the variable in the service's definition would not be
+    expect(readFileSync(path.join(m.home, '.config/systemd/user/it.service'), 'utf8')).not.toContain('IT_UPDATE_CHECK')
+    expect(printed(await run(m, ['updates', 'on']))).toEqual({ on: true })
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
+  test.each(['no task', 'refused', 'silent refusal', 'unavailable', 'an empty error'])(
+    'on Windows, uninstall with no service or lock handles a scheduler that says %s in words',
+    async (answer) => {
+      const m = machine()
+      const preload = path.join(m.home, 'windows.cjs')
+      writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })\n")
+      if (answer === 'an empty error')
+        writeFileSync(
+          preload,
+          `Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+const child = require('node:child_process')
+const spawnSync = child.spawnSync
+child.spawnSync = (file, args, opts) => {
+  if (file === 'powershell.exe' && Buffer.from(args.at(-1), 'base64').toString('utf16le').includes('Stop-ScheduledTask')) throw new Error()
+  return spawnSync(file, args, opts)
+}
+require('node:module').syncBuiltinESMExports()
+`,
+        )
+      if (answer !== 'unavailable')
+        writeFileSync(
+          path.join(m.bin, 'powershell.exe'),
+          `#!${process.execPath}
+const script = Buffer.from(process.argv.at(-1), 'base64').toString('utf16le')
+if (script.includes('[Microsoft.Win32.Registry]')) { console.log('absent'); process.exit(0) }
+if (!script.includes('Stop-ScheduledTask')) process.exit(1)
+const answer = ${JSON.stringify(answer)}
+if (answer === 'refused') console.error('The scheduler refused access')
+process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
+`,
+          { mode: 0o755 },
+        )
+      const done = await run(m, ['uninstall', '--yes'], {}, process.execPath, ['--require', preload])
+      if (answer === 'no task') {
+        expect([done.code, printed(done).removed, existsSync(m.it)]).toEqual([0, true, false])
+      } else {
+        expect(done.code).not.toBe(0)
+        expect(error(done).message).toContain(
+          answer === 'an empty error' ? 'the background service could not be stopped or removed' : 'the background task could not be taken away',
+        )
+        if (answer === 'refused') expect(error(done).message).toContain('The scheduler refused access')
+        expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)
+      }
+    },
+  )
+
+  test.each([false, true])('preserves its database and profile when an orphan cannot be identified or its settings cannot be read (%s)', async (unreadable) => {
+    const m = machine()
+    const port = await ports.next()
+    const secret = 'ab'.repeat(32)
+    for (const name of ['systemctl', 'launchctl', 'loginctl']) writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    mkdirSync(path.join(m.it, 'backend'))
+    const database = path.join(m.it, 'backend', 'db.sqlite3')
+    const profile = path.join(m.home, '.profile')
+    writeFileSync(database, 'the database is still here')
+    writeFileSync(profile, `# It\nexport PATH="${m.it}/bin:$PATH"\n`)
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify(unreadable ? { port } : { port, network: false, instanceSecret: secret, adminKey: 'test', sessionSecret: 'test' }),
+    )
+    const server = http.createServer((_req, res) => res.end(instanceName(secret)))
+    await new Promise<void>((resolve) => server.listen(port + PORTS.backendApi, '127.0.0.1', resolve))
+    try {
+      const done = await run(m, ['uninstall', '--yes'], { PATH: `${m.bin}:/usr/bin:/bin` })
+      expect(done.code).not.toBe(0)
+      expect(error(done).message).toMatch(/could not make sure that no backend program/)
+      expect(error(done).message).toMatch(unreadable ? /settings.*not as It wrote/ : /answers for this folder.*does not know which process/)
+      expect(readFileSync(database, 'utf8')).toBe('the database is still here')
+      expect(readFileSync(profile, 'utf8')).toBe(`# It\nexport PATH="${m.it}/bin:$PATH"\n`)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await ports.release()
+    }
+  })
+
   test('`it uninstall` leaves what is another It folder’s in the agent apps, and leaves a profile it cannot replace whole exactly as it was, and says so', async () => {
     const m = machine(true, true)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {

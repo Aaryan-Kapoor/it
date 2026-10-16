@@ -21,6 +21,12 @@ export interface Playing {
   show(index: number): void
   /** Holds what is up for as long as it is pointed at. */
   hold(on: boolean): void
+  /**
+   * Stands still, or plays again. Standing still, what is up is shown whole, as it is when its
+   * exchange is over, with its headline written out, and nothing moves until it is told to
+   * play. Playing again begins what is up from its beginning.
+   */
+  still(on: boolean): void
   stop(): void
 }
 
@@ -32,9 +38,10 @@ const BUDGET = 2.2e6
 /**
  * Starts playing in `panel`, which takes each thing's colour, with the card set in the middle
  * of `stage`, an element inside it. Resolves once the film's fonts are in and the first thing
- * is on its way. Rejects where the film cannot be drawn at all.
+ * is on its way. Rejects where the film cannot be drawn at all. With `still` it begins standing
+ * still, on the first thing: for someone who has asked their system for less motion.
  */
-export async function play(panel: HTMLElement, stage: HTMLElement, told: Told): Promise<Playing> {
+export async function play(panel: HTMLElement, stage: HTMLElement, told: Told, still = false): Promise<Playing> {
   const { film } = await import('./film.js')
   await film.ready()
   const cards = film.cards
@@ -49,6 +56,8 @@ export async function play(panel: HTMLElement, stage: HTMLElement, told: Told): 
   let stopped = false
   let token = 0
   let holding = false
+  /** Which thing is up, or the first where none is yet. */
+  let at = 0
   const live = (tok: number) => !stopped && tok === token
   const running = () => !document.hidden
 
@@ -59,7 +68,8 @@ export async function play(panel: HTMLElement, stage: HTMLElement, told: Told): 
   /** The colour behind, which changes as a circle that grows out of the card. */
   const field = { was: film.paper, now: film.paper, t0: -1e9, ms: 1 }
   const setField = (color: string, dark: boolean, ms = 560) => {
-    Object.assign(field, { was: field.now, now: color, t0: performance.now(), ms })
+    // Standing still, the colour is there at once, and does not grow out of the card
+    Object.assign(field, { was: field.now, now: color, t0: still ? -1e9 : performance.now(), ms })
     panel.style.backgroundColor = color
     panel.classList.toggle('dark', dark)
   }
@@ -137,6 +147,12 @@ export async function play(panel: HTMLElement, stage: HTMLElement, told: Told): 
   // ---------- the headline, typed ----------
   let text = ''
   const typeTo = async (target: string, tok: number) => {
+    // Standing still, it is written out whole
+    if (still) {
+      text = target
+      told.headline(text)
+      return live(tok)
+    }
     let i = 0
     while (i < text.length && i < target.length && text[i] === target[i]) i++
     while (text.length > i) {
@@ -155,6 +171,7 @@ export async function play(panel: HTMLElement, stage: HTMLElement, told: Told): 
   // ---------- a thing: it opens, plays, waits to be looked at, and closes ----------
   const showThing = async (i: number, tok: number) => {
     const card = cards[i]!
+    at = i
     told.thing(i)
     told.you(null)
     told.did(null, card.by)
@@ -174,13 +191,20 @@ export async function play(panel: HTMLElement, stage: HTMLElement, told: Told): 
       }
       draw()
     }
+    if (still) {
+      // Shown as it is when its exchange is over, and left so. Looked at again now and then by a
+      // timer, and not frame by frame: nothing is drawn while it stands still
+      frame(card.end)
+      while (still) if (!(await new Promise<boolean>((done) => setTimeout(() => done(live(tok)), 250)))) return false
+      return true
+    }
     if (!(await roll(card.a, card.end, card.rate, frame, tok))) return false
     if (!(await sleep(2400, tok))) return false
     while (holding) if (!(await sleep(400, tok))) return false
     return roll(card.end, card.out, 1, frame, tok)
   }
   const run = async (tok: number, from: number, intro: boolean) => {
-    if (intro)
+    if (intro && !still)
       for (const [said, held] of [
         ['It', 600],
         ['It can', 460],
@@ -198,6 +222,12 @@ export async function play(panel: HTMLElement, stage: HTMLElement, told: Told): 
     show: (index) => void run(++token, index, false),
     hold: (on) => {
       holding = on
+    },
+    still: (on) => {
+      if (on === still || stopped) return
+      still = on
+      // What is up is begun again, as it now is to be shown: whole, or played from its beginning
+      void run(++token, at, false)
     },
     stop: () => {
       stopped = true

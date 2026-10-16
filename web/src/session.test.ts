@@ -69,6 +69,23 @@ describe('whether this browser is paired', () => {
     expect(d.asked).toEqual([{ path: '/session/token', method: 'POST', site: '1', body: undefined }])
   })
 
+  test.each(['current', 'retained'])('the door reports %s functions without changing the session', async (functions) => {
+    let service: unknown = { functions }
+    door(() => paired({ service }))
+    const session = await load()
+    await session.begin()
+    expect(session.current().service).toEqual({ functions })
+    service = { functions: 'unexpected', administrator: 'not for the site' }
+    await session.token(true)
+    expect(session.current().service).toBeUndefined()
+    service = { functions }
+    await session.token(true)
+    expect(session.current().service).toEqual({ functions })
+    door(() => refused)
+    await session.token(true)
+    expect(session.current().service).toBeUndefined()
+  })
+
   test('a 401 means this browser is not paired, and there is no token to give', async () => {
     door(() => refused)
     const session = await load()
@@ -1024,6 +1041,41 @@ describe('pairing with a code', () => {
     await vi.advanceTimersByTimeAsync(10_000)
     await pairing
     expect(d.to('/session/redeem').length).toBe(3)
+  })
+
+  test('a code whose redeeming is never answered is given up on, later than the door itself gives the backend up, and is said to have met trouble', async () => {
+    // Each time limit the site sets, as the browser would keep it: how long, and what ends a request that is still waiting then
+    const limits: { ms: number; end: () => void }[] = []
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const limit = new AbortController()
+      limits.push({ ms, end: () => limit.abort(new DOMException('The operation timed out.', 'TimeoutError')) })
+      return limit.signal
+    })
+    // A connection that carries the request off and brings nothing back, as one does that was lost on the way
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (path: string, init: RequestInit = {}) =>
+          new Promise<Response>((answer, fail) => {
+            if (path !== '/session/redeem') return answer(new Response(JSON.stringify(refused.body), { status: 401 }))
+            init.signal?.addEventListener('abort', () => fail(init.signal?.reason))
+          }),
+      ),
+    )
+    const session = await load()
+    await session.begin()
+    limits.length = 0
+    let done = false
+    const pairing = session.pair(CODE).then(() => {
+      done = true
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect([done, limits.length]).toEqual([false, 1])
+    // The door gives the backend thirty seconds: a browser that gave up sooner would put again a code the backend was still taking
+    expect(limits[0]!.ms).toBeGreaterThan(30_000)
+    limits[0]!.end()
+    await pairing
+    expect(session.current()).toMatchObject({ loaded: true, paired: false, code: 'trouble' })
   })
 
   /** What the door answers once ten codes from one address have been refused within a minute: it tries no more from that address until the minute is over. */

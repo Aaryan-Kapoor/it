@@ -183,8 +183,32 @@ const unkept = new Map<string, number[]>()
 const unkeptKey = (user: string, artifactId: string) => `${user}.${artifactId}`
 /** How many of this person's clicks on one page are on their way with no copy kept in this browser. */
 export const unsaved = (user: string, artifactId: string) => unkept.get(unkeptKey(user, artifactId))?.length ?? 0
+// What a person typed to a page's agent is sent with no copy kept in this browser, and is in
+// the box and this tab alone until It has taken it. Noted for as long as it is on its way, when
+// each was sent, so that the page's bar says so and the site is not loaded afresh over it.
+const typed = new Map<string, number[]>()
+/** How many things typed to one page's agent are on their way, in this tab alone. */
+export const typedWaiting = (user: string, artifactId: string) => typed.get(unkeptKey(user, artifactId))?.length ?? 0
+/** Notes that something typed to a page's agent is on its way. Answers with what takes the note away, once It has taken the message or refused it. */
+export function typedOnItsWay(user: string, artifactId: string): () => void {
+  const key = unkeptKey(user, artifactId)
+  const at = Date.now()
+  typed.set(key, [...(typed.get(key) ?? []), at])
+  changed()
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    const others = [...(typed.get(key) ?? [])]
+    const i = others.indexOf(at)
+    if (i >= 0) others.splice(i, 1)
+    if (others.length) typed.set(key, others)
+    else typed.delete(key)
+    changed()
+  }
+}
 /** Whether anything done on any page is on its way with no copy kept in this browser: it is in this tab alone, and loading the site afresh would lose it. */
-export const anyUnsaved = (): boolean => [...unkept.values()].some((made) => made.length > 0)
+export const anyUnsaved = (): boolean => [...unkept.values(), ...typed.values()].some((made) => made.length > 0)
 
 // What was kept in this browser was let go of: everything, or what was one person's where the
 // browser is kept for another by now. What this tab holds of it in memory goes too: nothing of
@@ -197,6 +221,7 @@ whenLetGo((person, whole) => {
     retry.delete(user)
   }
   for (const key of [...unkept.keys()]) if (whole || (person !== null && key.startsWith(`${person}.`))) unkept.delete(key)
+  for (const key of [...typed.keys()]) if (whole || (person !== null && key.startsWith(`${person}.`))) typed.delete(key)
   changed()
 })
 
@@ -515,6 +540,6 @@ const ON_ITS_WAY_MS = 4000
 export function onItsWayUntil(user: string, artifactId: string): number | null {
   const kept = entries(user).filter(([, e]) => e.artifactId === artifactId)
   if (kept.some(([key]) => !sending.has(key))) return null
-  const made = [...kept.map(([, e]) => e.at), ...(unkept.get(unkeptKey(user, artifactId)) ?? [])]
+  const made = [...kept.map(([, e]) => e.at), ...(unkept.get(unkeptKey(user, artifactId)) ?? []), ...(typed.get(unkeptKey(user, artifactId)) ?? [])]
   return made.length ? Math.min(...made) + ON_ITS_WAY_MS : null
 }

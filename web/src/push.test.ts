@@ -6,7 +6,7 @@ import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { forgetAll, keepFor, letGoElsewhere } from './lib'
 import { outboxBelongsTo, stillPairedFor, thisPairing } from './outbox'
-import { dropPushHere, forgetPushHere, turnOffPush, turnOnPush } from './push'
+import { dropPushHere, forgetPushHere, mendPush, turnOffPush, turnOnPush } from './push'
 
 /** A promise the test settles when it chooses, standing in for a browser that answers late. */
 const late = <T>() => {
@@ -496,5 +496,164 @@ describe('taking the site’s script away when everything is erased, stopped at 
     Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: { getRegistrations: async () => [registration] } })
     await forgetPushHere()
     expect(done).toEqual(['closed', 'dropped', 'unregistered'])
+  })
+})
+
+describe('putting back a subscription the browser has lost, where the backend still counts this display as notified', () => {
+  /** A browser that may be notified and has lost its subscription, whose first answer to which script is there comes when the test gives it. */
+  function lost() {
+    const first = late<unknown>()
+    let there: typeof made | null = null
+    const made = {
+      endpoint: 'https://push.example/made',
+      getKey: () => new ArrayBuffer(4),
+      unsubscribe: vi.fn(async () => {
+        there = null
+        return true
+      }),
+    }
+    const registration = {
+      pushManager: {
+        getSubscription: async () => there,
+        subscribe: vi.fn(async () => {
+          there = made
+          return made
+        }),
+      },
+    }
+    let asked = 0
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: {
+        getRegistration: () => (++asked === 1 ? first.promise : Promise.resolve(registration)),
+        register: async () => registration,
+        ready: Promise.resolve(registration),
+      },
+    })
+    vi.stubGlobal('matchMedia', () => ({ matches: false }))
+    vi.stubGlobal('PushManager', function PushManager() {})
+    vi.stubGlobal('Notification', { permission: 'granted', requestPermission: async () => 'granted' })
+    const calls: string[] = []
+    const client = {
+      action: async () => 'AAAA',
+      mutation: vi.fn(async (fn: never) => void calls.push(getFunctionName(fn))),
+    } as never
+    return { first, registration, calls, client, made, subscribed: () => there !== null }
+  }
+
+  beforeEach(() => {
+    keepFor('alice')
+    outboxBelongsTo('alice', 'session-1')
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  test('with nothing in its way it subscribes again without asking, and tells the backend', async () => {
+    const s = lost()
+    const mending = mendPush(s.client)
+    s.first.settle(s.registration)
+    await mending
+    expect([s.registration.pushManager.subscribe.mock.calls.length, s.calls]).toEqual([1, ['push:subscribe']])
+  })
+
+  test('permission that still stands is not asked for again: a browser that answers no to an asking nobody pressed anything for, as Safari does, is subscribed again all the same', async () => {
+    const s = lost()
+    const asked = vi.fn(async () => 'denied')
+    vi.stubGlobal('Notification', { permission: 'granted', requestPermission: asked })
+    localStorage.setItem('it.pushAsked', 'yes')
+    const mending = mendPush(s.client)
+    s.first.settle(s.registration)
+    await mending
+    expect(asked).not.toHaveBeenCalled()
+    expect([s.registration.pushManager.subscribe.mock.calls.length, s.calls]).toEqual([1, ['push:subscribe']])
+    expect(localStorage.getItem('it.pushAsked')).toBe('yes')
+  })
+
+  test('notifications the person turned off while it waited on the browser stay off: it subscribes to nothing and tells the backend nothing', async () => {
+    const s = lost()
+    const mending = mendPush(s.client)
+    await turnOffPush(s.client)
+    expect(s.calls).toEqual(['push:unsubscribe'])
+    s.first.settle(s.registration)
+    await mending
+    expect([s.registration.pushManager.subscribe.mock.calls.length, s.calls]).toEqual([0, ['push:unsubscribe']])
+  })
+
+  test.each(['the first lookup', 'the key', 'the new subscription'] as const)(
+    'notifications turned off in another tab while a repair waits for %s stay off when that repair resumes',
+    async (wait) => {
+      const s = lost()
+      const reached = late<void>()
+      const reply = late<void>()
+      const held = async () => {
+        reached.settle()
+        await reply.promise
+      }
+      if (wait === 'the key') {
+        ;(s.client as { action: unknown }).action = async () => {
+          await held()
+          return 'AAAA'
+        }
+      } else if (wait === 'the new subscription') {
+        const subscribe = s.registration.pushManager.subscribe.getMockImplementation()!
+        s.registration.pushManager.subscribe.mockImplementation(async () => {
+          await held()
+          return subscribe()
+        })
+      }
+      // This tab has its own module counters and the same browser storage and subscription.
+      vi.resetModules()
+      const other = await import('./push')
+      expect(other.turnOffPush).not.toBe(turnOffPush)
+      const mending = mendPush(s.client)
+      if (wait !== 'the first lookup') {
+        s.first.settle(s.registration)
+        await reached.promise
+      }
+      await other.turnOffPush(s.client)
+      expect([s.calls, s.subscribed()]).toEqual([['push:unsubscribe'], false])
+      s.first.settle(s.registration)
+      reply.settle()
+      await mending
+      expect([s.calls, s.subscribed()]).toEqual([['push:unsubscribe'], false])
+      expect(s.registration.pushManager.subscribe).toHaveBeenCalledTimes(wait === 'the new subscription' ? 1 : 0)
+      expect(s.made.unsubscribe).toHaveBeenCalledTimes(wait === 'the new subscription' ? 1 : 0)
+    },
+  )
+
+  test('an opt-out in another tab clears a repair that reaches the backend after the opt-out', async () => {
+    const s = lost()
+    const reached = late<void>()
+    const reply = late<void>()
+    const committed: string[] = []
+    let stored = false
+    const commit = (fn: never) => {
+      const name = getFunctionName(fn)
+      stored = name === 'push:subscribe'
+      committed.push(name)
+    }
+    // Separate clients can commit the opt-out before the earlier subscribe request.
+    const repairing = {
+      action: async () => 'AAAA',
+      mutation: async (fn: never) => {
+        if (getFunctionName(fn) === 'push:subscribe') {
+          reached.settle()
+          await reply.promise
+        }
+        commit(fn)
+      },
+    }
+    const optingOut = { mutation: async (fn: never) => commit(fn) }
+    vi.resetModules()
+    const other = await import('./push')
+    const mending = mendPush(repairing as never)
+    s.first.settle(s.registration)
+    await reached.promise
+    await other.turnOffPush(optingOut as never)
+    expect(stored).toBe(false)
+    reply.settle()
+    await mending
+    expect(stored).toBe(false)
+    expect(s.subscribed()).toBe(false)
+    expect(committed).toEqual(['push:unsubscribe', 'push:subscribe', 'push:unsubscribe'])
   })
 })

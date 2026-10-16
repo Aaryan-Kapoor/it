@@ -96,6 +96,7 @@ The bar above a page says what is still waiting, though something you did later 
 | Sent. Waiting for your agent | It has it, and is handing it to the agent | Nothing, for the first seconds |
 | Sent. … is busy, and gets it when it is free | The conversation is open and in the middle of something | Wait for its turn to end |
 | Sent. … is not listening: its conversation looks closed | Nothing on that machine was listening for it: the conversation is closed, or its app is not running | Open the conversation again, or press "Wake it", where it is offered, to have It reopen it for this and from now on. It is offered in a browser paired as yours, for what was done in the last day, on a machine that runs Linux or macOS |
+| Sent. … is not connected on …, and gets it once it is connected there, under Machines | The agent app that made the page is switched off on that machine, under Machines. The machine hands nothing to such an app and reopens none of its conversations, whatever Auto-wake is set to | Connect the app again on the Machines page, or run `it wait` in its conversation to take this one thing. It is said in a browser paired as yours, for an agent app It can reopen a conversation of: any other browser says that the conversation looks closed |
 | Sent more than a day ago. … gets it when its conversation is next open | It is older than anything a conversation is reopened for | Open the conversation again |
 | … earlier things done here are still waiting for … | What you did last is done with, and something from before it never reached the agent | Open its conversation, or look at its machine |
 | Working | It reopened the conversation, and its agent is at work. "…more waiting" counts what else you did meanwhile, and "not sent yet" what has not left this browser | Nothing. Stop, beside it, ends the agent and drops what was waiting for it |
@@ -103,6 +104,7 @@ The bar above a page says what is still waiting, though something you did later 
 | … is not answering. Whether … is still at work there is not known | The machine went quiet while its agent was working: it may have stopped, or may not | Look at that machine. Stop can still be asked, and is kept for it |
 | Asked to stop. … is not answering, and is told when it is back | Your stop is kept, and the machine has not heard it | Look at that machine if the work has to end now |
 | Not sent yet. This browser could not save it, so keep this tab open | This browser would not store what you did, so it is only in this tab | Keep the tab open until it says it was sent |
+| Not sent yet. What you typed is only in this tab, so keep it open | What you typed to the agent is never kept in the browser, and It has not taken it yet | Keep the tab open until the box is empty again. What you typed stays in the box until then |
 | Couldn’t wake …, with a reason | It tried to reopen the conversation and could not: the reason follows, with the last line the agent app itself printed where it ended with an error | Put right what the reason names. It tries four times in all, further apart each time, and then leaves what you did waiting until the conversation next runs |
 | Stopped, sometimes "with … more that were waiting" | You stopped the agent. What was waiting for that conversation went with the stop | Do it again if you still want it |
 | Your agent got it; whether it finished is not known | It was handed over, and what became of the work cannot be told | Look at the page and the conversation before you do it again |
@@ -121,3 +123,9 @@ If a page says that a turn from before may still be running, or `it status` says
 On a machine that joined an It, `it status` may say that the two are of versions that do not work together, and which of them to update. The machine stays joined. Nothing done on a page is handed to an agent on it until the two fit, which It asks about every minute, so there is nothing to do after the update but wait a moment.
 
 A page that a conversation made belongs to that conversation until another one brings it up or takes it, so what you do on it goes to the agent you last asked to show it.
+
+## Older backend functions
+
+If an update cannot load its backend functions, It keeps serving with the functions already loaded. The site shows this beside its pages and on Machines. Some pages or controls may fail because the site and functions differ. In an owner browser, the warning points to `it status` on the machine It runs on for the reason. After resolving the reported problem, restart It to retry loading the functions. `it service logs` shows what the service met. A paired screen shows the warning and asks you to open your owner browser.
+
+Machines compares the running versions already reported by the host and joined machines. A joined machine can say it is behind before its next release check. That alone does not offer an update: a release must also have been found by that machine.

@@ -17,11 +17,12 @@ import { fileURLToPath } from 'node:url'
 import { AUDIENCE, contentPort, LIMITS, SANDBOX } from '@it/protocol'
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { Problem } from './src/lib'
 import { doorKey } from './src/serve/config'
 import { type Arrival, type DoorParts, makeContent, makeDoor, startDoor } from './src/serve/door'
 import { answerSite, type Site } from './src/serve/site'
+import { forgetTailnetName, tailnetName } from './src/serve/tailnet'
 
 type ServiceConfig = Parameters<typeof startDoor>[0]
 type Backend = Parameters<typeof startDoor>[1]
@@ -159,6 +160,10 @@ const site = {
       } else if (req.url === '/session/redeem' || req.url === '/session/end') {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'set-cookie': SET })
         res.end('{"ok":true}')
+      } else if (req.url === '/session/token' && /it_session_good=(owner|screen)/.test(req.headers.cookie ?? '')) {
+        const role = /it_session_good=(owner|screen)/.exec(req.headers.cookie ?? '')![1]
+        res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': SET })
+        res.end(JSON.stringify({ token: 'stub', role, expiresIn: 300, user: 'person', session: 'session' }))
       } else if (req.url === '/session/token') {
         // A session that is over: its cookie is cleared with the refusal
         res.writeHead(401, { 'content-type': 'application/json', 'set-cookie': SET.slice(1) })
@@ -912,6 +917,36 @@ describe('The names the door answers to', () => {
 })
 
 describe('What the door passes on to the backend', () => {
+  test.each(['owner', 'screen'])('the door tells a paired %s about retained functions without asking older functions for anything new', async (role) => {
+    const behind = await open(false, {}, { ...backend, behind: { functions: 'private-function-hash', why: 'refused', at: 1 } })
+    try {
+      const headers: [string, string][] = [
+        ['Origin', `http://127.0.0.1:${behind.base}`],
+        ['x-it-site', '1'],
+        ['Cookie', `it_session_good=${role}`],
+      ]
+      const got = await ask(behind.base, { method: 'POST', path: '/session/token', headers })
+      expect(got.status).toBe(200)
+      expect(JSON.parse(got.body)).toMatchObject({ role, service: { functions: 'retained' } })
+      expect(got.body).not.toContain('private-function-hash')
+      expect(got.headers['content-length']).toBe(String(Buffer.byteLength(got.body)))
+      expect(got.headers['cache-control']).toBe('no-store')
+      expect(got.cookies).toEqual(SET)
+      const current = await ask(door.base, { method: 'POST', path: '/session/token', headers: [own(), ['Cookie', `it_session_good=${role}`]] })
+      expect(JSON.parse(current.body).service).toEqual({ functions: 'current' })
+      const refused = await ask(behind.base, { method: 'POST', path: '/session/token', headers: headers.slice(0, 2) })
+      expect(refused.status).toBe(401)
+      expect(JSON.parse(refused.body)).not.toHaveProperty('service')
+      for (const origin of ['null', `http://127.0.0.1:${behind.base + 1}`, 'https://foreign.example']) {
+        const refused = await ask(behind.base, { method: 'POST', path: '/session/token', headers: [['Origin', origin], ...headers.slice(1)] })
+        expect(refused.status).toBe(403)
+        expect(JSON.parse(refused.body)).not.toHaveProperty('service')
+      }
+    } finally {
+      await behind.stop()
+    }
+  })
+
   test('The session’s routes, the machines’ routes, the public keys and the rest of the named routes reach the backend’s HTTP port and are answered as it answers', async () => {
     const redeemed = await ask(door.base, {
       method: 'POST',
@@ -2107,6 +2142,41 @@ describe('With a proxy named in the environment', () => {
 })
 
 describe('What the door will wait for', () => {
+  test('An upload that is refused with none of it read is let go of once it is answered: nothing is kept waiting on it for the time an upload is given', async () => {
+    // A content service that refuses an upload as it does one with no grant: at once, and without reading it
+    const refuses: Content = { ...contentStandIn, upload: async () => new Response('{"error":"grant"}', { status: 401 }) }
+    let letGo = false
+    const arriving = () =>
+      new ReadableStream<Uint8Array>(
+        {
+          pull: (controller) => controller.enqueue(new Uint8Array(1024)),
+          cancel: () => {
+            letGo = true
+          },
+        },
+        { highWaterMark: 0 },
+      )
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const made = makeDoor(config(door.base), backend, () => {}, parts({ content: refuses }))
+      const waiting = vi.getTimerCount()
+      for (let n = 0; n < 20; n++) {
+        const answer = await made.answer({
+          method: 'PUT',
+          target: '/upload/a.bin',
+          headers: new Headers({ host: `localhost:${door.base}`, 'content-length': '65536' }),
+          body: arriving(),
+          port: door.base,
+          address: '127.0.0.1',
+        } satisfies Arrival)
+        expect(answer.status).toBe(401)
+      }
+      expect([vi.getTimerCount() - waiting, letGo]).toEqual([0, true])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test('A body longer than the door allows is refused, whether or not it says how long it is', async () => {
     const long = 'x'.repeat(70_000)
     expect((await ask(door.base, { method: 'POST', path: '/bridge/token', body: long })).status).toBe(413)
@@ -3290,6 +3360,47 @@ describe('Kept to the tailnet', () => {
   test('Open to every network, the same callers are answered', async () => {
     const open = config(door.base, true)
     for (const anyone of ['192.168.1.50', '100.101.42.17', '2001:db8:100:c690::4f1a']) expect(await asked(open, anyone), anyone).not.toBe(421)
+  })
+
+  test('Opened to every network after it was kept to the tailnet, the door still answers to the name the machine has there, which is the address its screens were given', async () => {
+    // A machine that is on a tailnet, where Tailscale says its name
+    const interfaces = vi.spyOn(os, 'networkInterfaces').mockReturnValue({
+      eth0: [{ address: '192.168.1.20', family: 'IPv4', internal: false, netmask: '255.255.255.0', mac: '00:00:00:00:00:01', cidr: '192.168.1.20/24' }],
+      tailscale0: [
+        { address: '100.101.42.17', family: 'IPv4', internal: false, netmask: '255.255.255.255', mac: '00:00:00:00:00:00', cidr: '100.101.42.17/32' },
+      ],
+    })
+    forgetTailnetName()
+    tailnetName(() => JSON.stringify({ Self: { DNSName: 'studio.tail1234.ts.net.' } }))
+    try {
+      /** What a door answers a screen on the tailnet that asks by a name, on the site's port and on the pages'. */
+      const byName = async (kept: ServiceConfig, name: string) => {
+        const answers: number[] = []
+        for (const port of [door.base, contentPort(door.base)])
+          answers.push(
+            (
+              await makeDoor(kept, backend, () => {}, parts()).answer({
+                method: 'GET',
+                target: '/',
+                headers: new Headers({ host: `${name}:${port}` }),
+                body: null,
+                port,
+                address: '100.101.42.17',
+              } satisfies Arrival)
+            ).status,
+          )
+        return answers.map((status) => status === 421)
+      }
+      const [tailnet, open] = [{ ...config(door.base, true), tailnet: true }, config(door.base, true)]
+      expect(await byName(tailnet, 'studio.tail1234.ts.net')).toEqual([false, false])
+      expect(await byName(open, 'studio.tail1234.ts.net')).toEqual([false, false])
+      // Still no name but the machine's own, and with the network off not that one either
+      expect(await byName(open, 'other.tail1234.ts.net')).toEqual([true, true])
+      expect(await byName(config(door.base, false), 'studio.tail1234.ts.net')).toEqual([true, true])
+    } finally {
+      interfaces.mockRestore()
+      forgetTailnetName()
+    }
   })
 })
 

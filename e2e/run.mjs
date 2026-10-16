@@ -3487,11 +3487,11 @@ try {
       `[It] The page "${marked('Agent page')}" (${cslug}) sent this just after someone used it: approve {"plan":"${PLAN}"} [action ${delivered?.clicks[0]?.id}]`,
     delivered?.clicks[0]?.text,
   )
-  // In its first seconds it is waiting for the agent. Held by the add-on for longer than that
-  // and not yet acknowledged, its agent is at something else, and the site says that instead.
+  // The stand-in answers as an add-on, but Claude Code itself cannot run in this fixture.
+  // The site keeps that unconfirmed app status until the delivery is acknowledged.
   check(
-    'until it is acknowledged the site says it is on its way',
-    await until(() => page.locator('.status', { hasText: /Waiting for your agent|is busy, and gets it when it is free/ }).isVisible()),
+    'until it is acknowledged the site says the stand-in app connection has not been confirmed',
+    await until(() => page.locator('.status', { hasText: "It has not confirmed Claude Code's connection" }).isVisible()),
   )
   if (!delivered) throw new Error('no click reached the conversation that made the page, so there is nothing for its add-on to acknowledge')
   await mod.ack(delivered.clicks.map((c) => c.id))

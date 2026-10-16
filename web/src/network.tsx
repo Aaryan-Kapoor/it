@@ -5,7 +5,7 @@
 // owner's browser reads that here, and what it shows changes by itself when `it network on` or
 // `it network off` is run.
 import { useMutation, useQuery } from 'convex/react'
-import { useCallback, useEffect, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Copyable } from './dialog'
 import { api, pairingAddress, refusal, useNow } from './lib'
 
@@ -35,8 +35,14 @@ export function useWhere(): Where {
   const said = useQuery(api.network.get, {}) as { on: boolean; addresses: string[] } | undefined
   const [chosen, choose] = useState<string | null>(null)
   const here = ownAddress()
-  const all = [...new Set([...(here ? [here] : []), ...(said?.on ? said.addresses : [])])]
-  const address = chosen !== null && all.includes(chosen) ? chosen : (all[0] ?? null)
+  // Compare destinations as origins, keeping the first spelling for display.
+  const origins = new Map<string, string>()
+  for (const address of [...(here ? [here] : []), ...(said?.on ? said.addresses : [])]) {
+    const origin = new URL(address).origin
+    if (!origins.has(origin)) origins.set(origin, address)
+  }
+  const all = [...origins.values()]
+  const address = (chosen !== null ? origins.get(new URL(chosen).origin) : null) ?? all[0] ?? null
   return { state: address !== null ? 'known' : said === undefined ? 'unknown' : said.on ? 'nowhere' : 'off', address, all, choose }
 }
 
@@ -95,7 +101,11 @@ const onThatMachine = () => ['localhost', '127.0.0.1', '[::1]'].includes(locatio
 export function useNetwork() {
   const said = useQuery(api.network.get, {}) as Stands | undefined
   const asking = useMutation(api.network.ask)
-  const now = useNow(1000)
+  // Looked at again every second, for the two waits below. The time `useNow` gives is the
+  // backend's, and is not what they are counted by: an asking is timed from when this browser
+  // made it, by this browser's own clock, and one that is ahead of the backend's would
+  // otherwise wait as much longer as it is ahead
+  useNow(1000)
   /**
    * What was asked here and is not yet over: for which way, when by this browser's clock, and
    * the name the backend gave the asking, once it has. An answer is this asking's only if it
@@ -103,6 +113,8 @@ export function useNetwork() {
    * for the answer to this, and what the other was refused is not said here.
    */
   const [mine, setMine] = useState<{ to: Way; at: number; id: number | null } | null>(null)
+  /** When the last asking was made here, which is the one a refusal has to be of to be said here. */
+  const last = useRef(0)
   /** Why what was last asked here did not come about, in a sentence, until something else is asked. */
   const [failed, setFailed] = useState('')
   const way: Way | undefined = said === undefined ? undefined : !said.on ? 'off' : said.tailnet ? 'tailscale' : 'on'
@@ -119,7 +131,7 @@ export function useNetwork() {
     else if ((said.asked && said.asked.at !== mine.id) || (answered && (answered.asked ?? 0) > mine.id)) setMine(null)
   }, [mine, said])
   // Never waited for for ever: an asking that nothing is heard of gives the choice back
-  const givenUp = mine !== null && now - mine.at > GIVEN_UP_MS && Date.now() - mine.at > GIVEN_UP_MS
+  const givenUp = mine !== null && Date.now() - mine.at > GIVEN_UP_MS
   useEffect(() => {
     if (!givenUp) return
     setMine(null)
@@ -142,11 +154,15 @@ export function useNetwork() {
       }
       setFailed('')
       const at = Date.now()
+      last.current = at
       setMine({ to, at, id: null })
       asking({ to }).then(
         // The name the backend gave it, by which its answer is known
         (given) => setMine((was) => (was && was.at === at ? { ...was, id: (given as { asked?: number } | null)?.asked ?? null } : was)),
         (err) => {
+          // Refused only after it was given up on and something else was asked: that asking
+          // goes on, and what is said is its own
+          if (last.current !== at) return
           setMine(null)
           setFailed(refusal(err).message)
         },
@@ -165,7 +181,7 @@ export function useNetwork() {
     /** What is being turned to, while the service has not yet said what became of it. */
     turning: mine ? mine.to : null,
     /** It has gone unanswered for longer than the service takes to look. */
-    untaken: mine !== null && now - mine.at > UNTAKEN_MS && Date.now() - mine.at > UNTAKEN_MS,
+    untaken: mine !== null && Date.now() - mine.at > UNTAKEN_MS,
     /** Why what was asked here did not come about, in a sentence, where it did not. */
     failed,
     ask,

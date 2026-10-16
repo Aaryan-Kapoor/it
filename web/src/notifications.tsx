@@ -5,6 +5,7 @@ import { useMutation, useQuery } from 'convex/react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { IconBell } from './brand'
 import { ago, api, displayKey, type Id, navigate, refusal, useNow } from './lib'
+import { useDialogKeys } from './overlay'
 import { NOT_SECURE, notSecure } from './push'
 
 interface Note {
@@ -89,16 +90,25 @@ function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast'
           ))}
         </div>
       )}
-      {/* Answered: said in words, since a dimmed button alone does not say that the answer went */}
-      {n.answer !== null && n.buttons.length > 0 && (
-        <span className="note-answered">Sent to your agent: {n.buttons.find((b) => b.action === n.answer)?.label ?? n.answer}</span>
-      )}
-      {sending !== null && n.answer === null && (
-        <span className="note-answered" role="status">
-          Sending “{n.buttons.find((b) => b.action === sending)?.label ?? sending}”… Keep this tab open until it says it was sent
+      {/* What became of an answer is said aloud as well, to whoever cannot see it change. Where
+          it is said is there before there is anything to say: what is put in place with its
+          words already in it is not always said */}
+      <span className="note-said" role="status">
+        {/* Answered: said in words, since a dimmed button alone does not say that the answer went */}
+        {n.answer !== null && n.buttons.length > 0 && (
+          <span className="note-answered">Sent to your agent: {n.buttons.find((b) => b.action === n.answer)?.label ?? n.answer}</span>
+        )}
+        {sending !== null && n.answer === null && (
+          <span className="note-answered">
+            Sending “{n.buttons.find((b) => b.action === sending)?.label ?? sending}”… Keep this tab open until it says it was sent
+          </span>
+        )}
+      </span>
+      {error && (
+        <span className="error" role="alert">
+          {error}
         </span>
       )}
-      {error && <span className="error">{error}</span>}
     </>
   )
 }
@@ -181,22 +191,24 @@ export function Bell({ compact = false }: { compact?: boolean }) {
   useEffect(() => {
     if (open && unseenIds) void seen({ key: displayKey(), ids: unseenIds.split(',') as Id<'notifications'>[] }).catch(() => {})
   }, [open, unseenIds, seen])
-  // A click anywhere else closes it, and so does Escape
+  // A click anywhere else closes it, and so does Escape. Closed with the keyboard in it, the
+  // keyboard goes to the bell: what it was on is gone, and it would otherwise be left nowhere
   const box = useRef<HTMLDivElement>(null)
+  const opener = useRef<HTMLButtonElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  useDialogKeys(panel, () => setOpen(false), open, opener)
   useEffect(() => {
     if (!open) return
     const away = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false)
-    const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
     document.addEventListener('mousedown', away)
-    document.addEventListener('keydown', key)
     return () => {
       document.removeEventListener('mousedown', away)
-      document.removeEventListener('keydown', key)
     }
   }, [open])
   return (
     <div className="menu" ref={box}>
       <button
+        ref={opener}
         type="button"
         className={`icon bell notif-btn ${compact ? 'nav-action' : 'grid-icon-btn'}`}
         aria-haspopup="dialog"
@@ -209,7 +221,14 @@ export function Bell({ compact = false }: { compact?: boolean }) {
         {unseen > 0 && <span className="count notif-badge">{unseen > 9 ? '9+' : unseen}</span>}
       </button>
       {open && (
-        <div className={`tray-panel notif-panel${compact ? ' notif-panel--low' : ''}`} role="dialog" aria-label="Notifications">
+        <div
+          ref={panel}
+          tabIndex={-1}
+          className={`tray-panel notif-panel${compact ? ' notif-panel--low' : ''}`}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Notifications"
+        >
           <div className="tray-head notif-head">
             <span className="notif-head-title">Notifications</span>
             {(notes?.length ?? 0) > 0 && (

@@ -130,7 +130,11 @@ export const wake = mutation({
     const m = await ownMachine(ctx, user._id, machineId)
     if (!(WAKES as readonly string[]).includes(harness)) fail('invalid', 'It cannot reopen a closed conversation of that agent app.')
     if (on && !wakesOn(m.system)) fail('invalid', noWakeHere(m.system))
-    if (on && !(m.wanted ?? []).includes(harness)) fail('invalid', 'Connect that agent app before turning on Auto-wake.')
+    if (
+      on &&
+      (!(m.wanted ?? []).includes(harness) || !(m.harnesses ?? []).some((h) => h.id === harness && (h.addon === 'connected' || h.addon === 'needs_approval')))
+    )
+      fail('invalid', 'Connect that agent app before turning on Auto-wake.')
     const now = m.wakes ?? []
     const is = now.some((w) => w.harness === harness)
     const off = (m.wakesOff ?? []).filter((h) => h !== harness)
@@ -164,6 +168,8 @@ export const upgrade = mutation({
         .take(QUOTA.machines)
       const runsIt = all.find((x) => !x.byMachine && !x.bySession)
       if (runsIt && newer(m.latest, runsIt.connectorVersion)) fail('conflict', 'Update the machine It runs on first.', { first: true })
+      if (runsIt && newer(runsIt.connectorVersion, m.latest))
+        fail('conflict', 'That release is older than the machine It runs on. Run `it upgrade --check` on this machine to check for a matching release.')
     }
     // Asked for again while it is at work, it is the same asking
     if (m.upgrade?.state === 'working' && Date.now() - m.upgrade.at < UPGRADE_MS) return null

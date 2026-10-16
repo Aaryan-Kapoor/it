@@ -86,6 +86,20 @@ describe('adding a display, in the browser on the machine It runs on', () => {
     await show(createElement(Displays, { thisDisplay: 'display-1' }))
   }
 
+  test('default ports share one destination and a chosen origin survives a spelling change', async () => {
+    browser.reconfigure({ url: 'http://workstation/' })
+    watched['network:get'] = { on: true, addresses: ['http://workstation:80', 'http://other:80', 'http://workstation:4700'] }
+    await displays()
+    await press('Add a display')
+    const options = () => [...host.querySelectorAll('option')].map((o) => o.value)
+    expect(options()).toEqual(['http://workstation', 'http://other:80', 'http://workstation:4700'])
+    await choose('http://other:80')
+    await networkIs({ on: true, addresses: ['http://other', 'http://workstation:4700'] })
+    expect(text('.pair-address')).toBe(`http://other/pair#${CODE}`)
+    await networkIs({ on: true, addresses: ['http://workstation:4700'] })
+    expect(text('.pair-address')).toBe(`http://workstation/pair#${CODE}`)
+  })
+
   test('with the network on, the owner is given the machine’s address on the network to open on the other screen, a QR code of it, and the code in letters', async () => {
     watched['network:get'] = { on: true, addresses: [LAN] }
     await displays()
@@ -312,6 +326,48 @@ describe('what is said of an agent app on a machine', () => {
     expect(said()).toEqual(['It 0.1.1 is installed on the laptop. It runs once It is started again there: stop it serve where it is running, and start it.'])
   })
 
+  test.each([null, '0.1.0', '0.9.5'])('a joined machine shows a newer host before its next release lookup, last result %s', async (latest) => {
+    const { Machines } = await import('./machines')
+    watched['machines:list'] = [
+      { ...machine(Date.now(), [], []), connectorVersion: '0.10.0', runsIt: true },
+      { ...machine(Date.now(), [], []), id: 'machine-2', connectorVersion: '0.9.0', latest },
+    ]
+    await show(createElement(Machines))
+    expect(text('p.newer')).toContain('The machine It runs on uses 0.10.0.')
+    expect(text('p.newer')).toContain('A matching release has not been confirmed here.')
+    expect(host.querySelector('p.newer button')).toBeNull()
+    watched['machines:list'] = [
+      { ...machine(Date.now(), [], []), connectorVersion: '0.9.0', runsIt: true },
+      { ...machine(Date.now(), [], []), id: 'machine-2', connectorVersion: '0.10.0', latest },
+    ]
+    await act(async () => root.render(createElement(Machines)))
+    expect(host.querySelector('p.newer')).toBeNull()
+  })
+
+  test.each(['connected', 'needs_approval', 'not_connected', 'error', 'unknown', 'future-state'])(
+    'Auto-wake can be enabled only for an accepted add-on report, and can still be turned off: %s',
+    async (addon) => {
+      const { Machines } = await import('./machines')
+      const found = [{ id: 'claude-code', version: '2.1.0', addon }]
+      watched['machines:list'] = [machine(Date.now(), found, ['claude-code'])]
+      await show(createElement(Machines))
+      const wake = () => host.querySelector<HTMLInputElement>('.wake-row input')!
+      const ready = addon === 'connected' || addon === 'needs_approval'
+      expect(wake().disabled).toBe(!ready)
+      await act(async () => wake().click())
+      expect(asked).toEqual(ready ? [{ machineId: 'machine-1', harness: 'claude-code', on: true }] : [])
+      calls.length = 0
+      asked.length = 0
+      // A failed report does not prevent the owner from withdrawing permission already given.
+      watched['machines:list'] = [machine(Date.now(), found, ['claude-code'], ['claude-code'])]
+      await act(async () => root.render(createElement(Machines)))
+      expect(wake().checked).toBe(true)
+      expect(wake().disabled).toBe(false)
+      await act(async () => wake().click())
+      expect(asked).toEqual([{ machineId: 'machine-1', harness: 'claude-code', on: false }])
+    },
+  )
+
   test('each connected app It can reopen a closed conversation of has a switch for that, off until the owner turns it on, and no other app has one', async () => {
     const found = [
       { id: 'claude-code', version: '2.1.0', addon: 'connected' },
@@ -353,6 +409,25 @@ describe('what is said of an agent app on a machine', () => {
     await show(createElement(Machines))
     expect(switches()).toEqual([])
     expect(host.textContent).toContain('It does not reopen closed conversations on a Windows machine yet.')
+  })
+})
+
+describe('giving a machine another name', () => {
+  test('however the field is left, by Escape, by Cancel or by saving, the keyboard is back on Rename', async () => {
+    watched['machines:list'] = [
+      { id: 'machine-1', name: 'the desk', lastSeenAt: Date.now(), connectorVersion: '0.1.0', system: 'linux', harnesses: [], wanted: [], wakes: [] },
+    ]
+    const { Machines } = await import('./machines')
+    await show(createElement(Machines))
+    const field = () => host.querySelector<HTMLInputElement>('input[aria-label="Machine name"]')
+    for (const leave of ['Escape', 'Cancel', 'Save']) {
+      await press('Rename')
+      expect([leave, document.activeElement === field()]).toEqual([leave, true])
+      if (leave === 'Escape') await act(async () => void field()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+      else await press(leave)
+      expect([leave, field(), document.activeElement?.textContent]).toEqual([leave, null, 'Rename'])
+    }
+    expect(calls.filter((fn) => fn === 'machines:rename').length).toBe(1)
   })
 })
 
@@ -539,6 +614,62 @@ describe('the network as a switch', () => {
     expect(said()).toBe('It has not said what became of that. The choice shows how the network stands now.')
     expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
     expect(ways().map((w) => w.checked)).toEqual([true, false, false])
+  })
+
+  test('the waiting is counted by this browser’s own clock: one that is an hour ahead of the machine It runs on is given the choice back as soon', async () => {
+    vi.useFakeTimers()
+    const { learnClock } = await import('./lib')
+    // As a heartbeat's answer teaches the site: the backend's clock is an hour behind this browser's
+    learnClock(Date.now() - 3_600_000)
+    try {
+      watched['network:get'] = stands()
+      await panel()
+      await pick(1)
+      await act(async () => void (await vi.advanceTimersByTimeAsync(UNTAKEN + 1500)))
+      expect(said()).toContain('It has not taken that yet.')
+      await act(async () => void (await vi.advanceTimersByTimeAsync(GIVEN_UP)))
+      expect(said()).toBe('It has not said what became of that. The choice shows how the network stands now.')
+      expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
+    } finally {
+      learnClock(Date.now())
+    }
+  })
+
+  test('an asking that was given up on and is refused afterwards leaves the next asking alone: that one goes on, and what is said is its own', async () => {
+    vi.useFakeTimers()
+    const { ConvexError } = await import('convex/values')
+    let refuse!: (err: unknown) => void
+    answers['network:ask'] = () =>
+      new Promise((_, reject) => {
+        refuse = reject
+      })
+    watched['network:get'] = stands()
+    await panel()
+    await pick(1)
+    await act(async () => void (await vi.advanceTimersByTimeAsync(GIVEN_UP + 1500)))
+    expect(said()).toBe('It has not said what became of that. The choice shows how the network stands now.')
+    // Asked again, and this time the backend takes it
+    answers['network:ask'] = () => ({ asked: ASKED })
+    await pick(1)
+    expect(said()).toBe('Turning the network on…')
+    // The first asking is refused only now
+    await act(async () => refuse(new ConvexError({ code: 'busy', message: 'The first asking was refused.' })))
+    expect(said()).toBe('Turning the network on…')
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(true)
+    // And the second is still known by its name when the service answers it
+    await networkStands({ answered: { to: 'on', at: Date.now() + 1000, ok: false, why: 'cannot_listen', asked: ASKED } })
+    expect(said()).toContain('It could not listen on that machine’s network addresses, so the network is left off.')
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
+  })
+
+  test('an asking the backend refuses is over at once, and what the backend said is shown', async () => {
+    const { ConvexError } = await import('convex/values')
+    answers['network:ask'] = () => Promise.reject(new ConvexError({ code: 'busy', message: 'The asking was refused.' }))
+    watched['network:get'] = stands()
+    await panel()
+    await pick(1)
+    expect(said()).toBe('The asking was refused.')
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
   })
 
   test('on a machine the internet reaches, turning it on is asked about first, with why, and nothing is done on a no', async () => {

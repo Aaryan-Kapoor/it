@@ -1621,7 +1621,9 @@ describe('clicks and their delivery', () => {
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
     // These delivery fixtures have connected apps whose reopening has not been switched on.
-    await t.run((ctx) => ctx.db.patch(m.id, { wanted: ['claude-code', 'codex'] }))
+    await t.run((ctx) =>
+      ctx.db.patch(m.id, { wanted: ['claude-code', 'codex'], harnesses: ['claude-code', 'codex'].map((id) => ({ id, addon: 'connected' })) }),
+    )
     const p = await publish(m, 'plan', { session: SESSION })
     const click = (id: string, over = {}) =>
       alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id, over) })
@@ -2456,7 +2458,9 @@ describe('clicks and their delivery', () => {
     // Its conversation is open on the machine that joined again, which takes the click for it: the page is that machine's now
     expect(await again.as.mutation(api.delivery.claim, { ids: [first as never], for: SESSION })).toEqual([first])
     await settle(t)
-    expect(await page()).toMatchObject({ machine: 'laptop again', machineGone: false, wake: { machineId: again.id, harness: 'claude-code', on: false } })
+    expect(await page()).toMatchObject({ machine: 'laptop again', machineGone: false, wake: null })
+    await t.run((ctx) => ctx.db.patch(again.id, { wanted: ['claude-code'] }))
+    expect((await page()).wake).toEqual({ machineId: again.id, harness: 'claude-code', on: false })
     expect((await page()).machineSeenAt).toBeGreaterThan(0)
     // The next click is that machine's with nobody listening, and no other machine is offered it
     const second = await press('click-second')
@@ -3196,6 +3200,7 @@ describe('displays and machines', () => {
     const t = backend()
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
+    await m.as.mutation(api.machines.inventory, { harnesses: ['claude-code', 'codex'].map((id) => ({ id, addon: 'connected' })) })
     const wakes = async () => (await m.as.query(api.machines.me, {})).wakes.map((w) => w.harness).sort()
     expect(await wakes()).toEqual([])
     // Connected by the person, on the Machines page
@@ -3260,6 +3265,7 @@ describe('displays and machines', () => {
     await alice.browser.mutation(api.machines.revoke, { machineId: again.id })
     await settle(t)
     const third = await machineOf(t, 'alice', 'laptop', again.id)
+    await third.as.mutation(api.machines.inventory, { harnesses: [{ id: 'claude-code', addon: 'connected' }] })
     expect(await third.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex'], system: 'linux' })).toEqual({ wakes: ['codex'] })
     // Only the person switches it on again
     await alice.browser.mutation(api.machines.wake, { machineId: third.id, harness: 'claude-code', on: true })
@@ -3276,6 +3282,7 @@ describe('displays and machines', () => {
     const t = backend()
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
+    await m.as.mutation(api.machines.inventory, { harnesses: ['claude-code', 'codex'].map((id) => ({ id, addon: 'connected' })) })
     await t.run((ctx) => ctx.db.patch(m.id, { wanted: ['claude-code'] }))
     const other = await machineOf(t, 'alice', 'desktop')
     await publish(m, 'plan', { session: { harness: 'claude-code', id: 'c-1' } })
@@ -3331,7 +3338,7 @@ describe('displays and machines', () => {
     expect(((await t.run((ctx) => ctx.db.get(m.id as never))) as { system?: string }).system).toBe('darwin')
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: false })
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
-    expect(await onPage('plan')).toEqual({ machineId: m.id, harness: 'claude-code', on: false })
+    expect(await onPage('plan')).toBeNull()
     // A connector that hands nothing over for now says so with its report, and why. The site is told beside
     // the machine and on its pages, until a report says it no more
     const paused = async () => [
@@ -3401,7 +3408,7 @@ describe('displays and machines', () => {
         expect(got).not.toHaveProperty('wanted')
         expect(got).not.toHaveProperty('publicKey')
         expect(JSON.stringify(got)).not.toMatch(/private installation detail|private unrelated detail|unrelated-app/)
-        if (harness === 'openclaw') expect(got.wake).toBeNull()
+        if (harness === 'openclaw' || !wanted || !['connected', 'needs_approval'].includes(addon ?? '')) expect(got.wake).toBeNull()
       }
       expect(await code(screen.browser.query(api.machines.list, {}))).toBe('forbidden')
     },
@@ -3445,6 +3452,11 @@ describe('displays and machines', () => {
     expect((await t.run((ctx) => ctx.db.get(m.id)))?.wakesOff).toEqual(['codex'])
     await m.as.mutation(api.machines.choose, { harnesses: ['codex'], system: 'linux' })
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+    for (const addon of [undefined, 'not_connected', 'error', 'too_old', 'unavailable']) {
+      await m.as.mutation(api.machines.inventory, { harnesses: addon ? [{ id: 'codex', addon, version: '0.160.0' }] : [] })
+      expect(await code(alice.browser.mutation(api.machines.wake, args))).toBe('invalid')
+      expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+    }
     await m.as.mutation(api.machines.inventory, { harnesses: [{ id: 'codex', addon: 'needs_approval', version: '0.160.0' }] })
     for (const reader of [screen.browser, m.as]) expect(await code(reader.mutation(api.machines.wake, args))).toBe('forbidden')
     await alice.browser.mutation(api.machines.wake, args)
@@ -3496,6 +3508,18 @@ describe('displays and machines', () => {
     expect(await onSite()).toMatchObject({ harnesses: [{ id: 'codex', version: '0.160.0' }], connectorVersion: '0.1.0', lastSeenAt: heardAt })
     // It is the machine's own to say, and nobody else's
     expect(await code(alice.browser.mutation(api.machines.inventory, { harnesses: [] }))).toBe('forbidden')
+  })
+
+  test('a joined machine cannot request a cached release below its host version', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const host = await machineOf(t, 'alice', 'the desk')
+    const laptop = await machineOf(t, 'alice', 'the laptop')
+    await t.run((ctx) => ctx.db.patch(laptop.id as never, { byMachine: host.id } as never))
+    await host.as.mutation(api.machines.report, { connectorVersion: '0.10.0', harnesses: [] })
+    await laptop.as.mutation(api.machines.report, { connectorVersion: '0.9.0', latest: '0.9.5', harnesses: [] })
+    expect(await code(alice.browser.mutation(api.machines.upgrade, { machineId: laptop.id as never }))).toBe('conflict')
+    expect((await laptop.as.query(api.machines.me, {})).upgrade).toBeNull()
   })
 
   test('a machine says which newer version of It it has learned is out, and only the owner’s own browser can have it brought to it, the machine It runs on first', async () => {

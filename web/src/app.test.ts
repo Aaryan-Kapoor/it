@@ -281,7 +281,7 @@ describe('what the site keeps in this browser', () => {
       expect(written).toEqual([])
       expect(document.cookie).toBe('')
       // What it does keep is in the storage a browser holds apart for each port
-      expect(Object.keys(localStorage).sort()).toEqual(['it.cookies', 'it.display', 'it.display.session', 'it.person', 'it.session'])
+      expect(Object.keys(localStorage).sort()).toEqual(['it.cookies', 'it.display', 'it.display.session', 'it.person', 'it.pushOff', 'it.session'])
     } finally {
       Reflect.deleteProperty(document, 'cookie')
     }
@@ -598,6 +598,197 @@ describe('something that failed while the site was being shown', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('a page an agent brings up on this display', () => {
+  test('is shown with the tour’s dialog closed, which is what asked for it: the tour does not come up under the dialog', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:get'] = {
+      id: 'page-1',
+      slug: 'tour-menu',
+      title: 'The It tour',
+      version: 1,
+      updatedAt: Date.now(),
+      agent: 'pi',
+      machine: 'here',
+      run: null,
+      pending: 0,
+    }
+    await start()
+    await press('Take the tour')
+    expect(host.querySelector('.modal-panel')!.textContent).toContain('Give me the It tour.')
+    // The agent was given the sentence, and shows the tour's first page here
+    watched['displays:mine'] = { ...DISPLAY, showing: { slug: 'tour-menu', at: 5 } }
+    const react = await import('react')
+    const { App } = await import('./app')
+    await act(async () => {
+      root.render(react.createElement(App))
+      await tick()
+    })
+    expect(location.pathname).toBe('/p/tour-menu')
+    expect(host.querySelector('.modal-panel')).toBeNull()
+  })
+})
+
+describe('telling the backend that this display is open', () => {
+  const beats = () => names().filter((what) => what === 'displays:heartbeat').length
+
+  test('a telling that met trouble is made once more by itself a moment later, and the backend’s clock is learned from that one', async () => {
+    cookie = CODES.ownercode00000000001!
+    // The moment before the second asking, which is otherwise not the same for any two tabs, at its shortest
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    answers['displays:heartbeat'] = () =>
+      beats() === 1 ? Promise.reject(new Error('[CONVEX M(displays:heartbeat)] [Request ID: 0123456789abcdef] Server Error')) : { now: Date.now() - 3_600_000 }
+    await start()
+    const { serverNow } = await import('./lib')
+    expect(beats()).toBe(1)
+    expect(Date.now() - serverNow()).toBeLessThan(1000)
+    await vi.waitFor(() => expect(beats()).toBe(2), 4000)
+    await settle()
+    expect(Date.now() - serverNow()).toBeGreaterThan(3_599_000)
+    expect(errors).toEqual([])
+  }, 10_000)
+
+  test('while one telling is not yet answered no other is made, however often the tab is hidden and shown again', async () => {
+    cookie = CODES.ownercode00000000001!
+    answers['displays:heartbeat'] = () => new Promise(() => {})
+    await start()
+    expect(beats()).toBe(1)
+    for (let shown = 0; shown < 5; shown++) await act(async () => void document.dispatchEvent(new Event('visibilitychange')))
+    expect(beats()).toBe(1)
+  })
+})
+
+describe('finding a page with the keyboard', () => {
+  /** Presses a key where the keyboard is, and gives back the press, which says whether the site took it for itself. */
+  const key = async (to: EventTarget, named: string, more: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent('keydown', { key: named, bubbles: true, cancelable: true, ...more })
+    await act(async () => void to.dispatchEvent(event))
+    return event
+  }
+  const field = () => host.querySelector<HTMLInputElement>('.finder-input')
+  beforeEach(() => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:list'] = [
+      { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: Date.now(), agent: 'pi', machine: 'here', pending: 0, pinned: false },
+    ]
+  })
+
+  test('Notifications keeps the keyboard visible and blocks the finder until it closes', async () => {
+    await start()
+    const bell = button('Notifications')!
+    bell.focus()
+    await act(async () => bell.click())
+    const panel = host.querySelector<HTMLElement>('.notif-panel')!
+    expect(document.activeElement).toBe(panel)
+    for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+      await key(panel, 'k', modifier)
+      expect(field()).toBeNull()
+      expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1)
+    }
+    for (const shiftKey of [false, true]) {
+      await key(panel, 'Tab', { shiftKey })
+      expect(document.activeElement).toBe(panel)
+    }
+    await key(panel, 'Escape')
+    expect(host.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(bell)
+    await key(bell, 'k', { ctrlKey: true })
+    expect(document.activeElement).toBe(field())
+  })
+
+  test('one Escape closes only the last dialog and returns focus to the dialog beneath it', async () => {
+    await start()
+    await act(async () => button('Notifications')!.click())
+    const panel = host.querySelector<HTMLElement>('.notif-panel')!
+    // Clicking a background control moves focus there before opening the second dialog.
+    // Closing it must still put the keyboard in the notification dialog that remains.
+    const tour = button('Take the tour')!
+    tour.focus()
+    await act(async () => tour.click())
+    expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(2)
+    await key(document, 'Escape')
+    expect(host.querySelector('.modal-panel')).toBeNull()
+    expect(host.querySelector('.notif-panel')).toBe(panel)
+    expect(document.activeElement).toBe(panel)
+    await key(document, 'Escape')
+    expect(host.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  test('the keyboard stays in the finder while it is open: Tab goes nowhere else, Escape closes it wherever the keyboard is, and the keyboard is then back where it was', async () => {
+    await start()
+    const tour = button('Take the tour')!
+    tour.focus()
+    await key(document, 'k', { ctrlKey: true })
+    expect(document.activeElement).toBe(field())
+    for (const shiftKey of [false, true]) {
+      const tab = await key(field()!, 'Tab', { shiftKey })
+      expect([shiftKey, tab.defaultPrevented, document.activeElement === field()]).toEqual([shiftKey, true, true])
+    }
+    // A result that was pressed with the mouse and not let go on has the keyboard, and the field no longer does
+    const result = host.querySelector<HTMLElement>('.finder-result')!
+    result.focus()
+    expect(document.activeElement).toBe(result)
+    await key(result, 'Tab')
+    expect(document.activeElement).toBe(field())
+    result.focus()
+    await key(result, 'Escape')
+    expect(field()).toBeNull()
+    expect(document.activeElement).toBe(tour)
+  })
+
+  test('the result the arrows choose is the field’s to say, to whoever cannot see it, and that nothing matches is said too', async () => {
+    watched['artifacts:list'] = [
+      { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: Date.now(), agent: 'pi', machine: 'here', pending: 0, pinned: false },
+      {
+        id: 'page-2',
+        slug: 'packing',
+        title: 'Packing list',
+        version: 1,
+        updatedAt: Date.now() - 60_000,
+        agent: 'pi',
+        machine: 'here',
+        pending: 0,
+        pinned: false,
+      },
+    ]
+    await start()
+    await key(document, 'k', { ctrlKey: true })
+    const list = host.querySelector('.finder-results')!
+    /** The result the field says is chosen, by the name it points at. */
+    const chosen = () => document.getElementById(field()!.getAttribute('aria-activedescendant') ?? '')
+    expect([field()!.getAttribute('role'), field()!.getAttribute('aria-expanded'), field()!.getAttribute('aria-controls')]).toEqual([
+      'combobox',
+      'true',
+      list.id,
+    ])
+    expect(list.id).not.toBe('')
+    expect(host.querySelector('.finder-panel [role="status"]')!.textContent).toBe('')
+    expect([chosen()?.getAttribute('role'), chosen()?.getAttribute('aria-selected'), chosen()?.querySelector('.finder-result-title')?.textContent]).toEqual([
+      'option',
+      'true',
+      'Plan',
+    ])
+    await key(field()!, 'ArrowDown')
+    expect(document.activeElement).toBe(field())
+    expect([chosen()?.getAttribute('aria-selected'), chosen()?.querySelector('.finder-result-title')?.textContent]).toEqual(['true', 'Packing list'])
+    // Nothing matches: the field points at no result, and the sentence that says so is said aloud
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(field()!, 'zebra')
+      field()!.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(field()!.hasAttribute('aria-activedescendant')).toBe(false)
+    expect(host.querySelector('.finder-panel [role="status"]')!.textContent).toBe('No pages match “zebra”')
+  })
+
+  test('it is not opened over a dialog, which keeps the keyboard to itself', async () => {
+    await start()
+    await press('Take the tour')
+    expect(host.querySelector('.modal-panel')).not.toBeNull()
+    await key(document, 'k', { ctrlKey: true })
+    expect(field()).toBeNull()
+    expect(host.querySelector('.modal-panel')).not.toBeNull()
   })
 })
 

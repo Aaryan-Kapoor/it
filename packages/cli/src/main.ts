@@ -92,7 +92,7 @@ import {
 import { login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
 import { gather, noteConversation, publish } from './publish'
-import { alone, asAdmin, standing, startBackend } from './serve/backend'
+import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
@@ -118,7 +118,7 @@ import {
 } from './setup'
 import { printEnv } from './shell-env'
 import { GUIDE, NAMES, END as TOUR_END, MENU as TOUR_MENU, TOUR_PREFIX, STEPS as TOUR_STEPS, tourPage } from './tour'
-import { fetchNewer, keepBase, latest, watch, watched } from './upgrade'
+import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import * as usage from './usage'
 
 // Everything is written through `written`, which follows each write until it has left the
@@ -1222,7 +1222,7 @@ async function uninstall(a: Args) {
   const since = usage.sinceBegun()
   if (since !== undefined) await usage.sendNow('installation.removed', { age: usage.ageBand(since) })
   const left: string[] = []
-  // First of all the background service, since it is the one thing that may refuse: where it
+  // First of all the background service, since stopping it may be refused: where it
   // could not be stopped, nothing else is taken away, so that It is still whole and this can
   // be run again. With the program and its folder gone and the service left, there would be
   // nothing left to run.
@@ -1235,54 +1235,74 @@ async function uninstall(a: Args) {
       if (was) say('The background service is stopped, and no longer starts by itself.')
     } catch (err) {
       throw new Problem(
-        `It was not taken off this machine: ${why(err)}.`,
+        `It was not taken off this machine: ${err instanceof Error && err.message.trim() ? err.message.replace(/\.$/, '') : 'the background service could not be stopped or removed'}.`,
         'error',
         'Nothing else was changed, and It is as it was. Run `it uninstall` again once the service can be stopped.',
       )
     }
   }
-  // 1. The add-ons, each from where this folder put it
-  for (const id of HARNESSES) {
-    if (!existsSync(stampFile(id))) continue
-    const gone = await disconnect(id, say).catch(() => false)
-    if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
-    else left.push(`${KNOWN[id].label} still has It’s add-on, which could not be taken out. Its own command for add-ons removes it.`)
-  }
-  // 2. An `it serve` someone started by hand in this folder
+  // A service started by hand and an orphaned backend must stop before anything else goes.
   service.askToStop(folder, 30_000)
-  if (service.runningFor(folder)) left.push('It is still running, and was asked to stop: end the `it serve` you started, in its terminal.')
-  // 3. Its line in the shell's profile, with the comment above it
-  const bin = path.join(folder, 'bin')
-  const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
-  for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
-  for (const { file, why: reason } of profiles.failed)
-    left.push(`${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`)
-  // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
-  if (process.platform === 'win32') {
-    const taken = offWindowsPath(bin)
-    if (taken === 'off') say(`${bin} is off your PATH.`)
-    else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
-  }
-  // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
-  crumbs(folder)
-  // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
-  // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
-  if (codexRuleLetsItOut())
-    say(
-      `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
-    )
-  // 5. Its folder, the program in it included. A program that is running may delete its own
-  // file on every system but Windows, where it steps out of the folder first. What the service
-  // held open there a moment ago may be held a moment longer, and is tried again.
-  const stepped = process.platform === 'win32' ? stepOutOf(folder) : undefined
-  if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
-  else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+  if (service.runningFor(folder)) throw new Problem('It is still running for this folder, so nothing else was removed.', 'still_running')
+  const heard: string[] = []
+  let removing = false
   try {
-    rmSync(folder, { recursive: true, force: true, ...(process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}) })
+    await nothingLeft(
+      (line) => heard.push(line),
+      async () => {
+        removing = true
+        if (heard.length) say('The backend program that an It which had died left running here is stopped.')
+        // The add-ons go only after no backend program has the folder.
+        for (const id of HARNESSES) {
+          if (!existsSync(stampFile(id))) continue
+          const gone = await disconnect(id, say).catch(() => false)
+          if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
+          else left.push(`${KNOWN[id].label} still has It’s add-on, which could not be taken out. Its own command for add-ons removes it.`)
+        }
+        // 3. Its line in the shell's profile, with the comment above it
+        const bin = path.join(folder, 'bin')
+        const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
+        for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
+        for (const { file, why: reason } of profiles.failed)
+          left.push(`${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`)
+        // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
+        if (process.platform === 'win32') {
+          const taken = offWindowsPath(bin)
+          if (taken === 'off') say(`${bin} is off your PATH.`)
+          else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
+        }
+        // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
+        crumbs(folder)
+        // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
+        // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
+        if (codexRuleLetsItOut())
+          say(
+            `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
+          )
+        // 5. Its folder, the program in it included. A program that is running may delete its own
+        // file on every system but Windows, where it steps out of the folder first. What the service
+        // held open there a moment ago may be held a moment longer, and is tried again.
+        const stepped = process.platform === 'win32' ? stepOutOf(folder) : undefined
+        if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
+        else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+        try {
+          // A start that read these settings before uninstall must refuse once the inner lock goes.
+          rmSync(path.join(folder, 'service.json'), { force: true })
+          rmSync(folder, { recursive: true, force: true, ...(process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}) })
+        } catch (err) {
+          left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
+        }
+        if (existsSync(folder) && !left.some((line) => line.startsWith(folder))) left.push(`${folder} could not be deleted whole. Delete it to finish.`)
+      },
+    )
   } catch (err) {
-    left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
+    if (removing) throw err
+    throw new Problem(
+      `It could not make sure that no backend program is left running on this folder’s database: ${err instanceof Problem ? err.message : why(err)}.`,
+      'still_running',
+      'The folder and add-ons were kept. Resolve the running program or unreadable settings, then run `it uninstall` again.',
+    )
   }
-  if (existsSync(folder) && !left.some((line) => line.startsWith(folder))) left.push(`${folder} could not be deleted whole. Delete it to finish.`)
   if (!forPerson(a)) return out({ removed: left.length === 0, folder, ...(left.length ? { left } : {}), said })
   tell([
     left.length ? 'It is off this machine, but for this:' : 'It is off this machine.',
@@ -1493,39 +1513,49 @@ function setUp(a: Args, was: boolean): void {
 }
 
 async function setup(a: Args, joined = false) {
-  // Where this It was installed from, if that is not the usual place, is where it looks for newer versions
-  keepBase()
+  // Take the folder's setup lock first where one is needed, so concurrent setups keep their
+  // usual waiting message and allowance. Every path checks the program before its writes.
+  const current = <T>(run: () => Promise<T>) =>
+    withCurrentProgram(() => {
+      // Where this It was installed from is where it looks for newer versions.
+      keepBase()
+      return run()
+    })
   if (a.flags.none && !enrolledHere()) {
     const leftBehind = !existsSync(settingsFile()) && (hasLeft() || holdsAddons())
     if (leftBehind || elsewhere()) {
-      await reconcile([], say)
-      if (leftBehind) {
-        // Noted, so that the folder is still known for what it is once its add-ons are out
-        noteLeft()
-        say(
-          'It is not set up in this folder, which holds only what an earlier use of It left there, so nothing was started. `it setup --none` here takes out the add-ons this folder had put in. To set It up on this machine, run `it setup`.',
-        )
-      }
-      const left = await detectAll()
-      return forPerson(a) ? tell(appsSaid(left, false)) : out({ harnesses: left, wanted: [] })
+      return current(async () => {
+        await reconcile([], say)
+        if (leftBehind) {
+          // Noted, so that the folder is still known for what it is once its add-ons are out
+          noteLeft()
+          say(
+            'It is not set up in this folder, which holds only what an earlier use of It left there, so nothing was started. `it setup --none` here takes out the add-ons this folder had put in. To set It up on this machine, run `it setup`.',
+          )
+        }
+        const left = await detectAll()
+        return forPerson(a) ? tell(appsSaid(left, false)) : out({ harnesses: left, wanted: [] })
+      })
     }
   }
-  if (elsewhere()) return settingUp(a, joined)
+  if (elsewhere()) return current(() => settingUp(a, joined))
   // Where the backend is this machine's own to run, a setup makes what It needs here and may
   // run the backend for as long as the setup takes: one at a time for a folder, and not while
   // the machine is joining an It on another computer. Whether the folder is to run an It is
   // decided again once the folder is this setup's alone. A machine that has joined an It
   // meanwhile keeps the identity it joined with: nothing is set up here over it.
-  return oneAtATime(() => {
-    const at = readJson<{ at?: string }>(inHome('machine.json'))?.at
-    if (at)
-      throw new Problem(
-        `This machine joined the It at ${at} while this setup was waiting, so no It was set up here.`,
-        'joined',
-        'Run `it setup` again to connect its agent apps to that It. To have It run on this machine instead, run `it logout` first, and then `it setup`.',
-      )
-    return settingUp(a, joined)
-  })
+  return oneAtATime(() =>
+    current(() => {
+      const at = readJson<{ at?: string }>(inHome('machine.json'))?.at
+      if (at)
+        throw new Problem(
+          `This machine joined the It at ${at} while this setup was waiting, so no It was set up here.`,
+          'joined',
+          'Run `it setup` again to connect its agent apps to that It. To have It run on this machine instead, run `it logout` first, and then `it setup`.',
+        )
+      return settingUp(a, joined)
+    }),
+  )
 }
 
 /** How long a setup waits for another that is at work in the same folder, which may itself be waiting for a person's answers. */
@@ -2160,11 +2190,13 @@ async function networkAsItStands(running: boolean): Promise<ReturnType<typeof ne
  * asks as the service itself does, with the key in It's settings, so that it needs nothing of
  * this machine's enrolment.
  */
-async function doorStands(config: { port: number; adminKey: string }): Promise<{ on: boolean; wanted: boolean } | undefined> {
+async function doorStands(config: { port: number; adminKey: string }): Promise<{ on: boolean; wanted: boolean; tailnet?: boolean } | undefined> {
   const said = (await asAdmin({ api: backendAt(config.port).api, adminKey: config.adminKey }, 'network:current', {}).catch(() => undefined)) as
-    | { on?: unknown; wanted?: unknown }
+    | { on?: unknown; wanted?: unknown; tailnet?: unknown }
     | undefined
-  return typeof said?.on === 'boolean' && typeof said.wanted === 'boolean' ? { on: said.on, wanted: said.wanted } : undefined
+  return typeof said?.on === 'boolean' && typeof said.wanted === 'boolean'
+    ? { on: said.on, wanted: said.wanted, ...(typeof said.tailnet === 'boolean' ? { tailnet: said.tailnet } : {}) }
+    : undefined
 }
 
 /**
@@ -2183,11 +2215,17 @@ async function turnNetwork(
    * Waits until the running service has looked at a setting and said so, and gives how its
    * door then stands. Nothing when no service is running to be waited for.
    */
-  const taken = async (setting: boolean) => {
+  const taken = async (setting: boolean, policy?: boolean) => {
     if (!running) return undefined
     const until = Date.now() + TAKEN_MS
     let stands = await doorStands(config)
-    while (stands !== undefined && stands.wanted !== setting && Date.now() < until) {
+    while (
+      stands !== undefined &&
+      (stands.wanted !== setting ||
+        (!setting && stands.on) ||
+        (setting && stands.on && policy !== undefined && stands.tailnet !== undefined && stands.tailnet !== policy)) &&
+      Date.now() < until
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 200))
       stands = await doorStands(config)
     }
@@ -2200,14 +2238,9 @@ async function turnNetwork(
     noteNetwork(false)
     stands = await taken(false)
   }
-  // Whom the door answers changes with nothing else changing when only the tailnet is turned
-  // to or from. The service opens its door anew for that at its next look, which is waited out
-  const onlyWhom = running && on && config.network && (config.tailnet === true) !== tailnet
   noteNetwork(on, tailnet)
-  // The service that is running takes it by itself. With none running there is nothing to wait for.
-  stands = await taken(on)
-  if (onlyWhom) await new Promise((resolve) => setTimeout(resolve, 2500))
-  if (stands !== undefined && stands.wanted !== on)
+  stands = await taken(on, tailnet)
+  if (stands !== undefined && (stands.wanted !== on || (!on && stands.on) || (on && stands.on && stands.tailnet !== undefined && stands.tailnet !== tailnet)))
     throw new Problem(
       `The network is turned ${on ? 'on' : 'off'} in It’s settings, and the service that is running has not taken that.`,
       'not_taken',
@@ -2223,6 +2256,14 @@ async function turnNetwork(
       'Another program may have one of the ports It listens on, on one of those addresses. `it service logs` says what the service met.',
     )
   }
+  if (running && (stands === undefined || (on && stands.tailnet === undefined)))
+    throw new Problem(
+      'The network setting was saved, but It could not confirm that the service applied it.',
+      'not_confirmed',
+      stands === undefined
+        ? 'The service could not be asked how its door stands. Check `it service logs` and try again.'
+        : 'The backend functions do not report the applied network policy. Run `it status` on this machine to check whether older functions are still running.',
+    )
 }
 
 /** What is said where the tailnet is asked for on a machine that is on none. */
@@ -2670,15 +2711,20 @@ async function main(argv: string[]): Promise<void> {
       if (!done) return forPerson(a) ? tell([`This is the newest It there is (${VERSION}).`]) : out({ version: VERSION, upgraded: false })
       // The program is in place. What runs is still the one that was started: the service is
       // started again by the new program, which also writes the service's definition as its
-      // version has it and brings the add-ons in the agent apps up to it. Where nothing starts
-      // It by itself, whoever started it does so again.
+      // version has it and brings the add-ons in the agent apps up to it. It is given what the
+      // definition that is there gives the service, so that a setting this terminal does not
+      // name is in the one written next. Where nothing starts It by itself, whoever started it
+      // does so again.
       let started: 'again' | 'by hand' | 'failed' = 'by hand'
       let why: string | undefined
       if (service.installedHere()) {
         say('Starting It again as the new version…')
         const ran = await new Promise<{ ok: boolean; said: string; failed: string }>((resolve) =>
-          execFile(done.program, ['setup'], { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) =>
-            resolve({ ok: !err, said: String(stdout), failed: String(stderr) }),
+          execFile(
+            done.program,
+            ['setup'],
+            { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true, env: service.againWith() },
+            (err, stdout, stderr) => resolve({ ok: !err, said: String(stdout), failed: String(stderr) }),
           ),
         )
         started = ran.ok ? 'again' : 'failed'
