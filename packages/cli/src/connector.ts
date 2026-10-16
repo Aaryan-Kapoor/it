@@ -15,7 +15,16 @@ import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renam
 import http from 'node:http'
 import path from 'node:path'
 import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, MARK, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
-import { DeliveryRecovery, eraseDeliveryRecovery, type Given, MARK_AGAIN_MS, type MarkCopy, type MarkFallback, type Offered } from './delivery-recovery'
+import {
+  DeliveryRecovery,
+  eraseDeliveryRecovery,
+  type Given,
+  MARK_AGAIN_MS,
+  type MarkCopy,
+  type MarkFallback,
+  type Offered,
+  WAITERS_PER_CONVERSATION,
+} from './delivery-recovery'
 import {
   api,
   ask,
@@ -496,6 +505,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * message that stands behind it.
    */
   const recovery = new DeliveryRecovery()
+  recovery.pruneWaiters()
   const behindTurn = recovery.waiters
   for (const id of recovery.accepted) toConfirm.set(id, 'queue')
   /**
@@ -503,8 +513,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * and says so in a moment. One that has not said so by then never had it, or is gone.
    */
   const GIVEN_MS = 10_000
-  /** How many of them are kept at once. */
-  const BEHIND_MOST = 200
+  /** Outstanding queue acceptance receipts, independent of waiter copies. */
+  const ACCEPTED_MOST = 200
+  const waiterRoom = (key: string) => {
+    const ids = new Set([...behindTurn].filter(([, copy]) => follow(copy.key) === key).map(([id]) => id))
+    for (const [id, sent] of submitting) {
+      const session = sent.click.session
+      if (session && follow(keyOf(session.harness, session.id)) === key) ids.add(id)
+    }
+    return Math.max(0, WAITERS_PER_CONVERSATION - ids.size)
+  }
   const turnRunning = (key: string, now: number) => {
     const s = sessions.get(key)
     if (!(s?.busy === true && now - s.busyAt < TURN_QUIET_MS)) return false
@@ -1493,7 +1511,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // hands while the click stood in line here
       // The hold is counted from before it was asked for: It starts counting when it gives it,
       // which may be long before its answer is here
-      if (recovery.accepted.size + queueReceipts.size >= BEHIND_MOST) return
+      if (!reopening && waiterRoom(key) === 0) return
+      if (recovery.accepted.size + queueReceipts.size >= ACCEPTED_MOST) return
       queueReceipts.add(click.id)
       receiptSlots.push(click.id)
       const claimedAt = steady()
@@ -1526,7 +1545,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
               !awaited(c, Date.now()),
           )
           .sort((a, b) => a.at - b.at)
-          .slice(0, Math.min(WAKE_MOST - 1, Math.max(0, BEHIND_MOST - recovery.accepted.size - queueReceipts.size)))
+          .slice(
+            0,
+            Math.min(
+              WAKE_MOST - 1,
+              Math.max(0, ACCEPTED_MOST - recovery.accepted.size - queueReceipts.size),
+              reopening ? Infinity : Math.max(0, waiterRoom(follow(key)) - 1),
+            ),
+          )
         if (more.length) {
           for (const c of more) {
             queueReceipts.add(c.id)
@@ -1850,12 +1876,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   function queue(click: Offered, reopening: boolean, t3?: { server: T3; thread: string }): boolean {
     if (closing || unfitting) return false
-    // What Codex's queue or T3 Code takes behind a running turn is kept here for a waiter in
-    // that turn, and only so much is kept. Past that a click stays with It, where nothing is
-    // lost, until a turn ends and makes room: letting go of the oldest copy to make room took
-    // it from a turn that may still be waiting for it.
-    if (recovery.accepted.size >= BEHIND_MOST) return false
-    if (!reopening && !queueing.has(click.id) && behindTurn.size + submitting.size >= BEHIND_MOST) return false
+    const key = follow(keyOf(click.session!.harness, click.session!.id))
+    // A conversation's copies can hold back only its own queue. Restored copies expire
+    // independently of session evidence; a missing session does not prove a turn ended.
+    if (recovery.accepted.size >= ACCEPTED_MOST) return false
+    if (!reopening && !queueing.has(click.id) && waiterRoom(key) === 0) return false
     let tried = queueTries.get(tag(click))
     if (queueing.has(click.id)) return true
     // Tried one way and now to go the other: its conversation was closed and is open, or was
@@ -1877,7 +1902,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // old one. Two hand-overs of one conversation side by side read and let go of each other's
     // notes of how a run ended, and each of four repairs to that left another way for it to
     // happen. One at a time, there is no other hand-over's note to meet.
-    const key = follow(keyOf(click.session!.harness, click.session!.id))
     // Every line that is this conversation's by now: also one that was begun under an id the
     // conversation has since been found to have had
     const before = [...queues].filter(([line]) => follow(line) === key).map(([, pending]) => pending)
@@ -1908,6 +1932,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (routing || closing || unfitting || recovery.erased) return
     routing = true
     try {
+      recovery.pruneWaiters()
       if (givingBack === 'due') {
         const asked = await recoverBatch()
         if (asked === null) {
@@ -2417,6 +2442,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     if (req.method === 'POST' && url.pathname === '/waiting') {
       if (recovery.erased) return [200, { ok: true, clicks: [] }]
+      recovery.pruneWaiters()
       const who = String(body.id ?? '')
       if (!who) return [400, { error: 'say who is waiting' }]
       // What the waiter says it has printed, of what was kept for a turn that waits, is let go of

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { WAKE_BACK_MS } from '@it/protocol'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import { DeliveryRecovery, eraseDeliveryRecovery, type WaitCopy } from './src/delivery-recovery'
 import { erasing } from './src/serve'
@@ -68,15 +69,76 @@ test('a corrupt recovery record stops delivery instead of becoming an empty reco
   expect(open).toThrow(expect.objectContaining({ code: 'record_unread' }))
 })
 
-test('the record refuses more copies than it can retain and preserves the previous copy', () => {
+test('the record keeps copies for different conversations beyond the per-conversation limit', () => {
+  const store = open()
+  store.change(() => {
+    for (let i = 0; i < 201; i++) store.waiters.set(`action-${i}`, { ...copy, key: `codex:thread-${i}`, click: { ...copy.click, id: `action-${i}` } })
+  })
+  expect(open().waiters.size).toBe(201)
+})
+
+test('a failed expiry write preserves copies until a retry, without removing delivery receipts', () => {
+  const store = open()
+  store.change(() => {
+    store.waiters.set('action', copy)
+    store.accepted.add('action')
+    store.returning.add('action')
+    store.targets.set('action', copy.key)
+    store.marks.set(copy.key, [{ id: 'mark', texts: ['Private text'], at: 1 }])
+  })
+  store.close()
+  const restored = open()
+  const temporary = `${restored.file}.${process.pid}.tmp`
+  mkdirSync(temporary)
+  expect(() => restored.pruneWaiters(WAKE_BACK_MS + 1)).toThrow()
+  expect(restored.waiters.get('action')).toEqual(copy)
+  expect(open().waiters.get('action')).toEqual(copy)
+  rmSync(temporary, { recursive: true })
+  restored.pruneWaiters(WAKE_BACK_MS + 1)
+  const again = open()
+  expect(again.waiters.size).toBe(0)
+  expect([...again.accepted]).toEqual(['action'])
+  expect([...again.returning]).toEqual(['action'])
+  expect([...again.targets]).toEqual([['action', copy.key]])
+  expect(again.marks.get(copy.key)).toEqual([{ id: 'mark', texts: ['Private text'], at: 1 }])
+})
+
+test('expiry uses the original click age across restarts and leaves copies made in this process alone', () => {
   const store = open()
   store.change(() => store.waiters.set('action', copy))
-  expect(() =>
-    store.change(() => {
-      for (let i = 0; i < 201; i++) store.waiters.set(`action-${i}`, { ...copy, click: { ...copy.click, id: `action-${i}` } })
-    }),
-  ).toThrow()
-  expect([...store.waiters.keys()]).toEqual(['action'])
+  store.close()
+  const restored = open()
+  restored.pruneWaiters(WAKE_BACK_MS)
+  expect(restored.waiters.get('action')).toEqual(copy)
+  restored.close()
+  const again = open()
+  again.change(() => again.waiters.set('live', { ...copy, click: { ...copy.click, id: 'live' } }))
+  again.pruneWaiters(WAKE_BACK_MS + 1)
+  expect([...again.waiters.keys()]).toEqual(['live'])
+  expect([...open().waiters.keys()]).toEqual(['live'])
+})
+
+test('the byte bound evicts the oldest restored copy without dropping acceptance, claims or marks', () => {
+  const store = open()
+  // Insert the newer copy first, so insertion order cannot stand in for age.
+  store.change(() => {
+    store.waiters.set('newer', { ...copy, click: { ...copy.click, id: 'newer', at: 2, payload: 'x'.repeat(4_000_000) } })
+    store.waiters.set('action', { ...copy, click: { ...copy.click, payload: 'x'.repeat(4_000_000) } })
+    store.accepted.add('action')
+    store.returning.add('action')
+    store.targets.set('action', copy.key)
+    store.marks.set(copy.key, [{ id: 'mark', texts: ['Private text'], at: 1 }])
+  })
+  store.close()
+  const restored = open()
+  restored.change(() => restored.waiters.set('live', { ...copy, key: 'codex:other', click: { ...copy.click, id: 'live', payload: 'x'.repeat(8_000_000) } }))
+  const again = open()
+  expect([...again.waiters.keys()]).toEqual(['newer', 'live'])
+  expect([...again.accepted]).toEqual(['action'])
+  expect([...again.returning]).toEqual(['action'])
+  expect([...again.targets]).toEqual([['action', copy.key]])
+  expect(again.marks.get(copy.key)).toEqual([{ id: 'mark', texts: ['Private text'], at: 1 }])
+  expect(statSync(again.file).size).toBeLessThanOrEqual(16_000_000)
 })
 
 test('service erasure clears the active copies and prevents any late write from recreating them', () => {

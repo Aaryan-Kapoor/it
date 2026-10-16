@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { WAKE_BACK_MS } from '@it/protocol'
 import { inHome, Problem, readJson, writePrivate } from './lib'
 
 export interface Offered {
@@ -31,6 +32,7 @@ export type MarkCopy = {
 }
 const file = () => inHome('delivery-recovery.json')
 const MOST = 200
+export const WAITERS_PER_CONVERSATION = 200
 const BYTES = 16_000_000
 interface Kept {
   version: 1
@@ -71,6 +73,8 @@ export class DeliveryRecovery {
   onErase: (() => void) | undefined
   erased = false
   private closed = false
+  /** Only copies read at startup may be discarded for age or space. No turn is inferred. */
+  private readonly restoredWaiters = new Set<string>()
 
   constructor() {
     if (existsSync(this.file)) {
@@ -89,6 +93,7 @@ export class DeliveryRecovery {
         )
       }
     }
+    for (const id of this.waiters.keys()) this.restoredWaiters.add(id)
     active.add(this)
   }
 
@@ -125,8 +130,7 @@ export class DeliveryRecovery {
       throw new Error('invalid')
     if (data.version !== 1 || !strings(data.accepted) || !strings(data.returning) || !Array.isArray(data.waiters) || !Array.isArray(data.marks))
       throw new Error('invalid')
-    if (data.waiters.length > MOST || data.marks.flatMap(([, marks]) => marks).length > MOST || data.accepted.length > MOST || data.returning.length > 100_000)
-      throw new Error('full')
+    if (data.marks.flatMap(([, marks]) => marks).length > MOST || data.accepted.length > MOST || data.returning.length > 100_000) throw new Error('full')
     if (data.targets !== undefined && (!Array.isArray(data.targets) || data.targets.some(([id, key]) => typeof id !== 'string' || typeof key !== 'string')))
       throw new Error('invalid')
     for (const [id, copy] of data.waiters) {
@@ -170,6 +174,22 @@ export class DeliveryRecovery {
     }
   }
 
+  /**
+   * Reuse the one-day click lookback for reopening a conversation. Before these records,
+   * restart lost every waiter copy; the app queue and normal claim recovery kept the click.
+   * Its timestamp survives repeated restarts, and its acceptance and mark receipts stay put.
+   */
+  pruneWaiters(now = Date.now()): void {
+    const expired = [...this.restoredWaiters].filter((id) => {
+      const copy = this.waiters.get(id)
+      return copy && now - copy.click.at >= WAKE_BACK_MS
+    })
+    if (expired.length)
+      this.change(() => {
+        for (const id of expired) this.waiters.delete(id)
+      })
+  }
+
   /** Nothing changes in memory if its durable replacement could not be written. */
   change(change: () => void): void {
     if (this.closed || this.erased) throw new Error('delivery recovery is closed')
@@ -178,9 +198,22 @@ export class DeliveryRecovery {
       change()
       const after = this.snapshot()
       this.validate(after)
-      const text = JSON.stringify(after)
-      if (Buffer.byteLength(text) > BYTES) throw new Error('delivery recovery is full')
+      let text = JSON.stringify(after)
+      let bytes = Buffer.byteLength(text)
+      if (bytes > BYTES) {
+        // A different conversation must not be refused because restored copies use the
+        // record's safety bound. Drop the oldest copies only, retaining every other receipt.
+        const oldest = [...this.waiters].filter(([id]) => this.restoredWaiters.has(id)).sort((a, b) => a[1].click.at - b[1].click.at)
+        for (const [id, copy] of oldest) {
+          this.waiters.delete(id)
+          bytes -= Buffer.byteLength(JSON.stringify([id, copy])) + (this.waiters.size ? 1 : 0)
+          if (bytes <= BYTES) break
+        }
+        text = JSON.stringify(this.snapshot())
+        if (Buffer.byteLength(text) > BYTES) throw new Error('delivery recovery is full')
+      }
       if (text !== JSON.stringify(before)) writePrivate(this.file, text)
+      for (const id of this.restoredWaiters) if (!this.waiters.has(id)) this.restoredWaiters.delete(id)
     } catch (error) {
       this.restore(before)
       throw error
@@ -194,6 +227,7 @@ export class DeliveryRecovery {
   erase(): void {
     this.erased = true
     this.waiters.clear()
+    this.restoredWaiters.clear()
     this.marks.clear()
     this.accepted.clear()
     this.returning.clear()

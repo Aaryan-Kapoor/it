@@ -9,7 +9,7 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { MARK, PROTOCOL_VERSION } from '@it/protocol'
+import { MARK, PROTOCOL_VERSION, WAKE_BACK_MS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { conversationFolder, noteConversation } from './src/publish'
@@ -1392,6 +1392,98 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await waitingFor(6)
     await restart()
     expect((await waitingFor(6))?.clicks).toBeUndefined()
+  })
+
+  test.each(['codex', 't3'])('restored copies at one conversation limit do not block another %s queue', async (via) => {
+    if (via === 't3') {
+      stand.t3.running = true
+      stand.t3.threads.set('thread-6', 't3-6')
+      stand.t3.threads.set('thread-7', 't3-7')
+    }
+    await start('socket', {}, (folder) => {
+      const waiters = Array.from({ length: 200 }, (_, n) => {
+        const id = `old-${n}`
+        return [id, { click: { ...click(6), id }, key: 'codex:thread-6' }]
+      })
+      writeFileSync(path.join(folder, 'delivery-recovery.json'), JSON.stringify({ version: 1, waiters, marks: [], accepted: [], returning: [] }))
+    })
+    await turn(7, true)
+    offered(click(6), click(7))
+    await until(() => (via === 't3' ? stand.t3.sent.length === 1 : stand.codex.length === 1))
+    if (via === 'codex') stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-7'))
+    expect(called('delivery:claim')).toEqual(['click-7'])
+    const kept = readJson<{ waiters: [string, unknown][] }>(path.join(home, 'delivery-recovery.json'))!
+    expect(kept.waiters).toHaveLength(201)
+    expect((await waitingFor(7))?.clicks?.map((c) => c.id)).toEqual(['click-7'])
+  })
+
+  test.each(['confirmed', 'unconfirmed', 'pending'] as const)('an expired restored copy leaves its %s click on the existing restart path', async (state) => {
+    standIn()
+    const expired = { ...click(6), at: Date.now() - WAKE_BACK_MS - 1 }
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch') return { back: state === 'pending' ? [expired.id] : [], done: true }
+      if (name === 'delivery:recover') return [{ id: expired.id, click: expired }]
+      return undefined
+    }
+    await start('socket', {}, (folder) => {
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({
+          version: 1,
+          waiters: [[expired.id, { click: expired, key: 'codex:thread-6' }]],
+          marks: [],
+          accepted: state === 'unconfirmed' ? [expired.id] : [],
+          returning: state === 'confirmed' ? [] : [expired.id],
+        }),
+      )
+      // Before durable copies, a queued receipt was recovered from the journal alone.
+      const event = state === 'confirmed' ? 'confirmed' : state === 'unconfirmed' ? 'queued' : 'queueing'
+      writeFileSync(path.join(folder, 'journal.jsonl'), `${JSON.stringify({ event, id: expired.id })}\n`)
+    })
+    await pass(3)
+    expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+    if (state === 'pending') {
+      await until(() => stand.codex.length === 1)
+      stand.codex[0]!.end()
+      await until(() => called('delivery:handedOff').includes(expired.id))
+      expect(called('delivery:claim')).toEqual([expired.id])
+    } else {
+      expect(stand.codex).toHaveLength(0)
+      expect(called('delivery:claim')).toEqual([])
+      expect(called('delivery:handedOff')).toEqual(state === 'unconfirmed' ? [expired.id] : [])
+    }
+    expect((await waitingFor(6))?.clicks).toBeUndefined()
+    expect(called('delivery:release')).toEqual([])
+    expect(called('delivery:park')).toEqual([])
+  })
+
+  test('an unexpired restored copy is kept until its age limit, even without another restart', async () => {
+    standIn()
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const kept = { ...click(6), at: now - WAKE_BACK_MS + 1000 }
+      await start('socket', {}, (folder) =>
+        writeFileSync(
+          path.join(folder, 'delivery-recovery.json'),
+          JSON.stringify({
+            version: 1,
+            waiters: [[kept.id, { click: kept, key: 'codex:thread-6' }]],
+            marks: [],
+            accepted: [],
+            returning: [],
+          }),
+        ),
+      )
+      expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual([kept.id])
+      now += 1000
+      await pass()
+      expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+      expect((await waitingFor(6))?.clicks).toBeUndefined()
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   test('a returned click cannot be overtaken after more than three seconds without visibility', async () => {
