@@ -337,7 +337,8 @@ export default defineSchema({
     .index('by_parked_generation', ['userId', 'delivery', 'harness', 'sessionId', 'parkedBy', 'parkedGeneration'])
     .index('by_delivery_created', ['delivery', 'createdAt'])
     .index('by_delivery_handed', ['delivery', 'handedAt'])
-    .index('by_delivery_lease', ['delivery', 'leaseExpiresAt']),
+    .index('by_delivery_lease', ['delivery', 'leaseExpiresAt'])
+    .index('by_lease_machine', ['leaseMachineId', 'delivery', 'createdAt']),
 
   // One showing of a page on a display. Each gets one ticket.
   mounts: defineTable({
