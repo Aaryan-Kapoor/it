@@ -619,4 +619,41 @@ describe('putting back a subscription the browser has lost, where the backend st
       expect(s.made.unsubscribe).toHaveBeenCalledTimes(wait === 'the new subscription' ? 1 : 0)
     },
   )
+
+  test('an opt-out in another tab clears a repair that reaches the backend after the opt-out', async () => {
+    const s = lost()
+    const reached = late<void>()
+    const reply = late<void>()
+    const committed: string[] = []
+    let stored = false
+    const commit = (fn: never) => {
+      const name = getFunctionName(fn)
+      stored = name === 'push:subscribe'
+      committed.push(name)
+    }
+    // Separate clients can commit the opt-out before the earlier subscribe request.
+    const repairing = {
+      action: async () => 'AAAA',
+      mutation: async (fn: never) => {
+        if (getFunctionName(fn) === 'push:subscribe') {
+          reached.settle()
+          await reply.promise
+        }
+        commit(fn)
+      },
+    }
+    const optingOut = { mutation: async (fn: never) => commit(fn) }
+    vi.resetModules()
+    const other = await import('./push')
+    const mending = mendPush(repairing as never)
+    s.first.settle(s.registration)
+    await reached.promise
+    await other.turnOffPush(optingOut as never)
+    expect(stored).toBe(false)
+    reply.settle()
+    await mending
+    expect(stored).toBe(false)
+    expect(s.subscribed()).toBe(false)
+    expect(committed).toEqual(['push:unsubscribe', 'push:subscribe', 'push:unsubscribe'])
+  })
 })
