@@ -497,22 +497,34 @@ describe('the drum machine', () => {
     page.close()
   })
 
-  test('a reply for a cleared beat stays ignored after the next beat was sent', async () => {
+  test.each(['last hit', 'clear button'])('a reply for a beat cleared with %s stays ignored after the next beat was sent', async (how) => {
     const page = await opened('drums', silent)
     tapped(page, 3, 0)
     await page.advance(1500)
     const first = page.sent[0]!.data.request
     await page.sent[0]!.accept()
-    page.$('#clear').click()
+    if (how === 'last hit') {
+      tapped(page, 3, 0)
+      await page.advance(1500)
+    } else page.$('#clear').click()
     tapped(page, 2, 4)
     await page.advance(1500)
     const next = page.sent.at(-1)!.data.request
     expect(typeof first).toBe('string')
     expect(next).not.toBe(first)
-    await page.set({ theirs: { request: first, pattern: ['x.......', '........', '........', '........'], note: 'Old beat' } })
-    expect(page.$('.pad.theirs')).toBeNull()
-    expect(page.$('#play').getAttribute('data-on')).toBe('0')
+    const stale = { request: first, pattern: ['x.......', '........', '........', '........'], note: 'Old beat' }
+    for (const theirs of [stale.pattern, stale]) {
+      await page.set({ theirs, note: 'Old beat' })
+      expect(page.$('.pad.theirs')).toBeNull()
+      expect(page.$('#play').getAttribute('data-on')).toBe('0')
+      expect(page.$('#t-did').classList.contains('in')).toBe(false)
+    }
     await page.set({ theirs: { request: next, pattern: ['..x.....', '........', '........', '........'], note: 'New beat' } })
+    expect(page.$('.pad[data-r="0"][data-c="2"]').classList.contains('theirs')).toBe(true)
+    expect(page.$('#t-did b').textContent).toBe('New beat')
+    expect(page.$('#play').getAttribute('data-on')).toBe('1')
+    await page.set({ theirs: stale })
+    expect(page.$('.pad[data-r="0"][data-c="0"]').classList.contains('theirs')).toBe(false)
     expect(page.$('.pad[data-r="0"][data-c="2"]').classList.contains('theirs')).toBe(true)
     expect(page.$('#t-did b').textContent).toBe('New beat')
     page.close()
