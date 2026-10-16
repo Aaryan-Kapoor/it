@@ -534,11 +534,12 @@ describe('putting back a subscription the browser has lost, where the backend st
     vi.stubGlobal('PushManager', function PushManager() {})
     vi.stubGlobal('Notification', { permission: 'granted', requestPermission: async () => 'granted' })
     const calls: string[] = []
+    const mutation = vi.fn(async (fn: never) => void calls.push(getFunctionName(fn)))
     const client = {
       action: async () => 'AAAA',
-      mutation: vi.fn(async (fn: never) => void calls.push(getFunctionName(fn))),
+      mutation,
     } as never
-    return { first, registration, calls, client, made, subscribed: () => there !== null }
+    return { first, registration, calls, client, mutation, made, subscribed: () => there !== null }
   }
 
   beforeEach(() => {
@@ -576,6 +577,54 @@ describe('putting back a subscription the browser has lost, where the backend st
     s.first.settle(s.registration)
     await mending
     expect([s.registration.pushManager.subscribe.mock.calls.length, s.calls]).toEqual([0, ['push:unsubscribe']])
+  })
+
+  test.each(['during', 'after'] as const)('a repair begun %s an opt-out in another tab leaves notifications off', async (when) => {
+    const s = lost()
+    const reached = late<void>()
+    const reply = late<void>()
+    let stored = true
+    s.mutation.mockImplementation(async (fn) => {
+      const name = getFunctionName(fn)
+      if (name === 'push:unsubscribe') {
+        reached.settle()
+        await reply.promise
+      }
+      stored = name === 'push:subscribe'
+      s.calls.push(name)
+    })
+    vi.resetModules()
+    const other = await import('./push')
+    const off = other.turnOffPush(s.client)
+    s.first.settle(s.registration)
+    await reached.promise
+    // The browser subscription is gone and Off is saved, but its backend request is still waiting.
+    expect(localStorage.getItem('it.pushOff')).not.toBeNull()
+    if (when === 'after') {
+      reply.settle()
+      await off
+    }
+    const mending = mendPush(s.client)
+    reply.settle()
+    await off
+    await mending
+    expect(stored).toBe(false)
+    expect(s.subscribed()).toBe(false)
+    expect(s.calls).toEqual(['push:unsubscribe'])
+    expect(s.registration.pushManager.subscribe).not.toHaveBeenCalled()
+  })
+
+  test('turning notifications on again allows a later lost subscription to be repaired', async () => {
+    const s = lost()
+    s.first.settle(s.registration)
+    await turnOffPush(s.client)
+    expect(localStorage.getItem('it.pushOff')).not.toBeNull()
+    expect(await turnOnPush(s.client)).toBe('on')
+    expect(localStorage.getItem('it.pushOff')).toBeNull()
+    await s.made.unsubscribe()
+    await mendPush(s.client)
+    expect(s.subscribed()).toBe(true)
+    expect(s.calls).toEqual(['push:unsubscribe', 'push:subscribe', 'push:subscribe'])
   })
 
   test.each(['the first lookup', 'the key', 'the new subscription'] as const)(
