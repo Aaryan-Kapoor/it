@@ -2022,14 +2022,47 @@ describe('clicks and their delivery', () => {
     expect(await other.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([borrowed])
     // Until the lease runs out, the one made after it is all that is offered
     expect((await inbox(m)).map((c) => c.id)).toEqual([second])
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [first], done: true })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [first], done: true })
     expect((await inbox(m)).map((c) => c.id)).toEqual([first, second])
     // The other machine's is still its own, and a second asking gives back nothing more
     expect(await m.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([])
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: true })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [], done: true })
     // It is a machine's to ask, and nobody else's
     const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
     expect(await code(browser.mutation(api.delivery.giveBackBatch, {}))).not.toBe('ok')
+  })
+
+  test('recovery reads returned clicks directly and resolves stopped, deleted and reassigned actions', async () => {
+    const { t, m, click } = await setup()
+    const other = await machineOf(t, 'alice', 'other')
+    const first = (await click('recover-first')).actionId
+    const gone = (await click('recover-gone')).actionId
+    const moved = (await click('recover-moved')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [first, gone, moved] })
+    const batch = await m.as.mutation(api.delivery.giveBackBatch, {})
+    expect(batch.routes).toHaveLength(3)
+    await t.run(async (ctx) => {
+      await ctx.db.delete(gone)
+      const row = (await ctx.db.get(moved))!
+      await ctx.db.patch(row.artifactId, { machineId: other.id })
+    })
+    // All actions share this page, so its reassignment resolves every remaining hold.
+    expect(await m.as.query(api.delivery.recover, { ids: [first, gone, moved] })).toEqual([
+      { id: first, click: null },
+      { id: gone, click: null },
+      { id: moved, click: null },
+    ])
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.get(first))!
+      await ctx.db.patch(row.artifactId, { machineId: m.id })
+    })
+    expect((await m.as.query(api.delivery.recover, { ids: [first] }))[0]?.click?.id).toBe(first)
+    await m.as.mutation(api.delivery.claim, { ids: [first] })
+    await m.as.mutation(api.delivery.handedOff, { id: first, route: 'queue' })
+    expect(await m.as.query(api.delivery.recover, { ids: [first] })).toEqual([{ id: first, click: null }])
+    const stranger = await machineOf(t, 'bob', 'stranger')
+    expect(await stranger.as.query(api.delivery.recover, { ids: [moved] })).toEqual([{ id: moved, click: null }])
+    expect(await m.as.query(api.delivery.recover, { ids: Array(40).fill('invalid') })).toHaveLength(32)
   })
 
   test('more than four thousand leases held by another machine cannot hide this machine’s lease when it starts', async () => {
@@ -2042,7 +2075,7 @@ describe('clicks and their delivery', () => {
       for (let i = 0; i < 4001; i++)
         await ctx.db.insert('actions', { ...base, clientActionId: `foreign-${i}`, leaseMachineId: other.id, leaseExpiresAt: Date.now() })
     })
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [first], done: true })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [first], done: true })
     expect((await inbox(m)).map((c) => c.id)).toEqual([first])
     expect(
       await t.run((ctx) =>
@@ -2085,7 +2118,7 @@ describe('clicks and their delivery', () => {
       back.push(...batch.back)
     }
     expect(back).toEqual(ids)
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: true })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [], done: true })
     const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
     expect(await code(browser.mutation(api.delivery.giveBackBatch, {}))).not.toBe('ok')
   })
@@ -2100,9 +2133,9 @@ describe('clicks and their delivery', () => {
       for (let i = 1; i < 64; i++) await ctx.db.insert('actions', { ...base, clientActionId: `stopped-${i}` })
       return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', createdAt: Date.now() + 1 })
     })
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: false })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [], done: false })
     expect(await t.run((ctx) => ctx.db.get(first))).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [later], done: true })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [later], done: true })
   })
 
   test('a connector keeps a click it is still delivering by renewing, and cannot renew what it has lost', async () => {

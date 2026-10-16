@@ -6,6 +6,7 @@ import net from 'node:net'
 import path from 'node:path'
 import { contentPort } from '@it/protocol'
 import { runConnector } from '../connector'
+import { eraseDeliveryRecovery } from '../delivery-recovery'
 import { elsewhere, inHome, type Machine, machine, machineFile, notSetUp, Problem, readJson, why, writePrivate } from '../lib'
 import { conversationsFile } from '../publish'
 import { startsByItself, stopFile, supervised } from '../service'
@@ -307,6 +308,7 @@ export function erasing(say: (line: string) => void): (person: string) => void {
     let copies: number
     try {
       copies = removeCopies(person)
+      eraseDeliveryRecovery(person)
     } catch (err) {
       say(
         `backend: everything was erased, and the copies of the database from before an update could not be removed (${why(err)}); it will be tried when the backend asks again`,

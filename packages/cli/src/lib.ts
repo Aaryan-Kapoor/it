@@ -16,6 +16,7 @@ import {
   statSync,
   writeSync,
 } from 'node:fs'
+import { mkdir, open, rm } from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -332,6 +333,42 @@ export function writePrivate(file: string, data: unknown): void {
   } catch (err) {
     if (!['EISDIR', 'EPERM', 'EACCES', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'EBADF'].includes((err as NodeJS.ErrnoException)?.code ?? '')) throw err
   }
+}
+
+/**
+ * The connector keeps receipts while it also answers add-ons. Writing and flushing their
+ * contents must let those requests run. As with writePrivate, publication is one rename;
+ * the caller can cancel it if erasure or shutdown happened while the disk was being written.
+ */
+export async function writePrivateAsync(file: string, pieces: Iterable<string>, current: () => boolean): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+  const whole = `${file}.${process.pid}.tmp`
+  try {
+    const out = await open(whole, 'w', 0o600)
+    try {
+      await out.writeFile(pieces)
+      await out.chmod(0o600)
+      await out.sync()
+    } finally {
+      await out.close()
+    }
+    if (!current()) throw new Error('the record was closed before it was saved')
+    // There is no await between the last erasure check and publication. Unlike rename(),
+    // a busy Windows file is retried by the connector's next pass, without blocking it.
+    renameSync(whole, file)
+  } catch (err) {
+    await rm(whole, { force: true })
+    throw err
+  }
+  // Some filesystems cannot flush a directory. This has the same guarantee as writePrivate.
+  try {
+    const folder = await open(path.dirname(file), 'r')
+    try {
+      await folder.sync()
+    } finally {
+      await folder.close()
+    }
+  } catch {}
 }
 // ---------- what may be written down ----------
 
