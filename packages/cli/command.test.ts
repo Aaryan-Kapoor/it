@@ -3140,7 +3140,7 @@ describe.skipIf(process.platform === 'win32')('`it setup --none`, which connects
   /** The note a folder keeps of an add-on it put into Claude Code. No `claude` is on the PATH here, so it cannot be asked to take it out. */
   const noteAddon = (m: { it: string }) => {
     mkdirSync(path.join(m.it, 'addons'), { recursive: true })
-    writeFileSync(path.join(m.it, 'addons', 'claude-code.json'), JSON.stringify({ version: '0.1.0', at: 1 }))
+    writeFileSync(path.join(m.it, 'addons', 'claude-code.json'), JSON.stringify({ installs: [{ version: '0.1.0', at: 1, env: {} }] }))
   }
   const NOTHING_STARTED = 'It is not set up in this folder, which holds only what an earlier use of It left there, so nothing was started.'
   const COULD_NOT_ASK = 'Claude Code could not be run from here, so its add-on was left as it is'
@@ -3213,6 +3213,18 @@ describe.skipIf(process.platform === 'win32')('`it setup --none`, which connects
     const again = await run(m, ['setup', '--none'], noProgram(m))
     expect(again.code).toBe(0)
     expect(again.err).toContain(NOTHING_STARTED)
+    expect(begun(m)).toEqual([])
+  })
+
+  test('a damaged add-on record remains on disk and setup reports its error without beginning a service', async () => {
+    const m = machine(false)
+    noteAddon(m)
+    const file = path.join(m.it, 'addons', 'claude-code.json')
+    writeFileSync(file, 'not a readable installation record')
+    const ran = await run(m, ['setup', '--none', '--no-service'], noProgram(m))
+    expect(printed(ran)).toMatchObject({ wanted: [], harnesses: [{ id: 'claude-code', addon: 'error' }] })
+    expect(ran.err).toContain('The installation record for Claude Code could not be read.')
+    expect(readFileSync(file, 'utf8')).toBe('not a readable installation record')
     expect(begun(m)).toEqual([])
   })
 
