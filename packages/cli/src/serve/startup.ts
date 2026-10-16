@@ -1,10 +1,14 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, rmSync, statSync } from 'node:fs'
+import { rename } from 'node:fs/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { inHome, Problem, VERSION, writePrivate } from '../lib'
 import { RELEASE } from './config'
 
-/** The waits after failed starts. A fourth failure stops automatic attempts. */
+/**
+ * Failed starts wait longer each time, up to ten minutes so a machine that stays offline
+ * does not keep fetching or filling its log. That last wait repeats until it can start.
+ */
 export const STARTUP_WAITS = [30_000, 120_000, 600_000] as const
 const file = () => inHome('startup.json')
 const recovery = 'Run `it serve` in a terminal to read why. After fixing it, run `it service install` to retry in the background.'
@@ -15,32 +19,50 @@ interface Attempt {
   retryAt: number | null
 }
 
-function read(): Attempt | null {
+function read(): Attempt | 'unreadable' | null {
   let bytes: string
   try {
     bytes = readFileSync(file(), 'utf8')
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw unread()
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') return null
+    return 'unreadable'
   }
+  let a: unknown
   try {
-    const a = JSON.parse(bytes) as Attempt
-    if (
-      a &&
-      typeof a.key === 'string' &&
-      /^[a-f0-9]{64}$/.test(a.key) &&
-      Number.isInteger(a.failures) &&
-      a.failures >= 1 &&
-      a.failures <= 4 &&
-      typeof a.code === 'string' &&
-      /^[a-zA-Z_0-9]{1,40}$/.test(a.code) &&
-      (a.retryAt === null || (Number.isSafeInteger(a.retryAt) && a.retryAt > 0 && a.failures < 4))
-    )
-      return a
-  } catch {}
-  throw unread()
+    a = JSON.parse(bytes)
+  } catch {
+    return 'unreadable'
+  }
+  if (
+    a &&
+    typeof a === 'object' &&
+    'key' in a &&
+    typeof a.key === 'string' &&
+    /^[a-f0-9]{64}$/.test(a.key) &&
+    'failures' in a &&
+    typeof a.failures === 'number' &&
+    Number.isSafeInteger(a.failures) &&
+    a.failures >= 1 &&
+    'code' in a &&
+    typeof a.code === 'string' &&
+    /^[a-zA-Z_0-9]{1,40}$/.test(a.code) &&
+    'retryAt' in a &&
+    (a.retryAt === null || (typeof a.retryAt === 'number' && Number.isSafeInteger(a.retryAt) && a.retryAt > 0))
+  )
+    return { key: a.key, failures: a.failures, code: a.code, retryAt: a.retryAt }
+  return 'unreadable'
 }
-const unread = () => new Problem('The startup record in startup.json cannot be read.', 'record_unread', recovery)
+
+/** This is only a retry counter. Losing it must not keep an otherwise working service stopped. */
+async function forgetUnread(say: (line: string) => void): Promise<null> {
+  try {
+    await rename(file(), `${file()}.unreadable`)
+    say('startup.json could not be read; kept as startup.json.unreadable and its retry count forgotten')
+  } catch (err) {
+    say(`startup.json could not be read or moved aside (${codeOf(err)}); its retry count was ignored`)
+  }
+  return null
+}
 export const resetStartup = () => rmSync(file(), { force: true })
 
 /** Only a digest is kept: settings and proxy addresses can contain credentials. */
@@ -85,7 +107,7 @@ export function startupKey(): string {
 
 export function startupStatus() {
   const a = read()
-  if (!a) return undefined
+  if (!a || a === 'unreadable') return undefined
   return { failures: a.failures, code: a.code, retryAt: a.retryAt, paused: a.retryAt === null, hint: recovery }
 }
 
@@ -94,6 +116,8 @@ const needsChange = new Set([
   'settings',
   'not_set_up',
   'backend_releases',
+  'backend_program',
+  'checksum',
   'unsupported',
   'backend_older',
   'database_unfinished',
@@ -107,12 +131,13 @@ const codeOf = (err: unknown) => {
   return typeof code === 'string' && /^E[A-Z0-9_]{2,30}$/.test(code) ? code : 'error'
 }
 
-/** A ready service has no retry budget. Only attempts that fail before readiness count. */
+/** A successful start clears the failure count. Only failures that need a person stop automatic attempts. */
 export async function recoverStartup(
   run: (ready: () => void) => Promise<boolean>,
   { supervised, signal, say }: { supervised: boolean; signal: AbortSignal; say: (line: string) => void },
 ): Promise<boolean> {
   if (!supervised) {
+    if (read() === 'unreadable') await forgetUnread(say)
     resetStartup()
     return run(() => {})
   }
@@ -120,7 +145,8 @@ export async function recoverStartup(
   let before: Attempt | null
   try {
     key = startupKey()
-    before = read()
+    const attempt = read()
+    before = attempt === 'unreadable' ? await forgetUnread(say) : attempt
     if (before?.key !== key) before = null
   } catch (err) {
     say(`could not start: ${codeOf(err)}`)
@@ -144,14 +170,13 @@ export async function recoverStartup(
       const current = read()
       if (
         startupKey() !== key ||
-        current?.key !== before.key ||
-        current.failures !== before.failures ||
-        current.code !== before.code ||
-        current.retryAt !== before.retryAt
+        (current !== 'unreadable' &&
+          (current?.key !== before.key || current.failures !== before.failures || current.code !== before.code || current.retryAt !== before.retryAt))
       ) {
         say('startup retry cancelled because its record or settings changed')
         return false
       }
+      if (current === 'unreadable') before = await forgetUnread(say)
     } catch (err) {
       say(`could not start: ${codeOf(err)}`)
       say(`automatic startup stopped; ${recovery}`)
@@ -174,8 +199,8 @@ export async function recoverStartup(
   } catch (err) {
     if (ready || (signal.aborted && !endedBeforeReady) || (err instanceof Problem && err.code === 'stopped')) throw err
     const code = codeOf(err)
-    const failures = Math.min(4, (before?.failures ?? 0) + 1)
-    const delay = needsChange.has(code) ? undefined : STARTUP_WAITS[failures - 1]
+    const failures = (before?.failures ?? 0) + 1
+    const delay = needsChange.has(code) ? undefined : STARTUP_WAITS[Math.min(failures, STARTUP_WAITS.length) - 1]
     try {
       writePrivate(file(), { key, failures, code, retryAt: delay === undefined ? null : Date.now() + delay } satisfies Attempt)
     } catch {

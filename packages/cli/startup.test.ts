@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -35,36 +35,86 @@ describe('a background service that cannot start', () => {
     rmSync(folder, { recursive: true, force: true })
   })
 
-  test.each([404, 200])('bounds real missing or checksum-rejected backend downloads across starts (%s)', async (status) => {
+  test('stops downloading a backend whose checksum is wrong until a person retries it', async () => {
     let requests = 0
     const server = http.createServer((_req, res) => {
       requests++
-      res.writeHead(status).end('not a backend archive')
+      res.writeHead(200).end('not a backend archive')
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    process.env.IT_BACKEND_RELEASES = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('The test server has no port.')
+    process.env.IT_BACKEND_RELEASES = `http://127.0.0.1:${address.port}`
     const start = () =>
       recoverStartup(async () => {
         await program(() => {})
         return false
       }, options())
     try {
-      for (const [index, delay] of STARTUP_WAITS.entries()) {
-        const now = Date.now()
-        await expect(start()).rejects.toMatchObject({ code: status === 404 ? 'offline' : 'checksum' })
-        expect(record()).toMatchObject({ failures: index + 1, retryAt: now + delay })
-        vi.setSystemTime(now + delay)
-      }
       expect(await start()).toBe(false)
-      expect(startupStatus()).toMatchObject({ failures: 4, paused: true, retryAt: null })
+      expect(startupStatus()).toMatchObject({ failures: 1, code: 'checksum', paused: true, retryAt: null })
       expect(await start()).toBe(false)
-      expect(requests).toBe(4)
+      expect(requests).toBe(1)
       expect(said.join('\n')).toContain('it service install')
       expect(said.join('\n')).not.toContain('private explanation')
       // A new process sees the persisted stop before it tries to read settings or fetch anything.
       const child = spawnSync(process.execPath, ['packages/cli/dist/it.mjs', 'serve', '--supervised'], { env: process.env, encoding: 'utf8', timeout: 15_000 })
       expect([child.status, child.stderr]).toEqual([0, expect.stringContaining('automatic startup stopped')])
-      expect(requests).toBe(4)
+      expect(requests).toBe(1)
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
+  test.each([
+    new Problem('The backend program could not be fetched.', 'offline'),
+    ...['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT'].map((code) => Object.assign(new Error('private explanation'), { code })),
+    new TypeError('fetch failed', { cause: Object.assign(new Error('DNS is unavailable'), { code: 'ENOTFOUND' }) }),
+    new DOMException('The request timed out.', 'TimeoutError'),
+  ])('keeps retrying a temporary failure at the last interval, then starts when it clears: %s', async (error) => {
+    const run = vi.fn(async () => {
+      throw error
+    })
+    for (const [index, delay] of [30_000, 120_000, 600_000, 600_000, 600_000, 600_000, 600_000].entries()) {
+      const failures = index + 1
+      const now = Date.now()
+      await expect(recoverStartup(run, options())).rejects.toBe(error)
+      expect(startupStatus()).toMatchObject({ failures, retryAt: now + delay, paused: false })
+      vi.setSystemTime(now + delay)
+    }
+    expect(run).toHaveBeenCalledTimes(7)
+    const ready = vi.fn(async (ready: () => void) => {
+      ready()
+      return false
+    })
+    expect(await recoverStartup(ready, options())).toBe(false)
+    expect(ready).toHaveBeenCalledOnce()
+    expect(startupStatus()).toBeUndefined()
+    expect(said.join('\n')).not.toContain('private explanation')
+  })
+
+  test('keeps retrying a missing backend download after the fourth attempt', async () => {
+    let requests = 0
+    const server = http.createServer((_req, res) => {
+      requests++
+      res.writeHead(404).end('not here')
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('The test server has no port.')
+    process.env.IT_BACKEND_RELEASES = `http://127.0.0.1:${address.port}`
+    try {
+      for (let failures = 1; failures <= 5; failures++) {
+        await expect(
+          recoverStartup(async () => {
+            await program(() => {})
+            return false
+          }, options()),
+        ).rejects.toMatchObject({ code: 'offline' })
+        expect(startupStatus()).toMatchObject({ failures, paused: false })
+        vi.setSystemTime(record().retryAt)
+      }
+      expect(requests).toBe(5)
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
@@ -81,7 +131,7 @@ describe('a background service that cannot start', () => {
     expect(record().failures).toBe(1)
   })
 
-  test.each(['manual start', 'reset', 'later retry', 'paused retry', 'changed settings', 'unreadable record'])(
+  test.each(['manual start', 'reset', 'later retry', 'paused retry', 'changed settings'])(
     'does not use a stale attempt after waiting through a %s',
     async (change) => {
       await expect(fail()).rejects.toMatchObject({ code: 'offline' })
@@ -105,7 +155,6 @@ describe('a background service that cannot start', () => {
       } else if (change === 'paused retry') {
         writeFileSync(path.join(folder, 'startup.json'), JSON.stringify({ ...before, code: 'settings', retryAt: null }))
       } else if (change === 'changed settings') writeFileSync(path.join(folder, 'service.json'), 'changed settings')
-      else writeFileSync(path.join(folder, 'startup.json'), '{broken')
       const kept = existsSync(path.join(folder, 'startup.json')) ? readFileSync(path.join(folder, 'startup.json'), 'utf8') : undefined
       await expect(pending).resolves.toBe(false)
       expect(run).not.toHaveBeenCalled()
@@ -123,7 +172,7 @@ describe('a background service that cannot start', () => {
 
   test('stops at once for a failure that requires changed data or settings, without changing either', async () => {
     writeFileSync(path.join(folder, 'service.json'), 'settings left intact')
-    for (const code of ['settings', 'backend_releases', 'backend_older', 'database_unopened', 'record_unread']) {
+    for (const code of ['settings', 'backend_releases', 'backend_program', 'backend_older', 'database_unopened', 'record_unread']) {
       resetStartup()
       expect(await fail(code)).toBe(false)
       expect(startupStatus()).toMatchObject({ failures: 1, code, paused: true })
@@ -187,16 +236,43 @@ describe('a background service that cannot start', () => {
     expect(startupStatus()).toMatchObject({ failures: 1, paused: false, code: 'backend_exited' })
   })
 
-  test('keeps an unreadable retry record and starts nothing until an explicit retry', async () => {
-    writeFileSync(path.join(folder, 'startup.json'), '{broken')
-    const run = vi.fn(async () => false)
-    expect(await recoverStartup(run, options())).toBe(false)
-    expect(run).not.toHaveBeenCalled()
-    expect(readFileSync(path.join(folder, 'startup.json'), 'utf8')).toBe('{broken')
-    expect(said.join('\n')).toContain('record_unread')
-    expect(() => startupStatus()).toThrow('startup.json')
-    resetStartup()
-    expect(await recoverStartup(run, options())).toBe(false)
+  test.each([
+    { contents: '{broken', supervised: true },
+    { contents: JSON.stringify({ failures: 'many' }), supervised: true },
+    { contents: 'directory', supervised: true },
+    { contents: '{broken', supervised: false },
+  ])('moves an unreadable retry record aside, reports it once and starts: $contents, supervised $supervised', async ({ contents, supervised }) => {
+    const file = path.join(folder, 'startup.json')
+    if (contents === 'directory') mkdirSync(file)
+    else writeFileSync(file, contents)
+    const run = vi.fn(async (ready: () => void) => {
+      ready()
+      return false
+    })
+    expect(startupStatus()).toBeUndefined()
+    expect(await recoverStartup(run, { ...options(), supervised })).toBe(false)
     expect(run).toHaveBeenCalledOnce()
+    expect(existsSync(file)).toBe(false)
+    expect(existsSync(`${file}.unreadable`)).toBe(true)
+    if (contents !== 'directory') expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe(contents)
+    expect(said).toEqual(['startup.json could not be read; kept as startup.json.unreadable and its retry count forgotten'])
+    expect(await recoverStartup(run, { ...options(), supervised })).toBe(false)
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(said).toHaveLength(1)
+  })
+
+  test('starts with a fresh count when the retry record becomes unreadable during the wait', async () => {
+    await expect(fail()).rejects.toMatchObject({ code: 'offline' })
+    writeFileSync(path.join(folder, 'startup.json'), JSON.stringify({ ...record(), retryAt: Date.now() + 10 }))
+    const run = vi.fn(async () => {
+      throw new Problem('The connection is still down.', 'offline')
+    })
+    const pending = recoverStartup(run, options())
+    writeFileSync(path.join(folder, 'startup.json'), '{broken')
+    await expect(pending).rejects.toMatchObject({ code: 'offline' })
+    expect(run).toHaveBeenCalledOnce()
+    expect(record()).toMatchObject({ failures: 1, retryAt: Date.now() + STARTUP_WAITS[0] })
+    expect(readFileSync(path.join(folder, 'startup.json.unreadable'), 'utf8')).toBe('{broken')
+    expect(said.filter((line) => line.includes('startup.json.unreadable'))).toHaveLength(1)
   })
 })
