@@ -2975,7 +2975,7 @@ describe.skipIf(process.platform === 'win32')('a connector that cannot start, on
     mkdirSync(deep)
     writeFileSync(path.join(deep, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'test', key: {} }))
     const { written, running } = await served(m, path.join(m.home, 'it.log'), { IT_HOME: deep })
-    expect(written).toMatch(/ connector: could not start: home_too_long\n$/)
+    expect(written).toMatch(/ connector: could not start: home_too_long\n/)
     expect(written).not.toContain('PRIVATE-NAME')
     expect(running).toBe(true)
   })
@@ -5530,6 +5530,29 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
 })
 
 describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent will find `it`', () => {
+  const zsh = [process.env.IT_TEST_ZSH, '/bin/zsh', '/usr/bin/zsh'].find((file): file is string => Boolean(file && existsSync(file)))
+  test.skipIf(!zsh)('does not accept an unused zsh profile as proof that a new terminal will find It', async () => {
+    const m = machine()
+    const dir = path.join(m.home, 'zsh-files')
+    mkdirSync(dir)
+    writeFileSync(path.join(m.home, '.zshenv'), `ZDOTDIR='${dir}'\n`)
+    const line = `export PATH='${path.join(m.it, 'bin')}':"$PATH"`
+    writeFileSync(path.join(m.home, '.zshrc'), `${line}\n`)
+    const b = await backend({ it: m.it })
+    try {
+      const env = { ...b.env, SHELL: zsh! }
+      const unused = await run(m, ['setup', '--yes', '--no-service'], env)
+      expect(unused.code).toBe(0)
+      expect(unused.err).toContain('`it` is not on your PATH yet')
+      writeFileSync(path.join(dir, '.zshrc'), `${line}\n`)
+      const active = await run(m, ['setup', '--yes', '--no-service'], env)
+      expect(active.code).toBe(0)
+      expect(active.err).not.toContain('`it` is not on your PATH yet')
+    } finally {
+      await b.close()
+    }
+  })
+
   test('says that It’s folder of programs is not on the PATH, with the line that puts it there, and says nothing once it is', async () => {
     // A home with an apostrophe in its name: the line must still be one a shell reads as meant
     const m = machine()

@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
 import { CODEX_RULE_FILE, CODEX_SHUT_SAID } from './src/codex-settings'
 import { shutIn, VERSION } from './src/lib'
+import { keepOriginal, ORIGINAL_LIMIT, restoreAbsent } from './src/preserve'
 import { startOf } from './src/serve/backend'
 import {
   AFTER,
@@ -243,10 +244,11 @@ const put = (file: string, text: string) => {
   mkdirSync(path.dirname(file), { recursive: true })
   writeFileSync(file, text)
 }
-/** Every file under a folder, by its name from there, written with forward slashes on every system. */
+/** Installed files, excluding separately asserted recovery folders, named with forward slashes. */
 const under = (dir: string, base = dir): string[] =>
   existsSync(dir)
     ? readdirSync(dir, { withFileTypes: true })
+        .filter((e) => !e.name.endsWith('.it-recovery'))
         .flatMap((e) => (e.isDirectory() ? under(path.join(dir, e.name), base) : [path.relative(base, path.join(dir, e.name)).split(path.sep).join('/')]))
         .sort()
     : []
@@ -355,6 +357,91 @@ test('a discovery pass shares plugin answers and a later pass observes installat
 })
 
 describe('an add-on whose files It copies into an app’s folder', () => {
+  test.each(
+    ['file', 'directory'].flatMap((kind) =>
+      ['record', 'publication'].flatMap((failure) => ['absent', 'file', 'directory'].map((destination) => ({ kind, failure, destination }))),
+    ),
+  )('preserves a user-owned $kind after $failure fails with the destination $destination', async ({ kind, failure, destination }) => {
+    const folder = folderOf('opencode')
+    const plugin = path.join(folder, 'plugins/it-bridge.js')
+    const saved = `${plugin}.set-aside-by-it`
+    const content = (name: string) => (kind === 'directory' ? path.join(name, 'nested/notes.txt') : name)
+    put(content(plugin), "the person's own content")
+    if (process.platform !== 'win32') chmodSync(plugin, kind === 'directory' ? 0o750 : 0o640)
+    const before = lstatSync(plugin)
+    const original = { renameSync: fs.renameSync, linkSync: fs.linkSync }
+    let failed = false
+    let recreated: fs.Stats | undefined
+    const fail = () => {
+      if (failed) return
+      failed = true
+      expect(existsSync(plugin)).toBe(false)
+      expect(read(content(saved))).toBe("the person's own content")
+      if (destination === 'file') put(plugin, 'a concurrent save')
+      if (destination === 'directory') mkdirSync(plugin)
+      if (destination !== 'absent') recreated = lstatSync(plugin)
+      throw Object.assign(new Error(`${failure} failed`), { code: 'ENOSPC' })
+    }
+    fs.renameSync = (from, to) => {
+      if (failure === 'record' && to === stampFile('opencode') && existsSync(saved)) fail()
+      return original.renameSync(from, to)
+    }
+    fs.linkSync = (from, to) => {
+      if (failure === 'publication' && to === plugin) fail()
+      return original.linkSync(from, to)
+    }
+    syncBuiltinESMExports()
+    try {
+      expect(await connect('opencode', () => {})).toMatchObject({ addon: 'error', detail: expect.stringContaining(`${failure} failed`) })
+    } finally {
+      Object.assign(fs, original)
+      syncBuiltinESMExports()
+    }
+    expect(failed).toBe(true)
+    if (destination === 'absent') {
+      expect(read(content(plugin))).toBe("the person's own content")
+      expect(lstatSync(plugin).isDirectory()).toBe(kind === 'directory')
+      expect(lstatSync(plugin).mode).toBe(before.mode)
+      expect(lstatSync(plugin).ino).not.toBe(lstatSync(saved).ino)
+      writeFileSync(content(plugin), 'a later save')
+      expect(read(content(saved))).toBe("the person's own content")
+    } else {
+      expect(lstatSync(plugin).ino).toBe(recreated!.ino)
+      if (destination === 'file') expect(read(plugin)).toBe('a concurrent save')
+      else expect(readdirSync(plugin)).toEqual([])
+      expect(read(content(saved))).toBe("the person's own content")
+    }
+    expect(noted('opencode').installs[0]!.files ?? []).toEqual([])
+    expect(under(folder).some((file) => file.endsWith('.part') || file.endsWith('.link-check'))).toBe(false)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(existsSync(plugin)).toBe(true)
+  })
+
+  test.each(['file', 'directory'])('leaves a user-owned %s in place when its filesystem cannot make hard links', async (kind) => {
+    const folder = folderOf('opencode')
+    const plugin = path.join(folder, 'plugins/it-bridge.js')
+    const original = kind === 'directory' ? path.join(plugin, 'notes.txt') : plugin
+    put(original, "the person's own content")
+    const files = under(folder)
+    const link = fs.linkSync
+    fs.linkSync = () => {
+      throw Object.assign(new Error('hard links are unsupported'), { code: 'ENOTSUP' })
+    }
+    syncBuiltinESMExports()
+    try {
+      expect(await connect('opencode', () => {})).toMatchObject({ addon: 'error', detail: expect.stringContaining('hard links are unsupported') })
+    } finally {
+      fs.linkSync = link
+      syncBuiltinESMExports()
+    }
+    expect(read(original)).toBe("the person's own content")
+    expect(under(folder)).toEqual(files)
+    expect(noted('opencode').installs[0]!.files ?? []).toEqual([])
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(read(original)).toBe("the person's own content")
+    expect(under(folder)).toEqual(files)
+  })
+
   test.each([
     { id: 'opencode' as const, files: ['plugins/it-bridge.js', 'skills/it/SKILL.md'] },
     { id: 'hermes' as const, files: ['plugins/it-bridge/__init__.py', 'plugins/it-bridge/plugin.yaml', 'skills/it/SKILL.md'] },
@@ -394,7 +481,7 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(commands('hermes')).not.toContain('plugins remove it-bridge')
   })
 
-  test('Hermes’s own command removes the plugin when its folder holds nothing but what It put there, and the skill’s folder goes once it is empty', async () => {
+  test('Hermes is disabled and its unchanged copied files are removed without keeping recovery folders', async () => {
     const folder = folderOf('hermes')
     expect((await connect('hermes', () => {})).addon).toBe('connected')
     expect(under(folder)).toEqual([
@@ -407,8 +494,9 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     // Python leaves this beside code it has run: it is nobody's file
     put(path.join(folder, 'plugins/it-bridge/__pycache__/__init__.cpython-312.pyc'), 'compiled')
     expect(await disconnect('hermes', () => {})).toBe(true)
-    expect(commands('hermes')).toContain('plugins remove it-bridge')
-    expect(under(folder)).toEqual([])
+    expect(commands('hermes')).toContain('plugins disable it-bridge')
+    expect(commands('hermes')).not.toContain('plugins remove it-bridge')
+    expect(under(folder)).toEqual(['plugins/it-bridge/__pycache__/__init__.cpython-312.pyc'])
     expect(existsSync(path.join(folder, 'skills/it'))).toBe(false)
     // Hermes's own skills folder is never removed
     expect(existsSync(path.join(folder, 'skills'))).toBe(true)
@@ -494,7 +582,7 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(read(`${plugin}.set-aside-by-it-2`)).toBe('changed again')
   })
 
-  test('a newer version replaces the files It put there, keeps aside none of them, and takes away a file It put there that the add-on does not have', async () => {
+  test('a newer version replaces and removes unchanged files without keeping recovery copies', async () => {
     const folder = folderOf('opencode')
     const plugin = path.join(folder, 'plugins/it-bridge.js')
     await connect('opencode', () => {})
@@ -516,7 +604,9 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect((await connect('opencode', say)).addon).toBe('connected')
     expect(under(folder)).toEqual(['plugins/it-bridge.js', 'skills/it/SKILL.md', 'skills/it/it-home.json'])
     expect(read(plugin)).toContain('The It add-on for OpenCode')
-    expect(said).toEqual(['connecting OpenCode'])
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+    expect(existsSync(`${gone}.it-recovery`)).toBe(false)
+    expect(said.join('\n')).not.toContain('it-recovery')
     expect(noted('opencode').installs.map((i) => i.version)).toEqual([ADDONS.opencode!.version])
   })
 
@@ -566,6 +656,156 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     }
   })
 
+  test('thirty successive updates of an unchanged owned file leave no recovery folders', async () => {
+    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    await connect('opencode', () => {})
+    for (let release = 1; release <= 30; release++) {
+      const text = `the installed plugin at release ${release}`
+      writeFileSync(plugin, text)
+      const before = noted('opencode')
+      before.installs[0]!.version = `release-${release}`
+      before.installs[0]!.files!.find((f) => f.path === plugin)!.sha256 = sha(text)
+      writeFileSync(stampFile('opencode'), JSON.stringify(before))
+      expect((await connect('opencode', () => {})).addon).toBe('connected')
+      expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+    }
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+  })
+
+  test.each([false, true])('removal clears leftover owned originals and keeps a personal recovery edit when present is %s', async (edited) => {
+    await connect('opencode', () => {})
+    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    const saved = keepOriginal(plugin)
+    restoreAbsent(saved, plugin)
+    mkdirSync(path.join(`${plugin}.it-recovery`, '2'))
+    if (edited) writeFileSync(saved, 'the person saved this during an interrupted update')
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(edited)
+    if (edited) expect(read(saved)).toBe('the person saved this during an interrupted update')
+  })
+
+  test('an update clears unchanged originals from failed attempts before reserving a recovery slot', async () => {
+    await connect('opencode', () => {})
+    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    writeFileSync(plugin, 'the previous version')
+    const before = noted('opencode')
+    before.installs[0]!.version = 'previous-version'
+    before.installs[0]!.files!.find((f) => f.path === plugin)!.sha256 = sha('the previous version')
+    writeFileSync(stampFile('opencode'), JSON.stringify(before))
+    for (let attempt = 0; attempt < ORIGINAL_LIMIT; attempt++) restoreAbsent(keepOriginal(plugin), plugin)
+    expect((await connect('opencode', () => {})).addon).toBe('connected')
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+  })
+
+  test('removal clears an empty recovery folder left before its ownership note was written', async () => {
+    await connect('opencode', () => {})
+    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    mkdirSync(`${plugin}.it-recovery`)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(existsSync(plugin)).toBe(false)
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+  })
+
+  test.each(['an earlier plugin', 'a personal edit'])('keeps ownership of an obsolete file recreated with %s during preservation', async (recreated) => {
+    await connect('opencode', () => {})
+    const file = path.join(folderOf('opencode'), 'plugins/obsolete.js')
+    put(file, 'an earlier plugin')
+    const before = noted('opencode')
+    before.installs[0]!.version = 'another-version'
+    before.installs[0]!.files!.push({ path: file, sha256: sha('an earlier plugin') })
+    writeFileSync(stampFile('opencode'), JSON.stringify(before))
+    const rename = fs.renameSync
+    fs.renameSync = (from, to) => {
+      rename(from, to)
+      if (String(from) === file) writeFileSync(file, recreated)
+    }
+    syncBuiltinESMExports()
+    const { said, say } = lines()
+    try {
+      expect(await connect('opencode', say)).toMatchObject({ addon: 'error', detail: expect.stringContaining('recreated') })
+    } finally {
+      fs.renameSync = rename
+      syncBuiltinESMExports()
+    }
+    expect(read(file)).toBe(recreated)
+    expect(read(`${file}.it-recovery/1/original`)).toBe('an earlier plugin')
+    expect(noted('opencode').installs[0]!.files).toContainEqual({ path: file, sha256: sha('an earlier plugin') })
+    expect(said.join('\n')).toContain(`${file}.it-recovery`)
+    expect(await disconnect('opencode', () => {})).toBe(recreated === 'an earlier plugin')
+    expect(existsSync(file)).toBe(recreated !== 'an earlier plugin')
+  })
+
+  test.each(['replace', 'obsolete', 'remove'])('keeps a last-moment external save during copied-file %s', async (operation) => {
+    await connect('opencode', () => {})
+    const folder = folderOf('opencode')
+    const file = path.join(folder, operation === 'obsolete' ? 'plugins/old.js' : 'plugins/it-bridge.js')
+    const before = noted('opencode')
+    if (operation !== 'remove') {
+      put(file, 'an earlier version')
+      before.installs[0]!.version = 'another-version'
+      before.installs[0]!.files = [...before.installs[0]!.files!.filter((f) => f.path !== file), { path: file, sha256: sha('an earlier version') }]
+      writeFileSync(stampFile('opencode'), JSON.stringify(before))
+    }
+    const rename = fs.renameSync
+    let saved = false
+    fs.renameSync = (from, to) => {
+      if (from === realpathSync(path.dirname(file)) + path.sep + path.basename(file)) {
+        saved = true
+        writeFileSync(file, 'the final external save')
+      }
+      return rename(from, to)
+    }
+    syncBuiltinESMExports()
+    const { said, say } = lines()
+    try {
+      if (operation === 'remove') expect(await disconnect('opencode', say)).toBe(true)
+      else expect((await connect('opencode', say)).addon).toBe('connected')
+    } finally {
+      fs.renameSync = rename
+      syncBuiltinESMExports()
+    }
+    expect(saved).toBe(true)
+    expect(read(`${file}.it-recovery/1/original`)).toBe('the final external save')
+    expect(said.join('\n')).toContain(`${file}.it-recovery`)
+    expect(said.join('\n')).not.toContain('the final external save')
+  })
+
+  test('leaves a file created in the Hermes folder just before its removal command', async () => {
+    await connect('hermes', () => {})
+    const file = path.join(folderOf('hermes'), 'plugins/it-bridge/new-notes.txt')
+    const run = fake.execFile.getMockImplementation()!
+    fake.execFile.mockImplementation((bin, args, ...rest) => {
+      if (bin === 'hermes' && args.map((word: string) => word.replace(/^"(.*)"$/, '$1')).join(' ') === 'plugins disable it-bridge') put(file, 'new notes')
+      return run(bin, args, ...rest)
+    })
+    expect(await disconnect('hermes', () => {})).toBe(true)
+    expect(read(file)).toBe('new notes')
+    expect(commands('hermes')).not.toContain('plugins remove it-bridge')
+  })
+
+  test('reports recovery counts without paths or contents in service logs', async () => {
+    await connect('opencode', () => {})
+    const { said, say } = lines()
+    const file = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    const rename = fs.renameSync
+    fs.renameSync = (from, to) => {
+      if (from === file) writeFileSync(file, 'a last-moment personal save')
+      return rename(from, to)
+    }
+    syncBuiltinESMExports()
+    try {
+      expect(await disconnect('opencode', say, {}, true)).toBe(true)
+    } finally {
+      fs.renameSync = rename
+      syncBuiltinESMExports()
+    }
+    expect(said.join('\n')).toContain('originals were kept for recovery')
+    expect(said.join('\n')).not.toContain(tmp)
+  })
+
   test('an install that stops half way leaves a note of every file it wrote, and they are removed with it', async () => {
     const folder = folderOf('hermes')
     failing = ['hermes plugins enable it-bridge']
@@ -602,18 +842,20 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     const skill = path.join(folder, 'skills/it/SKILL.md')
     // The program is stopped once the skill is where OpenCode finds it: nothing it would have
     // put in place after that, a note or a file, is put in place
-    const real = fs.renameSync
+    const real = { renameSync: fs.renameSync, linkSync: fs.linkSync }
     let stopped = false
-    fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
-      if (stopped) throw new Error('the program was stopped before this')
-      real(from, to)
-      if (path.resolve(String(to)) === skill) stopped = true
-    }) as typeof fs.renameSync
+    for (const method of ['renameSync', 'linkSync'] as const) {
+      fs[method] = (from, to) => {
+        if (stopped) throw new Error('the program was stopped before this')
+        real[method](from, to)
+        if (path.resolve(String(to)) === skill) stopped = true
+      }
+    }
     syncBuiltinESMExports()
     try {
       await connect('opencode', () => {}).catch(() => {})
     } finally {
-      fs.renameSync = real
+      Object.assign(fs, real)
       syncBuiltinESMExports()
     }
     expect(stopped).toBe(true)
@@ -631,18 +873,20 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     const skill = path.join(folder, 'skills/it/SKILL.md')
     put(skill, 'a skill of the person’s own')
     // Stopped once the plugin is in its place, with the skill not yet come to
-    const real = fs.renameSync
+    const real = { renameSync: fs.renameSync, linkSync: fs.linkSync }
     let stopped = false
-    fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
-      if (stopped) throw new Error('the program was stopped before this')
-      real(from, to)
-      if (path.resolve(String(to)) === plugin) stopped = true
-    }) as typeof fs.renameSync
+    for (const method of ['renameSync', 'linkSync'] as const) {
+      fs[method] = (from, to) => {
+        if (stopped) throw new Error('the program was stopped before this')
+        real[method](from, to)
+        if (path.resolve(String(to)) === plugin) stopped = true
+      }
+    }
     syncBuiltinESMExports()
     try {
       await connect('opencode', () => {}).catch(() => {})
     } finally {
-      fs.renameSync = real
+      Object.assign(fs, real)
       syncBuiltinESMExports()
     }
     expect(stopped).toBe(true)
@@ -663,41 +907,43 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     return { plugin, old }
   }
   const interruptReplacement = async (plugin: string, boundary: string) => {
-    const original = fs.renameSync
+    const original = { renameSync: fs.renameSync, linkSync: fs.linkSync }
     let stopped = false
     let fileWritten = false
     let noteWrites = 0
-    fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
-      if (stopped) throw new Error('the program was stopped')
-      const target = path.resolve(String(to))
-      const isRecord = target === stampFile('opencode')
-      const record = isRecord ? JSON.parse(read(String(from))) : undefined
-      if (isRecord) noteWrites++
-      const pending = record?.installs[0]?.files?.find((f: { path: string }) => f.path === plugin)?.previousSha256 !== undefined
-      if (
-        (boundary === 'before the first record' && isRecord && noteWrites === 1) ||
-        (boundary === 'before the intent record' && pending) ||
-        (boundary === 'before the replacement' && target === plugin) ||
-        (boundary === 'before the completed record' && isRecord && record.installs[0].version !== 'installing')
-      ) {
-        stopped = true
-        throw new Error('the program was stopped')
+    for (const method of ['renameSync', 'linkSync'] as const) {
+      fs[method] = (from, to) => {
+        if (stopped) throw new Error('the program was stopped')
+        const target = path.resolve(String(to))
+        const isRecord = target === stampFile('opencode')
+        const record = isRecord ? JSON.parse(read(String(from))) : undefined
+        if (isRecord) noteWrites++
+        const pending = record?.installs[0]?.files?.find((f: { path: string }) => f.path === plugin)?.previousSha256 !== undefined
+        if (
+          (boundary === 'before the first record' && isRecord && noteWrites === 1) ||
+          (boundary === 'before the intent record' && pending) ||
+          (boundary === 'before the replacement' && target === plugin) ||
+          (boundary === 'before the completed record' && isRecord && record.installs[0].version !== 'installing')
+        ) {
+          stopped = true
+          throw new Error('the program was stopped')
+        }
+        original[method](from, to)
+        if (target === plugin) fileWritten = true
+        if (
+          (boundary === 'after the intent record' && pending) ||
+          (boundary === 'after the replacement' && target === plugin) ||
+          (boundary === 'after the file record' && isRecord && fileWritten && !pending)
+        )
+          stopped = true
       }
-      original(from, to)
-      if (target === plugin) fileWritten = true
-      if (
-        (boundary === 'after the intent record' && pending) ||
-        (boundary === 'after the replacement' && target === plugin) ||
-        (boundary === 'after the file record' && isRecord && fileWritten && !pending)
-      )
-        stopped = true
-    }) as typeof fs.renameSync
+    }
     syncBuiltinESMExports()
     try {
       const result = await connect('opencode', () => {}).catch(() => undefined)
       expect(result?.addon).not.toBe('connected')
     } finally {
-      fs.renameSync = original
+      Object.assign(fs, original)
       syncBuiltinESMExports()
     }
     expect(stopped).toBe(true)
@@ -717,7 +963,10 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     const { plugin } = await replacement()
     await interruptReplacement(plugin, boundary)
     const record = noted('opencode').installs[0]!.files!.find((f) => f.path === plugin)!
-    expect([record.sha256, record.previousSha256]).toContain(sha(read(plugin)))
+    // Publication first preserves the old file. A stopped process may leave those bytes
+    // only in the recovery folder, with the live name absent. They remain owned either way.
+    const left = existsSync(plugin) ? plugin : path.join(`${plugin}.it-recovery`, '1', 'original')
+    expect([record.sha256, record.previousSha256]).toContain(sha(read(left)))
     if (recovery === 'reconnect') {
       expect((await connect('opencode', () => {})).addon).toBe('connected')
       expect(noted('opencode').installs[0]!.files!.every((f) => f.previousSha256 === undefined)).toBe(true)
@@ -730,7 +979,7 @@ describe('an add-on whose files It copies into an app’s folder', () => {
   test.each(['before the replacement', 'after the replacement'])('consecutive partial upgrades retain the bytes actually left %s', async (boundary) => {
     const { plugin } = await replacement()
     await interruptReplacement(plugin, boundary)
-    const left = sha(read(plugin))
+    const left = existsSync(plugin) ? sha(read(plugin)) : undefined
     const files = ADDONS.opencode!.files
     const previous = files['plugins/it-bridge.js']!
     files['plugins/it-bridge.js'] = `${previous}\n// The next version.\n`
@@ -821,6 +1070,40 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
     { id: 'claude-code' as const, bin: 'claude', variable: 'CLAUDE_CONFIG_DIR', label: 'Claude Code' },
     { id: 'codex' as const, bin: 'codex', variable: 'CODEX_HOME', label: 'Codex' },
   ]
+  test.each(APPS.flatMap((app) => [false, true].map((edited) => ({ ...app, edited }))))(
+    'keeps a recreated companion skill on record after removing the plugin from $label, with a personal edit $edited',
+    async ({ id, bin, edited }) => {
+      await connect(id, () => {})
+      const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+      const recreated = edited ? 'a personal edit' : SKILL
+      const rename = fs.renameSync
+      fs.renameSync = (from, to) => {
+        rename(from, to)
+        if (String(from) === skill) writeFileSync(skill, recreated)
+      }
+      syncBuiltinESMExports()
+      const { said, say } = lines()
+      try {
+        expect(await disconnect(id, say)).toBe(false)
+      } finally {
+        fs.renameSync = rename
+        syncBuiltinESMExports()
+      }
+      expect(read(skill)).toBe(recreated)
+      expect(read(`${skill}.it-recovery/1/original`)).toBe(SKILL)
+      expect(noted(id).installs[0]!.files).toContainEqual({ path: skill, sha256: sha(SKILL) })
+      expect(said.join('\n')).toContain('not all gone')
+      expect(kept[bin]!.get(folderOf(bin))!.on).toBeUndefined()
+      expect(await disconnect(id, () => {})).toBe(!edited)
+      expect(existsSync(skill)).toBe(edited)
+      if (edited) {
+        expect(read(skill)).toBe(recreated)
+        rmSync(skill)
+        expect(await disconnect(id, () => {})).toBe(true)
+      }
+      expect(existsSync(stampFile(id))).toBe(false)
+    },
+  )
   test.each(APPS)('$label is given the skill beside the person’s own skills, and it is taken out again with the add-on', async ({ id, bin }) => {
     const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
     expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
@@ -833,7 +1116,7 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
     expect(said.filter((line) => /set aside|kept beside|had not put there/.test(line))).toEqual([])
     expect(under(path.dirname(skill))).toEqual(['SKILL.md'])
     expect(await disconnect(id, () => {})).toBe(true)
-    expect(existsSync(path.dirname(skill))).toBe(false)
+    expect(existsSync(`${skill}.it-recovery`)).toBe(false)
     expect(existsSync(stampFile(id))).toBe(false)
   })
   test.each(APPS)('where $label is told to keep its settings elsewhere, the skill goes there', async ({ id, bin, variable }) => {
@@ -901,7 +1184,8 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
       // Once the plugin is seen to be gone, the skill goes with it
       failing = []
       expect(await disconnect(id, () => {})).toBe(true)
-      expect(existsSync(path.dirname(skill))).toBe(false)
+      expect(existsSync(skill)).toBe(false)
+      expect(existsSync(`${skill}.it-recovery`)).toBe(false)
       expect(existsSync(stampFile(id))).toBe(false)
     },
   )
@@ -2801,6 +3085,69 @@ describe('what a person is told about an app', () => {
 describe('on Windows', () => {
   const platform = process.platform
   afterEach(() => Object.defineProperty(process, 'platform', { value: platform }))
+
+  test('background reconciliation leaves a busy file for another attempt without waiting on the connector', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    await connect('opencode', () => {})
+    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+    const installed = read(plugin)
+    const rename = fs.renameSync
+    const wait = vi.spyOn(Atomics, 'wait')
+    fs.renameSync = (from, to) => {
+      if (from === plugin) throw Object.assign(new Error('scanner has the file open'), { code: 'EBUSY' })
+      return rename(from, to)
+    }
+    syncBuiltinESMExports()
+    const { said, say } = lines()
+    try {
+      await reconcile([], say, true)
+    } finally {
+      fs.renameSync = rename
+      syncBuiltinESMExports()
+    }
+    expect(wait).not.toHaveBeenCalled()
+    expect(read(plugin)).toBe(installed)
+    expect(existsSync(stampFile('opencode'))).toBe(true)
+    expect(said.join('\n')).toContain('the note of the add-on is kept')
+    await reconcile([], say, true)
+    expect(existsSync(plugin)).toBe(false)
+    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+    expect(existsSync(stampFile('opencode'))).toBe(false)
+  })
+
+  test.each(['EPERM', 'EACCES', 'EBUSY'])('retries %s when removing a hard-link probe before setting aside a user file', async (code) => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    const folder = folderOf('opencode')
+    const plugin = path.join(folder, 'plugins/it-bridge.js')
+    put(plugin, 'a personal plugin')
+    const original = { rmSync: fs.rmSync, unlinkSync: fs.unlinkSync }
+    let attempts = 0
+    const busy = (name: fs.PathLike) => {
+      if (String(name).startsWith(`${plugin}.`) && String(name).endsWith('.part.link-check') && ++attempts === 1)
+        throw Object.assign(new Error('probe is busy'), { code })
+    }
+    fs.rmSync = (name, options) => {
+      busy(name)
+      original.rmSync(name, options)
+    }
+    fs.unlinkSync = (name) => {
+      busy(name)
+      original.unlinkSync(name)
+    }
+    syncBuiltinESMExports()
+    try {
+      expect((await connect('opencode', () => {})).addon).toBe('connected')
+    } finally {
+      Object.assign(fs, original)
+      syncBuiltinESMExports()
+    }
+    expect(attempts).toBe(2)
+    expect(read(`${plugin}.set-aside-by-it`)).toBe('a personal plugin')
+    expect(under(folder).some((file) => file.endsWith('.part') || file.endsWith('.link-check'))).toBe(false)
+    expect(noted('opencode').installs[0]!.files!.map((file) => file.path)).toContain(plugin)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(read(`${plugin}.set-aside-by-it`)).toBe('a personal plugin')
+  })
 
   test('a hook’s command is written without quotes when the launcher’s address needs none, so that cmd and PowerShell both run it', () => {
     Object.defineProperty(process, 'platform', { value: 'win32' })

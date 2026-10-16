@@ -122,6 +122,7 @@ import {
   whyHeldBack,
 } from './setup'
 import { printEnv } from './shell-env'
+import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, MENU as TOUR_MENU, TOUR_PREFIX, STEPS as TOUR_STEPS, tourPage } from './tour'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
@@ -1267,7 +1268,7 @@ async function answering(forMs = 10_000): Promise<boolean> {
  * else has only this to say so. Nothing when the folder is on the PATH already; otherwise what
  * to do about it, with the line to add.
  */
-function pathLine(): string | undefined {
+async function pathLine(): Promise<string | undefined> {
   // The launcher is put there now if it is not there yet, so that what the line points at exists
   try {
     shim()
@@ -1279,7 +1280,7 @@ function pathLine(): string | undefined {
   // Put there by the install script for every terminal opened from now on, it is only not on
   // the PATH this program was started with, as when an agent installs It and sets it up in
   // one conversation. Nothing is left for the person to do, and nothing is said.
-  if (onPathLater(bin)) return undefined
+  if (await onPathLater(bin)) return undefined
   if (process.platform === 'win32') return `Run this in PowerShell, then open a new terminal:\n\n  ${windowsPathCommand(bin)}`
   return `Add this line to the file your shell reads when it starts, then open a new terminal:\n\n  export PATH='${bin.replace(/'/g, `'\\''`)}':"$PATH"`
 }
@@ -1481,11 +1482,11 @@ async function uninstall(a: Args) {
           }
           // 3. Its line in the shell's profile, with the comment above it
           const bin = path.join(folder, 'bin')
-          const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
+          const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : await unlisted(bin, say)
           for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
           for (const { file, why: reason } of profiles.failed)
             left.push(
-              `${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`,
+              `${file} still has the line that puts It on your PATH, and could not be changed (${reason}). Check the file and any recovery original named above, then take the It line out yourself.`,
             )
           // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
           if (process.platform === 'win32') {
@@ -1494,7 +1495,7 @@ async function uninstall(a: Args) {
             else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
           }
           // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
-          crumbs(folder)
+          crumbs(folder, say)
           // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
           // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
           if (codexRuleLetsItOut())
@@ -1559,25 +1560,36 @@ async function uninstall(a: Args) {
   ])
 }
 
-/**
- * Takes the installer's line out of every shell profile it may have put it in, with the comment
- * and the blank line it wrote above it, and says which files it was in. A profile that held
- * nothing else is removed unless it is a link, whose target is left empty.
- */
-/** The files a shell reads when it starts, each with the line the install script writes into it to put a folder on the PATH. */
-function profileLines(bin: string): Map<string, string> {
-  const dirs = [process.env.ZDOTDIR, os.homedir()].filter((d): d is string => typeof d === 'string' && d !== '')
-  // The line as the installer writes it for each shell: fish has a file of It's own, and words of its own
+/** The line the installer writes for a folder, without asking a shell to discover its profiles again. */
+function profileLine(bin: string, fish: boolean): string {
   const posix = `export PATH='${bin.replaceAll("'", `'\\''`)}':"$PATH"`
   const fishWord = `'${bin.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`
-  const fish = `contains -- ${fishWord} $PATH; or set -gx PATH ${fishWord} $PATH`
-  const files = new Map<string, string>(
-    [...new Set(dirs.flatMap((d) => ['.zshrc', '.bashrc', '.bash_profile', '.bash_login', '.profile'].map((name) => path.join(d, name))))].map((file) => [
-      file,
-      posix,
-    ]),
-  )
-  files.set(path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'fish', 'conf.d', 'it.fish'), fish)
+  const fishLine = `contains -- ${fishWord} $PATH; or set -gx PATH ${fishWord} $PATH`
+  return fish ? fishLine : posix
+}
+
+/** The files a shell reads when it starts, each with the line the install script writes into it to put a folder on the PATH. */
+async function profileLines(bin: string, active = false, unresolved: () => void = () => {}): Promise<Map<string, string>> {
+  const shell = path.basename(process.env.SHELL || 'sh')
+  const zdot = shell === 'zsh' ? await zshDirectory() : undefined
+  if (shell === 'zsh' && !zdot) unresolved()
+  const home = os.homedir()
+  const zshFiles = [...new Set([zdot, ...(!active ? [process.env.ZDOTDIR, home] : [])])]
+    .filter((d): d is string => Boolean(d))
+    .map((dir) => path.join(dir, '.zshrc'))
+  const login = ['.bash_profile', '.bash_login', '.profile'].find((name) => existsSync(path.join(home, name))) ?? '.profile'
+  const posixFiles = active
+    ? shell === 'zsh'
+      ? zshFiles
+      : shell === 'bash'
+        ? ['.bashrc', login].map((name) => path.join(home, name))
+        : shell === 'fish'
+          ? []
+          : [path.join(home, '.profile')]
+    : [...zshFiles, ...['.bashrc', '.bash_profile', '.bash_login', '.profile'].map((name) => path.join(home, name))]
+  const files = new Map(posixFiles.map((file) => [file, profileLine(bin, false)]))
+  if (!active || shell === 'fish')
+    files.set(path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'fish', 'conf.d', 'it.fish'), profileLine(bin, true))
   return files
 }
 
@@ -1586,9 +1598,9 @@ function profileLines(bin: string): Map<string, string> {
  * PATH holds: the install script's line for it is in a file the person's shell reads, or the
  * folder is on the PATH Windows keeps for the account.
  */
-function onPathLater(bin: string): boolean {
+async function onPathLater(bin: string): Promise<boolean> {
   if (process.platform === 'win32') return inPowerShell(windowsPathHas(bin))?.trim() === 'on'
-  for (const [file, line] of profileLines(bin)) {
+  for (const [file, line] of await profileLines(bin, true)) {
     try {
       if (readFileSync(file, 'utf8').split('\n').includes(line)) return true
     } catch {}
@@ -1596,8 +1608,15 @@ function onPathLater(bin: string): boolean {
   return false
 }
 
-function unlisted(bin: string): { changed: string[]; failed: { file: string; why: string }[] } {
-  const files = profileLines(bin)
+/**
+ * Takes the installer's line out of every shell profile it may have put it in, with the comment
+ * and the blank line it wrote above it, and says which files it was in. A profile that held
+ * nothing else is removed unless it is a link, whose target is left empty.
+ */
+async function unlisted(bin: string, say: (line: string) => void): Promise<{ changed: string[]; failed: { file: string; why: string }[] }> {
+  const files = await profileLines(bin, false, () =>
+    say('Zsh did not report its startup folder within five seconds. Check the .zshrc it reads and remove the It PATH line there if it remains.'),
+  )
   const changed: string[] = []
   const failed: { file: string; why: string }[] = []
   for (const [file, line] of files) {
@@ -1610,7 +1629,7 @@ function unlisted(bin: string): { changed: string[]; failed: { file: string; why
           const posix = /^export PATH='(.*)':"\$PATH"$/.exec(l)
           const fish = /^contains -- '((?:\\.|[^'])*)' \$PATH; or set -gx PATH /.exec(l)
           const named = posix ? posix[1]!.replaceAll("'\\''", "'") : fish?.[1]?.replace(/\\([\\'])/g, '$1')
-          if (!named || !path.isAbsolute(named) || profileLines(named).get(file) !== l) return false
+          if (!named || !path.isAbsolute(named) || profileLine(named, line.startsWith('contains -- ')) !== l) return false
           try {
             return realpathSync(named) === realpathSync(bin)
           } catch {
@@ -1637,9 +1656,10 @@ function unlisted(bin: string): { changed: string[]; failed: { file: string; why
       continue
     }
     try {
-      if (changeWhole(file, without)) changed.push(file)
+      if (changeWhole(file, without, (original) => say(`The original is kept for recovery at ${original}. Review it before removing its numbered folder`)))
+        changed.push(file)
     } catch (err) {
-      failed.push({ file, why: (err as NodeJS.ErrnoException).code ?? 'an error' })
+      failed.push({ file, why: (err as NodeJS.ErrnoException).code ?? (err as Error).message })
     }
   }
   return { changed, failed }
@@ -1649,9 +1669,9 @@ function unlisted(bin: string): { changed: string[]; failed: { file: string; why
  * What the agent apps keep of It's add-ons after their own commands have removed them, and
  * do not clear away: Codex's note that the person trusted the add-on's hooks, and the copies of
  * the add-on that Codex and Claude Code keep. Each is taken out only where it is plainly It's,
- * and nothing here is ever said to have failed: none of it does anything once the add-on is gone.
+ * and a settings file that cannot be changed is left for the person to check.
  */
-function crumbs(folder: string): void {
+function crumbs(folder: string, say: (line: string) => void): void {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
   // What is in the apps' folders is shared by every It folder on the machine. A copy of the
   // add-on says which It folder it was installed from: where one that an app keeps says another
@@ -1693,14 +1713,20 @@ function crumbs(folder: string): void {
   if (anothers(path.join(codexHome, 'plugins', 'cache', 'it'))) return
   try {
     // Codex saves this file itself, when the person trusts a project or a plugin's hooks, and
-    // may do so while this is at work: the change is made to what the file holds at the moment
-    // it is replaced, so that nothing Codex saved meanwhile is taken back
-    changeWhole(path.join(codexHome, 'config.toml'), (text) => {
-      // A table of its own for each hook, holding the one line that says it was trusted
-      const without = withoutTables(text, (header) => /^\[hooks\.state\."it-bridge@it:[^"]*"\]/.test(header)).replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
-      return without === text ? undefined : without.replace(/\n{3,}/g, '\n\n')
-    })
-  } catch {}
+    // may do so while this is at work. Only an unfinished change keeps its original for recovery.
+    changeWhole(
+      path.join(codexHome, 'config.toml'),
+      (text) => {
+        // A table of its own for each hook, holding the one line that says it was trusted
+        const without = withoutTables(text, (header) => /^\[hooks\.state\."it-bridge@it:[^"]*"\]/.test(header)).replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
+        return without === text ? undefined : without.replace(/\n{3,}/g, '\n\n')
+      },
+      (original) => say(`Codex: the original settings are kept for recovery at ${original}. Review them before removing the numbered folder`),
+    )
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
+      say(`Codex's settings could not be cleaned up. Check its config.toml and any recovery original named above: ${(err as Error).message}`)
+  }
   try {
     rmSync(path.join(codexHome, 'plugins', 'cache', 'it'), { recursive: true, force: true })
   } catch {}
@@ -2133,7 +2159,7 @@ async function settingUpLed(a: Args, begunAlready = false) {
       }
     }
 
-    const add = pathLine()
+    const add = await pathLine()
     if (add) left.push(`\`it\` is not on your PATH yet, so an agent that runs it by name will not find it. ${add}`)
     flow.line()
     if (left.length) {
@@ -2377,7 +2403,7 @@ async function settingUp(a: Args, joined: boolean) {
     // The things left for the person to do, unless everything was just taken out again from
     // an It that was already here
     if (!a.flags.none || begun?.enrolled || joined) {
-      const add = pathLine()
+      const add = await pathLine()
       if (add) say(`\n\`it\` is not on your PATH yet, so an agent that runs it by name will not find it. ${add}`)
       // Run from here only for as long as setup took, It stops with it
       if (begun?.own) say('\nIt is not running in the background. Run `it serve`, in a terminal or under a supervisor of your own, to keep it going.')
@@ -2940,6 +2966,12 @@ async function main(argv: string[]): Promise<void> {
   if (cmd === 'shell-env') {
     usage.heed()
     return printEnv()
+  }
+  if (cmd === 'shell-profile') {
+    const dir = await zshDirectory()
+    if (!dir) throw new Problem('Zsh did not report an absolute startup folder within five seconds. Its PATH file was left alone.')
+    process.stdout.write(`${dir}\n`)
+    return
   }
   const a = parse(rest)
   optionsFor(cmd, a)
@@ -3550,7 +3582,7 @@ const began = Date.now()
 function counted(code?: string): void {
   try {
     const cmd = process.argv[2]
-    if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'serve' || takenOff) return
+    if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'shell-profile' || cmd === 'serve' || takenOff) return
     const harness = sessionAsked()?.session.harness
     const by = harness
       ? (HARNESSES as readonly string[]).includes(harness)

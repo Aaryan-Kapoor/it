@@ -11,6 +11,7 @@ import {
   closeSync,
   constants,
   existsSync,
+  fchmodSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -31,6 +32,7 @@ import { CODEX_MIN_VERSION, HARNESSES, type Harness, newer as newerVersion } fro
 import { ADDONS, LICENSE } from './addons.generated'
 import { codexConfig } from './codex-settings'
 import { harnessEnv, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
+import { checkHardLinks, keepOriginal, putAbsent, removeOriginal, removeOwnOriginals, restoreAbsent, withoutFileWait } from './preserve'
 import { alone as oneAtATime } from './serve/backend'
 
 export type AddonState = 'connected' | 'not_connected' | 'needs_approval' | 'too_old' | 'unavailable' | 'error'
@@ -273,10 +275,6 @@ function lookAt(root: string, file: string): Found {
 }
 /** Whether a file is there and holds just what this program put in it. */
 const matchesPut = (f: Put | undefined, sha256: string) => f !== undefined && (sha256 === f.sha256 || sha256 === f.previousSha256)
-const asPut = (root: string, f: Put) => {
-  const now = lookAt(root, f.path)
-  return now.is === 'file' && matchesPut(f, now.sha256)
-}
 /**
  * Makes a folder inside a harness's folder, one step at a time. A step that is a link leading
  * out of the harness's folder is not gone through, so nothing is ever made on the far side of it.
@@ -301,27 +299,43 @@ function makeWithin(root: string, dir: string): void {
  * and the file of that name is made new by this very call and never opened through a link: what
  * is written can go nowhere but into that new file.
  */
-function putInPlace(data: Buffer, to: string): void {
+function putInPlace(data: Buffer, to: string, before?: () => string | undefined, mode?: number, publishing?: () => void): void {
   const part = `${to}.${randomBytes(12).toString('hex')}.part`
   const made = openSync(part, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o666)
   try {
     try {
       writeFileSync(made, data)
+      if (mode !== undefined) fchmodSync(made, mode)
       fsyncSync(made)
     } finally {
       closeSync(made)
     }
-    // Tried again for a little while on Windows, where a program that looks into every new file may have this one open for a moment
-    rename(part, to)
-    // Flush the new name where the system permits syncing a directory, as for ownership records.
-    try {
-      const folder = openSync(path.dirname(to), 'r')
+    if (!before) {
+      // Tried again for a little while on Windows, where a program that looks into every new file may have this one open for a moment
+      rename(part, to)
+      // Flush the new name where the system permits syncing a directory, as for ownership records.
       try {
-        fsyncSync(folder)
-      } finally {
-        closeSync(folder)
+        const folder = openSync(path.dirname(to), 'r')
+        try {
+          fsyncSync(folder)
+        } finally {
+          closeSync(folder)
+        }
+      } catch {}
+    } else {
+      // Check publication support before moving any existing entry, including a person's
+      // file or directory. Probe with the staged file because directories cannot be linked.
+      checkHardLinks(part, `${part}.link-check`)
+      // Publish at a free name after preserving what occupied it.
+      const original = before?.()
+      try {
+        publishing?.()
+        putAbsent(part, to)
+      } catch (err) {
+        if (original) restoreAbsent(original, to)
+        throw err
       }
-    } catch {}
+    }
   } catch (err) {
     rmSync(part, { force: true })
     throw err
@@ -556,7 +570,12 @@ interface Adapter {
   /** Refuses an occupied plugin or marketplace name unless this installation owns it. */
   preflight?(at: Place, was: Installation | undefined): Promise<string | undefined>
   /** `wrote` records ownership before a file changes and after its replacement finishes. */
-  install(dir: string, at: Place, was: Installation | undefined, wrote: (files: Put[]) => void): Promise<Ran & { files?: Put[]; aside?: string[] }>
+  install(
+    dir: string,
+    at: Place,
+    was: Installation | undefined,
+    wrote: (files: Put[]) => void,
+  ): Promise<Ran & { files?: Put[]; aside?: string[]; recovery?: string[] }>
   /** Takes the add-on out. What it returns are the files it did not take out. */
   remove(at: Place, was?: Installation): Promise<Left | undefined>
   /** Something the person still has to do inside the harness, if anything. */
@@ -565,6 +584,7 @@ interface Adapter {
 
 /** The files of an add-on that a removal left where they were. */
 interface Left {
+  recovery?: string[]
   /** The host has not yet confirmed removal, so companion cleanup has not run. */
   pending?: boolean
   /** Changed by the person since they were put there, so theirs to keep or to take out. */
@@ -730,7 +750,7 @@ function withSkill(
   dir: string,
   was: Installation | undefined,
   wrote: (files: Put[]) => void,
-): Ran & { files?: Put[]; aside?: string[] } {
+): Ran & { files?: Put[]; aside?: string[]; recovery?: string[] } {
   if (!installed.ok) return installed
   const put = putFiles(
     root,
@@ -741,14 +761,14 @@ function withSkill(
     was,
     wrote,
   )
-  return { ok: put.err === undefined, out: installed.out, err: put.err ?? installed.err, files: put.files, aside: put.aside }
+  return { ok: put.err === undefined, out: installed.out, err: put.err ?? installed.err, files: put.files, aside: put.aside, recovery: put.recovery }
 }
 /** Takes the skill out again, where this program has a note of putting it there. An installation from before the skill was put beside the plugin has none, and nothing to take. */
 function withoutSkill(root: string, was: Installation | undefined): Left | undefined {
   if (!was?.files) return undefined
   const left = takeFiles(root, was.files)
   takeFolders(root, [path.dirname(SKILL_FILE)])
-  return left.changed.length || left.closed.length || left.outside.length ? left : undefined
+  return left.changed.length || left.closed.length || left.outside.length || left.recovery?.length ? left : undefined
 }
 
 const ADAPTERS: Partial<Record<Harness, Adapter>> = {
@@ -864,22 +884,6 @@ interface Copied {
   before?(at: Place, was: Installation | undefined): Promise<void>
 }
 
-/** Whether a folder holds nothing but files this program put there, unchanged, and what Python leaves beside code it has run. */
-function onlyOurs(root: string, dir: string, files: Put[]): boolean {
-  try {
-    return readdirSync(dir, { withFileTypes: true }).every((entry) => {
-      const full = path.join(dir, entry.name)
-      // What Python leaves is compiled code and nothing else: any other file kept there is the person's
-      if (entry.isDirectory() && entry.name === '__pycache__')
-        return readdirSync(full, { withFileTypes: true }).every((left) => left.isFile() && left.name.endsWith('.pyc'))
-      if (entry.isDirectory()) return onlyOurs(root, full, files)
-      return files.some((f) => f.path === full && asPut(root, f))
-    })
-  } catch {
-    return false
-  }
-}
-
 /** A file an add-on is to have in a harness's folder: where, and what it holds. */
 interface Wanted {
   to: string
@@ -901,12 +905,20 @@ function putFiles(
   wanted: () => Wanted[],
   was: Installation | undefined,
   wrote: (files: Put[]) => void,
-): { files: Put[]; aside: string[]; err?: string } {
+): { files: Put[]; aside: string[]; recovery: string[]; err?: string } {
   const kept: string[] = []
+  const recovery: string[] = []
   // The files that are this program's: what the last install left, and then each file this
   // one intends to write, with the old contents kept until the new contents are in place
   const mine = new Map((was?.files ?? []).map((f) => [f.path, f]))
   const noted = () => [...mine.values()]
+  const finished = (original: string, sha256: string) => {
+    const saved = lookAt(root, original)
+    if (saved.is === 'file' && saved.sha256 === sha256) {
+      removeOriginal(original)
+      recovery.splice(recovery.indexOf(original), 1)
+    }
+  }
   try {
     const files = wanted()
     const look = (file: string) => {
@@ -929,40 +941,67 @@ function putFiles(
         continue
       }
       makeWithin(root, path.dirname(f.to))
-      // Whatever is there that this program did not put there, or that has been changed
-      // since, is the person's, though it hold the very same words
-      if (now.is !== 'none' && !own) {
-        const name = aside(f.to)
-        renameSync(f.to, name)
-        mine.delete(f.to)
-        kept.push(name)
-      }
-      // Keep both possible contents before changing an owned file. On a later attempt the
-      // previous checksum is the bytes just observed, not the last attempt's intended bytes.
-      // Thus A left by an interrupted A-to-B replacement stays owned during an A-to-C retry.
-      mine.set(f.to, { path: f.to, sha256: f.sha256, ...(own && now.is === 'file' ? { previousSha256: now.sha256 } : {}) })
-      wrote(noted())
+      const mode = now.is === 'file' ? statSync(f.to).mode & 0o777 : undefined
+      const previous = mine.get(f.to)
+      let original: string | undefined
       try {
-        putInPlace(f.data, f.to)
+        putInPlace(
+          f.data,
+          f.to,
+          () => {
+            // A stopped publication can leave only its owned original. Clear that copy
+            // using the saved record too, even when the live name is still absent.
+            if (previous) {
+              removeOwnOriginals(f.to, previous.sha256)
+              if (previous.previousSha256) removeOwnOriginals(f.to, previous.previousSha256)
+            }
+            if (now.is === 'none') return undefined
+            // Moving the actual entry captures a save after the checksum, even an atomic save.
+            const name = own ? keepOriginal(f.to) : aside(f.to)
+            if (!own) renameSync(f.to, name)
+            mine.delete(f.to)
+            ;(own ? recovery : kept).push(name)
+            if (own) original = name
+            return name
+          },
+          mode,
+          () => {
+            // Record the replacement before publication, so an interrupted install still
+            // knows every file it may have published. Removal also checks its checksum.
+            mine.set(f.to, { path: f.to, sha256: f.sha256, ...(own && now.is === 'file' ? { previousSha256: now.sha256 } : {}) })
+            wrote(noted())
+          },
+        )
       } catch (err) {
-        // A failed call may still have put the file in place. Forget it only when its place
-        // is confirmed empty; otherwise either recorded checksum may be there.
-        if (lookAt(root, f.to).is === 'none') mine.delete(f.to)
+        // A failed call may have published the replacement or restored the original. Keep
+        // ownership only where either recorded checksum is still there. A personal file
+        // restored after a failed first install does not become ours.
+        const after = lookAt(root, f.to)
+        const pending = mine.get(f.to) ?? previous
+        if (after.is === 'file' && matchesPut(pending, after.sha256)) mine.set(f.to, pending!)
+        else if (after.is !== 'closed') mine.delete(f.to)
         throw err
       }
       mine.set(f.to, { path: f.to, sha256: f.sha256 })
       wrote(noted())
+      if (original && own && now.is === 'file') finished(original, now.sha256)
     }
     // A file noted as put there that this add-on does not have is taken away, where it is still as it was put
     for (const [file, put] of [...mine]) {
       if (files.some((f) => f.to === file)) continue
       const now = lookAt(root, file)
-      if (now.is === 'file' && matchesPut(put, now.sha256)) rmSync(file, { force: true })
+      if (now.is === 'file' && matchesPut(put, now.sha256)) {
+        removeOwnOriginals(file, now.sha256)
+        const original = keepOriginal(file)
+        recovery.push(original)
+        if (look(file).is !== 'none') throw new Error(`${file} was recreated by another program, so its removal is unfinished`)
+        finished(original, now.sha256)
+      }
       if (now.is !== 'closed') mine.delete(file)
     }
-    return { files: noted(), aside: kept }
+    return { files: noted(), aside: kept, recovery }
   } catch (err) {
-    return { files: noted(), aside: kept, err: (err as Error).message }
+    return { files: noted(), aside: kept, recovery, err: (err as Error).message }
   }
 }
 
@@ -975,14 +1014,29 @@ function leaveAs(left: Left, file: string, now: Found): void {
 function takeFiles(root: string, files: Put[]): Left {
   const left: Left = { changed: [], closed: [], outside: [] }
   for (const f of files) {
-    const now = lookAt(root, f.path)
-    if (now.is !== 'file' || !matchesPut(f, now.sha256)) leaveAs(left, f.path, now)
-    else
-      try {
-        rmSync(f.path)
-      } catch (err) {
-        if (!absent(err)) left.closed.push(f.path)
+    try {
+      const now = lookAt(root, f.path)
+      if (now.is === 'outside' || now.is === 'closed') {
+        leaveAs(left, f.path, now)
+        continue
       }
+      removeOwnOriginals(f.path, f.sha256)
+      if (f.previousSha256) removeOwnOriginals(f.path, f.previousSha256)
+      if (now.is !== 'file' || !matchesPut(f, now.sha256)) leaveAs(left, f.path, now)
+      else {
+        const original = keepOriginal(f.path)
+        const after = lookAt(root, f.path)
+        leaveAs(left, f.path, after)
+        const saved = lookAt(root, original)
+        if (after.is === 'none' && saved.is === 'file' && matchesPut(f, saved.sha256)) removeOriginal(original)
+        else {
+          left.recovery ??= []
+          left.recovery.push(original)
+        }
+      }
+    } catch (err) {
+      if (!absent(err)) left.closed.push(f.path)
+    }
   }
   return left
 }
@@ -1038,8 +1092,8 @@ function copied(id: Harness, c: Copied): Adapter {
         was,
         wrote,
       )
-      if (put.err !== undefined) return { ok: false, out: '', err: put.err, files: put.files, aside: put.aside }
-      return { ...((await c.after?.(at)) ?? { ok: true, out: '', err: '' }), files: put.files, aside: put.aside }
+      if (put.err !== undefined) return { ok: false, out: '', err: put.err, files: put.files, aside: put.aside, recovery: put.recovery }
+      return { ...((await c.after?.(at)) ?? { ok: true, out: '', err: '' }), files: put.files, aside: put.aside, recovery: put.recovery }
     },
     async remove(at, was) {
       const root = at.dir!
@@ -1185,14 +1239,10 @@ Object.assign(ADAPTERS, {
     after(at) {
       return run('hermes', ['plugins', 'enable', PLUGIN], 60_000, envAt(this.profile, at))
     },
-    async before(at, was) {
-      // Hermes's own command for removing a plugin takes the plugin's folder away whole, and
-      // with it the person's permission for the plugin in their settings. It is used when that
-      // folder holds nothing but what this program put there. When the person has changed or
-      // added something in it, the plugin is switched off with Hermes's own command instead,
-      // and only this program's files are taken out.
-      const whole = was?.files !== undefined && onlyOurs(at.dir!, path.join(at.dir!, 'plugins', PLUGIN), was.files)
-      await run('hermes', ['plugins', whole ? 'remove' : 'disable', PLUGIN], 60_000, envAt(this.profile, at))
+    async before(at) {
+      // A whole-folder removal can erase files saved after an ownership check. Disable it
+      // through Hermes and preserve each copied file ourselves, leaving every other entry.
+      await run('hermes', ['plugins', 'disable', PLUGIN], 60_000, envAt(this.profile, at))
     },
   }),
 } satisfies Partial<Record<Harness, Adapter>>)
@@ -1648,6 +1698,12 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
         : `${found} ${one ? 'was' : 'were'} in the add-on’s place. Nothing was written over: ${one ? 'it is' : 'each is'} kept beside the add-on, as ${r.aside.join(', ')}`,
     )
   }
+  if (r.recovery?.length)
+    say(
+      forLog
+        ? `${label}: ${r.recovery.length} originals were kept for recovery`
+        : `${label}: originals are kept for recovery at ${r.recovery.join(', ')}. Review them before removing their numbered folders`,
+    )
   if (!r.ok) {
     if (r.files) keep(id, noted('installing', r.files))
     return { id, version: before.version, addon: 'error', detail: (r.err || r.out).split('\n').slice(-3).join(' ').slice(0, 200) }
@@ -1717,6 +1773,12 @@ export async function disconnect(
           continue
         }
         const stayed = await adapter.remove(at, was)
+        if (stayed?.recovery?.length)
+          say(
+            forLog
+              ? `${label}: ${stayed.recovery.length} originals were kept for recovery`
+              : `${label}: originals are kept for recovery at ${stayed.recovery.join(', ')}. Review them before removing their numbered folders`,
+          )
         if (stayed?.pending) {
           say(`${label}: removal has not been confirmed, so the companion files and installation note are kept for another try`)
           continue
@@ -1838,6 +1900,11 @@ let reconciling: Promise<void> = Promise.resolve()
  * in the words of a harness's own installer or of an error, which can hold a path or a name.
  */
 export function reconcile(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog = false): Promise<void> {
+  if (forLog) return withoutFileWait(() => reconcileWithFiles(chosen, say, forLog))
+  return reconcileWithFiles(chosen, say, forLog)
+}
+
+function reconcileWithFiles(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog: boolean): Promise<void> {
   // One run's failure (the lock could not be had, say) is that run's alone: the next still runs
   reconciling = reconciling
     .catch(() => {})
