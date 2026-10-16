@@ -46,7 +46,7 @@ The door answers only to the machine's own names and addresses. A request that n
 
 ### What It asks of itself goes to itself
 
-The `it` command, the connector and the service ask It's own backend and its own door for everything they do. None of those requests goes through a proxy that the environment names, with `HTTP_PROXY`, `HTTPS_PROXY` or a variable like them, so a key or a token that It sends to itself is never handed to a proxy. The one request It does send through such a proxy is the download of the backend program.
+The `it` command, the connector and the service ask It's own backend and its own door for everything they do. None of those requests goes through a proxy that the environment names, with `HTTP_PROXY`, `HTTPS_PROXY` or a variable like them, so a key or a token that It sends to itself is never handed to a proxy. The one request It does send through such a proxy is the download of the backend program. What the add-ons inside the agent apps ask of the connector on this machine goes through no proxy either, and [Add-ons](add-ons.md#what-every-add-on-does) says how each makes sure of it.
 
 ### What is on the disk is yours alone
 
@@ -117,6 +117,10 @@ Auto-wake is on for an agent app from when you connect it on a machine, and stay
 So think of who can do something on a page. You can, from any paired browser. So can a paired screen, and whoever can pair one. On your network everything travels in the clear, so someone there who reads one request of a paired browser can send one of their own. And another account on the same computer can reach the door. What they send reaches the agent as text: the name of what was pressed and the first 2,000 characters of what it carried, for up to eight things done at once, and the agent can read the whole of each. That is enough to ask an agent for something you did not.
 
 What It does about it: the text is marked as coming from a page, a conversation is reopened only on a machine and for an app where it is on, what you have turned off is turned on again by nobody but you, while It's service is running it asks a run to end after fifteen minutes and ends it if it does not, and Stop on the page ends it and what it started once its machine has heard: a machine that is out of reach is told when it is back, and the page says so meanwhile. If the service itself dies during a run, the agent goes on until the service starts again, which is when it looks at the runs it had noted and ends what is left of them. A reopened Codex conversation is kept to Codex's sandbox, with It's own folder writable too. None of that makes an agent refuse a request. Leave Auto-wake on where you would accept that agent acting on anything a page can send, and turn it off where you would not.
+
+### Hermes can switch conversations during a handover
+
+The Hermes add-on checks that a click still belongs to the conversation in its chat before handing it over. Hermes does not let the add-on make that check and the handover one operation. A switch after the last check can send the click to the replacement conversation. In the terminal, a `/resume` entered just after the check for waiting input can do this too. [Add-ons](add-ons.md#hermes-agent) describes these limits.
 
 ### It is not made for the public internet
 

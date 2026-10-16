@@ -19,7 +19,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import { changeWhole } from './src/lib'
-import { keepOriginal, ORIGINAL_LIMIT, putAbsent } from './src/preserve'
+import { keepOriginal, ORIGINAL_LIMIT, putAbsent, restoreAbsent } from './src/preserve'
 
 let folder: string
 let file: string
@@ -99,15 +99,24 @@ test('never overwrites a file another writer recreates after the original moves'
 })
 
 test('restores the original after publication fails and keeps its recovery name', () => {
-  writeFileSync(file, 'before')
+  writeFileSync(file, 'before', { mode: 0o640 })
+  let failed = false
   fs.linkSync = (from, to) => {
-    if (String(from).endsWith('.part')) throw Object.assign(new Error('full'), { code: 'ENOSPC' })
+    if (String(from).endsWith('.part') && !failed) {
+      failed = true
+      throw Object.assign(new Error('full'), { code: 'ENOSPC' })
+    }
     return original.linkSync(from, to)
   }
   syncBuiltinESMExports()
   expect(() => changeWhole(file, () => 'after')).toThrow(/original is kept/)
   expect(readFileSync(file, 'utf8')).toBe('before')
   expect(readFileSync(copy(), 'utf8')).toBe('before')
+  expect(statSync(file).ino).not.toBe(statSync(copy()).ino)
+  expect(statSync(file).mode).toBe(statSync(copy()).mode)
+  writeFileSync(file, 'a later in-place save')
+  expect(readFileSync(copy(), 'utf8')).toBe('before')
+  expect(readdirSync(folder).sort()).toEqual(['settings', 'settings.it-recovery'])
 })
 
 test('retains twenty originals without expiring any and refuses the next change', () => {
@@ -151,6 +160,10 @@ test.skipIf(process.platform === 'win32')('moves a symlink itself without touchi
   symlinkSync(target, file)
   const kept = keepOriginal(file)
   expect(lstatSync(kept).isSymbolicLink()).toBe(true)
+  restoreAbsent(kept, file)
+  expect(lstatSync(file).isSymbolicLink()).toBe(true)
+  expect(lstatSync(file).ino).not.toBe(lstatSync(kept).ino)
+  expect(readFileSync(file, 'utf8')).toBe('user content')
   expect(readFileSync(target, 'utf8')).toBe('user content')
 })
 

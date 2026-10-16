@@ -1,4 +1,20 @@
-import { chmodSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import {
+  chmodSync,
+  constants,
+  copyFileSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  renameSync,
+  rmdirSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import path from 'node:path'
 
 /** Retries the sharing violations a scanner can cause on Windows, without replacing a name. */
@@ -80,7 +96,20 @@ export function putAbsent(part: string, target: string): void {
 
 /** Restores an original only if nothing has been saved under its old name in the meantime. */
 export function restoreAbsent(original: string, target: string): void {
+  const part = `${target}.it-${randomUUID()}.part`
+  let made = false
   try {
-    tryFile(() => linkSync(original, target))
-  } catch {}
+    // A restored file must not share its inode with the saved original: a later in-place
+    // save to the live name would otherwise change the recovery copy too.
+    if (lstatSync(original).isSymbolicLink()) symlinkSync(readlinkSync(original), part)
+    else copyFileSync(original, part, constants.COPYFILE_EXCL)
+    made = true
+    putAbsent(part, target)
+  } catch {
+  } finally {
+    if (made)
+      try {
+        tryFile(() => unlinkSync(part))
+      } catch {}
+  }
 }

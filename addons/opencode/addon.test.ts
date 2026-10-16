@@ -1,15 +1,17 @@
 // The contract between the OpenCode add-on and the connector, checked without OpenCode: the
 // add-on's own code runs against a stand-in for what OpenCode hands a plugin, and against a
 // stand-in connector listening on a socket in a temporary folder.
+import { spawn } from 'node:child_process'
 import { createHmac } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import files from 'node:fs/promises'
 import http from 'node:http'
 import { syncBuiltinESMExports } from 'node:module'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { describeClick, WHEN } from '@it/protocol'
+import { describeClick, LISTENING_MOST, WHEN } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as addon from './plugins/it-bridge.js'
 
@@ -42,18 +44,19 @@ const NO_FILE = Symbol('no connector file')
  * waited for the add-on has acted on all of it.
  */
 let outside = { waiting: 0, looked: 0, put: 0 }
-const itself = { request: http.request, readFile: files.readFile }
+const itself = { connect: net.connect, readFile: files.readFile }
 function watchOutside() {
   // Each test counts for itself: a question an earlier test left unanswered ends in that test's count, not this one's
   const seen = { waiting: 0, looked: 0, put: 0 }
   outside = seen
-  http.request = ((...given: unknown[]) => {
+  // The add-on opens a connection of its own for each question, and closes it with the answer
+  net.connect = ((...given: unknown[]) => {
     seen.waiting++
     seen.put++
-    const req = (itself.request as (...given: unknown[]) => http.ClientRequest)(...given)
-    req.once('close', () => seen.waiting--)
-    return req
-  }) as typeof http.request
+    const socket = (itself.connect as (...given: unknown[]) => net.Socket)(...given)
+    socket.once('close', () => seen.waiting--)
+    return socket
+  }) as typeof net.connect
   files.readFile = ((...given: unknown[]) => {
     seen.waiting++
     seen.looked++
@@ -62,7 +65,7 @@ function watchOutside() {
   syncBuiltinESMExports()
 }
 function watchNoMore() {
-  http.request = itself.request
+  net.connect = itself.connect
   files.readFile = itself.readFile
   syncBuiltinESMExports()
 }
@@ -399,6 +402,24 @@ describe('the OpenCode add-on', () => {
     await settled()
     expect(c.polls().length).toBe(1)
     expect(c.polls().every((a) => a.session === 'ses_parent')).toBe(true)
+  })
+
+  it('asks about as many conversations at once as the connector listens for, and past that the one used longest ago gives way', async () => {
+    standIn()
+    const c = await connector()
+    const { hooks } = await load()
+    const open = Array.from({ length: LISTENING_MOST }, (_, i) => `ses_${i + 1}`)
+    for (const id of open) await begin(hooks, id)
+    await settled()
+    c.state.asked.length = 0
+    await seconds(1)
+    expect(c.polls().map((a) => a.session)).toEqual(open)
+    // One more than the connector listens for: the first, which has said nothing since, is the one not asked about
+    await begin(hooks, 'ses_one_more')
+    await settled()
+    c.state.asked.length = 0
+    await seconds(1)
+    expect(c.polls().map((a) => a.session)).toEqual([...open.slice(1), 'ses_one_more'])
   })
 
   it('gives a subagent no conversation at all when the one that started it cannot be told for sure', async () => {
@@ -965,4 +986,102 @@ describe('the OpenCode add-on', () => {
     expect(c.state.asked).toEqual([])
     expect(rejections).toEqual([])
   })
+})
+
+// The connector is on this machine, and what is asked of it names a conversation and brings
+// back what a person did on a page. A proxy named in the environment is for the internet, and
+// must be shown none of it. OpenCode runs its plugins under Bun, which sends whatever
+// `node:http` and `fetch` ask through a proxy that is named when it starts, so the add-on is
+// run in a process of its own that was started with one named.
+describe.skipIf(process.platform === 'win32')('the OpenCode add-on, in an OpenCode started with a proxy named in its environment', () => {
+  /** Something that takes whatever is sent to it as a proxy would, notes the first line of each thing asked, and passes nothing on. */
+  async function collecting() {
+    const seen: string[] = []
+    const server = net.createServer((socket) => {
+      socket.on('error', () => {})
+      let got = ''
+      socket.on('data', (piece: Buffer) => {
+        const first = !got.includes('\r\n')
+        got += piece.toString('latin1')
+        if (!first || !got.includes('\r\n')) return
+        seen.push(got.split('\r\n')[0]!)
+        socket.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+      })
+    })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    const at = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`
+    return {
+      seen,
+      // Named in every variable either runtime reads, with nothing left out of its reach
+      env: { HTTP_PROXY: at, http_proxy: at, HTTPS_PROXY: at, https_proxy: at, ALL_PROXY: at, all_proxy: at, NO_PROXY: '', no_proxy: '' },
+      close: () => new Promise<void>((r) => void server.close(() => r())),
+    }
+  }
+  const bun = (process.env.PATH ?? '')
+    .split(path.delimiter)
+    .map((dir) => path.join(dir, 'bun'))
+    .find((file) => existsSync(file))
+  /**
+   * An OpenCode cut down to what the add-on asks of one. The person writes in a conversation,
+   * and a message the add-on hands over is said, stored and announced as OpenCode announces one.
+   */
+  const OPENCODE = `
+    import { ItBridge } from ${JSON.stringify(pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), 'plugins/it-bridge.js')).href)}
+    const hooks = await ItBridge({
+      client: {
+        session: {
+          get: async ({ path: { id } }) => ({ data: { id }, response: { ok: true, status: 200 } }),
+          promptAsync: async ({ path: { id }, body }) => {
+            const text = body.parts.map((part) => part.text).join('')
+            console.log(text)
+            const message = { id: 'msg_2', role: 'user', sessionID: id, agent: body.agent }
+            await hooks['chat.message']({ sessionID: id, agent: body.agent }, { message, parts: [] })
+            await hooks.event({ event: { type: 'message.part.updated', properties: { part: { id: 'prt_2', type: 'text', sessionID: id, messageID: 'msg_2', text } } } })
+            return { data: {}, response: { ok: true, status: 204 } }
+          },
+        },
+      },
+    })
+    await hooks['chat.message']({ sessionID: 'ses_the_persons_own' }, { message: { id: 'msg_1', agent: 'build' }, parts: [] })
+    setTimeout(() => process.exit(0), 20000)
+  `
+
+  for (const [name, runtime, told] of [
+    ['Bun', bun, {}],
+    ['Node told to use the environment’s proxy', process.execPath, { NODE_USE_ENV_PROXY: '1' }],
+  ] as const)
+    it.skipIf(!runtime)(
+      `under ${name}, a click is asked for, taken and reported over the connector’s port on this machine, and the proxy is sent nothing`,
+      async () => {
+        const home = mkdtempSync(path.join(os.tmpdir(), 'it-opencode-'))
+        const proxy = await collecting()
+        const c = await fakeConnector(0)
+        writeFileSync(path.join(home, 'connector.json'), JSON.stringify({ port: c.port, token: TOKEN }))
+        const offered = click('k1')
+        c.state.offered = [offered]
+        const opencode = path.join(home, 'opencode.mjs')
+        writeFileSync(opencode, OPENCODE)
+        const child = spawn(runtime!, [opencode], {
+          env: { PATH: process.env.PATH, IT_HOME: home, ...proxy.env, ...told },
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+        let handed = ''
+        child.stdout.on('data', (piece) => (handed += piece))
+        try {
+          // Either the connector hears that the agent has the click, or the proxy was asked something
+          const end = performance.now() + 15_000
+          while (!c.state.acked.length && !proxy.seen.length && performance.now() < end) await pause(20)
+          expect(proxy.seen).toEqual([])
+          expect(c.polls().map((a) => a.session)).toContain('ses_the_persons_own')
+          expect(handed.trim()).toBe(offered.text)
+          expect(c.state.acked).toEqual(['k1'])
+        } finally {
+          child.kill('SIGKILL')
+          await proxy.close()
+          await c.close()
+          rmSync(home, { recursive: true, force: true })
+        }
+      },
+      30_000,
+    )
 })
