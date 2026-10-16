@@ -4638,6 +4638,24 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
 })
 
 describe.skipIf(process.platform === 'win32')('`it setup --none`, which connects no agent app', () => {
+  test('source setup holds the folder lock while changing a joined machine', async () => {
+    const m = machine()
+    const held: boolean[] = []
+    const b = await backend(m, (asked) => {
+      held.push(existsSync(path.join(m.it, 'setup.lock')))
+      return asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : null
+    })
+    try {
+      const ran = await run(m, ['setup', '--none', '--no-service'], b.env)
+      expect(ran.code, ran.err).toBe(0)
+      expect(held.length).toBeGreaterThan(0)
+      expect(held.every(Boolean)).toBe(true)
+      expect(existsSync(path.join(m.it, 'setup.lock'))).toBe(false)
+    } finally {
+      await b.close()
+    }
+  })
+
   /** A backend program that is not there: a first run asks for it before anything else, and ends saying so. */
   // A first run looks first at whether It could have its ports, so these are given ports that nothing has: an It of the
   // developer's own may be running at the usual ones

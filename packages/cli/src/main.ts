@@ -1690,21 +1690,23 @@ async function setup(a: Args, joined = false) {
   if (a.flags.none && !enrolledHere()) {
     const leftBehind = !existsSync(settingsFile()) && (hasLeft() || holdsAddons())
     if (leftBehind || elsewhere()) {
-      return current(async () => {
-        await reconcile([], say)
-        if (leftBehind) {
-          // Noted, so that the folder is still known for what it is once its add-ons are out
-          noteLeft()
-          say(
-            'It is not set up in this folder, which holds only what an earlier use of It left there, so nothing was started. `it setup --none` here takes out the add-ons this folder had put in. To set It up on this machine, run `it setup`.',
-          )
-        }
-        const left = await detectAll()
-        return forPerson(a) ? tell(appsSaid(left, false)) : out({ harnesses: left, wanted: [] })
-      })
+      return oneAtATime(() =>
+        current(async () => {
+          await reconcile([], say)
+          if (leftBehind) {
+            // Noted, so that the folder is still known for what it is once its add-ons are out
+            noteLeft()
+            say(
+              'It is not set up in this folder, which holds only what an earlier use of It left there, so nothing was started. `it setup --none` here takes out the add-ons this folder had put in. To set It up on this machine, run `it setup`.',
+            )
+          }
+          const left = await detectAll()
+          return forPerson(a) ? tell(appsSaid(left, false)) : out({ harnesses: left, wanted: [] })
+        }),
+      )
     }
   }
-  if (elsewhere()) return current(() => settingUp(a, joined))
+  if (elsewhere()) return oneAtATime(() => current(() => settingUp(a, joined)))
   // Where the backend is this machine's own to run, a setup makes what It needs here and may
   // run the backend for as long as the setup takes: one at a time for a folder, and not while
   // the machine is joining an It on another computer. Whether the folder is to run an It is

@@ -365,6 +365,49 @@ describe('installation ownership', () => {
     expect(existsSync(path.join(at, '.installing'))).toBe(false)
   })
 
+  test.each(['setup.lock', 'addons/setup.lock'])('uninstall refuses a live %s before changing the installation', async (name) => {
+    const at = folder()
+    markInstallation(at)
+    let entered = false
+    await aloneAt(path.join(at, name), async () => {
+      await expect(
+        withInstallationLock(at, async () => {
+          entered = true
+        }),
+      ).rejects.toMatchObject({ code: 'busy' })
+      expect(markedInstallation(at)).toBe(true)
+      expect(existsSync(path.join(at, name))).toBe(true)
+    })
+    expect(entered).toBe(false)
+  })
+
+  test.each(['setup.lock', 'addons/setup.lock'])('uninstall keeps an unrecognised %s and never enters removal', async (name) => {
+    const at = folder()
+    markInstallation(at)
+    put(at, name, 'mine')
+    let entered = false
+    await expect(
+      withInstallationLock(at, async () => {
+        entered = true
+      }),
+    ).rejects.toThrow('not a recognised lock record')
+    expect(entered).toBe(false)
+    expect(readFileSync(path.join(at, name), 'utf8')).toBe('mine')
+  })
+
+  test('cleanup holds the setup and add-on locks until removal has finished', async () => {
+    const at = folder()
+    markInstallation(at)
+    put(at, 'addons/pi/private', 'private data')
+    await withInstallationLock(at, async () => {
+      removeInstallationFiles(at, false)
+      for (const name of ['setup.lock', 'addons/setup.lock']) expect(existsSync(path.join(at, name))).toBe(true)
+      expect(existsSync(path.join(at, 'addons/pi'))).toBe(false)
+    })
+    expect(finishInstallationRemoval(at)).toEqual([])
+    expect(existsSync(at)).toBe(false)
+  })
+
   test('the installer lock is released when uninstall fails', async () => {
     const at = folder()
     markInstallation(at)

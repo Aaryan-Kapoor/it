@@ -48,6 +48,7 @@ const LOCK_SUFFIX = /^(?:\.after\.(?:[0-9a-f]{16}|unread-\d+-\d+))?(?:\.[0-9a-f]
 export const ROOT_LOCKS = ['connector.lock', 'setup.lock', 'enrol.lock']
 const LOCKS: Record<string, string[]> = {
   '': ROOT_LOCKS,
+  addons: ['setup.lock'],
   bin: ['it.upgrade.lock', 'it.exe.upgrade.lock'],
 }
 const lockRecord = (value: unknown): value is { pid: number; started: string; where: string; holder: string } =>
@@ -79,14 +80,32 @@ export function installationFile(folder: string, relative: string): string | und
   return stat && (stat.isFile() || stat.isSocket()) ? at : undefined
 }
 
-/** An updater or setup must finish before uninstall changes the program. Its lock also recovers interrupted lock-taking. */
+/** Setup, login and uninstall take these locks in the same order, including when the command runs from source and has no program lock. */
 export async function withInstallationLock<T>(folder: string, run: () => Promise<T>): Promise<T> {
-  return withInstallerLock(folder, () => withProgramLock(folder, run))
+  // A setup can be waiting for the person's answers, and an add-on can be waiting for its
+  // app. Refuse immediately while either is busy, with the installation still whole.
+  return withRecordLock(
+    folder,
+    'setup.lock',
+    () =>
+      withInstallerLock(folder, () =>
+        withProgramLock(folder, () => {
+          const addons = lstatSync(path.join(folder, 'addons'), { throwIfNoEntry: false })
+          if (addons && !addons.isDirectory()) return run()
+          return withRecordLock(folder, 'addons/setup.lock', run, 0)
+        }),
+      ),
+    0,
+  )
 }
 
 async function withProgramLock<T>(folder: string, run: () => Promise<T>): Promise<T> {
   if (!lstatSync(path.join(folder, 'bin'), { throwIfNoEntry: false })?.isDirectory()) return run()
   const relative = `bin/${process.platform === 'win32' ? 'it.exe' : 'it'}.upgrade.lock`
+  return withRecordLock(folder, relative, run)
+}
+
+async function withRecordLock<T>(folder: string, relative: string, run: () => Promise<T>, forMs?: number): Promise<T> {
   const file = path.join(folder, relative)
   if (lstatSync(file, { throwIfNoEntry: false })) {
     let recognised = false
@@ -94,9 +113,9 @@ async function withProgramLock<T>(folder: string, run: () => Promise<T>): Promis
       recognised = !!installationFile(folder, relative) && lockRecord(JSON.parse(readFileSync(file, 'utf8')))
     } catch {}
     if (!recognised && lstatSync(file, { throwIfNoEntry: false }))
-      throw new Problem('The program lock is not a recognised lock record. The installation files were kept.', 'invalid')
+      throw new Problem(`${relative} is not a recognised lock record. The installation files were kept.`, 'invalid')
   }
-  return aloneAt(file, run)
+  return aloneAt(file, run, forMs)
 }
 
 /** Removes known root files and whole owned folders, keeping the locks until their holders release them. */
@@ -172,7 +191,7 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
     // unlinked by rmSync, which never follows them to files outside this installation.
     for (const name of children(dir)) {
       if (dir === 'backend' && (name === 'lock' || (name.startsWith('lock') && LOCK_SUFFIX.test(name.slice(4))))) continue
-      if (dir === 'bin' && LOCKS.bin!.some((lock) => name.startsWith(lock) && LOCK_SUFFIX.test(name.slice(lock.length)))) continue
+      if (LOCKS[dir]?.some((lock) => name.startsWith(lock) && LOCK_SUFFIX.test(name.slice(lock.length)))) continue
       rmSync(path.join(at, name), { recursive: true, force: true })
     }
     empty(dir)
@@ -181,9 +200,9 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
   return finishInstallationRemoval(folder)
 }
 
-/** Program and shutdown locks keep their folders until cleanup returns. Remove only empty directories after they are released. */
+/** Add-on, program and shutdown locks keep their folders until cleanup returns. Remove only empty directories after they are released. */
 export function finishInstallationRemoval(folder: string): string[] {
-  for (const at of [path.join(folder, 'bin'), path.join(folder, 'backend'), folder]) {
+  for (const at of [path.join(folder, 'bin'), path.join(folder, 'backend'), path.join(folder, 'addons'), folder]) {
     if (!lstatSync(at, { throwIfNoEntry: false })?.isDirectory()) continue
     try {
       rmdirSync(at)
