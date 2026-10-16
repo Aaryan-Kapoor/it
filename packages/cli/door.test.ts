@@ -3031,7 +3031,12 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
       window.heard = []
       window.stopped = []
       window.live = 'waiting'
-      addEventListener('securitypolicyviolation', (e) => window.stopped.push(e.effectiveDirective + ' ' + e.blockedURI))
+      const report = () => fetch('/api/mutation', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'test:seen', args: { heard: window.heard, stopped: window.stopped, live: window.live }, format: 'json' })
+      }).catch(() => {})
+      addEventListener('securitypolicyviolation', (e) => { window.stopped.push(e.effectiveDirective + ' ' + e.blockedURI); report() })
       const frame = document.createElement('iframe')
       frame.setAttribute('sandbox', ${JSON.stringify(SANDBOX)})
       frame.referrerPolicy = 'no-referrer'
@@ -3041,13 +3046,13 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
         if (e.source !== frame.contentWindow || !e.data || e.data.type !== 'it:hello' || answered) return
         answered = true
         const channel = new MessageChannel()
-        channel.port1.onmessage = (m) => window.heard.push(m.data)
+        channel.port1.onmessage = (m) => { window.heard.push(m.data); report() }
         frame.contentWindow.postMessage({ type: 'it:port' }, '*', [channel.port2])
       })
       document.body.append(frame)
       const socket = new WebSocket('ws://' + location.host + '/api/1.46.0/sync')
-      socket.onmessage = () => { window.live = 'open' }
-      socket.onerror = () => { window.live = 'refused' }
+      socket.onmessage = () => { window.live = 'open'; report() }
+      socket.onerror = () => { window.live = 'refused'; report() }
       `,
     ),
   }
@@ -3086,12 +3091,6 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
   /** Whether Playwright has a browser of a kind on this machine. */
   const has = async (kind: Kind) => existsSync((await import('playwright'))[kind].executablePath())
   /**
-   * A wait that ran out. It is the one failure a case is tried again for: a browser on a machine
-   * that is busy may be slower than any wait a test can give it. What a case saw, and did not
-   * expect, is never this, and is never tried again.
-   */
-  class Late extends Error {}
-  /**
    * Does one thing a case has to wait for. When it is not done in its time, the case fails
    * there and says which thing it was and what was last seen of it, and not that the whole
    * case ran out of time.
@@ -3101,7 +3100,7 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
     const late = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         const last = seen()
-        reject(new Late(`${what} did not happen in ${ms / 1000} seconds${last === undefined ? '' : `. Last seen: ${JSON.stringify(last)}`}`))
+        reject(new Error(`${what} did not happen in ${ms / 1000} seconds${last === undefined ? '' : `. Last seen: ${JSON.stringify(last)}`}`))
       }, ms)
     })
     try {
@@ -3180,15 +3179,18 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
           page.on('requestfailed', (request) =>
             said.push(`not fetched: ${request.method()} ${new URL(request.url()).origin} ${request.failure()?.errorText ?? ''}`),
           )
-          const look = async () => {
-            last = await page
-              .evaluate(() => {
-                const w = window as unknown as Partial<Seen>
-                return w.heard && w.stopped && w.live ? { heard: w.heard, stopped: w.stopped, live: w.live } : null
-              })
-              .catch(() => null)
-            return last
-          }
+          // Firefox can leave an evaluation pending after navigation even when the page's
+          // scripts have run. Observe the fixture's reports through network events, which
+          // need no evaluation in that context. Each page has its own listener and result.
+          const heard = new Promise<Seen>((resolve) => {
+            page.on('request', (request) => {
+              if (new URL(request.url()).pathname !== '/api/mutation' || request.method() !== 'POST') return
+              const report = request.postDataJSON() as { path?: string; args: Seen }
+              if (report.path !== 'test:seen') return
+              last = report.args
+              if (last.heard.length > 0 && last.live !== 'waiting') resolve(last)
+            })
+          })
           await stage(
             `the site loading at ${name}`,
             patience,
@@ -3197,24 +3199,18 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
             },
             () => said,
           )
-          // Waited for by what it is waiting for: the site's own script, then the page in its frame saying what it shows, and the live connection answering
-          await stage(
+          // The site reports the page's message and the answer on its live connection.
+          const seen = await stage(
             `the page being heard from and the live connection answering at ${name}`,
             patience,
-            async () => {
-              for (;;) {
-                const seen = await look()
-                if (seen && seen.heard.length > 0 && seen.live !== 'waiting') return
-                await pause(50)
-              }
-            },
+            () => heard,
             () => ({ site: last, said }),
           )
+          kept.push([name, seen])
         } finally {
-          // A window of a browser that has stopped answering is not waited for: the browser is closed whole when the try is given up
+          // Bound the cleanup of a window whose browser has stopped answering
           await Promise.race([context.close().catch(() => {}), pause(15_000)])
         }
-        kept.push([name, last])
       }
     } finally {
       await opened.stop()
@@ -3236,12 +3232,7 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
             )
             return skip()
           }
-          // A try that ran out of time, and only that, is made once more, in a browser of its own: the one it had is closed first
-          const kept = await shown(kind, under, runtime!).catch(async (failed) => {
-            if (!(failed instanceof Late)) throw failed
-            await discard(kind)
-            return shown(kind, under, runtime!)
-          })
+          const kept = await shown(kind, under, runtime!)
           for (const [name, seen] of kept) {
             // The page ran with It in it, as a document with an origin of its own, and reached the site that framed it
             expect([name, seen?.stopped, seen?.live]).toEqual([name, [], 'open'])
@@ -3256,7 +3247,7 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
             ])
           }
         },
-        // Longer than every stage of two tries together, so that a stage that stands still is what fails, by its name
+        // Each stage has its own deadline, so a wait that stands still fails by its name
         1_500_000,
       )
 })
