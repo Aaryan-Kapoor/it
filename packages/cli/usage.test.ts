@@ -535,6 +535,8 @@ describe('turning it off', () => {
   })
   test('turned off by another program while a pass is sending, nothing more of that pass is sent', async () => {
     told()
+    // This tests an opt-out during a send, so disk speed must not expire the decision first.
+    ownClock()
     const posts: string[] = []
     const sender = usage.startSender({
       post: async (_a, body) => {

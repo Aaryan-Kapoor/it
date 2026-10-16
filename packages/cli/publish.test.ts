@@ -101,6 +101,33 @@ describe('the conversation folders It remembers', () => {
     }
   })
 
+  test.each([false, true])('recovers its own abandoned published lock after removal is temporarily denied, recovery %s', (recovering) => {
+    const lock = `${conversationsFile()}.lock`
+    const dead = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']))
+    if (recovering) writeFileSync(lock, JSON.stringify({ pid: dead, holder: 'b'.repeat(16) }))
+    const claimed = recovering ? `${lock}.after.${'b'.repeat(16)}` : lock
+    const remove = fs.rmSync
+    let denied = true
+    fs.rmSync = (file, options) => {
+      if (denied && (String(file) === claimed || (String(file).endsWith('.tmp') && fs.existsSync(claimed)))) {
+        throw Object.assign(new Error('deletion is temporarily denied'), { code: 'EPERM' })
+      }
+      return remove(file, options)
+    }
+    syncBuiltinESMExports()
+    try {
+      noteConversation({ harness: 'pi', id: 'interrupted' }, scratch)
+      expect(fs.existsSync(claimed)).toBe(true)
+      denied = false
+      noteConversation({ harness: 'pi', id: 'next' }, scratch)
+      expect(conversationFolder({ harness: 'pi', id: 'next' })).toBe(scratch)
+      expect(fs.existsSync(claimed)).toBe(false)
+    } finally {
+      fs.rmSync = remove
+      syncBuiltinESMExports()
+    }
+  })
+
   test('keeps a conversation used again in the same folder when the oldest unused one is forgotten', () => {
     const used = { harness: 'pi', id: 'used-again' }
     const kept = Object.fromEntries(Array.from({ length: 299 }, (_, n) => [`pi:other-${n}`, { cwd: scratch, at: n + 2 }]))

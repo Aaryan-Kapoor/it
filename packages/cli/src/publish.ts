@@ -201,7 +201,16 @@ function conversationLock(file: string): ConversationLock | undefined {
   const held = readJson<ConversationLock>(file)
   return held && Number.isInteger(held.pid) && held.pid > 0 && typeof held.holder === 'string' && /^[0-9a-f]{16}$/.test(held.holder) ? held : undefined
 }
-function gone(held: ConversationLock): boolean {
+// Only a lock this process has finished using can be recovered while its PID is alive.
+const abandonedConversationLocks = new Set<string>()
+function releaseConversationLock(file: string, holder: string): void {
+  const key = `${file}\0${holder}`
+  abandonedConversationLocks.add(key)
+  if (conversationLock(file)?.holder === holder) rmSync(file, { force: true })
+  abandonedConversationLocks.delete(key)
+}
+function gone(file: string, held: ConversationLock): boolean {
+  if (held.pid === process.pid && abandonedConversationLocks.has(`${file}\0${held.holder}`)) return true
   try {
     process.kill(held.pid, 0)
     return false
@@ -227,7 +236,7 @@ function toItself(run: () => void): void {
       return makeOnce(whole, file)
     } catch (err) {
       // Publication may have succeeded before temporary cleanup failed.
-      if (conversationLock(file)?.holder === me.holder) rmSync(file, { force: true })
+      releaseConversationLock(file, me.holder)
       rmSync(whole, { force: true })
       throw err
     }
@@ -239,7 +248,7 @@ function toItself(run: () => void): void {
       break
     }
     const seen = conversationLock(lock)
-    if (seen && gone(seen)) {
+    if (seen && gone(lock, seen)) {
       let word = seen.holder
       const abandoned: { file: string; holder: string }[] = []
       for (let attempt = 0; attempt < 20 && performance.now() < until; attempt++) {
@@ -251,17 +260,17 @@ function toItself(run: () => void): void {
               renameSync(whole, lock)
               held = true
               for (const old of abandoned) {
-                if (conversationLock(old.file)?.holder === old.holder) rmSync(old.file, { force: true })
+                releaseConversationLock(old.file, old.holder)
               }
             }
           } finally {
-            if (conversationLock(after)?.holder === me.holder) rmSync(after, { force: true })
+            releaseConversationLock(after, me.holder)
             rmSync(whole, { force: true })
           }
           break
         }
         const claimant = conversationLock(after)
-        if (!claimant || !gone(claimant)) break
+        if (!claimant || !gone(after, claimant)) break
         abandoned.push({ file: after, holder: claimant.holder })
         word = claimant.holder
       }
@@ -273,7 +282,7 @@ function toItself(run: () => void): void {
   try {
     run()
   } finally {
-    if (conversationLock(lock)?.holder === me.holder) rmSync(lock, { force: true })
+    releaseConversationLock(lock, me.holder)
   }
 }
 /** The folder a conversation was last known to be working in, if it is still there. */
