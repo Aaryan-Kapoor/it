@@ -1439,6 +1439,11 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
 
   test('`it uninstall` refuses unrelated JSON records and preserves unknown files in a marked installation', async () => {
     const m = machine(true, true)
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify({ port: SITE_PORT, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' }),
+    )
+    writeFileSync(path.join(m.it, 'runs.json.unreadable'), '{')
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
       writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
       chmodSync(path.join(m.bin, name), 0o755)
@@ -1461,6 +1466,8 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
     expect(printed(removed).left.join(' ')).toContain('may include page data or backups')
     expect(existsSync(path.join(m.it, 'backend', 'db.sqlite3'))).toBe(false)
     expect(existsSync(path.join(m.it, 'machine.json'))).toBe(false)
+    expect(existsSync(path.join(m.it, 'runs.json.unreadable'))).toBe(false)
+    expect(existsSync(path.join(m.it, 'backend', 'lock'))).toBe(false)
     expect(readFileSync(path.join(m.it, 'valuable.txt'), 'utf8')).toBe('mine')
     expect(readFileSync(path.join(m.it, 'backend', 'notes.txt'), 'utf8')).toBe('mine')
   })

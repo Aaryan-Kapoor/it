@@ -192,6 +192,20 @@ describe('installation ownership', () => {
       expect(existsSync(path.join(at, file))).toBe(false)
   })
 
+  test('cleanup removes quarantined run records and keeps similarly named files', () => {
+    const clean = folder()
+    markInstallation(clean)
+    put(clean, 'runs.json.unreadable', '{')
+    expect(removeInstallationFiles(clean, false)).toEqual([])
+    expect(existsSync(clean)).toBe(false)
+
+    const kept = folder()
+    markInstallation(kept)
+    put(kept, 'runs.json.unreadable.notes', 'mine')
+    expect(removeInstallationFiles(kept, false)).toEqual(['runs.json.unreadable.notes'])
+    expect(readFileSync(path.join(kept, 'runs.json.unreadable.notes'), 'utf8')).toBe('mine')
+  })
+
   test('a malformed page manifest and its files stay, while a clean installation can be removed completely', () => {
     const at = folder()
     markInstallation(at)

@@ -1454,6 +1454,10 @@ try {
       const name = legacy ? 'legacy-removal' : 'custom-removal'
       const installed = await install(name, { IT_HOME: path.join(tmp, name, 'custom') })
       if (legacy) rmSync(path.join(installed.folder, 'installation.json'))
+      writeFileSync(
+        path.join(installed.folder, 'service.json'),
+        JSON.stringify({ port: 21000, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' }),
+      )
       mkdirSync(path.join(installed.folder, 'backend'))
       writeFileSync(path.join(installed.folder, 'backend', 'db.sqlite3'), 'pages')
       writeFileSync(path.join(installed.folder, 'keep.txt'), 'mine')
@@ -1472,7 +1476,8 @@ try {
       check(
         `${legacy ? 'a legacy' : 'a marked'} custom installation uninstalls from a fresh terminal and keeps unknown files and the default home`,
         off.status === 0 &&
-          result?.folder === realpathSync(installed.folder) &&
+          typeof result?.folder === 'string' &&
+          realpathSync(result.folder) === realpathSync(installed.folder) &&
           result?.removed === false &&
           !existsSync(path.join(installed.folder, 'backend', 'db.sqlite3')) &&
           readFileSync(path.join(installed.folder, 'keep.txt'), 'utf8') === 'mine' &&

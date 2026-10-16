@@ -27,6 +27,7 @@ const ROOT_FILES = [
   'conversation-notes-erasing',
   'aliases.json',
   'runs.json',
+  'runs.json.unreadable',
   'cut-off.json',
   'stopped.json',
   'service.stop',

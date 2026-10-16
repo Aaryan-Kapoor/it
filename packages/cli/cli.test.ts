@@ -2093,26 +2093,32 @@ describe('add-ons carried by the CLI', () => {
     // In the usual place nothing is written
     expect(itHomeWritten(js, null)).toBe(js)
   })
-  test('generated add-ons retain a custom installation discovered without IT_HOME', async () => {
+  test.each([false, true])('generated add-ons retain a custom installation discovered without IT_HOME, through an alias: %s', async (alias) => {
     const { itHomeWritten, unpack } = await import('./src/setup')
     const { markInstallation } = await import('./src/installation')
     const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-discovered-addons-'))
     const before = { home: process.env.IT_HOME, argv: [...process.argv], program: process.execPath }
     try {
-      const program = path.join(scratch, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
+      const installation = alias ? path.join(scratch, 'alias') : scratch
+      if (alias) {
+        const physical = path.join(scratch, 'physical')
+        mkdirSync(physical)
+        symlinkSync(physical, installation, 'junction')
+      }
+      const program = path.join(installation, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
       mkdirSync(path.dirname(program), { recursive: true })
       writeFileSync(program, 'installed program')
-      markInstallation(scratch)
+      markInstallation(installation)
       delete process.env.IT_HOME
       process.execPath = program
       process.argv.splice(0, process.argv.length, program)
-      expect(itHomeWritten('const IT_HOME_AT_SETUP = null')).toBe(`const IT_HOME_AT_SETUP = ${JSON.stringify(realpathSync(scratch))}`)
+      expect(itHomeWritten('const IT_HOME_AT_SETUP = null')).toBe(`const IT_HOME_AT_SETUP = ${JSON.stringify(installation)}`)
       for (const id of ['pi', 'claude-code', 'hermes', 'opencode', 'openclaw'] as const) {
         const dir = unpack(id)
         const sources = readdirSync(dir, { recursive: true }).filter((file) => /\.(?:js|mjs|py)$/.test(String(file)))
         const embedded = sources.map((file) => readFileSync(path.join(dir, String(file)), 'utf8')).filter((text) => text.includes('IT_HOME_AT_SETUP'))
         expect(embedded.length).toBeGreaterThan(0)
-        expect(embedded.every((text) => text.includes(`IT_HOME_AT_SETUP = ${JSON.stringify(realpathSync(scratch))}`))).toBe(true)
+        expect(embedded.every((text) => text.includes(`IT_HOME_AT_SETUP = ${JSON.stringify(installation)}`))).toBe(true)
       }
     } finally {
       if (before.home === undefined) delete process.env.IT_HOME
