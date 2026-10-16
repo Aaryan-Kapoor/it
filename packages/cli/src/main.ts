@@ -119,7 +119,7 @@ import {
 import { printEnv } from './shell-env'
 import { GUIDE, NAMES, END as TOUR_END, MENU as TOUR_MENU, TOUR_PREFIX, STEPS as TOUR_STEPS, tourPage } from './tour'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles } from './uninstall-files'
-import { fetchNewer, keepBase, latest, watch, watched } from './upgrade'
+import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import * as usage from './usage'
 
 // Everything is written through `written`, which follows each write until it has left the
@@ -3147,7 +3147,7 @@ async function main(argv: string[]): Promise<void> {
       return status(a)
     case 'setup': {
       const was = enrolledHere() || existsSync(settingsFile())
-      await setup(a)
+      await withCurrentProgram(() => setup(a))
       return setUp(a, was)
     }
     case 'uninstall':
