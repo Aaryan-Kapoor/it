@@ -4,7 +4,8 @@ import path from 'node:path'
 import { HARNESSES } from '@it/protocol'
 import { ADDONS } from './addons.generated'
 import { INSTALLATION_FILE } from './installation'
-import { home } from './lib'
+import { home, Problem } from './lib'
+import { aloneAt, holderRuns } from './serve/backend'
 import { addonHookCommand, itHomeWritten } from './setup'
 
 /** These are individual files It reserves in a marked home. No directory is removed recursively. */
@@ -42,6 +43,14 @@ const ROOT_FILES = [
 const DATABASE_FILES = ['db.sqlite3', 'db.sqlite3-wal', 'db.sqlite3-shm', 'db.sqlite3-journal', 'data.json']
 const RELEASE = 'precompiled-\\d{4}-\\d{2}-\\d{2}-[0-9a-f]{7,40}'
 const COPY = new RegExp(`^(before-(?:${RELEASE}(?:-functions-[0-9a-f]{12})?|functions-[0-9a-f]{12}))(?:\\.[0-9a-f]{16}\\.(?:part|old))?$`)
+const PROGRAM_LOCK = /^it(?:\.exe)?\.upgrade\.lock(?:\.after\.(?:[0-9a-f]{16}|unread-\d+-\d+))?(?:\.[0-9a-f]{16}\.tmp)?$/
+const lockRecord = (value: any): value is { pid: number; started: string; where: string; holder: string } =>
+  Number.isInteger(value?.pid) &&
+  value.pid > 0 &&
+  typeof value.started === 'string' &&
+  typeof value.where === 'string' &&
+  typeof value.holder === 'string' &&
+  /^[0-9a-f]{16}$/.test(value.holder)
 
 /** A file is reached only through real directories. Even a dangling link remains the person's. */
 export function installationFile(folder: string, relative: string): string | undefined {
@@ -55,6 +64,22 @@ export function installationFile(folder: string, relative: string): string | und
   at = path.join(at, parts[parts.length - 1]!)
   const stat = lstatSync(at, { throwIfNoEntry: false })
   return stat && (stat.isFile() || stat.isSocket()) ? at : undefined
+}
+
+/** An updater or setup must finish before uninstall changes the program. Its lock also recovers interrupted lock-taking. */
+export async function withInstallationLock<T>(folder: string, run: () => Promise<T>): Promise<T> {
+  if (!lstatSync(path.join(folder, 'bin'), { throwIfNoEntry: false })?.isDirectory()) return run()
+  const relative = `bin/${process.platform === 'win32' ? 'it.exe' : 'it'}.upgrade.lock`
+  const file = path.join(folder, relative)
+  if (lstatSync(file, { throwIfNoEntry: false })) {
+    let recognised = false
+    try {
+      recognised = !!installationFile(folder, relative) && lockRecord(JSON.parse(readFileSync(file, 'utf8')))
+    } catch {}
+    if (!recognised && lstatSync(file, { throwIfNoEntry: false }))
+      throw new Problem('The program lock is not a recognised lock record. The installation files were kept.', 'invalid')
+  }
+  return aloneAt(file, run)
 }
 
 /** Removes known files and then empty directories. Unknown and linked entries are left in place. */
@@ -155,6 +180,12 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
   }
   remove('logs/it.log')
   remove('logs/it.log.1')
+  for (const name of children('logs')) if (/^reopened-\d+-\d+\.txt$/.test(name)) remove(`logs/${name}`)
+  for (const name of children('bin')) {
+    if (!PROGRAM_LOCK.test(name)) continue
+    const owner = json(`bin/${name}`)
+    if (lockRecord(owner) && !holderRuns(owner)) remove(`bin/${name}`)
+  }
   if (!keepAddons) {
     for (const name of ['it', 'it.exe', 'it.cmd', 'it-here', 'it-here.cmd', 'it-service.cmd']) remove(`bin/${name}`)
     for (const name of children('bin')) if (/^it\.old\.\d+\.exe$/.test(name)) remove(`bin/${name}`)
@@ -210,9 +241,9 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
   return finishInstallationRemoval(folder)
 }
 
-/** A shutdown lock can keep the backend folder until cleanup returns. Remove only empty directories after it is released. */
+/** Program and shutdown locks keep their folders until cleanup returns. Remove only empty directories after they are released. */
 export function finishInstallationRemoval(folder: string): string[] {
-  for (const at of [path.join(folder, 'backend'), folder]) {
+  for (const at of [path.join(folder, 'bin'), path.join(folder, 'backend'), folder]) {
     if (!lstatSync(at, { throwIfNoEntry: false })?.isDirectory()) continue
     try {
       rmdirSync(at)

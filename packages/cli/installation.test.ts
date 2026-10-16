@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
@@ -6,8 +7,9 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS, LICENSE } from './src/addons.generated'
 import { INSTALLATION, INSTALLATION_FILE, installationHome, legacyInstallation, markedInstallation, markInstallation } from './src/installation'
 import { home } from './src/lib'
+import { aloneAt } from './src/serve/backend'
 import { unpack } from './src/setup'
-import { finishInstallationRemoval, removeInstallationFiles } from './src/uninstall-files'
+import { finishInstallationRemoval, removeInstallationFiles, withInstallationLock } from './src/uninstall-files'
 
 const folders: string[] = []
 const folder = () => {
@@ -204,6 +206,115 @@ describe('installation ownership', () => {
     put(kept, 'runs.json.unreadable.notes', 'mine')
     expect(removeInstallationFiles(kept, false)).toEqual(['runs.json.unreadable.notes'])
     expect(readFileSync(path.join(kept, 'runs.json.unreadable.notes'), 'utf8')).toBe('mine')
+  })
+
+  test('cleanup removes reopened-run logs and keeps similarly named files', () => {
+    const clean = folder()
+    markInstallation(clean)
+    put(clean, 'logs/reopened-123-4.txt', 'interrupted run')
+    expect(removeInstallationFiles(clean, false)).toEqual([])
+    expect(existsSync(clean)).toBe(false)
+
+    const kept = folder()
+    markInstallation(kept)
+    for (const name of ['reopened-notes.txt', 'reopened-123-4.txt.notes', 'reopened-123-4.txt/notes']) put(kept, `logs/${name}`, 'mine')
+    expect(removeInstallationFiles(kept, false)).toEqual(['logs'])
+    for (const name of ['reopened-notes.txt', 'reopened-123-4.txt.notes', 'reopened-123-4.txt/notes'])
+      expect(readFileSync(path.join(kept, 'logs', name), 'utf8')).toBe('mine')
+  })
+
+  test.each([false, true])('cleanup removes dead upgrade locks and their sidecars, with unknown files: %s', async (unknown) => {
+    const at = folder()
+    markInstallation(at)
+    const program = put(at, process.platform === 'win32' ? 'bin/it.exe' : 'bin/it')
+    const lock = `${program}.upgrade.lock`
+    let owner: any
+    await aloneAt(lock, async () => {
+      owner = JSON.parse(readFileSync(lock, 'utf8'))
+    })
+    owner.pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    const record = JSON.stringify(owner)
+    const dead = [lock, `${lock}.after.${owner.holder}`, `${lock}.${owner.holder}.tmp`, `${lock}.after.${owner.holder}.${owner.holder}.tmp`]
+    for (const file of dead) writeFileSync(file, file === `${lock}.after.${owner.holder}` ? JSON.stringify({ ...owner, holder: 'a'.repeat(16) }) : record)
+    const kept = [`${lock}.notes`, `${lock}.after.1234567890abcdef`]
+    if (unknown) for (const file of kept) writeFileSync(file, 'mine')
+    await withInstallationLock(at, async () => {
+      removeInstallationFiles(at, false)
+      expect(existsSync(lock)).toBe(true)
+    })
+    for (const file of dead) expect(existsSync(file)).toBe(false)
+    if (unknown) {
+      for (const file of kept) expect(readFileSync(file, 'utf8')).toBe('mine')
+      expect(finishInstallationRemoval(at)).toEqual(['bin'])
+    } else {
+      expect(finishInstallationRemoval(at)).toEqual([])
+      expect(existsSync(at)).toBe(false)
+    }
+  })
+
+  test('uninstall waits for the program lock, and keeps live temporary records', async () => {
+    const at = folder()
+    markInstallation(at)
+    const program = put(at, process.platform === 'win32' ? 'bin/it.exe' : 'bin/it')
+    const lock = `${program}.upgrade.lock`
+    let release!: () => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const holding = aloneAt(lock, async () => {
+      const owner = JSON.parse(readFileSync(lock, 'utf8'))
+      writeFileSync(`${lock}.${owner.holder}.tmp`, JSON.stringify(owner))
+      entered()
+      await waiting
+    })
+    await started
+    let removed = false
+    const removing = withInstallationLock(at, async () => {
+      removed = true
+      removeInstallationFiles(at, false)
+    })
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(removed).toBe(false)
+      expect(existsSync(program)).toBe(true)
+    } finally {
+      release()
+      await holding
+      await removing
+    }
+    expect(removed).toBe(true)
+    expect(readdirSync(path.join(at, 'bin'))).toEqual([expect.stringMatching(/\.upgrade\.lock\.[0-9a-f]{16}\.tmp$/)])
+  })
+
+  test('an unrecognised program lock stops uninstall before any installation file is removed', async () => {
+    const at = folder()
+    markInstallation(at)
+    const program = put(at, process.platform === 'win32' ? 'bin/it.exe' : 'bin/it')
+    const lock = `${program}.upgrade.lock`
+    writeFileSync(lock, 'mine')
+    await expect(withInstallationLock(at, async () => removeInstallationFiles(at, false))).rejects.toThrow('not a recognised lock record')
+    expect(readFileSync(lock, 'utf8')).toBe('mine')
+    expect(existsSync(program)).toBe(true)
+    expect(markedInstallation(at)).toBe(true)
+  })
+
+  test.skipIf(process.platform === 'win32')('linked program locks and reopened logs remain untouched', async () => {
+    const at = folder()
+    const outside = put(folder(), 'mine', 'mine')
+    markInstallation(at)
+    const program = put(at, 'bin/it')
+    symlinkSync(outside, `${program}.upgrade.lock`)
+    mkdirSync(path.join(at, 'logs'))
+    symlinkSync(outside, path.join(at, 'logs/reopened-123-4.txt'))
+    await expect(withInstallationLock(at, async () => removeInstallationFiles(at, false))).rejects.toThrow('not a recognised lock record')
+    expect(removeInstallationFiles(at, false)).toEqual(['bin', 'logs'])
+    expect(lstatSync(`${program}.upgrade.lock`).isSymbolicLink()).toBe(true)
+    expect(lstatSync(path.join(at, 'logs/reopened-123-4.txt')).isSymbolicLink()).toBe(true)
+    expect(readFileSync(outside, 'utf8')).toBe('mine')
   })
 
   test('a malformed page manifest and its files stay, while a clean installation can be removed completely', () => {

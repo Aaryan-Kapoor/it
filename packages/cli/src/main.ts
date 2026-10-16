@@ -118,7 +118,7 @@ import {
 } from './setup'
 import { printEnv } from './shell-env'
 import { GUIDE, NAMES, END as TOUR_END, MENU as TOUR_MENU, TOUR_PREFIX, STEPS as TOUR_STEPS, tourPage } from './tour'
-import { finishInstallationRemoval, installationFile, removeInstallationFiles } from './uninstall-files'
+import { finishInstallationRemoval, installationFile, removeInstallationFiles, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import * as usage from './usage'
 
@@ -1406,57 +1406,62 @@ async function uninstall(a: Args) {
   const heard: string[] = []
   let removing = false
   try {
-    await nothingLeft(
-      (line) => heard.push(line),
-      async () => {
-        removing = true
-        if (heard.length) say('The backend program that an It which had died left running here is stopped.')
-        // 1. The add-ons, each from where this folder put it. One that could not be taken out is
-        // taken out by running this again, which needs the note It keeps of where it put the add-on,
-        // and the program: so those are kept, and said, with how it is run once its PATH is gone
-        for (const id of HARNESSES) {
-          if (!installationFile(real, `addons/${id}.json`)) continue
-          const gone = await disconnect(id, say, { keepLocalFiles: true }).catch(() => false)
-          if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
-          else {
-            kept = true
-            left.push(
-              `${KNOWN[id].label} still has It’s add-on, which could not be taken out. What It noted of where it put the add-on is kept in ${path.join(folder, 'addons')}, with the program: once ${KNOWN[id].label} can be run from here, run \`${program} uninstall\`${process.env.IT_HOME ? `, with IT_HOME set to ${folder} as it is now` : ''}, which takes the add-on out and removes recognized files. Inspect any remaining files before deleting them yourself.`,
-            )
+    await withInstallationLock(real, () =>
+      nothingLeft(
+        (line) => heard.push(line),
+        async () => {
+          removing = true
+          if (heard.length) say('The backend program that an It which had died left running here is stopped.')
+          // 1. The add-ons, each from where this folder put it. One that could not be taken out is
+          // taken out by running this again, which needs the note It keeps of where it put the add-on,
+          // and the program: so those are kept, and said, with how it is run once its PATH is gone
+          for (const id of HARNESSES) {
+            if (!installationFile(real, `addons/${id}.json`)) continue
+            const gone = await disconnect(id, say, { keepLocalFiles: true }).catch(() => false)
+            if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
+            else {
+              kept = true
+              left.push(
+                `${KNOWN[id].label} still has It’s add-on, which could not be taken out. What It noted of where it put the add-on is kept in ${path.join(folder, 'addons')}, with the program: once ${KNOWN[id].label} can be run from here, run \`${program} uninstall\`${process.env.IT_HOME ? `, with IT_HOME set to ${folder} as it is now` : ''}, which takes the add-on out and removes recognized files. Inspect any remaining files before deleting them yourself.`,
+              )
+            }
           }
-        }
-        // 3. Its line in the shell's profile, with the comment above it
-        const bin = path.join(folder, 'bin')
-        const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
-        for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
-        for (const { file, why: reason } of profiles.failed)
-          left.push(`${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`)
-        // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
-        if (process.platform === 'win32') {
-          const taken = offWindowsPath(bin)
-          if (taken === 'off') say(`${bin} is off your PATH.`)
-          else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
-        }
-        // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
-        crumbs(folder)
-        // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
-        // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
-        if (codexRuleLetsItOut())
-          say(
-            `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
-          )
-        // 5. Recognized files only. Windows moves the running executable out first. An add-on
-        // that remains keeps the program and its ownership record so removal can be retried.
-        const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
-        if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
-        else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
-        takenOff = true
-        try {
-          removeInstallationFiles(real, kept)
-        } catch (err) {
-          left.push(`${folder} could not be fully cleaned (${why(err)}). Inspect the remaining files before removing them yourself.`)
-        }
-      },
+          // 3. Its line in the shell's profile, with the comment above it
+          const bin = path.join(folder, 'bin')
+          const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
+          for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
+          for (const { file, why: reason } of profiles.failed)
+            left.push(
+              `${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`,
+            )
+          // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
+          if (process.platform === 'win32') {
+            const taken = offWindowsPath(bin)
+            if (taken === 'off') say(`${bin} is off your PATH.`)
+            else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
+          }
+          // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
+          crumbs(folder)
+          // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
+          // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
+          if (codexRuleLetsItOut())
+            say(
+              `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
+            )
+          // 5. Recognized files only. Windows moves the running executable out first. An add-on
+          // that remains keeps the program and its ownership record so removal can be retried.
+          const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
+          if (stepped?.deletedLater)
+            say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
+          else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+          takenOff = true
+          try {
+            removeInstallationFiles(real, kept)
+          } catch (err) {
+            left.push(`${folder} could not be fully cleaned (${why(err)}). Inspect the remaining files before removing them yourself.`)
+          }
+        },
+      ),
     )
   } catch (err) {
     if (removing) throw err
@@ -1466,7 +1471,7 @@ async function uninstall(a: Args) {
       'The folder and add-ons were kept. Resolve the running program or unreadable settings, then run `it uninstall` again.',
     )
   }
-  // The shutdown lock is released before the last empty directories are removed.
+  // The program and shutdown locks are released before the last empty directories are removed.
   try {
     const retained = finishInstallationRemoval(real)
     if (!retained.length && lstatSync(folder, { throwIfNoEntry: false })?.isSymbolicLink()) rmSync(folder)

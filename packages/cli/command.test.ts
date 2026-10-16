@@ -21,6 +21,7 @@ import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
+import { aloneAt } from './src/serve/backend'
 import { instanceName } from './src/serve/config'
 import { bases, holdBase } from './test-ports'
 
@@ -1444,6 +1445,18 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
       JSON.stringify({ port: SITE_PORT, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' }),
     )
     writeFileSync(path.join(m.it, 'runs.json.unreadable'), '{')
+    mkdirSync(path.join(m.it, 'logs'))
+    writeFileSync(path.join(m.it, 'logs', 'reopened-123-4.txt'), 'interrupted run')
+    mkdirSync(path.join(m.it, 'bin'))
+    const installed = path.join(m.it, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
+    writeFileSync(installed, 'installed program')
+    const lock = `${installed}.upgrade.lock`
+    let owner: any
+    await aloneAt(lock, async () => {
+      owner = JSON.parse(readFileSync(lock, 'utf8'))
+    })
+    owner.pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    writeFileSync(lock, JSON.stringify(owner))
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
       writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
       chmodSync(path.join(m.bin, name), 0o755)
@@ -1468,6 +1481,8 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
     expect(existsSync(path.join(m.it, 'machine.json'))).toBe(false)
     expect(existsSync(path.join(m.it, 'runs.json.unreadable'))).toBe(false)
     expect(existsSync(path.join(m.it, 'backend', 'lock'))).toBe(false)
+    expect(existsSync(path.join(m.it, 'logs'))).toBe(false)
+    expect(existsSync(path.join(m.it, 'bin'))).toBe(false)
     expect(readFileSync(path.join(m.it, 'valuable.txt'), 'utf8')).toBe('mine')
     expect(readFileSync(path.join(m.it, 'backend', 'notes.txt'), 'utf8')).toBe('mine')
   })
