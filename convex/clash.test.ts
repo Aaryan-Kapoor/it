@@ -186,10 +186,16 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
     return { cookie, session: told.session, key, asks }
   }
   const outcome = (said: { value: unknown } | { refused: string }) => ('refused' in said ? said.refused : 'answered')
+  /** Forty callers exceed the largest allowance of thirty, but fit within the backend's 64-action limit. Every call is made once. */
+  const bursts = async <T>(count: number, call: () => Promise<T>): Promise<T[]> => {
+    const answers: T[] = []
+    while (answers.length < count) answers.push(...(await Promise.all(Array.from({ length: Math.min(40, count - answers.length) }, call))))
+    return answers
+  }
 
   test('every tab that fetches the token its display signs out with is given one, or told it has asked too often', async () => {
     const browser = await paired()
-    const answers = await Promise.all(Array.from({ length: 120 }, () => browser.asks('action', 'displays:signOutToken', { key: browser.key }).then(outcome)))
+    const answers = await bursts(120, () => browser.asks('action', 'displays:signOutToken', { key: browser.key }).then(outcome))
     const { answered, rate_limited, ...other } = tally(answers)
     expect(other).toEqual({})
     // As many as the limit lets through at once, and no fewer for having asked together
@@ -198,7 +204,7 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
 
   test('every tab that asks for the key notifications are subscribed with is given it, or told it has asked too often', async () => {
     const browser = await paired()
-    const answers = await Promise.all(Array.from({ length: 120 }, () => browser.asks('action', 'push:publicKey', {}).then(outcome)))
+    const answers = await bursts(120, () => browser.asks('action', 'push:publicKey', {}).then(outcome))
     const { answered, rate_limited, ...other } = tally(answers)
     expect(other).toEqual({})
     expect([answered! >= 10, answered! + rate_limited!]).toEqual([true, 120])
