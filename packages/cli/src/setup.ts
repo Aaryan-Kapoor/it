@@ -10,6 +10,7 @@ import {
   closeSync,
   constants,
   existsSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -111,6 +112,8 @@ interface Place {
 interface Put {
   path: string
   sha256: string
+  /** The bytes seen before an unfinished replacement. Either checksum still belongs to this installation. */
+  previousSha256?: string
 }
 /**
  * One installation of an add-on. Where it was made is kept, because the person may point the
@@ -142,8 +145,34 @@ function installations(id: string): Installation[] {
   // something was installed. Where, and which files, it does not say.
   return existsSync(stampFile(id)) ? [{ version: 'installing', at: 0 }] : []
 }
+/** A damaged record cannot grant ownership or prove that every installation has gone. */
+function unreadInstallations(id: Harness): string | undefined {
+  if (reached(stampFile(id)) === 'none') return undefined
+  const stamp = readJson<Stamp>(stampFile(id))
+  const hash = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+  const valid =
+    Array.isArray(stamp?.installs) &&
+    stamp.installs.every(
+      (i) =>
+        i &&
+        typeof i.version === 'string' &&
+        (i.by === undefined || typeof i.by === 'string') &&
+        Number.isFinite(i.at) &&
+        (i.env === undefined ||
+          (typeof i.env === 'object' && i.env !== null && !Array.isArray(i.env) && Object.values(i.env).every((v) => typeof v === 'string'))) &&
+        (i.dir === undefined || (typeof i.dir === 'string' && path.isAbsolute(i.dir))) &&
+        (i.files === undefined ||
+          (Array.isArray(i.files) &&
+            i.files.every(
+              (f) => f && typeof f.path === 'string' && path.isAbsolute(f.path) && hash(f.sha256) && (f.previousSha256 === undefined || hash(f.previousSha256)),
+            ))),
+    )
+  if (!valid)
+    return `The installation record for ${KNOWN[id].label} could not be read. Restore its addons/${id}.json file from a backup, then run \`it setup\` again. No add-on was changed and the record is kept.`
+  return undefined
+}
 /** Whether this folder has a note of an add-on that it put into an agent app and has not seen gone. */
-export const holdsAddons = (): boolean => HARNESSES.some((id) => installations(id).length > 0)
+export const holdsAddons = (): boolean => HARNESSES.some((id) => unreadInstallations(id) !== undefined || installations(id).length > 0)
 function keep(id: string, installs: Installation[]): void {
   writePrivate(stampFile(id), { installs } satisfies Stamp)
 }
@@ -224,9 +253,10 @@ function lookAt(root: string, file: string): Found {
   }
 }
 /** Whether a file is there and holds just what this program put in it. */
+const matchesPut = (f: Put | undefined, sha256: string) => f !== undefined && (sha256 === f.sha256 || sha256 === f.previousSha256)
 const asPut = (root: string, f: Put) => {
   const now = lookAt(root, f.path)
-  return now.is === 'file' && now.sha256 === f.sha256
+  return now.is === 'file' && matchesPut(f, now.sha256)
 }
 /**
  * Makes a folder inside a harness's folder, one step at a time. A step that is a link leading
@@ -258,11 +288,21 @@ function putInPlace(data: Buffer, to: string): void {
   try {
     try {
       writeFileSync(made, data)
+      fsyncSync(made)
     } finally {
       closeSync(made)
     }
     // Tried again for a little while on Windows, where a program that looks into every new file may have this one open for a moment
     rename(part, to)
+    // Flush the new name where the system permits syncing a directory, as for ownership records.
+    try {
+      const folder = openSync(path.dirname(to), 'r')
+      try {
+        fsyncSync(folder)
+      } finally {
+        closeSync(folder)
+      }
+    } catch {}
   } catch (err) {
     rmSync(part, { force: true })
     throw err
@@ -374,12 +414,48 @@ export function itHomeWritten(text: string, elsewhere = process.env.IT_HOME ? pa
     .replace(/^IT_HOME_AT_SETUP = None$/m, () => `IT_HOME_AT_SETUP = ${JSON.stringify(elsewhere)}`)
 }
 
+/** Keeps files outside the current package beside its source, where the app cannot load them. */
+function retireUnpacked(dir: string, files: string[]): void {
+  makeWithin(home(), dir)
+  if (!lstatSync(dir).isDirectory()) throw new Error(`${dir} is not an ordinary folder, so it was left as it is`)
+  const wanted = new Set(files.map((rel) => path.join(dir, ...rel.split('/'))))
+  const folders = new Set<string>()
+  for (const file of wanted) {
+    for (let parent = path.dirname(file); parent !== dir; parent = path.dirname(parent)) folders.add(parent)
+  }
+  const extra: string[] = []
+  const inspect = (folder: string) => {
+    for (const entry of readdirSync(folder, { withFileTypes: true })) {
+      const file = path.join(folder, entry.name)
+      if (wanted.has(file) && entry.isFile()) continue
+      if (folders.has(file)) {
+        if (entry.isSymbolicLink()) throw new Error(`${file} is not an ordinary folder, so it was left as it is`)
+        if (entry.isDirectory()) {
+          inspect(file)
+          continue
+        }
+      }
+      extra.push(file)
+    }
+  }
+  inspect(dir)
+  if (!extra.length) return
+  // Earlier packages did not record their source files. Keep everything that is no longer
+  // packaged, since it may include the person's own files. A fresh sibling cannot be loaded
+  // as part of this plugin, and no existing backup is replaced. Move links without following them.
+  const saved = mkdtempSync(`${dir}.set-aside-by-it-`)
+  for (const file of extra) {
+    const to = path.join(saved, path.relative(dir, file))
+    makeWithin(saved, path.dirname(to))
+    rename(file, to)
+  }
+}
+
 /** Writes an add-on's files where the harness will install them from. */
 export function unpack(id: Harness): string {
   const addon = ADDONS[id]
   if (!addon) throw new Error(`there is no add-on for ${id}`)
   const dir = addonDir(id)
-  rmSync(dir, { recursive: true, force: true })
   // The terms are kept in It's own folder wherever an add-on is installed from it, as the
   // install script leaves them. An add-on that is one file with no folder of its own (OpenCode's)
   // says in its first lines that they are here.
@@ -387,6 +463,7 @@ export function unpack(id: Harness): string {
     mkdirSync(home(), { recursive: true })
     writeFileSync(inHome('LICENSE.md'), LICENSE)
   }
+  retireUnpacked(dir, Object.keys(addon.files))
   const it = shim()
   // The launcher's address, written so that a shell reads it as one word whatever is in it:
   // a space, an apostrophe, a dollar sign. On Windows a harness may hand a hook to cmd or to
@@ -399,13 +476,20 @@ export function unpack(id: Harness): string {
   const command = `${quoted} hook ${id}`
   for (const [rel, text] of Object.entries(addon.files)) {
     const file = path.join(dir, ...rel.split('/'))
-    mkdirSync(path.dirname(file), { recursive: true })
+    makeWithin(home(), path.dirname(file))
+    const found = lookAt(home(), file)
+    if (found.is !== 'file' && found.is !== 'none') throw new Error(`${file} cannot be replaced safely, so it was left as it is`)
     // A hook is one fixed command at one fixed address; all the logic is inside this program
     // Put into the JSON as a value, so that whatever the address contains it stays one string
-    if (rel.endsWith('hooks.json')) writeFileSync(file, text.replaceAll(JSON.stringify(`it hook ${id}`), JSON.stringify(command)))
+    let content: string
+    if (rel.endsWith('hooks.json')) content = text.replaceAll(JSON.stringify(`it hook ${id}`), JSON.stringify(command))
     // The note of which It folder the add-on comes from says this one
-    else if (path.basename(rel) === HOME_NOTE) writeFileSync(file, `${JSON.stringify({ ...(readNote(text) ?? {}), home: thisHome() }, null, 1)}\n`)
-    else writeFileSync(file, itHomeWritten(text))
+    else if (path.basename(rel) === HOME_NOTE) content = `${JSON.stringify({ ...(readNote(text) ?? {}), home: thisHome() }, null, 1)}\n`
+    else content = itHomeWritten(text)
+    // A registered marketplace must keep its manifest and ownership note throughout an upgrade.
+    // Replacing whole files in place leaves those proofs readable if unpacking stops, so the
+    // next setup or disconnect can pass the same ownership checks.
+    putInPlace(Buffer.from(content), file)
   }
   return dir
 }
@@ -445,7 +529,9 @@ interface Adapter {
    * the harness has none, or does not say where it keeps it.
    */
   note?(at: Place): Promise<string | null>
-  /** `wrote` is told, each time a file has been written, every file of the add-on that is this program's now. */
+  /** Refuses an occupied plugin or marketplace name unless this installation owns it. */
+  preflight?(at: Place, was: Installation | undefined): Promise<string | undefined>
+  /** `wrote` records ownership before a file changes and after its replacement finishes. */
   install(dir: string, at: Place, was: Installation | undefined, wrote: (files: Put[]) => void): Promise<Ran & { files?: Put[]; aside?: string[] }>
   /** Takes the add-on out. What it returns are the files it did not take out. */
   remove(at: Place, was?: Installation): Promise<Left | undefined>
@@ -506,9 +592,98 @@ async function openclawHas(at: Place): Promise<{ enabled?: boolean; status?: str
   // OpenClaw saying it knows no such plugin is the one refusal that means it is gone
   if (!r.ok) return /not found|no such plugin|unknown plugin|not installed/i.test(`${r.out}\n${r.err}`) ? undefined : null
   try {
-    return (JSON.parse(r.out.slice(r.out.indexOf('{'))) as { plugin?: { enabled?: boolean; status?: string; rootDir?: unknown } }).plugin
+    const result = JSON.parse(r.out.slice(r.out.indexOf('{'))) as { plugin?: { enabled?: boolean; status?: string; rootDir?: unknown } } | null
+    const plugin = result?.plugin
+    return plugin && typeof plugin === 'object' && !Array.isArray(plugin) ? plugin : null
   } catch {
     return null
+  }
+}
+
+/**
+ * The plugin and marketplace names must belong to this installation before either is changed.
+ * A legacy record without profile metadata is checked in the caller's current place, just as
+ * it is for removal. It still needs the plugin's ownership note and the matching marketplace.
+ */
+async function marketplacePreflight(id: 'claude-code' | 'codex', at: Place, was: Installation | undefined): Promise<string | undefined> {
+  const claude = id === 'claude-code'
+  const bin = claude ? 'claude' : 'codex'
+  const label = KNOWN[id].label
+  const env = envAt(claude ? ['CLAUDE_CONFIG_DIR'] : ['CODEX_HOME'], at)
+  const retry = `It could not verify ${label}'s plugin and marketplace names. Nothing was changed. Run \`${bin} plugin marketplace list --json\` and \`${bin} plugin list --json\`, then retry \`it setup\`.`
+  const conflict = `The plugin it-bridge@it or marketplace it in ${label} is not owned solely by this installation. Nothing was changed. Inspect them with \`${bin} plugin list --json\` and \`${bin} plugin marketplace list --json\`. If you choose to remove the conflict, use \`${bin} plugin ${claude ? 'uninstall' : 'remove'} it-bridge@it\` or \`${bin} plugin marketplace remove it\`; removing a marketplace also affects its other plugins. Then run \`it setup\` again.`
+  const [plugins, markets] = await Promise.all([
+    run(bin, claude ? ['plugin', 'list', '--json'] : ['plugin', 'list', '--marketplace', MARKET, '--json'], 60_000, env),
+    run(bin, ['plugin', 'marketplace', 'list', '--json'], 60_000, env),
+  ])
+  if (!plugins.ok || !markets.ok) return retry
+  try {
+    const object = (value: unknown): Record<string, unknown> => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid entry')
+      return value as Record<string, unknown>
+    }
+    const list = (value: unknown): Record<string, unknown>[] => {
+      if (!Array.isArray(value)) throw new Error('invalid list')
+      return value.map(object)
+    }
+    const pluginData: unknown = JSON.parse(plugins.out)
+    const marketData: unknown = JSON.parse(markets.out)
+    const installed = list(claude ? pluginData : object(pluginData).installed)
+    const marketplaces = list(claude ? marketData : object(marketData).marketplaces)
+    if (!claude) list(object(pluginData).available)
+    const ours = []
+    for (const plugin of installed) {
+      const name = claude ? plugin.id : plugin.pluginId
+      if (typeof name !== 'string') return retry
+      if (!name.endsWith(`@${MARKET}`)) continue
+      if (name !== `${PLUGIN}@${MARKET}`) return conflict
+      if (typeof plugin.enabled !== 'boolean') return retry
+      if (claude && plugin.scope !== 'user') return conflict
+      const source = claude ? (plugin.readFromFolder ?? plugin.installPath) : object(plugin.source).path
+      if (!claude && object(plugin.source).source !== 'local') return conflict
+      if (typeof source !== 'string' || !path.isAbsolute(source)) return retry
+      const from = readJson<{ home?: unknown }>(path.join(source, HOME_NOTE))?.home
+      if (!was || typeof from !== 'string' || real(from) !== thisHome()) return conflict
+      ours.push(plugin)
+    }
+    if (ours.length > 1) return conflict
+    const matching = marketplaces.filter((market) => {
+      if (typeof market.name !== 'string') throw new Error('invalid name')
+      return market.name === MARKET
+    })
+    if (matching.length > 1) return conflict
+    for (const market of matching) {
+      const root = claude ? market.path : market.root
+      if (claude && market.source !== 'directory') return conflict
+      if (!was || typeof root !== 'string' || !path.isAbsolute(root) || real(root) !== real(addonDir(id))) return conflict
+      if (!lstatSync(root).isDirectory() || !holds(thisHome(), real(root))) return conflict
+      // Read before unpacking: unpacking must not erase evidence of another plugin in this marketplace.
+      const file = path.join(root, claude ? '.claude-plugin' : '.agents/plugins', 'marketplace.json')
+      if (lookAt(root, file).is !== 'file') return retry
+      const manifest = readJson<{ name?: unknown; plugins?: unknown }>(file)
+      if (manifest?.name !== MARKET) return retry
+      const entries = list(manifest.plugins)
+      if (entries.length !== 1 || entries[0]?.name !== PLUGIN) return conflict
+      const source = entries[0].source
+      if (claude ? source !== './it-bridge' : object(source).source !== 'local' || object(source).path !== './plugins/it-bridge') return conflict
+    }
+    if (ours.length && !matching.length) return conflict
+    return undefined
+  } catch {
+    return retry
+  }
+}
+
+/** Only a well-formed empty listing confirms that the marketplace registration has gone. */
+async function marketplaceGone(bin: 'claude' | 'codex', env: NodeJS.ProcessEnv): Promise<boolean> {
+  const result = await run(bin, ['plugin', 'marketplace', 'list', '--json'], 60_000, env)
+  if (!result.ok) return false
+  try {
+    const parsed = JSON.parse(result.out)
+    const entries = bin === 'claude' ? parsed : parsed?.marketplaces
+    return Array.isArray(entries) && entries.every((entry) => entry && typeof entry.name === 'string' && entry.name !== MARKET)
+  } catch {
+    return false
   }
 }
 
@@ -555,6 +730,7 @@ function withoutSkill(root: string, was: Installation | undefined): Left | undef
 const ADAPTERS: Partial<Record<Harness, Adapter>> = {
   'claude-code': {
     profile: ['CLAUDE_CONFIG_DIR'],
+    preflight: (at, was) => marketplacePreflight('claude-code', at, was),
     installed: async (at) => Boolean((await claudeHas(at))?.enabled),
     async present(at) {
       const ours = await claudeHas(at)
@@ -586,11 +762,13 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       // load a skill that was no longer there.
       if ((await this.present(at)) !== false) return { changed: [], closed: [], outside: [], pending: true }
       await run('claude', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
+      if (!(await marketplaceGone('claude', env))) return { changed: [], closed: [], outside: [], pending: true }
       return withoutSkill(settingsAt(at, 'CLAUDE_CONFIG_DIR', '.claude'), was)
     },
   },
   codex: {
     profile: ['CODEX_HOME'],
+    preflight: (at, was) => marketplacePreflight('codex', at, was),
     installed: async (at) => /^installed, enabled/.test((await codexHas(at)) ?? ''),
     async present(at) {
       const ours = await codexHas(at)
@@ -623,6 +801,7 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       // finished one. The skill goes then too, and no sooner, as in Claude Code.
       if ((await this.present(at)) !== false) return { changed: [], closed: [], outside: [], pending: true }
       await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
+      if (!(await marketplaceGone('codex', env))) return { changed: [], closed: [], outside: [], pending: true }
       return withoutSkill(settingsAt(at, 'CODEX_HOME', '.codex'), was)
     },
     pending() {
@@ -689,8 +868,7 @@ interface Wanted {
  * that is still as it left it, is written over. Whatever else stands in a file's place is the
  * person's, though it hold the very same words, and is kept beside the new one under another
  * name. `wanted` is asked for here, so that a file of the add-on that cannot be read is a
- * failure like any other. `wrote` is told, each time a file is about to be put in a place that was
- * empty and each time one has been written, every file that is this program's now. What is
+ * failure like any other. `wrote` records every owned file before and after each replacement. What is
  * returned says the same at the end, with what was set aside, and with why it stopped where it
  * did not finish.
  */
@@ -702,9 +880,9 @@ function putFiles(
 ): { files: Put[]; aside: string[]; err?: string } {
   const kept: string[] = []
   // The files that are this program's: what the last install left, and then each file this
-  // one writes, from the moment it has been written and no sooner
-  const mine = new Map((was?.files ?? []).map((f) => [f.path, f.sha256]))
-  const noted = () => [...mine].map(([file, sha256]) => ({ path: file, sha256 }))
+  // one intends to write, with the old contents kept until the new contents are in place
+  const mine = new Map((was?.files ?? []).map((f) => [f.path, f]))
+  const noted = () => [...mine.values()]
   try {
     const files = wanted()
     const look = (file: string) => {
@@ -718,8 +896,14 @@ function putFiles(
     for (const f of files) look(f.to)
     for (const f of files) {
       const now = look(f.to)
-      const own = now.is === 'file' && mine.get(f.to) === now.sha256
-      if (own && now.sha256 === f.sha256) continue
+      const own = now.is === 'file' && matchesPut(mine.get(f.to), now.sha256)
+      if (own && now.sha256 === f.sha256) {
+        if (mine.get(f.to)?.previousSha256 !== undefined) {
+          mine.set(f.to, { path: f.to, sha256: f.sha256 })
+          wrote(noted())
+        }
+        continue
+      }
       makeWithin(root, path.dirname(f.to))
       // Whatever is there that this program did not put there, or that has been changed
       // since, is the person's, though it hold the very same words
@@ -729,31 +913,27 @@ function putFiles(
         mine.delete(f.to)
         kept.push(name)
       }
-      // A file that is new to its place is noted before it is put there, with the checksum it
-      // is about to have. A program that is stopped between the two then still has a note of
-      // it, and it is taken out with the rest: noted only afterwards, it would be left where
-      // the harness finds it, with nothing to say that it is this program's. Nothing stands in
-      // its place at this moment, and a file is only ever taken out for holding what its note
-      // says, so one that is noted and never written costs nothing.
-      if (!own) {
-        mine.set(f.to, f.sha256)
-        wrote(noted())
-      }
+      // Keep both possible contents before changing an owned file. On a later attempt the
+      // previous checksum is the bytes just observed, not the last attempt's intended bytes.
+      // Thus A left by an interrupted A-to-B replacement stays owned during an A-to-C retry.
+      mine.set(f.to, { path: f.to, sha256: f.sha256, ...(own && now.is === 'file' ? { previousSha256: now.sha256 } : {}) })
+      wrote(noted())
       try {
         putInPlace(f.data, f.to)
       } catch (err) {
-        // It could not be put there, and so is not there: the note of it is taken back
-        if (!own) mine.delete(f.to)
+        // A failed call may still have put the file in place. Forget it only when its place
+        // is confirmed empty; otherwise either recorded checksum may be there.
+        if (lookAt(root, f.to).is === 'none') mine.delete(f.to)
         throw err
       }
-      mine.set(f.to, f.sha256)
+      mine.set(f.to, { path: f.to, sha256: f.sha256 })
       wrote(noted())
     }
     // A file noted as put there that this add-on does not have is taken away, where it is still as it was put
-    for (const [file, sha256] of [...mine]) {
+    for (const [file, put] of [...mine]) {
       if (files.some((f) => f.to === file)) continue
       const now = lookAt(root, file)
-      if (now.is === 'file' && now.sha256 === sha256) rmSync(file, { force: true })
+      if (now.is === 'file' && matchesPut(put, now.sha256)) rmSync(file, { force: true })
       if (now.is !== 'closed') mine.delete(file)
     }
     return { files: noted(), aside: kept }
@@ -772,7 +952,7 @@ function takeFiles(root: string, files: Put[]): Left {
   const left: Left = { changed: [], closed: [], outside: [] }
   for (const f of files) {
     const now = lookAt(root, f.path)
-    if (now.is !== 'file' || now.sha256 !== f.sha256) leaveAs(left, f.path, now)
+    if (now.is !== 'file' || !matchesPut(f, now.sha256)) leaveAs(left, f.path, now)
     else
       try {
         rmSync(f.path)
@@ -846,6 +1026,10 @@ function copied(id: Harness, c: Copied): Adapter {
       // that it is It's add-on. A file of that name which does not is the person's own, and
       // nothing is asked of the harness.
       if (!was?.files) {
+        // A first install can stop while unpacking, before any destination file is recorded.
+        // Forget that attempt only at its recorded place, with every possible file confirmed
+        // absent. No app command is needed, and an unknown or redirected path is not absence.
+        if (was?.version === 'installing' && placed(was)?.dir && all(at).every((f) => lookAt(root, f.to).is === 'none')) return undefined
         const now = lookAt(root, main)
         if (now.is === 'closed') return { changed: [], closed: [main], outside: [] }
         if (now.is !== 'file' || !readFileSync(main, 'utf8').includes('The It add-on for ')) return NOWHERE
@@ -854,7 +1038,7 @@ function copied(id: Harness, c: Copied): Adapter {
       const loaded = was?.files?.find((f) => f.path === main)
       if (loaded) {
         const now = lookAt(root, main)
-        if (now.is === 'other' || (now.is === 'file' && now.sha256 !== loaded.sha256)) return { changed: [main], closed: [], outside: [], whole: true }
+        if (now.is === 'other' || (now.is === 'file' && !matchesPut(loaded, now.sha256))) return { changed: [main], closed: [], outside: [], whole: true }
       }
       await c.before?.(at, was)
       let left: Left = { changed: [], closed: [], outside: [] }
@@ -917,6 +1101,17 @@ Object.assign(ADAPTERS, {
     // OpenClaw names a conversation by a key such as `agent:main:main`, which is the same in
     // every profile, and the add-on asks the connector for a conversation's clicks by that key
     single: true,
+    async preflight(at, was) {
+      const plugin = await openclawHas(at)
+      if (plugin === null)
+        return 'It could not inspect the OpenClaw plugin. Nothing was changed. Run `openclaw plugins inspect it-bridge --json`, then retry `it setup`.'
+      if (plugin === undefined) return undefined
+      // Legacy records use the current place, but still need the installed plugin's proof of ownership.
+      const from = typeof plugin.rootDir === 'string' ? readJson<{ home?: unknown }>(path.join(plugin.rootDir, HOME_NOTE))?.home : undefined
+      if (!was || typeof from !== 'string' || real(from) !== thisHome())
+        return 'The OpenClaw plugin it-bridge is not owned by this installation. Nothing was changed. Inspect it with `openclaw plugins inspect it-bridge --json`. If you choose to remove it, use `openclaw plugins uninstall it-bridge`, then run `it setup` again.'
+      return undefined
+    },
     async installed(at) {
       const ours = await openclawHas(at)
       return ours?.enabled === true && ours.status !== 'error'
@@ -1191,6 +1386,8 @@ interface Seen {
   other: Other | null
 }
 async function look(id: Harness): Promise<Seen | HarnessStatus | null> {
+  const unread = unreadInstallations(id)
+  if (unread) return { id, addon: 'error', detail: unread }
   const version = await versionOf(id)
   if (!version) return null
   found[id] = version
@@ -1311,7 +1508,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   const seen = await look(id)
   if (!seen) return { id, addon: 'error', detail: `${label} was not found on this machine.` }
   if (!('status' in seen)) return seen
-  const { status: before, adapter, at, from, other } = seen
+  const { status: before, adapter, at, other } = seen
   let { all, was } = seen
   if (adapter.single) {
     // Confirmed absence needs no folder comparison. Keep unknown places and failed
@@ -1373,7 +1570,7 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
     )
     return before
   }
-  // An add-on that no It folder has on record is replaced whatever state it is in
+  // Copied files from an unrecorded installation are kept aside when replaced.
   let doing = other ? 'install' : await whatToDo(before.addon, was?.version, ADDONS[id]!.version, () => adapter.present(at, was), was?.at, undefined, was?.by)
   // A person who runs setup with this program has chosen this program, whichever of the two is
   // the newer: someone who went back to an earlier It on purpose gets that It's add-on. Only a
@@ -1394,6 +1591,8 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
       ...before,
       detail: `It’s add-on is switched off inside ${label}. Switch it on there, or untick ${label} here and tick it again to have the add-on installed afresh.`,
     }
+  const refused = await adapter.preflight?.(at, was)
+  if (refused) return { id, version: before.version, addon: 'error', detail: refused }
   say(`connecting ${label}`)
   // The person is told plainly when what is about to be replaced is not something this It
   // folder put there: an add-on from an It folder that keeps no note of it any more, or one
@@ -1404,14 +1603,12 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
         ? `${label}: the add-on in it came from an It folder that has no note of it any more, and now belongs to this one`
         : `${label}: the add-on in it came from the It folder at ${other.home}, which has no note of it any more. It now belongs to this It folder, at ${thisHome()}`,
     )
-  else if (!was && !from && !adapter.folder && (before.addon !== 'not_connected' || (await adapter.present(at)) === true))
-    say(`${label}: it already had an add-on under It’s name that this It folder has no note of installing, and that add-on is replaced by this folder’s`)
-  const dir = unpack(id)
   // Noted before anything is installed: if installing stops half way, what it left behind is
   // still known to be this program's, and is removed when the person disconnects
   const others = all.filter((i) => i !== was)
   const noted = (version: string, files?: Put[]): Installation[] => [...others, { version, at: Date.now(), by: VERSION, env: at.env, dir: at.dir, files }]
   keep(id, noted('installing', was?.files))
+  const dir = unpack(id)
   // Each file is noted as it is written, from the moment before it is put into an empty place:
   // a file that an install never got as far as is not this program's, whatever was there under
   // its name
@@ -1439,10 +1636,15 @@ export async function disconnect(
   say: (line: string) => void,
   // What does the removing, and whether the harness can be run at all: given by the tests. And
   // which installations are to go, where it is not all of them: the rest stay on record
-  how: { adapter?: Pick<Adapter, 'remove' | 'present' | 'note'>; runnable?: () => Promise<boolean>; only?: (was: Installation) => boolean } = {},
+  how: { adapter?: Pick<Adapter, 'remove' | 'present' | 'note' | 'preflight'>; runnable?: () => Promise<boolean>; only?: (was: Installation) => boolean } = {},
   forLog = false,
 ): Promise<boolean> {
   const label = KNOWN[id].label
+  const unread = unreadInstallations(id)
+  if (unread) {
+    say(forLog ? `${label}: its installation record could not be read, so the add-on and record were kept` : unread)
+    return false
+  }
   // Only what this program installed is removed, and from where it installed it
   let left = installations(id)
   if (!left.length) return true
@@ -1478,6 +1680,11 @@ export async function disconnect(
             : `${label}: the add-on in it now belongs to the It folder at ${other.home}, and was left as it is`,
         )
       } else {
+        const refused = await adapter.preflight?.(at, was)
+        if (refused) {
+          say(refused)
+          continue
+        }
         const stayed = await adapter.remove(at, was)
         if (stayed?.pending) {
           say(`${label}: removal has not been confirmed, so the companion files and installation note are kept for another try`)
