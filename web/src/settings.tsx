@@ -168,7 +168,8 @@ export function Displays({ thisDisplay }: { thisDisplay?: string }) {
   const [error, act] = useAct()
   const [adding, setAdding] = useState(false)
   const done = useCallback(() => setAdding(false), [])
-  if (displays === undefined) return <main className="list-view" role="status" />
+  // Forget also ends descendants. Their counts must be known before its confirmation is offered.
+  if (displays === undefined || paired === undefined || left === undefined) return <main className="list-view" role="status" />
   return (
     <main className="list-view">
       <header className="list-head">

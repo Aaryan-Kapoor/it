@@ -2,6 +2,7 @@
 // Pairing and what comes of it, against an in-memory copy of the backend: a code and the wrong
 // codes anyone sends, whose a display is, what ending a session ends, who a session and a
 // machine were invited by, and what a screen is told about another display.
+import { QUOTA } from '@it/protocol'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
@@ -816,12 +817,12 @@ describe('what ending a paired browser takes with it', () => {
       const owner = await ownerOf(t, machine)
       const first = await joined(t, owner.browser, 'laptop')
       await first.as.mutation(api.machines.leave, {})
+      let previousRequest: { code: string; name: string; publicKey: Awaited<ReturnType<typeof aPublicKey>>; replaces: string }
+      const retry = () => t.fetch('/bridge/enroll', { method: 'POST', body: JSON.stringify(previousRequest) })
       const enrollAgain = async (by: Asks) => {
         const invite = await by.mutation(api.sessions.inviteMachine, {})
-        return t.fetch('/bridge/enroll', {
-          method: 'POST',
-          body: JSON.stringify({ code: invite.code, name: 'laptop', publicKey: await aPublicKey(), replaces: first.id }),
-        })
+        previousRequest = { code: invite.code, name: 'laptop', publicKey: await aPublicKey(), replaces: first.id }
+        return retry()
       }
       const secondReply = await enrollAgain(owner.browser)
       expect(secondReply.status).toBe(200)
@@ -839,8 +840,14 @@ describe('what ending a paired browser takes with it', () => {
       expect(accepted.status).toBe(200)
       const heir = (await accepted.json()) as { machine: string; waitsFor: string }
       expect(heir.waitsFor).toBe('laptop')
+      expect(await (await retry()).json()).toEqual(heir)
+      // A second invite for the same key reaches the normal enrollment path.
+      previousRequest!.code = (await owner.browser.mutation(api.sessions.inviteMachine, {})).code
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(await (await retry()).json()).toEqual(heir)
       await owner.browser.mutation(api.machines.revoke, { machineId: second.machine as never })
       await settle(t)
+      expect(await (await retry()).json()).toEqual({ machine: heir.machine })
       expect(await alive(t.withIdentity({ issuer: SITE, subject: heir.machine, kind: 'machine' }))).toBe(true)
       expect(await alive(retained)).toBe(false)
       expect(await alive(owner)).toBe(true)
@@ -991,6 +998,72 @@ describe('what ending a paired browser takes with it', () => {
     expect(await living(h)).toEqual(['desk', 'hall'])
     expect(await alive(again)).toBe(false)
     expect(await alive(added.as)).toBe(false)
+    expect(await alive(h.machine)).toBe(true)
+  })
+
+  test.each([false, true])('quota eviction keeps earlier pairings of a reclaimed display when named is %s', async (named) => {
+    const h = await household()
+    const key = 'the-reclaimed-display-key'
+    const display = await register(h.laptop, key)
+    await endOf(h.t, h.laptop)
+    const back = await ownerOf(h.t, h.machine)
+    await register(back, key)
+    const age = named ? 31 * 86_400_000 : 11 * 60_000
+    await h.t.run(async (ctx) => {
+      const current = (await ctx.db.get(display.id))!
+      await ctx.db.patch(display.id, { name: named ? 'Reclaimed' : undefined, lastSeenAt: Date.now() - age })
+      await ctx.db.patch(h.display.id, { name: 'In use', lastSeenAt: Date.now() })
+      for (let i = 2; i < QUOTA.displays; i++)
+        await ctx.db.insert('displays', {
+          userId: current.userId,
+          sessionId: h.desk.session as typeof current.sessionId,
+          key: `quota-filler-display-${i}`,
+          generatedName: 'Browser',
+          name: `Kept ${i}`,
+          createdAt: Date.now(),
+          lastSeenAt: Date.now(),
+          epoch: 0,
+        })
+    })
+    const before = await displayOf(h.t, key)
+    const pairing = await living(h)
+    expect(await code(register(h.desk, 'the-next-display-key-01'))).toBe('limit')
+    expect(await displayOf(h.t, key)).toEqual(before)
+    expect(await living(h)).toEqual(pairing)
+    expect(await alive(back)).toBe(true)
+    // An ordinary display can still make room, even though the reclaimed one is older.
+    await h.t.run((ctx) => ctx.db.patch(h.display.id, { name: named ? 'Old display' : undefined, lastSeenAt: Date.now() - age + 1000 }))
+    expect(await code(register(h.desk, 'the-next-display-key-01'))).toBe('ok')
+    expect(await h.t.run((ctx) => ctx.db.get(h.display.id))).toBeNull()
+    expect(await displayOf(h.t, key)).toEqual(before)
+    // Ending the current browser still reaches everything invited by its earlier pairing.
+    await h.desk.browser.mutation(api.sessions.end, { session: back.session as never })
+    expect(await living(h)).toEqual(['desk', 'hall'])
+    expect(await alive(back)).toBe(false)
+  })
+
+  test('removal counts follow the earlier pairings of a descendant display', async () => {
+    const h = await household()
+    const key = 'nested-reclaimed-display-key'
+    await register(h.desk, key)
+    const extra = await joined(h.t, h.desk.browser, 'the earlier pairing added this')
+    await endOf(h.t, h.desk)
+    await register(h.kitchen, key)
+    const viewer = await ownerOf(h.t, h.machine)
+    const display = await register(h.laptop, 'the-laptop-display-key-01')
+    const expected = {
+      browsers: [h.kitchen.session, h.agent.session, h.agentsScreen.session, h.hall.session].sort(),
+      machines: [h.second.id, h.third.id, extra.id].sort(),
+    }
+    const listed = (await viewer.browser.query(api.sessions.list, {})).find((s) => s.id === h.laptop.session)!.along
+    expect({ browsers: listed.browsers.sort(), machines: listed.machines.sort() }).toEqual(expected)
+    await endOf(h.t, h.laptop)
+    const left = (await viewer.browser.query(api.sessions.leftBehind, {})).find((d) => d.display === display.id)!.along
+    expect({ browsers: left.browsers.sort(), machines: left.machines.sort() }).toEqual(expected)
+    await viewer.browser.mutation(api.displays.forget, { displayId: display.id })
+    expect(await living(h)).toEqual([])
+    expect(await alive(extra.as)).toBe(false)
+    expect(await alive(viewer)).toBe(true)
     expect(await alive(h.machine)).toBe(true)
   })
 
