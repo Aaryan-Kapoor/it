@@ -283,7 +283,7 @@ export function windowsScript(folder: string, launcher: string): string {
   ].join('\n')
 }
 /**
- * What takes the task away on Windows. A machine has one task of this name, whoever made it:
+ * What takes the task away on Windows. The scheduler's root has one task of this name, whoever made it:
  * it may be the It of another account of the machine, or something else of the person's that
  * happens to be called `it`. Only the task that is started in this folder's `bin`, which is how
  * `windowsScript` registers It's, is this folder's to stop and take away, and any other is
@@ -295,7 +295,7 @@ export function windowsRemoval(folder: string): string {
   const started = ps(folder.replace(/\//g, '\\').replace(/\\+$/, ''))
   // Asking for a missing task is a failed cmdlet even when its error is silenced. Listing
   // tasks instead tells absence apart from a scheduler that cannot be asked at all.
-  const task = `Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq ${ps(NAME)} }`
+  const task = `Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq ${ps(NAME)} }`
   return `$task = ${task}; if ($task -and (([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq ${started})) { Stop-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName ${ps(NAME)} -Confirm:$false -ErrorAction SilentlyContinue; if (${task}) { 'Windows still has the task'; exit 3 } }; exit 0`
 }
 /**
@@ -332,7 +332,7 @@ const powershellAsked = (script: string) => powershell(script, ASKED_WINDOWS_MS)
  */
 export function windowsRegisteredFor(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): string | null {
   const asked = ask(
-    `[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction Stop).Actions[0].WorkingDirectory))`,
+    `[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((Get-ScheduledTask -TaskName ${ps(NAME)} -TaskPath '\\' -ErrorAction Stop).Actions[0].WorkingDirectory))`,
   )
   const said = asked.ok ? (asked.out.split(/\r?\n/)[0]?.trim() ?? '') : ''
   // Only what is base64 from end to end is the folder's name. Anything else is PowerShell saying something of its own
@@ -691,7 +691,7 @@ export function status(): ServiceStatus {
     return { registered: existsSync(plistPath()), state: r.ok ? (/state = (\w+)/.exec(r.out)?.[1] ?? 'loaded') : 'not loaded', where: plistPath() }
   }
   if (process.platform === 'win32') {
-    const r = powershellAsked(`(Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction Stop).State`)
+    const r = powershellAsked(`(Get-ScheduledTask -TaskName ${ps(NAME)} -TaskPath '\\' -ErrorAction Stop).State`)
     // The state is one word, on the first line of what was printed. Anything PowerShell said after it is not the state
     return { registered: r.ok, state: r.ok ? (r.out.split(/\r?\n/)[0]?.trim() ?? '') || 'unknown' : 'not registered', where: `Scheduled Task "${NAME}"` }
   }
