@@ -20,6 +20,8 @@ The address that carries a code has it after the `#`, which a browser sends to n
 
 A browser that is used stays paired, and one that nothing has used for a year is ended. Every call a browser makes is checked against its pairing at that moment, so ending a pairing takes effect at once.
 
+A records download starts only from the site in a browser paired as yours. Its link works once, for a minute, and still needs that browser's session cookie. The door checks the pairing on each batch and stops when the browser cancels or a batch fails.
+
 A browser paired with `it site` may do everything. A screen paired from the Displays page may open every page and answer on any of them, be named, take and answer notifications, and sign itself out. Each page also tells it whether that page's owning app is connected and supports queued clicks. It may not delete a page, list or change your machines or other displays, make a code, download the records or erase them.
 
 ### Every pairing can be seen and ended

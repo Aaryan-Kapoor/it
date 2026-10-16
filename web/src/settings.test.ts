@@ -61,8 +61,8 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
-  vi.useRealTimers()
   vi.restoreAllMocks()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   browser.reconfigure({ url: HOME })
 })
@@ -274,104 +274,55 @@ describe('erasing everything', () => {
   })
 })
 
-describe('taking a copy of the records', () => {
-  test.each([false, true])('receipts are paginated before completeness is claimed, including a failed last batch: %s', async (fail) => {
-    const { Settings } = await import('./settings')
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
-    const blobs: Blob[] = []
-    vi.stubGlobal('URL', {
-      createObjectURL: (blob: Blob) => {
-        blobs.push(blob)
-        return 'blob:export'
-      },
-      revokeObjectURL: vi.fn(),
-    })
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
-    answers['account:exportStart'] = () => ({ owner: 'user-1', exportedAt: 1000, displays: [], pages: [] })
-    answers['account:exportMachines'] = () => ({ machines: [], next: null })
-    answers['account:exportNotifications'] = () => ({ notifications: [], next: null })
-    answers['account:exportDeletions'] = ({ cursor }) => {
-      if (cursor === null) return { deletions: [{ job: 'one', title: 'Plan', state: 'pending' }], next: 'next-receipt' }
-      if (fail) throw new Error('The receipts could not be read.')
-      return { deletions: [{ job: 'two', title: 'Trip', state: 'completed', completedAt: 2000 }], next: null }
-    }
-    await show(createElement(Settings, { user: 'user-1', owner: true, display: DISPLAYS[0]!, onSignOut: vi.fn() }))
-    await press('Download my data')
-    expect(calls.filter((c) => c.fn === 'account:exportDeletions').map((c) => c.args)).toEqual([
-      { owner: 'user-1', cursor: null },
-      { owner: 'user-1', cursor: 'next-receipt' },
-    ])
-    expect(blobs).toHaveLength(fail ? 0 : 1)
-    if (!fail) {
-      const text = await new Promise<string>((resolve) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(String(reader.result))
-        reader.readAsText(blobs[0]!)
-      })
-      expect(JSON.parse(text)).toMatchObject({
-        complete: true,
-        deletions: [
-          { job: 'one', title: 'Plan', state: 'pending' },
-          { job: 'two', title: 'Trip', state: 'completed', completedAt: 2000 },
-        ],
-      })
-    }
-  })
-})
-
 describe('downloading the records', () => {
-  test('each batch is handed to the browser as it is read and not kept as text until the end, and the file holds every record with its last word', async () => {
-    // How many pieces of text the most that any one piece handed to the browser was made of, and what was last given it to download
-    let most = 0
-    let given: Blob | null = null
-    const Real = Blob
-    vi.stubGlobal(
-      'Blob',
-      class extends Real {
-        constructor(parts: BlobPart[] = [], options?: BlobPropertyBag) {
-          super(parts, options)
-          most = Math.max(most, parts.filter((part) => typeof part === 'string').length)
-        }
-      },
-    )
-    URL.createObjectURL = (blob: Blob) => {
-      given = blob
-      return 'blob:records'
-    }
-    URL.revokeObjectURL = () => {}
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
-    /** A history in batches of a hundred, as the backend gives it: three batches for each of two pages. */
-    const batch = (artifactId: string, cursor: string | null) => {
-      const from = Number(cursor ?? 0)
-      return {
-        actions: Array.from({ length: 100 }, (_, n) => ({ id: `${artifactId}-${from + n}`, payload: JSON.stringify({ n: from + n }) })),
-        next: from + 100 < 300 ? String(from + 100) : null,
-      }
-    }
-    answers['account:exportStart'] = () => ({ owner: 'user-1', exportedAt: 1_800_000_000_000, displays: [{ name: 'Kitchen TV' }], pages: ['page-1', 'page-2'] })
-    answers['account:exportMachines'] = () => ({ machines: [{ name: 'the laptop' }], next: null })
-    answers['account:exportPage'] = ({ artifactId }) => ({ id: artifactId, title: 'Plan', state: '{"step":2}' })
-    answers['account:exportActions'] = ({ artifactId, cursor }) => batch(artifactId, cursor)
-    answers['account:exportNotifications'] = () => ({ notifications: [{ title: 'Done' }], next: null })
-    answers['account:exportDeletions'] = () => ({ deletions: [], next: null })
+  test('the browser is given a download link and the tab never reads the records', async () => {
+    const href = `/session/export/${'a'.repeat(48)}`
+    const fetch = vi.fn(async () => Response.json({ download: href }))
+    vi.stubGlobal('fetch', fetch)
+    const clicked: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this.getAttribute('href')!)
+    })
     const { Settings } = await import('./settings')
+    const { current } = await import('./session')
     await show(createElement(Settings, { user: 'user-1', owner: true, display: DISPLAYS[0]!, onSignOut: () => {} }))
     await press('Download my data')
-    await vi.waitFor(() => expect(given).not.toBeNull())
-    // No more text at once than one batch is: the six hundred actions were never all held as text
-    expect(most).toBeLessThanOrEqual(110)
-    const text = await new Promise<string>((read) => {
-      const reader = new FileReader()
-      reader.onload = () => read(reader.result as string)
-      reader.readAsText(given!)
+    expect(fetch).toHaveBeenCalledWith(
+      '/session/export/start',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'x-it-site': '1', 'content-type': 'application/json' },
+        body: JSON.stringify({ session: current().session }),
+      }),
+    )
+    expect(clicked).toEqual([href])
+    expect(calls).toEqual([])
+    expect(host.querySelector('[role="status"]')!.textContent).toContain('If the download fails, discard any partial file')
+  })
+
+  test('a refused export is explained and no download begins', async () => {
+    vi.stubGlobal('fetch', async () => Response.json({ error: 'This browser has been paired again.' }, { status: 409 }))
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const { Settings } = await import('./settings')
+    await show(createElement(Settings, { user: 'user-1', owner: true, display: null, onSignOut: () => {} }))
+    await press('Download my data')
+    expect(click).not.toHaveBeenCalled()
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe('This browser has been paired again.')
+    expect(button('Download my data')!.disabled).toBe(false)
+  })
+
+  test('leaving settings cancels a preparation that has not answered', async () => {
+    let signal: AbortSignal | undefined
+    vi.stubGlobal('fetch', (_path: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal
+      return new Promise<Response>((_resolve, reject) => signal!.addEventListener('abort', () => reject(new Error('aborted'))))
     })
-    const records = JSON.parse(text)
-    expect(records).toMatchObject({ exportedAt: 1_800_000_000_000, displays: [{ name: 'Kitchen TV' }], machines: [{ name: 'the laptop' }], complete: true })
-    expect(records.pages.map((page: { id: string; state: unknown; actions: unknown[] }) => [page.id, page.state, page.actions.length])).toEqual([
-      ['page-1', { step: 2 }, 300],
-      ['page-2', { step: 2 }, 300],
-    ])
-    expect(records.pages[1].actions[299]).toEqual({ id: 'page-2-299', payload: { n: 299 } })
-    expect(records.notifications).toEqual([{ title: 'Done' }])
+    const { Settings } = await import('./settings')
+    await show(createElement(Settings, { user: 'user-1', owner: true, display: null, onSignOut: () => {} }))
+    await press('Download my data')
+    await act(async () => root.render(null))
+    expect(signal!.aborted).toBe(true)
   })
 })
