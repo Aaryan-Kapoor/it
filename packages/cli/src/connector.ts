@@ -162,27 +162,60 @@ const stoppedFile = () => inHome('stopped.json')
 const a = (word: string) => `${/^[aeiou]/i.test(word) ? 'an' : 'a'} ${word}`
 const lockFile = () => inHome('connector.lock')
 
-function journal(event: string, id: string): void {
+function journalWrite(event: string, id: string): void {
   try {
-    if (existsSync(journalFile()) && statSync(journalFile()).size > 1_000_000)
-      writeFileSync(journalFile(), readFileSync(journalFile(), 'utf8').split('\n').slice(-500).join('\n'))
-    appendFileSync(journalFile(), `${JSON.stringify({ t: Date.now(), event, id })}\n`, { mode: 0o600 })
+    // Cut down to its last records once it is large, into a file beside it that then takes its
+    // place: cut down where it lies, a disk that filled in the middle left it with nothing
+    if (existsSync(journalFile()) && statSync(journalFile()).size > 1_000_000) {
+      const fewer = `${journalFile()}.${process.pid}.tmp`
+      writeFileSync(fewer, `${readFileSync(journalFile(), 'utf8').split('\n').filter(Boolean).slice(-500).join('\n')}\n`, { mode: 0o600 })
+      renameSync(fewer, journalFile())
+    }
+    // Begun on a line of its own, whatever the record before it ended with: one that was cut
+    // short, by a crash or a full disk, would otherwise take this one with it
+    appendFileSync(journalFile(), `\n${JSON.stringify({ t: Date.now(), event, id })}\n`, { mode: 0o600 })
   } catch {}
+}
+/** What the journal holds, in the order it was written. A line that cannot be read, as one cut short is, is passed over and says nothing of the lines after it. */
+function journalled(): { event: string; id: string }[] {
+  let text = ''
+  try {
+    text = readFileSync(journalFile(), 'utf8')
+  } catch {}
+  const out: { event: string; id: string }[] = []
+  for (const line of text.split('\n')) {
+    if (!line) continue
+    try {
+      const e = JSON.parse(line) as { event?: unknown; id?: unknown } | null
+      if (typeof e?.event === 'string' && typeof e.id === 'string') out.push({ event: e.event, id: e.id })
+    } catch {}
+  }
+  return out
 }
 /** Clicks the journal says a harness's queue accepted, but which were never confirmed to It. */
 function queuedButUnconfirmed(): Set<string> {
   const out = new Set<string>()
-  try {
-    for (const line of readFileSync(journalFile(), 'utf8').split('\n')) {
-      if (!line) continue
-      const e = JSON.parse(line) as { event: string; id: string }
-      // "queueing" is only the intent. If nothing follows it, the command may never have run,
-      // so the click is sent again: a repeat can be told apart by its id, a loss cannot be undone.
-      if (e.event === 'queued') out.add(e.id)
-      if (e.event === 'confirmed') out.delete(e.id)
-    }
-  } catch {}
+  for (const e of journalled()) {
+    // "queueing" is only the intent. If nothing follows it, the command may never have run,
+    // so the click is sent again: a repeat can be told apart by its id, a loss cannot be undone.
+    if (e.event === 'queued') out.add(e.id)
+    if (e.event === 'confirmed') out.delete(e.id)
+  }
   return out
+}
+
+/**
+ * Clicks the journal says this machine claimed, with nothing after to say what became of them.
+ * A connector that ended in the middle left them leased, which is to say out of what It offers
+ * until the lease runs out, while what was done after them is offered at once.
+ */
+function claimedAndLeft(): string[] {
+  const out = new Set<string>()
+  for (const e of journalled()) {
+    if (e.event === 'claimed' || e.event === 'queueing' || e.event === 'served') out.add(e.id)
+    else out.delete(e.id)
+  }
+  return [...out]
 }
 
 /**
@@ -463,7 +496,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * An agent that begins to wait for such a click is given it as well (see `/waiting`), and
    * that is noted here, so that a refusal by the command is then no failure.
    */
-  const submitting = new Map<string, { click: Offered; toWaiter: boolean }>()
+  const submitting = new Map<string, { click: Offered; toWaiter: boolean; given?: Given; printed?: boolean }>()
   /**
    * Taken by Codex's queue, or by T3 Code for a thread of Codex, while the conversation's turn
    * was running. Either hands such a click over only when that turn is done, so an agent that
@@ -471,8 +504,20 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * turn. It is given the click as well (see `/waiting`). Kept, by the conversation it is for,
    * until the conversation is heard to end the turn or begin another, which is when the click
    * is handed over.
+   *
+   * One that was given to a waiter is kept until that waiter says it has printed it. It has
+   * been reported to It as handed over, so nothing else would bring it back: were it let go of
+   * as it is given, an answer that never reached the waiter would leave the turn waiting for a
+   * message that stands behind it.
    */
-  const behindTurn = new Map<string, { click: Offered; key: string }>()
+  const behindTurn = new Map<string, { click: Offered; key: string; given?: Given }>()
+  /** Which waiter such a click was given to, and when. */
+  type Given = { who: string; at: number }
+  /**
+   * For how long a click given to one waiter is not given to another. The first is printing it
+   * and says so in a moment. One that has not said so by then never had it, or is gone.
+   */
+  const GIVEN_MS = 10_000
   /** How many of them are kept at once. */
   const BEHIND_MOST = 200
   const turnRunning = (key: string, now: number) => {
@@ -583,7 +628,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     heardBefore.add(key)
     while (heardBefore.size > HEARD_MOST) heardBefore.delete(heardBefore.values().next().value!)
     try {
-      writePrivate(heardFile(), Object.fromEntries([...heardBefore].map((k) => [k, 1])))
+      if (!over) writePrivate(heardFile(), Object.fromEntries([...heardBefore].map((k) => [k, 1])))
     } catch {
       // Not kept: it is heard from again soon enough
     }
@@ -613,11 +658,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const noteMark = (key: string, harness: string, texts: string[], again: () => Promise<unknown>) => {
     const entry = { id: randomBytes(8).toString('hex'), texts, at: Date.now() }
     marked.set(key, [...(marked.get(key) ?? []), entry])
-    const kept = () => (marked.get(key) ?? []).includes(entry)
+    // Looked for wherever it is kept by now: a conversation that carries on under a new id takes its marks along
+    const where = () => [...marked].find(([, kept]) => kept.includes(entry))?.[0]
+    const kept = () => where() !== undefined
     const takeAway = () => {
-      const left = (marked.get(key) ?? []).filter((m) => m !== entry)
-      if (left.length) marked.set(key, left)
-      else marked.delete(key)
+      const under = where()
+      if (under === undefined) return
+      const left = marked.get(under)!.filter((m) => m !== entry)
+      if (left.length) marked.set(under, left)
+      else marked.delete(under)
     }
     const who = `${a(agentOf(harness))} conversation (${short(threadOf(key))})`
     const after = (ms: number, what: () => void) => {
@@ -628,6 +677,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       markTimers.add(timer)
     }
     const line = (tried: number) => {
+      // Not into an app the person has disconnected since: what the mark stood for stays as it is, for a hook of the app once it is connected again
+      if (!chosen(harness)) return
+      // And not while this machine hands nothing over: looked at again later, when it may
+      if (unfitting) return after(MARK_ASKED_MS, () => line(tried))
       void again()
         .catch(() => 'it could not be sent')
         .then((refused) => {
@@ -642,9 +695,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
           after(next, () => line(tried + 1))
         })
     }
-    const wait = () =>
+    const wait = (): void =>
       after(MARK_ASKED_MS, () => {
-        unmarked.add(key)
+        if (!chosen(harness)) return
+        if (unfitting) return wait()
+        unmarked.add(where() ?? key)
         say(`${who} was given a mark and none of its hooks said it had what the mark stood for; it is given the short line now, and from here on`)
         line(0)
       })
@@ -653,6 +708,49 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
   const queues = new Map<string, Promise<void>>()
   const unconfirmed = queuedButUnconfirmed()
+  /**
+   * What the connector before this one left claimed is given back before anything is taken,
+   * and nothing is taken until It has offered it again: taken first, a click made after one of
+   * those would reach its conversation before it. It is asked for all that this machine holds,
+   * since a claim may have been made that this machine never heard the answer to. An It from
+   * before it could be asked that is asked for each click the journal names instead.
+   */
+  let givingBack: 'due' | 'asked' | 'done' = 'due'
+  /** What was given back and has not been offered again yet, and until when that is waited for. */
+  const comingBack = new Set<string>()
+  let legacyGiveBack = false
+  let backBy = 0
+  /** For how long the offer of what was given back is waited for. One whose conversation is not listened for here is never offered. */
+  const BACK_SEEN_MS = 3000
+  async function recoverBatch(): Promise<{ back: string[]; done: boolean } | null> {
+    const missing = (err: unknown) => /could not find/i.test(String((err as Error)?.message ?? err))
+    if (!legacyGiveBack) {
+      try {
+        const result = await call<{ back: string[]; done: boolean }>('mutation', api.delivery.giveBackBatch, {})
+        if (!result || !Array.isArray(result.back) || !result.back.every((id) => typeof id === 'string') || typeof result.done !== 'boolean') return null
+        return result
+      } catch (err) {
+        if (!missing(err)) return null
+        legacyGiveBack = true
+      }
+    }
+    try {
+      const back = await call<string[]>('mutation', api.delivery.giveBack, {})
+      return Array.isArray(back) && back.every((id) => typeof id === 'string') ? { back, done: true } : null
+    } catch (err) {
+      if (!missing(err)) return null
+      // An It from before either function: give back each click the journal names.
+      const gone = await Promise.all(
+        claimedAndLeft().map((id) =>
+          call('mutation', api.delivery.release, { id }).then(
+            () => id,
+            () => null,
+          ),
+        ),
+      )
+      return { back: gone.filter((id): id is string => id !== null), done: true }
+    }
+  }
   let inbox: Offered[] = []
   let routing = false
   let stopping: ((code: number) => void) | null = null
@@ -779,6 +877,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** Whether this connector is stopping: what it reopened is then ended with it, and is not taken for something a person stopped. */
   let closing = false
   /**
+   * Whether this connector has stopped. Something it began may still be on its way then: a
+   * turn it was ending, whose answer comes seconds later. What that then does is written
+   * nowhere, since the notes are no longer this connector's to keep: the service may have
+   * cleared them for an erase, or another connector may have them by now.
+   */
+  let over = false
+  const journal = (event: string, id: string): void => {
+    if (!over) journalWrite(event, id)
+  }
+  /**
    * Why this machine and the It it joined do not fit, while they do not: the two speak
    * different versions of how machines talk to It, and what one of them means by a request is
    * not what the other takes it for. Nothing is handed to an agent meanwhile, and nothing is
@@ -799,6 +907,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const keepCutOff = () => {
     try {
       while (cutOff.size > 200) cutOff.delete(cutOff.values().next().value!)
+      if (over) return
       if (cutOff.size) writePrivate(cutOffFile(), [...cutOff])
       else rmSync(cutOffFile(), { force: true })
       cutOffKept = true
@@ -836,6 +945,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     try {
       const all = { ...Object.fromEntries(unsettled), ...Object.fromEntries(running) }
+      if (over) {
+        if (must) throw new Error('this connector has stopped')
+        return
+      }
       if (Object.keys(all).length) writePrivate(runsFile(), all)
       else rmSync(runsFile(), { force: true })
     } catch (err) {
@@ -993,6 +1106,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const stoppedByPerson = new Set<string>(readJson<string[]>(stoppedFile()) ?? [])
   const keepStopped = () => {
     try {
+      if (over) return
       if (stoppedByPerson.size) writePrivate(stoppedFile(), [...stoppedByPerson])
       else rmSync(stoppedFile(), { force: true })
     } catch {}
@@ -1405,20 +1519,21 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Still not settled, it is reopened for nothing: said below, by `carry`, as why
       /** Whether this turn is told that the one before it was cut off: decided before it begins, since its own ending may make such a note anew. */
       const toldCutOff = cutOff.has(key)
-      const sent = { click, toWaiter: false }
+      const sent: { click: Offered; toWaiter: boolean; given?: Given; printed?: boolean } = { click, toWaiter: false }
       submitting.set(click.id, sent)
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
       // hook of It's hands the agent the rest, and otherwise one short line for each click
       const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
       const put = (text: string) => {
         if (t3) return t3Send(t3.server, t3.thread, text)
-        const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: threadOf(key) }), harnessEnv())
-        return typeof env === 'string' ? Promise.resolve(env) : codexQueue(threadOf(key), text, env)
+        const thread = threadOf(follow(key))
+        const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: thread }), harnessEnv())
+        return typeof env === 'string' ? Promise.resolve(env) : codexQueue(thread, text, env)
       }
       const mark =
-        !reopening && marks(key, harness)
+        !reopening && marks(follow(key), harness)
           ? noteMark(
-              key,
+              follow(key),
               harness,
               [click, ...(t3 ? withIt : [])].map((c) => describeClick(asClick(c))),
               () => put(lines()),
@@ -1519,8 +1634,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // for a thread whose turn is running, with every click that went along in the same
         // message: an agent that waits in that turn for one of those would wait for a message
         // that stands behind its own turn. A reopening never does: nothing was running
-        if (!reopening && turnRunning(key, Date.now())) {
-          for (const c of [click, ...withIt]) if (c !== click || !sent.toWaiter) behindTurn.set(c.id, { click: c, key })
+        if (!reopening && turnRunning(follow(key), Date.now())) {
+          // One that a waiter was given while the command was still to answer is kept as given
+          // to it, until it says that it has it. Where it has said so already, it is not kept
+          for (const c of [click, ...withIt]) {
+            if (c === click && sent.printed) continue
+            behindTurn.set(c.id, { click: c, key: follow(key), ...(c === click && sent.given ? { given: sent.given } : {}) })
+          }
         }
         await confirmAll()
       } else {
@@ -1654,6 +1774,34 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (routing || closing || unfitting) return
     routing = true
     try {
+      if (givingBack === 'due') {
+        const asked = await recoverBatch()
+        if (asked === null) {
+          // An expired lease is still hidden until the backend requeues it. Only a complete
+          // recovery answer proves that older work no longer waits behind a newer click.
+          soon(1000)
+          return
+        } else {
+          for (const id of asked.back) {
+            journal('released', id)
+            comingBack.add(id)
+          }
+          if (!asked.done) {
+            soon(0)
+            return
+          }
+          backBy = steady() + BACK_SEEN_MS
+          givingBack = 'asked'
+        }
+      }
+      if (givingBack === 'asked') {
+        for (const c of inbox) comingBack.delete(c.id)
+        if (comingBack.size && steady() < backBy) {
+          soon(100)
+          return
+        }
+        givingBack = 'done'
+      }
       const now = Date.now()
       // Telling It what was handed over is done beside this, never ahead of it: a slow answer
       // there must not hold up renewing leases or taking new clicks
@@ -1762,7 +1910,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const listening = !codex && s !== undefined && now - s.seen < LIVE_MS
         // A Codex turn that is running will reach a hook: after its next command, or when it stops
         const inTurn = codex && turnRunning(key, now)
-        const forAddOn = listening || (inTurn && now - click.at < FRESH_MS)
+        // Codex's queue may hold an earlier click of the conversation behind this very turn, or
+        // one may have its place in line for the queue, from the moment it was given that place
+        // and before anything was asked for it. Given to the turn's next hook, this one would
+        // be read before it: so it follows the earlier one, and is handed over after it.
+        const queuedBefore = inTurn && ([...queues.keys()].some((line) => follow(line) === key) || [...behindTurn.values()].some((b) => follow(b.key) === key))
+        const forAddOn = listening || (inTurn && now - click.at < FRESH_MS && !queuedBefore)
         // Which of the other ways it goes, asked only where the first does not take it
         const way = forAddOn
           ? undefined
@@ -1783,7 +1936,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
             journal('released', click.id)
             await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
           } else if (got) {
-            held.set(click.id, { click, key, claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
+            // Under the id the conversation has by now: it may have carried on under another while the claim was being asked for
+            held.set(click.id, { click, key: follow(key), claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
             journal('claimed', click.id)
           }
         } else if (way === 't3') {
@@ -1899,6 +2053,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
         else marked.delete(key)
         return [200, { ok: true }]
       }
+      // A hook of an app the person has disconnected is handed nothing, as its add-on is given
+      // no clicks, and nor is any hook by a machine that hands nothing over. What the marks
+      // stood for is kept as it is.
+      if (!chosen(harness) || unfitting || closing) return [200, { ok: true, marks: [], texts: [] }]
       // For a turn the person started with a message of their own, only what has waited past
       // its time is handed over: a mark's own turn is still to come, and has first claim
       const due = (marked.get(key) ?? []).filter((m) => body.own !== true || Date.now() - m.at > MARK_ASKED_MS)
@@ -1945,10 +2103,21 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // Whatever led to the old id leads straight to the new one, so no chain grows
         for (const [from, to] of aliases) if (to === was) aliases.set(from, key)
         aliases.set(was, key)
+        // And whatever is kept here for the conversation under its old id is kept for it under
+        // the new one: a click it was given and has not said it has, which it now asks for
+        // by the new id and would not be given again until its hold ran out; and what a mark
+        // put into it stands for
+        for (const h of held.values()) if (h.key === was) h.key = key
+        for (const b of behindTurn.values()) if (b.key === was) b.key = key
+        const kept = marked.get(was)
+        if (kept) {
+          marked.delete(was)
+          marked.set(key, [...(marked.get(key) ?? []), ...kept])
+        }
         while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
         changed = true
       }
-      if (changed) writePrivate(aliasFile(), Object.fromEntries(aliases))
+      if (changed && !over) writePrivate(aliasFile(), Object.fromEntries(aliases))
       if (blocked) {
         if (changed) watch()
         return [200, { ok: false, clicks: [], runtime }]
@@ -2076,6 +2245,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (req.method === 'POST' && url.pathname === '/waiting') {
       const who = String(body.id ?? '')
       if (!who) return [400, { error: 'say who is waiting' }]
+      // What the waiter says it has printed, of what was kept for a turn that waits, is let go of
+      for (const got of Array.isArray(body.got) ? body.got.slice(0, 1000) : []) {
+        if (typeof got !== 'string') continue
+        if (behindTurn.get(got)?.given?.who === who) behindTurn.delete(got)
+        // One that Codex's command has not yet answered for is noted as printed, so that no copy of it is kept once it has
+        const sent = submitting.get(got)
+        if (sent?.given?.who === who) sent.printed = true
+      }
       if (body.done) {
         // Kept, as one that has ended: see `waiters`
         const ended = waiters.get(who)
@@ -2133,20 +2310,26 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // after the turn that is now waiting. So the waiter is given it too, still held for
         // this machine. Should Codex hand it over as well, its id shows it is the same click.
         for (const sent of submitting.values()) {
-          // Once: an agent that took it, dealt with it and waits again is not given it a second time
-          if (sent.toWaiter || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
+          // Once: an agent that took it, dealt with it and waits again is not given it a second
+          // time. Unless it never had it: the same waiter asking again with no word of it was
+          // sent an answer that did not arrive
+          if (sent.printed || (sent.toWaiter && sent.given?.who !== who) || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
           sent.toWaiter = true
+          sent.given = { who, at: Date.now() }
           handedBack.push(sent.click)
         }
         // And a click that Codex's queue has taken, and holds until the turn now running is
-        // done: the waiter is that turn, so it is given the click too, and given it once
+        // done: the waiter is that turn, so it is given the click too. Given once to a waiter
+        // that says it has it. One that asks again and has not said so was sent an answer that
+        // never arrived, and is given it again; and one that went quiet without saying so
+        // leaves it for the next waiter of the turn.
+        const now = Date.now()
         for (const [clickId, b] of behindTurn) {
-          if (!turnRunning(b.key, Date.now())) behindTurn.delete(clickId)
-          // Given in this answer already, as one is that Codex's command has only just answered
-          // for: its second copy is let go of, and is not left to be given to the next waiter
-          else if (handedBack.some((c) => c.id === clickId)) behindTurn.delete(clickId)
-          else if (waitedFor(waiter, b.click) && fits(b.click)) {
-            behindTurn.delete(clickId)
+          if (!turnRunning(b.key, now)) behindTurn.delete(clickId)
+          // Given in this answer already, as one is that Codex's command has only just answered for
+          else if (handedBack.some((c) => c.id === clickId)) b.given = { who, at: now }
+          else if (waitedFor(waiter, b.click) && (!b.given || b.given.who === who || now - b.given.at > GIVEN_MS) && fits(b.click)) {
+            b.given = { who, at: now }
             handedBack.push(b.click)
           }
         }
@@ -2256,7 +2439,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (info.socket) rmSync(info.socket, { force: true })
     throw lockLost()
   }
-  writePrivate(infoFile(), info)
+  try {
+    writePrivate(infoFile(), info)
+  } catch (err) {
+    // Where the note cannot be written, on a disk that is full say, nothing can find this
+    // connector. What it opened is closed, so that the next try, half a minute on, does not
+    // leave one more listener open behind it each time
+    server.close()
+    if (info.socket) rmSync(info.socket, { force: true })
+    throw err
+  }
   // Where it listens is said by kind: the socket's own address would name the person's home folder
   say(`connector ${VERSION} started (pid ${process.pid}); connector listening on ${info.socket ? 'its socket' : `127.0.0.1:${info.port}`}`)
   // Usage counts are sent from here, in the background, for every command on this machine.
@@ -2690,6 +2882,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     rmSync(infoFile(), { force: true })
     if (info.socket) rmSync(info.socket, { force: true })
   }
+  over = true
   say('stopped')
   process.exitCode = code
 }

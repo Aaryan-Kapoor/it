@@ -1,11 +1,14 @@
 // What It makes of T3 Code's own account of its server and its threads: which server is asked,
 // which threads are looked into first for a conversation, and which thread is the conversation's.
 // The asking and the sending themselves need a T3 Code that is running, and are tried against one.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
-import { holds, likeliest, t3Server } from './src/t3'
+import { holds, likeliest, t3Server, t3ThreadOf } from './src/t3'
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-t3-'))
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
@@ -84,6 +87,22 @@ describe('the threads looked into for a conversation', () => {
     expect(likeliest({}, { harness: 'claude-code' })).toEqual([])
     expect(likeliest({ threads: 'none', projects: 3 }, { harness: 'claude-code' })).toEqual([])
   })
+
+  test('on Windows a folder is the same folder with either stroke and in either case, and one whose name only begins alike is another', () => {
+    const windows = (workspaceRoot: string) => ({
+      projects: [{ id: 'site', workspaceRoot }],
+      threads: [
+        { id: 'in-project', projectId: 'site', providerInstanceId: 'codex', updatedAt: '2026-10-01T10:00:00.000Z' },
+        ...Array.from({ length: 30 }, (_, i) => ({ id: `newer-${i}`, projectId: 'other', providerInstanceId: 'codex', updatedAt: '2026-10-08T10:00:00.000Z' })),
+      ],
+    })
+    const cwd = 'C:\\Users\\Jane Doe\\work\\site\\pages'
+    for (const root of ['C:\\Users\\Jane Doe\\work\\site', 'C:/Users/Jane Doe/work/site', 'c:\\users\\jane doe\\work\\site', 'C:/Users/Jane Doe/work/site/'])
+      expect([root, likeliest(windows(root), { harness: 'codex', cwd }, 24, 'win32')[0]]).toEqual([root, 'in-project'])
+    expect(likeliest(windows('C:\\Users\\Jane Doe\\work\\si'), { harness: 'codex', cwd }, 24, 'win32')).not.toContain('in-project')
+    // Elsewhere a name in another case is another folder
+    expect(likeliest(windows('/home/Someone/site'), { harness: 'codex', cwd: '/home/someone/site/pages' }, 24, 'linux')).not.toContain('in-project')
+  })
 })
 
 describe('the thread a conversation is held in', () => {
@@ -112,5 +131,124 @@ describe('the thread a conversation is held in', () => {
       snapshot(7),
     ])
       expect(holds(not, ['7', 'undefined', 'null'])).toBe(false)
+  })
+})
+
+// T3 Code's own command, which issues the session, and its server are stood in for: what is
+// tried is what It makes of the answers
+describe.skipIf(process.platform === 'win32')('which thread holds a conversation, asked of a server', () => {
+  /** A server that lists two threads and answers for each as it is told to: with what the thread holds, or with a status. */
+  async function server(threads: Record<string, string | number>) {
+    const folder = mkdtempSync(path.join(scratch, 'asked-'))
+    const program = path.join(folder, 't3')
+    writeFileSync(program, '#!/bin/sh\necho \'{"token":"a-session"}\'\n')
+    chmodSync(program, 0o755)
+    const answers = http.createServer((req, res) => {
+      const json = (status: number, body: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+      if (req.url === '/api/orchestration/shell') return json(200, { projects: [], threads: Object.keys(threads).map((id) => ({ id })) })
+      const said = threads[decodeURIComponent(/^\/api\/orchestration\/threads\/([^/]+)\/bounded$/.exec(req.url ?? '')?.[1] ?? '')]
+      if (typeof said === 'number') return json(said, {})
+      return json(200, { projection: { providerThreads: [{ nativeThreadRef: { nativeId: said } }] } })
+    })
+    await new Promise<void>((r) => answers.listen(0, '127.0.0.1', r))
+    return { t3: { origin: `http://127.0.0.1:${(answers.address() as AddressInfo).port}`, home: folder, program }, close: () => answers.close() }
+  }
+  const of = { harness: 'codex', ids: ['conversation-1'] }
+
+  test('is the thread that carries the conversation’s id, and none where every thread was read and none carries it', async () => {
+    const found = await server({ 'thread-a': 'another-conversation', 'thread-b': 'conversation-1' })
+    const none = await server({ 'thread-a': 'another-conversation', 'thread-b': 'a-third' })
+    try {
+      expect(await t3ThreadOf(found.t3, of)).toBe('thread-b')
+      expect(await t3ThreadOf(none.t3, of)).toBeNull()
+    } finally {
+      found.close()
+      none.close()
+    }
+  })
+
+  test('is asked of the server itself, though the environment names a proxy for everything', async () => {
+    const found = await server({ 'thread-a': 'conversation-1' })
+    // A proxy that would see the session and every answer, were anything sent its way
+    let through = 0
+    const proxy = http.createServer((_req, res) => {
+      through++
+      res.writeHead(502).end()
+    })
+    proxy.on('connect', (_req, socket) => {
+      through++
+      socket.destroy()
+    })
+    await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r))
+    const named = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'NO_PROXY', 'no_proxy']
+    const before = Object.fromEntries(named.map((name) => [name, process.env[name]]))
+    for (const name of named.slice(0, 5)) process.env[name] = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`
+    delete process.env.NO_PROXY
+    delete process.env.no_proxy
+    try {
+      expect(await t3ThreadOf(found.t3, of)).toBe('thread-a')
+      expect(through).toBe(0)
+    } finally {
+      for (const name of named) {
+        if (before[name] === undefined) delete process.env[name]
+        else process.env[name] = before[name]
+      }
+      proxy.close()
+      found.close()
+    }
+  })
+
+  // Bun is what the standalone program runs under, and takes a proxy named as it starts for
+  // every request it makes by itself, one to this machine included. So the same is asked by a
+  // program started under Bun with a proxy named, where Bun is here to start one.
+  const bun =
+    'Bun' in globalThis
+      ? process.execPath
+      : (process.env.PATH ?? '')
+          .split(path.delimiter)
+          .map((folder) => path.join(folder, 'bun'))
+          .find((file) => existsSync(file))
+  test.skipIf(!bun)('and so it is by the standalone program’s runtime, with a proxy named as it starts', async () => {
+    const found = await server({ 'thread-a': 'conversation-1' })
+    let through = 0
+    const proxy = http.createServer((_req, res) => {
+      through++
+      res.writeHead(502).end()
+    })
+    await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r))
+    const named = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`
+    const asks = path.join(scratch, 'asks.ts')
+    writeFileSync(
+      asks,
+      `import { t3ThreadOf } from ${JSON.stringify(path.join(__dirname, 'src', 't3.ts'))}
+       console.log(JSON.stringify(await t3ThreadOf(${JSON.stringify(found.t3)}, ${JSON.stringify(of)})))`,
+    )
+    try {
+      const said = await new Promise<string>((resolve) =>
+        execFile(
+          bun!,
+          [asks],
+          { env: { PATH: process.env.PATH, HOME: scratch, HTTP_PROXY: named, http_proxy: named, ALL_PROXY: named }, timeout: 30_000 },
+          (_err, out) => resolve(String(out).trim()),
+        ),
+      )
+      expect([said, through]).toEqual(['"thread-a"', 0])
+    } finally {
+      proxy.close()
+      found.close()
+    }
+  })
+
+  test('is not said to be none where a thread could not be read: it may be that one, and is asked about again', async () => {
+    const unread = await server({ 'thread-a': 'another-conversation', 'thread-b': 503 })
+    const readElsewhere = await server({ 'thread-a': 503, 'thread-b': 'conversation-1' })
+    try {
+      expect(await t3ThreadOf(unread.t3, of)).toBeUndefined()
+      // One thread that cannot be read still says nothing of the others
+      expect(await t3ThreadOf(readElsewhere.t3, of)).toBe('thread-b')
+    } finally {
+      unread.close()
+      readElsewhere.close()
+    }
   })
 })
