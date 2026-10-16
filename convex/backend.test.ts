@@ -1680,6 +1680,36 @@ describe('clicks and their delivery', () => {
     expect(await code(m.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt: first }))).toBe('conflict')
   })
 
+  test.each(['expired', 'reaped', 'legacy-reaped'] as const)('a matching saved receipt confirms its original attempt after it is %s', async (state) => {
+    const { t, m, click, counts } = await setup()
+    const other = await machineOf(t, 'alice', 'other')
+    const id = (await click('saved-receipt')).actionId
+    const receipt = { token: 'saved-claim', session: SESSION }
+    await m.raw.mutation(api.delivery.claim, { ids: [id], for: SESSION, token: receipt.token })
+    if (state === 'legacy-reaped') await t.run((ctx) => ctx.db.patch(id, { claim: receipt }))
+    await vi.advanceTimersByTimeAsync(LEASE_MS + 1)
+    if (state !== 'expired') {
+      await t.mutation(internal.delivery.reap, {})
+      expect((await t.run((ctx) => ctx.db.get(id)))?.delivery).toBe('pending')
+    }
+    expect(await code(other.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt }))).toBe('conflict')
+    expect((await m.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt })).already).toBe(false)
+    expect((await m.raw.mutation(api.delivery.handedOff, { id, route: 'addon', receipt })).already).toBe(true)
+    expect(await counts()).toEqual([0, 0])
+  })
+
+  test('a reaped waiter receipt belongs to the borrowing machine, not the machine that owns the page', async () => {
+    const { t, m, click } = await setup()
+    const borrower = await machineOf(t, 'alice', 'borrower')
+    const id = (await click('borrowed-receipt')).actionId
+    const receipt = { token: 'borrowed-claim', session: null }
+    await borrower.raw.mutation(api.delivery.claim, { ids: [id], token: receipt.token })
+    await vi.advanceTimersByTimeAsync(LEASE_MS + 1)
+    await t.mutation(internal.delivery.reap, {})
+    expect(await code(m.raw.mutation(api.delivery.handedOff, { id, route: 'waiter', receipt }))).toBe('conflict')
+    expect((await borrower.raw.mutation(api.delivery.handedOff, { id, route: 'waiter', receipt })).already).toBe(false)
+  })
+
   test('old delivery clients fail closed while an explicit manual acknowledgement still works', async () => {
     const { t, m, click } = await setup()
     const id = (await click('receipt-0002')).actionId

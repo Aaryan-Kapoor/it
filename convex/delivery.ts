@@ -361,7 +361,7 @@ export const claim = mutation({
         await dropStopped(ctx, x)
         continue
       }
-      const claim = { token, session: expected ?? null }
+      const claim = { token, session: expected ?? null, machineId: machine._id }
       if (x.delivery === 'leased' && x.leaseMachineId === machine._id && matches(x, claim) && (x.leaseExpiresAt ?? 0) >= now) {
         held.push(id)
         continue
@@ -467,6 +467,9 @@ async function backToWaiting(ctx: QueryCtx, x: Doc<'actions'>) {
     delivery: 'pending' as const,
     leaseMachineId: undefined,
     leaseExpiresAt: undefined,
+    // Keep the machine with the attempt after its lease is gone. This also upgrades a
+    // receipt made before claims stored it, while its lease still proves whose it was.
+    ...(x.claim ? { claim: { ...x.claim, machineId: x.claim.machineId ?? x.leaseMachineId } } : {}),
     ...to,
     ...(stillAside ? { machineId: undefined } : { parkedBy: undefined }),
   }
@@ -499,8 +502,11 @@ export const handedOff = mutation({
       await dropStopped(ctx, x)
       return said(true)
     }
-    if (route !== 'manual' && (!matches(x, receipt) || x.delivery !== 'leased' || x.leaseMachineId !== machine._id || (x.leaseExpiresAt ?? 0) < Date.now()))
-      fail('conflict', 'That delivery attempt no longer holds this click.')
+    // An accepted delivery can be confirmed after a restart outlasts its lease. The
+    // receipt must still name the current attempt and the machine that claimed it;
+    // any newer claim replaces that identity, even when it belongs to the same machine.
+    if (route !== 'manual' && (!matches(x, receipt) || (x.claim?.machineId ?? x.leaseMachineId) !== machine._id))
+      fail('conflict', 'That receipt belongs to another delivery attempt.')
     if (x.delivery === 'leased' && x.leaseMachineId !== machine._id && (x.leaseExpiresAt ?? 0) > Date.now())
       fail('conflict', 'Another machine is delivering this.')
     if (route !== 'manual' && x.claim?.session) {

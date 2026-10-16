@@ -312,7 +312,7 @@ export default defineSchema({
     parkedGeneration: v.optional(v.number()),
     leaseExpiresAt: v.optional(v.number()),
     /** The identity and destination of this delivery attempt, retained for idempotent receipts. */
-    claim: v.optional(v.object({ token: v.string(), session: v.union(session, v.null()) })),
+    claim: v.optional(v.object({ token: v.string(), session: v.union(session, v.null()), machineId: v.optional(v.id('machines')) })),
     claimGeneration: v.optional(v.number()),
     route: v.optional(v.string()),
     /** The machine that said it was handed over, where a machine did: a machine that was at work on it and did not hand it over itself has lost it to that one. */
