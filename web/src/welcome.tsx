@@ -1,6 +1,7 @@
 // What a display shows while there is nothing on it: the things It can be, played one after
 // another as the launch film draws them, and beside them the sentence that gets a person
 // started, to give to their agent.
+import { ALIVE } from '@it/protocol'
 import { useMutation, useQuery } from 'convex/react'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -72,15 +73,34 @@ export function useTour() {
   const now = useNow(2_000)
   /** When the person pressed the button here, and whether an agent was waiting to hear it. */
   const [pressed, setPressed] = useState<{ at: number; heard: boolean } | null>(null)
+  // A reply to an older asking must not bring the tour back after the person chose Skip.
+  const request = useRef(0)
   const waiting = tour !== undefined && tour.waitingUntil !== null && tour.waitingUntil > now
   const by = agentName(tour?.by ?? null) ?? 'Your agent'
   const ask = useCallback(() => {
+    const mine = ++request.current
     asking({}).then(
-      (said) => setPressed({ at: Date.now(), heard: (said as { waiting: boolean }).waiting }),
-      (err) => toast(refusal(err).message, 'error'),
+      (said) => {
+        if (request.current === mine) setPressed({ at: Date.now(), heard: (said as { waiting: boolean }).waiting })
+      },
+      (err) => {
+        if (request.current === mine) toast(refusal(err).message, 'error')
+      },
     )
   }, [asking])
-  const skip = useCallback(() => void ending({}).catch((err) => toast(refusal(err).message, 'error')), [ending])
+  const skip = useCallback(() => {
+    const mine = request.current
+    void ending({}).then(
+      () => {
+        if (request.current !== mine) return
+        request.current++
+        setPressed(null)
+      },
+      (err) => {
+        if (request.current === mine) toast(refusal(err).message, 'error')
+      },
+    )
+  }, [ending])
   return {
     /** Whether the backend has said how things stand. */
     known: tour !== undefined,
@@ -140,18 +160,42 @@ export function TourDialog({ onClose }: { onClose: () => void }) {
 }
 
 /**
- * The agent apps on the person's machines, for the owner: those that are connected, and those
- * that were found there and could be. Unknown until the backend has said.
+ * The agent apps on the person's machines, for the owner: those that are connected, those of
+ * them on machines currently available, and those that were found there and could be connected. Unknown
+ * until the backend has said.
  */
-function useApps(owner: boolean): { connected: string[]; more: string[] } | undefined {
-  const machines = useQuery(api.machines.list, owner ? {} : 'skip') as { harnesses: { id: string; addon: string }[] }[] | undefined
+function useApps(owner: boolean): { connected: string[]; ready: string[]; approval: string[]; more: string[] } | undefined {
+  const machines = useQuery(api.machines.list, owner ? {} : 'skip') as
+    | {
+        harnesses: { id: string; addon: string }[]
+        wanted?: string[]
+        lastSeenAt: number
+        connectorVersion: string | null
+        off?: boolean
+        paused?: string | null
+      }[]
+    | undefined
+  const now = useNow()
   if (!owner || !machines) return undefined
   const named = (ids: string[]) => [...new Set(ids)].map((id) => agentName(id) ?? id)
-  const all = machines.flatMap((m) => m.harnesses)
-  const on = all.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval').map((h) => h.id)
+  const appsOn = (m: (typeof machines)[number]) => m.harnesses.map((h) => ({ ...h, addon: m.wanted && !m.wanted.includes(h.id) ? 'not_connected' : h.addon }))
+  const all = machines.flatMap(appsOn)
+  const connected = (h: { addon: string }) => h.addon === 'connected' || h.addon === 'needs_approval'
+  const on = all.filter(connected).map((h) => h.id)
+  const there = machines.filter((m) => !m.off && !m.paused && m.connectorVersion !== null && now - m.lastSeenAt < ALIVE.onlineMs)
+  const ready = there.flatMap((m) =>
+    appsOn(m)
+      .filter((h) => h.addon === 'connected')
+      .map((h) => h.id),
+  )
+  const approval = there.flatMap((m) =>
+    appsOn(m)
+      .filter((h) => h.addon === 'needs_approval' && !ready.includes(h.id))
+      .map((h) => h.id),
+  )
   // Found and not connected, and nothing stands in the way of connecting it: not one that is too old, or that It cannot connect yet
   const off = all.filter((h) => !on.includes(h.id) && h.addon !== 'unavailable' && h.addon !== 'too_old').map((h) => h.id)
-  return { connected: named(on), more: named(off) }
+  return { connected: named(on), ready: named(ready), approval: named(approval), more: named(off) }
 }
 
 /** A list of names as a person says it: "Claude Code", "Claude Code and Codex", "Claude Code, Codex and Pi". */
@@ -208,10 +252,17 @@ export function Starters({ owner, notice }: { owner: boolean; notice?: ReactNode
   )
 }
 
-export function Welcome({ owner }: { owner: boolean }) {
+/** What a browser is asked, to learn that the person's system asks for less motion. */
+const LESS_MOTION = '(prefers-reduced-motion: reduce)'
+const lessMotion = () => typeof matchMedia === 'function' && matchMedia(LESS_MOTION)?.matches === true
+
+/**
+ * The first screen. How things stand with the tour is given to it by whoever chose to show it:
+ * that the person asked for the tour here is known in this tab alone, and what chooses between
+ * this screen and the one for when a tour is over has to know it too.
+ */
+export function Welcome({ owner, tour }: { owner: boolean; tour: ReturnType<typeof useTour> }) {
   const apps = useApps(owner)
-  const connected = apps?.connected
-  const tour = useTour()
   const panel = useRef<HTMLDivElement>(null)
   const stage = useRef<HTMLDivElement>(null)
   const first = useRef<HTMLSpanElement>(null)
@@ -222,6 +273,14 @@ export function Welcome({ owner }: { owner: boolean }) {
   /** The things the film has, once it is playing, and which of them is up. Until then the screen stands still. */
   const [things, setThings] = useState<typeof THINGS>([])
   const [at, setAt] = useState(-1)
+  // Whether the film stands still. It does from the start for someone who has asked their
+  // system for less motion, where a thing is shown whole and nothing moves: the stylesheet
+  // stills what it animates, and cannot still what is drawn here. And it does when the person
+  // stops it, with the button under it, which is the one way to stop it from the keyboard
+  const [still, setStill] = useState(lessMotion)
+  const stillNow = useRef(still)
+  stillNow.current = still
+  useEffect(() => playing.current?.still(still), [still])
 
   useEffect(() => {
     // Where there is nothing to draw with, the screen says what it has to say in words and shows no picture
@@ -236,22 +295,34 @@ export function Welcome({ owner }: { owner: boolean }) {
       void line.offsetWidth
       line.classList.add('in')
     }
+    // What the person's system asks is followed as it changes while this screen is up
+    const less = typeof matchMedia === 'function' ? matchMedia(LESS_MOTION) : null
+    const changed = (e: { matches: boolean }) => setStill(e.matches)
+    less?.addEventListener?.('change', changed)
+    const begunStill = stillNow.current
     void import('./film/play')
       .then(({ play }) =>
-        play(panel.current!, stage.current!, {
-          headline(text) {
-            const [a, b = ''] = text.split('\n')
-            if (first.current) first.current.textContent = a ?? ''
-            if (second.current) second.current.textContent = b
+        play(
+          panel.current!,
+          stage.current!,
+          {
+            headline(text) {
+              const [a, b = ''] = text.split('\n')
+              if (first.current) first.current.textContent = a ?? ''
+              if (second.current) second.current.textContent = b
+            },
+            thing: (index) => setAt(index),
+            you: (text) => say(you.current, text),
+            did: (text, by) => say(did.current, text, by),
           },
-          thing: (index) => setAt(index),
-          you: (text) => say(you.current, text),
-          did: (text, by) => say(did.current, text, by),
-        }),
+          begunStill,
+        ),
       )
       .then((started) => {
         if (over) return started.stop()
         playing.current = started
+        // It may have changed while the film's typefaces were being fetched
+        if (stillNow.current !== begunStill) started.still(stillNow.current)
         // Only what the film has is offered, in its order, under the names given here
         setThings(started.cards.flatMap((card) => THINGS.filter((t) => t.key === card.key)))
       })
@@ -259,6 +330,7 @@ export function Welcome({ owner }: { owner: boolean }) {
       .catch(() => {})
     return () => {
       over = true
+      less?.removeEventListener?.('change', changed)
       playing.current?.stop()
       playing.current = null
     }
@@ -269,7 +341,7 @@ export function Welcome({ owner }: { owner: boolean }) {
   return (
     <main className="hello" data-playing={things.length ? '' : undefined}>
       <div className="hello-text">
-        <div className="hello-eyebrow">{connected?.length ? `${listed(connected)} ${connected.length > 1 ? 'are' : 'is'} listening` : 'It is listening'}</div>
+        <div className="hello-eyebrow">It is ready to show pages</div>
         {/* What is typed here is read out once, whole: letter by letter it would be read as noise */}
         <h2 className="hello-h" aria-label="It can be anything your agent needs">
           <span aria-hidden="true">
@@ -279,7 +351,16 @@ export function Welcome({ owner }: { owner: boolean }) {
             <i className="hello-dot" />
           </span>
         </h2>
-        <p className="hello-lede">Your agent builds whatever the moment needs, here, and what you do on it goes back to the agent.</p>
+        <p className="hello-lede">Open your agent to start. It builds a page here, and what you do on the page goes back to the agent.</p>
+        {apps && apps.connected.length > 0 && apps.ready.length === 0 && apps.approval.length === 0 && (
+          <p className="hello-hint">Your agent's machine is offline or paused. Check Machines before starting.</p>
+        )}
+        {apps && apps.approval.length > 0 && (
+          <p className="hello-hint">
+            {`${listed(apps.approval)} needs add-on approval. Open the app to review it.`}
+            {apps.approval.includes('Codex') && ' Codex can still receive queued clicks in an open conversation.'}
+          </p>
+        )}
         <div className="hello-say">
           <TourAsk tour={tour} />
         </div>
@@ -345,6 +426,11 @@ export function Welcome({ owner }: { owner: boolean }) {
               {thing.name}
             </button>
           ))}
+          {things.length > 0 && (
+            <button type="button" className="hello-thing" aria-label={still ? 'Play the film' : 'Pause the film'} onClick={() => setStill(!still)}>
+              {still ? 'Play' : 'Pause'}
+            </button>
+          )}
         </fieldset>
       </div>
     </main>

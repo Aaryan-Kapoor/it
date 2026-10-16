@@ -92,6 +92,63 @@ describe('the box a person types to a page’s agent in', () => {
     expect(box()!.value).toBe('')
   })
 
+  test('what is typed while a message is on its way is still in the box when that message has been taken', async () => {
+    await shown()
+    await act(async () => opener().click())
+    await type('first message')
+    await act(async () => send().click())
+    await type('second message, typed while waiting')
+    await act(async () => answer!.accept({ actionId: 'a1' }))
+    expect(box()!.value).toBe('second message, typed while waiting')
+    // And is a message of its own when it is sent
+    await act(async () => send().click())
+    expect(client.mutation.mock.calls.map((c) => c[1].text)).toEqual(['first message', 'second message, typed while waiting'])
+    expect(client.mutation.mock.calls[1]![1].clientActionId).not.toBe(client.mutation.mock.calls[0]![1].clientActionId)
+    await act(async () => answer!.accept({ actionId: 'a2' }))
+    expect(box()!.value).toBe('')
+  })
+
+  test('a draft edited away and back to the words on their way stays in the box and is sent as a message of its own', async () => {
+    await shown()
+    await act(async () => opener().click())
+    await type('please try again')
+    await act(async () => send().click())
+    await type('another draft')
+    await type('please try again')
+    await act(async () => answer!.accept({ actionId: 'a1' }))
+    expect(client.mutation.mock.calls.map((c) => c[1].text)).toEqual(['please try again'])
+    expect(box()!.value).toBe('please try again')
+    await act(async () => send().click())
+    expect(client.mutation.mock.calls.map((c) => c[1].text)).toEqual(['please try again', 'please try again'])
+    expect(client.mutation.mock.calls[1]![1].clientActionId).not.toBe(client.mutation.mock.calls[0]![1].clientActionId)
+    await act(async () => answer!.accept({ actionId: 'a2' }))
+    expect(box()!.value).toBe('')
+  })
+
+  test('a message on its way is said to be in this tab alone, and the site is not loaded afresh over it, until It has taken it', async () => {
+    vi.useFakeTimers()
+    try {
+      await shown()
+      const outbox = await import('./outbox')
+      const status = () => host.querySelector('.status')?.textContent ?? null
+      await act(async () => opener().click())
+      await type('are you there')
+      expect(outbox.anyUnsaved()).toBe(false)
+      await act(async () => send().click())
+      expect(status()).toBe('Sending. What you typed is only in this tab, so keep it open')
+      expect(outbox.anyUnsaved()).toBe(true)
+      // A few seconds on with no answer, as when It cannot be reached, it is not said to be on its way
+      await act(async () => void (await vi.advanceTimersByTimeAsync(4100)))
+      expect(status()).toBe('Not sent yet. What you typed is only in this tab, so keep it open')
+      expect(box()!.value).toBe('are you there')
+      await act(async () => answer!.accept({ actionId: 'a1' }))
+      expect(outbox.anyUnsaved()).toBe(false)
+      expect(status()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test('keeps what was typed when it was refused, says why, and sends it again under the same id', async () => {
     await shown()
     await act(async () => opener().click())
@@ -120,6 +177,15 @@ describe('the box a person types to a page’s agent in', () => {
     expect(location.pathname).toBe('/p/plan')
   })
 
+  test('closed with Escape, it leaves the keyboard on the button that opened it', async () => {
+    await shown()
+    await act(async () => opener().click())
+    expect(document.activeElement).toBe(box())
+    await act(async () => void box()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+    expect(box()).toBeNull()
+    expect(document.activeElement).toBe(opener())
+  })
+
   test('is not offered on a page that has nothing published', async () => {
     page = { ...page, version: null }
     await shown()
@@ -139,6 +205,19 @@ describe('what a page’s agent said above the page', () => {
     page = { ...page, said: { text: 'And centred.', at: NOW } }
     await drawnAgain()
     expect(line()).toBe('And centred.')
+  })
+
+  test('one that was dismissed is not brought back by opening the box, nor by drawing the page again in that tab', async () => {
+    page = { ...page, said: { text: 'Bigger now.', at: NOW - 60_000 } }
+    await shown()
+    await act(async () => host.querySelector<HTMLButtonElement>('.page-talk-x')!.click())
+    await act(async () => opener().click())
+    expect(box()).not.toBeNull()
+    expect(line()).toBeNull()
+    await act(async () => root.unmount())
+    host.remove()
+    await shown()
+    expect(host.querySelector('.page-talk')).toBeNull()
   })
 
   test('is not brought up by itself long after, and is there for whoever opens the box', async () => {

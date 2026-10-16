@@ -86,6 +86,20 @@ describe('adding a display, in the browser on the machine It runs on', () => {
     await show(createElement(Displays, { thisDisplay: 'display-1' }))
   }
 
+  test('default ports share one destination and a chosen origin survives a spelling change', async () => {
+    browser.reconfigure({ url: 'http://workstation/' })
+    watched['network:get'] = { on: true, addresses: ['http://workstation:80', 'http://other:80', 'http://workstation:4700'] }
+    await displays()
+    await press('Add a display')
+    const options = () => [...host.querySelectorAll('option')].map((o) => o.value)
+    expect(options()).toEqual(['http://workstation', 'http://other:80', 'http://workstation:4700'])
+    await choose('http://other:80')
+    await networkIs({ on: true, addresses: ['http://other', 'http://workstation:4700'] })
+    expect(text('.pair-address')).toBe(`http://other/pair#${CODE}`)
+    await networkIs({ on: true, addresses: ['http://workstation:4700'] })
+    expect(text('.pair-address')).toBe(`http://workstation/pair#${CODE}`)
+  })
+
   test('with the network on, the owner is given the machine’s address on the network to open on the other screen, a QR code of it, and the code in letters', async () => {
     watched['network:get'] = { on: true, addresses: [LAN] }
     await displays()
@@ -356,6 +370,25 @@ describe('what is said of an agent app on a machine', () => {
   })
 })
 
+describe('giving a machine another name', () => {
+  test('however the field is left, by Escape, by Cancel or by saving, the keyboard is back on Rename', async () => {
+    watched['machines:list'] = [
+      { id: 'machine-1', name: 'the desk', lastSeenAt: Date.now(), connectorVersion: '0.1.0', system: 'linux', harnesses: [], wanted: [], wakes: [] },
+    ]
+    const { Machines } = await import('./machines')
+    await show(createElement(Machines))
+    const field = () => host.querySelector<HTMLInputElement>('input[aria-label="Machine name"]')
+    for (const leave of ['Escape', 'Cancel', 'Save']) {
+      await press('Rename')
+      expect([leave, document.activeElement === field()]).toEqual([leave, true])
+      if (leave === 'Escape') await act(async () => void field()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+      else await press(leave)
+      expect([leave, field(), document.activeElement?.textContent]).toEqual([leave, null, 'Rename'])
+    }
+    expect(calls.filter((fn) => fn === 'machines:rename').length).toBe(1)
+  })
+})
+
 describe('revoking a machine', () => {
   test('the owner is asked first, and told how a machine that joined is used again: by leaving and being added again', async () => {
     const asked: string[] = []
@@ -539,6 +572,62 @@ describe('the network as a switch', () => {
     expect(said()).toBe('It has not said what became of that. The choice shows how the network stands now.')
     expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
     expect(ways().map((w) => w.checked)).toEqual([true, false, false])
+  })
+
+  test('the waiting is counted by this browser’s own clock: one that is an hour ahead of the machine It runs on is given the choice back as soon', async () => {
+    vi.useFakeTimers()
+    const { learnClock } = await import('./lib')
+    // As a heartbeat's answer teaches the site: the backend's clock is an hour behind this browser's
+    learnClock(Date.now() - 3_600_000)
+    try {
+      watched['network:get'] = stands()
+      await panel()
+      await pick(1)
+      await act(async () => void (await vi.advanceTimersByTimeAsync(UNTAKEN + 1500)))
+      expect(said()).toContain('It has not taken that yet.')
+      await act(async () => void (await vi.advanceTimersByTimeAsync(GIVEN_UP)))
+      expect(said()).toBe('It has not said what became of that. The choice shows how the network stands now.')
+      expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
+    } finally {
+      learnClock(Date.now())
+    }
+  })
+
+  test('an asking that was given up on and is refused afterwards leaves the next asking alone: that one goes on, and what is said is its own', async () => {
+    vi.useFakeTimers()
+    const { ConvexError } = await import('convex/values')
+    let refuse!: (err: unknown) => void
+    answers['network:ask'] = () =>
+      new Promise((_, reject) => {
+        refuse = reject
+      })
+    watched['network:get'] = stands()
+    await panel()
+    await pick(1)
+    await act(async () => void (await vi.advanceTimersByTimeAsync(GIVEN_UP + 1500)))
+    expect(said()).toBe('It has not said what became of that. The choice shows how the network stands now.')
+    // Asked again, and this time the backend takes it
+    answers['network:ask'] = () => ({ asked: ASKED })
+    await pick(1)
+    expect(said()).toBe('Turning the network on…')
+    // The first asking is refused only now
+    await act(async () => refuse(new ConvexError({ code: 'busy', message: 'The first asking was refused.' })))
+    expect(said()).toBe('Turning the network on…')
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(true)
+    // And the second is still known by its name when the service answers it
+    await networkStands({ answered: { to: 'on', at: Date.now() + 1000, ok: false, why: 'cannot_listen', asked: ASKED } })
+    expect(said()).toContain('It could not listen on that machine’s network addresses, so the network is left off.')
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
+  })
+
+  test('an asking the backend refuses is over at once, and what the backend said is shown', async () => {
+    const { ConvexError } = await import('convex/values')
+    answers['network:ask'] = () => Promise.reject(new ConvexError({ code: 'busy', message: 'The asking was refused.' }))
+    watched['network:get'] = stands()
+    await panel()
+    await pick(1)
+    expect(said()).toBe('The asking was refused.')
+    expect(host.querySelector<HTMLFieldSetElement>('.net-ways')!.disabled).toBe(false)
   })
 
   test('on a machine the internet reaches, turning it on is asked about first, with why, and nothing is done on a no', async () => {

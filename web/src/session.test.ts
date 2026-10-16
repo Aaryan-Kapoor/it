@@ -1026,6 +1026,41 @@ describe('pairing with a code', () => {
     expect(d.to('/session/redeem').length).toBe(3)
   })
 
+  test('a code whose redeeming is never answered is given up on, later than the door itself gives the backend up, and is said to have met trouble', async () => {
+    // Each time limit the site sets, as the browser would keep it: how long, and what ends a request that is still waiting then
+    const limits: { ms: number; end: () => void }[] = []
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const limit = new AbortController()
+      limits.push({ ms, end: () => limit.abort(new DOMException('The operation timed out.', 'TimeoutError')) })
+      return limit.signal
+    })
+    // A connection that carries the request off and brings nothing back, as one does that was lost on the way
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (path: string, init: RequestInit = {}) =>
+          new Promise<Response>((answer, fail) => {
+            if (path !== '/session/redeem') return answer(new Response(JSON.stringify(refused.body), { status: 401 }))
+            init.signal?.addEventListener('abort', () => fail(init.signal?.reason))
+          }),
+      ),
+    )
+    const session = await load()
+    await session.begin()
+    limits.length = 0
+    let done = false
+    const pairing = session.pair(CODE).then(() => {
+      done = true
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect([done, limits.length]).toEqual([false, 1])
+    // The door gives the backend thirty seconds: a browser that gave up sooner would put again a code the backend was still taking
+    expect(limits[0]!.ms).toBeGreaterThan(30_000)
+    limits[0]!.end()
+    await pairing
+    expect(session.current()).toMatchObject({ loaded: true, paired: false, code: 'trouble' })
+  })
+
   /** What the door answers once ten codes from one address have been refused within a minute: it tries no more from that address until the minute is over. */
   const tooMany = (seconds: number): Answer => ({ status: 429, body: { error: 'too_many_wrong_codes' }, headers: { 'retry-after': String(seconds) } })
 

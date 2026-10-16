@@ -157,6 +157,8 @@ export function Mount({
     let tokens = BURST
     let filled = Date.now()
     const timer = setTimeout(() => live && setPhase({ is: 'failed', why: 'The page did not load. Check the connection.' }), READY_MS)
+    /** The framing again that a showing which ran out too soon after the last one is waiting for. */
+    let later: ReturnType<typeof setTimeout> | undefined
 
     // "At the page" means the person did something in it lately. A browser tells this page when
     // the person has just clicked, tapped or typed anywhere in it, frames included, and a script
@@ -221,11 +223,17 @@ export function Mount({
     const fromPage = async (from: MessagePort, message: PageToSite) => {
       if (!message || typeof message !== 'object') return
       if (message.type === 'it:lapsed') {
-        // The page's showing is over. Show it again, but not in a loop.
-        if (Date.now() - lastRemount.current > REMOUNT_EVERY_MS) {
+        // The page's showing is over. Show it again, but not in a loop: one that is over so
+        // soon after the last was begun is shown again when that while has passed. It is not
+        // let go by, since a document says that its showing is over only once, and the page
+        // would stay as it is with nothing under it to load from.
+        const remount = () => {
           lastRemount.current = Date.now()
           again()
         }
+        const wait = Math.min(lastRemount.current + REMOUNT_EVERY_MS - Date.now(), REMOUNT_EVERY_MS)
+        if (wait < 0) remount()
+        else later ??= setTimeout(remount, wait)
         return
       }
       if (message.type === 'it:fault') {
@@ -344,6 +352,7 @@ export function Mount({
     return () => {
       live = false
       clearTimeout(timer)
+      clearTimeout(later)
       clearInterval(looking)
       window.removeEventListener('message', onMessage)
       port.current?.close()

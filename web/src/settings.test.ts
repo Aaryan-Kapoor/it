@@ -100,6 +100,22 @@ describe('what each kind of session is offered', () => {
     expect(calls).toEqual([{ fn: 'displays:forget', args: { displayId: 'display-2' } }])
   })
 
+  test('however the field for a display’s name is left, by Escape, by Cancel or by saving, the keyboard is back on Rename', async () => {
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    const row = () => [...host.querySelectorAll('li')][1]!
+    const field = () => row().querySelector<HTMLInputElement>('input[aria-label="Display name"]')
+    const inRow = (label: string) => [...row().querySelectorAll('button')].find((b) => b.textContent === label)!
+    for (const leave of ['Escape', 'Cancel', 'Save']) {
+      await act(async () => inRow('Rename').click())
+      expect([leave, document.activeElement === field()]).toEqual([leave, true])
+      if (leave === 'Escape') await act(async () => void field()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+      else await act(async () => inRow(leave).click())
+      expect([leave, field(), document.activeElement === inRow('Rename')]).toEqual([leave, null, true])
+    }
+    expect(calls.map((c) => c.fn)).toEqual(['displays:rename'])
+  })
+
   test('a display whose browser’s pairing has ended is said to be not paired, and not when it was last open', async () => {
     watched['displays:list'] = [
       { ...DISPLAYS[0]!, paired: true },
@@ -300,5 +316,62 @@ describe('taking a copy of the records', () => {
         ],
       })
     }
+  })
+})
+
+describe('downloading the records', () => {
+  test('each batch is handed to the browser as it is read and not kept as text until the end, and the file holds every record with its last word', async () => {
+    // How many pieces of text the most that any one piece handed to the browser was made of, and what was last given it to download
+    let most = 0
+    let given: Blob | null = null
+    const Real = Blob
+    vi.stubGlobal(
+      'Blob',
+      class extends Real {
+        constructor(parts: BlobPart[] = [], options?: BlobPropertyBag) {
+          super(parts, options)
+          most = Math.max(most, parts.filter((part) => typeof part === 'string').length)
+        }
+      },
+    )
+    URL.createObjectURL = (blob: Blob) => {
+      given = blob
+      return 'blob:records'
+    }
+    URL.revokeObjectURL = () => {}
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    /** A history in batches of a hundred, as the backend gives it: three batches for each of two pages. */
+    const batch = (artifactId: string, cursor: string | null) => {
+      const from = Number(cursor ?? 0)
+      return {
+        actions: Array.from({ length: 100 }, (_, n) => ({ id: `${artifactId}-${from + n}`, payload: JSON.stringify({ n: from + n }) })),
+        next: from + 100 < 300 ? String(from + 100) : null,
+      }
+    }
+    answers['account:exportStart'] = () => ({ owner: 'user-1', exportedAt: 1_800_000_000_000, displays: [{ name: 'Kitchen TV' }], pages: ['page-1', 'page-2'] })
+    answers['account:exportMachines'] = () => ({ machines: [{ name: 'the laptop' }], next: null })
+    answers['account:exportPage'] = ({ artifactId }) => ({ id: artifactId, title: 'Plan', state: '{"step":2}' })
+    answers['account:exportActions'] = ({ artifactId, cursor }) => batch(artifactId, cursor)
+    answers['account:exportNotifications'] = () => ({ notifications: [{ title: 'Done' }], next: null })
+    answers['account:exportDeletions'] = () => ({ deletions: [], next: null })
+    const { Settings } = await import('./settings')
+    await show(createElement(Settings, { user: 'user-1', owner: true, display: DISPLAYS[0]!, onSignOut: () => {} }))
+    await press('Download my data')
+    await vi.waitFor(() => expect(given).not.toBeNull())
+    // No more text at once than one batch is: the six hundred actions were never all held as text
+    expect(most).toBeLessThanOrEqual(110)
+    const text = await new Promise<string>((read) => {
+      const reader = new FileReader()
+      reader.onload = () => read(reader.result as string)
+      reader.readAsText(given!)
+    })
+    const records = JSON.parse(text)
+    expect(records).toMatchObject({ exportedAt: 1_800_000_000_000, displays: [{ name: 'Kitchen TV' }], machines: [{ name: 'the laptop' }], complete: true })
+    expect(records.pages.map((page: { id: string; state: unknown; actions: unknown[] }) => [page.id, page.state, page.actions.length])).toEqual([
+      ['page-1', { step: 2 }, 300],
+      ['page-2', { step: 2 }, 300],
+    ])
+    expect(records.pages[1].actions[299]).toEqual({ id: 'page-2-299', payload: { n: 299 } })
+    expect(records.notifications).toEqual([{ title: 'Done' }])
   })
 })

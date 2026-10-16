@@ -109,6 +109,42 @@ describe('this display, on plain http', () => {
   })
 })
 
+describe('copying, on plain http', () => {
+  test('is done the older way, from a field that holds the text, and the keyboard is left on the button that was pressed', async () => {
+    plainHttp()
+    const { copy } = await import('./brand')
+    // As a browser does it: choosing what is in a field takes the keyboard to that field
+    const select = HTMLTextAreaElement.prototype.select
+    vi.spyOn(HTMLTextAreaElement.prototype, 'select').mockImplementation(function (this: HTMLTextAreaElement) {
+      this.focus()
+      select.call(this)
+    })
+    const copied: string[] = []
+    Object.assign(document, { execCommand: () => copied.push((document.activeElement as HTMLTextAreaElement).value) > 0 })
+    const pressed = document.body.appendChild(document.createElement('button'))
+    try {
+      pressed.focus()
+      expect(await copy('it network on')).toBe(true)
+      expect(copied).toEqual(['it network on'])
+      expect(document.activeElement).toBe(pressed)
+      expect(document.querySelector('textarea')).toBeNull()
+      // And when the browser will not copy that way either
+      Object.assign(document, {
+        execCommand: () => {
+          throw new Error('NotAllowedError')
+        },
+      })
+      expect(await copy('it network on')).toBe(false)
+      expect(document.activeElement).toBe(pressed)
+      expect(document.querySelector('textarea')).toBeNull()
+    } finally {
+      pressed.remove()
+      Reflect.deleteProperty(document, 'execCommand')
+      vi.restoreAllMocks()
+    }
+  })
+})
+
 describe('notifications, on plain http', () => {
   for (const as of ['chromium', 'firefox'] as const) {
     test(`in ${as} nothing is offered that cannot work, and nothing throws: turning them on answers with why not, and asks nothing of the browser or the backend`, async () => {

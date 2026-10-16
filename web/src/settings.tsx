@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { version } from '../package.json'
 import { About } from './about'
 import { Dialog } from './dialog'
-import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow } from './lib'
+import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow, useOpener } from './lib'
 import { NetworkSwitch, NoAddress, OtherAddresses, useNetwork, useWhere } from './network'
 import { thisPairing } from './outbox'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
@@ -48,6 +48,7 @@ function DisplayItem({
   const rename = useMutation(api.displays.rename)
   const forget = useMutation(api.displays.forget)
   const [name, setName] = useState<string | null>(null)
+  const renaming = useOpener<HTMLButtonElement>(name !== null)
   const support = pushSupport()
   return (
     <li className="row">
@@ -114,7 +115,7 @@ function DisplayItem({
           </label>
         )}
         {(owner || here) && name === null && (
-          <button type="button" className="link" onClick={() => setName(d.named ? d.name : '')}>
+          <button ref={renaming} type="button" className="link" onClick={() => setName(d.named ? d.name : '')}>
             Rename
           </button>
         )}
@@ -342,8 +343,10 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
   const [typed, setTyped] = useState('')
 
   // Read a piece at a time and put together here, so that records of any size can be taken
-  // away. The pieces are kept as separate pieces of text and handed to the browser as they are:
-  // the whole history never has to fit in one string.
+  // away. Each batch is handed to the browser as it is read, as a blob of its own, and its
+  // text let go of: a browser keeps what a blob holds outside the memory the site's script
+  // has, and a large one on disk where it can. Kept as text until the end, a long history was
+  // in the tab's memory twice over at the moment it was put together.
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
@@ -361,7 +364,13 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
       const still = () => {
         if (!alive.current) throw new Error('The export was stopped.')
       }
-      const parts: string[] = [`{\n"exportedAt": ${start.exportedAt},\n"displays": ${JSON.stringify(start.displays)},\n"machines": [`]
+      let parts: string[] = [`{\n"exportedAt": ${start.exportedAt},\n"displays": ${JSON.stringify(start.displays)},\n"machines": [`]
+      /** What has been handed to the browser so far, in the order it is to be written. */
+      const handed: Blob[] = []
+      const hand = () => {
+        handed.push(new Blob(parts))
+        parts = []
+      }
       const list = async <T,>(fetchBatch: (cursor: string | null) => Promise<{ items: T[]; next: string | null }>, shape: (item: T) => unknown) => {
         let first = true
         for (let cursor: string | null = null; ; ) {
@@ -371,6 +380,7 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
             parts.push(`${first ? '' : ','}\n${JSON.stringify(shape(item))}`)
             first = false
           }
+          hand()
           if (batch.next === null) break
           cursor = batch.next
         }
@@ -417,7 +427,8 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
       )
       // Said last, and only when every piece was read
       parts.push('\n],\n"complete": true\n}\n')
-      const url = URL.createObjectURL(new Blob(parts, { type: 'application/json' }))
+      hand()
+      const url = URL.createObjectURL(new Blob(handed, { type: 'application/json' }))
       const a = Object.assign(document.createElement('a'), { href: url, download: `it-export-${new Date().toISOString().slice(0, 10)}.json` })
       document.body.append(a)
       a.click()

@@ -404,7 +404,6 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const key = displayKey()
   const display = useQuery(api.displays.mine, { key })
   const pages = useQuery(api.artifacts.list, {})
-  const heartbeat = useMutation(api.displays.heartbeat)
   const [leaving, setLeaving] = useState(false)
   const [stillIn, setStillIn] = useState(false)
   // What is typed into the search, the finder and the tour's dialog, which the bar opens and the shell shows
@@ -413,10 +412,15 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const [tour, setTour] = useState(false)
   const closeFinder = useCallback(() => setFinding(false), [])
   const closeTour = useCallback(() => setTour(false), [])
-  // The finder opens on its key from anywhere on the site
+  // The finder opens on its key from anywhere on the site but a dialog
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+      // Not over a dialog, which keeps the keyboard to itself: Tab in the finder would go to the dialog under it
+      if (document.querySelector('[role="dialog"]')) {
+        e.preventDefault()
+        return
+      }
       e.preventDefault()
       setFinding(true)
     }
@@ -427,21 +431,37 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   // Presence, so a notification knows whether this display is open. The answer carries the
   // backend's clock, which is what "recent" is judged by everywhere on the site.
   useEffect(() => {
+    let live = true
+    let asking = false
     const beat = () => {
-      if (document.visibilityState !== 'visible') return
-      heartbeat({ key }).then(
-        (r) => learnClock(r.now),
-        () => {},
+      // One at a time: a tab that is hidden and shown again while the backend is slow to answer does not ask once more each time
+      if (asking || document.visibilityState !== 'visible') return
+      asking = true
+      // Trouble the backend had for a moment is got past by asking once more, a second or two
+      // on, and is then written nowhere. Left to the next beat, a minute later, the display
+      // would be taken for closed and the backend's clock go unlearned for that minute
+      askTwice(
+        convex,
+        (calls) => calls.mutation(api.displays.heartbeat, { key }),
+        () => live,
       )
+        .then(
+          (r) => learnClock(r.now),
+          () => {},
+        )
+        .finally(() => {
+          asking = false
+        })
     }
     beat()
     const t = setInterval(beat, 60_000)
     document.addEventListener('visibilitychange', beat)
     return () => {
+      live = false
       clearInterval(t)
       document.removeEventListener('visibilitychange', beat)
     }
-  }, [heartbeat, key])
+  }, [convex, key])
 
   // Clicks that were waiting to be sent go when the connection comes back: when the browser
   // says it is online again, and when the connection to the backend itself is made again,
@@ -582,6 +602,9 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     if (!showing || showing.at <= shownAt.current) return
     shownAt.current = showing.at
     sessionStorage.setItem(shownKey, String(showing.at))
+    // The tour's dialog is the way to ask an agent for the tour, and what an agent brings up
+    // after it is most often that tour: left open, it would lie over the page it asked for
+    setTour(false)
     navigate(`/p/${encodeURIComponent(showing.slug)}`)
   }, [display, shownKey])
 

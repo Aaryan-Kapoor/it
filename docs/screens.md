@@ -26,7 +26,7 @@ A page that is open has a bar above it: the way back, the page's title, which ag
 
 The speech bubble in the bar opens a box to type to the page's agent in. What you type there goes as anything done on the page goes: to the conversation the page belongs to, kept until it is taken, and reopening that conversation where Auto-wake is on. The agent is told that you typed it, in your own words, which is a thing no page can do: a page that tries to send something under that name is refused. It is a second way to the agent beside whatever the page itself has for it, so that you do not have to go back to the agent's own window to say something about what is in front of you. A message is at most 4,000 characters.
 
-An agent can answer in the same place. `it say <id> "<text>"` puts a line of its words above the page, under the bar, for an answer that has no place on the page itself. It is shown by itself for half an hour, can be dismissed, and is there afterwards for whoever opens the box. Each line takes the place of the one before, and is at most 600 characters.
+An agent can answer in the same place. `it say <id> "<text>"` puts a line of its words above the page, under the bar, for an answer that has no place on the page itself. It is shown by itself for half an hour, and can be dismissed. One that was left alone is there afterwards for whoever opens the box. One that was dismissed stays away in that tab, also when the box is opened, and is there again in a tab opened afresh. Each line takes the place of the one before, and is at most 600 characters.
 
 ## Paired browsers
 

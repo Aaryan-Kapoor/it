@@ -37,26 +37,22 @@ const b64u = (buf: ArrayBuffer | null) =>
     .replace(/\//g, '_')
     .replace(/=+$/, '')
 
-// Turning notifications on takes a few steps, each of which waits on the person, the browser
-// or the network. If the person signs out while they are under way, or everything is erased,
-// the steps that remain must not put the site's script or a subscription back. Each "off" moves
-// this on, and an "on" that finds it moved since it started undoes what it made itself.
+// Every wait can be overtaken. `generation` stops work after Off, sign-out or erasure in this
+// tab; `attempt` keeps older work from touching what a later On has made; `keptFor()` keeps it
+// from acting for a person the browser no longer belongs to. `PUSH_OFF` shares Off across tabs:
+// its presence blocks repairs, and a changed value stops work already under way. Only a
+// successful On clears it. Stopped attempts undo only what they made, unless a later On owns it.
 let generation = 0
-
-// Each attempt to turn notifications on has a number. One that has been overtaken stops where
-// it is, at whichever step it finds so. Overtaken by a later attempt, it touches nothing: what
-// is in the browser by then belongs to that one. Overtaken by a sign-out or an erasing, it
-// takes away again what it made itself, the script it registered and the subscription it made,
-// and nothing that was there before it or that anything later put there.
 let attempt = 0
+const PUSH_OFF = 'it.pushOff'
 /** Asks for permission, subscribes this browser, and gives the subscription to this display. Returns 'on' or a short reason. */
-export async function turnOnPush(convex: ConvexReactClient): Promise<string> {
+export async function turnOnPush(convex: ConvexReactClient, off = localStorage.getItem(PUSH_OFF)): Promise<string> {
   const started = generation
   const mine = ++attempt
   // Whose the browser is when this begins. Kept for nobody, or for somebody else by a later
   // step, it is not theirs to be notified in: everything of theirs was erased, or it was paired anew
   const person = keptFor()
-  const overtaken = () => generation !== started || attempt !== mine || keptFor() !== person
+  const overtaken = () => generation !== started || attempt !== mine || keptFor() !== person || localStorage.getItem(PUSH_OFF) !== off
   const support = pushSupport()
   if (notSecure()) return 'Needs a secure address'
   if (support === 'needs-install') return 'Add It to your Home Screen first'
@@ -66,16 +62,24 @@ export async function turnOnPush(convex: ConvexReactClient): Promise<string> {
   /** What this attempt itself put in the browser: the script, where none was registered before it, and its subscription. */
   const made: { script?: ServiceWorkerRegistration; subscription?: PushSubscription } = {}
   /** Stops an attempt that was overtaken, taking away again what it made unless a later attempt has begun. */
-  const stopped = async (): Promise<string> => {
+  const stopped = async (subscribed?: string): Promise<string> => {
     if (attempt === mine) {
+      // Another tab's Off can reach the backend before our subscribe. Clear that late
+      // subscription afterwards, while it still belongs to this person's attempt.
+      if (subscribed && keptFor() === person && localStorage.getItem(PUSH_OFF) !== off)
+        await convex.mutation(api.push.unsubscribe, { key: subscribed }).catch(() => {})
+      if (attempt !== mine) return 'Signed out'
       await made.subscription?.unsubscribe().catch(() => {})
-      await made.script?.unregister().catch(() => {})
+      if (attempt === mine) await made.script?.unregister().catch(() => {})
     }
     return 'Signed out'
   }
   try {
+    // Permission that already stands is not asked for again: a browser may answer no to an
+    // asking that nothing the person pressed led to, as Safari does, and a subscription that
+    // is being put back by itself would be taken for one the person had refused
+    if (Notification.permission !== 'granted' && (await Notification.requestPermission()) !== 'granted') return 'Not allowed'
     // Asked after every wait, before the next thing is done: a wait may last as long as the person takes to answer the browser
-    if ((await Notification.requestPermission()) !== 'granted') return 'Not allowed'
     if (overtaken()) return stopped()
     const before = await navigator.serviceWorker.getRegistration()
     if (overtaken()) return stopped()
@@ -100,8 +104,10 @@ export async function turnOnPush(convex: ConvexReactClient): Promise<string> {
     made.subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytes(key) })
     if (overtaken()) return stopped()
     const sub = made.subscription
-    await convex.mutation(api.push.subscribe, { key: displayKey(), endpoint: sub.endpoint, p256dh: b64u(sub.getKey('p256dh')), auth: b64u(sub.getKey('auth')) })
-    if (overtaken()) return stopped()
+    const display = displayKey()
+    await convex.mutation(api.push.subscribe, { key: display, endpoint: sub.endpoint, p256dh: b64u(sub.getKey('p256dh')), auth: b64u(sub.getKey('auth')) })
+    if (overtaken()) return stopped(display)
+    localStorage.removeItem(PUSH_OFF)
     return 'on'
   } catch (err) {
     // Refused or failed after it was overtaken, as the backend refuses a browser whose session is over: what it made goes all the same
@@ -119,6 +125,7 @@ export async function turnOnPush(convex: ConvexReactClient): Promise<string> {
  */
 export async function turnOffPush(convex: ConvexReactClient, still: () => boolean = () => true): Promise<void> {
   const mine = ++generation
+  localStorage.setItem(PUSH_OFF, crypto.getRandomValues(new Uint32Array(4)).join('-'))
   const turnedOnSince = attempt
   const overtaken = () => generation !== mine || attempt !== turnedOnSince || !still()
   const registration = await navigator.serviceWorker?.getRegistration()
@@ -198,15 +205,25 @@ whenLetGo((person, whole) => {
 export async function mendPush(convex: ConvexReactClient): Promise<void> {
   try {
     if (pushSupport() === 'unsupported' || pushSupport() === 'needs-install') return
-    const registration = await navigator.serviceWorker?.getRegistration()
-    if (await registration?.pushManager.getSubscription()) return
+    // What stands when this begins, before the browser is waited on at all: the person may turn
+    // notifications off or on themselves, or the browser be signed out, during either wait, and
+    // a count taken after them would take that for something done before this began
     const started = generation
+    const begun = attempt
+    const person = keptFor()
+    const off = localStorage.getItem(PUSH_OFF)
+    if (off !== null) return
+    const overtaken = () => generation !== started || keptFor() !== person || localStorage.getItem(PUSH_OFF) !== off
+    const registration = await navigator.serviceWorker?.getRegistration()
+    if (overtaken() || attempt !== begun) return
+    const there = await registration?.pushManager.getSubscription()
+    if (there || overtaken() || attempt !== begun) return
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       const mine = attempt + 1
-      if ((await turnOnPush(convex)) === 'on') return
+      if ((await turnOnPush(convex, off)) === 'on') return
       // Overtaken by the person turning notifications on or off themselves, or by signing out:
       // what is there now is theirs, and nothing is cleaned up
-      if (generation !== started || attempt !== mine) return
+      if (overtaken() || attempt !== mine) return
     }
     await convex.mutation(api.push.unsubscribe, { key: displayKey() })
     localStorage.removeItem('it.pushAsked')
