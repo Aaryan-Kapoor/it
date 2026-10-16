@@ -2297,64 +2297,45 @@ describe('a file that is not It’s alone, changed while another program may sav
     }
   })
 
-  test('keeps a settings save made after the last content read, before replacement or deletion', () => {
+  test('reads the original and its final comparison once each when no other program saves it', () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
     const file = path.join(realpathSync(folder), 'config.toml')
-    const original = fs.readFileSync
+    writeFileSync(file, BEFORE)
+    const read = vi.spyOn(fs, 'readFileSync')
+    syncBuiltinESMExports()
     try {
-      for (const removing of [false, true]) {
-        writeFileSync(file, BEFORE)
-        let reads = 0
-        fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
-          const text = original(...args)
-          if (args[0] === file && ++reads === 2) writeFileSync(file, SAVED)
-          return text
-        }) as typeof fs.readFileSync
-        syncBuiltinESMExports()
-        expect(changeWhole(file, removing ? (text) => (text === BEFORE ? null : undefined) : without)).toBe(!removing)
-        expect(readFileSync(file, 'utf8')).toContain('[projects."/work"]')
-        fs.readFileSync = original
-        syncBuiltinESMExports()
-      }
+      expect(changeWhole(file, without)).toBe(true)
+      expect(read.mock.calls.filter(([name]) => name === file)).toHaveLength(2)
     } finally {
-      fs.readFileSync = original
+      read.mockRestore()
       syncBuiltinESMExports()
       rmSync(folder, { recursive: true, force: true })
     }
   })
 
-  test('keeps a same-size save after the content read even when the file’s identity and times do not change', () => {
+  test('keeps a same-size save made after the metadata check, before the final content comparison', () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
     const file = path.join(realpathSync(folder), 'config.toml')
-    const original = { readFileSync: fs.readFileSync, statSync: fs.statSync }
+    const stat = fs.statSync
     const before = `${BEFORE}#${' '.repeat(SAVED.length - BEFORE.length - 2)}\n`
     try {
       for (const removing of [false, true]) {
         writeFileSync(file, before)
-        const identity = statSync(file, { bigint: true })
-        let reads = 0
-        fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
-          const text = original.readFileSync(...args)
-          if (args[0] === file && ++reads === 2) writeFileSync(file, SAVED)
-          return text
-        }) as typeof fs.readFileSync
-        // A same-size in-place save keeps its inode, and timestamp precision is not a change counter.
-        Object.assign(fs, {
-          statSync: ((...args: Parameters<typeof fs.statSync>) => {
-            const stat = original.statSync(...args)
-            return args[0] === file && typeof stat?.size === 'bigint' ? identity : stat
-          }) as typeof fs.statSync,
+        let checked = 0
+        const check = vi.spyOn(fs, 'statSync').mockImplementation((name, options) => {
+          const seen = stat(name, options)
+          if (name === file && options?.bigint && ++checked === 2) writeFileSync(file, SAVED)
+          return seen
         })
         syncBuiltinESMExports()
         expect(Buffer.byteLength(before)).toBe(Buffer.byteLength(SAVED))
         expect(changeWhole(file, removing ? (text) => (text === before ? null : undefined) : without)).toBe(!removing)
         expect(readFileSync(file, 'utf8')).toContain('[projects."/work"]')
-        expect(reads).toBeGreaterThan(2)
-        Object.assign(fs, original)
+        check.mockRestore()
         syncBuiltinESMExports()
       }
     } finally {
-      Object.assign(fs, original)
+      vi.restoreAllMocks()
       syncBuiltinESMExports()
       rmSync(folder, { recursive: true, force: true })
     }

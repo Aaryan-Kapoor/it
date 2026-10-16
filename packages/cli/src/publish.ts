@@ -2,12 +2,11 @@
 
 import { execFileSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs'
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN } from '@it/protocol'
-import { legacyEmptyLock } from './legacy-lock'
-import { api, call, direct, doorRefusal, inHome, Problem, readJson, sessionAsked, sessionNote, throughDoor, writeFlushed, writePrivate } from './lib'
-import { makeOnce } from './serve/config'
+import { claimLock } from './legacy-lock'
+import { api, call, direct, doorRefusal, inHome, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
 import { agentOf, filesBand, record, sizeBand } from './usage'
 
 interface Gathered {
@@ -176,116 +175,39 @@ const CONVERSATIONS = 300
  * has been closed is reopened from the folder it was held in, and only this machine knows which
  * that was. The note is kept here and sent nowhere.
  */
-export function noteConversation(session: { harness: string; id: string }, cwd = process.cwd()): void {
+export async function noteConversation(session: { harness: string; id: string }, cwd = process.cwd()): Promise<void> {
   try {
     const key = `${session.harness}:${session.id}`
     const read = () => readJson<Record<string, { cwd: string; at: number }>>(conversationsFile()) ?? {}
-    // Read afresh once the note is this command's alone: what another wrote meanwhile is kept
-    toItself(() => {
-      const kept = read()
-      kept[key] = { cwd, at: Date.now() }
-      const newest = Object.entries(kept)
-        .filter(([, noted]) => typeof noted?.cwd === 'string' && typeof noted.at === 'number')
-        .sort((a, b) => b[1].at - a[1].at)
-        .slice(0, CONVERSATIONS)
-      writePrivate(conversationsFile(), Object.fromEntries(newest))
-    })
+    // Hooks report the folder on every event. An unchanged note needs no lock or disk flush.
+    if (read()[key]?.cwd === cwd) return
+    // Preserve the command's three-second chance to keep its note under contention, but
+    // yield between attempts so hooks never stop the connector from answering other work.
+    const until = performance.now() + 3000
+    while (performance.now() < until) {
+      const release = claimLock(`${conversationsFile()}.lock`, 10_000, randomBytes(8).toString('hex'))
+      if (release) {
+        try {
+          // Another writer may have changed the notes before this command took the lock.
+          const kept = read()
+          if (kept[key]?.cwd === cwd) return
+          kept[key] = { cwd, at: Date.now() }
+          const newest = Object.entries(kept)
+            .filter(([, noted]) => typeof noted?.cwd === 'string' && typeof noted.at === 'number')
+            .sort((a, b) => b[1].at - a[1].at)
+            .slice(0, CONVERSATIONS)
+          writePrivate(conversationsFile(), Object.fromEntries(newest))
+          return
+        } finally {
+          release()
+        }
+      }
+      // A short jitter keeps commands that started together from retrying together.
+      await sleep(5 + Math.random() * 20)
+      if (read()[key]?.cwd === cwd) return
+    }
   } catch {
     // A note that cannot be kept keeps nothing from being published
-  }
-}
-interface ConversationLock {
-  pid: number
-  holder: string
-}
-function conversationLock(file: string): ConversationLock | undefined {
-  const held = readJson<ConversationLock>(file)
-  return held && Number.isInteger(held.pid) && held.pid > 0 && typeof held.holder === 'string' && /^[0-9a-f]{16}$/.test(held.holder) ? held : undefined
-}
-// Only a lock this process has finished using can be recovered while its PID is alive.
-const abandonedConversationLocks = new Set<string>()
-function releaseConversationLock(file: string, holder: string): void {
-  const key = `${file}\0${holder}`
-  abandonedConversationLocks.add(key)
-  if (conversationLock(file)?.holder === holder) rmSync(file, { force: true })
-  abandonedConversationLocks.delete(key)
-}
-function gone(file: string, held: ConversationLock): boolean {
-  if (held.pid === process.pid && abandonedConversationLocks.has(`${file}\0${held.holder}`)) return true
-  try {
-    process.kill(held.pid, 0)
-    return false
-  } catch (err) {
-    // Permission errors and reused process numbers keep the lock held.
-    return (err as NodeJS.ErrnoException).code === 'ESRCH'
-  }
-}
-/**
- * Holds the conversation note while reading and replacing it. A live or unknown holder keeps
- * its lock however old the file is. Empty legacy locks retain their ten-second recovery age.
- * A dead holder or an expired legacy lock is replaced only after taking a claim named
- * for that lock, so two commands recovering it cannot remove each other's replacement. A dead
- * claimant is recovered through another such claim. The record is skipped after three seconds.
- */
-function toItself(run: () => void): void {
-  const lock = `${conversationsFile()}.lock`
-  const until = performance.now() + 3000
-  const me: ConversationLock = { pid: process.pid, holder: randomBytes(8).toString('hex') }
-  const whole = `${lock}.${me.holder}.tmp`
-  const make = (file: string): boolean => {
-    writeFlushed(whole, JSON.stringify(me))
-    try {
-      return makeOnce(whole, file)
-    } catch (err) {
-      // Publication may have succeeded before temporary cleanup failed.
-      releaseConversationLock(file, me.holder)
-      rmSync(whole, { force: true })
-      throw err
-    }
-  }
-  let held = false
-  while (performance.now() < until) {
-    if (make(lock)) {
-      held = true
-      break
-    }
-    const seen = conversationLock(lock)
-    const legacy = seen ? undefined : legacyEmptyLock(lock, 10_000)
-    if (seen ? gone(lock, seen) : legacy) {
-      let word = seen?.holder ?? legacy!
-      const abandoned: { file: string; holder: string }[] = []
-      for (let attempt = 0; attempt < 20 && performance.now() < until; attempt++) {
-        const after = `${lock}.after.${word}`
-        if (make(after)) {
-          try {
-            if (seen ? conversationLock(lock)?.holder === seen.holder : legacyEmptyLock(lock, 10_000) === legacy) {
-              writeFlushed(whole, JSON.stringify(me))
-              renameSync(whole, lock)
-              held = true
-              for (const old of abandoned) {
-                releaseConversationLock(old.file, old.holder)
-              }
-            }
-          } finally {
-            releaseConversationLock(after, me.holder)
-            rmSync(whole, { force: true })
-          }
-          break
-        }
-        const claimant = conversationLock(after)
-        if (!claimant || !gone(after, claimant)) break
-        abandoned.push({ file: after, holder: claimant.holder })
-        word = claimant.holder
-      }
-    }
-    if (held) break
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5 + Math.random() * 20)
-  }
-  if (!held) return
-  try {
-    run()
-  } finally {
-    releaseConversationLock(lock, me.holder)
   }
 }
 /** The folder a conversation was last known to be working in, if it is still there. */
@@ -375,7 +297,7 @@ export async function publish(input: {
   if (bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
   const asked = sessionAsked()
   const session = asked?.session
-  if (session) noteConversation(session)
+  if (session) await noteConversation(session)
   const begun = await call<{ artifactId: string; slug: string; version: number; upload: { url: string; grant: string } }>('action', api.publish.begin, {
     slug: input.slug,
     title: input.title,
