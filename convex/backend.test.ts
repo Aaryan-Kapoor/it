@@ -10,7 +10,7 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } fro
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
-import { get as pageQuery } from './artifacts'
+import { get as pageQuery, takePage } from './artifacts'
 import { inbox as inboxQuery } from './delivery'
 import schema from './schema'
 
@@ -1449,6 +1449,285 @@ describe('publishing', () => {
     })
     await publish(m, 'plan', { project: { key: 'one-more', name: 'x' } })
     expect((await t.run((ctx) => ctx.db.query('projects').collect())).length).toBe(QUOTA.projects)
+  })
+})
+
+describe('tour page ownership', () => {
+  const start = (m: Awaited<ReturnType<typeof machineOf>>, name: string, state = '{}') =>
+    m.as.action(api.publish.begin, { slug: `tour-${name}`, title: 'A checklist', files: page, state, tour: name })
+  const finish = (m: Awaited<ReturnType<typeof machineOf>>, begun: { artifactId: any; version: number }) =>
+    m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })
+  const make = async (m: Awaited<ReturnType<typeof machineOf>>, name: string, state = '{}') => {
+    const begun = await start(m, name, state)
+    await finish(m, begun)
+    return begun
+  }
+
+  test('a legacy page with the same id, title and full state is adopted once and keeps its mark on later showings', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-match')
+    const old = await publish(m, 'tour-checklist', { title: 'A checklist', state: '{"note":"","added":[]}' })
+    // Earlier programs wrote no ownership field. A current ordinary publication is not a legacy page.
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    const adopted = await make(m, 'checklist', '{"added":[],"note":""}')
+    const mark = (await t.run((ctx) => ctx.db.get(old.artifactId)))!.tour
+    expect(mark).toEqual({ name: 'checklist', identity: expect.any(String) })
+    expect(adopted.artifactId).toBe(old.artifactId)
+    await m.as.mutation(api.state.patch, { slug: 'tour-checklist', patch: '{"note":"an answer"}' })
+    await make(m, 'checklist', '{"added":[],"note":""}')
+    expect((await t.run((ctx) => ctx.db.get(old.artifactId)))!.tour).toEqual(mark)
+    const cleared = await m.as.mutation(api.tour.clear, {})
+    expect(cleared).toEqual({
+      requested: ['tour-checklist'].map((slug) => ({ slug, job: expect.any(String) })),
+      kept: [],
+      seen: 0,
+    })
+    const receipt = await m.as.query(api.deletions.get, { job: cleared.requested[0]!.job })
+    expect(receipt).toMatchObject({ slug: 'tour-checklist', state: 'pending' })
+  })
+
+  test.each([
+    { difference: 'id', slug: 'tour-menu', title: 'A checklist', state: '{"added":[],"note":""}' },
+    { difference: 'title', slug: 'tour-checklist', title: 'My checklist', state: '{"added":[],"note":""}' },
+    { difference: 'state value', slug: 'tour-checklist', title: 'A checklist', state: '{"added":["Umbrella"],"note":""}' },
+    { difference: 'state key', slug: 'tour-checklist', title: 'A checklist', state: '{"added":[],"note":"","extra":true}' },
+  ])('a legacy page with a different $difference is reported and left untouched', async ({ slug, title, state }) => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-different')
+    const old = await publish(m, slug, { title, state })
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    const before = await m.as.query(api.artifacts.get, { slug })
+    const beforeState = await m.as.query(api.state.get, { slug })
+    await expect(
+      m.as.action(api.publish.begin, { slug, title: 'A checklist', state: '{"added":[],"note":""}', files: page, tour: 'checklist' }),
+    ).rejects.toThrow(slug === 'tour-checklist' ? 'tour does not own' : 'known tour page id')
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({ requested: [], kept: [slug], seen: 0 })
+    expect(await m.as.query(api.artifacts.get, { slug })).toEqual(before)
+    expect(await m.as.query(api.state.get, { slug })).toEqual(beforeState)
+    expect((await t.run((ctx) => ctx.db.get(old.artifactId)))!.tour).toBeUndefined()
+  })
+
+  test.each(['publish', 'take', 'rollback'])('a legacy page adopted once cannot be adopted again after an ordinary %s', async (how) => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-once')
+    const initial = { title: 'A checklist', state: '{"added":[],"note":""}' }
+    const old = await publish(m, 'tour-checklist', initial)
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    await make(m, 'checklist', initial.state)
+    if (how === 'publish') await publish(m, 'tour-checklist', initial)
+    else if (how === 'take') await m.as.mutation(api.artifacts.take, { slug: 'tour-checklist', session: SESSION })
+    else await m.as.mutation(api.artifacts.rollback, { slug: 'tour-checklist', version: old.version })
+    await expect(start(m, 'checklist', initial.state)).rejects.toThrow('tour does not own')
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({
+      requested: [],
+      kept: ['tour-checklist'],
+      seen: 0,
+    })
+  })
+
+  test('a state change while an adopted legacy page uploads refuses its stale reset', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-race')
+    const old = await publish(m, 'tour-checklist', { title: 'A checklist', state: '{"added":[],"note":""}' })
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    const pending = await start(m, 'checklist', '{"added":[],"note":""}')
+    await m.as.mutation(api.state.patch, { slug: 'tour-checklist', patch: '{"note":"keep this answer"}' })
+    const state = await m.as.query(api.state.get, { slug: 'tour-checklist' })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect((await m.as.query(api.artifacts.get, { slug: 'tour-checklist' })).version).toBe(old.version)
+    expect(await m.as.query(api.state.get, { slug: 'tour-checklist' })).toEqual(state)
+  })
+
+  test('matching titles and state keys never adopt personal or unfinished pages', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy')
+    const initial = { added: [{ text: 'Umbrella' }], note: 'the rain', extra: true }
+    await publish(m, 'tour-checklist', { title: 'A checklist', state: JSON.stringify(initial) })
+    await publish(m, 'tour-menu', { title: 'The It tour', state: '{"status":"open","picked":"","seen":["chess"]}' })
+    await m.as.action(api.publish.begin, { slug: 'tour-chess', title: 'A chessboard', files: page })
+    const before = await m.as.query(api.artifacts.get, { slug: 'tour-checklist' })
+    for (const name of ['checklist', 'menu', 'chess']) await expect(start(m, name)).rejects.toThrow('tour does not own')
+    expect(await m.as.query(api.tour.seen, {})).toEqual({ seen: [] })
+    const cleared = await m.as.mutation(api.tour.clear, {})
+    expect(cleared.requested.map((r) => r.slug)).toEqual([])
+    expect(cleared.kept).toEqual(['tour-menu', 'tour-chess', 'tour-checklist'])
+    expect(await m.as.query(api.artifacts.get, { slug: 'tour-checklist' })).toEqual(before)
+    expect(JSON.parse((await m.as.query(api.state.get, { slug: 'tour-checklist' })).json)).toEqual(initial)
+    expect((await m.as.query(api.tour.get, {})).doneAt).toBeNull()
+  })
+
+  test('publication resets the step and merges the current marked menu progress in its transaction', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-progress')
+    await make(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    const chess = await start(m, 'chess', '{"reply":"","note":""}')
+    const drums = await start(m, 'drums', '{"theirs":[],"note":""}')
+    await finish(m, drums)
+    await finish(m, chess)
+    expect(await m.as.query(api.tour.seen, {})).toEqual({ seen: ['drums', 'chess'] })
+    await m.as.mutation(api.state.patch, { slug: 'tour-chess', patch: '{"reply":"e7e5","note":"answer"}' })
+    await make(m, 'chess', '{"reply":"","note":""}')
+    expect(JSON.parse((await m.as.query(api.state.get, { slug: 'tour-chess' })).json)).toEqual({ reply: '', note: '' })
+    await m.as.mutation(api.state.patch, { slug: 'tour-menu', patch: '{"picked":"chess","status":"done"}' })
+    await make(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    expect(JSON.parse((await m.as.query(api.state.get, { slug: 'tour-menu' })).json)).toEqual({ status: 'open', picked: '', seen: ['drums', 'chess'] })
+    expect((await m.as.mutation(api.tour.clear, {})).requested.map((r) => r.slug)).toEqual(['tour-menu', 'tour-chess', 'tour-drums'])
+  })
+
+  test('a personal publication committed after tour inspection survives both finish and cleanup', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-reauthored')
+    await make(m, 'checklist', '{"added":[],"note":""}')
+    // The personal publish starts first, but commits after the tour checked the mark.
+    const personal = await m.as.action(api.publish.begin, { slug: 'tour-checklist', title: 'A checklist', files: page })
+    const tour = await start(m, 'checklist', '{"added":[],"note":""}')
+    await finish(m, personal)
+    await m.as.mutation(api.state.patch, { slug: 'tour-checklist', patch: '{"added":["Umbrella"],"note":"keep","extra":true}', replace: true })
+    const before = await m.as.query(api.artifacts.get, { slug: 'tour-checklist' })
+    const state = await m.as.query(api.state.get, { slug: 'tour-checklist' })
+    await expect(finish(m, tour)).rejects.toThrow('Nothing was replaced')
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({
+      requested: [],
+      kept: ['tour-checklist'],
+      seen: 0,
+    })
+    expect(await m.as.query(api.artifacts.get, { slug: 'tour-checklist' })).toEqual({
+      ...before,
+      versions: before.versions.filter((v) => v.n !== tour.version),
+    })
+    expect(await m.as.query(api.state.get, { slug: 'tour-checklist' })).toEqual(state)
+    expect(await t.run((ctx) => ctx.db.query('starts').collect())).toEqual([])
+    expect((await t.run((ctx) => ctx.db.query('tallies').first()))?.stagingCount).toBe(0)
+  })
+
+  test('a newer state revision refuses a stale reset and commits neither its content nor menu progress', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-state-race')
+    await make(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    const page = await make(m, 'chess', '{"reply":"","note":""}')
+    const pending = await start(m, 'chess', '{"reply":"","note":""}')
+    await m.as.mutation(api.state.patch, { slug: 'tour-chess', patch: '{"reply":"e7e5","note":"keep this answer"}' })
+    const state = await m.as.query(api.state.get, { slug: 'tour-chess' })
+    const menu = await m.as.query(api.state.get, { slug: 'tour-menu' })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect((await m.as.query(api.artifacts.get, { slug: 'tour-chess' })).version).toBe(page.version)
+    expect(await m.as.query(api.state.get, { slug: 'tour-chess' })).toEqual(state)
+    expect(await m.as.query(api.state.get, { slug: 'tour-menu' })).toEqual(menu)
+  })
+
+  test.each(['menu', 'chess', 'done'])('a saved navigation attempt on %s survives a stale tour reset', async (name) => {
+    const t = backend()
+    const m = await machineOf(t, `tour-navigation-${name}`)
+    const p = await person(t, `tour-navigation-${name}`)
+    const showing = await make(m, name)
+    const pending = await start(m, name)
+    const attempt = { version: showing.version, attempt: 2, attempt_display: 'page-load-b' }
+    await p.browser.mutation(api.state.storeSet, { artifactId: showing.artifactId, key: 'tour-navigation', value: JSON.stringify(attempt) })
+    const state = await m.as.query(api.state.get, { slug: `tour-${name}` })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect(await m.as.query(api.state.get, { slug: `tour-${name}` })).toEqual(state)
+    expect(JSON.parse(state.json)[STORE_KEY]['tour-navigation']).toEqual(attempt)
+    expect((await m.as.query(api.artifacts.get, { slug: `tour-${name}` })).version).toBe(showing.version)
+    if (name === 'menu') {
+      await make(m, 'drums')
+      const progressed = JSON.parse((await m.as.query(api.state.get, { slug: 'tour-menu' })).json)
+      expect(progressed[STORE_KEY]['tour-navigation']).toEqual(attempt)
+      expect(progressed.seen).toEqual(['drums'])
+    }
+    // A fresh showing has its own version, so its counter may start again.
+    const next = await make(m, name)
+    expect(next.version).toBeGreaterThan(showing.version)
+    expect(JSON.parse((await m.as.query(api.state.get, { slug: `tour-${name}` })).json)[STORE_KEY]).toBeUndefined()
+  })
+
+  test('progress added during a menu upload survives a stale menu reset', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-menu-progress-race')
+    await make(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    const pending = await start(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    await make(m, 'chess', '{"reply":"","note":""}')
+    const state = await m.as.query(api.state.get, { slug: 'tour-menu' })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect(await m.as.query(api.state.get, { slug: 'tour-menu' })).toEqual(state)
+    expect(await m.as.query(api.tour.seen, {})).toEqual({ seen: ['chess'] })
+  })
+
+  test('clearing every marked page preserves an identified tour waiter and personal pages', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-clear-all')
+    await m.as.mutation(api.tour.wait, { waitId: 'waiting-command', first: true })
+    const waiting = await m.as.query(api.tour.get, {})
+    for (const name of ['menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done']) await make(m, name)
+    await publish(m, 'tour-of-my-project')
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({
+      requested: ['tour-menu', 'tour-whiteboard', 'tour-chess', 'tour-checklist', 'tour-drums', 'tour-button', 'tour-done'].map((slug) => ({
+        slug,
+        job: expect.any(String),
+      })),
+      kept: [],
+      seen: 5,
+    })
+    expect((await m.as.query(api.artifacts.list, {})).map((p) => p.slug)).toEqual(['tour-of-my-project'])
+    expect((await m.as.query(api.tour.get, {})).waitingUntil).toBe(waiting.waitingUntil)
+    expect(await m.as.mutation(api.tour.wait, { waitId: 'waiting-command' })).toEqual({ asked: false })
+    expect((await m.as.query(api.tour.get, {})).doneAt).not.toBeNull()
+  })
+
+  test('a menu replaced during a step upload keeps all its personal state and supplies no progress', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-menu-race')
+    await make(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    const pending = await start(m, 'chess', '{"reply":"","note":""}')
+    await publish(m, 'tour-menu', { title: 'The It tour' })
+    await m.as.mutation(api.state.patch, { slug: 'tour-menu', patch: '{"status":"open","picked":"","seen":["Kyoto","Lima"]}', replace: true })
+    const state = await m.as.query(api.state.get, { slug: 'tour-menu' })
+    await finish(m, pending)
+    expect(await m.as.query(api.state.get, { slug: 'tour-menu' })).toEqual(state)
+    expect(await m.as.query(api.tour.seen, {})).toEqual({ seen: [] })
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({
+      requested: ['tour-chess'].map((slug) => ({ slug, job: expect.any(String) })),
+      kept: ['tour-menu'],
+      seen: 0,
+    })
+  })
+
+  test.each(['take', 'shared take', 'shared transfer', 'rollback'] as const)('%s revokes tour ownership and a pending tour cannot restore it', async (how) => {
+    const t = backend()
+    const m = await machineOf(t, `tour-${how}`)
+    const mine = { harness: 'pi', id: 'conversation-1' }
+    await publish(m, 'tour-chess', { tour: 'chess', state: '{"reply":"","note":""}', session: mine })
+    const pending = await start(m, 'chess')
+    if (how === 'take') expect(await m.as.mutation(api.artifacts.take, { slug: 'tour-chess', session: mine })).toEqual({ took: false })
+    else if (how === 'rollback') await m.as.mutation(api.artifacts.rollback, { slug: 'tour-chess', version: 1 })
+    else
+      expect(
+        await t.run(async (ctx) => takePage(ctx, (await ctx.db.get(pending.artifactId))!, (await ctx.db.get(m.id))!, how === 'shared take' ? mine : SESSION)),
+      ).toEqual({ took: how === 'shared transfer' })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect((await m.as.mutation(api.tour.clear, {})).kept).toEqual(['tour-chess'])
+    await expect(start(m, 'chess')).rejects.toThrow('tour does not own')
+  })
+
+  test('reusing an id after deletion never gives the replacement an old tour mark', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-reused')
+    const pending = await start(m, 'chess')
+    await m.as.mutation(api.artifacts.remove, { slug: 'tour-chess' })
+    await publish(m, 'tour-chess', { title: 'A chessboard', state: '{"reply":"","note":""}' })
+    const before = await m.as.query(api.artifacts.get, { slug: 'tour-chess' })
+    await expect(finish(m, pending)).rejects.toThrow('No such page')
+    expect((await m.as.mutation(api.tour.clear, {})).kept).toEqual(['tour-chess'])
+    expect(await m.as.query(api.artifacts.get, { slug: 'tour-chess' })).toEqual(before)
+  })
+
+  test('tour ownership rejects unknown names and callers without machine authority', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-authority')
+    const p = await person(t, 'tour-authority')
+    await expect(start(m, 'personal')).rejects.toThrow('known tour page')
+    await expect(m.as.action(api.publish.begin, { slug: 'personal', title: 'Page', files: page, tour: 'menu', state: '{}' })).rejects.toThrow('known tour page')
+    await expect(p.browser.mutation(api.tour.clear, {})).rejects.toThrow('Only an enrolled machine')
+    await expect(p.browser.query(api.tour.seen, {})).rejects.toThrow('Only an enrolled machine')
   })
 })
 

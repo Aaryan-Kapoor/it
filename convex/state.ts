@@ -24,7 +24,7 @@ export const get = query({
   },
 })
 
-async function write(
+export async function write(
   ctx: MutationCtx,
   userId: Id<'users'>,
   artifactId: Id<'artifacts'>,

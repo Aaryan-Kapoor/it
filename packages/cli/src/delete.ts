@@ -12,7 +12,11 @@ type Receipt = {
 /** A request is not completion. Wait briefly, and leave a way to check the durable receipt. */
 export async function deletePage(slug: string, status = false) {
   const requested = status ? null : await call<{ job: string } | null>('mutation', api.artifacts.remove, { slug })
-  const job = requested?.job
+  return deletionStatus(slug, requested?.job, status)
+}
+
+/** Confirms a deletion already requested, including one checked by the guarded tour mutation. */
+export async function deletionStatus(slug: string, job?: string, status = false) {
   const hint = `Run \`it delete ${slug} --status\` to check again. It keeps trying while it is running.`
   const pending = { requested: slug, job: job ?? null, state: 'pending' as const, hint }
   // Earlier functions can accept a deletion without returning a receipt. That proves no completion.

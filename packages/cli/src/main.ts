@@ -40,7 +40,7 @@ import {
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
 import { local } from './connector'
-import { deletePage } from './delete'
+import { deletePage, deletionStatus } from './delete'
 import * as flow from './flow'
 import { hook } from './hooks'
 import { checkInstallationRecord, legacyInstallation, markedInstallation, markInstallation } from './installation'
@@ -123,7 +123,7 @@ import {
 } from './setup'
 import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
-import { GUIDE, NAMES, END as TOUR_END, MENU as TOUR_MENU, TOUR_PREFIX, STEPS as TOUR_STEPS, tourPage } from './tour'
+import { GUIDE, NAMES, END as TOUR_END, STEPS as TOUR_STEPS, tourPage } from './tour'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import * as usage from './usage'
@@ -585,18 +585,6 @@ async function tourWhenAsked(a: Args) {
 }
 
 /**
- * Whether a page that has one of the tour's ids is the tour's own, which is asked before it is
- * written over and before it is deleted. The id proves nothing: a person may have a page of
- * their own called `tour-chess`. So it is told by what the tour gives its page of that name,
- * taken together: the title, and a state that keeps each thing the tour's page keeps.
- */
-function isTours(name: string, title: unknown, state: unknown): boolean {
-  const its = tourPage(name)
-  const keeps = typeof state === 'object' && state !== null && !Array.isArray(state) ? state : {}
-  return title === its.title && Object.keys(JSON.parse(its.state) as Record<string, unknown>).every((key) => Object.hasOwn(keeps, key))
-}
-
-/**
  * The tour an agent gives of It. With nothing after it, the guide is printed for the agent to
  * follow. `show` publishes one of the tour's pages and brings it up, starting afresh each time,
  * and `clear` removes every page of the tour and nothing else.
@@ -611,65 +599,25 @@ async function tour(a: Args) {
   const what = a._[0]
   if (a.flags.wait === true && what === undefined) return tourWhenAsked(a)
   if (what === undefined) return written(process.stdout, GUIDE)
-  const menu = `${TOUR_PREFIX}${TOUR_MENU}`
-  // The title and state are read together just before a change. The backend has no conditional tour mutation.
-  const tourState = async (slug: string): Promise<Record<string, unknown> | undefined> => {
-    const [page, state] = await Promise.all([call<{ title?: string } | null>('query', api.artifacts.get, { slug }).catch(() => null), keptBy(slug)])
-    if (!page) return undefined
-    if (isTours(slug.slice(TOUR_PREFIX.length), page.title, state)) return state as Record<string, unknown>
-    await written(process.stderr, `${slug} is not a page the tour made, so it was left as it is.\n`)
-    return undefined
-  }
-  const seenIn = (state: Record<string, unknown> | undefined): string[] => {
-    const said = state?.seen
-    return Array.isArray(said) ? [...new Set(said.filter((name): name is string => typeof name === 'string' && TOUR_STEPS.includes(name)))] : []
-  }
-  const seenSoFar = async (): Promise<string[]> => seenIn(await tourState(menu))
-  // What a page keeps as its state, or nothing where that cannot be read.
-  const keptBy = (slug: string): Promise<unknown> =>
-    call<{ json: string }>('query', api.state.get, { slug }).then(
-      (s) => parseJson(s.json),
-      () => undefined,
-    )
   if (what === 'clear') {
-    const pages = await call<{ slug: string; title?: string }[]>('query', api.artifacts.list)
-    const gone: string[] = []
-    const pending: Awaited<ReturnType<typeof deletePage>>[] = []
-    // The tour's own pages, each by its whole id, and no other page whose id only begins as theirs do.
-    // Nor one that has such an id and is not the tour's by what is in it: that is the person's own, and stays
-    const its = new Set(NAMES.map((name) => `${TOUR_PREFIX}${name}`))
-    const tours: string[] = []
-    const kept: string[] = []
-    for (const p of pages.filter((p) => its.has(p.slug))) (isTours(p.slug.slice(TOUR_PREFIX.length), p.title, await keptBy(p.slug)) ? tours : kept).push(p.slug)
-    const had = tours.length ? await seenSoFar() : undefined
-    for (const slug of tours) {
-      if ((await tourState(slug)) === undefined) {
-        kept.push(slug)
-        continue
-      }
-      const result = await deletePage(slug)
-      if (result.state === 'completed') gone.push(slug)
-      else pending.push(result)
-    }
-    // Counted where there was a tour to end: how many of its things had been looked at, and never which
-    if (had) usage.record('tour.ended', { seen: String(Math.min(had.length, 5)) as '0' | '1' | '2' | '3' | '4' | '5' })
-    // And It is told that a tour is over, so that the site no longer leads someone with no pages
-    // into one. An It from before it kept that refuses this, which changes nothing
-    if (had) await call('mutation', api.tour.done, {}).catch(() => {})
+    const cleared = await call<{ requested: { slug: string; job: string }[]; kept: string[]; seen: number }>('mutation', api.tour.clear, {})
+    if (cleared.requested.length) usage.record('tour.ended', { seen: String(Math.min(cleared.seen, 5)) as '0' | '1' | '2' | '3' | '4' | '5' })
+    const results = await Promise.all(cleared.requested.map(({ slug, job }) => deletionStatus(slug, job)))
+    const pending = results.filter((r) => r.state !== 'completed')
     return out({
-      deleted: gone,
+      deleted: results.filter((r) => r.state === 'completed').map((r) => r.requested),
       ...(pending.length ? { pending } : {}),
-      ...(kept.length
+      ...(cleared.kept.length
         ? {
-            kept,
-            hint: `${kept.join(', ')} ${kept.length === 1 ? 'has the id of a page of the tour and is not a page' : 'have the ids of pages of the tour and are not pages'} the tour made, so ${kept.length === 1 ? 'it was' : 'they were'} left as ${kept.length === 1 ? 'it is' : 'they are'}.`,
+            kept: cleared.kept,
+            hint: 'These pages have tour ids but no tour ownership mark, so they were preserved. Older tour pages are preserved too. Ask the person before deleting any of them with it delete.',
           }
         : {}),
     })
   }
   if (what !== 'show') throw new Problem(`It does not know what to do with "${what}".`, 'invalid', `Usage: it ${USAGE}`)
   const asked = need(a._[1], `which page of the tour (${NAMES.join(', ')}, or next)`, USAGE)
-  const seen = await seenSoFar()
+  const { seen } = asked === 'next' ? await call<{ seen: string[] }>('query', api.tour.seen, {}) : { seen: [] }
   const name = asked === 'next' ? (TOUR_STEPS.find((step) => !seen.includes(step)) ?? TOUR_END) : asked
   const given: Record<string, unknown> = {}
   for (const param of a.many.param ?? []) {
@@ -680,18 +628,6 @@ async function tour(a: Args) {
   // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
-  // A page that has this id already and is not the tour's by what is in it is the person's own:
-  // nothing is published over it. An id that was only begun under holds no page yet
-  const there = await call<{ title?: string; version?: number | null } | null>('query', api.artifacts.get, { slug: made.slug }).catch((err) => {
-    if (err instanceof Problem && err.code === 'not_found') return null
-    throw err
-  })
-  if (there && typeof there.version === 'number' && !isTours(name, there.title, await keptBy(made.slug)))
-    throw new Problem(
-      `There is already a ${NOUN.one} with the id ${made.slug}${there.title ? `, ${named(there.title)}` : ''}, and it is not one the tour made. Nothing was published.`,
-      'conflict',
-      `The tour shows this ${NOUN.one} under that id and no other, and would replace what is there. Show another of the tour’s pages, or tell the person which ${NOUN.one} is in the way and ask them whether it may be deleted: \`it delete ${made.slug}\` deletes it for good.`,
-    )
   // The page is this conversation's from now on, whoever showed it last. An agent app that does
   // not say which conversation it is in has none to take the page for: it publishes the page all
   // the same, and waits for what is done on it by the page's id, as the tour tells it to
@@ -703,27 +639,10 @@ async function tour(a: Args) {
     state: made.state,
     take: by !== undefined,
     itsOwn: true,
+    tour: name,
   })
   // Counted as a page of the tour that was shown, by its name, which is It's own
   usage.record('tour.shown', { page: name as usage.TourPage, agent: usage.agentOf(by) })
-  // And it starts as it was first made, whatever a tour before this one left in it. The menu
-  // alone keeps something: which things have been seen
-  const fresh = JSON.parse(made.state) as Record<string, unknown>
-  const current = await tourState(made.slug)
-  if (current !== undefined)
-    await call('mutation', api.state.patch, {
-      slug: made.slug,
-      patch: JSON.stringify(name === TOUR_MENU ? { ...fresh, seen: seenIn(current) } : fresh),
-      replace: true,
-    })
-  // A thing that is shown has been seen from now on, which the menu is told where there is one:
-  // it is there unless the agent began somewhere else, and then nothing is kept
-  if (TOUR_STEPS.includes(name)) {
-    const current = await tourState(menu)
-    const latest = seenIn(current)
-    if (current !== undefined && !latest.includes(name))
-      await call('mutation', api.state.patch, { slug: menu, patch: JSON.stringify({ seen: [...latest, name] }) }).catch(() => {})
-  }
   a.flags.open = true
   await published(done, a)
 }

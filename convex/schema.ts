@@ -23,6 +23,7 @@ export const publicationResult = v.object({
   superseded: v.boolean(),
   anothers: v.optional(v.boolean()),
   ownerChanged: v.optional(v.boolean()),
+  tourConflict: v.optional(v.boolean()),
   elsewhere: v.optional(v.boolean()),
   took: v.optional(v.boolean()),
 })
@@ -208,6 +209,8 @@ export default defineSchema({
 
   // A page. Its bytes are kept by the content service; this is everything else.
   artifacts: defineTable({
+    /** A tour's mark, null after ordinary publication, taking or rollback, and absent on unchecked legacy pages. */
+    tour: v.optional(v.union(v.null(), v.object({ name: v.string(), identity: v.string() }))),
     userId: v.id('users'),
     slug: v.string(),
     title: v.string(),
@@ -254,6 +257,8 @@ export default defineSchema({
     .index('by_created', ['createdAt']),
 
   versions: defineTable({
+    /** The tour page and state this upload may replace, checked again when it goes live. */
+    tour: v.optional(v.object({ name: v.string(), identity: v.string(), version: v.optional(v.number()), revision: v.number() })),
     artifactId: v.id('artifacts'),
     userId: v.id('users'),
     n: v.number(),

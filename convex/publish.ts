@@ -1,7 +1,7 @@
 // Publishing a page, in two steps so that a crash in the middle leaves the old version live:
 // `begin` records what is about to be uploaded and returns a grant to upload it; `finish`
 // checks the upload with the content service and then switches the page to the new version.
-import { AUDIENCE, isSafePath, isSlug, LIMITS, PUBLICATION, parseJson, QUOTA, RETENTION, STORE_KEY } from '@it/protocol'
+import { AUDIENCE, isSafePath, isSlug, LIMITS, PUBLICATION, parseJson, QUOTA, RETENTION, STORE_KEY, TOUR, TOUR_NAMES } from '@it/protocol'
 import { ConvexError, v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -16,10 +16,13 @@ import { quota, rateLimit } from './lib/limits'
 import { kind, log } from './lib/log'
 import { mint } from './lib/signing'
 import { bump, tally } from './lib/tally'
+import { adoptTourPage, isTourPage, pageState, startTourPage } from './lib/tourPages'
 import { expectedOwner, fileEntry, session } from './schema'
 import { noteRevision } from './state'
 
 const beginArgs = {
+  /** Only the built-in tour asks for this. A matching legacy page may be adopted once. */
+  tour: v.optional(v.string()),
   operation: v.optional(v.string()),
   agentExplicit: v.optional(v.boolean()),
   expectedOwner: v.optional(expectedOwner),
@@ -58,6 +61,8 @@ async function anothers(ctx: MutationCtx, a: Doc<'artifacts'>, by: { machineId: 
 }
 /** What is said where a page that a conversation meant to make is another's. The command that asked says whose, and what can be done. */
 const ANOTHERS = 'A page with that id belongs to another conversation.'
+const TOUR_CONFLICT =
+  'This id belongs to a page that the tour does not own, or the page changed while the tour was publishing. Nothing was replaced. Keep the page, or ask the person before deleting it with it delete.'
 
 function slugify(title: string): string {
   const base = title
@@ -178,6 +183,9 @@ export const _begin = internalMutation({
     if (args.expectedOwner && (!args.take || !args.session)) fail('invalid', 'An expected owner requires a takeover from a conversation.')
     if (args.take && !args.session) fail('invalid', 'Taking a page over only works from inside an agent conversation.')
 
+    if (args.tour !== undefined && (!TOUR_NAMES.includes(args.tour) || args.slug !== `${TOUR.prefix}${args.tour}` || args.state === undefined))
+      fail('invalid', 'A tour publication needs a known tour page id and its starting state.')
+
     let projectId: Id<'projects'> | undefined
     if (args.project) {
       const key = args.project.key.slice(0, 200)
@@ -215,6 +223,11 @@ export const _begin = internalMutation({
       ...(own ? { own: true } : {}),
     }
     let artifact = args.slug ? await artifactBySlug(ctx, user._id, args.slug) : null
+    if (artifact && args.tour !== undefined && !isTourPage(artifact, args.tour)) {
+      const adopted = await adoptTourPage(ctx, artifact, args.tour, title, args.state!)
+      if (!adopted) fail('conflict', TOUR_CONFLICT)
+      artifact = adopted
+    }
     if (args.expectedOwner && (!artifact || !ownerMatches(artifact, args.expectedOwner)))
       fail('conflict', 'The page changed owner. Read it before publishing again.')
     // Refused before anything is begun, and again when it is shown, in case two began it together
@@ -227,6 +240,7 @@ export const _begin = internalMutation({
       let slug = args.slug ?? slugify(title)
       if (!args.slug) while (mine.some((a) => a.slug === slug)) slug = `${slugify(title)}-${crypto.randomUUID().slice(0, 6)}`
       const id = await ctx.db.insert('artifacts', {
+        tour: args.tour === undefined ? null : { name: args.tour, identity: crypto.randomUUID() },
         userId: user._id,
         slug,
         title,
@@ -276,6 +290,16 @@ export const _begin = internalMutation({
       createdAt: now,
     })
     const versionId = await ctx.db.insert('versions', {
+      ...(args.tour === undefined
+        ? {}
+        : {
+            tour: {
+              name: args.tour,
+              identity: artifact.tour!.identity,
+              version: artifact.currentVersion,
+              revision: (await pageState(ctx, artifact._id))?.revision ?? 0,
+            },
+          }),
       publicationId,
       artifactId: artifact._id,
       userId: user._id,
@@ -502,6 +526,7 @@ export const _finish = internalMutation({
       superseded: boolean
       anothers?: boolean
       ownerChanged?: boolean
+      tourConflict?: boolean
       elsewhere?: boolean
       took?: boolean
     }) => {
@@ -524,6 +549,18 @@ export const _finish = internalMutation({
     }
     // Either way this publish is over
     await bump(ctx, user._id, { stagingCount: -1, stagingBytes: -ver.bytes })
+    if (
+      ver.tour !== undefined &&
+      (!isTourPage(a, ver.tour.name) ||
+        a.tour?.identity !== ver.tour.identity ||
+        a.currentVersion !== ver.tour.version ||
+        ((await pageState(ctx, a._id))?.revision ?? 0) !== ver.tour.revision)
+    ) {
+      await takeStart(ctx, ver._id)
+      await ctx.db.delete(ver._id)
+      await removeLater(ctx, prefixOf(user._id, a._id, version), { grantMayBeLive: true })
+      return remember({ slug: a.slug, version: a.currentVersion ?? version, superseded: false, tourConflict: true })
+    }
     // Two conversations began a page of the same id at the same moment, and the other finished
     // first: the page is its own, and this publish is put away unshown. Looked at before
     // whether a newer publish finished first, which the other's may also be: what this
@@ -555,10 +592,12 @@ export const _finish = internalMutation({
       .take(10)
     for (const x of live) await ctx.db.patch(x._id, { status: 'retired' })
     await ctx.db.patch(ver._id, { status: 'live' })
-    // The state this publish asked to start with becomes the page's, in the same step as the
-    // publish itself, if the page has none: a starting state is never laid over one that is there
+    // Tour publication resets only the page checked above. An ordinary starting state fills
+    // a page that has none; it never replaces the agent's existing state.
     const start = await takeStart(ctx, ver._id)
-    if (start !== null) {
+    if (ver.tour !== undefined && start !== null) {
+      await startTourPage(ctx, a, ver.tour.name, start)
+    } else if (start !== null) {
       const state = await ctx.db
         .query('states')
         .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
@@ -613,6 +652,7 @@ export const _finish = internalMutation({
       (!owner || owner.revoked || ver.by.take || ver.by.own || a.currentVersion === undefined) &&
       (ver.by.machineId !== a.machineId || JSON.stringify(ver.by.session) !== JSON.stringify(a.session))
     await ctx.db.patch(a._id, {
+      tour: ver.tour === undefined ? null : { name: ver.tour.name, identity: ver.tour.identity },
       currentVersion: version,
       highestLive: version,
       bytes,
@@ -670,6 +710,7 @@ export const finish = action({
 export const STAGING_MS = RETENTION.stagingHours * 3_600_000
 
 function outcome(done: NonNullable<Doc<'publications'>['result']>) {
+  if (done.tourConflict) fail('conflict', TOUR_CONFLICT)
   if (done.superseded) fail('conflict', 'A newer publish of this page finished first, so this one was not shown. Read the page before publishing again.')
   if (done.anothers) fail('conflict', ANOTHERS, { anothers: true })
   if (done.ownerChanged) fail('conflict', 'The page changed owner. Read it before publishing again.')
