@@ -1252,6 +1252,45 @@ describe('OpenClaw, which gives a conversation the same name in every folder it 
     expect(existsSync(root(path.join(person, '.openclaw')))).toBe(true)
   })
 
+  test.each([false, true])('a deleted default OpenClaw profile stays gone when connecting another, with an optional config override %s', async (config) => {
+    if (config) vi.stubEnv('OPENCLAW_CONFIG_PATH', path.join(tmp, 'optional.json'))
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    const first = folderOf('openclaw')
+    rmSync(first, { recursive: true })
+    const second = path.join(tmp, 'second-state')
+    vi.stubEnv('OPENCLAW_STATE_DIR', second)
+    ran = []
+    expect((await statusOf('openclaw'))!.addon).toBe('not_connected')
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    expect(existsSync(first)).toBe(false)
+    expect(ran.filter((r) => folderOf(r.bin, r.env) === first)).toEqual([])
+    expect(noted('openclaw').installs.map((i) => i.env?.OPENCLAW_STATE_DIR)).toEqual([second])
+  })
+
+  test.each([false, true])('a deleted default OpenClaw profile stays gone when disconnecting, with an optional config override %s', async (config) => {
+    if (config) vi.stubEnv('OPENCLAW_CONFIG_PATH', path.join(tmp, 'optional.json'))
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    const first = folderOf('openclaw')
+    rmSync(first, { recursive: true })
+    ran = []
+    expect(await disconnect('openclaw', () => {})).toBe(true)
+    expect(commands('openclaw')).toEqual(['--version'])
+    expect(existsSync(first)).toBe(false)
+    expect(existsSync(stampFile('openclaw'))).toBe(false)
+  })
+
+  test('an OpenClaw record with no saved environment is not taken to mean the default profile', async () => {
+    const state = path.join(tmp, 'explicit-state')
+    vi.stubEnv('OPENCLAW_STATE_DIR', state)
+    expect((await connect('openclaw', () => {})).addon).toBe('connected')
+    writeFileSync(stampFile('openclaw'), 'unreadable')
+    failing = ['openclaw plugins inspect it-bridge --json', 'openclaw plugins uninstall it-bridge --force']
+    expect(existsSync(path.join(person, '.openclaw'))).toBe(false)
+    expect(await disconnect('openclaw', () => {})).toBe(false)
+    expect(readFileSync(stampFile('openclaw'), 'utf8')).toBe('unreadable')
+    expect(existsSync(root(state))).toBe(true)
+  })
+
   test.each([false, true])('a surviving OpenClaw home does not recreate a removed state directory with an explicit override %s', async (explicit) => {
     const home = path.join(tmp, 'openclaw-home')
     const first = explicit ? path.join(tmp, 'explicit-state') : path.join(home, '.openclaw')
