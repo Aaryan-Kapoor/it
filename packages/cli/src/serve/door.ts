@@ -527,6 +527,17 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       return refuse(502, 'backend_unreachable')
     }
     const says = passedOn(answered.headers, NOT_RETURNED)
+    // Only a token that the backend granted to a paired browser carries this word. Retained
+    // functions need no new route or argument, and no database or administrator details leave.
+    if (url.pathname === '/session/token' && answered.status === 200 && !answered.headers.has('content-encoding')) {
+      try {
+        const token = JSON.parse(new TextDecoder().decode(bytes))
+        if (token && typeof token.token === 'string' && (token.role === 'owner' || token.role === 'screen')) {
+          bytes = new TextEncoder().encode(JSON.stringify({ ...token, service: { functions: backend.behind ? 'retained' : 'current' } })).buffer
+          says.set('cache-control', 'no-store')
+        }
+      } catch {}
+    }
     const empty = a.method === 'HEAD' || [204, 205, 304].includes(answered.status)
     if (!empty) says.set('content-length', String(bytes.byteLength))
     return new Response(empty ? null : bytes, { status: answered.status, headers: says })

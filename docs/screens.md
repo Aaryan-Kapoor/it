@@ -76,3 +76,5 @@ Before you turn the network on, know these things:
 - **The address `it create` prints is for the machine It runs on.** It says `localhost`, which no other device can open. On another screen, open the page from the site there.
 
 Turn the network on only on a network where you trust every device and everyone who can join it, and run `it network off` before you carry the machine to another.
+
+The command confirms a network change only after the service reports that it applied it. If older backend functions do not report the applied policy, the setting is saved and the command says that it could not confirm the change. Run `it status` on the machine It runs on to check for older functions. Turning the network off waits until the service reports that its door is closed to other devices.

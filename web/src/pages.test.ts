@@ -17,6 +17,9 @@ let machines: { id: string; name?: string; wanted: string[]; harnesses?: { id: s
 const inventoryAsked = vi.fn()
 /** Whether there is a connection to the backend, and what was asked to be told when that changes. */
 let connected: boolean
+let functions: 'current' | 'retained' | undefined
+const pageQueries: unknown[] = []
+vi.mock('./session', () => ({ useSession: () => ({ service: functions ? { functions } : undefined }) }))
 const told = new Set<() => void>()
 /** What the backend answers each click with, in the order they were sent: nothing, until the test lets it. */
 const answers: ((said: { actionId: string }) => void)[] = []
@@ -48,6 +51,7 @@ vi.mock('convex/react', () => ({
   useMutation: (fn: unknown) => (getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : async () => null),
   useQuery: (fn: unknown, args: unknown) => {
     const name = getFunctionName(fn as never)
+    if (name === 'artifacts:get') pageQueries.push(args)
     queries.push({ name, args })
     if (name === 'machines:list' && args !== 'skip') inventoryAsked()
     return args === 'skip' ? undefined : { 'artifacts:get': PAGE, 'actions:forArtifact': recent, 'machines:list': machines }[name]
@@ -101,6 +105,8 @@ beforeEach(() => {
     },
   ]
   connected = true
+  functions = undefined
+  pageQueries.length = 0
   told.clear()
   answers.length = 0
   stopsAsked.length = 0
@@ -125,6 +131,7 @@ const connection = (up: boolean) =>
 
 describe('what the page’s bar says of the last thing the person did', () => {
   test.each([true, false])('the live page omits version history from its subscription when owner is %s', async (owner) => {
+    functions = 'current'
     await shown(owner)
     const pageQueries = () => queries.filter((q) => q.name === 'artifacts:get').map((q) => q.args)
     expect(pageQueries()).toEqual([{ slug: 'plan', history: false }])
@@ -794,6 +801,12 @@ describe('the line that moves under a page’s bar', () => {
     await drawnAgain()
     expect(host.querySelector('.page-progress')).toBeNull()
   })
+})
+
+test.each([undefined, 'retained', 'current'] as const)('the page uses only arguments supported by %s functions', async (state) => {
+  functions = state
+  await shown()
+  expect(pageQueries.at(-1)).toEqual(state === 'current' ? { slug: 'plan', history: false } : { slug: 'plan' })
 })
 
 describe('Escape on a page', () => {

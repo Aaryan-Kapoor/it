@@ -101,7 +101,13 @@ export const get = query({
       // Where the page's conversation is in an agent app It can reopen a closed conversation of:
       // the machine that would do it, and whether the person has switched that on there
       wake:
-        machine !== null && !machine.revoked && wakesOn(machine.system) && a.session && (WAKES as readonly string[]).includes(a.session.harness)
+        machine !== null &&
+        !machine.revoked &&
+        wakesOn(machine.system) &&
+        a.session &&
+        (machine.wanted ?? []).includes(a.session.harness) &&
+        (machine.harnesses ?? []).some((h) => h.id === a.session?.harness && (h.addon === 'connected' || h.addon === 'needs_approval')) &&
+        (WAKES as readonly string[]).includes(a.session.harness)
           ? { machineId: machine._id, harness: a.session.harness, on: (machine.wakes ?? []).some((w) => w.harness === a.session?.harness) }
           : null,
       // When the page's agent last changed it: published it, or wrote its state. What was done on

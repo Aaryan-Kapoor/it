@@ -132,3 +132,9 @@ A page that a conversation made belongs to that conversation until another one b
 Messages you send above a page and answers you choose in notifications are saved before they are sent. Reopening the site under the same pairing retries them. If a saved request is too old to retry safely, check what your agent received before sending it again. A typed message refused during recovery remains in the composer with the reason. A Stop still needs its tab until It confirms it, and automatic recovery waits for that confirmation. A retry of Stop applies only to the run you saw when you pressed it. If It asks you to reload before stopping or answering a notification, reload and check what is shown before acting again.
 
 If It says "Reload It before sending new requests", reload the site to use the service's current version. An older site left open during an update cannot safely send a new request without a replay deadline. It can still confirm a request whose receipt the service has kept. Check what your agent received before repeating an older saved request.
+
+## Older backend functions
+
+If an update cannot load its backend functions, It keeps serving with the functions already loaded. The site shows this beside its pages and on Machines. Some pages or controls may fail because the site and functions differ. In an owner browser, the warning points to `it status` on the machine It runs on for the reason. After resolving the reported problem, restart It to retry loading the functions. `it service logs` shows what the service met. A paired screen shows the warning and asks you to open your owner browser.
+
+Machines compares the running versions already reported by the host and joined machines. A joined machine can say it is behind before its next release check. That alone does not offer an update: a release must also have been found by that machine.

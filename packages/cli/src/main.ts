@@ -2228,11 +2228,13 @@ async function networkAsItStands(running: boolean): Promise<ReturnType<typeof ne
  * asks as the service itself does, with the key in It's settings, so that it needs nothing of
  * this machine's enrolment.
  */
-async function doorStands(config: { port: number; adminKey: string }): Promise<{ on: boolean; wanted: boolean } | undefined> {
+async function doorStands(config: { port: number; adminKey: string }): Promise<{ on: boolean; wanted: boolean; tailnet?: boolean } | undefined> {
   const said = (await asAdmin({ api: backendAt(config.port).api, adminKey: config.adminKey }, 'network:current', {}).catch(() => undefined)) as
-    | { on?: unknown; wanted?: unknown }
+    | { on?: unknown; wanted?: unknown; tailnet?: unknown }
     | undefined
-  return typeof said?.on === 'boolean' && typeof said.wanted === 'boolean' ? { on: said.on, wanted: said.wanted } : undefined
+  return typeof said?.on === 'boolean' && typeof said.wanted === 'boolean'
+    ? { on: said.on, wanted: said.wanted, ...(typeof said.tailnet === 'boolean' ? { tailnet: said.tailnet } : {}) }
+    : undefined
 }
 
 /**
@@ -2251,11 +2253,17 @@ async function turnNetwork(
    * Waits until the running service has looked at a setting and said so, and gives how its
    * door then stands. Nothing when no service is running to be waited for.
    */
-  const taken = async (setting: boolean) => {
+  const taken = async (setting: boolean, policy?: boolean) => {
     if (!running) return undefined
     const until = Date.now() + TAKEN_MS
     let stands = await doorStands(config)
-    while (stands !== undefined && stands.wanted !== setting && Date.now() < until) {
+    while (
+      stands !== undefined &&
+      (stands.wanted !== setting ||
+        (!setting && stands.on) ||
+        (setting && stands.on && policy !== undefined && stands.tailnet !== undefined && stands.tailnet !== policy)) &&
+      Date.now() < until
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 200))
       stands = await doorStands(config)
     }
@@ -2268,14 +2276,9 @@ async function turnNetwork(
     noteNetwork(false)
     stands = await taken(false)
   }
-  // Whom the door answers changes with nothing else changing when only the tailnet is turned
-  // to or from. The service opens its door anew for that at its next look, which is waited out
-  const onlyWhom = running && on && config.network && (config.tailnet === true) !== tailnet
   noteNetwork(on, tailnet)
-  // The service that is running takes it by itself. With none running there is nothing to wait for.
-  stands = await taken(on)
-  if (onlyWhom) await new Promise((resolve) => setTimeout(resolve, 2500))
-  if (stands !== undefined && stands.wanted !== on)
+  stands = await taken(on, tailnet)
+  if (stands !== undefined && (stands.wanted !== on || (!on && stands.on) || (on && stands.on && stands.tailnet !== undefined && stands.tailnet !== tailnet)))
     throw new Problem(
       `The network is turned ${on ? 'on' : 'off'} in It’s settings, and the service that is running has not taken that.`,
       'not_taken',
@@ -2291,6 +2294,14 @@ async function turnNetwork(
       'Another program may have one of the ports It listens on, on one of those addresses. `it service logs` says what the service met.',
     )
   }
+  if (running && (stands === undefined || (on && stands.tailnet === undefined)))
+    throw new Problem(
+      'The network setting was saved, but It could not confirm that the service applied it.',
+      'not_confirmed',
+      stands === undefined
+        ? 'The service could not be asked how its door stands. Check `it service logs` and try again.'
+        : 'The backend functions do not report the applied network policy. Run `it status` on this machine to check whether older functions are still running.',
+    )
 }
 
 /** What is said where the tailnet is asked for on a machine that is on none. */

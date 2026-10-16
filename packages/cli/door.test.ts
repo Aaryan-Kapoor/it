@@ -160,6 +160,10 @@ const site = {
       } else if (req.url === '/session/redeem' || req.url === '/session/end') {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'set-cookie': SET })
         res.end('{"ok":true}')
+      } else if (req.url === '/session/token' && /it_session_good=(owner|screen)/.test(req.headers.cookie ?? '')) {
+        const role = /it_session_good=(owner|screen)/.exec(req.headers.cookie ?? '')![1]
+        res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': SET })
+        res.end(JSON.stringify({ token: 'stub', role, expiresIn: 300, user: 'person', session: 'session' }))
       } else if (req.url === '/session/token') {
         // A session that is over: its cookie is cleared with the refusal
         res.writeHead(401, { 'content-type': 'application/json', 'set-cookie': SET.slice(1) })
@@ -913,6 +917,36 @@ describe('The names the door answers to', () => {
 })
 
 describe('What the door passes on to the backend', () => {
+  test.each(['owner', 'screen'])('the door tells a paired %s about retained functions without asking older functions for anything new', async (role) => {
+    const behind = await open(false, {}, { ...backend, behind: { functions: 'private-function-hash', why: 'refused', at: 1 } })
+    try {
+      const headers: [string, string][] = [
+        ['Origin', `http://127.0.0.1:${behind.base}`],
+        ['x-it-site', '1'],
+        ['Cookie', `it_session_good=${role}`],
+      ]
+      const got = await ask(behind.base, { method: 'POST', path: '/session/token', headers })
+      expect(got.status).toBe(200)
+      expect(JSON.parse(got.body)).toMatchObject({ role, service: { functions: 'retained' } })
+      expect(got.body).not.toContain('private-function-hash')
+      expect(got.headers['content-length']).toBe(String(Buffer.byteLength(got.body)))
+      expect(got.headers['cache-control']).toBe('no-store')
+      expect(got.cookies).toEqual(SET)
+      const current = await ask(door.base, { method: 'POST', path: '/session/token', headers: [own(), ['Cookie', `it_session_good=${role}`]] })
+      expect(JSON.parse(current.body).service).toEqual({ functions: 'current' })
+      const refused = await ask(behind.base, { method: 'POST', path: '/session/token', headers: headers.slice(0, 2) })
+      expect(refused.status).toBe(401)
+      expect(JSON.parse(refused.body)).not.toHaveProperty('service')
+      for (const origin of ['null', `http://127.0.0.1:${behind.base + 1}`, 'https://foreign.example']) {
+        const refused = await ask(behind.base, { method: 'POST', path: '/session/token', headers: [['Origin', origin], ...headers.slice(1)] })
+        expect(refused.status).toBe(403)
+        expect(JSON.parse(refused.body)).not.toHaveProperty('service')
+      }
+    } finally {
+      await behind.stop()
+    }
+  })
+
   test('The session’s routes, the machines’ routes, the public keys and the rest of the named routes reach the backend’s HTTP port and are answered as it answers', async () => {
     const redeemed = await ask(door.base, {
       method: 'POST',

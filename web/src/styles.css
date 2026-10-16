@@ -1193,6 +1193,12 @@ main:has(.modal-overlay) {
   padding: 2px 5px;
 }
 
+.page-container {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
 .page-view {
   position: absolute;
   inset: 0;
@@ -2481,6 +2487,11 @@ input[role="switch"]:disabled {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
 }
+.shell[data-view="page"] > .notice {
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
 .notice > span {
   flex: 1 1 260px;
 }
