@@ -85,7 +85,7 @@ While a turn runs, the click is handed to the model at the next tool call, and t
 
 Codex runs an agent's commands in a sandbox, and as it comes that sandbox reaches nothing on your machine: not a port, and not a socket in a folder. `it` has to reach It, so in the sandbox it is stopped, and it says so: its answer has the code `blocked`, and says that It could not be asked from there. There are three ways to live with that. It changes nothing in Codex's settings itself, whichever you choose.
 
-**Let `it`, and only `it`, out of the sandbox.** Codex reads rules from every file ending in `.rules` in `~/.codex/rules`. Make one there, `it.rules`, with this one line in it, and start Codex again:
+**Let `it`, and only `it`, out of the sandbox.** Codex reads rules from every file ending in `.rules` in `~/.codex/rules`, or in the `rules` folder of wherever `CODEX_HOME` says it keeps its settings, and that is the folder It names when it tells you of this. Make one there, `it.rules`, with this one line in it, and start Codex again:
 
 ```
 prefix_rule(pattern=["it"], decision="allow")

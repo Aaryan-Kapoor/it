@@ -98,6 +98,10 @@ export const get = query({
       ...card(a, a.waiting ?? 0, machine?.name ?? null),
       // Only this page's app readiness is shared with its readers, including paired screens.
       connection: connection(machine, a),
+      // Which of the person's machines has the page, by what the machine itself knows itself
+      // by: a machine tells its own page from one on another by this, and never by a name,
+      // which two machines may share
+      machineId: a.machineId ?? null,
       // Where the page's conversation is in an agent app It can reopen a closed conversation of:
       // the machine that would do it, and whether the person has switched that on there
       wake:

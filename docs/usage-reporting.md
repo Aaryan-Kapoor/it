@@ -36,6 +36,14 @@ Once `it telemetry off` has returned, no new request begins. A request that had 
 
 Turning reporting off also forgets the installation's id, and turning it on always makes a new one, even when reporting was on already. Every event remembers which id it was recorded under, and an event recorded under any id but the current one is never sent. So nothing recorded before you turned reporting off is sent after you turn it on again. What happens between a screen and It is noted by the backend first, without an id, and taken from it by the service a few times a minute. The service counts none of those notes that waited there when it started, or that waited when it found the id to be another than the last time it took them: either may be from before you turned reporting off, so a few counts from the moments around a start are given up for that.
 
+### When a sender stops unexpectedly
+
+A sender leaves a short-lived record in `telemetry-sending` while it decides whether to send. If it exits before removing that record, the next sender recovers it once the system confirms that its process has ended. A live process, or one that cannot be checked, keeps its record regardless of the file's age.
+
+An empty record carries no owner. Once it is more than ten minutes old, the next sender recovers it and sends the waiting counts under the same reporting identity. A younger empty record is left alone.
+
+A nonempty record that cannot be read still stops reporting until you clear it. If you want reporting to resume, run `it telemetry off` and then `it telemetry on`. This discards waiting counts and starts a new reporting identity.
+
 ## What is sent
 
 Each event is a name, the hour it happened in, an id of its own, and the properties in this table. Every property is one of the listed values: there is no free text anywhere in an event, and the program refuses to send an event that holds anything else. Where a number is counted it is sent as a band, never as the number.
