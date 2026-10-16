@@ -1182,16 +1182,13 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   })
 
   test('more than one answer can carry is given to a waiter over several askings, each click once and none lost', async () => {
+    standIn()
     await start()
     expect(await turn(6, true)).toEqual({ ok: true })
     // Thirty-four clicks that each carry as much as a click may, taken by Codex’s queue behind the turn that is running
     const carried = JSON.stringify('x'.repeat(31_000))
     const ids: string[] = []
-    // Each of the sixty-eight waits below is given half a minute and not the usual eight seconds:
-    // nothing here is held to a time, and on a machine that is busy with the other suites one
-    // step of so many has taken longer than eight
-    // Where a step does not come about, what the connector did and said by then is told: on
-    // one of the workflow's machines the first step has not, and nothing said why
+    // A failed wait says how far the hand-over got.
     const sofar = (step: string, i: number) => (err: unknown) => {
       throw new Error(
         `${step} of click ${i} did not come about: ${JSON.stringify({
@@ -1210,9 +1207,14 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       ids.push(`click-big-${i}`)
       offered({ ...click(6), id: ids[i]!, payload: carried })
       await until(() => stand.codex.length === commands + 1, 30_000).catch(sofar('Codex’s command', i))
+      // A claimed click is no longer on offer from the backend. Withdraw it before the
+      // command ends, so a timer cannot submit the stale offer again after confirmation.
+      offered()
       stand.codex[commands]!.end()
       await until(() => called('delivery:handedOff').includes(ids[i]!), 30_000).catch(sofar('telling It', i))
-      offered()
+      // Exercise the timer between hand-overs, even when the runner finishes them quickly.
+      await pass()
+      expect(stand.codex.length).toBe(commands + 1)
     }
     // Together they are over a megabyte, which is more than a waiter reads of one answer
     expect(ids.length * carried.length).toBeGreaterThan(1_000_000)
