@@ -5,7 +5,20 @@
 // It folder that hold only what the test put there.
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -20,6 +33,7 @@ const AFTER_SETUP =
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
+import { BOOLEAN } from './src/args'
 import { bases, holdBase } from './test-ports'
 
 // Every test here starts the program, and some start it a dozen times over. Each is given the
@@ -297,7 +311,246 @@ function atTerminal(m: { home: string; it: string; bin: string }, args: string[]
   })
 }
 
+describe('help respects persistent telemetry opt-outs', () => {
+  for (const env of [{ IT_TELEMETRY_ENABLED: 'false' }, { DO_NOT_TRACK: '1' }] as Record<string, string>[])
+    test(`persists ${Object.keys(env)[0]} before returning help without beginning counts`, async () => {
+      for (const args of [[], ['help'], ['--help'], ['status', '--help']]) {
+        const m = machine(false)
+        const ran = await run(m, args, env)
+        expect([ran.code, existsSync(path.join(m.it, 'telemetry-off'))]).toEqual([0, true])
+        expect(existsSync(path.join(m.it, 'telemetry.json'))).toBe(false)
+        expect(existsSync(path.join(m.it, 'usage.jsonl'))).toBe(false)
+      }
+    })
+  test('invalid options still make no reporting changes', async () => {
+    const m = machine(false)
+    const ran = await run(m, ['status', '--repalce'], { DO_NOT_TRACK: '1' })
+    expect([ran.code, error(ran).code, existsSync(path.join(m.it, 'telemetry-off'))]).toEqual([2, 'invalid', false])
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('setup prerequisites and diagnostics', () => {
+  test('an incompatible-only first setup stops before downloading, and a retry or --none can proceed', async () => {
+    const m = machine(false)
+    const held = await holdBase(25_000, 10)
+    const downloads: string[] = []
+    const release = http.createServer((req, res) => {
+      downloads.push(req.url ?? '')
+      res.writeHead(404).end()
+    })
+    await new Promise<void>((resolve) => release.listen(0, '127.0.0.1', resolve))
+    const env = { IT_PORT: String(held.base), IT_HARNESSES: 'pi', IT_BACKEND_RELEASES: `http://127.0.0.1:${(release.address() as net.AddressInfo).port}` }
+    const app = path.join(m.bin, 'pi')
+    const version = (v: string) => {
+      writeFileSync(app, `#!/bin/sh\necho ${v}\n`)
+      chmodSync(app, 0o755)
+    }
+    try {
+      version('0.81.0')
+      const ran = await run(m, ['setup', '--yes', '--no-service'], env)
+      expect([ran.code, error(ran).code]).toEqual([2, 'invalid'])
+      expect(error(ran).message).toContain('It needs Pi 0.82.0 or newer, and this one is 0.81.0.')
+      expect(error(ran).hint).toContain('it setup --none')
+      expect(downloads).toEqual([])
+      expect(existsSync(path.join(m.it, 'service.json'))).toBe(false)
+      expect(existsSync(path.join(m.it, 'machine.json'))).toBe(false)
+      if (python) {
+        const human = await atTerminal(m, ['setup', '--yes', '--no-service'], env)
+        expect(human.code).toBe(2)
+        expect(human.shown).toContain(error(ran).message)
+        expect(human.shown).not.toContain('Backend program')
+        expect(downloads).toEqual([])
+      }
+      // Manual setup bypasses prerequisites even while that app is still old.
+      await run(m, ['setup', '--none', '--no-service'], env)
+      expect(downloads.length).toBeGreaterThan(0)
+      downloads.length = 0
+      version('0.82.0')
+      await run(m, ['setup', '--yes', '--no-service'], env)
+      expect(downloads.length).toBeGreaterThan(0)
+      downloads.length = 0
+      rmSync(app)
+      await run(m, ['setup', '--yes', '--no-service'], env)
+      expect(downloads.length).toBeGreaterThan(0)
+    } finally {
+      release.closeAllConnections()
+      await new Promise((resolve) => release.close(resolve))
+      await held.release()
+    }
+  }, 60_000)
+
+  test('discovery asks Claude once per pass, including an absent or failed answer, and observes the next answer', async () => {
+    const m = machine()
+    const b = await backend(m, () => ({ id: 'machine-1', name: 'test' }))
+    const app = path.join(m.bin, 'claude')
+    const calls = path.join(m.home, 'plugin-calls')
+    try {
+      for (const reply of ['[]', 'failed', JSON.stringify([{ id: 'it-bridge@it', enabled: true }])]) {
+        writeFileSync(
+          app,
+          `#!${process.execPath}\nimport fs from 'node:fs';
+          if(process.argv[2] === '--version') console.log('2.1.287');
+          else { fs.appendFileSync(${JSON.stringify(calls)}, 'list\\n');
+            ${reply === 'failed' ? 'process.exitCode=1' : `console.log(${JSON.stringify(reply)})`} }
+        `,
+        )
+        chmodSync(app, 0o755)
+        writeFileSync(calls, '')
+        const ran = await run(m, ['status'], { ...b.env, IT_HARNESSES: 'claude-code' })
+        expect(ran.code).toBe(0)
+        expect(readFileSync(calls, 'utf8')).toBe('list\n')
+        expect(printed(ran).harnesses).toEqual([{ id: 'claude-code', version: '2.1.287', addon: reply.startsWith('[{') ? 'connected' : 'not_connected' }])
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
+  test.skipIf(!python)('a stalled app query is bounded and its setup progress line is cleared', async () => {
+    const m = machine(false)
+    const held = await holdBase(25_000, 10)
+    const calls = path.join(m.home, 'plugin-calls')
+    const app = path.join(m.bin, 'claude')
+    writeFileSync(
+      app,
+      `#!${process.execPath}\nimport fs from 'node:fs';
+      if(process.argv[2] === '--version') console.log('2.1.287');
+      else { fs.appendFileSync(${JSON.stringify(calls)}, 'list\\n'); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); }
+    `,
+    )
+    chmodSync(app, 0o755)
+    const bad = path.join(m.home, 'backend')
+    writeFileSync(bad, '#!/bin/sh\necho invalid-key\n')
+    chmodSync(bad, 0o755)
+    const start = Date.now()
+    const ran = await atTerminal(m, ['setup', '--yes', '--no-service'], {
+      IT_PORT: String(held.base),
+      IT_HARNESSES: 'claude-code',
+      IT_BACKEND_BIN: bad,
+      NO_COLOR: '1',
+    }).finally(() => held.release())
+    expect(Date.now() - start).toBeLessThan(25_000)
+    expect(ran.code).toBe(1)
+    expect(readFileSync(calls, 'utf8')).toBe('list\n')
+    expect(ran.shown).toContain('looking for them on this machine')
+    const final = ran.shown.split('\n').map((line) => line.slice(line.lastIndexOf('\x1b[2K') + 1).trim())
+    expect(final.filter((line) => line.includes('looking for them'))).toEqual([])
+    expect(ran.shown).toContain('The backend program could not make the key')
+  })
+
+  test('taken ports name the manual second-instance command and the single background service', async () => {
+    for (const another of [false, true]) {
+      const m = machine(false)
+      const held = await holdBase(25_000, 10)
+      const server = http.createServer((_req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ it: another })))
+      await new Promise<void>((resolve) => server.listen(held.base, '127.0.0.1', resolve))
+      try {
+        const ran = await run(m, ['setup', '--none', '--no-service'], { IT_PORT: String(held.base), IT_HARNESSES: '' })
+        const said = error(ran)
+        expect([ran.code, said.code]).toEqual([1, 'port_taken'])
+        expect(said.message).toContain(another ? 'Another It is already running' : `Port ${held.base} is in use`)
+        expect(said.hint).toMatch(/IT_PORT=\d+ it setup --none --no-service/)
+        expect(said.hint).toContain('keep IT_HOME set to this folder')
+        expect(said.hint).toContain('setup without --no-service replaces its registration with this folder')
+        expect(existsSync(path.join(m.it, 'service.json'))).toBe(false)
+        expect(existsSync(path.join(m.it, 'machine.json'))).toBe(false)
+      } finally {
+        server.closeAllConnections()
+        await new Promise((resolve) => server.close(resolve))
+        await held.release()
+      }
+    }
+  })
+
+  test('key generation uses its own accessible folder after the caller folder disappears and keeps distinct failure diagnostics', async () => {
+    const actual = machine(false)
+    const m = { ...actual, it: path.join(actual.home, 'it-link') }
+    // A linked home also exercises the canonical paths returned under macOS temporary folders.
+    symlinkSync(actual.it, m.it, 'dir')
+    const backend = path.join(m.home, 'backend')
+    const marker = path.join(m.home, 'keygen-cwd')
+    const prelude = path.join(m.home, 'remove-cwd.mjs')
+    writeFileSync(
+      prelude,
+      `import fs from 'node:fs'; const dir=${JSON.stringify(path.join(m.home, 'gone'))}; fs.mkdirSync(dir); process.chdir(dir); process.cwd(); fs.rmdirSync(dir);`,
+    )
+    writeFileSync(
+      backend,
+      `#!${process.execPath}\nimport fs from 'node:fs';
+      if (process.argv[2] === 'keygen') { fs.writeFileSync(${JSON.stringify(marker)}, process.cwd()); console.log(process.argv[5] + '|a-test-key'); }
+      else process.exitCode = 1;
+    `,
+    )
+    chmodSync(backend, 0o755)
+    const held = await holdBase(25_000, 10)
+    const env = { IT_PORT: String(held.base), IT_HARNESSES: '', IT_BACKEND_BIN: backend }
+    try {
+      const ran = await run(m, ['setup', '--none', '--no-service'], env, process.execPath, ['--import', pathToFileURL(prelude).href])
+      expect(existsSync(marker), ran.err).toBe(true)
+      expect(readFileSync(marker, 'utf8')).toBe(realpathSync(path.join(m.it, 'backend')))
+      const settings = path.join(m.it, 'service.json')
+      expect(JSON.parse(readFileSync(settings, 'utf8')).adminKey).toMatch(/^it-[0-9a-f]+\|a-test-key$/)
+      const kept = readFileSync(settings, 'utf8')
+      writeFileSync(backend, '#!/bin/sh\necho invalid-key\n')
+      await run(m, ['setup', '--none', '--no-service'], env)
+      expect(readFileSync(settings, 'utf8')).toBe(kept)
+      rmSync(settings)
+      const invalid = await run(m, ['setup', '--none', '--no-service'], env)
+      expect(error(invalid).message).toBe('The backend program could not make the key It runs it with.')
+      expect(existsSync(settings)).toBe(false)
+    } finally {
+      await held.release()
+    }
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('a switch written with a value', () => {
+  test('a known option on the wrong command is refused before input, backend requests or local writes', async () => {
+    const m = machine()
+    const b = await backend(m)
+    const before = readdirSync(m.it).sort()
+    try {
+      for (const args of [
+        ['set', 'plan', 'count', '1', '--replace'],
+        ['patch', 'plan', '--file', 'missing.json'],
+        ['create', 'Plan', '--if-revision', '1'],
+        ['update', 'plan', '--state', '{}'],
+        ['delete', 'plan', '--take'],
+        ['ack', 'action', '--force'],
+        ['setup', '--replace=false'],
+        ['service', 'install', '--no-service'],
+        ['tour', 'clear', '--wait'],
+        ['tour', 'show', 'menu', '--timeout', '1'],
+        ['runs', '--yes'],
+        ['login', '--no-setup', '--all'],
+        ['set', 'plan', 'count', '1', '--repalce'],
+      ]) {
+        // Keep standard input open: even patch and create must reject without trying to read it.
+        const ran = await new Promise<Ran>((resolve) => {
+          const child = execFile(
+            process.execPath,
+            [program, ...args],
+            {
+              cwd: m.home,
+              env: { PATH: m.bin, HOME: m.home, IT_HOME: m.it, IT_TELEMETRY_ENABLED: 'false', ...b.env },
+              timeout: 5000,
+            },
+            (err, out, stderr) => {
+              child.stdin?.end()
+              resolve({ code: err ? ((err as { code?: number }).code ?? null) : 0, signal: null, out, err: stderr })
+            },
+          )
+        })
+        expect([args, ran.code, ran.out, error(ran).code]).toEqual([args, 2, '', 'invalid'])
+      }
+      expect(b.asked).toEqual([])
+      expect(b.uploads).toEqual([])
+      expect(readdirSync(m.it).sort()).toEqual(before)
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it logout --force=false` is not forced: a machine that could not be taken off the person’s machines keeps its key', async () => {
     // No backend is known here, so It cannot be told that the machine is leaving
     for (const off of ['--force=false', '--force=no', '--force=0']) {
@@ -1028,6 +1281,44 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(await begun()).not.toHaveProperty('take')
       expect(await begun('--take=true')).toMatchObject({ take: true })
       expect(await begun('--take')).toMatchObject({ take: true })
+    } finally {
+      await b.close()
+    }
+  })
+})
+
+describe.skipIf(process.platform === 'win32' || !python)('failures at a terminal and through a pipe', () => {
+  test('missing pages, invalid options and backend refusals keep the same codes while people get sentences', async () => {
+    const m = machine()
+    const b = await backend(
+      m,
+      ({ path: fn }) =>
+        new Refusal(
+          fn === 'state:patch'
+            ? { code: 'conflict', message: 'The state has changed. Read it and try again.' }
+            : { code: 'not_found', message: 'No such page.' },
+        ),
+    )
+    try {
+      for (const args of [
+        ['read', 'missing'],
+        ['set', 'plan', 'count', '1', '--replace'],
+        ['set', 'plan', 'count', '1', '--repalce'],
+        ['set', 'plan', 'count', '1', '--if-revision', '2'],
+      ]) {
+        const piped = await run(m, args, b.env)
+        const problem = error(piped)
+        const expected = `${[problem.message, problem.hint].filter(Boolean).join('\n')}\n`
+        const human = await atTerminal(m, args, b.env)
+        expect([human.code, human.shown]).toEqual([piped.code, expected])
+        for (const [words, env] of [
+          [[...args, '--json'], b.env],
+          [args, { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'a-conversation' }],
+        ] as const) {
+          const json = await atTerminal(m, [...words], env)
+          expect([json.code, JSON.parse(json.shown)]).toEqual([piped.code, { error: problem }])
+        }
+      }
     } finally {
       await b.close()
     }
@@ -1877,6 +2168,12 @@ describe.skipIf(process.platform === 'win32')('a wait', () => {
     try {
       const ran = await run(m, ['wait', '--id', 'plan', '--follow', '--timeout', '20'], { IT_URL: api, IT_SITE_URL: api })
       expect([ran.code, ran.out, error(ran)]).toEqual([1, '', { code: 'not_found', message: 'No such page.' }])
+      if (python) {
+        const human = await atTerminal(m, ['wait', '--id', 'plan', '--follow', '--timeout', '20'], { IT_URL: api, IT_SITE_URL: api })
+        expect([human.code, human.shown]).toEqual([1, 'No such page.\n'])
+        const json = await atTerminal(m, ['wait', '--id', 'plan', '--follow', '--timeout', '20', '--json'], { IT_URL: api, IT_SITE_URL: api })
+        expect([json.code, JSON.parse(json.shown)]).toEqual([1, { error: error(ran) }])
+      }
     } finally {
       for (const socket of sockets) socket.destroy()
       live.closeAllConnections()
@@ -2510,6 +2807,14 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
 
   test('the help says how It is set up, opened and run, and how another machine joins', async () => {
     const ran = await run(machine(), ['help'])
+    // The real parser accepts the options the command's own usage lines advertise.
+    for (const line of ran.out.split('\n')) {
+      const cmd = /^ {2}it ([a-z]+)\b/.exec(line)?.[1]
+      if (!cmd) continue
+      const flags = [...line.matchAll(/--([a-z]+(?:-[a-z]+)*)/g)].flatMap((m) => (BOOLEAN.has(m[1]!) ? [m[0]] : [m[0], 'value']))
+      const accepted = await run(machine(false), [cmd, ...flags, '--help'])
+      expect([cmd, flags, accepted.code, accepted.err]).toEqual([cmd, flags, 0, ''])
+    }
     expect(ran.out).toMatch(/^ {2}it setup \[--all \| --only a,b \| --none\] \[--name <name>\] \[--no-service\]$/m)
     expect(ran.out).toMatch(/^ {2}it site /m)
     expect(ran.out).toMatch(/^ {2}it serve /m)
@@ -3313,7 +3618,7 @@ describe.skipIf(process.platform !== 'linux' || !python)('a setup that leads a p
       writeFileSync(path.join(here.m.bin, 'pi'), '#!/bin/sh\necho 0.81.0\n')
       chmodSync(path.join(here.m.bin, 'pi'), 0o755)
       const ran = await atTerminal(here.m, ['setup'], here.env)
-      const shown = ran.shown.split('\n').map((line) => line.trim())
+      const shown = ran.shown.split('\n').map((line) => line.slice(line.lastIndexOf('\x1b[2K') + 1).trim())
       expect(shown.filter((line) => line.includes('Agent apps'))).toEqual([expect.stringContaining('none found that It can connect yet')])
       expect(shown).toContain('Left for you')
       expect(shown).toContain('! Pi: It needs Pi 0.82.0 or newer, and this one is 0.81.0. Update Pi, then run `it setup` again.')
@@ -3329,9 +3634,10 @@ describe.skipIf(process.platform !== 'linux' || !python)('a setup that leads a p
       writeFileSync(path.join(here.m.bin, 'pi'), '#!/bin/sh\nPATH=/bin:/usr/bin\nsleep 1\necho 0.81.0\n')
       chmodSync(path.join(here.m.bin, 'pi'), 0o755)
       const { shown } = await atTerminal(here.m, ['setup'], here.env)
-      // Drawn, in the place a step is drawn, once this machine has been named and before anything is said of the apps
+      // Drawn before the backend starts, and cleared before the result of connecting is shown.
       const looking = shown.indexOf('Agent apps           looking for them on this machine')
-      expect(looking).toBeGreaterThan(shown.indexOf('This machine         the desk'))
+      expect(looking).toBeGreaterThan(-1)
+      expect(looking).toBeLessThan(shown.indexOf('Backend program'))
       expect(looking).toBeLessThan(shown.indexOf('none found that It can connect yet'))
       // Each line as it stands once everything drawn in its place has been: none of them says it any more
       const stands = shown.split('\n').map((line) => line.slice(line.lastIndexOf('\x1b[2K') + 1).trim())

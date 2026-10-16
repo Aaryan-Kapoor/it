@@ -38,7 +38,7 @@ import {
   withoutFiles,
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
-import { type Args, json, loose, need, nested, parse, text } from './args'
+import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
 import { local } from './connector'
 import * as flow from './flow'
 import { hook } from './hooks'
@@ -135,6 +135,14 @@ const out = (value: unknown): void => written(process.stdout, `${JSON.stringify(
 const forPerson = (a: Args): boolean => process.stdout.isTTY === true && a.flags.json !== true && sessionAsked() === undefined
 /** Says something to a person, a sentence or a paragraph to the line, on standard output. */
 const tell = (lines: (string | undefined)[]): void => written(process.stdout, `${lines.filter((line) => line !== undefined).join('\n')}\n`)
+
+/** Failures follow the same output policy as successful commands, and stay on standard error. */
+function failure(p: Problem, a: Args): void {
+  if (forPerson(a)) {
+    say(p.message)
+    if (p.hint) say(p.hint)
+  } else say(JSON.stringify({ error: { code: p.code, message: p.message, ...(p.hint ? { hint: p.hint } : {}) } }))
+}
 
 /** What a person is told where Codex is connected and, as it is set, would keep `it` from reaching It. Null where it would not. */
 function codexShut(found: HarnessStatus[]): string | null {
@@ -995,11 +1003,9 @@ async function wait(a: Args) {
         void onClicks(latest)
       },
       (err) => {
-        // What It refuses here (a page that was deleted while it was waited on, say) is said
-        // as every command says a refusal: in JSON, with its code, so that whatever reads this
-        // can tell one from another as it can before a wait has begun
+        // A refusal during the live wait follows the same policy as one before it began.
         void translate(err).catch((p: Problem) => {
-          say(JSON.stringify({ error: { code: p.code, message: p.message, ...(p.hint ? { hint: p.hint } : {}) } }))
+          failure(p, a)
           void finish(1)
         })
       },
@@ -1024,7 +1030,7 @@ async function wait(a: Args) {
         while (busy) await new Promise((resolve) => setTimeout(resolve, 50))
         await onHandedBack()
         if (ending || printedOne()) return
-        say(JSON.stringify({ error: { code: p.code, message: `${what}: ${p.message}`, ...(p.hint ? { hint: p.hint } : {}) } }))
+        failure(new Problem(`${what}: ${p.message}`, p.code, p.hint), a)
         clearInterval(again)
         void finish(1)
       }
@@ -1826,18 +1832,37 @@ async function newDisplay(before: Set<string>, forMs: number, given?: AbortSigna
   return undefined
 }
 
-/**
- * A setup that leads a person through: the same things `settingUp` does, in the same order,
- * said as a few steps, and with two more at the end that the person would otherwise have to
- * know to ask for: how It is to be reached from their other devices, and the pairing of the
- * first screen. It ends by saying the one thing to do next.
- */
+/** Checks app prerequisites before a first backend download, then reuses the result for choosing apps. */
+async function setupApps(a: Args, guided: boolean): Promise<HarnessStatus[]> {
+  const looking = guided ? flow.step('Agent apps', 'looking for them on this machine') : undefined
+  if (!guided) say('Looking for agent apps on this machine…')
+  const found = await detectAll().finally(() => looking?.clear())
+  const old = found.filter((h) => h.addon === 'too_old')
+  if (
+    !a.flags.none &&
+    !elsewhere() &&
+    !existsSync(settingsFile()) &&
+    !enrolledHere() &&
+    old.length &&
+    !found.some((h) => supported(h.id) && h.addon !== 'too_old')
+  ) {
+    throw new Problem(
+      old.map((h) => h.detail).join('\n'),
+      'invalid',
+      'No backend was downloaded or set up. Update an agent app and run `it setup` again, or use `it setup --none` to set It up without connecting an app.',
+    )
+  }
+  return found
+}
+
+/** Leads a person through setup, network access and pairing their first screen. */
 async function settingUpLed(a: Args, begunAlready = false) {
   // What the parts say in sentences is kept, and said at the end where the person has to act on it
   const kept: string[] = []
   const quiet = (line: string) => void kept.push(line)
   // The name is said once: by the install script where that ran, by the question of where It is where that was asked, and else here
   if (!process.env.IT_INSTALL_FLOW && !(begunAlready && !a.flags.all && text(a, 'only') === undefined && !a.flags.yes)) flow.banner('setup')
+  const found = await setupApps(a, true)
   await noneAbandoned()
   const inBackground = !a.flags['no-service']
   let at = flow.step('Backend program')
@@ -1880,11 +1905,6 @@ async function settingUpLed(a: Args, begunAlready = false) {
     flow.step('This machine').done(me.name)
 
     // ---------- the agent apps
-    // Said for as long as they are looked for: each app is asked which version it is and what
-    // it has installed, and one that is slow to answer is waited for, up to a minute for each
-    // thing asked. With nothing drawn meanwhile, the screen stood still under a step that was done
-    const looking = flow.step('Agent apps', 'looking for them on this machine')
-    const found = await detectAll().finally(() => looking.clear())
     const usable = found.filter((h) => supported(h.id) && h.addon !== 'too_old')
     let wanted: Harness[]
     const only = text(a, 'only')
@@ -2145,6 +2165,8 @@ async function settingUp(a: Args, joined: boolean) {
   // not. A machine that has only just joined is not set up yet, though it has its identity
   const leaves = a.flags.none === true && !joined && enrolledHere() && (elsewhere() || existsSync(settingsFile()))
   const inBackground = !a.flags['no-service'] && !leaves
+  // --none needs no app prerequisite. Its inventory is read once the backend is ready.
+  const beforeSetup = a.flags.none ? undefined : await setupApps(a, false)
   if (!elsewhere()) await noneAbandoned()
   // Where the backend is not this machine's to run, there is nothing to make here, and the
   // background service is the connector alone
@@ -2156,8 +2178,7 @@ async function settingUp(a: Args, joined: boolean) {
     // its folder's permissions and this program cannot give it others.
     if (begun?.enrolled && process.platform === 'win32' && process.env.IT_HOME)
       say(`This machine's key is kept in ${home()}. Windows lets whoever can open that folder read it, so make sure nobody but you can.`)
-    say('Looking for agent apps on this machine…')
-    const found = await detectAll()
+    const found = beforeSetup ?? (await setupApps(a, false))
     const usable = found.filter((h) => supported(h.id) && h.addon !== 'too_old')
     for (const h of found)
       say(
@@ -2819,14 +2840,20 @@ async function main(argv: string[]): Promise<void> {
     quietAboutItsDatabase()
     lenientAboutServiceMarks()
   }
-  // Usage reporting turned off in this command's environment is written down for the
-  // background service, which has no such environment, before anything else is done
-  usage.heed()
-  if (cmd === 'hook') return hook(rest[0] ?? '')
+  if (cmd === 'hook') {
+    usage.heed()
+    return hook(rest[0] ?? '')
+  }
   // What the background service has the person's shell run, to learn what it gives a program
-  if (cmd === 'shell-env') return printEnv()
+  if (cmd === 'shell-env') {
+    usage.heed()
+    return printEnv()
+  }
   const a = parse(rest)
+  optionsFor(cmd, a)
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h' || a.flags.help) {
+    // An explicit opt-out must reach the background service even when this command only prints help.
+    usage.heed()
     // `it help <word>` prints one of the parts the agent skill leaves for when it is needed.
     // Any other word after it, a command's name among them, prints the whole help as before
     const more = cmd === 'help' && a._[0] !== undefined && Object.hasOwn(MORE, a._[0]) ? MORE[a._[0]] : undefined
@@ -2834,6 +2861,8 @@ async function main(argv: string[]): Promise<void> {
     return
   }
   noMore(cmd, a)
+  // A rejected command changes no reporting setting either.
+  usage.heed()
   // Counting begins with the first command, whoever runs it, and nothing is said of it here: the
   // first screen of the site says it. Not by a command that only prints what it was asked for,
   // nor by `it telemetry`, which is how a person turns it off before it has begun. The service
@@ -3441,7 +3470,7 @@ main(process.argv.slice(2)).then(
     clearInterval(whileItRuns)
     const p = err instanceof Problem ? err : new Problem(String((err as Error)?.message ?? err))
     counted(p.code)
-    say(JSON.stringify({ error: { code: p.code, message: p.message, ...(p.hint ? { hint: p.hint } : {}) } }))
+    failure(p, outputArgs(process.argv.slice(3)))
     return end(p.code === 'invalid' ? 2 : 1)
   },
 )
