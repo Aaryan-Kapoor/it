@@ -110,7 +110,9 @@ export const register = mutation({
       // and no other: letting a display go signs it out, and a screen that could make room among
       // all of them would sign out the owner's by registering itself anew.
       const leastRecent = (of: typeof mine) => of.reduce((a, b) => (a.lastSeenAt <= b.lastSeenAt ? a : b))
-      const itsOwn = mine.filter((d) => speaksFor(c, d))
+      // Earlier pairings are retained only on the display. Keep it until explicit removal,
+      // which follows that ancestry, rather than losing access the owner must still be able to end.
+      const itsOwn = mine.filter((d) => speaksFor(c, d) && !d.previousSessions?.length)
       const passing = itsOwn.filter((d) => !d.name && !d.push && now - d.lastSeenAt > 600_000)
       const oldest = itsOwn.length ? leastRecent(itsOwn) : null
       const going = passing.length ? leastRecent(passing) : oldest && now - oldest.lastSeenAt >= 30 * 86_400_000 ? oldest : null
