@@ -68,7 +68,7 @@ beforeEach(() => {
   for (const name of Object.keys(answers)) delete answers[name]
   answers['sessions:inviteScreen'] = () => ({ code: CODE, expiresAt: Date.now() + 600_000 })
   answers['sessions:inviteMachine'] = () => ({ code: CODE, expiresAt: Date.now() + 600_000 })
-  watched = { 'displays:list': [], 'machines:list': [], 'network:get': { on: false, addresses: [] } }
+  watched = { 'displays:list': [], 'sessions:list': [], 'sessions:leftBehind': [], 'machines:list': [], 'network:get': { on: false, addresses: [] } }
   localStorage.clear()
   vi.stubGlobal('matchMedia', () => ({ matches: false }))
 })

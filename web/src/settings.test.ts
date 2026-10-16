@@ -52,7 +52,7 @@ beforeEach(() => {
   calls.length = 0
   for (const name of Object.keys(answers)) delete answers[name]
   answers['sessions:inviteScreen'] = () => ({ code: CODE, expiresAt: Date.now() + 600_000 })
-  watched = { 'displays:list': DISPLAYS }
+  watched = { 'displays:list': DISPLAYS, 'sessions:list': [], 'sessions:leftBehind': [] }
   localStorage.clear()
   sessionStorage.clear()
   // This stand-in browser has no notifications, and cannot say how the site is being shown
@@ -68,6 +68,23 @@ afterEach(async () => {
 
 describe('what each kind of session is offered', () => {
   const mine = DISPLAYS[0]!
+
+  test.each(['sessions:list', 'sessions:leftBehind'])('does not offer Forget before %s has answered', async (delayed) => {
+    const confirm = vi.fn(() => false)
+    vi.stubGlobal('confirm', confirm)
+    watched[delayed] = undefined
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    expect(button('Forget')).toBeUndefined()
+    expect(confirm).not.toHaveBeenCalled()
+    watched['sessions:list'] = []
+    watched['sessions:leftBehind'] = [{ display: 'display-2', along: { browsers: ['browser-child'], machines: ['machine-child'] } }]
+    await act(async () => root.render(createElement(Displays, { thisDisplay: 'display-1' })))
+    const row = [...host.querySelectorAll('li')].find((li) => li.textContent?.includes('Kitchen TV'))!
+    await act(async () => [...row.querySelectorAll('button')].find((b) => b.textContent === 'Forget')!.click())
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('1 paired browser and 1 machine'))
+    expect(calls).toEqual([])
+  })
 
   test('the owner may name and forget every display', async () => {
     vi.stubGlobal('confirm', () => true)
@@ -144,6 +161,38 @@ describe('what each kind of session is offered', () => {
     expect(asked).toEqual([
       'Forget “Kitchen TV”? It is signed out, and pages open on it stop working, usually at once. It has to be paired again before it can be used. 2 paired browsers and 1 machine came from it, and are ended with it. This browser is one of them.',
       'Forget this display? This browser is signed out, and has to be paired again before it can be used.',
+    ])
+    expect(calls).toEqual([])
+  })
+
+  test('and what a browser that signed itself out let in, which goes when the display it was is forgotten', async () => {
+    const asked: string[] = []
+    vi.stubGlobal('confirm', (text: string) => {
+      asked.push(text)
+      return false
+    })
+    watched['displays:list'] = [
+      { ...DISPLAYS[0]!, paired: true },
+      { ...DISPLAYS[1]!, paired: false, push: false },
+    ]
+    watched['sessions:list'] = [
+      {
+        role: 'owner',
+        pairedAt: 0,
+        lastSeenAt: 0,
+        invitedBy: null,
+        id: 'session-1',
+        mine: true,
+        displays: [{ id: 'display-1', name: 'Chrome on Linux' }],
+        along: { browsers: [], machines: [] },
+      },
+    ]
+    watched['sessions:leftBehind'] = [{ display: 'display-2', along: { browsers: ['session-3'], machines: ['machine-2'] } }]
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    await act(async () => [...host.querySelectorAll('ul.rows')[0]!.querySelectorAll('li')][1]!.querySelectorAll('button')[1]!.click())
+    expect(asked).toEqual([
+      'Forget “Kitchen TV”? It is signed out, and pages open on it stop working, usually at once. It has to be paired again before it can be used. 1 paired browser and 1 machine came from it, and are ended with it.',
     ])
     expect(calls).toEqual([])
   })

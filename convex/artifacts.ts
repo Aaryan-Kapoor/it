@@ -1,4 +1,4 @@
-import { LIMITS, QUOTA, WAKES, wakesOn } from '@it/protocol'
+import { LIMITS, newer, QUOTA, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -54,23 +54,50 @@ export const list = query({
   },
 })
 
+/**
+ * A page, as the site shows it and as `it read` prints it. A screen that shows the page asks
+ * this again after every change to it, to its state and to its machine's record, and a machine
+ * says it is alive every half minute: so no more is read here than is told. With `history`
+ * false the versions are not read at all, each of which holds the list of its files, and how
+ * the state stands is read from the small record of its revision, never from the state.
+ */
 export const get = query({
-  args: ref,
-  handler: async (ctx, args) => {
+  args: { ...ref, history: v.optional(v.boolean()) },
+  handler: async (ctx, { history, ...args }) => {
     const { user } = await requireCaller(ctx)
     const a = await resolve(ctx, user._id, args)
-    const versions = await ctx.db
-      .query('versions')
-      .withIndex('by_artifact_n', (q) => q.eq('artifactId', a._id))
-      .order('desc')
-      .take(LIMITS.versionsKept + 2)
-    const state = await ctx.db
-      .query('states')
+    // The versions that can be gone back to are read by themselves: the one that is shown and
+    // the ones kept from before it, which are never more than may be kept. Read together with
+    // the publishes that were begun and not finished, a few of those hid them, and a dozen hid
+    // every one. Of the unfinished, the newest two are listed with them.
+    const ofStatus = (status: Doc<'versions'>['status'], most: number) =>
+      ctx.db
+        .query('versions')
+        .withIndex('by_artifact_status', (q) => q.eq('artifactId', a._id).eq('status', status))
+        .order('desc')
+        .take(most)
+    const versions =
+      history === false
+        ? []
+        : [...(await ofStatus('live', 1)), ...(await ofStatus('retired', LIMITS.versionsKept)), ...(await ofStatus('staging', 2))].sort((x, y) => y.n - x.n)
+    const noted = await ctx.db
+      .query('revisions')
       .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
       .unique()
+    // A record of the revision from before it kept when the agent last wrote, or none at all,
+    // says nothing of that: the state is read for it then, until it is next written
+    const state =
+      noted?.agentAt !== undefined
+        ? { revision: noted.revision, agentAt: noted.agentAt }
+        : await ctx.db
+            .query('states')
+            .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
+            .unique()
     const machine = a.machineId ? await ctx.db.get(a.machineId) : null
     return {
       ...card(a, a.waiting ?? 0, machine?.name ?? null),
+      // Only this page's app readiness is shared with its readers, including paired screens.
+      connection: connection(machine, a),
       // Where the page's conversation is in an agent app It can reopen a closed conversation of:
       // the machine that would do it, and whether the person has switched that on there
       wake:
@@ -144,10 +171,10 @@ export const remove = mutation({
     if (a.waiting) await bump(ctx, user._id, { waiting: -a.waiting })
     // What was sent to the bell about the page goes from the bell with it. Left there, it
     // offers a button for a page that is gone: the tour's last notice outlived the tour so.
-    // The newest few hundred are looked through, which is more than a tray ever holds.
+    // The rest go in the bounded cleanup of this page, however old they are.
     const told = await ctx.db
       .query('notifications')
-      .withIndex('by_user', (q) => q.eq('userId', user._id))
+      .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
       .order('desc')
       .take(300)
     for (const n of told) if (n.artifactId === a._id && !n.dismissedAt) await ctx.db.patch(n._id, { dismissedAt: Date.now() })
@@ -169,6 +196,11 @@ export const take = mutation({
   args: { ...ref, session, agent: v.optional(v.string()) },
   handler: async (ctx, { session: mine, agent, ...which }) => {
     const { user, machine } = await requireMachine(ctx)
+    // A conversation is named here in as many characters as publishing takes one in. A longer
+    // name is kept whole on the page and cut short where the machine says the conversation is
+    // running, so the page would never be seen to run and could not be stopped; and it is read
+    // with every page of the person's, each time they are listed.
+    if (mine.harness.length > 40 || mine.id.length > 200) fail('invalid', 'That is not a session.')
     const a = await resolve(ctx, user._id, which)
     if (a.machineId === machine._id && a.session?.harness === mine.harness && a.session?.id === mine.id) return { took: false }
     await rateLimit(ctx, 'take', user._id)
@@ -178,6 +210,39 @@ export const take = mutation({
     return { took: true }
   },
 })
+
+type Connection = {
+  harness: string
+  state: 'disconnected' | 'connecting' | 'needs_approval' | 'error' | 'unavailable' | 'too_old' | 'connected' | 'unknown'
+  queue: boolean
+}
+
+/** The owning app's reported capability, without claiming that this conversation is open. */
+function connection(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): Connection | null {
+  if (!machine || machine.revoked || !a.session) return null
+  const harness = a.session.harness
+  if (!(machine.wanted ?? []).includes(harness)) return { harness, state: 'disconnected', queue: false }
+  const report = machine.harnesses?.find((h) => h.id === harness)
+  let state: Connection['state'] = 'unknown'
+  switch (report?.addon) {
+    case 'not_connected':
+      state = 'connecting'
+      break
+    case 'needs_approval':
+    case 'error':
+    case 'unavailable':
+    case 'too_old':
+    case 'connected':
+      state = report.addon
+  }
+  // This minimum matches Codex's supported version in setup. An unreadable version proves nothing.
+  const queue =
+    harness === 'codex' &&
+    (state === 'connected' || state === 'needs_approval') &&
+    /^v?\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(report?.version ?? '') &&
+    !newer('0.160.0', report?.version)
+  return { harness, state, queue }
+}
 
 /** The reopened run of a page's conversation, where its machine says one is under way. */
 function running(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): { since: number; stopping: boolean; identity: string } | null {
@@ -258,7 +323,13 @@ export const stop = mutation({
   },
 })
 
-/** How many waiting clicks one step drops, of each of the two ways a click can be waiting. */
+/**
+ * How many waiting clicks one step drops, of every way a click can be waiting taken together.
+ * A click carries up to 32 KB, and the backend counts it once when it is read and once more
+ * when it is changed, against the 16 MB it lets one step read: a hundred of the largest are
+ * well within that. A hundred of each way, which is what a step once took, came to six hundred,
+ * and the backend refused the step whole, the word to the machine to stop with it.
+ */
 const DROP_AT_ONCE = 100
 
 /**
@@ -280,12 +351,21 @@ async function dropWaiting(
   artifactId?: Id<'artifacts'>,
 ): Promise<{ count: number; more: boolean }> {
   let count = 0
+  // How many of them still counted as waiting for the person: all but those of a page that has
+  // been deleted meanwhile, which gave back everything that was waiting on it when it went
+  let tallied = 0
   let more = false
   for (const delivery of ['pending', 'leased'] as const)
     for (const [addressed, aside] of [
       [machineId, undefined],
       [undefined, machineId],
     ] as const) {
+      // What this step may take has been taken: whatever waits in the ways not yet looked at is the next step's
+      const room = DROP_AT_ONCE - count
+      if (room <= 0) {
+        more = true
+        break
+      }
       const batch = await ctx.db
         .query('actions')
         .withIndex('by_user_route', (q) =>
@@ -299,8 +379,8 @@ async function dropWaiting(
             // Made after the stop: the person did that knowing the agent was stopped, and it is kept
             .lte('createdAt', at),
         )
-        .take(DROP_AT_ONCE)
-      if (batch.length === DROP_AT_ONCE) more = true
+        .take(room)
+      if (batch.length === room) more = true
       for (const x of batch) {
         await ctx.db.patch(x._id, {
           delivery: 'handed_off',
@@ -313,7 +393,10 @@ async function dropWaiting(
         count++
         // It stops counting as waiting, on its page and for the person, as any click does that is no longer waiting
         const page = await ctx.db.get(x.artifactId)
-        if (page) await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+        if (page) {
+          await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+          tallied++
+        }
       }
     }
   // And whatever else waits on the page the stop was asked from, from before the stop: a click
@@ -322,11 +405,16 @@ async function dropWaiting(
   // stands in front of it.
   if (artifactId)
     for (const delivery of ['pending', 'leased'] as const) {
+      const room = DROP_AT_ONCE - count
+      if (room <= 0) {
+        more = true
+        break
+      }
       const batch = await ctx.db
         .query('actions')
         .withIndex('by_artifact_delivery', (q) => q.eq('artifactId', artifactId).eq('delivery', delivery).lte('createdAt', at))
-        .take(DROP_AT_ONCE)
-      if (batch.length === DROP_AT_ONCE) more = true
+        .take(room)
+      if (batch.length === room) more = true
       for (const x of batch) {
         await ctx.db.patch(x._id, {
           delivery: 'handed_off',
@@ -338,10 +426,13 @@ async function dropWaiting(
         })
         count++
         const page = await ctx.db.get(x.artifactId)
-        if (page) await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+        if (page) {
+          await ctx.db.patch(page._id, { waiting: Math.max(0, (page.waiting ?? 0) - 1) })
+          tallied++
+        }
       }
     }
-  if (count) await bump(ctx, userId, { waiting: -count })
+  if (tallied) await bump(ctx, userId, { waiting: -tallied })
   return { count, more: more && count > 0 }
 }
 

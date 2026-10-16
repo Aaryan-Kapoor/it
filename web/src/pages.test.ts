@@ -41,11 +41,13 @@ const stopsAsked: {
 }[] = []
 const askedToStop = (input: { expectedRun?: string; expectedSession?: string }) =>
   new Promise<{ stopping: boolean }>((answer, refuse) => void stopsAsked.push({ input, answer, refuse }))
+const queries: { name: string; args: unknown }[] = []
 vi.mock('convex/react', () => ({
   useConvex: () => client,
   useMutation: (fn: unknown) => (getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : async () => null),
   useQuery: (fn: unknown, args: unknown) => {
     const name = getFunctionName(fn as never)
+    queries.push({ name, args })
     if (name === 'machines:list' && args !== 'skip') inventoryAsked()
     return args === 'skip' ? undefined : { 'artifacts:get': PAGE, 'actions:forArtifact': recent, 'machines:list': machines }[name]
   },
@@ -65,19 +67,19 @@ const envelope = (id: string): Sent => ({ v: 1, clientActionId: id, name: 'appro
 const tick = () => act(async () => new Promise<void>((r) => setTimeout(r, 0)))
 /** Longer than a stop is on its way before the bar says so. */
 const aWhile = () => act(async () => new Promise<void>((r) => setTimeout(r, 800)))
-async function shown() {
+async function shown(owner = true) {
   const { PageView } = await import('./pages')
   const outbox = await import('./outbox')
   outbox.outboxBelongsTo('user-1', 'session-1')
   host = document.body.appendChild(document.createElement('div'))
   root = createRoot(host)
-  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: true })))
+  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner })))
   return outbox
 }
 /** Draws the page again where it is, as it is drawn when the backend has something new to say of it. */
-async function drawnAgain() {
+async function drawnAgain(owner = true) {
   const { PageView } = await import('./pages')
-  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: true })))
+  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner })))
 }
 
 beforeEach(() => {
@@ -101,6 +103,7 @@ beforeEach(() => {
   told.clear()
   answers.length = 0
   stopsAsked.length = 0
+  queries.length = 0
   client.mutation.mockClear()
   inventoryAsked.mockClear()
 })
@@ -120,6 +123,17 @@ const connection = (up: boolean) =>
   })
 
 describe('what the page’s bar says of the last thing the person did', () => {
+  test.each([true, false])('the live page omits version history from its subscription when owner is %s', async (owner) => {
+    await shown(owner)
+    const pageQueries = () => queries.filter((q) => q.name === 'artifacts:get').map((q) => q.args)
+    expect(pageQueries()).toEqual([{ slug: 'plan', history: false }])
+    queries.length = 0
+    recent = [{ at: NOW - 2000, delivery: 'pending', outcome: null }]
+    await drawnAgain(owner)
+    expect(pageQueries()).toEqual([{ slug: 'plan', history: false }])
+    expect(said()).toBe('Sent. Waiting for your agent')
+  })
+
   test('when It has not been reachable for a few seconds the bar says so, whatever was last done, and stops saying so when It is back', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
