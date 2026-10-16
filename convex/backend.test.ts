@@ -1536,14 +1536,14 @@ describe('clicks and their delivery', () => {
     expect(await other.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([borrowed])
     // Until the lease runs out, the one made after it is all that is offered
     expect((await inbox(m)).map((c) => c.id)).toEqual([second])
-    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([first])
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [first], done: true })
     expect((await inbox(m)).map((c) => c.id)).toEqual([first, second])
     // The other machine's is still its own, and a second asking gives back nothing more
     expect(await m.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([])
-    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([])
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: true })
     // It is a machine's to ask, and nobody else's
     const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
-    expect(await code(browser.mutation(api.delivery.giveBack, {}))).not.toBe('ok')
+    expect(await code(browser.mutation(api.delivery.giveBackBatch, {}))).not.toBe('ok')
   })
 
   test('more than four thousand leases held by another machine cannot hide this machine’s lease when it starts', async () => {
@@ -1556,10 +1556,8 @@ describe('clicks and their delivery', () => {
       for (let i = 0; i < 4001; i++)
         await ctx.db.insert('actions', { ...base, clientActionId: `foreign-${i}`, leaseMachineId: other.id, leaseExpiresAt: Date.now() })
     })
-    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual([first])
-    expect((await inbox(m)).map((c) => c.id)).toEqual([first])
-    expect(await m.as.mutation(api.delivery.claim, { ids: [first] })).toEqual([first])
     expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [first], done: true })
+    expect((await inbox(m)).map((c) => c.id)).toEqual([first])
     expect(
       await t.run((ctx) =>
         ctx.db
@@ -1602,10 +1600,6 @@ describe('clicks and their delivery', () => {
     }
     expect(back).toEqual(ids)
     expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: [], done: true })
-    // An older connector still gets its array answer with the same 500-action ceiling.
-    for (let i = 0; i < ids.length; i += 50) await m.as.mutation(api.delivery.claim, { ids: ids.slice(i, i + 50) })
-    expect(await m.as.mutation(api.delivery.giveBack, {})).toEqual(ids.slice(0, 500))
-    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toEqual({ back: ids.slice(500), done: true })
     const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
     expect(await code(browser.mutation(api.delivery.giveBackBatch, {}))).not.toBe('ok')
   })

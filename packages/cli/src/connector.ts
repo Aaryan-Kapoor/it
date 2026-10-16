@@ -753,23 +753,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
         legacyGiveBack = true
       }
     }
-    try {
-      const back = await call<string[]>('mutation', api.delivery.giveBack, {})
-      return Array.isArray(back) && back.every((id) => typeof id === 'string') ? { back, done: true } : null
-    } catch (err) {
-      if (!missing(err)) return null
-      // An It from before either function: give back each click the journal names.
-      const gone = await Promise.all(
-        claimedAndLeft().map((id) =>
-          call('mutation', api.delivery.release, { id }).then(
-            () => id,
-            () => null,
-          ),
+    // An It from before the batch function: give back each click the journal names.
+    const gone = await Promise.all(
+      claimedAndLeft().map((id) =>
+        call('mutation', api.delivery.release, { id }).then(
+          () => id,
+          () => null,
         ),
-      )
-      return { back: gone.filter((id): id is string => id !== null), done: true }
-    }
+      ),
+    )
+    return { back: gone.filter((id): id is string => id !== null), done: true }
   }
+
   let inbox: Offered[] = []
   let routing = false
   let stopping: ((code: number) => void) | null = null

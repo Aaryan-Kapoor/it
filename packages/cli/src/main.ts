@@ -702,7 +702,13 @@ async function wait(a: Args) {
    * of its that never arrived would otherwise be the last of that click.
    */
   const taken = new Set<string>()
-  const got = () => (taken.size ? { got: [...taken].slice(-500) } : {})
+  // Only the latest 500 receipts are sent with an asking. Keep no more in a wait that may follow
+  // for days; an older click offered again is remembered anew, without being printed twice.
+  const take = (id: string) => {
+    taken.add(id)
+    if (taken.size > 500) taken.delete(taken.values().next().value!)
+  }
+  const got = () => (taken.size ? { got: [...taken] } : {})
   const announce = () =>
     local<{ sessions?: { harness: string; id: string }[]; clicks?: Listed[] }>('/waiting', {
       method: 'POST',
@@ -801,11 +807,11 @@ async function wait(a: Args) {
       // What the connector gave again is what this already had, and is said to it as printed.
       // Anything else only once it is: the connector lets go of its copy at that word
       if (printedIds.has(c.id)) {
-        taken.add(c.id)
+        take(c.id)
         continue
       }
       await emit(printed(c))
-      taken.add(c.id)
+      take(c.id)
       printedIds.add(c.id)
       if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
       unreported.add(c.id)
