@@ -3,7 +3,7 @@
 // what stands for the program is a script that says its version as the program does.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -332,6 +332,98 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     expect(await fetchNewer({ program: here() })).toBeNull()
     expect(asked).toEqual(['/latest/download/latest.json'])
   })
+
+  test.each([false, true])(
+    'standalone setup checks its installed version and holds the program lock through its writes, through a linked folder too (%s)',
+    async (linked) => {
+      const named = path.join(folder, 'linked-bin')
+      if (linked) symlinkSync(path.dirname(here()), named, 'dir')
+      const program = linked ? path.join(named, 'it') : here()
+      const worker = path.join(folder, 'setup.mjs')
+      await build({
+        stdin: {
+          contents: `
+          // Run the real setup command as though it were the standalone program.
+          Object.defineProperty(process, 'execPath', { value: process.argv[2] })
+          process.argv = [process.execPath, process.execPath, 'setup', '--none', '--no-service']
+          await import('./src/main')
+        `,
+          resolveDir: __dirname,
+          loader: 'ts',
+        },
+        bundle: true,
+        platform: 'node',
+        format: 'esm',
+        target: 'node22',
+        outfile: worker,
+        banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
+        loader: { '.md': 'text', '.txt': 'text' },
+        logLevel: 'silent',
+      })
+      const data = path.join(folder, 'setup-home')
+      mkdirSync(path.join(data, 'addons'), { recursive: true })
+      // This setup only removes absent add-ons. It never starts a service or a backend.
+      writeFileSync(path.join(data, 'left.json'), '{"left":true}')
+      const waiting = 'Another `it setup` or `it login` is at work in this folder. This one goes on when that one has finished.'
+      const run = (stopWhileWaiting = false) => {
+        const child = spawn(process.execPath, [worker, program], {
+          env: {
+            PATH: path.join(folder, 'bin'),
+            HOME: folder,
+            IT_HOME: data,
+            IT_INSTALL_BASE: process.env.IT_INSTALL_BASE,
+            IT_TELEMETRY_ENABLED: 'false',
+            IT_HARNESSES: 'none',
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: stopWhileWaiting ? 5000 : 15_000,
+        })
+        let err = ''
+        child.stdout.resume()
+        child.stderr.on('data', (bytes) => {
+          err += bytes
+          if (stopWhileWaiting && err.includes(waiting)) child.kill('SIGKILL')
+        })
+        return new Promise<{ code: number | null; err: string }>((resolve, reject) => {
+          child.once('error', reject)
+          child.once('close', (code) => resolve({ code, err }))
+        })
+      }
+      const lock = `${realpathSync(program)}.upgrade.lock`
+      // A replacement that landed before setup took the lock must stop the old setup before
+      // even its release settings are written, including when the version cannot be checked.
+      for (const version of ['9.9.9', null]) {
+        writeFileSync(here(), says(version))
+        const ran = await run()
+        expect([ran.code, existsSync(path.join(data, 'releases.json'))], ran.err).toEqual([1, false])
+        expect(ran.err).toContain('Run `it setup` again')
+        expect(await aloneAt(lock, async () => true, 0)).toBe(true)
+      }
+      writeFileSync(here(), says(VERSION))
+      let running: ReturnType<typeof run> | undefined
+      try {
+        await aloneAt(path.join(data, 'addons', 'setup.lock'), async () => {
+          running = run()
+          for (const end = Date.now() + 10_000; !existsSync(path.join(data, 'releases.json')); ) {
+            if (Date.now() >= end) throw new Error('Setup did not reach its first write.')
+            await new Promise((resolve) => setTimeout(resolve, 20))
+          }
+          // Setup has passed its version check and is waiting to reconcile add-ons. An
+          // updater from any data home must still be unable to replace its executable.
+          const contender = await aloneAt(lock, async () => 'replaced', 0).catch((err: Problem) => err.code)
+          expect(contender).toBe('busy')
+        })
+      } finally {
+        if (running) expect((await running).code).toBe(0)
+      }
+      expect(await aloneAt(lock, async () => true, 0)).toBe(true)
+      // An ordinary setup waits on the folder first, so its existing waiting message and
+      // ten-minute wait still apply when another setup also owns the program lock.
+      rmSync(path.join(data, 'left.json'))
+      const queued = await aloneAt(lock, () => aloneAt(path.join(data, 'setup.lock'), () => run(true)))
+      expect(queued.err).toContain(waiting)
+    },
+  )
 
   test('leaves the program that is here exactly as it was where anything about it is wrong: its checksum, a file the release does not list, a program that does not start, or one that says it is no newer', async () => {
     const untouched = () => expect(readFileSync(here(), 'utf8')).toBe(says(VERSION))
