@@ -2331,6 +2331,8 @@ describe('what cannot be trusted', () => {
   })
   test('however many files stand in It’s folder, a pass and a turning off touch only the two they know by name', async () => {
     told()
+    // This tests which files are touched, so disk speed must not expire the decision first.
+    ownClock()
     const good = aLine()
     const one = Array.from({ length: 400 }, () => `${JSON.stringify({ ...good, id: randomUUID() })}\n`).join('')
     for (let i = 0; i < 300; i++) writeFileSync(`${spool()}.${10_000 + i}`, '')
