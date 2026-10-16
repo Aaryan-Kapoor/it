@@ -4015,6 +4015,30 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
 })
 
 describe.skipIf(process.platform === 'win32')('a second machine', () => {
+  test.each([false, true])('login checks a damaged installation record before joining, with an earlier unreadable record: %s', async (earlier) => {
+    const m = machine(false)
+    writeFileSync(path.join(m.it, INSTALLATION_FILE), '{')
+    if (earlier) writeFileSync(path.join(m.it, `${INSTALLATION_FILE}.unreadable`), 'earlier record')
+    const b = await backend(m)
+    try {
+      const ran = await run(m, ['login', '--url', b.url, '--code', 'invite', '--no-setup'])
+      if (earlier) {
+        expect(error(ran).code).toBe('record_unread')
+        expect(b.joined).toEqual([])
+        expect(existsSync(path.join(m.it, 'machine.json'))).toBe(false)
+        expect(existsSync(path.join(m.it, 'machine.pending.json'))).toBe(false)
+        expect(readFileSync(path.join(m.it, INSTALLATION_FILE), 'utf8')).toBe('{')
+      } else {
+        expect(ran.code, ran.err).toBe(0)
+        expect(b.joined).toHaveLength(1)
+        expect(readFileSync(path.join(m.it, INSTALLATION_FILE), 'utf8')).toBe(INSTALLATION)
+      }
+      expect(readFileSync(path.join(m.it, `${INSTALLATION_FILE}.unreadable`), 'utf8')).toBe(earlier ? 'earlier record' : '{')
+    } finally {
+      await b.close()
+    }
+  })
+
   test.each([
     { standalone: false, pauseAt: '/cli/config' },
     { standalone: false, pauseAt: '/bridge/enroll' },

@@ -42,7 +42,7 @@ import { type Args, json, loose, need, nested, parse, text } from './args'
 import { local } from './connector'
 import * as flow from './flow'
 import { hook } from './hooks'
-import { legacyInstallation, markedInstallation, markInstallation } from './installation'
+import { checkInstallationRecord, legacyInstallation, markedInstallation, markInstallation } from './installation'
 import { withInstallerLock } from './installer-lock'
 import {
   api,
@@ -3051,7 +3051,7 @@ async function main(argv: string[]): Promise<void> {
         withInstallerLock(home(), () =>
           withCurrentProgram(async () => {
             refused()
-            markedInstallation(home())
+            checkInstallationRecord(home())
             const joined = await login(asked)
             markInstallation(home())
             return joined

@@ -41,15 +41,19 @@ export function markedInstallation(folder: string): boolean {
   return false
 }
 
+/** Login must check before consuming an invite that no unreadable record would prevent marking the joined folder afterwards. */
+export function checkInstallationRecord(folder: string): boolean {
+  const marked = markedInstallation(folder)
+  const file = path.join(folder, INSTALLATION_FILE)
+  if (!marked && lstatSync(file, { throwIfNoEntry: false }))
+    throw new Problem(`${file} is not the installation record It wrote.`, 'record_unread', 'Inspect the unreadable records before installing It here again.')
+  return marked
+}
+
 /** Setup deliberately chooses this folder. Existing files are never taken for a marker. */
 export function markInstallation(folder: string): void {
   mkdirSync(folder, { recursive: true, mode: 0o700 })
-  if (!markedInstallation(folder)) {
-    const file = path.join(folder, INSTALLATION_FILE)
-    if (lstatSync(file, { throwIfNoEntry: false }))
-      throw new Problem(`${file} is not the installation record It wrote.`, 'record_unread', 'Inspect the unreadable records before installing It here again.')
-    writePrivate(file, INSTALLATION)
-  }
+  if (!checkInstallationRecord(folder)) writePrivate(path.join(folder, INSTALLATION_FILE), INSTALLATION)
 }
 
 /** A standalone program belongs to its real bin folder. A PATH symlink cannot assign it another home. */
