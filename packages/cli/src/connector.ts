@@ -23,7 +23,7 @@ import {
   type MarkCopy,
   type MarkFallback,
   type Offered,
-  WAITERS_PER_CONVERSATION,
+  RECEIPTS_MOST,
 } from './delivery-recovery'
 import {
   api,
@@ -504,9 +504,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * as it is given, an answer that never reached the waiter would leave the turn waiting for a
    * message that stands behind it.
    */
-  const recovery = new DeliveryRecovery()
-  recovery.pruneWaiters()
-  const behindTurn = recovery.waiters
+  const recovery = new DeliveryRecovery(say)
+  await recovery.pruneWaiters()
   for (const id of recovery.accepted) toConfirm.set(id, 'queue')
   /**
    * For how long a click given to one waiter is not given to another. The first is printing it
@@ -514,14 +513,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   const GIVEN_MS = 10_000
   /** Outstanding queue acceptance receipts, independent of waiter copies. */
-  const ACCEPTED_MOST = 200
+  const ACCEPTED_MOST = RECEIPTS_MOST
   const waiterRoom = (key: string) => {
-    const ids = new Set([...behindTurn].filter(([, copy]) => follow(copy.key) === key).map(([id]) => id))
+    const pending = new Map<string, string>()
     for (const [id, sent] of submitting) {
       const session = sent.click.session
-      if (session && follow(keyOf(session.harness, session.id)) === key) ids.add(id)
+      if (session) pending.set(id, keyOf(session.harness, session.id))
     }
-    return Math.max(0, WAITERS_PER_CONVERSATION - ids.size)
+    // Reserve space even while another queue command is waiting for its claim to answer.
+    for (const [id, target] of queueReceipts) pending.set(id, target)
+    return recovery.waiterRoom(key, pending, follow)
   }
   const turnRunning = (key: string, now: number) => {
     const s = sessions.get(key)
@@ -612,7 +613,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * them, which it does as the turn begins that the mark started, or at the next moment one
    * of them runs. A mark nobody asks about in time was put where no hook of It's runs.
    */
-  const marked = recovery.marks
   /** The conversations a mark went unasked about: they are given the short line from then on, for as long as this connector runs. */
   const unmarked = new Set<string>()
   /** How long a conversation's hooks are given to ask what a mark stands for, and to say that they have it. An agent app that has to be started first takes ten seconds or so. */
@@ -659,19 +659,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const markReceipt = (key: string, entry: MarkCopy) => {
     const harness = key.slice(0, key.indexOf(':'))
     // Looked for wherever it is kept by now: a conversation that carries on under a new id takes its marks along
-    const where = () => [...marked].find(([, kept]) => kept.some((m) => m.id === entry.id))?.[0]
+    const where = () => [...recovery.marks].find(([, kept]) => kept.some((m) => m.id === entry.id))?.[0]
     const kept = () => where() !== undefined
-    // A failed atomic write restores cloned entries. Always change the current durable copy.
-    const current = () => marked.get(where() ?? key)?.find((m) => m.id === entry.id)
-    const takeAway = () => {
+    // Entries are replaced only after a durable save. Look up the current retry progress.
+    const current = () => recovery.marks.get(where() ?? key)?.find((m) => m.id === entry.id)
+    const takeAway = async () => {
       if (recovery.erased || over) return
       const under = where()
       if (under === undefined) return
-      recovery.change(() => {
-        const left = marked.get(under)!.filter((m) => m.id !== entry.id)
-        if (left.length) marked.set(under, left)
-        else marked.delete(under)
-      })
+      await recovery.removeMark(entry.id)
     }
     const who = `${a(agentOf(harness))} conversation (${short(threadOf(key))})`
     const after = (ms: number, what: () => void) => {
@@ -681,7 +677,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       }, ms)
       markTimers.add(timer)
     }
-    const line = () => {
+    const line = async () => {
       const copy = current()
       if (!copy || copy.retry?.nextAt === null) return
       // Not into an app the person has disconnected since: what the mark stood for stays as it is, for a hook of the app once it is connected again
@@ -698,22 +694,24 @@ async function connecting(say: (line: string) => void): Promise<void> {
       const next = MARK_AGAIN_MS[tried]
       try {
         // Reserve the attempt before sending, so even an interrupted send cannot reset its budget.
-        recovery.change(() => {
-          copy.retry = { attempts: tried + 1, nextAt: next === undefined ? null : Date.now() + next }
-        })
+        await recovery.retryMark(entry.id, { attempts: tried + 1, nextAt: next === undefined ? null : Date.now() + next })
       } catch (err) {
         seldom('mark-receipt', `could not keep the mark retry (${why(err)}); trying again`)
         return after(MARK_ASKED_MS, line)
       }
+      // The disk may have taken time. A hook, disconnection or shutdown that arrived
+      // meanwhile takes precedence over sending the fallback whose attempt was reserved.
+      if (closing || unfitting || recovery.stopped || !kept() || !chosen(harness) || !connected(harness)) return
+      if (fallback.via === 'codex' && !codexHeld(threadOf(follow(where() ?? key)))) return
       void (
         fallback.via === 't3'
           ? server
             ? t3Send(server, fallback.thread, fallback.text)
             : Promise.resolve('T3 Code could not be reached')
-          : codexQueue(threadOf(keyNow), fallback.text)
+          : codexQueue(threadOf(follow(where() ?? key)), fallback.text)
       )
         .catch(() => 'it could not be sent')
-        .then((refused) => {
+        .then(async (refused) => {
           if (closing || recovery.stopped || !kept()) return
           // Taken: the agent has it in the line, and the note is done with
           if (refused === null) return takeAway()
@@ -723,9 +721,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           }
           try {
             // Measure the next delay from the refusal, including time spent awaiting the app.
-            recovery.change(() => {
-              current()!.retry!.nextAt = Date.now() + next
-            })
+            await recovery.retryMark(entry.id, { attempts: tried + 1, nextAt: Date.now() + next })
           } catch (err) {
             seldom('mark-receipt', `could not keep the next mark retry (${why(err)}); the reserved attempt remains`)
           }
@@ -746,23 +742,22 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     return { takeAway, wait }
   }
-  const noteMark = (key: string, texts: string[], fallback: MarkFallback) => {
+  const noteMark = async (key: string, texts: string[], fallback: MarkFallback) => {
     // Exhausted marks still belong to their hooks. Keep them and use the normal short line
     // for this click when no durable slot is free, rather than holding up another conversation.
-    if (!recovery.hasMarkRoom) return undefined
     const entry = { id: randomBytes(8).toString('hex'), texts, at: Date.now(), fallback }
-    recovery.change(() => marked.set(key, [...(marked.get(key) ?? []), entry]))
+    if (!(await recovery.addMark(key, entry))) return undefined
     return markReceipt(key, entry)
   }
   // Old records without routing data remain available to hooks. Never guess a command line from their full text.
   const restoredMarks = new Set(
-    [...marked.values()]
+    [...recovery.marks.values()]
       .flat()
       .filter((m) => m.fallback)
       .map((m) => m.id),
   )
   const restoreMarks = () => {
-    for (const [key, entries] of marked) {
+    for (const [key, entries] of recovery.marks) {
       if (!chosen(key.slice(0, key.indexOf(':')))) continue
       for (const entry of entries) {
         if (!restoredMarks.delete(entry.id)) continue
@@ -773,7 +768,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
   const queues = new Map<string, Promise<void>>()
   /** Room for the durable receipt is reserved before an app is asked to accept a click. */
-  const queueReceipts = new Set<string>()
+  const queueReceipts = new Map<string, string>()
   const unconfirmed = new Set([...queuedButUnconfirmed(), ...recovery.accepted])
   /**
    * What the connector before this one left claimed is given back before anything is taken,
@@ -789,6 +784,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
   let legacyGiveBack = false
   let legacyRecover = false
   let legacyLeft: Set<string> | undefined
+  // The backend accepts at most 32 recovery ids. Older backends need one call per id;
+  // use the same batch there so recovery cannot flood the backend with requests.
+  const RECOVERY_BATCH = 32
   async function recoverBatch(): Promise<{
     back: string[]
     done: boolean
@@ -819,7 +817,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Older backends are asked about every locally recorded claim, a bounded batch at a time.
       legacyLeft ??= new Set([...claimedAndLeft(), ...recovery.returning])
       const gone = await Promise.all(
-        [...legacyLeft].slice(0, 32).map((id) =>
+        [...legacyLeft].slice(0, RECOVERY_BATCH).map((id) =>
           call('mutation', api.delivery.release, { id }).then(
             () => id,
             (err) => ((err as { code?: string }).code === 'not_found' ? id : null),
@@ -833,20 +831,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   // A late answer about a previous hold must not erase the receipt for a newer claim of the same click.
   const claimAttempts = new Map<string, object>()
-  const retireClaim = (id: string, attempt: object | undefined) => {
+  const retireClaim = async (id: string, attempt: object | undefined) => {
     if (recovery.stopped || claimAttempts.get(id) !== attempt) return
-    recovery.change(() => {
-      recovery.returning.delete(id)
-      recovery.targets.delete(id)
-    })
-    claimAttempts.delete(id)
+    await recovery.retire([id], () => claimAttempts.get(id) === attempt)
+    if (claimAttempts.get(id) === attempt) claimAttempts.delete(id)
   }
   /** Confirmed lease losses whose durable cleanup may still need a successful write. */
   const lostClaims = new Map<string, object | undefined>()
-  const retireLostClaims = () => {
+  const retireLostClaims = async () => {
     for (const [id, attempt] of lostClaims) {
       try {
-        retireClaim(id, attempt)
+        await retireClaim(id, attempt)
         lostClaims.delete(id)
       } catch (err) {
         seldom('recovery-lost', `could not retire the lost claim (${why(err)}); trying again`)
@@ -860,19 +855,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
     } catch (err) {
       if ((err as { code?: string }).code !== 'not_found') throw err
     }
-    retireClaim(id, attempt)
+    await retireClaim(id, attempt)
   }
   const claim = async (ids: string[], session: { harness: string; id: string }) => {
     const attempt = {}
-    recovery.change(() => {
-      for (const id of ids) {
-        recovery.returning.add(id)
-        recovery.targets.set(id, keyOf(session.harness, session.id))
-      }
-    })
+    await recovery.claim(ids, keyOf(session.harness, session.id))
     for (const id of ids) claimAttempts.set(id, attempt)
     const got = await call<string[]>('mutation', api.delivery.claim, { ids, for: session })
-    for (const id of ids) if (!got.includes(id)) retireClaim(id, attempt)
+    for (const id of ids) if (!got.includes(id)) await retireClaim(id, attempt)
     return got
   }
   let inbox: Offered[] = []
@@ -894,14 +884,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       const attempt = claimAttempts.get(id)
       try {
         const done = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route })
-        if (recovery.accepted.has(id) || recovery.returning.has(id))
-          recovery.change(() => {
-            recovery.accepted.delete(id)
-            if (claimAttempts.get(id) === attempt) {
-              recovery.returning.delete(id)
-              recovery.targets.delete(id)
-            }
-          })
+        if (recovery.accepted.has(id) || recovery.returning.has(id)) await recovery.confirm(id, () => claimAttempts.get(id) === attempt)
         if (claimAttempts.get(id) === attempt) claimAttempts.delete(id)
         if (done) {
           confirmed.add(id)
@@ -917,13 +900,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // Another machine took it over, or it is gone: either way it is not this one's to confirm
         if (/conflict|not_found/.test(String((err as { code?: string }).code))) {
           try {
-            recovery.change(() => {
-              recovery.accepted.delete(id)
-              if (claimAttempts.get(id) === attempt) {
-                recovery.returning.delete(id)
-                recovery.targets.delete(id)
-              }
-            })
+            await recovery.confirm(id, () => claimAttempts.get(id) === attempt)
             if (claimAttempts.get(id) === attempt) claimAttempts.delete(id)
           } catch (error) {
             seldom('recovery', `could not keep the delivery receipt (${why(error)}); trying again`)
@@ -965,7 +942,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         )
         if (!done) continue
         try {
-          retireClaim(id, attempt)
+          await retireClaim(id, attempt)
         } catch (err) {
           seldom('recovery', `could not keep the parked delivery receipt (${why(err)}); trying again`)
           continue
@@ -1529,7 +1506,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // which may be long before its answer is here
       if (!reopening && waiterRoom(key) === 0) return
       if (recovery.accepted.size + queueReceipts.size >= ACCEPTED_MOST) return
-      queueReceipts.add(click.id)
+      queueReceipts.set(click.id, key)
       receiptSlots.push(click.id)
       const claimedAt = steady()
       const [got] = await claim([click.id], click.session!)
@@ -1571,7 +1548,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           )
         if (more.length) {
           for (const c of more) {
-            queueReceipts.add(c.id)
+            queueReceipts.set(c.id, key)
             receiptSlots.push(c.id)
           }
           const got = await claim(
@@ -1697,13 +1674,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
       const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
       const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexQueue(threadOf(follow(key)), text))
       if (!reopening && turnRunning(follow(key), Date.now())) {
-        recovery.change(() => {
-          for (const c of [click, ...withIt]) behindTurn.set(c.id, { click: c, key: follow(key) })
-        })
+        await recovery.keepWaiters([click, ...withIt], follow(key))
       }
       const mark =
         !reopening && marks(follow(key), harness)
-          ? noteMark(
+          ? await noteMark(
               follow(key),
               [click, ...(t3 ? withIt : [])].map((c) => describeClick(asClick(c))),
               t3 ? { via: 't3', thread: t3.thread, text: lines() } : { via: 'codex', text: lines() },
@@ -1750,7 +1725,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             // command line.
             await put(mark ? MARK : lines())
       // A mark that was not taken stands for nothing. One that was is waited on: a hook asks
-      if (mark && refused !== null) mark.takeAway()
+      if (mark && refused !== null) await mark.takeAway()
       else mark?.wait()
       // A conversation the person stopped had what was done all the same: it is handed over,
       // and nothing is tried again for it
@@ -1783,9 +1758,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       }
       const handed = refused === null || refused === STOPPED
       if (!handed) {
-        recovery.change(() => {
-          for (const c of [click, ...withIt]) behindTurn.delete(c.id)
-        })
+        await recovery.dropWaiters([click, ...withIt].map((c) => c.id))
         await giveBack()
       }
       // Refused by the command, and given meanwhile to an agent that is waiting for it: the
@@ -1796,16 +1769,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // that handoff into a refusal or release the rest of its batch for redelivery.
         if (!recovery.stopped) {
           try {
-            recovery.change(() => {
-              for (const c of [click, ...withIt]) {
-                recovery.accepted.add(c.id)
-                // Keep copies for a waiter in the running turn until it says it printed
-                // them. Its answer may have arrived while the app was taking this batch.
-                const kept = behindTurn.get(c.id)
-                if (c === click && sent.printed) behindTurn.delete(c.id)
-                else if (kept && c === click && sent.given) kept.given = sent.given
-              }
-            })
+            await recovery.accept(
+              [click, ...withIt].map((c) => c.id),
+              { id: click.id, printed: sent.printed, given: sent.given },
+            )
           } catch (err) {
             seldom('recovery', `could not keep the delivery receipt (${why(err)}); confirming the accepted clicks`)
           }
@@ -1950,8 +1917,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (routing || closing || unfitting || recovery.erased) return
     routing = true
     try {
-      retireLostClaims()
-      recovery.pruneWaiters()
+      await retireLostClaims()
+      await recovery.pruneWaiters(Date.now(), (key) => sessions.has(follow(key)) && !turnRunning(follow(key), Date.now()))
       if (givingBack === 'due') {
         const asked = await recoverBatch()
         if (asked === null) {
@@ -1960,14 +1927,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
           soon(1000)
           return
         } else {
-          recovery.change(() => {
-            if (typeof asked.person === 'string') recovery.person = asked.person
-            for (const id of asked.back) {
-              comingBack.add(id)
-              recovery.returning.add(id)
-            }
-            for (const row of asked.routes ?? []) if (row.session) recovery.targets.set(row.id, keyOf(row.session.harness, row.session.id))
-          })
+          await recovery.recover(
+            asked.back,
+            (asked.routes ?? []).flatMap((row) => (row.session ? [[row.id, keyOf(row.session.harness, row.session.id)]] : [])),
+            asked.person,
+          )
+          for (const id of asked.back) comingBack.add(id)
           for (const id of asked.back) journal('released', id)
           if (!asked.done) {
             soon(1000)
@@ -1979,16 +1944,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (givingBack === 'asked') {
         // A current inbox row is evidence too, including for an older backend.
         const seen = inbox.filter((c) => comingBack.has(c.id))
-        if (seen.length)
-          recovery.change(() => {
-            for (const c of seen) {
-              comingBack.delete(c.id)
-              recovery.returning.delete(c.id)
-              recovery.targets.delete(c.id)
-            }
-          })
+        if (seen.length) {
+          await recovery.retire(seen.map((c) => c.id))
+          for (const c of seen) comingBack.delete(c.id)
+        }
         if (comingBack.size) {
-          const ids = [...comingBack].slice(0, 32)
+          const ids = [...comingBack].slice(0, RECOVERY_BATCH)
           try {
             const rows = legacyRecover
               ? await Promise.all(
@@ -2006,13 +1967,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
               : await call<{ id: string; click: Offered | null }[]>('query', api.delivery.recover, { ids })
             if (!Array.isArray(rows) || rows.length !== ids.length || rows.some((r, i) => r.id !== ids[i] || (r.click !== null && r.click?.id !== r.id)))
               throw new Error('incomplete recovery')
-            recovery.change(() => {
-              for (const row of rows) {
-                comingBack.delete(row.id)
-                recovery.returning.delete(row.id)
-                recovery.targets.delete(row.id)
-              }
-            })
+            await recovery.retire(rows.map((row) => row.id))
+            for (const row of rows) comingBack.delete(row.id)
             for (const row of rows) if (row.click) recoveredClicks.set(row.id, row.click)
           } catch (err) {
             if (/could not find/i.test(String((err as Error)?.message ?? err))) legacyRecover = true
@@ -2072,7 +2028,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             // Stop serving it even if saving the cleanup fails, and retry that save separately.
             if (kept !== null) {
               lostClaims.set(id, attempt)
-              retireLostClaims()
+              await retireLostClaims()
             }
             journal('lost', id)
             say(
@@ -2150,7 +2106,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // one may have its place in line for the queue, from the moment it was given that place
         // and before anything was asked for it. Given to the turn's next hook, this one would
         // be read before it: so it follows the earlier one, and is handed over after it.
-        const queuedBefore = inTurn && ([...queues.keys()].some((line) => follow(line) === key) || [...behindTurn.values()].some((b) => follow(b.key) === key))
+        const queuedBefore =
+          inTurn && ([...queues.keys()].some((line) => follow(line) === key) || [...recovery.waiters.values()].some((b) => follow(b.key) === key))
         const forAddOn = listening || (inTurn && now - click.at < FRESH_MS && !queuedBefore)
         // Which of the other ways it goes, asked only where the first does not take it
         const way = forAddOn
@@ -2219,7 +2176,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // Route 4: nothing to do. The click stays waiting and the site shows it.
       }
     } catch (err) {
-      say(`delivery: ${why(err)}`)
+      if (!closing) say(`delivery: ${why(err)}`)
     } finally {
       routing = false
     }
@@ -2283,11 +2240,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       const key = follow(keyOf(harness, id))
       // The hook has what it was given, and says which: only then is it let go of
       if (Array.isArray(body.taken)) {
-        recovery.change(() => {
-          const left = (marked.get(key) ?? []).filter((m) => !body.taken.includes(m.id))
-          if (left.length) marked.set(key, left)
-          else marked.delete(key)
-        })
+        await recovery.removeMarks(key, body.taken)
         return [200, { ok: true }]
       }
       // A hook of an app the person has disconnected is handed nothing, as its add-on is given
@@ -2296,7 +2249,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!chosen(harness) || unfitting || closing) return [200, { ok: true, marks: [], texts: [] }]
       // For a turn the person started with a message of their own, only what has waited past
       // its time is handed over: a mark's own turn is still to come, and has first claim
-      const due = (marked.get(key) ?? []).filter((m) => body.own !== true || Date.now() - m.at > MARK_ASKED_MS)
+      const due = (recovery.marks.get(key) ?? []).filter((m) => body.own !== true || Date.now() - m.at > MARK_ASKED_MS)
       return [200, { ok: true, marks: due.map((m) => m.id), texts: due.flatMap((m) => m.texts) }]
     }
     if (url.pathname === '/session' || url.pathname === '/clicks') {
@@ -2353,24 +2306,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // by the new id and would not be given again until its hold ran out; and what a mark
         // put into it stands for
         for (const h of held.values()) if (h.key === was) h.key = key
-        recovery.change(() => {
-          for (const b of behindTurn.values()) if (b.key === was) b.key = key
-          const kept = marked.get(was)
-          if (kept) {
-            marked.delete(was)
-            marked.set(key, [...(marked.get(key) ?? []), ...kept])
-          }
-        })
         if (unmarked.delete(was)) unmarked.add(key)
         while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
         changed = true
       }
       // A turn has ended or a new one has begun: Codex now hands over what its queue held
       // behind the turn. Clear those copies after moving anything kept under the old id.
-      if (url.pathname === '/session' && typeof body.busy === 'boolean')
-        recovery.change(() => {
-          for (const [clickId, b] of behindTurn) if (b.key === key) behindTurn.delete(clickId)
-        })
+      if ((changed && typeof body.was === 'string') || (url.pathname === '/session' && typeof body.busy === 'boolean'))
+        await recovery.session(
+          key,
+          typeof body.was === 'string' ? keyOf(harness, body.was) : undefined,
+          url.pathname === '/session' && typeof body.busy === 'boolean',
+        )
       if (changed && !over) writePrivate(aliasFile(), Object.fromEntries(aliases))
       // The harness as It knows it, and never as whoever asked spelled it
       if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
@@ -2468,19 +2415,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     if (req.method === 'POST' && url.pathname === '/waiting') {
       if (recovery.erased) return [200, { ok: true, clicks: [] }]
-      recovery.pruneWaiters()
+      await recovery.pruneWaiters(Date.now(), (key) => sessions.has(follow(key)) && !turnRunning(follow(key), Date.now()))
       const who = String(body.id ?? '')
       if (!who) return [400, { error: 'say who is waiting' }]
       // What the waiter says it has printed, of what was kept for a turn that waits, is let go of
-      recovery.change(() => {
-        for (const got of Array.isArray(body.got) ? body.got.slice(0, 1000) : []) {
-          if (typeof got !== 'string') continue
-          if (behindTurn.get(got)?.given?.who === who) behindTurn.delete(got)
-          // One that Codex's command has not yet answered for is noted as printed, so that no copy of it is kept once it has
-          const sent = submitting.get(got)
-          if (sent?.given?.who === who) sent.printed = true
-        }
-      })
+      const got: string[] = Array.isArray(body.got) ? body.got.slice(0, 1000).filter((id: unknown): id is string => typeof id === 'string') : []
+      await recovery.printed(who, got)
+      for (const id of got) {
+        const sent = submitting.get(id)
+        if (sent?.given?.who === who) sent.printed = true
+      }
       if (body.done) {
         // Kept, as one that has ended: see `waiters`
         const ended = waiters.get(who)
@@ -2543,7 +2487,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // sent an answer that did not arrive
           if (sent.printed || (sent.toWaiter && sent.given?.who !== who) || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
           sent.toWaiter = true
-          sent.given = { who, at: Date.now() }
+          if (sent.given?.who !== who) sent.given = { who, at: Date.now() }
           handedBack.push(sent.click)
         }
         // And a click that Codex's queue has taken, and holds until the turn now running is
@@ -2552,15 +2496,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // never arrived, and is given it again; and one that went quiet without saying so
         // leaves it for the next waiter of the turn.
         const now = Date.now()
-        recovery.change(() => {
-          for (const [clickId, b] of behindTurn) {
-            // Given in this answer already, as one is that Codex's command has only just answered for
-            if (handedBack.some((c) => c.id === clickId)) b.given = { who, at: now }
-            else if (waitedFor(waiter, b.click) && (!b.given || b.given.who === who || now - b.given.at > GIVEN_MS) && fits(b.click)) {
-              b.given = { who, at: now }
-              handedBack.push(b.click)
-            }
-          }
+        await recovery.giveWaiters(who, now, (b, clickId) => {
+          // Asking again keeps a waiter's hold in memory; it does not rewrite the saved
+          // receipt's timestamp. After a restart its original timestamp is the fallback.
+          if (handedBack.some((c) => c.id === clickId)) return true
+          const seen = b.given ? (waiters.get(b.given.who)?.seen ?? b.given.at) : 0
+          if (!waitedFor(waiter, b.click) || (b.given && b.given.who !== who && now - seen <= GIVEN_MS) || !fits(b.click)) return false
+          handedBack.push(b.click)
+          return true
         })
         const sessions = watched.map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
         return [200, { ok: true, ...(session ? { sessions } : {}), ...(handedBack.length ? { clicks: handedBack } : {}) }]
@@ -3114,7 +3057,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (info.socket) rmSync(info.socket, { force: true })
   }
   over = true
-  recovery.close()
+  await recovery.close()
   say('stopped')
   process.exitCode = code
 }

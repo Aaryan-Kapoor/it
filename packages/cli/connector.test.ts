@@ -23,6 +23,7 @@ const stand = vi.hoisted(() => ({
   found: [] as { id: string; version?: string; addon: string }[],
   /** Every call the connector made to the backend. */
   calls: [] as { name: string; args: any }[],
+  saving: new Set<Promise<void>>(),
   /** What a call answers, when the test wants something other than the usual. Undefined leaves it to the usual. */
   answer: null as null | ((name: string, args: any) => unknown),
   /** Every time Codex's own command was started, and how the test ends it. */
@@ -91,6 +92,12 @@ vi.mock('./src/lib', async (original) => {
   const real = await original<typeof import('./src/lib')>()
   return {
     ...real,
+    writePrivateAsync: (...args: Parameters<typeof real.writePrivateAsync>) => {
+      const saving = real.writePrivateAsync(...args)
+      stand.saving.add(saving)
+      void saving.finally(() => stand.saving.delete(saving)).catch(() => {})
+      return saving
+    },
     live: () => ({
       onUpdate: (fn: any, args: unknown, heard: (value: any) => void) => {
         stand.watching.set(getFunctionName(fn), heard)
@@ -116,6 +123,7 @@ vi.mock('./src/lib', async (original) => {
 
 import { type ConnectorInfo, infoFile, local, mac, runConnector, wayOf } from './src/connector'
 import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
+import * as files from './src/lib'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
 import { identity, SINCE_TOLD, WAS_STOPPED } from './src/wake'
@@ -137,7 +145,14 @@ async function until(what: () => boolean | Promise<boolean>, ms = 8000): Promise
  * those are a test's to give here. So by the end of a turn it has done what it does, and what
  * it has not done by then it does not do.
  */
-const settled = () => new Promise((r) => reallyNext(r))
+const settled = async () => {
+  // The connector now flushes receipts asynchronously. A pass is not settled merely
+  // because its microtasks ran; wait for its real disk writes without advancing time.
+  do {
+    await Promise.allSettled([...stand.saving])
+    await new Promise((r) => reallyNext(r))
+  } while (stand.saving.size)
+}
 /** The connector's once-a-second timer is a stand-in, and its other waits too when asked: its passes run when a test says. To be called before it starts. */
 const standIn = (waits = false) => vi.useFakeTimers({ toFake: [...(waits ? (['setTimeout', 'clearTimeout'] as const) : []), 'setInterval', 'clearInterval'] })
 /** A second passes for the connector whose timer is a stand-in: it makes the pass it makes every second, and that pass is over. */
@@ -572,7 +587,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       }
       parkFails = false
       if (diskFails) {
-        const saving = vi.spyOn(DeliveryRecovery.prototype, 'change').mockImplementation(() => {
+        const saving = vi.spyOn(DeliveryRecovery.prototype, 'retire').mockImplementation(() => {
           throw new Error('disk unavailable')
         })
         try {
@@ -1417,6 +1432,117 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:handedOff')).toEqual(['click-6'])
   })
 
+  test('an unreadable recovery record is kept aside once and does not stop click delivery', async () => {
+    await start('socket', {}, (folder) => writeFileSync(path.join(folder, 'delivery-recovery.json'), '{broken'))
+    expect(readFileSync(path.join(home, 'delivery-recovery.json.unreadable'), 'utf8')).toBe('{broken')
+    expect(said.filter((line) => line.includes('recovery record could not be read'))).toHaveLength(1)
+    await takenByTheQueue(6)
+    expect(called('delivery:handedOff')).toEqual(['click-6'])
+    expect(said.filter((line) => line.includes('recovery record could not be read'))).toHaveLength(1)
+  })
+
+  test('closing Codex without an ending hook removes copies made for its running turn', async () => {
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    stand.closed.add('thread-6')
+    expect((await waitingFor(6, true))?.clicks).toBeUndefined()
+    expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+    expect(called('delivery:handedOff')).toEqual(['click-6'])
+  })
+
+  test('asking again for an unanswered copy keeps its first receipt without rewriting the record', async () => {
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    const file = path.join(home, 'delivery-recovery.json')
+    const before = readFileSync(file, 'utf8')
+    const blocked = `${file}.${process.pid}.tmp`
+    mkdirSync(blocked)
+    try {
+      expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+      expect(readFileSync(file, 'utf8')).toBe(before)
+    } finally {
+      rmSync(blocked, { recursive: true })
+    }
+  })
+
+  test.each(['/session', '/marked', '/waiting'])('a nearly full restored record still answers %s and keeps its receipts', async (endpoint) => {
+    await start('socket', {}, (folder) => {
+      const old = { ...click(1), id: 'old', at: Date.now() - 20_000, payload: '' }
+      const record = {
+        version: 1,
+        accepted: [],
+        returning: [],
+        targets: [],
+        marks: [['codex:thread-6', [{ id: 'mark', texts: ['Private text'], at: Date.now() }]]],
+        waiters: [
+          ['old', { key: 'codex:thread-1', click: old }],
+          ['click-6', { key: 'codex:thread-6', click: click(6) }],
+        ],
+      }
+      old.payload = 'x'.repeat(16_000_000 - Buffer.byteLength(JSON.stringify(record)) - 1)
+      writeFileSync(path.join(folder, 'delivery-recovery.json'), JSON.stringify(record))
+    })
+    const body =
+      endpoint === '/session'
+        ? { harness: 'codex', session: 'longer-thread-6', was: 'thread-6' }
+        : endpoint === '/marked'
+          ? { harness: 'codex', session: 'thread-6', taken: ['not-this-mark'] }
+          : { id: 'waiter-6', session: { harness: 'codex', id: 'thread-6' } }
+    expect(await local(endpoint, { method: 'POST', body })).toMatchObject({ ok: true })
+    const kept = readJson<{ waiters: [string, unknown][]; marks: unknown[] }>(path.join(home, 'delivery-recovery.json'))!
+    expect(kept.marks).toHaveLength(1)
+    if (endpoint !== '/marked') expect(kept.waiters.map(([id]) => id)).toEqual(['click-6'])
+  })
+
+  test('a slow recovery save leaves the add-on answer free to meet its 300 millisecond deadline', async () => {
+    standIn(true)
+    await start('socket', {}, (folder) =>
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({
+          version: 1,
+          accepted: [],
+          returning: [],
+          marks: [],
+          waiters: [['large', { key: 'codex:other', click: { ...click(6), id: 'large', payload: 'x'.repeat(15_000_000) } }]],
+        }),
+      ),
+    )
+    const write = files.writePrivateAsync
+    let resume = () => {}
+    const blocked = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    let began = false
+    const saving = vi.spyOn(files, 'writePrivateAsync').mockImplementation(async (...args) => {
+      began = true
+      await blocked
+      await write(...args)
+    })
+    try {
+      offered({ ...click(8), session: { harness: 'pi', id: 'thread-8' } })
+      let answered = false
+      const asking = local<{ clicks: unknown[] }>('/clicks?harness=pi&session=thread-8').finally(() => {
+        answered = true
+      })
+      await until(() => began)
+      expect(called('delivery:claim')).toEqual([])
+      expect(answered).toBe(false)
+      vi.advanceTimersByTime(300)
+      expect((await asking)?.clicks).toEqual([])
+      // The claim is not sent until its receipt has actually reached the disk.
+      expect(called('delivery:claim')).toEqual([])
+      resume()
+      await until(() => called('delivery:claim').includes('click-8'))
+    } finally {
+      resume()
+      saving.mockRestore()
+    }
+  })
+
   test('a waiter copy and its receipt survive consecutive connector restarts', async () => {
     await start()
     await turn(6, true)
@@ -1459,7 +1585,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await until(() => called('delivery:handedOff').includes('click-7'))
     expect(called('delivery:claim')).toEqual(['click-7'])
     const kept = readJson<{ waiters: [string, unknown][] }>(path.join(home, 'delivery-recovery.json'))!
-    expect(kept.waiters).toHaveLength(201)
+    expect(kept.waiters).toHaveLength(200)
     expect((await waitingFor(7))?.clicks?.map((c) => c.id)).toEqual(['click-7'])
   })
 
@@ -2754,6 +2880,7 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
         await vi.advanceTimersByTimeAsync(retry.nextAt! - Date.now() - 1)
         expect(attempts()).toBe(n)
         await vi.advanceTimersByTimeAsync(1)
+        await settled()
       }
     }
     await pass(600)
@@ -2784,6 +2911,7 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     await vi.advanceTimersByTimeAsync(retry.nextAt! - Date.now() - 1)
     expect(stand.codex).toHaveLength(2)
     await vi.advanceTimersByTimeAsync(1)
+    await settled()
     expect(stand.codex).toHaveLength(3)
     expect(savedMark().retry?.attempts).toBe(2)
   })
