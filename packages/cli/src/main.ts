@@ -86,6 +86,7 @@ import {
   windowsPathHas,
   windowsPathRemoval,
   withoutTables,
+  writePrivate,
   written,
 } from './lib'
 import { joinedBefore, login, runsItsOwn } from './login'
@@ -1480,9 +1481,12 @@ async function uninstall(a: Args) {
         try {
           linked = lstatSync(folder).isSymbolicLink()
         } catch {}
+        const settingsAt = path.join(folder, 'service.json')
+        let settings: string | undefined
         try {
+          settings = existsSync(settingsAt) ? readFileSync(settingsAt, 'utf8') : undefined
           // A service waiting on this lock must refuse after the settings are removed.
-          rmSync(path.join(folder, 'service.json'), { force: true })
+          rmSync(settingsAt, { force: true })
           if (!kept) {
             rmSync(linked ? real : folder, { recursive: true, force: true, ...retried })
             if (linked) rmSync(folder, { force: true })
@@ -1491,6 +1495,15 @@ async function uninstall(a: Args) {
               if (name !== 'addons' && name !== 'bin') rmSync(path.join(folder, name), { recursive: true, force: true, ...retried })
         } catch (err) {
           left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
+          // A partial removal may leave the backend behind. Keep the settings needed to
+          // identify it on a later uninstall, and to reach any retained add-on cleanup.
+          if (settings !== undefined && existsSync(real) && !existsSync(settingsAt)) {
+            try {
+              writePrivate(settingsAt, settings)
+            } catch (restore) {
+              left.push(`The service settings could not be restored (${why(restore)}). Put service.json back before retrying uninstall.`)
+            }
+          }
         }
         if (!kept && (existsSync(folder) || existsSync(real)) && !left.some((line) => line.startsWith(folder)))
           left.push(`${existsSync(real) ? real : folder} could not be deleted whole. Delete it to finish.`)

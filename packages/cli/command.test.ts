@@ -1549,6 +1549,54 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
     expect(ran().some((words) => words.startsWith('remove '))).toBe(true)
   })
 
+  test.each([false, true])('`it uninstall` preserves settings after a failed removal so it can be retried, with retained add-ons %s', async (retained) => {
+    const m = machine(true, true)
+    const settings = JSON.stringify({ port: SITE_PORT, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' })
+    writeFileSync(path.join(m.it, 'service.json'), settings)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    mkdirSync(path.join(m.it, 'backend'))
+    writeFileSync(path.join(m.it, 'backend', 'pages.sqlite3'), 'the pages')
+    if (retained) {
+      mkdirSync(path.join(m.it, 'bin'))
+      mkdirSync(path.join(m.it, 'addons', 'pi'), { recursive: true })
+      writeFileSync(path.join(m.it, 'bin', 'it'), '#!/bin/sh\n')
+      writeFileSync(path.join(m.it, 'addons', 'pi.json'), JSON.stringify({ installs: [{ version: '0.1.0', at: 1, by: '0.1.22', env: {} }] }))
+      writeFileSync(path.join(m.home, 'pi-has'), `${path.join(m.it, 'addons', 'pi')}\n`)
+    }
+    const preload = path.join(m.home, 'refuse-removal.mjs')
+    writeFileSync(
+      preload,
+      `import fs from 'node:fs'
+import path from 'node:path'
+import { syncBuiltinESMExports } from 'node:module'
+const remove = fs.rmSync
+fs.rmSync = (file, options) => {
+  if (options?.recursive && [process.env.IT_HOME, path.join(process.env.IT_HOME, 'backend')].includes(String(file))) {
+    throw Object.assign(new Error('the backend file is locked'), { code: 'EBUSY' })
+  }
+  return remove(file, options)
+}
+syncBuiltinESMExports()
+`,
+    )
+    const first = await run(m, ['uninstall', '--yes'], {}, process.execPath, ['--import', pathToFileURL(preload).href])
+    expect([first.code, printed(first).removed]).toEqual([0, false])
+    expect(printed(first).left.some((line: string) => line.includes('could not be deleted'))).toBe(true)
+    expect(readFileSync(path.join(m.it, 'service.json'), 'utf8')).toBe(settings)
+    expect(readFileSync(path.join(m.it, 'backend', 'pages.sqlite3'), 'utf8')).toBe('the pages')
+    if (process.platform !== 'win32') expect(statSync(path.join(m.it, 'service.json')).mode & 0o077).toBe(0)
+    const ran = retained ? pi(m) : undefined
+    const second = await run(m, ['uninstall', '--yes'])
+    expect([second.code, printed(second).removed, existsSync(m.it)]).toEqual([0, true, false])
+    if (ran) {
+      expect(ran().some((words) => words.startsWith('remove '))).toBe(true)
+      expect(existsSync(path.join(m.home, 'pi-has'))).toBe(false)
+    }
+  })
+
   test('`it uninstall` deletes the folder It is kept in where the folder it was told of is a link to it, and the link with it', async () => {
     const m = machine(true, true)
     writeFileSync(
