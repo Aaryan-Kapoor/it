@@ -299,7 +299,10 @@ describe('the agent skill', () => {
         .join(', ')} and \`${nine.at(-1)}\`, speak in sentences to a person at a terminal.`,
     )
     expect(skill).toContain('What you run is known to be an agent’s, so you get JSON from those too, and `--json` asks for it')
-    expect(main).toMatch(/const forPerson = \(a: Args\): boolean => process\.stdout\.isTTY === true && a\.flags\.json !== true/)
+    expect(main).toContain("import { failure, forPerson } from './output'")
+    expect(source('../../packages/cli/src/output.ts')).toMatch(
+      /const forPerson = \(a: Args\): boolean => process\.stdout\.isTTY === true && a\.flags\.json !== true && sessionAsked\(\) === undefined/,
+    )
   })
 
   test('tells an agent what a display that is not paired means, and how to change state only while it is as it was read', () => {
@@ -444,7 +447,12 @@ describe('the agent skill', () => {
   test('says that a page is a conversation’s to keep or to take only where the harness names the conversation, and what to do where it does not', () => {
     // With no conversation named, the command does not ask for the page as its own, nothing is taken by opening it, and taking it is refused
     expect(source('../../packages/cli/src/publish.ts')).toContain('...(input.own && !input.take && session ? { own: true } : {})')
-    expect(main).toMatch(/const mine = asked\?\.session[\s\S]{0,900}if \(mine\) \{[\s\S]{0,900}api\.artifacts\.take/)
+    expect(main).toMatch(
+      /const mine = asked\?\.session[\s\S]{0,900}api\.displays\.show[\s\S]{0,300}\.\.\.\(mine \? \{ session: mine, agent: mine\.harness \} : \{\}\)/,
+    )
+    expect(source('../../convex/displays.ts')).toMatch(
+      /const took = mine && shown\.length \? \(await takePage\(ctx, artifact, machine, mine, agent\)\)\.took : false/,
+    )
     expect(source('../../convex/publish.ts')).toMatch(/if \(args\.take && !args\.session\) fail\('invalid'/)
     expect(short).toContain('None of that holds where your harness does not tell `it` which conversation this is: read `it help actions`')
     expect(more.actions).toContain('publishes over its page and answers no `conflict`, `it open` brings a page up without making it yours, `--take` is refused')
