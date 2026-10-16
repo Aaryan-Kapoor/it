@@ -228,6 +228,8 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
         if (!file) continue
         const text = readFileSync(file, 'utf8')
         const sourceMatches = homes.some((at) => text === itHomeWritten(expected, at))
+        const homeMatches =
+          path.basename(name) === 'it-home.json' && homes.some((at) => text === `${JSON.stringify({ ...JSON.parse(expected), home: at }, null, 1)}\n`)
         const hookMatches =
           name.endsWith('hooks.json') &&
           homes.some((at) =>
@@ -236,12 +238,7 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
             ),
           )
         // Setup fills in the home and hook addresses. Recognize only those exact transformations.
-        if (
-          text === expected ||
-          sourceMatches ||
-          hookMatches ||
-          (name.endsWith('it-home.json') && homes.includes(json(relative)?.home) && json(relative)?.about === JSON.parse(expected).about)
-        ) {
+        if (text === expected || sourceMatches || homeMatches || hookMatches) {
           remove(relative)
           prune(relative)
         }

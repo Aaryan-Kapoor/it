@@ -482,6 +482,32 @@ describe('installation ownership', () => {
     expect(readFileSync(actual, 'utf8')).toBe('the person changed this file')
   })
 
+  test.each(['unchanged', 'extra field', 'reformatted'] as const)('cleanup checks the whole generated add-on home note: %s', (change) => {
+    const at = folder()
+    vi.stubEnv('IT_HOME', at)
+    markInstallation(at)
+    const addon = unpack('pi')
+    const note = path.join(addon, 'it-home.json')
+    const original = readFileSync(note, 'utf8')
+    const value = JSON.parse(original)
+    let text = original
+    if (change === 'extra field') text = `${JSON.stringify({ ...value, personal: 'keep this' }, null, 1)}\n`
+    if (change === 'reformatted') text = JSON.stringify(value)
+    writeFileSync(note, text)
+    if (change === 'reformatted') {
+      expect(text).not.toBe(original)
+      expect(JSON.parse(text)).toEqual(value)
+    }
+    if (change === 'unchanged') {
+      expect(removeInstallationFiles(at, false)).toEqual([])
+      expect(existsSync(at)).toBe(false)
+    } else {
+      expect(removeInstallationFiles(at, false)).toEqual(['addons'])
+      expect(readFileSync(note, 'utf8')).toBe(text)
+      expect(readdirSync(addon)).toEqual(['it-home.json'])
+    }
+  })
+
   test('cleanup keeps a held shutdown lock and removes only empty folders after its owner releases it', () => {
     const at = folder()
     markInstallation(at)
