@@ -33,6 +33,7 @@ import { contentPort, LIMITS, onThisMachine } from '@it/protocol'
 import { direct, inHome, Problem } from '../lib'
 import type { Backend } from './backend'
 import { doorKey, type ServiceConfig } from './config'
+import { recordExports } from './export'
 import { createPush, type Push } from './push'
 import { answerSite, BUILT, hostOf, type Site, spelled } from './site'
 import { inTailnet, isLoopback, tailnetName } from './tailnet'
@@ -73,6 +74,7 @@ export interface Arrival {
   port: number
   /** The caller's own address, from the connection and never from a header. */
   address: string
+  signal?: AbortSignal
 }
 /**
  * Whether a WebSocket may be passed on to the backend: at which path and with which key, or the
@@ -367,6 +369,7 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
   // machine itself: a device on another network this machine is on gets nothing, whatever name it asks for
   const answered = (address: string) => !config.tailnet || isLoopback(address) || inTailnet(address)
   const now = parts.now ?? Date.now
+  const exports = recordExports(site, api, itself, now)
 
   // Codes that were refused, counted for each address that sent them by itself. An address that
   // has had ten refused in a minute is answered here for the rest of that minute, and the
@@ -637,6 +640,28 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       if (CALLS.has(path)) return toCall(a, path)
       return refuse(404, 'api_path')
     }
+    if (path.startsWith('/session/export/')) {
+      if (path === '/session/export/start') {
+        if (a.method !== 'POST') return refuse(405, 'session_method', { allow: 'POST' })
+        if (!fromHere(a) || a.headers.get('x-it-site') !== '1') return refuse(403, 'foreign_origin')
+        const body = await whole(a, SMALL)
+        if (typeof body === 'string') return unread(body)
+        let session: unknown
+        try {
+          session = JSON.parse(new TextDecoder().decode(body)).session
+        } catch {}
+        if (typeof session !== 'string' || !session || session.length > 64) return refuse(400, 'bad_request')
+        return exports.prepare(a.headers.get('cookie') ?? '', session, a.signal)
+      }
+      if (a.method !== 'GET') return refuse(405, 'session_method', { allow: 'GET' })
+      // Native downloads cannot set a header. This one-use link was made by a same-origin
+      // POST and still needs the original session's cookie. No bearer alone opens it.
+      const origin = a.headers.get('sec-fetch-site')
+      if (fromElsewhere(a) || (origin !== null && origin !== 'same-origin')) return refuse(403, 'foreign_origin')
+      const id = path.slice('/session/export/'.length)
+      if (!/^[a-f0-9]{48}$/.test(id) || url.search) return refuse(404, 'no_such_thing')
+      return exports.download(id, a.headers.get('cookie') ?? '', a.signal)
+    }
     if (path.startsWith('/session/')) {
       // A session is a cookie, and a browser sends a cookie whichever page asks. Only the site's
       // own pages may: a page an agent wrote is shown from another port, and so has another origin.
@@ -727,6 +752,7 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
     turned: (why) => noted(why),
     // Only a content package the door made for itself is the door's to close
     close: async () => {
+      exports.close()
       if (!parts.content) await content.close()
     },
   }
@@ -1018,9 +1044,11 @@ const listenNode: Listen = (address, port, door, api, patience) => {
     const asks = req.method === 'GET' || req.method === 'HEAD'
     const said = !headers || carries(headers)
     let whole = false
+    const disconnected = new AbortController()
+    res.once('close', () => disconnected.abort())
     void (
       headers
-        ? door.answer(arrivalOf(req, headers, asks || unsent ? null : body.stream))
+        ? door.answer({ ...arrivalOf(req, headers, asks || unsent ? null : body.stream), signal: disconnected.signal })
         : Promise.resolve(new Response(null, { status: 400, headers: door.carried(port) }))
     )
       .then(async (response) => {
@@ -1337,6 +1365,34 @@ declare const Bun:
 const fromOpener = (code: number) => code === 1000 || (code >= 3000 && code <= 4999)
 const fromAsked = (code: number) => fromOpener(code) || (code >= 1001 && code <= 1014 && ![1004, 1005, 1006].includes(code))
 
+/**
+ * Bun ends an errored response stream as a complete HTTP response. For a download that
+ * would mark a partial file as saved. Leave it unfinished instead and cut its connection
+ * with the request's idle timeout. Cancellation still releases the source at once.
+ */
+function unfinishedOnFailure(response: Response, cut: () => void): Response {
+  const reader = response.body!.getReader()
+  return new Response(
+    new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          try {
+            const next = await reader.read()
+            if (next.done) controller.close()
+            else controller.enqueue(next.value)
+          } catch {
+            cut()
+            await new Promise<void>(() => {})
+          }
+        },
+        cancel: () => reader.cancel().catch(() => {}),
+      },
+      { highWaterMark: 0 },
+    ),
+    { status: response.status, headers: response.headers },
+  )
+}
+
 /** Inside the standalone program, the site's port: Bun's own server, and a WebSocket passed on a message at a time. */
 const listenBun: Listen = async (address, port, door, api, patience) => {
   /** The WebSockets the backend has not yet agreed to: for each, what gives up on it. */
@@ -1369,6 +1425,7 @@ const listenBun: Listen = async (address, port, door, api, patience) => {
         body: body?.stream ?? null,
         port,
         address: addressOf(server.requestIP(request)?.address),
+        signal: request.signal,
       }
       // Once an answer has been handed over, nothing more can be done about the connection it
       // goes out on. So what the caller is still sending is taken off the connection first, for
@@ -1384,8 +1441,12 @@ const listenBun: Listen = async (address, port, door, api, patience) => {
         return hurried(response)
       }
       // Only a WebSocket is carried on. Any other request that offers to change protocol is answered as the plain request it also is.
-      if (!/^websocket$/i.test(request.headers.get('upgrade') ?? '') || !namesIn(request.headers.get('connection')).includes('upgrade'))
-        return answered(await door.answer(arrival))
+      if (!/^websocket$/i.test(request.headers.get('upgrade') ?? '') || !namesIn(request.headers.get('connection')).includes('upgrade')) {
+        let response = await door.answer(arrival)
+        if (response.ok && response.body && request.method === 'GET' && new URL(request.url).pathname.startsWith('/session/export/'))
+          response = unfinishedOnFailure(response, () => server.timeout(request, 1))
+        return answered(response)
+      }
       const live = door.live({ ...arrival, body: null })
       if ('refuse' in live) return answered(new Response(null, { status: live.refuse, headers: live.says }))
       // The backend is asked first, on a connection of the door's own, and the browser is

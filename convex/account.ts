@@ -2,8 +2,8 @@
 // owner's browser's to do, and no screen's.
 //
 // An export is read a piece at a time (the person's lists, then each page, then each page's
-// history a batch at a time) and put together in the browser, so that no single read has to hold
-// everything at once.
+// history a batch at a time) and streamed to a download by the door, so that no single read
+// has to hold everything at once.
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { mutation, query } from './_generated/server'
