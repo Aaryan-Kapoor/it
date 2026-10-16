@@ -1897,7 +1897,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // here: where the app runs the agent's commands with It's folder shut to them (Codex does),
       // the `it` that publishes a page cannot note it itself, and without it the conversation
       // could never be reopened.
-      if (typeof body.folder === 'string' && body.folder.length <= 4096 && path.isAbsolute(body.folder)) noteConversation({ harness, id }, body.folder)
+      if (typeof body.folder === 'string' && body.folder.length <= 4096 && path.isAbsolute(body.folder)) void noteConversation({ harness, id }, body.folder)
       // An add-on that speaks is one its app lets run. Where the last look found it waiting for
       // the person's yes, as Codex has an add-on's hooks wait, that has been given since: the
       // machine is looked at again now, and not at the next half hour, until when `it status`

@@ -238,12 +238,10 @@ export function changeWhole(file: string, change: (text: string) => string | nul
           closeSync(out)
         }
       }
-      const unchanged = readFileSync(target, 'utf8') === text
       const now = statSync(target, { bigint: true })
-      // Identity and times can expose a save after the read, but same-size writes can share them.
-      // Check the content again when those agree, rather than trusting their precision.
+      // Same-size writes can share identity and times, so compare the content once more
+      // before replacement rather than trusting the precision of those times.
       if (
-        unchanged &&
         now.dev === before.dev &&
         now.ino === before.ino &&
         now.size === before.size &&
