@@ -2465,6 +2465,110 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     await until(async () => (await behindMarks(9))?.length === 0)
   })
 
+  const savedMark = () =>
+    readJson<{ marks: [string, { retry?: { attempts: number; nextAt: number | null } }[]][] }>(path.join(home, 'delivery-recovery.json'))!.marks[0]![1][0]!
+  const restartMarks = async () => {
+    const previous = home
+    await stop!()
+    stop = null
+    await start('socket', {}, (folder) => {
+      for (const name of ['delivery-recovery.json', 'heard.json']) writeFileSync(path.join(folder, name), readFileSync(path.join(previous, name)))
+    })
+    await pass()
+  }
+
+  test.each(['codex', 't3'] as const)('a %s mark keeps its backoff and retry limit across consecutive restarts', async (via) => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    if (via === 't3') {
+      withT3Code()
+      stand.t3.threads.set('thread-9', 't3-thread-nine')
+    }
+    await start()
+    await heard(9)
+    offered(click(9))
+    for (let i = 0; i < 5 && stand.codex.length + stand.t3.sent.length < 1; i++) await pass()
+    if (via === 'codex') stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    offered()
+    stand.t3.refusing = 'offline'
+    const attempts = () => (via === 'codex' ? stand.codex.length - 1 : stand.t3.refused.length)
+    await pass(20)
+    for (let n = 1; n <= 4; n++) {
+      expect(attempts()).toBe(n)
+      if (via === 'codex') stand.codex[n]!.end(new Error('declined'))
+      await settled()
+      const retry = savedMark().retry!
+      expect(retry.attempts).toBe(n)
+      if (n === 4) expect(retry.nextAt).toBeNull()
+      else expect(retry.nextAt).toBe(Date.now() + [20_000, 60_000, 300_000][n - 1]!)
+      await restartMarks()
+      expect(savedMark().retry).toEqual(retry)
+      expect(attempts()).toBe(n)
+      if (n < 4) {
+        await vi.advanceTimersByTimeAsync(retry.nextAt! - Date.now() - 1)
+        expect(attempts()).toBe(n)
+        await vi.advanceTimersByTimeAsync(1)
+      }
+    }
+    await pass(600)
+    expect(attempts()).toBe(4)
+    expect(await behindMarks(9)).toEqual([inFull(9)])
+    await hasThem(9)
+    expect(await behindMarks(9)).toEqual([])
+  })
+
+  test('an interrupted fallback attempt is already counted when the connector restarts', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    await start()
+    await heard(9)
+    offered(click(9))
+    await pass()
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    offered()
+    await pass(20)
+    expect(stand.codex).toHaveLength(2)
+    const retry = savedMark().retry!
+    expect(retry).toEqual({ attempts: 1, nextAt: Date.now() + 20_000 })
+    await restartMarks()
+    // A late answer from the stopped connector cannot change the restored progress.
+    stand.codex[1]!.end(new Error('declined'))
+    await settled()
+    expect(savedMark().retry).toEqual(retry)
+    await vi.advanceTimersByTimeAsync(retry.nextAt! - Date.now() - 1)
+    expect(stand.codex).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(stand.codex).toHaveLength(3)
+    expect(savedMark().retry?.attempts).toBe(2)
+  })
+
+  test('a fallback waits for durable progress and retries after a failed atomic write', async () => {
+    standIn(true)
+    await start()
+    await heard(9)
+    offered(click(9))
+    await pass()
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    offered()
+    const file = path.join(home, 'delivery-recovery.json')
+    const before = readFileSync(file, 'utf8')
+    const blocked = `${file}.${process.pid}.tmp`
+    mkdirSync(blocked)
+    await pass(20)
+    expect(stand.codex).toHaveLength(1)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    rmSync(blocked, { recursive: true })
+    await pass(20)
+    expect(stand.codex).toHaveLength(2)
+    expect(savedMark().retry?.attempts).toBe(1)
+    stand.codex[1]!.end(new Error('declined'))
+    await settled()
+    await pass(20)
+    expect(stand.codex).toHaveLength(3)
+    expect(savedMark().retry?.attempts).toBe(2)
+  })
+
   test.each(['acknowledged', 'disconnected', 'closed', 'erased'] as const)('a restored mark is not sent after it is %s', async (state) => {
     standIn(true)
     await start('socket', {}, (folder) =>

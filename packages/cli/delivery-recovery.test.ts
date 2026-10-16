@@ -142,3 +142,39 @@ test('a malformed mark fallback is refused without changing the previous record'
   expect(open).toThrow(expect.objectContaining({ code: 'record_unread' }))
   expect(store.marks.get('codex:thread')?.[0]).toEqual({ id: 'old', texts: ['Private text'], at: 1 })
 })
+
+test('mark retry progress survives alongside records written before retries were persisted', () => {
+  const store = open()
+  const entries = [
+    { id: 'old', texts: ['Private text'], at: 1, fallback: { via: 'codex' as const, text: 'Short line' } },
+    ...[1, 2, 3, 4].map((attempts) => ({
+      id: `retry-${attempts}`,
+      texts: ['Private text'],
+      at: 1,
+      fallback: { via: 'codex' as const, text: 'Short line' },
+      retry: { attempts, nextAt: attempts === 4 ? null : 123_456 },
+    })),
+  ]
+  store.change(() => store.marks.set('codex:thread', entries))
+  store.close()
+  expect(open().marks.get('codex:thread')).toEqual(entries)
+})
+
+test.each([
+  null,
+  { attempts: 0, nextAt: 123 },
+  { attempts: -1, nextAt: 123 },
+  { attempts: 1.5, nextAt: 123 },
+  { attempts: 5, nextAt: null },
+  { attempts: 1, nextAt: null },
+  { attempts: 1, nextAt: '123' },
+  { attempts: 1 },
+  { attempts: 4, nextAt: 123 },
+])('invalid mark retry progress is refused instead of starting a fresh retry sequence: %j', (retry) => {
+  const store = open()
+  store.change(() => store.marks.set('codex:thread', [{ id: 'mark', texts: ['Private text'], at: 1, fallback: { via: 'codex', text: 'Short line' } }]))
+  const changed = JSON.parse(readFileSync(store.file, 'utf8'))
+  changed.marks[0][1][0].retry = retry
+  writeFileSync(store.file, JSON.stringify(changed))
+  expect(open).toThrow(expect.objectContaining({ code: 'record_unread' }))
+})

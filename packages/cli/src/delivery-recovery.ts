@@ -19,7 +19,16 @@ export interface Offered {
 export type Given = { who: string; at: number }
 export type WaitCopy = { click: Offered; key: string; given?: Given }
 export type MarkFallback = { via: 'codex'; text: string } | { via: 't3'; text: string; thread: string }
-export type MarkCopy = { id: string; texts: string[]; at: number; fallback?: MarkFallback }
+/** Delays after each refused short line. The last attempt leaves its text for a hook. */
+export const MARK_AGAIN_MS = [20_000, 60_000, 300_000]
+export type MarkCopy = {
+  id: string
+  texts: string[]
+  at: number
+  fallback?: MarkFallback
+  /** Attempts include a send whose answer was lost. A null deadline means retries are exhausted. */
+  retry?: { attempts: number; nextAt: number | null }
+}
 const file = () => inHome('delivery-recovery.json')
 const MOST = 200
 const BYTES = 16_000_000
@@ -144,6 +153,17 @@ export class DeliveryRecovery {
             (fallback.via !== 'codex' && fallback.via !== 't3') ||
             (fallback.via === 'codex' && !key.startsWith('codex:')) ||
             (fallback.via === 't3' && typeof fallback.thread !== 'string'))
+        )
+          throw new Error('invalid')
+        const retry = m.retry
+        if (
+          retry !== undefined &&
+          (!fallback ||
+            !retry ||
+            !Number.isSafeInteger(retry.attempts) ||
+            retry.attempts < 1 ||
+            retry.attempts > MARK_AGAIN_MS.length + 1 ||
+            (retry.attempts === MARK_AGAIN_MS.length + 1 ? retry.nextAt !== null : retry.nextAt === null || !Number.isFinite(retry.nextAt)))
         )
           throw new Error('invalid')
       }

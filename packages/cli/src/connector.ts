@@ -15,7 +15,7 @@ import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renam
 import http from 'node:http'
 import path from 'node:path'
 import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, MARK, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
-import { DeliveryRecovery, eraseDeliveryRecovery, type Given, type MarkCopy, type MarkFallback, type Offered } from './delivery-recovery'
+import { DeliveryRecovery, eraseDeliveryRecovery, type Given, MARK_AGAIN_MS, type MarkCopy, type MarkFallback, type Offered } from './delivery-recovery'
 import {
   api,
   ask,
@@ -599,8 +599,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const unmarked = new Set<string>()
   /** How long a conversation's hooks are given to ask what a mark stands for, and to say that they have it. An agent app that has to be started first takes ten seconds or so. */
   const MARK_ASKED_MS = 20_000
-  /** How long after each try the short line is tried again, where the app did not take it. Past the last, what the mark stood for is kept for the conversation's next hook. */
-  const MARK_AGAIN_MS = [20_000, 60_000, 300_000]
   const markTimers = new Set<ReturnType<typeof setTimeout>>()
   /**
    * The conversations whose add-on has been heard from on this machine, kept across a restart
@@ -645,6 +643,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // Looked for wherever it is kept by now: a conversation that carries on under a new id takes its marks along
     const where = () => [...marked].find(([, kept]) => kept.some((m) => m.id === entry.id))?.[0]
     const kept = () => where() !== undefined
+    // A failed atomic write restores cloned entries. Always change the current durable copy.
+    const current = () => marked.get(where() ?? key)?.find((m) => m.id === entry.id)
     const takeAway = () => {
       if (recovery.erased || over) return
       const under = where()
@@ -663,17 +663,30 @@ async function connecting(say: (line: string) => void): Promise<void> {
       }, ms)
       markTimers.add(timer)
     }
-    const line = (tried: number) => {
+    const line = () => {
+      const copy = current()
+      if (!copy || copy.retry?.nextAt === null) return
       // Not into an app the person has disconnected since: what the mark stood for stays as it is, for a hook of the app once it is connected again
       if (!chosen(harness)) return
       // Recovery and the current machine settings must have answered before a restored mark can send anything.
-      if (unfitting || givingBack !== 'done' || !connected(harness)) return after(MARK_ASKED_MS, () => line(tried))
-      const fallback = entry.fallback
+      if (unfitting || givingBack !== 'done' || !connected(harness)) return after(MARK_ASKED_MS, line)
+      const fallback = copy.fallback
       if (!fallback) return
       const keyNow = follow(where() ?? key)
       // A fallback never reopens a closed Codex conversation. Its next hook can still read the note.
       if (fallback.via === 'codex' && !codexHeld(threadOf(keyNow))) return
       const server = fallback.via === 't3' ? t3Server() : undefined
+      const tried = copy.retry?.attempts ?? 0
+      const next = MARK_AGAIN_MS[tried]
+      try {
+        // Reserve the attempt before sending, so even an interrupted send cannot reset its budget.
+        recovery.change(() => {
+          copy.retry = { attempts: tried + 1, nextAt: next === undefined ? null : Date.now() + next }
+        })
+      } catch (err) {
+        seldom('mark-receipt', `could not keep the mark retry (${why(err)}); trying again`)
+        return after(MARK_ASKED_MS, line)
+      }
       void (
         fallback.via === 't3'
           ? server
@@ -686,23 +699,33 @@ async function connecting(say: (line: string) => void): Promise<void> {
           if (closing || recovery.stopped || !kept()) return
           // Taken: the agent has it in the line, and the note is done with
           if (refused === null) return takeAway()
-          const next = MARK_AGAIN_MS[tried]
           if (next === undefined) {
             say(`${who} did not take the short line either, ${tried + 1} times; what its mark stood for is kept for the next of its hooks that runs`)
             return
           }
-          after(next, () => line(tried + 1))
+          try {
+            // Measure the next delay from the refusal, including time spent awaiting the app.
+            recovery.change(() => {
+              current()!.retry!.nextAt = Date.now() + next
+            })
+          } catch (err) {
+            seldom('mark-receipt', `could not keep the next mark retry (${why(err)}); the reserved attempt remains`)
+          }
+          after(next, line)
         })
         .catch((err) => seldom('mark-receipt', `could not keep the mark receipt (${why(err)}); its text remains available`))
     }
-    const wait = (ms = MARK_ASKED_MS): void =>
+    const wait = (ms = MARK_ASKED_MS): void => {
+      if (current()?.retry?.attempts) unmarked.add(where() ?? key)
+      if (current()?.retry?.nextAt === null) return
       after(ms, () => {
         if (!chosen(harness)) return
         if (unfitting || givingBack !== 'done' || !connected(harness)) return wait()
         unmarked.add(where() ?? key)
         say(`${who} was given a mark and none of its hooks said it had what the mark stood for; it is given the short line now, and from here on`)
-        line(0)
+        line()
       })
+    }
     return { takeAway, wait }
   }
   const noteMark = (key: string, texts: string[], fallback: MarkFallback) => {
@@ -722,7 +745,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (!chosen(key.slice(0, key.indexOf(':')))) continue
       for (const entry of entries) {
         if (!restoredMarks.delete(entry.id)) continue
-        markReceipt(key, entry).wait(Math.max(0, MARK_ASKED_MS - (Date.now() - entry.at)))
+        markReceipt(key, entry).wait(Math.max(0, (entry.retry?.nextAt ?? entry.at + MARK_ASKED_MS) - Date.now()))
       }
     }
   }
