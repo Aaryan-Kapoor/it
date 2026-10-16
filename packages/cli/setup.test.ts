@@ -518,8 +518,19 @@ describe('an add-on whose files It copies into an app’s folder', () => {
       symlinkSync(outside, path.join(folder, 'skills'), 'junction')
     }
     const source = id === 'opencode' ? 'plugins/it-bridge.js' : 'it-bridge/__init__.py'
-    mkdirSync(path.join(process.env.IT_HOME!, 'addons', id, source), { recursive: true })
-    await expect(connect(id, () => {})).rejects.toThrow('cannot be replaced safely')
+    const target = path.join(process.env.IT_HOME!, 'addons', id, source)
+    const original = fs.openSync
+    fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+      if (String(args[0]).startsWith(`${target}.`) && String(args[0]).endsWith('.part')) throw new Error('the program stopped during unpacking')
+      return original(...args)
+    }) as typeof fs.openSync
+    syncBuiltinESMExports()
+    try {
+      await expect(connect(id, () => {})).rejects.toThrow('the program stopped during unpacking')
+    } finally {
+      fs.openSync = original
+      syncBuiltinESMExports()
+    }
     expect(noted(id).installs[0]!.version).toBe('installing')
     expect(noted(id).installs[0]!.files).toBeUndefined()
     if (destination === 'unplaced record') put(stampFile(id), JSON.stringify({ installs: [{ version: 'installing', at: 0 }] }))
@@ -1912,6 +1923,52 @@ describe('managed plugin and marketplace ownership', () => {
     expect(readdirSync(path.dirname(dir)).filter((name) => name.startsWith(`${id}.set-aside-by-it-`))).toEqual([saved])
     expect(await disconnect(id, () => {})).toBe(true)
   })
+
+  test.each(apps.flatMap((app) => ['directory', 'link'].map((kind) => ({ ...app, kind }))))(
+    '$bin retires a $kind when its path becomes a packaged file',
+    async ({ id, bin, kind }) => {
+      const addon = ADDONS[id]!
+      const rel = `${id === 'codex' ? 'plugins/it-bridge' : 'it-bridge'}/changing-command`
+      const previous = `${rel}/old.md`
+      addon.files[previous] = 'The previous packaged command.'
+      try {
+        await connect(id, () => {})
+        delete addon.files[previous]
+        addon.files[rel] = 'The replacement packaged file.'
+        const dir = path.join(process.env.IT_HOME!, 'addons', id)
+        const target = path.join(dir, rel)
+        const outside = path.join(tmp, 'personal-files')
+        if (kind === 'link') {
+          put(path.join(outside, 'keep.txt'), 'The person owns this file.')
+          rmSync(target, { recursive: true })
+          symlinkSync(outside, target, 'junction')
+        } else put(path.join(target, 'keep.txt'), 'The person owns this file.')
+        const record = noted(id)
+        record.installs[0]!.version = 'previous-version'
+        put(stampFile(id), JSON.stringify(record))
+        expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+        expect(lstatSync(target).isFile()).toBe(true)
+        expect(read(target)).toBe('The replacement packaged file.')
+        expect(under(dir)).toEqual(Object.keys(addon.files).sort())
+        const saved = readdirSync(path.dirname(dir)).find((name) => name.startsWith(`${id}.set-aside-by-it-`))!
+        expect(saved).toBeDefined()
+        const retired = path.join(path.dirname(dir), saved, rel)
+        expect(read(path.join(retired, 'keep.txt'))).toBe('The person owns this file.')
+        if (kind === 'link') {
+          expect(lstatSync(retired).isSymbolicLink()).toBe(true)
+          expect(under(outside)).toEqual(['keep.txt'])
+        } else expect(read(path.join(retired, 'old.md'))).toBe('The previous packaged command.')
+        const installed = bin === 'claude' ? path.join(folderOf(bin), 'plugins/cache/it/it-bridge/0.1.0/changing-command') : target
+        expect(read(installed)).toBe('The replacement packaged file.')
+        unpack(id)
+        expect(readdirSync(path.dirname(dir)).filter((name) => name.startsWith(`${id}.set-aside-by-it-`))).toEqual([saved])
+        expect(await disconnect(id, () => {})).toBe(true)
+      } finally {
+        delete addon.files[previous]
+        delete addon.files[rel]
+      }
+    },
+  )
 
   test.each(apps.flatMap((app) => ['before', 'after'].flatMap((boundary) => ['reconnect', 'disconnect'].map((recovery) => ({ ...app, boundary, recovery })))))(
     '$bin can $recovery when retiring an obsolete file stops $boundary its rename',

@@ -428,7 +428,7 @@ function retireUnpacked(dir: string, files: string[]): void {
   const inspect = (folder: string) => {
     for (const entry of readdirSync(folder, { withFileTypes: true })) {
       const file = path.join(folder, entry.name)
-      if (wanted.has(file)) continue
+      if (wanted.has(file) && entry.isFile()) continue
       if (folders.has(file)) {
         if (entry.isSymbolicLink()) throw new Error(`${file} is not an ordinary folder, so it was left as it is`)
         if (entry.isDirectory()) {
