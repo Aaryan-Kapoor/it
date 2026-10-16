@@ -2667,20 +2667,26 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // program then writes the service's definition as its version has it and starts the service
   // again, which ends this one. Where a person started It by hand, they are told to do so again.
   let upgradingNow = false
-  const upgradeAsked = async () => {
+  const upgradeAsked = async (version: string | undefined) => {
     if (upgradingNow) return
     upgradingNow = true
     try {
       await call('mutation', api.machines.upgrading, { state: 'working' }).catch(() => {})
+      if (!version || !/^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(version))
+        throw new Problem(
+          'The update request names no valid release, so nothing was changed.',
+          'upgrade_program',
+          'Refresh the Machines page and request the update again.',
+        )
       // Its sentences are a person's, and one of them names the folder the program is in: that one is said here without the folder
-      const done = await fetchNewer({ say: (line) => say(`upgrade: ${line.startsWith('Installed in ') ? 'installed' : line}`) })
+      const done = await fetchNewer({ expectedVersion: version, say: (line) => say(`upgrade: ${line.startsWith('Installed in ') ? 'installed' : line}`) })
       if (!done) return void (await call('mutation', api.machines.upgrading, { state: 'none' }).catch(() => {}))
       // Counted: from which version to which, asked for on the site
       record('upgrade.done', { from: three(done.from), to: three(done.to), by: 'site', result: 'ok' })
       // Not on Windows: there this connector runs inside the very task that starting again
       // stops, and what it starts may be ended with that task before it has started anything.
       // The new program is in place, and the person is told what starts It as it.
-      if (service.installedHere() && process.platform !== 'win32') {
+      if (service.restartsAfterUpgrade()) {
         say(`upgrade: starting again as ${done.to}`)
         // It is started again by the new program's own setup, which ends this connector on its
         // way. Where this connector is still here to see that setup end badly, or not start at
@@ -2780,9 +2786,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       wanted: string[]
       wakes?: { harness: string; since: number }[]
       runs?: { harness: string; sessionId: string; stop?: boolean; run?: string }[]
-      upgrade?: { state: string } | null
+      upgrade?: { state: string; version?: string } | null
     }) => {
-      if (me.upgrade?.state === 'asked') void upgradeAsked()
+      if (me.upgrade?.state === 'asked') void upgradeAsked(me.upgrade.version)
       // A conversation the person asked to have stopped is stopped. One that It has down as
       // running and that is not, which a connector that died leaves behind, is said to be over.
       for (const r of me.runs ?? []) {

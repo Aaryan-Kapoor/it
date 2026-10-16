@@ -183,8 +183,19 @@ function appsSaid(found: HarnessStatus[], advise = true, withCodex = true): stri
   return lines
 }
 /** What a person is told of the background service, and of whether what is done on a page is being handed to the conversations on this machine, which is the connector's doing. */
-function serviceSaid(background: { registered: boolean; state: string }, connector: Record<string, unknown>, running: boolean): string[] {
+function serviceSaid(
+  background: { registered: boolean; state: string; startup?: service.ServiceStatus['startup'] },
+  connector: Record<string, unknown>,
+  running: boolean,
+): string[] {
   return [
+    ...(background.startup
+      ? [
+          background.startup.paused
+            ? `Automatic startup stopped after ${background.startup.failures} failed starts (${background.startup.code}). ${background.startup.hint}`
+            : `Startup is waiting to retry after ${background.startup.code}. ${background.startup.hint}`,
+        ]
+      : []),
     background.registered
       ? `It is registered with the system to start by itself (${background.state}).`
       : service.reachable()
@@ -2457,8 +2468,7 @@ async function keepRunning(a: Args, named: string, command: string, run: (line: 
   const log = text(a, 'log')
   let last = ''
   let repeats = 0
-  // Told where to write its log, it is the background service and was started by the system
-  if (log && command === 'it serve') askShell((l) => line(l))
+  if (service.supervised() && command === 'it serve') askShell((l) => line(l))
   const line = (l: string) => {
     // The same line over and over (the network is down, say) is written once and counted
     if (l === last && ++repeats % 300 !== 0) return

@@ -10,6 +10,8 @@ Where the service could not start, the log has one line, `could not start: <code
 
 `it service status` says whether It is running, whether it is registered to start by itself, and whether it is ready to hand what is done on a page to the conversations on this machine.
 
+If a background start fails, It waits 30 seconds, then two minutes, then ten minutes between attempts. If the machine stays offline, a request times out or another temporary failure continues, It keeps trying every ten minutes. A failure that requires repaired settings or data, or a replacement backend program, stops automatic attempts immediately. An unreadable `startup.json` is moved aside as `startup.json.unreadable`, reported once and its retry count forgotten; it does not prevent a start. `it service status` shows the last code and whether a retry is waiting or stopped. Run `it serve` in a terminal to read the full explanation. After fixing the cause, run `it service install` to retry in the background. That command clears the retry count. Changed startup settings or a newer It get a fresh attempt the next time the service starts. Once It starts successfully, a later crash restarts normally.
+
 ## What the service could not start for
 
 The code is one of these, or the system's own code for what a file or a socket refused, such as `EACCES`.

@@ -56,7 +56,8 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }))
  */
 const RUNS = process.platform === 'linux' ? 'active' : 'running'
 /** The answers of a stand-in for the system's commands that has the service registered and running: systemd's to `is-active` and `is-enabled`, and launchd's to `print`. */
-const SAYS_IT_RUNS = '*" is-active "*) echo active ;; *" is-enabled "*) echo enabled ;; *" print "*) echo "state = running" ;;'
+const SAYS_IT_RUNS =
+  '*" is-active "*) echo active ;; *" is-enabled "*) echo enabled ;; *" bootout "*) printf off > "$0.state" ;; *" bootstrap "*) printf on > "$0.state" ;; *" print "*) state=on; [ ! -f "$0.state" ] || read -r state < "$0.state"; [ "$state" != off ] || exit 113; echo "state = running" ;;'
 /** The base ports a test here takes when it has something listen where It would: each from a block of this file's own, and held until the test gives it back. */
 const ports = bases(26_000, 20)
 /** The port the site is said to be at, on a machine that has It's settings. Nothing listens there. */
@@ -1717,7 +1718,7 @@ describe.skipIf(process.platform === 'win32')(
         }
         // What was registered runs the whole of It, and belongs to this folder
         const unit = path.join(m.home, '.config/systemd/user/it.service')
-        if (process.platform === 'linux') expect(readFileSync(unit, 'utf8')).toMatch(/^ExecStart=.* "serve" "--log" ".*"$/m)
+        if (process.platform === 'linux') expect(readFileSync(unit, 'utf8')).toMatch(/^ExecStart=.* "serve" "--supervised" "--log" ".*"$/m)
       } finally {
         await new Promise((r) => answers.close(r))
         await b.close()

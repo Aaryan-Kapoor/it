@@ -20,6 +20,7 @@ export const BOOLEAN = new Set([
   'check',
   'status',
   'wait',
+  'supervised',
 ])
 /** The switches that take a value: every other name a command line gives is refused, so that a misspelt one is never taken for nothing and the word after it never lost. */
 export const VALUED = new Set([

@@ -110,6 +110,15 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     expect(await latest()).toBeNull()
   })
 
+  test('refuses a latest release that changed since the host approved a site update', async () => {
+    const before = readFileSync(here(), 'utf8')
+    await expect(fetchNewer({ program: here(), expectedVersion: '9.9.8' })).rejects.toMatchObject({ code: 'upgrade_program' })
+    expect(asked).toEqual(['/latest/download/latest.json'])
+    expect(readFileSync(here(), 'utf8')).toBe(before)
+    expect(existsSync(path.join(folder, 'LICENSE.md'))).toBe(false)
+    expect(await fetchNewer({ program: here(), expectedVersion: '9.9.9' })).toMatchObject({ to: '9.9.9' })
+  })
+
   test('is given up when the time for fetching it is over, though a little of it goes on coming, and can then be fetched again', async () => {
     const before = readFileSync(here(), 'utf8')
     for (const never of ['SHA256SUMS', name, 'LICENSE.md']) {
@@ -449,6 +458,13 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     release('9.9.9', says(VERSION))
     expect((await refused()).code).toBe('upgrade_program')
     untouched()
+    // A checksum-valid program from another newer release is not the release selected.
+    release('9.9.9', says('9.9.8'))
+    expect((await refused()).message).toBe('The program that was fetched says it is version 9.9.8, but the release advertises 9.9.9, so nothing was changed.')
+    untouched()
+    release('9.9.9', says('not a version'))
+    expect((await refused()).code).toBe('upgrade_program')
+    untouched()
     expect(existsSync(path.join(folder, 'LICENSE.md'))).toBe(false)
     // The place cannot be reached
     await new Promise<void>((resolve) => {
@@ -457,6 +473,11 @@ describe.skipIf(process.platform === 'win32')('a newer release', () => {
     })
     expect((await refused()).code).toBe('offline')
     untouched()
+  })
+
+  test('compares the normalized version of the program with the advertised release', async () => {
+    release('9.9.9', says(' v9.9.9 '))
+    expect(await fetchNewer({ program: here() })).toMatchObject({ to: '9.9.9' })
   })
 
   test('is asked for over https or on this machine and nowhere else, and the place an It was installed from is where it looks from then on', () => {
