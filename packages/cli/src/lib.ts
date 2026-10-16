@@ -1277,7 +1277,7 @@ export function keepMachine(m: Machine): void {
 /** A time limit for one request, which also ends with whatever the request is part of, when that is given. */
 const within = (ms: number, ending?: AbortSignal) => (ending ? AbortSignal.any([ending, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms))
 /** A wait before something is tried again, which is over at once when whatever it is part of ends. */
-const waited = (ms: number, ending?: AbortSignal) =>
+export const waited = (ms: number, ending?: AbortSignal) =>
   new Promise<void>((resolve) => {
     if (ending?.aborted) return resolve()
     const done = () => {

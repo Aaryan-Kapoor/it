@@ -1,5 +1,4 @@
-import { setTimeout as pause } from 'node:timers/promises'
-import { api, call } from './lib'
+import { api, call, waited } from './lib'
 
 type Receipt = {
   job: string
@@ -45,9 +44,7 @@ export async function deletionStatus(slug: string, job?: string, status = false)
       }
       if (receipt.state === 'completed') return { ...result, deleted: slug }
       if (status || receipt.state === 'retrying') return { ...result, hint }
-      await pause(250, undefined, { signal: ending.signal }).catch((err) => {
-        if (!ending.signal.aborted) throw err
-      })
+      await waited(250, ending.signal)
     }
   } finally {
     clearTimeout(timer)
