@@ -153,9 +153,20 @@ case "${BASE}" in
 esac
 command -v curl >/dev/null 2>&1 || { say "Install curl first." >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || { say "Install sha256sum or shasum first." >&2; exit 1; }
+# A download is given up when it cannot be begun within half a minute, and when nothing of it
+# has come for a whole minute: left to itself curl waits for either without end, and says
+# nothing while it does. One that is slow and still coming is waited for, however long it
+# takes. Given `shown` at a terminal, a download draws curl's own bar as it comes, which is for
+# the program, the one file of the three that is large.
+unfetched() {
+  say "$1 could not be downloaded. Nothing was installed. Run the install line again to try it once more." >&2
+  exit "$2"
+}
 fetch() {
-  if [ "${plain}" = 1 ]; then curl -fsS --noproxy '*' --max-redirs 0 "$1" -o "$2"
-  else curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 "$1" -o "$2"
+  meter=--silent
+  if [ "${led}" = 1 ] && [ "${3:-}" = shown ]; then meter=--progress-bar; fi
+  if [ "${plain}" = 1 ]; then curl -fS "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --noproxy '*' --max-redirs 0 "$1" -o "$2" || unfetched "$1" "$?"
+  else curl -fSL "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --proto '=https' --proto-redir '=https' --tlsv1.2 "$1" -o "$2" || unfetched "$1" "$?"
   fi
   # What curl leaves is an ordinary file. Anything else there is not a download, and is not read
   if [ ! -f "$2" ] || [ -L "$2" ]; then
@@ -346,11 +357,13 @@ checked() {
     exit 1
   fi
 }
-if [ "${led}" = 1 ]; then printf '\n  \033[1mit\033[0m\033[32m.\033[0m  \033[2minstall\033[0m\n\n'
+if [ "${led}" = 1 ]; then
+  printf '\n  \033[1mit\033[0m\033[32m.\033[0m  \033[2minstall\033[0m\n\n'
+  quietly "Downloading for ${os} ${arch} ..."
 else say "It is being downloaded for ${os} ${arch}."
 fi
 fetch "${FROM}/SHA256SUMS" "${stage}/sums"
-fetch "${FROM}/${name}" "${stage}/program"
+fetch "${FROM}/${name}" "${stage}/program" shown
 checked "${name}" "${stage}/program"
 fetch "${FROM}/LICENSE.md" "${stage}/license"
 checked LICENSE.md "${stage}/license"
