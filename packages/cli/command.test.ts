@@ -60,7 +60,8 @@ const RUNS = process.platform === 'linux' ? 'active' : 'running'
 /** The answers of a stand-in for the system's commands that has the service registered and running: systemd's to `is-active` and `is-enabled`, and launchd's to `print`. */
 const SAYS_IT_RUNS = '*" is-active "*) echo active ;; *" is-enabled "*) echo enabled ;; *" print "*) echo "state = running" ;;'
 /** The base ports a test here takes when it has something listen where It would: each from a block of this file's own, and held until the test gives it back. */
-const ports = bases(33_000, 20)
+// Keep absent-site probes below Linux's ephemeral ports, which other connections can take after a block is checked.
+const ports = bases(27_000, 20)
 /** The port the site is said to be at, on a machine that has It's settings. Nothing listens there. */
 const SITE_PORT = 21000
 const SITE = `http://localhost:${SITE_PORT}`

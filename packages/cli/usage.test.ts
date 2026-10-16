@@ -1992,6 +1992,8 @@ describe('sending', () => {
   })
   test('an event taken from the file is sent under an id made as it is taken, and never under what the line gave as its id', async () => {
     told()
+    // Test event identity across retries without disk speed expiring a send decision.
+    vi.useFakeTimers({ toFake: ['performance'] })
     const good = aLine()
     const installation = kept().installation!
     // An id that is the installation's own, and one that ends in the tag, which is never sent
@@ -2331,6 +2333,8 @@ describe('what cannot be trusted', () => {
   })
   test('however many files stand in It’s folder, a pass and a turning off touch only the two they know by name', async () => {
     told()
+    // Test the file and batch bounds without disk speed expiring a send decision.
+    vi.useFakeTimers({ toFake: ['performance'] })
     const good = aLine()
     const one = Array.from({ length: 400 }, () => `${JSON.stringify({ ...good, id: randomUUID() })}\n`).join('')
     for (let i = 0; i < 300; i++) writeFileSync(`${spool()}.${10_000 + i}`, '')
