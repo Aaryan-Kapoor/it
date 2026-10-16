@@ -35,6 +35,7 @@ import { build, type Plugin } from 'esbuild'
 import { zipSync } from 'fflate'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { FUNCTIONS, FUNCTIONS_HASH } from './src/functions.generated'
+import { markInstallation } from './src/installation'
 import { api, backendAt, call, type Machine, machineFile, type Problem, readJson, VERSION } from './src/lib'
 import { login } from './src/login'
 import {
@@ -1042,9 +1043,12 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     expect(await refusal(nothingLeft(() => {}))).toBe('settings')
   }, 300_000)
 
-  test('`it uninstall` asks a backend program that outlived its service to stop, and only then deletes the folder its database is in', async () => {
+  test('`it uninstall` stops an orphaned backend before removing its database and preserves unrecognised storage', async () => {
+    markInstallation(folder)
     makeConfig()
     const left = await orphan()
+    const storage = within(inBackend('storage'))
+    expect(storage.length).toBeGreaterThan(0)
     // The whole program, run as a person runs it, with a home of its own that holds nothing
     await bundled('it.mjs', "import './src/main'")
     const person = mkdtempSync(path.join(scratch, 'person-'))
@@ -1054,9 +1058,12 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
         encoding: 'utf8',
         timeout: 120_000,
       })
-      const told = JSON.parse(ran.stdout) as { removed: boolean; said: string[] }
-      expect([told.removed, told.said]).toEqual([true, ['The backend program that an It which had died left running here is stopped.']])
-      expect([startOf(left), existsSync(folder)]).toEqual([null, false])
+      expect(ran.status, ran.stderr || String(ran.error ?? '')).toBe(0)
+      const told = JSON.parse(ran.stdout) as { removed: boolean; said: string[]; left: string[] }
+      expect([told.removed, told.said]).toEqual([false, ['The backend program that an It which had died left running here is stopped.']])
+      expect(told.left.join(' ')).toContain('files It could not safely remove: backend')
+      expect([startOf(left), existsSync(database()), existsSync(inBackend('lock'))]).toEqual([null, false, false])
+      expect(within(inBackend('storage'))).toEqual(storage)
     } finally {
       if (startOf(left) !== null) process.kill(left, 'SIGKILL')
     }
