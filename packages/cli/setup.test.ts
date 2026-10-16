@@ -1212,6 +1212,49 @@ describe('the lock one program holds while it changes what is installed', () => 
     expect([held.pid, beside()]).toEqual([process.pid, []])
   })
 
+  test('a refused cleanup after losing a takeover still waits for the new holder', async () => {
+    const shape = await aLock()
+    const replacement = heldByAnother(shape)
+    const claim = `${lock()}.after.${'a'.repeat(16)}`
+    writeFileSync(lock(), leftBehind(shape))
+    const link = fs.linkSync
+    const remove = fs.rmSync
+    let refused = false
+    let worked = false
+    fs.linkSync = ((from: string, to: string) => {
+      link(from, to)
+      // A contender replaced the old lock and cleared its claim just before this one
+      // claimed that old lock. This claim no longer permits replacing the main lock.
+      if (to === claim) writeFileSync(lock(), replacement)
+    }) as typeof fs.linkSync
+    fs.rmSync = ((file: string, opts: Parameters<typeof rmSync>[1]) => {
+      if (file === claim) {
+        refused = true
+        throw Object.assign(new Error('Windows is still closing the stale claim'), { code: 'EPERM' })
+      }
+      return remove(file, opts)
+    }) as typeof fs.rmSync
+    syncBuiltinESMExports()
+    try {
+      await expect(
+        alone(async () => {
+          worked = true
+        }, 0),
+      ).rejects.toMatchObject({ code: 'busy' })
+      expect([refused, worked, readFileSync(lock(), 'utf8'), existsSync(claim)]).toEqual([true, false, replacement, true])
+    } finally {
+      fs.linkSync = link
+      fs.rmSync = remove
+      syncBuiltinESMExports()
+    }
+    // The failed cleanup is harmless once the new holder leaves. The next holder removes it.
+    rmSync(lock())
+    await alone(async () => {
+      worked = true
+    })
+    expect([worked, beside()]).toEqual([true, []])
+  })
+
   test('one whose holder lives is that holder’s for as long as it takes: whoever waits for it gives up after the time it was given and says so, and the lock is as it was', async () => {
     const theirs = heldByAnother(await aLock())
     writeFileSync(lock(), theirs)
