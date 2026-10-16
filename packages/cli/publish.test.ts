@@ -23,6 +23,60 @@ afterEach(() => {
 })
 
 describe('the conversation folders It remembers', () => {
+  test.each([9999, 10_000, 10_001])('recovers an empty legacy lock only after ten seconds, at %s milliseconds', (age) => {
+    const lock = `${conversationsFile()}.lock`
+    const record = { 'pi:earlier': { cwd: scratch, at: 1 } }
+    writeFileSync(conversationsFile(), JSON.stringify(record))
+    writeFileSync(lock, '')
+    utimesSync(lock, 1000, 1000)
+    vi.spyOn(Date, 'now').mockReturnValue(1_000_000 + age)
+    noteConversation({ harness: 'pi', id: 'next' }, scratch)
+    expect(conversationFolder({ harness: 'pi', id: 'earlier' })).toBe(scratch)
+    if (age > 10_000) {
+      expect(conversationFolder({ harness: 'pi', id: 'next' })).toBe(scratch)
+      expect(fs.existsSync(lock)).toBe(false)
+    } else {
+      expect(JSON.parse(readFileSync(conversationsFile(), 'utf8'))).toEqual(record)
+      expect(readFileSync(lock, 'utf8')).toBe('')
+    }
+  })
+
+  test('leaves a nonempty unreadable lock alone regardless of its age', () => {
+    const lock = `${conversationsFile()}.lock`
+    writeFileSync(lock, '{')
+    utimesSync(lock, 0, 0)
+    noteConversation({ harness: 'pi', id: 'next' }, scratch)
+    expect(conversationFolder({ harness: 'pi', id: 'next' })).toBeUndefined()
+    expect(readFileSync(lock, 'utf8')).toBe('{')
+  })
+
+  test.each(['live owner', 'younger empty file'])('leaves a %s that replaces a legacy lock before recovery takes its claim', (kind) => {
+    const lock = `${conversationsFile()}.lock`
+    writeFileSync(lock, '')
+    utimesSync(lock, 0, 0)
+    const replacement = kind === 'live owner' ? JSON.stringify({ pid: process.pid, holder: 'd'.repeat(16) }) : ''
+    const link = fs.linkSync
+    let replaced = false
+    fs.linkSync = (from, to) => {
+      if (String(to).startsWith(`${lock}.after.`) && !replaced) {
+        replaced = true
+        rmSync(lock)
+        writeFileSync(lock, replacement)
+      }
+      return link(from, to)
+    }
+    syncBuiltinESMExports()
+    try {
+      noteConversation({ harness: 'pi', id: 'next' }, scratch)
+      expect(replaced).toBe(true)
+      expect(conversationFolder({ harness: 'pi', id: 'next' })).toBeUndefined()
+      expect(readFileSync(lock, 'utf8')).toBe(replacement)
+    } finally {
+      fs.linkSync = link
+      syncBuiltinESMExports()
+    }
+  })
+
   test('leaves the record untouched when a live writer holds its lock beyond the acquisition budget', () => {
     const record = { 'pi:holder': { cwd: scratch, at: Date.now() } }
     writeFileSync(conversationsFile(), JSON.stringify(record))
