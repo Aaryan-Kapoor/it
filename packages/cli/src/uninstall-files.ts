@@ -4,6 +4,7 @@ import path from 'node:path'
 import { HARNESSES } from '@it/protocol'
 import { ADDONS } from './addons.generated'
 import { INSTALLATION_FILE } from './installation'
+import { withInstallerLock } from './installer-lock'
 import { home, Problem } from './lib'
 import { aloneAt, holderRuns, startOf } from './serve/backend'
 import { addonHookCommand, itHomeWritten } from './setup'
@@ -73,6 +74,10 @@ export function installationFile(folder: string, relative: string): string | und
 
 /** An updater or setup must finish before uninstall changes the program. Its lock also recovers interrupted lock-taking. */
 export async function withInstallationLock<T>(folder: string, run: () => Promise<T>): Promise<T> {
+  return withInstallerLock(folder, () => withProgramLock(folder, run))
+}
+
+async function withProgramLock<T>(folder: string, run: () => Promise<T>): Promise<T> {
   if (!lstatSync(path.join(folder, 'bin'), { throwIfNoEntry: false })?.isDirectory()) return run()
   const relative = `bin/${process.platform === 'win32' ? 'it.exe' : 'it'}.upgrade.lock`
   const file = path.join(folder, relative)

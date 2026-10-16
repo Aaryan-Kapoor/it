@@ -1232,19 +1232,24 @@ child.spawnSync = (file, args, opts) => {
 require('node:module').syncBuiltinESMExports()
 `,
         )
-      if (answer !== 'unavailable')
-        writeFileSync(
-          path.join(m.bin, 'powershell.exe'),
-          `#!${process.execPath}
+      writeFileSync(
+        path.join(m.bin, 'powershell.exe'),
+        `#!${process.execPath}
 const script = Buffer.from(process.argv.at(-1), 'base64').toString('utf16le')
+if (script.includes('[IO.FileStream]')) {
+  console.log('locked')
+  process.stdin.resume()
+  process.stdin.once('data', () => process.exit(0))
+} else {
 if (script.includes('[Microsoft.Win32.Registry]')) { console.log('absent'); process.exit(0) }
 if (!script.includes('Stop-ScheduledTask')) process.exit(1)
 const answer = ${JSON.stringify(answer)}
 if (answer === 'refused') console.error('The scheduler refused access')
 process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
+}
 `,
-          { mode: 0o755 },
-        )
+        { mode: 0o755 },
+      )
       const done = await run(m, ['uninstall', '--yes'], {}, process.execPath, ['--require', preload])
       if (answer === 'no task') {
         expect([done.code, printed(done).removed, existsSync(m.it)]).toEqual([0, true, false])
@@ -1258,6 +1263,29 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
       }
     },
   )
+
+  test('on Windows, uninstall keeps the installation when the installer lock cannot be acquired', async () => {
+    const m = machine()
+    const preload = path.join(m.home, 'windows.cjs')
+    writeFileSync(preload, "Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })\n")
+    const done = await run(m, ['uninstall', '--yes'], {}, process.execPath, ['--require', preload])
+    expect(error(done).code).toBe('busy')
+    expect(readFileSync(path.join(m.it, INSTALLATION_FILE), 'utf8')).toBe(INSTALLATION)
+    expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)
+  })
+
+  test('`it uninstall` refuses a live standalone installer before changing its service or files', async () => {
+    const m = machine(true, true)
+    mkdirSync(path.join(m.it, '.installing'))
+    const owner = `${process.pid} ${os.hostname()}\n`
+    writeFileSync(path.join(m.it, '.installing', 'owner'), owner)
+    const done = await run(m, ['uninstall', '--yes'])
+    expect(error(done).code).toBe('busy')
+    expect(readFileSync(path.join(m.it, '.installing', 'owner'), 'utf8')).toBe(owner)
+    expect(readFileSync(path.join(m.it, INSTALLATION_FILE), 'utf8')).toBe(INSTALLATION)
+    expect(existsSync(path.join(m.it, 'service.json'))).toBe(true)
+    expect(existsSync(path.join(m.it, 'machine.json'))).toBe(true)
+  })
 
   test.each([false, true])('preserves its database and profile when an orphan cannot be identified or its settings cannot be read (%s)', async (unreadable) => {
     const m = machine()
@@ -1511,6 +1539,8 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
     owner.pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
     writeFileSync(lock, JSON.stringify(owner))
     writeFileSync(path.join(m.it, 'bin', `.it-upgrade-${owner.pid}`), 'interrupted update')
+    mkdirSync(path.join(m.it, '.installing'))
+    writeFileSync(path.join(m.it, '.installing', 'owner'), `${owner.pid} ${os.hostname()}\n`)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
       writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
       chmodSync(path.join(m.bin, name), 0o755)
@@ -1541,6 +1571,7 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
     expect(existsSync(path.join(m.it, 'backend', 'bin'))).toBe(false)
     expect(existsSync(path.join(m.it, 'logs'))).toBe(false)
     expect(existsSync(path.join(m.it, 'bin'))).toBe(false)
+    expect(existsSync(path.join(m.it, '.installing'))).toBe(false)
     expect(readFileSync(path.join(m.it, 'valuable.txt'), 'utf8')).toBe('mine')
     expect(readFileSync(path.join(m.it, 'backend', 'notes.txt'), 'utf8')).toBe('mine')
   })

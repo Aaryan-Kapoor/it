@@ -288,6 +288,71 @@ describe('installation ownership', () => {
     }
   })
 
+  test('uninstall holds the standalone installer lock even when the bin folder is absent', async () => {
+    const at = folder()
+    markInstallation(at)
+    await withInstallationLock(at, async () => {
+      await expect(withInstallationLock(at, async () => 'overlapped')).rejects.toMatchObject({ code: 'busy' })
+      expect(markedInstallation(at)).toBe(true)
+    })
+    expect(existsSync(path.join(at, '.installing'))).toBe(false)
+  })
+
+  test('the installer lock is released when uninstall fails', async () => {
+    const at = folder()
+    markInstallation(at)
+    await expect(
+      withInstallationLock(at, async () => {
+        throw new Error('service refused')
+      }),
+    ).rejects.toThrow('service refused')
+    expect(existsSync(path.join(at, '.installing'))).toBe(false)
+    expect(markedInstallation(at)).toBe(true)
+  })
+
+  test('uninstall recovers an abandoned standalone installer lock and removes the installation', async () => {
+    const at = folder()
+    markInstallation(at)
+    put(at, process.platform === 'win32' ? 'bin/it.exe' : 'bin/it')
+    if (process.platform === 'win32') put(at, '.installing', '')
+    else {
+      const dead = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+      put(at, '.installing/owner', `${dead} ${os.hostname()}\n`)
+    }
+    await withInstallationLock(at, async () => removeInstallationFiles(at, false))
+    expect(finishInstallationRemoval(at)).toEqual([])
+    expect(existsSync(at)).toBe(false)
+  })
+
+  test.skipIf(process.platform === 'win32').each(['live', 'foreign', 'malformed', 'linked', 'taking', 'unknown file'])(
+    'uninstall refuses a %s standalone installer lock without changing the installation',
+    async (kind) => {
+      const at = folder()
+      markInstallation(at)
+      const dead = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+      const record = `${kind === 'live' ? process.pid : dead} ${kind === 'foreign' ? 'another-machine' : os.hostname()}\n`
+      const owner = put(at, '.installing/owner', kind === 'malformed' ? 'mine' : record)
+      if (kind === 'linked') {
+        rmSync(owner)
+        symlinkSync(put(folder(), 'owner', record), owner)
+      }
+      if (kind === 'taking') mkdirSync(path.join(at, '.installing.taking'))
+      if (kind === 'unknown file') put(at, '.installing/notes', 'mine')
+      let entered = false
+      await expect(
+        withInstallationLock(at, async () => {
+          entered = true
+        }),
+      ).rejects.toMatchObject({ code: 'busy' })
+      expect(entered).toBe(false)
+      expect(markedInstallation(at)).toBe(true)
+      expect(readFileSync(owner, 'utf8')).toBe(kind === 'malformed' ? 'mine' : record)
+      if (kind === 'linked') expect(lstatSync(owner).isSymbolicLink()).toBe(true)
+      if (kind === 'taking') expect(existsSync(path.join(at, '.installing.taking'))).toBe(true)
+      if (kind === 'unknown file') expect(readFileSync(path.join(at, '.installing/notes'), 'utf8')).toBe('mine')
+    },
+  )
+
   test('uninstall waits for the program lock, and keeps live temporary records', async () => {
     const at = folder()
     markInstallation(at)
