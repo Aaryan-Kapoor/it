@@ -123,6 +123,10 @@ const needsChange = new Set([
   'backend_older',
   'database_unfinished',
   'database_unopened',
+  'copy_failed',
+  'port_changed',
+  'settings_refused',
+  'functions_refused',
   'record_unread',
   'home_unfit',
 ])

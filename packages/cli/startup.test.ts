@@ -181,6 +181,17 @@ describe('a background service that cannot start', () => {
     expect(readFileSync(path.join(folder, 'service.json'), 'utf8')).toBe('settings left intact')
   })
 
+  test.each(['copy_failed', 'port_changed', 'settings_refused', 'functions_refused'])(
+    'keeps automatic attempts paused when the backend reports %s',
+    async (code) => {
+      expect(await fail(code)).toBe(false)
+      expect(startupStatus()).toMatchObject({ failures: 1, code, paused: true, retryAt: null })
+      expect(await fail(code)).toBe(false)
+      expect(startupStatus()).toMatchObject({ failures: 1, code, paused: true, retryAt: null })
+      expect(said.join('\n')).toContain('it service install')
+    },
+  )
+
   test('pauses for an invalid configured port and starts again once the port is corrected', async () => {
     const config = { port: 39001, network: false, instanceSecret: '0'.repeat(64), adminKey: 'test', sessionSecret: 'test' }
     writeFileSync(path.join(folder, 'service.json'), JSON.stringify(config))
