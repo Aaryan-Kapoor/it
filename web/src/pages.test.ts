@@ -12,7 +12,8 @@ const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, agent: 'cl
 /** What the backend last said of the page's clicks, newest first. */
 let recent: { at: number; delivery: string; outcome?: string | null; route?: string | null; handedAt?: number | null }[]
 /** The person's machines as the backend gives them to the owner's browser, with the agent apps chosen on each. */
-let machines: { id: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[] | undefined
+let machines: { id: string; name?: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[] | undefined
+const inventoryAsked = vi.fn()
 /** Whether there is a connection to the backend, and what was asked to be told when that changes. */
 let connected: boolean
 const told = new Set<() => void>()
@@ -37,8 +38,11 @@ const askedToStop = () => new Promise<{ stopping: boolean }>((answer, refuse) =>
 vi.mock('convex/react', () => ({
   useConvex: () => client,
   useMutation: (fn: unknown) => (getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : async () => null),
-  useQuery: (fn: unknown, args: unknown) =>
-    args === 'skip' ? undefined : { 'artifacts:get': PAGE, 'actions:forArtifact': recent, 'machines:list': machines }[getFunctionName(fn as never)],
+  useQuery: (fn: unknown, args: unknown) => {
+    const name = getFunctionName(fn as never)
+    if (name === 'machines:list' && args !== 'skip') inventoryAsked()
+    return args === 'skip' ? undefined : { 'artifacts:get': PAGE, 'actions:forArtifact': recent, 'machines:list': machines }[name]
+  },
 }))
 // The frame a page is shown in has tests of its own
 vi.mock('./mount', () => ({ Mount: () => null }))
@@ -79,6 +83,7 @@ beforeEach(() => {
   machines = [
     {
       id: 'machine-1',
+      name: PAGE.machine,
       wanted: ['claude-code', 'pi'],
       harnesses: [
         { id: 'claude-code', addon: 'connected' },
@@ -91,6 +96,7 @@ beforeEach(() => {
   answers.length = 0
   stopsAsked.length = 0
   client.mutation.mockClear()
+  inventoryAsked.mockClear()
 })
 afterEach(async () => {
   await act(async () => root.unmount())
@@ -499,6 +505,56 @@ describe('what the page’s bar says of the last thing the person did', () => {
     }
   })
 
+  test.each(['openclaw', 'pi'])('an older backend reports %s readiness when waking is unavailable', async (harness) => {
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    Object.assign(PAGE, { agent: harness, session: { harness, id: 'conversation-1' }, wake: null, connection: undefined })
+    const app = { id: harness, addon: 'not_connected' }
+    machines = [
+      { id: 'another-machine', name: 'the desktop', wanted: [harness], harnesses: [{ id: harness, addon: 'connected' }] },
+      { id: 'machine-1', name: PAGE.machine, wanted: [harness], harnesses: [app] },
+    ]
+    try {
+      await shown()
+      for (const [addon, message] of [
+        ['not_connected', 'is still connecting'],
+        ['needs_approval', 'needs approval'],
+        ['error', 'could not connect'],
+      ] as const) {
+        app.addon = addon
+        await drawnAgain()
+        expect(said()).toContain(message)
+        expect(said()).not.toContain('conversation looks closed')
+        expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+      }
+      // Older backends do not give paired screens permission to read the inventory.
+      inventoryAsked.mockClear()
+      const { PageView } = await import('./pages')
+      await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: false })))
+      expect(inventoryAsked).not.toHaveBeenCalled()
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', session: null })
+    }
+  })
+
+  test('an older backend does not guess which of two machines with the same name owns a page', async () => {
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    Object.assign(PAGE, { agent: 'openclaw', session: { harness: 'openclaw', id: 'conversation-1' }, wake: null, connection: undefined })
+    machines = ['machine-1', 'machine-2'].map((id) => ({
+      id,
+      name: PAGE.machine,
+      wanted: ['openclaw'],
+      harnesses: [{ id: 'openclaw', addon: id === 'machine-1' ? 'connected' : 'error' }],
+    }))
+    try {
+      await shown()
+      expect(said()).toContain("has not confirmed OpenClaw's connection")
+      expect(said()).not.toContain('conversation looks closed')
+      expect(said()).not.toContain('could not connect')
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', session: null })
+    }
+  })
+
   test('what the agent had already done is not said to have been stopped by a stop that came after it', async () => {
     // Done a minute ago, and the conversation was stopped since, from another of its pages
     recent = [{ at: NOW - 60_000, delivery: 'handed_off', outcome: 'succeeded', route: 'addon', handedAt: NOW - 59_000 }]
@@ -551,7 +607,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
 
   test('something waiting for a machine that is there and hands nothing over for now is said as that, and nothing is offered that would not help', async () => {
     recent = [{ at: NOW - 20_000, delivery: 'pending' }]
-    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi', pending: 1, wake: { machineId: 'm1', harness: 'pi', on: false }, machinePaused: 'unfit' })
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi', pending: 1, wake: { machineId: 'machine-1', harness: 'pi', on: false }, machinePaused: 'unfit' })
     await shown()
     expect(said()).toBe(
       'Sent. the laptop and It are of versions that do not work together, so Pi gets it once the one that is behind is updated. The Machines page says more',
