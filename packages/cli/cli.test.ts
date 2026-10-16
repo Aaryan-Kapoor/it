@@ -35,7 +35,7 @@ import {
   currentSession,
   forgetMachine,
   harnessEnv,
-  home,
+  home as installationFolder,
   joinLine,
   notReached,
   overClashes,
@@ -2144,7 +2144,7 @@ describe('add-ons carried by the CLI', () => {
       writeFileSync(program, 'installed program')
       // Each fixture starts from an explicit home before testing discovery without it.
       process.env.IT_HOME = installation
-      expect(home()).toBe(installation)
+      expect(installationFolder()).toBe(installation)
       delete process.env.IT_HOME
       process.execPath = program
       process.argv.splice(0, process.argv.length, program)
