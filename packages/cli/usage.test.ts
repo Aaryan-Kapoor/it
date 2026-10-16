@@ -998,6 +998,7 @@ describe('turning it off', () => {
     expect(waiting()).toEqual([])
   })
   test('the program that sends never writes the settings or the off file, so it cannot undo what another program wrote', async () => {
+    ownClock()
     told()
     const before = folder()
     const sender = noting([])
@@ -1010,6 +1011,7 @@ describe('turning it off', () => {
 
 describe('what an event may hold', () => {
   test('a name, the hour, an id of its own, and properties from the fixed sets', async () => {
+    ownClock()
     told()
     published()
     usage.record('answer.delivered', { path: 'woke', after: '1 to 10 seconds', agent: 'codex' })
@@ -1188,6 +1190,7 @@ describe('what an event may hold', () => {
     ])
   })
   test('one event can be sent at once by the command that records it, as a batch like any other, and is not where reporting is off or has not begun', async () => {
+    ownClock()
     const got: { headers: http.IncomingHttpHeaders; body: string }[] = []
     const server = http.createServer((req, res) => {
       let body = ''
@@ -1325,6 +1328,7 @@ describe('what an event may hold', () => {
   })
 
   test('a sender leaves another sender’s replacement marker when its request has begun', async () => {
+    ownClock()
     told()
     const deciding = path.join(home, 'telemetry-sending')
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
