@@ -19,6 +19,7 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN, PUBLICATION, uploadBudgetMs } from '@it/protocol'
+import { legacyEmptyLock } from './legacy-lock'
 import { api, call, direct, doorRefusal, inHome, machine, Problem, readJson, sessionAsked, sessionNote, throughDoor, writeFlushed, writePrivate } from './lib'
 import { makeOnce } from './serve/config'
 import { agentOf, filesBand, record, sizeBand } from './usage'
@@ -235,7 +236,8 @@ function gone(file: string, held: ConversationLock): boolean {
 }
 /**
  * Holds the conversation note while reading and replacing it. A live or unknown holder keeps
- * its lock however old the file is. A dead holder is replaced only after taking a claim named
+ * its lock however old the file is. Empty legacy locks retain their ten-second recovery age.
+ * A dead holder or an expired legacy lock is replaced only after taking a claim named
  * for that lock, so two commands recovering it cannot remove each other's replacement. A dead
  * claimant is recovered through another such claim. The record is skipped after three seconds.
  */
@@ -262,14 +264,15 @@ function toItself(run: () => void): void {
       break
     }
     const seen = conversationLock(lock)
-    if (seen && gone(lock, seen)) {
-      let word = seen.holder
+    const legacy = seen ? undefined : legacyEmptyLock(lock, 10_000)
+    if (seen ? gone(lock, seen) : legacy) {
+      let word = seen?.holder ?? legacy!
       const abandoned: { file: string; holder: string }[] = []
       for (let attempt = 0; attempt < 20 && performance.now() < until; attempt++) {
         const after = `${lock}.after.${word}`
         if (make(after)) {
           try {
-            if (conversationLock(lock)?.holder === seen.holder) {
+            if (seen ? conversationLock(lock)?.holder === seen.holder : legacyEmptyLock(lock, 10_000) === legacy) {
               writeFlushed(whole, JSON.stringify(me))
               renameSync(whole, lock)
               held = true
