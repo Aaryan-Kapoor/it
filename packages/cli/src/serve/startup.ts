@@ -132,11 +132,31 @@ export async function recoverStartup(
     return false
   }
   const wait = before ? Math.min(STARTUP_WAITS.at(-1)!, Math.max(0, before.retryAt! - Date.now())) : 0
-  if (wait) {
-    say(`startup retry waits ${Math.ceil(wait / 1000)} seconds (${before!.code})`)
+  if (before && wait) {
+    say(`startup retry waits ${Math.ceil(wait / 1000)} seconds (${before.code})`)
     await sleep(wait, undefined, { signal }).catch((err) => {
       if (!signal.aborted) throw err
     })
+    if (signal.aborted) return false
+    // A manual start or another retry can replace this attempt while it sleeps.
+    // Leave that invocation's record alone and let this supervisor stop cleanly.
+    try {
+      const current = read()
+      if (
+        startupKey() !== key ||
+        current?.key !== before.key ||
+        current.failures !== before.failures ||
+        current.code !== before.code ||
+        current.retryAt !== before.retryAt
+      ) {
+        say('startup retry cancelled because its record or settings changed')
+        return false
+      }
+    } catch (err) {
+      say(`could not start: ${codeOf(err)}`)
+      say(`automatic startup stopped; ${recovery}`)
+      return false
+    }
   }
   if (signal.aborted) return false
   let ready = false

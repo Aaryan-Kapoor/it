@@ -81,6 +81,46 @@ describe('a background service that cannot start', () => {
     expect(record().failures).toBe(1)
   })
 
+  test.each(['manual start', 'reset', 'later retry', 'paused retry', 'changed settings', 'unreadable record'])(
+    'does not use a stale attempt after waiting through a %s',
+    async (change) => {
+      await expect(fail()).rejects.toMatchObject({ code: 'offline' })
+      const before = { ...record(), retryAt: Date.now() + 10 }
+      writeFileSync(path.join(folder, 'startup.json'), JSON.stringify(before))
+      const run = vi.fn(async () => {
+        throw new Problem('a manual service is already running', 'already_running')
+      })
+      const pending = recoverStartup(run, options())
+      expect(said.at(-1)).toContain('startup retry waits')
+      if (change === 'manual start') {
+        const manual = vi.fn(async (ready: () => void) => {
+          ready()
+          return false
+        })
+        await recoverStartup(manual, { ...options(), supervised: false })
+        expect(manual).toHaveBeenCalledOnce()
+      } else if (change === 'reset') resetStartup()
+      else if (change === 'later retry') {
+        writeFileSync(path.join(folder, 'startup.json'), JSON.stringify({ ...before, failures: 2, retryAt: Date.now() + STARTUP_WAITS[1] }))
+      } else if (change === 'paused retry') {
+        writeFileSync(path.join(folder, 'startup.json'), JSON.stringify({ ...before, code: 'settings', retryAt: null }))
+      } else if (change === 'changed settings') writeFileSync(path.join(folder, 'service.json'), 'changed settings')
+      else writeFileSync(path.join(folder, 'startup.json'), '{broken')
+      const kept = existsSync(path.join(folder, 'startup.json')) ? readFileSync(path.join(folder, 'startup.json'), 'utf8') : undefined
+      await expect(pending).resolves.toBe(false)
+      expect(run).not.toHaveBeenCalled()
+      if (kept === undefined) expect(existsSync(path.join(folder, 'startup.json'))).toBe(false)
+      else expect(readFileSync(path.join(folder, 'startup.json'), 'utf8')).toBe(kept)
+    },
+  )
+
+  test('counts another failure after waiting when the retry record and settings are unchanged', async () => {
+    await expect(fail()).rejects.toMatchObject({ code: 'offline' })
+    writeFileSync(path.join(folder, 'startup.json'), JSON.stringify({ ...record(), retryAt: Date.now() + 10 }))
+    await expect(fail()).rejects.toMatchObject({ code: 'offline' })
+    expect(record()).toMatchObject({ failures: 2, retryAt: Date.now() + STARTUP_WAITS[1] })
+  })
+
   test('stops at once for a failure that requires changed data or settings, without changing either', async () => {
     writeFileSync(path.join(folder, 'service.json'), 'settings left intact')
     for (const code of ['settings', 'backend_releases', 'backend_older', 'database_unopened', 'record_unread']) {

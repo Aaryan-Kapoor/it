@@ -1321,7 +1321,7 @@ describe('background service definitions', () => {
     try {
       process.env.IT_HOME = 'it-here'
       expect(logFile()).toBe(path.resolve('it-here', 'logs', 'it.log'))
-      expect(command().slice(-3)).toEqual(['serve', '--log', path.resolve('it-here', 'logs', 'it.log')])
+      expect(command().slice(-4)).toEqual(['serve', '--supervised', '--log', path.resolve('it-here', 'logs', 'it.log')])
     } finally {
       if (before === undefined) delete process.env.IT_HOME
       else process.env.IT_HOME = before
