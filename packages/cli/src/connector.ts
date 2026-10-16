@@ -2098,9 +2098,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // is let go, where it would otherwise be told to the agent at some later reopening,
         // of a turn that by then was long over.
         if (body.busy && !reopenedNow.has(follow(key)) && [key, follow(key)].map((k) => stoppedByPerson.delete(k)).some(Boolean)) keepStopped()
-        // A turn has ended or a new one has begun: what Codex's queue held behind the turn is
-        // now handed over by Codex itself, and is not a waiter's to be given
-        if (url.pathname === '/session') for (const [clickId, b] of behindTurn) if (b.key === follow(key)) behindTurn.delete(clickId)
       }
       sessions.set(key, s)
       if (isNew && (harness === 'codex' || harness === 'claude-code')) noteHeard(key)
@@ -2123,9 +2120,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
           marked.delete(was)
           marked.set(key, [...(marked.get(key) ?? []), ...kept])
         }
+        if (unmarked.delete(was)) unmarked.add(key)
         while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
         changed = true
       }
+      // A turn has ended or a new one has begun: Codex now hands over what its queue held
+      // behind the turn. Clear those copies after moving anything kept under the old id.
+      if (url.pathname === '/session' && typeof body.busy === 'boolean') for (const [clickId, b] of behindTurn) if (b.key === key) behindTurn.delete(clickId)
       if (changed && !over) writePrivate(aliasFile(), Object.fromEntries(aliases))
       // The harness as It knows it, and never as whoever asked spelled it
       if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
