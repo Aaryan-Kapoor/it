@@ -1,5 +1,6 @@
 // What the background service is given when it is registered, and what is kept of it when it
 // is registered again: checked on the definitions themselves, with no system asked to take one.
+import * as childProcess from 'node:child_process'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
@@ -16,6 +17,7 @@ import {
   install,
   kept,
   launchdPlist,
+  PS_QUIET,
   runningFor,
   stopFile,
   systemdUnit,
@@ -24,6 +26,8 @@ import {
   windowsRemoval,
   windowsScript,
 } from './src/service'
+
+vi.mock('node:child_process', async (original) => ({ ...(await original<typeof import('node:child_process')>()) }))
 
 describe('what a service is given of the shell that registered it', () => {
   test('that the person’s shell is not to be asked is said to the service, which is what would ask it', () => {
@@ -242,13 +246,11 @@ process.exit(/exit 0\\s*$/.test(script) ? 0 : missing ? 1 : 0)
 
   test('only a task that is started in this folder is stopped and taken away: another account’s It, or something else of the person’s that is called `it`, is left as it is', () => {
     const script = windowsRemoval("C:\\Users\\O'Neil\\.it\\bin\\")
-    // The task is asked for once, and everything that changes it comes after the look at where it is started, inside it
-    const task = "Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq 'it' }"
-    expect(script).toBe(
-      `$task = ${task}; if ($task -and (([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq 'C:\\Users\\O''Neil\\.it\\bin')) { Stop-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName 'it' -Confirm:$false -ErrorAction SilentlyContinue; if (${task}) { 'Windows still has the task'; exit 3 } }; exit 0`,
-    )
-    // However the folder was spelled when it was named here, it is the folder the task was registered with
-    expect(windowsRemoval('C:/Users/Ada/.it/bin')).toContain("-ieq 'C:\\Users\\Ada\\.it\\bin'))")
+    expect(script).toContain("$name = 'it-' + $sid")
+    expect(script).toContain('Test-ItTask $legacy')
+    expect(script).toContain("-ieq 'C:\\Users\\O''Neil\\.it\\bin'")
+    expect(script).toContain('Unregister-ScheduledTask -InputObject $owned')
+    expect(windowsRemoval('C:/Users/Ada/.it/bin')).toContain("-ieq 'C:\\Users\\Ada\\.it\\bin'")
     expect(windowsScript('C:\\Users\\Ada\\.it\\bin', 'it-service.cmd')).toContain("-WorkingDirectory 'C:\\Users\\Ada\\.it\\bin'")
   })
 
@@ -258,20 +260,27 @@ process.exit(/exit 0\\s*$/.test(script) ? 0 : missing ? 1 : 0)
       // These functions replace the scheduler cmdlets, so no installed task is changed.
       // The other folder's task deliberately comes first and uses this installation's launcher.
       const script = `
+${PS_QUIET}
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+function New-ItTestTask($taskPath, $folder) {
+  [pscustomobject]@{ TaskName = 'it'; TaskPath = $taskPath; Principal = [pscustomobject]@{ UserId = $sid }; Actions = @([pscustomobject]@{ Execute = 'conhost.exe'; Arguments = '--headless cmd.exe /d /c .\\it-service.cmd'; WorkingDirectory = $folder }) }
+}
 $script:tasks = @(
-  [pscustomobject]@{ TaskName = 'it'; TaskPath = '\\Other\\'; Actions = @([pscustomobject]@{ WorkingDirectory = 'C:\\it\\bin' }) }
-  ${root === 'absent' ? '' : `[pscustomobject]@{ TaskName = 'it'; TaskPath = '\\'; Actions = @([pscustomobject]@{ WorkingDirectory = '${root === 'this folder' ? 'C:\\it\\bin' : 'C:\\elsewhere\\bin'}' }) }`}
+  (New-ItTestTask '\\Other\\' 'C:\\it\\bin')
+  ${root === 'absent' ? '' : `(New-ItTestTask '\\' '${root === 'this folder' ? 'C:\\it\\bin' : 'C:\\elsewhere\\bin'}')`}
 )
 function Get-ScheduledTask {
   [CmdletBinding()] param([string]$TaskPath, [string]$TaskName)
   $script:tasks | Where-Object { (!$TaskPath -or $_.TaskPath -eq $TaskPath) -and (!$TaskName -or $_.TaskName -eq $TaskName) }
 }
 function Stop-ScheduledTask {
-  [CmdletBinding()] param([string]$TaskName, [string]$TaskPath = '\\')
+  [CmdletBinding()] param($InputObject)
+  $TaskName = $InputObject.TaskName; $TaskPath = $InputObject.TaskPath
   "stopped $TaskPath$TaskName"
 }
 function Unregister-ScheduledTask {
-  [CmdletBinding(SupportsShouldProcess)] param([string]$TaskName, [string]$TaskPath = '\\')
+  [CmdletBinding(SupportsShouldProcess)] param($InputObject)
+  $TaskName = $InputObject.TaskName; $TaskPath = $InputObject.TaskPath
   "removed $TaskPath$TaskName"
   $script:tasks = @($script:tasks | Where-Object { $_.TaskName -ne $TaskName -or $_.TaskPath -ne $TaskPath })
 }
@@ -288,6 +297,88 @@ ${windowsRemoval('C:\\it\\bin')}
       expect(ran.stdout.trim().split(/\r?\n/).filter(Boolean)).toEqual(root === 'this folder' ? ['stopped \\it', 'removed \\it'] : [])
     },
   )
+})
+
+describe('migrating Windows tasks', () => {
+  test('waits for both owned installations and this folder before ending either launcher', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-migrate-'))
+    const before = { home: process.env.IT_HOME, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+    const folders = ['account', 'legacy', 'current'].map((name) => path.join(folder, name))
+    const checks = new Map<number, number>()
+    const stopped = new Set<string>()
+    const changed: string[] = []
+    for (const [i, at] of folders.entries()) {
+      mkdirSync(at)
+      writeFileSync(path.join(at, 'connector.json'), JSON.stringify({ pid: 100_000 + i }))
+    }
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      expect(signal).toBe(0)
+      const at = folders[pid - 100_000]!
+      expect(at).toBeDefined()
+      if (existsSync(stopFile(at))) {
+        const count = (checks.get(pid) ?? 0) + 1
+        checks.set(pid, count)
+        // Receiving the stop file is not enough: the service still has work to finish.
+        if (count >= 2) {
+          stopped.add(at)
+          throw Object.assign(new Error('stopped'), { code: 'ESRCH' })
+        }
+      }
+      return true
+    })
+    const run = vi.spyOn(childProcess, 'spawnSync').mockImplementation((_cmd, args) => {
+      const script = Buffer.from((args as string[]).at(-1)!, 'base64').toString('utf16le')
+      let stdout = ''
+      if (script.includes('Register-ScheduledTask')) {
+        changed.push(script)
+        expect([...stopped].sort()).toEqual([...folders].sort())
+      } else if (script.includes('GetBytes(')) {
+        stdout = folders
+          .slice(0, 2)
+          .map((at) => Buffer.from(path.join(at, 'bin')).toString('base64'))
+          .join('\r\n')
+      } else stdout = 'it-test\r\nReady'
+      return { status: 0, stdout, stderr: '', pid: 0, output: [], signal: null }
+    })
+    try {
+      process.env.IT_HOME = folders[2]
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(install().registered).toBe(true)
+      expect(changed).toHaveLength(1)
+      expect(folders.every((at) => existsSync(stopFile(at)))).toBe(true)
+    } finally {
+      run.mockRestore()
+      kill.mockRestore()
+      Object.defineProperty(process, 'platform', before.platform)
+      if (before.home === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before.home
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('leaves both launchers alone when their folders cannot be discovered', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-unread-tasks-'))
+    const before = { home: process.env.IT_HOME, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+    const changed: string[] = []
+    const run = vi.spyOn(childProcess, 'spawnSync').mockImplementation((_cmd, args) => {
+      const script = Buffer.from((args as string[]).at(-1)!, 'base64').toString('utf16le')
+      if (script.includes('Register-ScheduledTask')) changed.push(script)
+      return { status: 1, stdout: '', stderr: 'scheduler unavailable', pid: 0, output: [], signal: null }
+    })
+    try {
+      process.env.IT_HOME = folder
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(() => install()).toThrow(/scheduler unavailable/)
+      expect(changed).toEqual([])
+      expect(existsSync(path.join(folder, 'bin', 'it-service.cmd'))).toBe(false)
+    } finally {
+      run.mockRestore()
+      Object.defineProperty(process, 'platform', before.platform)
+      if (before.home === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before.home
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
 })
 
 test('a backend cannot start while uninstall removes its folder, even after the inner lock has gone', async () => {

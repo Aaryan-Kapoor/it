@@ -91,7 +91,7 @@ const seen = () => {
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        "$ProgressPreference = 'SilentlyContinue'; Get-ScheduledTask -TaskName 'it' | Get-ScheduledTaskInfo | Format-List LastRunTime, LastTaskResult, NextRunTime, NumberOfMissedRuns; Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(it|it-windows-x64|convex-local-backend|conhost|cmd)' } | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-Table -AutoSize -Wrap | Out-String -Width 220",
+        "$ProgressPreference = 'SilentlyContinue'; Get-ScheduledTask -TaskPath '\\' -TaskName ('it-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) | Get-ScheduledTaskInfo | Format-List LastRunTime, LastTaskResult, NextRunTime, NumberOfMissedRuns; Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(it|it-windows-x64|convex-local-backend|conhost|cmd)' } | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-Table -AutoSize -Wrap | Out-String -Width 220",
       ]),
     ].join('\n')
   if (process.platform === 'darwin') return asked('launchctl', ['print', `gui/${process.getuid()}/dev.it`]).slice(0, 1500)

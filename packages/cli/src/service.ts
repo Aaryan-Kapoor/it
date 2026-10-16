@@ -2,7 +2,7 @@
 // system uses for that. All three run the same command, `it serve`.
 //   Linux    a systemd user unit, it.service
 //   macOS    a launchd agent, dev.it
-//   Windows  a scheduled task at logon, named it
+//   Windows  a scheduled task at logon, named for this account's SID
 //
 // However it is stopped, the service is asked to stop and waited for. It stops the backend
 // program itself, last: by asking and by nothing else on Linux and macOS, and on Windows, where
@@ -231,6 +231,25 @@ function cmdWord(w: string): string {
   if (/["\r\n]/.test(w)) throw new Error('a path on this machine has a character that cannot be written into the launcher')
   return `"${w.replace(/%/g, '%%')}"`
 }
+/** Restores the recorded previous executable after an interrupted replacement. */
+export function windowsRecovery(program: string): string {
+  return `
+$ErrorActionPreference = 'Stop'
+$program = ${psQuote(program)}
+if (Test-Path -LiteralPath $program) { exit 0 }
+$note = $program + '.recovery.json'
+if (-not (Test-Path -LiteralPath $note)) { throw 'It is missing. Run the installer again.' }
+$record = Get-Content -Raw -LiteralPath $note | ConvertFrom-Json
+if ($record.file -cnotmatch '^it\\.old\\.[0-9]+\\.exe$' -or $record.sha256 -cnotmatch '^[a-f0-9]{64}$' -or ($record.pid -isnot [int] -and $record.pid -isnot [long]) -or $record.pid -le 1 -or $record.started -isnot [string] -or $record.started -cnotmatch '^[0-9]+$') { throw 'The recovery record cannot be read. Run the installer again.' }
+$writer = Get-Process -Id $record.pid -ErrorAction SilentlyContinue
+if ($writer -and $writer.StartTime.ToFileTimeUtc().ToString() -ceq $record.started) { throw 'An install or update is still running.' }
+$old = Join-Path ([IO.Path]::GetDirectoryName($program)) $record.file
+$item = Get-Item -Force -LiteralPath $old
+if (($item.Attributes -band ([IO.FileAttributes]::ReparsePoint -bor [IO.FileAttributes]::Directory)) -ne 0 -or (Get-FileHash -Algorithm SHA256 -LiteralPath $old).Hash -ine $record.sha256) { throw 'The previous program does not match its recovery record. Run the installer again.' }
+[IO.File]::Move($old, $program)
+Remove-Item -LiteralPath $note -Force
+`.trim()
+}
 /**
  * What the scheduled task runs on Windows: a .cmd file that gives the service its settings and
  * then starts the program. A task has no environment of its own to put them in, so the file
@@ -258,45 +277,69 @@ export function windowsLauncher(cmd: string[], env: Record<string, string>): str
   // this file's own cmd.exe with it. The Task Scheduler is told to do the same a minute after
   // a task has failed, and was seen not to, which is why it is done here. The wait is a ping,
   // since `timeout` refuses to wait where it has no keyboard to be interrupted from.
-  lines.push(':again', cmd.map(cmdWord).join(' '), 'if %errorlevel% equ 0 exit /b 0', 'ping -n 6 127.0.0.1 >nul 2>&1', 'goto again')
+  lines.push(':again')
+  if (cmd[0] && path.win32.basename(cmd[0]).toLowerCase() === 'it.exe') {
+    const recovery = Buffer.from(windowsRecovery(cmd[0]), 'utf16le').toString('base64')
+    lines.push(`if not exist ${cmdWord(cmd[0])} powershell.exe -NoProfile -NonInteractive -EncodedCommand ${recovery}`)
+  }
+  lines.push(cmd.map(cmdWord).join(' '), 'if %errorlevel% equ 0 exit /b 0', 'ping -n 6 127.0.0.1 >nul 2>&1', 'goto again')
   return `${lines.join('\r\n')}\r\n`
 }
 const windowsLauncherFile = () => inHome('bin', 'it-service.cmd')
 
 const ps = psQuote
+/** Selects only this account's task, or a legacy launcher owned by this account. */
+export function windowsTask(): string {
+  return `
+$ErrorActionPreference = 'Stop'
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$name = 'it-' + $sid
+function Test-ItTask($candidate) {
+  if (-not $candidate -or @($candidate.Actions).Count -ne 1) { return $false }
+  try {
+    $owner = [string]$candidate.Principal.UserId
+    if ($owner -notmatch '^S-1-') { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value }
+  } catch { return $false }
+  $action = $candidate.Actions[0]
+  return $owner -eq $sid -and $action.Execute -ieq 'conhost.exe' -and $action.Arguments -ieq ${ps('--headless cmd.exe /d /c .\\it-service.cmd')} -and [IO.Path]::IsPathRooted($action.WorkingDirectory) -and [IO.Path]::GetFileName(([string]$action.WorkingDirectory).TrimEnd('\\')) -ieq 'bin'
+}
+$tasks = @(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop)
+$task = $tasks | Where-Object { $_.TaskName -eq $name }
+if ($task -and -not (Test-ItTask $task)) { throw 'The task for this account is not an It launcher owned by this account. It was left unchanged.' }
+$legacy = $tasks | Where-Object { $_.TaskName -eq 'it' }
+if (-not (Test-ItTask $legacy)) { $legacy = $null }
+if (-not $task) { $task = $legacy }
+`.trim()
+}
 export function windowsScript(folder: string, launcher: string): string {
-  // The task runs the launcher by its bare name, started in the launcher's folder. The folder's
-  // own name then passes through no command line, where a space, an ampersand or a caret in it
-  // would have to be quoted for three programs in turn. A .cmd file is run by cmd.exe, which
-  // is named here, and conhost --headless keeps a console window from appearing at logon.
-  // A task that is still running is stopped first. Registering the task again does not touch
-  // it, and starting a task that is running starts nothing, so one set up with the old settings
-  // would otherwise go on as it was. By now the service itself has been asked to stop and has
-  // (see `install`): what this ends is the window it was started in.
   return [
-    `Stop-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue`,
+    windowsTask(),
+    // The service was asked to stop before this script runs. Only its launcher remains.
+    'if ($task) { Stop-ScheduledTask -InputObject $task -ErrorAction Stop }',
+    'if ($legacy -and $legacy.TaskName -ne $task.TaskName) { Stop-ScheduledTask -InputObject $legacy -ErrorAction Stop }',
     `$action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ${ps(`--headless cmd.exe /d /c .\\${launcher}`)} -WorkingDirectory ${ps(folder)}`,
-    '$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME',
+    '$trigger = New-ScheduledTaskTrigger -AtLogOn -User $sid',
+    '$principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive -RunLevel Limited',
     '$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)',
-    `Register-ScheduledTask -TaskName ${ps(NAME)} -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null`,
-    `Start-ScheduledTask -TaskName ${ps(NAME)}`,
+    "Register-ScheduledTask -TaskPath '\\' -TaskName $name -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null",
+    // Keep the old registration until the account's new one exists. If migration fails,
+    // remove the new registration so two launchers are not left for the next sign-in.
+    "if ($legacy) { try { Unregister-ScheduledTask -InputObject $legacy -Confirm:$false -ErrorAction Stop } catch { Unregister-ScheduledTask -TaskPath '\\' -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue; throw } }",
+    "Start-ScheduledTask -TaskPath '\\' -TaskName $name -ErrorAction Stop",
   ].join('\n')
 }
-/**
- * What takes the task away on Windows. The scheduler's root has one task of this name, whoever made it:
- * it may be the It of another account of the machine, or something else of the person's that
- * happens to be called `it`. Only the task that is started in this folder's `bin`, which is how
- * `windowsScript` registers It's, is this folder's to stop and take away, and any other is
- * left exactly as it is. The folder is told from the task's own by its name, whichever way its
- * slashes lean and whatever the case of its letters, as Windows itself tells folders apart.
- * Where the task is still there after it was asked to go, that is said, and by how this ends.
- */
+/** Takes away only an owned task whose launcher starts in this folder. */
 export function windowsRemoval(folder: string): string {
   const started = ps(folder.replace(/\//g, '\\').replace(/\\+$/, ''))
-  // Asking for a missing task is a failed cmdlet even when its error is silenced. Listing
-  // tasks instead tells absence apart from a scheduler that cannot be asked at all.
-  const task = `Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq ${ps(NAME)} }`
-  return `$task = ${task}; if ($task -and (([string]$task.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq ${started})) { Stop-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName ${ps(NAME)} -Confirm:$false -ErrorAction SilentlyContinue; if (${task}) { 'Windows still has the task'; exit 3 } }; exit 0`
+  return `${windowsTask()}
+$ownedTasks = @($task, $legacy) | Where-Object { $_ } | Sort-Object TaskName -Unique
+foreach ($owned in $ownedTasks) {
+  if (([string]$owned.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq ${started}) {
+    Stop-ScheduledTask -InputObject $owned -ErrorAction Stop
+    Unregister-ScheduledTask -InputObject $owned -Confirm:$false -ErrorAction Stop
+    if (Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq $owned.TaskName }) { throw 'Windows still has the task' }
+  }
+}; exit 0`
 }
 /**
  * What every script given to PowerShell begins with. PowerShell says how far it has got with
@@ -324,20 +367,44 @@ function powershell(script: string, forMs?: number) {
 const powershellAsked = (script: string) => powershell(script, ASKED_WINDOWS_MS)
 
 /**
- * The It folder the task Windows has registered runs the service from, or null when no task is
- * registered or it cannot be asked. It is read from the task's own action: the task is started
+ * Every It folder this account's tasks run the service from. Both the account task and an
+ * owned legacy task may exist. A failed discovery throws before installation changes either.
+ * Each folder is read from the task's own action: the task is started
  * in the folder's `bin`, where its launcher is. The folder's name is asked for as the bytes of
  * it in UTF-8, written in base64, and read back from those: a name with a letter outside the
  * code page PowerShell prints in would otherwise come back as the name of some other folder.
  */
+export function windowsRegisteredFolders(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): string[] {
+  const asked = ask(`${windowsTask()}
+foreach ($owned in @($task, $legacy)) {
+  if ($owned) { [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($owned.Actions[0].WorkingDirectory)) }
+}`)
+  if (!asked.ok) throw new Error(`reading the registered tasks failed: ${asked.out}`)
+  const folders: string[] = []
+  for (const line of asked.out.trim() ? asked.out.trim().split(/\r?\n/) : []) {
+    const said = line.trim()
+    // Only a whole base64 line is a folder. A partial answer is not enough to stop both services.
+    const bin =
+      said.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(said)
+        ? Buffer.from(said, 'base64')
+            .toString('utf8')
+            .replace(/[\\/]+$/, '')
+        : ''
+    if (!path.win32.isAbsolute(bin) || path.win32.basename(bin).toLowerCase() !== 'bin')
+      throw new Error('The registered task folders could not be read. The tasks were left unchanged.')
+    const folder = path.win32.dirname(bin)
+    if (!folders.some((other) => sameWindowsFolder(other, folder))) folders.push(folder)
+  }
+  return folders
+}
+/** This folder's registration when present, otherwise the account's preferred task, or none. */
 export function windowsRegisteredFor(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): string | null {
-  const asked = ask(
-    `[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((Get-ScheduledTask -TaskName ${ps(NAME)} -TaskPath '\\' -ErrorAction Stop).Actions[0].WorkingDirectory))`,
-  )
-  const said = asked.ok ? (asked.out.split(/\r?\n/)[0]?.trim() ?? '') : ''
-  // Only what is base64 from end to end is the folder's name. Anything else is PowerShell saying something of its own
-  const bin = said.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(said) ? Buffer.from(said, 'base64').toString('utf8') : ''
-  return bin ? path.win32.dirname(bin.replace(/[\\/]+$/, '')) : null
+  try {
+    const folders = windowsRegisteredFolders(ask)
+    return folders.find((folder) => sameWindowsFolder(folder, home())) ?? folders[0] ?? null
+  } catch {
+    return null
+  }
 }
 /** Whether two addresses name the same folder on Windows, where the case of a letter and which way a slash leans make no difference. */
 export const sameWindowsFolder = (a: string, b: string): boolean => {
@@ -610,10 +677,11 @@ export function install(): ServiceStatus {
   } else if (process.platform === 'win32') {
     // Windows ends a task's programs outright, with no word to the service that it is to
     // close its door and stop its backend program in its turn. So the service that is running
-    // is asked to stop, and waited for, before its task is touched: this folder's, and the
-    // one the task was registered for when that is another.
-    const registered = windowsRegisteredFor()
-    for (const folder of registered && !sameWindowsFolder(registered, home()) ? [registered, home()] : [home()]) askToStop(folder)
+    // is asked to stop, and waited for, before either task is touched: this folder's, the
+    // account task's, and the owned legacy task's, which may each name a different folder.
+    const folders = windowsRegisteredFolders()
+    if (!folders.some((folder) => sameWindowsFolder(folder, home()))) folders.push(home())
+    for (const folder of folders) askToStop(folder)
     mkdirSync(path.dirname(windowsLauncherFile()), { recursive: true })
     writeDefinition(windowsLauncherFile(), windowsLauncher(cmd, env))
     const r = powershell(windowsScript(path.dirname(windowsLauncherFile()), path.basename(windowsLauncherFile())))
@@ -691,9 +759,14 @@ export function status(): ServiceStatus {
     return { registered: existsSync(plistPath()), state: r.ok ? (/state = (\w+)/.exec(r.out)?.[1] ?? 'loaded') : 'not loaded', where: plistPath() }
   }
   if (process.platform === 'win32') {
-    const r = powershellAsked(`(Get-ScheduledTask -TaskName ${ps(NAME)} -TaskPath '\\' -ErrorAction Stop).State`)
-    // The state is one word, on the first line of what was printed. Anything PowerShell said after it is not the state
-    return { registered: r.ok, state: r.ok ? (r.out.split(/\r?\n/)[0]?.trim() ?? '') || 'unknown' : 'not registered', where: `Scheduled Task "${NAME}"` }
+    const r = powershellAsked(`${windowsTask()}
+if ($task) { $task.TaskName; $task.State }`)
+    const [name, state] = r.ok ? r.out.split(/\r?\n/) : []
+    return {
+      registered: Boolean(name),
+      state: name ? state || 'unknown' : 'not registered',
+      where: name ? `Scheduled Task "${name}"` : 'Scheduled Task for this Windows account',
+    }
   }
   return { registered: false, state: 'unsupported', where: home() }
 }

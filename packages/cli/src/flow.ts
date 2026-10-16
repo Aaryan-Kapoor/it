@@ -51,6 +51,8 @@ export interface Step {
   warn(said: string): void
   /** It could not be done. */
   fail(said: string): void
+  /** It is over, and nothing of it stays on the screen: for a step that only says what is being waited for until something else is drawn in its place. */
+  clear(): void
 }
 /**
  * One step: a line that turns while the step is at work, and is written once more, with a mark,
@@ -78,6 +80,12 @@ export function step(name: string, said = ''): Step {
     done: (last) => end(green('✓'), last),
     warn: (last) => end(yellow('!'), last),
     fail: (last) => end(red('✗'), last),
+    clear() {
+      if (ended) return
+      ended = true
+      clearInterval(timer)
+      if (redrawn) write('\r\x1b[2K')
+    },
   }
 }
 

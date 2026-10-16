@@ -121,3 +121,11 @@ If a page says that a turn from before may still be running, or `it status` says
 On a machine that joined an It, `it status` may say that the two are of versions that do not work together, and which of them to update. The machine stays joined. Nothing done on a page is handed to an agent on it until the two fit, which It asks about every minute, so there is nothing to do after the update but wait a moment.
 
 A page that a conversation made belongs to that conversation until another one brings it up or takes it, so what you do on it goes to the agent you last asked to show it.
+
+## The Windows command is missing after an interrupted update
+
+If an install or update was stopped while it was replacing `it.exe`, run the install command again. That restores the command without removing your pages or settings. Do not choose a program from the files named `it.old.*.exe` yourself.
+
+A service registered by this version can restore the exact previous program recorded by an interrupted install or update. It checks the writer's process number and creation time, so an unrelated process that later receives the same number does not prevent recovery. Once the writer has stopped, it checks that the file matches the recorded checksum before giving it the `it.exe` name again. It leaves a program already at that name alone. A missing or unreadable record, or a file that does not match it, needs the installer again.
+
+An older service launcher has no recovery step. Once the command is available, run `it service install` to refresh that launcher. A terminal command cannot repair its own missing executable, and a computer with no background service also needs the installer run again.

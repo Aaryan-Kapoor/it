@@ -3,13 +3,15 @@
 // another, the processes above the command say which of the two is the inner one, which the
 // environment cannot: it holds the marks of both, the same whichever way round they are.
 import { execFileSync } from 'node:child_process'
-import { closeSync, openSync, readFileSync, readSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import type { Harness } from '@it/protocol'
 
 /** A process, as far as this needs to know it: what started it, and the first words of its command line, of which the first is the program itself. */
 export interface Proc {
   parent: number
   argv: string[]
+  /** The runtime's script could not be identified from command-line words that the system joined together. */
+  unknownScript?: boolean
 }
 
 // How each app shows among the processes of a machine. Some are programs of their own, named
@@ -94,8 +96,9 @@ export function agentApp(p: Pick<Proc, 'argv'>): Harness | undefined {
 
 /**
  * The agent apps among a process and those above it, the nearest first. `look` says what a
- * process is. The walk ends at the top, at a process that cannot be looked at, at one already
- * seen, or after `most` steps, whichever comes first.
+ * process is. The walk ends at the top, at a process that cannot be looked at, at a runtime
+ * whose joined words leave its script unknown, at one already seen, or after `most` steps,
+ * whichever comes first.
  */
 export function appsFrom(pid: number, look: (pid: number) => Proc | undefined, most = 40): Harness[] {
   const found: Harness[] = []
@@ -104,6 +107,8 @@ export function appsFrom(pid: number, look: (pid: number) => Proc | undefined, m
     seen.add(pid)
     const proc = look(pid)
     if (!proc) break
+    // Joined words can hide an inner app's script path, even behind a prefix shaped like a launcher.
+    if (proc.unknownScript) break
     const app = agentApp(proc)
     if (app && !found.includes(app)) found.push(app)
     pid = proc.parent
@@ -156,13 +161,20 @@ export function psTable(text: string): Map<number, Proc> {
   }
   return table
 }
+const scriptFile = (file: string): boolean => {
+  try {
+    return statSync(file).isFile()
+  } catch {
+    return false
+  }
+}
 /**
  * Adds, to processes read by `psTable`, the words after the program, from what
  * `ps -o pid= -o args=` printed. There the words of a command line come run together, so the
  * program is taken off the front as it is already known, and only the rest is split. A script
- * in a folder with a space in its name is then read as two words, and its runtime goes
- * unrecognised. It is taken for an app only where the words before the space are themselves an
- * app's launcher, as in a folder called `bin/pi tools`.
+ * in a folder with a space in its name is then read as two words. Where its runtime cannot be
+ * identified, or a launcher-shaped prefix has a possible path continuation, that is kept with
+ * the process so the walk cannot take an outer app for the one that ran the command.
  */
 export function psWords(table: Map<number, Proc>, text: string): void {
   for (const line of text.split('\n')) {
@@ -171,6 +183,17 @@ export function psWords(table: Map<number, Proc>, text: string): void {
     const program = proc?.argv[0]
     if (!m || !proc || !program || !m[2]!.startsWith(program)) continue
     proc.argv = [program, ...m[2]!.slice(program.length).split(/\s+/).filter(Boolean).slice(0, 15)]
+    const script = scriptOf(proc.argv)
+    const after = script === undefined ? [] : proc.argv.slice(proc.argv.indexOf(script) + 1)
+    // A path argument does not make an existing launcher uncertain. A longer file name
+    // containing spaces still can; where neither file can be checked, keep the uncertainty.
+    const continuedPath =
+      script !== undefined &&
+      /(?:^|\/)\.?bin\/[^/]+$/.test(script) &&
+      after.some((word) => !word.startsWith('-') && word.includes('/')) &&
+      (!scriptFile(script) || after.some((_, i) => scriptFile([script, ...after.slice(0, i + 1)].join(' '))))
+    if (RUNTIME.test(named(program)) && (!agentApp(proc) || continuedPath)) proc.unknownScript = true
+    else delete proc.unknownScript
   }
 }
 
