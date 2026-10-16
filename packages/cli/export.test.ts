@@ -198,7 +198,14 @@ describe('streamed record downloads', () => {
     const reader = response.body!.getReader()
     const first = await reader.read()
     revoked = true
-    await expect(reader.read()).rejects.toThrow()
+    // Await the socket-driven rejection before asserting. Bun's promise matchers can
+    // re-enter its socket event loop and crash on macOS and Windows.
+    const error = await reader.read().then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(error).toBeInstanceOf(Error)
+    expect(error).toMatchObject({ status: 409 })
     expect(new TextDecoder().decode(first.value)).not.toContain('"complete"')
   })
 
