@@ -1488,6 +1488,25 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
     expect(readFileSync(path.join(m.it, 'backend', 'notes.txt'), 'utf8')).toBe('mine')
   })
 
+  test.skipIf(process.platform !== 'linux')('`it uninstall` validates the program lock before changing its service', async () => {
+    const m = machine(true, true)
+    const unit = path.join(m.home, '.config', 'systemd', 'user', 'it.service')
+    mkdirSync(path.dirname(unit), { recursive: true })
+    const definition = `[Service]\nEnvironment="IT_HOME=${m.it}"\nExecStart=${m.it}/bin/it serve --log "${m.it}/logs/it.log"\n`
+    writeFileSync(unit, definition)
+    writeFileSync(path.join(m.bin, 'systemctl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    mkdirSync(path.join(m.it, 'bin'))
+    const installed = path.join(m.it, 'bin', 'it')
+    writeFileSync(installed, 'installed program')
+    writeFileSync(`${installed}.upgrade.lock`, 'mine')
+    const refused = await run(m, ['uninstall', '--yes'])
+    expect(refused.err).toContain('not a recognised lock record')
+    expect(readFileSync(unit, 'utf8')).toBe(definition)
+    expect(readFileSync(installed, 'utf8')).toBe('installed program')
+    expect(readFileSync(`${installed}.upgrade.lock`, 'utf8')).toBe('mine')
+    expect(existsSync(path.join(m.it, INSTALLATION_FILE))).toBe(true)
+  })
+
   test('`it uninstall` keeps add-ons intact when a manually started service has not stopped', async () => {
     const m = machine(true)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {

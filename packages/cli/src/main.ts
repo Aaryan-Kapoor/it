@@ -1374,40 +1374,40 @@ async function uninstall(a: Args) {
   const since = usage.sinceBegun()
   if (since !== undefined) await usage.sendNow('installation.removed', { age: usage.ageBand(since) })
   const left: string[] = []
-  // First of all the background service, since stopping it may be refused: where it
-  // could not be stopped, nothing else is taken away, so that It is still whole and this can
-  // be run again. With the program and its folder gone and the service left, there would be
-  // nothing left to run.
-  // The one service a machine has belongs to the It folder its definition names. One that runs
-  // It from another folder is another It's, and is left as it is.
-  if (service.definedFor() !== 'another folder') {
-    const was = service.definedFor() === 'this folder'
-    try {
-      service.uninstall()
-      if (was) say('The background service is stopped, and no longer starts by itself.')
-    } catch (err) {
-      throw new Problem(
-        `It was not taken off this machine: ${err instanceof Error && err.message.trim() ? err.message.replace(/\.$/, '') : 'the background service could not be stopped or removed'}.`,
-        'error',
-        'Nothing else was changed, and It is as it was. Run `it uninstall` again once the service can be stopped.',
-      )
-    }
-  }
-  // 2. An `it serve` someone started by hand in this folder
-  service.askToStop(folder, 30_000)
-  if (service.runningFor(folder))
-    throw new Problem(
-      'It is still running, and no data was removed.',
-      'still_running',
-      'End the `it serve` you started in its terminal, then run `it uninstall` again.',
-    )
   const program = path.join(folder, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
   let kept = false
   const heard: string[] = []
   let removing = false
-  try {
-    await withInstallationLock(real, () =>
-      nothingLeft(
+  await withInstallationLock(real, async () => {
+    // First of all the background service, since stopping it may be refused: where it
+    // could not be stopped, nothing else is taken away, so that It is still whole and this can
+    // be run again. With the program and its folder gone and the service left, there would be
+    // nothing left to run.
+    // The one service a machine has belongs to the It folder its definition names. One that runs
+    // It from another folder is another It's, and is left as it is.
+    if (service.definedFor() !== 'another folder') {
+      const was = service.definedFor() === 'this folder'
+      try {
+        service.uninstall()
+        if (was) say('The background service is stopped, and no longer starts by itself.')
+      } catch (err) {
+        throw new Problem(
+          `It was not taken off this machine: ${err instanceof Error && err.message.trim() ? err.message.replace(/\.$/, '') : 'the background service could not be stopped or removed'}.`,
+          'error',
+          'Nothing else was changed, and It is as it was. Run `it uninstall` again once the service can be stopped.',
+        )
+      }
+    }
+    // 2. An `it serve` someone started by hand in this folder
+    service.askToStop(folder, 30_000)
+    if (service.runningFor(folder))
+      throw new Problem(
+        'It is still running, and no data was removed.',
+        'still_running',
+        'End the `it serve` you started in its terminal, then run `it uninstall` again.',
+      )
+    try {
+      await nothingLeft(
         (line) => heard.push(line),
         async () => {
           removing = true
@@ -1461,16 +1461,16 @@ async function uninstall(a: Args) {
             left.push(`${folder} could not be fully cleaned (${why(err)}). Inspect the remaining files before removing them yourself.`)
           }
         },
-      ),
-    )
-  } catch (err) {
-    if (removing) throw err
-    throw new Problem(
-      `It could not make sure that no backend program is left running on this folder’s database: ${err instanceof Problem ? err.message : why(err)}.`,
-      'still_running',
-      'The folder and add-ons were kept. Resolve the running program or unreadable settings, then run `it uninstall` again.',
-    )
-  }
+      )
+    } catch (err) {
+      if (removing) throw err
+      throw new Problem(
+        `It could not make sure that no backend program is left running on this folder’s database: ${err instanceof Problem ? err.message : why(err)}.`,
+        'still_running',
+        'The folder and add-ons were kept. Resolve the running program or unreadable settings, then run `it uninstall` again.',
+      )
+    }
+  })
   // The program and shutdown locks are released before the last empty directories are removed.
   try {
     const retained = finishInstallationRemoval(real)
