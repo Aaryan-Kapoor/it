@@ -1,3 +1,4 @@
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import net from 'node:net'
 import { chromium, firefox } from 'playwright'
@@ -45,6 +46,55 @@ const link = async () => {
   const response = await prepare()
   expect(response.status).toBe(200)
   return (await response.json()).download as string
+}
+
+const underBun = 'Bun' in globalThis
+const hasBun = underBun || spawnSync('bun', ['--version'], { stdio: 'ignore' }).status === 0
+async function browserDoor(runtime: 'Node' | 'Bun') {
+  const parts = {
+    site: { 'index.html': { type: 'text/html', bytes: Buffer.from('<!doctype html><title>Download test</title>').toString('base64') } },
+  }
+  if (runtime === 'Node') return startDoor(config, { site: upstream, api: upstream } as never, () => {}, { ...parts, content })
+  const child = spawn(
+    'bun',
+    [
+      '--eval',
+      `import { startDoor } from ${JSON.stringify(new URL('./src/serve/door.ts', import.meta.url).href)};
+      const door = await startDoor(${JSON.stringify(config)}, ${JSON.stringify({ site: upstream, api: upstream })}, () => {}, {
+        ...${JSON.stringify(parts)}, content: { close: async () => {} }
+      });
+      const stop = () => void door.stop().then(() => process.exit(0), () => process.exit(1));
+      process.stdin.on('end', stop).on('close', stop).resume();
+      process.on('SIGTERM', stop);
+      process.stdout.write('ready\\n');`,
+    ],
+    { stdio: ['pipe', 'pipe', 'pipe'] },
+  )
+  let output = ''
+  let error = ''
+  child.stdout.on('data', (bytes: Buffer) => {
+    output += bytes.toString()
+  })
+  child.stderr.on('data', (bytes: Buffer) => {
+    error = (error + bytes.toString()).slice(-2000)
+  })
+  child.on('error', (failure) => {
+    error = failure.message
+  })
+  const exited = new Promise<void>((resolve) => child.once('close', () => resolve()))
+  const stop = async () => {
+    child.stdin.end()
+    const timer = setTimeout(() => child.kill('SIGKILL'), 5_000)
+    await exited.finally(() => clearTimeout(timer))
+  }
+  try {
+    await until(() => output.includes('ready\n') || Boolean(error) || child.exitCode !== null)
+    if (!output.includes('ready\n')) throw new Error(`The Bun door did not start: ${error}`)
+  } catch (error) {
+    await stop()
+    throw error
+  }
+  return { stop }
 }
 
 beforeEach(async () => {
@@ -224,16 +274,21 @@ describe('streamed record downloads', () => {
     expect((await prepare()).status).toBe(200)
   })
 
-  for (const browserType of [chromium, firefox]) {
-    test.skipIf(!existsSync(browserType.executablePath()))(
-      `${browserType.name()} downloads over HTTP before the last batch, cancels a stalled read, and never completes a broken stream`,
+  // Playwright runs under Node, including when the door runs under Bun. Its browser
+  // driver stalls under Bun on Windows; a child door still exercises Bun's HTTP path.
+  for (const [runtime, browserType] of [
+    ['Node', chromium],
+    ['Node', firefox],
+    ['Bun', chromium],
+    ['Bun', firefox],
+  ] as const) {
+    test.skipIf(underBun || (runtime === 'Bun' && !hasBun) || !existsSync(browserType.executablePath()))(
+      `${browserType.name()} downloads through ${runtime} before the last batch, cancels a stalled read, and never completes a broken stream`,
       async () => {
-        const running = await startDoor(config, { site: upstream, api: upstream } as never, () => {}, {
-          content,
-          site: { 'index.html': { type: 'text/html', bytes: Buffer.from('<!doctype html><title>Download test</title>').toString('base64') } },
-        })
-        const browser = await browserType.launch({ headless: true })
+        const running = await browserDoor(runtime)
+        let browser: Awaited<ReturnType<typeof browserType.launch>> | undefined
         try {
+          browser = await browserType.launch({ headless: true })
           const context = await browser.newContext({ acceptDownloads: true })
           await context.addCookies([{ name: 'it_test', value: 'owner', url: origin }])
           const page = await context.newPage()
@@ -280,11 +335,11 @@ describe('streamed record downloads', () => {
           expect(outcome).not.toBeNull()
           if (outcome === 'pending') await failed.cancel()
         } finally {
-          await browser.close()
+          await browser?.close()
           await running.stop()
         }
       },
-      30_000,
+      120_000,
     )
   }
 })
