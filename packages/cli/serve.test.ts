@@ -1175,6 +1175,28 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     expect(existsSync(path.join(folder, 'backend'))).toBe(false)
   })
 
+  test('a supervised start stops for broken settings, then starts after they are repaired and clears its failure', async () => {
+    expect(await well(run(['setup', '--none', '--no-service']))).toBe(0)
+    const settings = path.join(folder, 'service.json')
+    const before = readFileSync(settings)
+    writeFileSync(settings, '{not settings')
+    const args = ['serve', '--supervised', '--log', path.join(folder, 'service.log')]
+    expect(await well(run(args))).toBe(0)
+    expect(kept('startup.json')).toMatchObject({ failures: 1, code: 'settings', retryAt: null })
+    expect(log()).toContain('automatic startup stopped')
+    const reported = run(['service', 'status', '--json'])
+    expect(await well(reported)).toBe(0)
+    expect(JSON.parse(reported.out())).toMatchObject({ running: false, startup: { paused: true, code: 'settings' } })
+    writeFileSync(settings, before)
+    const recovered = run(args)
+    expect(await until(health, 60_000)).toBe(true)
+    expect(await until(() => log().includes('service started'), 30_000)).toBe(true)
+    expect(existsSync(path.join(folder, 'startup.json'))).toBe(false)
+    recovered.child.kill('SIGTERM')
+    expect(await recovered.ended).toBe(0)
+    expect(existsSync(path.join(folder, 'backend', 'lock'))).toBe(false)
+  }, 120_000)
+
   test('the first `it setup` makes the settings and enrols this machine, and with `--no-service` runs the backend only for as long as that takes', async () => {
     const ran = run(['setup', '--yes', '--no-service', '--name', 'the desk'])
     expect(await well(ran)).toBe(0)
@@ -1436,7 +1458,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     const commands = mkdtempSync(path.join(scratch, 'manager-'))
     symlinkSync(process.execPath, path.join(commands, 'node'))
     // It notes each thing it was asked, so that what a later setup asked of the system can be read
-    const manager = `#!/bin/sh\necho "$*" >> "$IT_HOME/system-was-asked"\ncase " $* " in\n*" restart "*|*" bootstrap "*) "$IT_TEST_NODE" "$IT_TEST_IT" serve --log "$IT_HOME/logs/it.log" >/dev/null 2>&1 & ;;\n*" is-active "*) echo active ;;\n*" is-enabled "*) echo enabled ;;\nesac\nexit 0\n`
+    const manager = `#!/bin/sh\necho "$*" >> "$IT_HOME/system-was-asked"\ncase " $* " in\n*" bootout "*) printf off > "$0.state" ;;\n*" print "*) state=on; [ ! -f "$0.state" ] || read -r state < "$0.state"; [ "$state" != off ] || exit 113; echo "state = running" ;;\n*" restart "*|*" bootstrap "*) printf on > "$0.state"; "$IT_TEST_NODE" "$IT_TEST_IT" serve --supervised --log "$IT_HOME/logs/it.log" >/dev/null 2>&1 & ;;\n*" is-active "*) echo active ;;\n*" is-enabled "*) echo enabled ;;\nesac\nexit 0\n`
     for (const name of ['systemctl', 'launchctl', 'loginctl']) writeFileSync(path.join(commands, name), manager, { mode: 0o755 })
     // Where a backend program would be fetched from, were this shell's not there: an address on this machine that nothing is asked at
     const releases = `http://127.0.0.1:${Number(process.env.IT_PORT) + 30}/releases`
