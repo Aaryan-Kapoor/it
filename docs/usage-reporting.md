@@ -14,9 +14,11 @@ Any of these stops events from being recorded and sent, and discards whatever wa
 - Set `IT_TELEMETRY_ENABLED=false` where an `it` command will run. The values `0`, `off`, `no`, `n` and `disabled` do the same, in capitals or not, and with or without spaces or quotes around them.
 - Set `DO_NOT_TRACK=1` where an `it` command will run. Any other value does the same, except an empty one and `0`, `false`, `no` and `off`.
 
+Reporting is also off wherever `CI` is set, which is how a machine that builds and tests software marks itself. An It installed there is tried and taken away again, and is nobody's installation. `CI` is read the way `DO_NOT_TRACK` is, and it does not turn reporting off where `IT_TELEMETRY_URL` names an address to send to, which is how a test of reporting runs on such a machine. Everything said below of the two variables holds for it too.
+
 ### Off is one file
 
-Reporting is off when something named `telemetry-off` exists in It's folder, which is `~/.it` unless `IT_HOME` names another. `it telemetry off` makes that file, and `it telemetry on` removes it. The file holds one word that says what turned reporting off: `command`, `IT_TELEMETRY_ENABLED` or `DO_NOT_TRACK`. Every `it` command looks for it before it records anything, and so does the background service, on every system. Nothing that It writes anywhere else can turn reporting back on, and making the file by hand turns it off as well.
+Reporting is off when something named `telemetry-off` exists in It's folder, which is `~/.it` unless `IT_HOME` names another. `it telemetry off` makes that file, and `it telemetry on` removes it. The file holds one word that says what turned reporting off: `command`, `IT_TELEMETRY_ENABLED`, `DO_NOT_TRACK` or `CI`. Every `it` command looks for it before it records anything, and so does the background service, on every system. Nothing that It writes anywhere else can turn reporting back on, and making the file by hand turns it off as well.
 
 ### A variable wins
 

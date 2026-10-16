@@ -105,6 +105,8 @@ beforeEach(async () => {
   process.env.IT_HOME = home
   delete process.env.IT_TELEMETRY_ENABLED
   delete process.env.DO_NOT_TRACK
+  // Set where CI runs these tests, and nothing to a test that is not about it
+  delete process.env.CI
   for (const name of CONVERSATION) delete process.env[name]
   process.env.IT_TELEMETRY_URL = 'http://127.0.0.1:9/usage'
   vi.resetModules()
@@ -115,6 +117,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true })
   delete process.env.IT_TELEMETRY_ENABLED
   delete process.env.DO_NOT_TRACK
+  delete process.env.CI
   for (const name of CONVERSATION) delete process.env[name]
 })
 
@@ -340,6 +343,46 @@ describe('turning it off', () => {
     delete process.env.DO_NOT_TRACK
     expect((await another()).status()).toMatchObject({ enabled: false, because: 'DO_NOT_TRACK' })
     expect(readFileSync(offFile(), 'utf8')).toBe('DO_NOT_TRACK')
+  })
+  test('on a machine where CI is set, an It is never counted, and the service that never sees CI stays off too', async () => {
+    // Where nothing names an address to report to, as on a build server that installs It and takes it away again
+    delete process.env.IT_TELEMETRY_URL
+    process.env.CI = 'true'
+    usage.heed()
+    usage.begin()
+    expect(usage.counting()).toBe(false)
+    expect(existsSync(settingsFile()) ? kept().installation : undefined).toBeUndefined()
+    expect(usage.status()).toMatchObject({ enabled: false, because: 'CI' })
+    expect(readFileSync(offFile(), 'utf8')).toBe('CI')
+    published()
+    expect(existsSync(spool())).toBe(false)
+    // The service, started by the system with no such variable, goes by the file
+    delete process.env.CI
+    const service = await another()
+    service.begin()
+    expect(service.status()).toMatchObject({ enabled: false, because: 'CI' })
+    const posts: string[] = []
+    const sender = noting(posts, () => 0, service)
+    service.record('service.started', service.thisProgram())
+    await sender.tick()
+    sender.stop()
+    expect(posts).toEqual([])
+  })
+  test.each(['', '0', 'false', 'no', 'off'])('CI set to %j turns nothing off', (value) => {
+    delete process.env.IT_TELEMETRY_URL
+    process.env.CI = value
+    usage.heed()
+    usage.begin()
+    expect(usage.counting()).toBe(true)
+    expect(existsSync(offFile())).toBe(false)
+  })
+  test('a test of reporting that runs where CI is set says where to send, and is counted there', () => {
+    process.env.CI = 'true'
+    usage.heed()
+    usage.begin()
+    expect(usage.counting()).toBe(true)
+    expect(usage.status()).toMatchObject({ enabled: true, because: 'the default', sendsTo: 'http://127.0.0.1:9/usage' })
+    expect(existsSync(offFile())).toBe(false)
   })
   test.each([
     ['IT_TELEMETRY_ENABLED', 'false'],
