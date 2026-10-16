@@ -36,6 +36,14 @@ Once `it telemetry off` has returned, no new request begins. A request that had 
 
 Turning reporting off also forgets the installation's id, and turning it on always makes a new one, even when reporting was on already. Every event remembers which id it was recorded under, and an event recorded under any id but the current one is never sent. So nothing recorded before you turned reporting off is sent after you turn it on again.
 
+### When a sender stops unexpectedly
+
+A sender leaves a short-lived record in `telemetry-sending` while it decides whether to send. If it exits before removing that record, the next sender recovers it once the system confirms that its process has ended. A live process, or one that cannot be checked, keeps its record regardless of the file's age.
+
+An empty record carries no owner. Once it is more than ten minutes old, the next sender recovers it and sends the waiting counts under the same reporting identity. A younger empty record is left alone.
+
+A nonempty record that cannot be read still stops reporting until you clear it. If you want reporting to resume, run `it telemetry off` and then `it telemetry on`. This discards waiting counts and starts a new reporting identity.
+
 ## What is sent
 
 Each event is a name, the hour it happened in, an id of its own, and the properties in this table. Every property is one of the listed values: there is no free text anywhere in an event, and the program refuses to send an event that holds anything else. Where a number is counted it is sent as a band, never as the number.
@@ -65,7 +73,7 @@ The agent apps are named as `claude-code`, `codex`, `openclaw`, `hermes`, `openc
 | `service.failed` | The background service ends because something went wrong | `what`: one of `backend_program`, `backend_silent`, `backend_exited`, `port_taken`, `lock_lost`, `functions` or `door`, and `other` for anything else |
 | `installation.removed` | `it uninstall` takes It off the machine. It is sent by that command itself, before anything is removed | `age`: how long the installation had been counting, in the bands of `installation.seen` |
 
-Five of these happen between a display and the backend, where the program that sends is not: `page.shown`, `screen.connected`, `display.paired`, `answer.sent` and `notification.ended`. The backend notes each as it happens, as a name and these same properties and nothing else, and only while reporting is on. The background service takes the notes from it a few times a minute and sends them like any other event. A note nobody came for is removed after a week.
+Five of these happen between a display and the backend, where the program that sends is not: `page.shown`, `screen.connected`, `display.paired`, `answer.sent` and `notification.ended`. The backend notes each as it happens, as a name and these same properties and nothing else, and only while reporting is on. The background service takes the notes from it a few times a minute and sends them like any other event. A note nobody came for is removed after a week. A note carries no id, and is sent under the id the installation has when the service takes it. So the backend removes every note it holds when the service tells it that reporting is off, which the service does within a second or two of finding it off. Notes waiting for deletion cannot be collected after that, even if reporting is already on again. That leaves one case in which something noted before you turned reporting off is sent after you turn it on again: a note made in the seconds before, where reporting was turned off and on again before the service had told the backend, or while the service was not running.
 
 What a page's files hold is looked at once, on your machine, to answer one question: whether they call It to send something back. Only the answer, `true` or `false`, is sent.
 

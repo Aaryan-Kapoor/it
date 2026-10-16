@@ -29,7 +29,7 @@ import type { Harness } from '@it/protocol'
 import { build } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
-import { CODEX_SHUT_SAID } from './src/codex-settings'
+import { CODEX_RULE_FILE, CODEX_SHUT_SAID } from './src/codex-settings'
 import { shutIn, VERSION } from './src/lib'
 import { startOf } from './src/serve/backend'
 import {
@@ -1487,6 +1487,28 @@ describe('what the connector writes down about installing and removing', () => {
 })
 
 describe('what a person is told about an app', () => {
+  test('setup follows a changed protocol minimum for the queue', async () => {
+    vi.doMock('@it/protocol', async () => ({
+      ...(await vi.importActual<typeof import('@it/protocol')>('@it/protocol')),
+      CODEX_MIN_VERSION: '0.161.0',
+    }))
+    vi.resetModules()
+    try {
+      const changed = await import('./src/setup')
+      expect((await changed.detectAll()).find((h) => h.id === 'codex')).toMatchObject({
+        version: '0.160.0',
+        addon: 'too_old',
+        detail: 'It needs Codex 0.161.0 or newer, and this one is 0.160.0. Update Codex, then run `it setup` again.',
+      })
+      VERSIONS.codex = 'codex-cli 0.161.0'
+      expect((await changed.detectAll()).find((h) => h.id === 'codex')).toMatchObject({ version: '0.161.0', addon: 'not_connected' })
+    } finally {
+      VERSIONS.codex = 'codex-cli 0.160.0'
+      vi.doUnmock('@it/protocol')
+      vi.resetModules()
+    }
+  })
+
   test('that is too old says which version is needed, which was found, and what to do', async () => {
     VERSIONS.claude = '2.1.100 (Claude Code)'
     try {
@@ -1648,7 +1670,7 @@ describe('whether Codex, as it is set, lets `it` reach It', () => {
     expect(CODEX_RULE).toBe('prefix_rule(pattern=["it"], decision="allow")')
     for (const said of [CODEX_SHUT, CODEX_SHUT_SAID]) {
       expect(said).toContain(CODEX_RULE)
-      expect(said).toContain('~/.codex/rules/it.rules')
+      expect(said).toContain(`\`${CODEX_RULE_FILE}\``)
       expect(said).toContain('leave')
     }
     expect(CODEX_SHUT).toContain(`\n    ${CODEX_RULE}\n`)
@@ -1661,5 +1683,35 @@ describe('whether Codex, as it is set, lets `it` reach It', () => {
     // What it is to pass on is the last thing it is told, so that nothing meant for the agent alone is passed on with it
     expect(hint.endsWith(CODEX_SHUT_SAID)).toBe(true)
     expect(shutIn({}).hint).not.toContain('rules')
+  })
+  test('the file a person is told to keep the rule in is in the folder Codex is using, which is where the rule is looked for', async () => {
+    const custom = mkdtempSync(path.join(os.tmpdir(), 'it-codex-home-'))
+    const was = process.env.CODEX_HOME
+    try {
+      // A Codex that was told to keep its settings in another folder than its usual one
+      process.env.CODEX_HOME = custom
+      vi.resetModules()
+      const there = await import('./src/codex-settings')
+      const file = path.join(custom, 'rules', 'it.rules')
+      expect(there.CODEX_RULE_FILE).toBe(file)
+      for (const said of [there.CODEX_SHUT, there.CODEX_SHUT_SAID]) {
+        expect(said).toContain(`\`${file}\``)
+        expect(said).not.toContain('~/.codex')
+      }
+      // And a rule kept in the file that was said is one that is found
+      expect(there.codexRuleLetsItOut()).toBe(false)
+      mkdirSync(path.dirname(file))
+      writeFileSync(file, `${there.CODEX_RULE}\n`)
+      expect(there.codexRuleLetsItOut()).toBe(true)
+      // With nothing said of where Codex keeps its settings, it is the usual folder, written as a person writes it
+      delete process.env.CODEX_HOME
+      vi.resetModules()
+      expect((await import('./src/codex-settings')).CODEX_RULE_FILE).toBe('~/.codex/rules/it.rules')
+    } finally {
+      if (was === undefined) delete process.env.CODEX_HOME
+      else process.env.CODEX_HOME = was
+      vi.resetModules()
+      rmSync(custom, { recursive: true, force: true })
+    }
   })
 })

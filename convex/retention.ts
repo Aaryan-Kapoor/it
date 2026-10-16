@@ -57,7 +57,12 @@ async function removeHangers(ctx: MutationCtx, artifactId: Id<'artifacts'>): Pro
     .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
     .take(HEAVY)
   for (const x of actions) await ctx.db.delete(x._id)
-  const more = versions.length === VERSIONS || actions.length === HEAVY
+  const notifications = await ctx.db
+    .query('notifications')
+    .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
+    .take(LIGHT)
+  for (const n of notifications) await ctx.db.delete(n._id)
+  const more = versions.length === VERSIONS || actions.length === HEAVY || notifications.length === LIGHT
   if (!more) await forgetCounts(ctx, artifactId)
   return more
 }

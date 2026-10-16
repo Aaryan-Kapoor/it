@@ -30,6 +30,7 @@ import { loose, nested, parse } from './src/args'
 import { codexCommand, codexQueue, local, mac } from './src/connector'
 import {
   backend,
+  changeWhole,
   clashed,
   currentSession,
   forgetMachine,
@@ -43,6 +44,7 @@ import {
   siteAddress,
   textOf,
   throughDoor,
+  wasAt,
   windowsPathCommand,
   windowsPathRemoval,
   withoutTables,
@@ -564,6 +566,105 @@ describe('gathering a folder to publish', () => {
     }
   })
 
+  test('a file that has grown since it was listed is counted by what was read of it, and is read no further than is left of what a page may hold', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'it-grown-'))
+    try {
+      // Listed when it held one byte, and two megabytes by the time it is opened
+      const grown = path.join(root, 'grown.bin')
+      writeFileSync(grown, Buffer.alloc(2 * 1024 * 1024))
+      const small = { bytes: 0 }
+      expect(read(grown, 'grown.bin', 1, small).data.length).toBe(2 * 1024 * 1024)
+      expect(small.bytes).toBe(2 * 1024 * 1024)
+      // With ten bytes left of what a page may hold, it is refused, having been read no further than that
+      const real = { readSync: fs.readSync, readFileSync: fs.readFileSync }
+      let taken = 0
+      fs.readSync = ((...args: Parameters<typeof fs.readSync>) => {
+        const n = real.readSync(...args)
+        taken += n
+        return n
+      }) as typeof fs.readSync
+      fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+        const all = real.readFileSync(...args)
+        if (typeof args[0] === 'number') taken += all.length
+        return all
+      }) as typeof fs.readFileSync
+      syncBuiltinESMExports()
+      try {
+        const nearlyFull = { bytes: 100 * 1024 * 1024 - 10 }
+        expect(() => read(grown, 'grown.bin', 1, nearlyFull)).toThrow(/at most 100 MB/)
+        expect(taken).toBeLessThanOrEqual(11)
+      } finally {
+        Object.assign(fs, real)
+        syncBuiltinESMExports()
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a file that grows after it was opened and looked at is read no further than a file may be large', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'it-growing-'))
+    const growing = path.join(root, 'growing.bin')
+    writeFileSync(growing, 'small')
+    const real = { fstatSync: fs.fstatSync, readSync: fs.readSync, readFileSync: fs.readFileSync }
+    let taken = 0
+    // Just after the open file was looked at and found small, whatever is writing it makes it forty megabytes
+    fs.fstatSync = ((...args: Parameters<typeof fs.fstatSync>) => {
+      const stat = real.fstatSync(...args)
+      const fd = openSync(growing, 'r+')
+      ftruncateSync(fd, 40 * 1024 * 1024)
+      closeSync(fd)
+      return stat
+    }) as typeof fs.fstatSync
+    fs.readSync = ((...args: Parameters<typeof fs.readSync>) => {
+      const n = real.readSync(...args)
+      taken += n
+      return n
+    }) as typeof fs.readSync
+    fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+      const all = real.readFileSync(...args)
+      if (typeof args[0] === 'number') taken += all.length
+      return all
+    }) as typeof fs.readFileSync
+    syncBuiltinESMExports()
+    try {
+      expect(() => read(growing, 'growing.bin', 5, { bytes: 0 })).toThrow(/larger than 25 MB/)
+      expect(taken).toBeLessThanOrEqual(25 * 1024 * 1024 + 1)
+    } finally {
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test.skipIf(process.platform === 'win32')(
+    'a file swapped for a pipe after it was listed is refused, and does not hold the command until something writes to the pipe',
+    () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), 'it-pipe-'))
+      const file = path.join(root, 'app.js')
+      writeFileSync(file, 'x')
+      const real = { openSync: fs.openSync }
+      // Just as the file is about to be opened, after it was listed as an ordinary file, it is made a pipe that nothing writes to
+      fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+        if (args[0] === file) {
+          // Opened as it was before, this would never come back: said here, where a test can still say anything
+          if (typeof args[1] !== 'number' || !(args[1] & fs.constants.O_NONBLOCK)) throw new Error('opened in a way that waits for a pipe to be written to')
+          rmSync(file)
+          execFileSync('mkfifo', [file])
+        }
+        return real.openSync(...args)
+      }) as typeof fs.openSync
+      syncBuiltinESMExports()
+      try {
+        expect(() => read(file, 'app.js', 1, { bytes: 0 })).toThrow('app.js is not an ordinary file.')
+      } finally {
+        Object.assign(fs, real)
+        syncBuiltinESMExports()
+        rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
+
   test('a file that is too large is refused before it is read', () => {
     const big = path.join(dir, 'big.bin')
     // A sparse file: its size is what counts, and nothing this large is ever loaded
@@ -636,6 +737,46 @@ describe('a machine that leaves', () => {
       forgetMachine()
       expect(readdirSync(folder)).toEqual([])
     } finally {
+      if (before === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps its identity where it could not write down which machine it was at the It it joined, and says so', () => {
+    const before = process.env.IT_HOME
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-left-'))
+    process.env.IT_HOME = folder
+    const real = { openSync: fs.openSync }
+    try {
+      const joined = { id: 'machine-7', name: 'laptop', key: { d: 'private' }, at: 'http://192.168.1.20:4700' }
+      writeFileSync(path.join(folder, 'machine.json'), JSON.stringify(joined))
+      writeFileSync(path.join(folder, 'token.json'), '{}')
+      // A disk with no room left for the note
+      fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+        if (String(args[0]).includes('was.json')) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+        return real.openSync(...args)
+      }) as typeof fs.openSync
+      syncBuiltinESMExports()
+      let said: unknown
+      try {
+        forgetMachine()
+      } catch (err) {
+        said = err
+      }
+      expect(said).toBeInstanceOf(Problem)
+      expect((said as Problem).message).toContain('could not be written down')
+      expect((said as Problem).hint).toContain('`it logout` again')
+      expect(readdirSync(folder).sort()).toEqual(['machine.json', 'token.json'])
+      // Once it can be written, the machine leaves, and what it was there is kept for joining again
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
+      forgetMachine()
+      expect(readdirSync(folder)).toEqual(['was.json'])
+      expect(wasAt(joined.at)).toBe('machine-7')
+    } finally {
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
       if (before === undefined) delete process.env.IT_HOME
       else process.env.IT_HOME = before
       rmSync(folder, { recursive: true, force: true })
@@ -751,6 +892,43 @@ describe('a file It keeps for this person alone', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ id: 'machine-1', key: { d: 'the key it had' } })
     expect(readdirSync(path.dirname(file))).toEqual(['machine.json'])
   })
+
+  test.skipIf(process.platform === 'win32')(
+    'is not said to be kept when the disk fails as its folder is flushed, and is when the system only has no way to flush a folder',
+    () => {
+      const dir = path.join(folder, 'lasting')
+      const file = path.join(dir, 'machine.json')
+      writePrivate(file, { id: 'machine-1' })
+      /** Writes the file with the flushing of its folder ending as the system would end it. */
+      const flushedAs = (code: string): unknown => {
+        const real = { openSync: fs.openSync, fsyncSync: fs.fsyncSync }
+        const folders = new Set<number>()
+        fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+          const fd = real.openSync(...args)
+          if (args[0] === dir) folders.add(fd)
+          return fd
+        }) as typeof fs.openSync
+        fs.fsyncSync = (fd: number) => {
+          if (folders.has(fd)) throw Object.assign(new Error(`${code}: fsync`), { code })
+          real.fsyncSync(fd)
+        }
+        syncBuiltinESMExports()
+        try {
+          writePrivate(file, { id: 'machine-2' })
+          return undefined
+        } catch (err) {
+          return err
+        } finally {
+          Object.assign(fs, real)
+          syncBuiltinESMExports()
+        }
+      }
+      // The disk failing: whoever asked is told, and goes on with nothing that rests on the file
+      expect(flushedAs('EIO')).toMatchObject({ code: 'EIO' })
+      // A system or a disk that keeps the names in a folder in its own way says so in a few words, which is no failure
+      for (const code of ['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM']) expect([code, flushedAs(code)]).toEqual([code, undefined])
+    },
+  )
 })
 
 describe('which conversation a command is run in', () => {
@@ -997,6 +1175,36 @@ describe('the agent apps a command was started from', () => {
     // Only words that are themselves a launcher before the space are taken for an app
     psWords(table, '  701 node /opt/tools/bin/pi tools/run.js')
     expect(agentApp(table.get(701)!)).toBe('pi')
+  })
+
+  test('a runtime whose script cannot be read from the joined words of `ps` leaves the conversation unsettled, even when an outer app is known', () => {
+    const table = psTable([' 101 1 /opt/homebrew/bin/node', ' 102 101 /bin/zsh', ' 103 102 /opt/homebrew/bin/node', ' 104 103 /bin/sh'].join('\n'))
+    psWords(table, ['101 /opt/homebrew/bin/node /opt/homebrew/bin/claude', '103 /opt/homebrew/bin/node /Volumes/Work Drive/npm/bin/pi --print'].join('\n'))
+    const environment = { IT_HARNESS: 'claude-code', IT_SESSION: 'outer-claude', CLAUDE_CODE_SESSION_ID: 'outer-claude', PI_SESSION_ID: 'inner-pi' }
+    expect(sessionAsked(environment, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({
+      session: { harness: 'claude-code', id: 'outer-claude' },
+      unsettled: ['pi'],
+    })
+    expect(appsFrom(104, (pid) => table.get(pid))).toEqual([])
+    // With the script's actual boundary preserved, the inner app is known.
+    table.set(103, { parent: 102, argv: ['/opt/homebrew/bin/node', '/Volumes/Work Drive/npm/bin/pi', '--print'] })
+    expect(sessionAsked(environment, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({
+      session: { harness: 'pi', id: 'inner-pi' },
+      unsettled: [],
+    })
+  })
+
+  test('a launcher-shaped prefix of a joined script path leaves the conversation unsettled', () => {
+    const table = psTable(['101 1 /opt/node', '102 101 /bin/zsh', '103 102 /opt/node', '104 103 /bin/sh'].join('\n'))
+    psWords(table, '101 /opt/node /opt/bin/pi\n103 /opt/node /Volumes/bin/pi tools/node_modules/@anthropic-ai/claude-code/cli.js')
+    const env = { IT_HARNESS: 'claude-code', IT_SESSION: 'inner-claude', PI_SESSION_ID: 'outer-pi', CLAUDE_CODE_SESSION_ID: 'inner-claude' }
+    expect(sessionAsked(env, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({
+      session: { harness: 'claude-code', id: 'inner-claude' },
+      unsettled: ['pi'],
+    })
+    expect(appsFrom(104, (pid) => table.get(pid))).toEqual([])
+    table.set(103, { parent: 102, argv: ['/opt/node', '/Volumes/bin/pi tools/node_modules/@anthropic-ai/claude-code/cli.js'] })
+    expect(sessionAsked(env, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({ session: { harness: 'claude-code', id: 'inner-claude' }, unsettled: [] })
   })
 
   test.skipIf(process.platform === 'win32' || !existsSync('/bin/ps'))(
@@ -2012,6 +2220,177 @@ describe('what It wrote into another program’s TOML file', () => {
     expect(withoutTables(between.replaceAll('\n', '\r\n'), owned)).toBe(left.replaceAll('\n', '\r\n'))
     // Nothing of It's in it: not a byte is changed
     expect(withoutTables(`${theirs}# end`, owned)).toBe(`${theirs}# end`)
+  })
+})
+
+describe('a file that is not It’s alone, changed while another program may save it', () => {
+  const HOOKS = /^\[hooks\.state\."it-bridge@it:[^"]*"\]/
+  const without = (text: string) => withoutTables(text, (header) => HOOKS.test(header))
+  const BEFORE = 'model = "gpt-6"\n\n[hooks.state."it-bridge@it:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:aa"\n'
+  // What Codex saves when the person trusts a project and the hooks of another plugin, with It's table still in it
+  const SAVED = `${BEFORE}\n[projects."/work"]\ntrust_level = "trusted"\n\n[hooks.state."other@market:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:bb"\n`
+  /** Runs something with another program saving the file each time It has its own copy written and on the disk, which is while It is at work. */
+  function withASave(file: string, saves: () => string | undefined, run: () => void): void {
+    const real = { fsyncSync: fs.fsyncSync }
+    fs.fsyncSync = (fd: number) => {
+      real.fsyncSync(fd)
+      const text = saves()
+      if (text !== undefined) writeFileSync(file, text)
+    }
+    syncBuiltinESMExports()
+    try {
+      run()
+    } finally {
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
+    }
+  }
+
+  test('is changed from what it holds when it is replaced: what was saved while It was at work stays, and It’s change is made to that', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, 'config.toml')
+    try {
+      writeFileSync(file, BEFORE)
+      const saves = [SAVED]
+      withASave(
+        file,
+        () => saves.shift(),
+        () => expect(changeWhole(file, without)).toBe(true),
+      )
+      const after = readFileSync(file, 'utf8')
+      expect(after).toContain('[projects."/work"]\ntrust_level = "trusted"')
+      expect(after).toContain('[hooks.state."other@market:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:bb"')
+      expect(after).not.toContain('it-bridge@it')
+      expect(readdirSync(folder)).toEqual(['config.toml'])
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test.skipIf(process.platform === 'win32')('follows a profile symlink repointed while its replacement is being written', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-link-'))
+    const file = path.join(folder, 'profile')
+    const first = path.join(folder, 'first')
+    const second = path.join(folder, 'second')
+    try {
+      writeFileSync(first, BEFORE)
+      writeFileSync(second, SAVED)
+      symlinkSync(first, file)
+      let moved = false
+      withASave(
+        file,
+        () => {
+          if (!moved) {
+            moved = true
+            rmSync(file)
+            symlinkSync(second, file)
+          }
+          return undefined
+        },
+        () => expect(changeWhole(file, without)).toBe(true),
+      )
+      expect(readFileSync(first, 'utf8')).toBe(BEFORE)
+      expect(readFileSync(second, 'utf8')).toBe(without(SAVED))
+      expect(realpathSync(file)).toBe(realpathSync(second))
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('reads the original and its final comparison once each when no other program saves it', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(realpathSync(folder), 'config.toml')
+    writeFileSync(file, BEFORE)
+    const read = vi.spyOn(fs, 'readFileSync')
+    syncBuiltinESMExports()
+    try {
+      expect(changeWhole(file, without)).toBe(true)
+      expect(read.mock.calls.filter(([name]) => name === file)).toHaveLength(2)
+    } finally {
+      read.mockRestore()
+      syncBuiltinESMExports()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps a same-size save made after the metadata check, before the final content comparison', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(realpathSync(folder), 'config.toml')
+    const stat = fs.statSync
+    const before = `${BEFORE}#${' '.repeat(SAVED.length - BEFORE.length - 2)}\n`
+    try {
+      for (const removing of [false, true]) {
+        writeFileSync(file, before)
+        let checked = 0
+        const check = vi.spyOn(fs, 'statSync').mockImplementation((name, options) => {
+          const seen = stat(name, options)
+          if (name === file && options?.bigint && ++checked === 2) writeFileSync(file, SAVED)
+          return seen
+        })
+        syncBuiltinESMExports()
+        expect(Buffer.byteLength(before)).toBe(Buffer.byteLength(SAVED))
+        expect(changeWhole(file, removing ? (text) => (text === before ? null : undefined) : without)).toBe(!removing)
+        expect(readFileSync(file, 'utf8')).toContain('[projects."/work"]')
+        check.mockRestore()
+        syncBuiltinESMExports()
+      }
+    } finally {
+      vi.restoreAllMocks()
+      syncBuiltinESMExports()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('is left as the last save made it where it is saved every time It is about to replace it, and that is said', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, 'config.toml')
+    try {
+      writeFileSync(file, BEFORE)
+      let saves = 0
+      withASave(
+        file,
+        () => `${SAVED}# saved ${++saves} times\n`,
+        () => expect(() => changeWhole(file, without)).toThrow(/was saved by another program each time/),
+      )
+      expect(readFileSync(file, 'utf8')).toBe(`${SAVED}# saved ${saves} times\n`)
+      expect(readdirSync(folder)).toEqual(['config.toml'])
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test.skipIf(process.platform === 'win32')('keeps a symlinked profile and its target when removing every installer line', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, '.profile')
+    const target = path.join(folder, 'dotfile')
+    try {
+      writeFileSync(target, '# It\nexport PATH=it:$PATH\n', { mode: 0o640 })
+      symlinkSync(target, file)
+      expect(changeWhole(file, () => null)).toBe(true)
+      expect(fs.lstatSync(file).isSymbolicLink()).toBe(true)
+      expect(readFileSync(target, 'utf8')).toBe('')
+      expect(statSync(target).mode & 0o777).toBe(0o640)
+      expect(changeWhole(file, () => null)).toBe(false)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('is not written where nothing is to change, and is taken away only where it still holds what it was read to hold', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, '.profile')
+    try {
+      writeFileSync(file, 'export EDITOR=vi\n')
+      const before = statSync(file, { bigint: true }).ino
+      expect(changeWhole(file, (text) => text)).toBe(false)
+      expect(changeWhole(file, () => undefined)).toBe(false)
+      expect(statSync(file, { bigint: true }).ino).toBe(before)
+      // Taken away, where the change says that nothing of it is left
+      expect(changeWhole(file, () => null)).toBe(true)
+      expect(existsSync(file)).toBe(false)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
   })
 })
 

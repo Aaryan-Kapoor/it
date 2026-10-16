@@ -24,7 +24,7 @@ export const get = query({
   },
 })
 
-async function write(
+export async function write(
   ctx: MutationCtx,
   userId: Id<'users'>,
   artifactId: Id<'artifacts'>,
@@ -55,18 +55,22 @@ async function write(
   const when = by === 'agent' ? { agentAt: Date.now() } : {}
   if (s) await ctx.db.patch(s._id, { json, revision, ...when })
   else await ctx.db.insert('states', { artifactId, userId, json, revision, ...when })
-  await noteRevision(ctx, artifactId, revision)
+  await noteRevision(ctx, artifactId, revision, when.agentAt ?? s?.agentAt ?? 0)
   return { revision }
 }
 
-/** Keeps the small record of which revision a page's state is at beside the state itself. */
-export async function noteRevision(ctx: MutationCtx, artifactId: Id<'artifacts'>, revision: number): Promise<void> {
+/**
+ * Keeps the small record of which revision a page's state is at beside the state itself, and
+ * with it when the page's agent last changed the state: what a screen that shows the page
+ * asks after every change, and should not have to read the whole state to be told.
+ */
+export async function noteRevision(ctx: MutationCtx, artifactId: Id<'artifacts'>, revision: number, agentAt: number): Promise<void> {
   const r = await ctx.db
     .query('revisions')
     .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
     .unique()
-  if (r) await ctx.db.patch(r._id, { revision })
-  else await ctx.db.insert('revisions', { artifactId, revision })
+  if (r) await ctx.db.patch(r._id, { revision, agentAt })
+  else await ctx.db.insert('revisions', { artifactId, revision, agentAt })
 }
 /**
  * The revision a page's state is at, read from the small record of it and without reading the

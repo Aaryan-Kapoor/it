@@ -4,8 +4,8 @@
 // background service or the person's own folders: the program is given a home, a PATH and an
 // It folder that hold only what the test put there.
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { createHmac } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash, createHmac } from 'node:crypto'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -20,7 +20,7 @@ const AFTER_SETUP =
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
-import { bases } from './test-ports'
+import { bases, holdBase } from './test-ports'
 
 // Every test here starts the program, and some start it a dozen times over. Each is given the
 // time that takes on a machine that is busy with other things as well.
@@ -57,7 +57,7 @@ const RUNS = process.platform === 'linux' ? 'active' : 'running'
 /** The answers of a stand-in for the system's commands that has the service registered and running: systemd's to `is-active` and `is-enabled`, and launchd's to `print`. */
 const SAYS_IT_RUNS = '*" is-active "*) echo active ;; *" is-enabled "*) echo enabled ;; *" print "*) echo "state = running" ;;'
 /** The base ports a test here takes when it has something listen where It would: each from a block of this file's own, and held until the test gives it back. */
-const ports = bases(16_000, 20)
+const ports = bases(33_000, 20)
 /** The port the site is said to be at, on a machine that has It's settings. Nothing listens there. */
 const SITE_PORT = 21000
 const SITE = `http://localhost:${SITE_PORT}`
@@ -367,12 +367,72 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('`it tour show next` shows the first thing the menu does not say has been seen, tells the menu, and shows the ending once all have been', async () => {
+  test('`it create` and `it update` given more than one of --file, --dir and --html publish nothing, and say which they were given', async () => {
     const m = machine()
-    let seen: string[] | null = ['whiteboard']
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:get' ? { title: 'Plan' } : null))
+    try {
+      writeFileSync(path.join(m.home, 'final.html'), '<p>the page that was meant</p>')
+      mkdirSync(path.join(m.home, 'site'))
+      writeFileSync(path.join(m.home, 'site', 'index.html'), '<p>a folder</p>')
+      for (const [words, which] of [
+        [['create', 'Plan', '--html', '<p>the old one</p>', '--file', 'final.html'], '--file and --html'],
+        [['create', 'Plan', '--file', 'final.html', '--dir', 'site'], '--file and --dir'],
+        [['update', 'plan', '--dir', 'site', '--html', '<p>the old one</p>'], '--dir and --html'],
+        [['update', 'plan', '--html', '<p>the old one</p>', '--dir', 'no-such-folder', '--file', 'no-such-file'], '--file, --dir and --html'],
+      ] as const) {
+        b.asked.length = 0
+        const ran = await run(m, [...words], b.env)
+        expect([words.join(' '), ran.code, ran.out, error(ran)]).toEqual([
+          words.join(' '),
+          2,
+          '',
+          {
+            code: 'invalid',
+            message: `A page is published from one source, and this command was given ${which}.`,
+            hint: 'Give one of --file, --dir and --html, or pipe HTML in with none of them.',
+          },
+        ])
+        expect(b.asked.filter((x) => x.path.startsWith('publish:'))).toEqual([])
+      }
+      // One of them alone is published as before
+      b.asked.length = 0
+      await run(m, ['create', 'Plan', '--file', 'final.html'], b.env)
+      expect(b.asked.find((x) => x.path === 'publish:begin')!.args.files).toMatchObject([{ path: 'index.html', size: 30 }])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a publish that It refuses to finish is given up on in so many words, so that it stops counting against what may be under way', async () => {
+    const m = machine()
     const b = await backend(m, ({ path: fn, args }) => {
-      if (fn === 'state:get')
-        return seen ? { json: JSON.stringify({ status: 'open', picked: '', seen }), revision: 1 } : new Refusal({ code: 'not_found', message: 'No such page.' })
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 3, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return new Refusal({ code: 'unavailable', message: 'The upload could not be checked just now. Try again in a moment.' })
+      return null
+    })
+    try {
+      const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], b.env)
+      // What is said is why it was not finished, whatever became of giving it up
+      expect([ran.code, ran.out, error(ran)]).toEqual([
+        1,
+        '',
+        { code: 'unavailable', message: 'The upload could not be checked just now. Try again in a moment.' },
+      ])
+      expect(b.asked.filter((x) => x.path.startsWith('publish:')).map((x) => [x.path, x.args.artifactId, x.args.version])).toEqual([
+        ['publish:begin', undefined, undefined],
+        ['publish:finish', 'artifact-1', 3],
+        ['publish:abandon', 'artifact-1', 3],
+      ])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it tour show next` selects from backend-owned progress and delegates resets to publication', async () => {
+    const m = machine()
+    let seen: string[] = ['whiteboard']
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'tour:seen') return { seen }
       if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
       if (fn === 'publish:finish') return { slug: 'shown', version: 1, url: 'https://site.example/p/shown' }
       if (fn === 'displays:show') return { displays: ['Desk'] }
@@ -383,33 +443,17 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
         b.asked.length = 0
         const ran = await run(m, ['tour', 'show', name], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' })
         expect([name, ran.code, ran.err]).toEqual([name, 0, ''])
-        return {
-          page: b.asked.find((x) => x.path === 'publish:begin')!.args.slug,
-          told: b.asked.filter((x) => x.path === 'state:patch').map((x) => [x.args.slug, JSON.parse(x.args.patch as string)]),
-        }
+        expect(b.asked.some((x) => x.path === 'state:patch')).toBe(false)
+        return b.asked.find((x) => x.path === 'publish:begin')!.args
       }
-      // The whiteboard has been seen: the chessboard is next, it starts as it was made, and the menu is told that it has been seen
-      expect(await shown('next')).toEqual({
-        page: 'tour-chess',
-        told: [
-          ['tour-chess', { reply: '', note: '' }],
-          ['tour-menu', { seen: ['whiteboard', 'chess'] }],
-        ],
-      })
-      // One that is asked for by name and was seen before is shown again, and the menu is told nothing new
-      expect((await shown('whiteboard')).told.map(([slug]) => slug)).toEqual(['tour-whiteboard'])
-      // The menu, shown again, starts open and keeps what was seen
-      seen = ['whiteboard', 'chess']
-      expect(await shown('menu')).toEqual({ page: 'tour-menu', told: [['tour-menu', { status: 'open', picked: '', seen: ['whiteboard', 'chess'] }]] })
-      // Everything seen: what is next is the ending, and nothing more is told the menu
+      expect(await shown('next')).toMatchObject({ slug: 'tour-chess', tour: 'chess', state: '{"reply":"","note":""}' })
+      expect((await shown('whiteboard')).tour).toBe('whiteboard')
+      expect(b.asked.some((x) => x.path === 'tour:seen')).toBe(false)
+      expect((await shown('menu')).tour).toBe('menu')
       seen = ['whiteboard', 'chess', 'checklist', 'drums', 'button']
-      expect((await shown('next')).page).toBe('tour-done')
-      // Something in the menu's state that is no thing of the tour is not counted as one
-      seen = ['whiteboard', 'tictactoe', 'done']
-      expect((await shown('next')).page).toBe('tour-chess')
-      // With no menu yet, as when an agent begins somewhere else, the first thing is next, and there is no menu to tell
-      seen = null
-      expect((await shown('next')).page).toBe('tour-whiteboard')
+      expect((await shown('next')).slug).toBe('tour-done')
+      seen = []
+      expect((await shown('next')).slug).toBe('tour-whiteboard')
     } finally {
       await b.close()
     }
@@ -484,6 +528,27 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       const refused = await run(m, ['tour', '--wait', '--timeout', 'soon'], env)
       expect(refused.code).not.toBe(0)
       expect(refused.err).toContain('--timeout is a number of seconds.')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it tour --wait` ends plainly when the person skips the tour, and other refusals still fail', async () => {
+    const m = machine()
+    let waits = 0
+    let message = 'The person said on the site that they want no tour, so there is nothing to wait for. Give the tour when they ask you for it.'
+    const b = await backend(m, ({ path }) => {
+      if (path === 'tour:wait') return ++waits === 1 ? { asked: false } : new Refusal({ code: 'conflict', message })
+      return null
+    })
+    try {
+      const skipped = await run(m, ['tour', '--wait'], b.env)
+      expect([skipped.code, JSON.parse(skipped.out), skipped.err]).toEqual([0, { skipped: true, hint: 'The person skipped the tour.' }, ''])
+      expect(b.asked.map(({ path }) => path)).toEqual(['tour:wait', 'tour:wait'])
+      message = 'Another tour is already under way.'
+      const refused = await run(m, ['tour', '--wait'], b.env)
+      expect([refused.code, error(refused).code]).toEqual([1, 'conflict'])
+      expect(refused.err).toContain(message)
     } finally {
       await b.close()
     }
@@ -593,7 +658,15 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
   test('each command is counted by its own name, who ran it and how it ended, and never by what was typed after it', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>
-      asked.path === 'artifacts:list' ? [{ slug: 'tour-menu' }] : asked.path === 'state:get' ? { json: '{"seen":["chess","drums"]}' } : null,
+      asked.path === 'tour:clear'
+        ? { deleted: ['tour-menu'], kept: [], seen: 2 }
+        : asked.path === 'artifacts:list'
+          ? [{ slug: 'tour-menu', title: 'The It tour' }]
+          : asked.path === 'artifacts:get'
+            ? { title: 'The It tour', version: 1 }
+            : asked.path === 'state:get'
+              ? { json: '{"status":"open","picked":"","seen":["chess","drums"]}' }
+              : null,
     )
     try {
       await run(m, ['list'], b.env)
@@ -623,17 +696,135 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('`it tour clear` removes the tour’s own pages and no other, also one whose id only begins as theirs do', async () => {
+  test('a command that did part of what it was asked and ended badly is counted as that, and a wait that ended is counted too', async () => {
     const m = machine()
-    const b = await backend(m, (asked) =>
-      asked.path === 'artifacts:list'
-        ? [{ slug: 'tour-menu' }, { slug: 'tour-of-my-project' }, { slug: 'plan' }, { slug: 'tour-whiteboard' }, { slug: 'tour-' }]
-        : null,
-    )
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'plan', version: 1, url: 'https://site.example/p/plan' }
+      if (fn === 'displays:show') return new Refusal({ code: 'rate_limited', message: 'Too many of those at once. Try again shortly.' })
+      if (fn === 'artifacts:get') return { title: 'Plan' }
+      if (fn === 'delivery:waiting') return []
+      return null
+    })
+    try {
+      // The page is published and could not be shown: the command says so and ends with 1
+      const made = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>', '--open'], b.env)
+      expect([made.code, printed(made).notShown.code]).toEqual([1, 'rate_limited'])
+      // A wait in which nothing happened ends well
+      const waited = await run(m, ['wait', '--id', 'plan', '--timeout', '0.2'], b.env)
+      expect([waited.code, printed(waited)]).toEqual([0, { timedOut: true }])
+      const commands = readFileSync(path.join(m.it, 'usage.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { name: string; properties: Record<string, string> })
+        .filter((c) => c.name === 'command.run')
+      expect(commands.map((c) => [c.properties.command, c.properties.result])).toEqual([
+        ['create', 'error'],
+        ['wait', 'ok'],
+      ])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it tour clear` uses the guarded backend mutation and reports preserved legacy pages', async () => {
+    const m = machine()
+    let kept: string[] = ['tour-checklist']
+    const b = await backend(m, ({ path: fn }) => (fn === 'tour:clear' ? { deleted: ['tour-menu', 'tour-whiteboard'], kept, seen: 2 } : null))
     try {
       const cleared = await run(m, ['tour', 'clear'], b.env)
-      expect([cleared.code, printed(cleared)]).toEqual([0, { deleted: ['tour-menu', 'tour-whiteboard'] }])
-      expect(b.asked.filter((x) => x.path === 'artifacts:remove').map((x) => x.args.slug)).toEqual(['tour-menu', 'tour-whiteboard'])
+      expect([cleared.code, cleared.err]).toEqual([0, ''])
+      expect(printed(cleared)).toMatchObject({ deleted: ['tour-menu', 'tour-whiteboard'], kept: ['tour-checklist'] })
+      expect(printed(cleared).hint).toContain('Older tour pages are preserved too')
+      expect(b.asked.map((x) => x.path)).toEqual(['tour:clear'])
+      kept = []
+      expect(printed(await run(m, ['tour', 'clear'], b.env))).toEqual({ deleted: ['tour-menu', 'tour-whiteboard'] })
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('tour commands never fall back to unguarded deletion or state changes on an older backend', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'tour:clear' || fn === 'tour:seen' || fn === 'publish:begin')
+        return new Refusal({ code: 'invalid', message: 'This backend does not support tour ownership.' })
+      if (fn === 'artifacts:list') return [{ slug: 'tour-checklist', title: 'A checklist' }]
+      if (fn === 'state:get') return { json: '{"added":[],"note":""}' }
+      if (fn === 'artifacts:get') return { slug: args.slug, title: 'A checklist', version: 1 }
+      return null
+    })
+    try {
+      for (const args of [
+        ['tour', 'clear'],
+        ['tour', 'show', 'next'],
+        ['tour', 'show', 'checklist'],
+      ]) {
+        const refused = await run(m, args, b.env)
+        expect([refused.code, refused.out, error(refused).code]).toEqual([2, '', 'invalid'])
+      }
+      expect(b.asked.map((x) => x.path)).toEqual(['tour:clear', 'tour:seen', 'publish:begin'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a tour finish conflict neither resets state nor shows a page the tour no longer owns', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 2, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return new Refusal({ code: 'conflict', message: 'The page changed while the tour was publishing. Nothing was replaced.' })
+      return null
+    })
+    try {
+      const refused = await run(m, ['tour', 'show', 'chess'], b.env)
+      expect([refused.code, refused.out, error(refused).code]).toEqual([1, '', 'conflict'])
+      expect(b.asked.map((x) => x.path)).toEqual(['publish:begin', 'publish:finish', 'publish:abandon'])
+      expect(b.asked[0]!.args).toMatchObject({ slug: 'tour-chess', tour: 'chess', state: '{"reply":"","note":""}' })
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it tour show` publishes its page from an agent app that does not say which conversation it is in, and takes the page for none', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'artifacts:get' || fn === 'state:get') return new Refusal({ code: 'not_found', message: 'No such page.' })
+      // The backend takes a page over only for a conversation, and refuses whoever asks that of it with none
+      if (fn === 'publish:begin')
+        return args.take && !args.session
+          ? new Refusal({ code: 'invalid', message: 'Taking a page over only works from inside an agent conversation.' })
+          : { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:finish') return { slug: 'tour-menu', version: 1, url: 'https://site.example/p/tour-menu' }
+      if (fn === 'displays:show') return { displays: ['Desk'] }
+      return null
+    })
+    try {
+      const shown = await run(m, ['tour', 'show', 'menu'], b.env)
+      expect([shown.code, shown.err]).toEqual([0, ''])
+      expect(printed(shown)).toMatchObject({ id: 'tour-menu', shownOn: ['Desk'] })
+      const begun = b.asked.find((x) => x.path === 'publish:begin')!.args
+      expect([begun.slug, begun.session, begun.take]).toEqual(['tour-menu', undefined, undefined])
+      // In a conversation, the page is that conversation's from then on, whoever showed it last
+      b.asked.length = 0
+      expect((await run(m, ['tour', 'show', 'menu'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' })).code).toBe(0)
+      const taken = b.asked.find((x) => x.path === 'publish:begin')!.args
+      expect([taken.session, taken.take]).toEqual([{ harness: 'pi', id: 'conversation-1' }, true])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it tour show` reports a backend ownership refusal without uploading or showing anything', async () => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn }) =>
+      fn === 'publish:begin' ? new Refusal({ code: 'conflict', message: 'This id belongs to a page that the tour does not own. Nothing was replaced.' }) : null,
+    )
+    try {
+      const refused = await run(m, ['tour', 'show', 'checklist'], b.env)
+      expect([refused.code, refused.out, error(refused).code]).toEqual([1, '', 'conflict'])
+      expect(b.asked.map((x) => x.path)).toEqual(['publish:begin'])
+      expect(b.asked[0]!.args.tour).toBe('checklist')
     } finally {
       await b.close()
     }
@@ -659,6 +850,51 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
           hint: 'The page is shown, and it is still another conversation’s: what is done on it does not come here. Run `it open board` again before you ask the person to use it.',
         },
       ])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it open` says that the page is this conversation’s now, and does not end well, where it was taken from another and could then not be shown', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:take'
+        ? { took: true }
+        : asked.path === 'displays:show'
+          ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
+          : asked.path === 'displays:list'
+            ? [{ name: 'Kitchen' }]
+            : null,
+    )
+    try {
+      const opened = await run(m, ['open', 'board', '--on', 'Kichen'], { ...b.env, CODEX_THREAD_ID: 'codex-today' })
+      expect([opened.code, opened.err, printed(opened)]).toEqual([
+        1,
+        '',
+        {
+          id: 'board',
+          shownOn: [],
+          notShown: { code: 'not_found', message: 'No display is called "Kichen".', hint: 'Displays: "Kitchen"' },
+          note: 'This page was another conversation’s, and is this one’s now: what is done on it comes here.',
+          hint: 'The page was not shown, and `notShown` says why. It was made this conversation’s before that, and stays so. Run `it open board` again to show it.',
+        },
+      ])
+      // Where nothing was taken, a page that could not be shown is said as it always was, and nothing is printed
+      const own = await backend(m, (asked) =>
+        asked.path === 'artifacts:take'
+          ? { took: false }
+          : asked.path === 'displays:show'
+            ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
+            : asked.path === 'displays:list'
+              ? [{ name: 'Kitchen' }]
+              : null,
+      )
+      try {
+        const again = await run(m, ['open', 'board', '--on', 'Kichen'], { ...own.env, CODEX_THREAD_ID: 'codex-today' })
+        expect([again.code, again.out, error(again).code]).toEqual([1, '', 'not_found'])
+      } finally {
+        await own.close()
+      }
     } finally {
       await b.close()
     }
@@ -878,6 +1114,104 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     },
   )
 
+  test.skipIf(process.platform === 'win32')('`it uninstall` leaves a linked profile and its empty target in place', async () => {
+    const m = machine(true, true)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    const target = path.join(m.home, 'dotfile')
+    const profile = path.join(m.home, '.profile')
+    const line = `export PATH='${path.join(m.it, 'bin')}':"$PATH"`
+    writeFileSync(target, `\n# It\n${line}\n`, { mode: 0o640 })
+    symlinkSync(target, profile)
+    const done = await run(m, ['uninstall', '--yes'])
+    expect([done.code, printed(done).removed]).toEqual([0, true])
+    expect(lstatSync(profile).isSymbolicLink()).toBe(true)
+    expect(readFileSync(profile, 'utf8')).toBe('')
+    expect(statSync(target).mode & 0o777).toBe(0o640)
+  })
+
+  test('`it uninstall` keeps its note of an add-on it could not take out, with the program, and takes the add-on out and deletes the folder when it is run again', async () => {
+    const m = machine(true, true)
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify({ port: SITE_PORT, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' }),
+    )
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    // An It that put its add-on into Pi, on a machine where Pi cannot be run for now: nothing called `pi` is on the PATH
+    mkdirSync(path.join(m.it, 'bin'))
+    mkdirSync(path.join(m.it, 'addons', 'pi'), { recursive: true })
+    mkdirSync(path.join(m.it, 'backend'))
+    writeFileSync(path.join(m.it, 'bin', 'it'), '#!/bin/sh\n')
+    writeFileSync(path.join(m.it, 'backend', 'pages.sqlite3'), 'the pages')
+    const note = JSON.stringify({ installs: [{ version: '0.1.0', at: 1, by: '0.1.22', env: {} }] })
+    writeFileSync(path.join(m.it, 'addons', 'pi.json'), note)
+    writeFileSync(path.join(m.home, 'pi-has'), `${path.join(m.it, 'addons', 'pi')}\n`)
+    const first = await run(m, ['uninstall', '--yes'])
+    const said = printed(first)
+    expect([first.code, said.removed, said.left.length]).toEqual([0, false, 1])
+    // Everything else It kept is gone, the pages and this machine's identity among it
+    expect(readdirSync(m.it).sort()).toEqual(['addons', 'bin'])
+    expect(readFileSync(path.join(m.it, 'addons', 'pi.json'), 'utf8')).toBe(note)
+    // And it says how the add-on is taken out later, by the program's whole name, since the folder is off the PATH by now
+    expect(said.left[0]).toContain('Pi still has It’s add-on, which could not be taken out')
+    expect(said.left[0]).toContain(`\`${path.join(m.it, 'bin', 'it')} uninstall\``)
+    expect(said.left[0]).not.toContain('Its own command for add-ons removes it')
+    // Run again where Pi can be run, it takes the add-on out and the folder goes
+    const ran = pi(m)
+    const second = await run(m, ['uninstall', '--yes'])
+    expect([second.code, printed(second).removed, existsSync(m.it), existsSync(path.join(m.home, 'pi-has'))]).toEqual([0, true, false, false])
+    expect(ran().some((words) => words.startsWith('remove '))).toBe(true)
+  })
+
+  test('`it uninstall` deletes the folder It is kept in where the folder it was told of is a link to it, and the link with it', async () => {
+    const m = machine(true, true)
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify({ port: SITE_PORT, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' }),
+    )
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    // It is kept on another disk, say, and the folder the person names is a link to there
+    const real = path.join(m.home, 'disk', 'it-data')
+    mkdirSync(path.dirname(real))
+    execFileSync('mv', [m.it, real])
+    mkdirSync(path.join(real, 'backend'))
+    writeFileSync(path.join(real, 'backend', 'pages.sqlite3'), 'the pages')
+    symlinkSync(real, m.it)
+    const done = await run(m, ['uninstall', '--yes'])
+    expect([done.code, printed(done).removed, existsSync(real), readdirSync(m.home).includes('.it')]).toEqual([0, true, false, false])
+    // And the folder beside it, which is the person's, is as it was
+    expect(existsSync(path.dirname(real))).toBe(true)
+  })
+
+  test('`it uninstall` leaves a project whose bin only links to the running program elsewhere', async () => {
+    const m = machine(false)
+    for (const linkedBin of [false, true]) {
+      const project = path.join(m.home, linkedBin ? 'linked-bin' : 'linked-program')
+      mkdirSync(project)
+      writeFileSync(path.join(project, 'unrelated.txt'), 'Keep this project.')
+      if (linkedBin) {
+        const external = path.join(m.home, 'external-bin')
+        mkdirSync(external)
+        symlinkSync(process.execPath, path.join(external, process.platform === 'win32' ? 'it.exe' : 'it'))
+        symlinkSync(external, path.join(project, 'bin'), 'dir')
+      } else {
+        mkdirSync(path.join(project, 'bin'))
+        symlinkSync(process.execPath, path.join(project, 'bin', process.platform === 'win32' ? 'it.exe' : 'it'))
+      }
+      const ran = await run(m, ['uninstall', '--yes'], { IT_HOME: project })
+      expect([ran.code, existsSync(path.join(project, 'unrelated.txt'))]).toEqual([2, true])
+      expect(error(ran).code).toBe('invalid')
+    }
+  })
+
   test('`it uninstall` takes away the service, its line in each shell profile, what it left in the agent apps, and its folder, and does none of it without being asked twice', async () => {
     const m = machine(true, true)
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
@@ -937,10 +1271,29 @@ describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
     const wrong = await run(m, ['uninstall', '--yes'], { IT_HOME: stray })
     expect([wrong.code, existsSync(path.join(stray, 'thesis.txt'))]).toEqual([2, true])
     expect(wrong.err).toContain('does not hold It')
+    // Nor one that has only the names of what It keeps: a project's own `addons`, its settings for a service, a program called `it`
+    const project = mkdtempSync(path.join(scratch, 'project-'))
+    mkdirSync(path.join(project, 'addons', 'theme'), { recursive: true })
+    mkdirSync(path.join(project, 'bin'))
+    writeFileSync(path.join(project, 'addons', 'codex.json'), '["not", "a", "note", "of", "Its"]')
+    writeFileSync(path.join(project, 'service.json'), '{"port": 8080, "name": "billing"}')
+    writeFileSync(path.join(project, 'machine.json'), '{"id": 7}')
+    writeFileSync(path.join(project, 'bin', 'it'), '#!/bin/sh\n')
+    writeFileSync(path.join(project, 'valuable.txt'), 'mine')
+    const named = await run(m, ['uninstall', '--yes'], { IT_HOME: project })
+    expect([named.code, existsSync(path.join(project, 'valuable.txt')), existsSync(path.join(project, 'addons', 'theme'))]).toEqual([2, true, true])
+    expect(named.err).toContain('does not hold It')
+    // One that holds no more of It than its note of an add-on is It's all the same, and goes
+    const begun = mkdtempSync(path.join(scratch, 'begun-'))
+    mkdirSync(path.join(begun, 'addons'))
+    writeFileSync(path.join(begun, 'addons', 'pi.json'), '{"installs": []}')
+    const little = await run(m, ['uninstall', '--yes'], { IT_HOME: begun })
+    expect([little.code, existsSync(begun)]).toEqual([0, false])
     // Nor the person's own folder, though a variable names it by a path that goes through a link, and though something of It's is in it
     const ana = path.join(scratch, 'people', 'ana')
     mkdirSync(path.join(ana, 'bin'), { recursive: true })
     writeFileSync(path.join(ana, 'bin', 'it'), '')
+    writeFileSync(path.join(ana, 'machine.json'), '{"id": "a-machine", "name": "ana", "key": {}}')
     writeFileSync(path.join(ana, 'personal.txt'), 'mine')
     symlinkSync(path.join(scratch, 'people'), path.join(scratch, 'mnt'))
     const own = await run(m, ['uninstall', '--yes'], { HOME: ana, IT_HOME: path.join(scratch, 'mnt', 'ana') })
@@ -1005,13 +1358,54 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
 })
 
 describe.skipIf(process.platform === 'win32')('a page another conversation made', () => {
+  test('`it create` takes nothing from a conversation on another machine that has the same id, nor from one whose id became this one’s on this machine', async () => {
+    const m = machine()
+    /** The page as the backend says it: whose it is, and on which machine. */
+    let has = { session: { harness: 'codex', id: 'codex-today' }, machineId: 'machine-2' as string | undefined }
+    const b = await backend(m, (asked) =>
+      asked.path === 'artifacts:get'
+        ? { title: 'Board', agent: 'codex', machine: 'the desktop', updatedAt: Date.now(), ...has }
+        : asked.path === 'publish:begin'
+          ? asked.args.own && !asked.args.take
+            ? new Refusal({ code: 'conflict', message: 'A page with that id belongs to another conversation.', anothers: true } as never)
+            : { artifactId: 'artifact-1', slug: 'board', version: 2, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+          : asked.path === 'publish:finish'
+            ? { slug: 'board', version: 2, url: 'https://site.example/p/board', took: true }
+            : null,
+    )
+    try {
+      const mine = { ...b.env, CODEX_THREAD_ID: 'codex-today' }
+      const create = () => run(m, ['create', 'Board', '--id', 'board', '--html', '<p>hi</p>'], mine)
+      const taken = () => b.asked.some((x) => x.path === 'publish:begin' && x.args.take === true)
+      // A conversation that was copied to another machine has the id it had there. The backend refused it as another's, and it stays refused
+      const same = await create()
+      expect([same.code, error(same).code, taken()]).toEqual([1, 'conflict', false])
+      expect(error(same).message).toContain('on "the desktop"')
+      // So it does where the backend does not say which machine the page is on, as one from before it said so
+      has = { ...has, machineId: undefined }
+      expect([(await create()).code, taken()]).toEqual([1, false])
+      // And where the id the page was made under became this conversation's on this machine, and the page is on another
+      has = { session: { harness: 'codex', id: 'codex-yesterday' }, machineId: 'machine-2' }
+      writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ 'codex:codex-yesterday': 'codex:codex-today' }))
+      expect([(await create()).code, taken()]).toEqual([1, false])
+      // An alias also proves nothing about the machine where the backend leaves that unsaid
+      has = { ...has, machineId: undefined }
+      expect([(await create()).code, taken()]).toEqual([1, false])
+      // On this machine it is this conversation's own page, under the id it had before, and is made again
+      has = { ...has, machineId: 'machine-1' }
+      expect([(await create()).code, taken()]).toEqual([0, true])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it create` makes nothing under an id that is another conversation’s page and says whose it is and what can be done, takes it when told to, and `it update` leaves it where it is and says how to have it', async () => {
     const m = machine()
     /** The conversation that has the page, as the backend says it. */
     let has = { harness: 'claude-code', id: 'yesterday' }
     const b = await backend(m, (asked) =>
       asked.path === 'artifacts:get'
-        ? { title: 'Board', agent: has.harness, machine: 'the laptop', updatedAt: Date.now() - 3 * 60_000, session: has }
+        ? { title: 'Board', agent: has.harness, machine: 'the laptop', machineId: 'machine-1', updatedAt: Date.now() - 3 * 60_000, session: has }
         : asked.path === 'publish:begin'
           ? // Made as a conversation's own under an id that is another's page, it is refused before anything is begun
             asked.args.own && !asked.args.take
@@ -1183,6 +1577,272 @@ describe.skipIf(process.platform === 'win32')('a command that two agent apps hav
       await b.close()
     }
   }, 40_000)
+})
+
+describe.skipIf(process.platform === 'win32')('the note of which folder each conversation works in', () => {
+  test('a writer suspended for more than ten seconds keeps its lock and another command leaves its record alone', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:take' ? { took: false } : asked.path === 'displays:show' ? { displays: ['Desk'] } : null))
+    const marker = path.join(m.home, 'suspended')
+    const preload = path.join(m.home, 'suspend.mjs')
+    const record = path.join(m.it, 'conversations.json')
+    writeFileSync(
+      preload,
+      `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const rename = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (to === ${JSON.stringify(record)}) {
+    fs.writeFileSync(${JSON.stringify(marker)}, 'ready');
+    process.kill(process.pid, 'SIGSTOP');
+  }
+  return rename(from, to);
+};
+syncBuiltinESMExports();
+`,
+    )
+    const child = spawn(process.execPath, ['--import', pathToFileURL(preload).href, program, 'open', 'board'], {
+      cwd: m.home,
+      env: { PATH: m.bin, HOME: m.home, IT_HOME: m.it, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'suspended' },
+    })
+    child.stdin.end()
+    child.stdout.resume()
+    child.stderr.resume()
+    const first = new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject)
+      child.once('close', resolve)
+    })
+    try {
+      for (let attempt = 0; attempt < 200 && !existsSync(marker); attempt++) await new Promise((resolve) => setTimeout(resolve, 25))
+      expect(existsSync(marker)).toBe(true)
+      const held = readFileSync(`${record}.lock`, 'utf8')
+      await new Promise((resolve) => setTimeout(resolve, 10_100))
+      expect((await run(m, ['open', 'board'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'contender' })).code).toBe(0)
+      expect(existsSync(record)).toBe(false)
+      expect(readFileSync(`${record}.lock`, 'utf8')).toBe(held)
+    } finally {
+      child.kill('SIGCONT')
+      if (!existsSync(marker)) child.kill('SIGTERM')
+      const finished = await first
+      await b.close()
+      expect(finished).toBe(0)
+    }
+    expect(Object.keys(JSON.parse(readFileSync(record, 'utf8')))).toEqual(['pi:suspended'])
+    expect(existsSync(`${record}.lock`)).toBe(false)
+  }, 30_000)
+
+  test('keeps every conversation that commands running at the same moment note, and none of them writes over another’s', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:take' ? { took: false } : asked.path === 'displays:show' ? { displays: ['Desk'] } : null))
+    try {
+      // Each conversation opens a page, which notes its folder, and all of them do so together, three times over,
+      // under each runtime the program runs under that is on this machine
+      const runtimes = RUNTIMES.map(([, runtime]) => runtime).filter((runtime): runtime is string => runtime !== undefined)
+      const dead = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']))
+      const all: string[] = []
+      for (let round = 0; round < 3; round++) {
+        // The same contention also recovers a dead holder and a dead recovery claimant.
+        if (round > 0) {
+          const lock = path.join(m.it, 'conversations.json.lock')
+          writeFileSync(lock, JSON.stringify({ pid: dead, holder: 'a'.repeat(16) }))
+          if (round === 2) writeFileSync(`${lock}.after.${'a'.repeat(16)}`, JSON.stringify({ pid: dead, holder: 'b'.repeat(16) }))
+        }
+        const ids = Array.from({ length: 10 }, (_, n) => `conversation-${round}-${n}`)
+        all.push(...ids)
+        const ran = await Promise.all(
+          ids.map((id, n) => run(m, ['open', 'board'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: id }, runtimes[n % runtimes.length])),
+        )
+        expect(ran.map((one) => one.code)).toEqual(ids.map(() => 0))
+      }
+      const noted = JSON.parse(readFileSync(path.join(m.it, 'conversations.json'), 'utf8')) as Record<string, { cwd: string }>
+      expect(Object.keys(noted).sort()).toEqual(all.map((id) => `pi:${id}`).sort())
+      // Nothing is left of the having it to itself, nor of a file half written
+      expect(readdirSync(m.it).filter((name) => name.startsWith('conversations.json.'))).toEqual([])
+    } finally {
+      await b.close()
+    }
+  }, 90_000)
+})
+
+describe.skipIf(process.platform === 'win32')('a wait', () => {
+  test('whose time runs out asks It what is waiting under every id the conversation has had, and prints an action on a page made under an earlier one', async () => {
+    const m = machine()
+    const earlier = { harness: 'pi', id: 'before-it-was-cleared' }
+    const now = { harness: 'pi', id: 'after-it-was-cleared' }
+    const action = {
+      id: 'k57',
+      artifact: 'plan',
+      title: 'Plan',
+      name: 'approve',
+      payload: '{"plan":"B"}',
+      at: 1,
+      attended: true,
+      session: earlier,
+    }
+    // The live connection is closed as soon as it is asked for, so nothing comes over it: what is waiting is learnt by asking
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'delivery:waitingFor') return (args.session as { id: string }).id === earlier.id ? [action] : []
+      if (fn === 'delivery:claim') return args.ids
+      if (fn === 'delivery:handedOff') return { already: false }
+      return null
+    })
+    // The connector, which knows the id this conversation had before it was cleared
+    const socket = path.join(m.it, 'connector.sock')
+    const connector = http.createServer((req, res) => {
+      req.resume().on('end', () => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ sessions: [now, earlier], clicks: [] })))
+    })
+    await new Promise<void>((resolve) => connector.listen(socket, resolve))
+    writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'a'.repeat(48), pid: process.pid, version: '0.0.0' }))
+    try {
+      const ran = await run(m, ['wait', '--timeout', '1'], { ...b.env, IT_HARNESS: now.harness, IT_SESSION: now.id })
+      expect([
+        ran.code,
+        ran.out
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line)),
+      ]).toEqual([0, [{ id: 'k57', page: 'plan', title: 'Plan', action: 'approve', data: { plan: 'B' }, at: 1 }]])
+      // Claimed for the conversation it was offered for, which is the one the page was made under
+      expect(b.asked.filter((x) => x.path === 'delivery:claim').map((x) => x.args)).toEqual([{ ids: ['k57'], for: earlier }])
+    } finally {
+      await new Promise((resolve) => connector.close(resolve))
+      await b.close()
+    }
+  })
+
+  test('on a page that is deleted meanwhile ends with an error as every command says one, with its code', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:get' ? { title: 'Plan' } : asked.path === 'delivery:waiting' ? [] : null))
+    // The live connection, answered as It answers one: the page was there when the wait began, and by the time it is watched it is gone
+    const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+    const zero = Buffer.alloc(8).toString('base64')
+    const sockets: net.Socket[] = []
+    const live = http.createServer((_req, res) => res.writeHead(404).end())
+    live.on('upgrade', (req, socket: net.Socket) => {
+      sockets.push(socket.on('error', () => {}))
+      const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}${GUID}`).digest('base64')
+      socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
+      const send = (message: unknown) => {
+        const text = Buffer.from(JSON.stringify(message))
+        const head = text.length < 126 ? Buffer.from([0x81, text.length]) : Buffer.from([0x81, 126, text.length >> 8, text.length & 255])
+        socket.write(Buffer.concat([head, text]))
+      }
+      let got = Buffer.alloc(0)
+      let identity = 0
+      socket.on('data', (piece: Buffer) => {
+        got = Buffer.concat([got, piece])
+        // One frame at a time, as a browser sends them: masked, with its length in one byte or in the two after it
+        for (;;) {
+          if (got.length < 2) return
+          const short = got[1]! & 127
+          const at = short === 126 ? 4 : 2
+          if (got.length < at) return
+          const length = short === 126 ? got.readUInt16BE(2) : short
+          if (got.length < at + 4 + length) return
+          const mask = got.subarray(at, at + 4)
+          const text = Buffer.from(got.subarray(at + 4, at + 4 + length).map((byte, i) => byte ^ mask[i % 4]!)).toString('utf8')
+          const opcode = got[0]! & 15
+          got = got.subarray(at + 4 + length)
+          // Asked to close, it closes, as the other end waits for it to
+          if (opcode === 8) return void socket.end(Buffer.from([0x88, 0]))
+          if (opcode !== 1) continue
+          const said = JSON.parse(text) as { type: string; newVersion?: number }
+          if (said.type === 'Authenticate') identity++
+          if (said.type === 'ModifyQuerySet')
+            // Answered a moment later, once the machine has said who it is as well, whichever of the two it said first
+            setTimeout(
+              () =>
+                send({
+                  type: 'Transition',
+                  startVersion: { querySet: 0, identity: 0, ts: zero },
+                  endVersion: { querySet: said.newVersion, identity, ts: zero },
+                  modifications: [
+                    {
+                      type: 'QueryFailed',
+                      queryId: 0,
+                      errorMessage: 'Uncaught ConvexError',
+                      logLines: [],
+                      errorData: { code: 'not_found', message: 'No such page.' },
+                      journal: null,
+                    },
+                  ],
+                }),
+              300,
+            )
+        }
+      })
+    })
+    await new Promise<void>((resolve) => live.listen(0, '127.0.0.1', resolve))
+    const api = `http://127.0.0.1:${(live.address() as { port: number }).port}`
+    // What is asked once goes to the stand-in backend, through the stand-in for the live connection, which is where the program is pointed
+    live.removeAllListeners('request')
+    live.on('request', (req, res) => {
+      const chunks: Buffer[] = []
+      req
+        .on('data', (c: Buffer) => chunks.push(c))
+        .on('end', async () => {
+          const answer = await fetch(`${b.url}${req.url}`, { method: req.method, headers: { 'content-type': 'application/json' }, body: Buffer.concat(chunks) })
+          res.writeHead(answer.status, { 'content-type': 'application/json' }).end(await answer.text())
+        })
+    })
+    writeFileSync(
+      path.join(m.it, 'token.json'),
+      JSON.stringify({ token: 'a-token', exp: Math.floor(Date.now() / 1000) + 3600, machine: 'machine-1', site: api }),
+    )
+    try {
+      const ran = await run(m, ['wait', '--id', 'plan', '--follow', '--timeout', '20'], { IT_URL: api, IT_SITE_URL: api })
+      expect([ran.code, ran.out, error(ran)]).toEqual([1, '', { code: 'not_found', message: 'No such page.' }])
+    } finally {
+      for (const socket of sockets) socket.destroy()
+      live.closeAllConnections()
+      await new Promise((resolve) => live.close(resolve))
+      await b.close()
+    }
+  })
+
+  test('a chunked wait counts elapsed time through clock corrections in either direction', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:get' ? { title: 'Plan' } : asked.path === 'delivery:waiting' ? [] : null))
+    const clock = path.join(m.home, 'wait-clock.mjs')
+    const delays = path.join(m.home, 'delays.json')
+    try {
+      for (const correction of [-60_000, 60_000]) {
+        writeFileSync(
+          clock,
+          `import { writeFileSync } from 'node:fs'; let elapsed = 0, wall = 0; const delays = []; const now = Date.now; Date.now = () => now() + wall; Object.defineProperty(performance, 'now', { value: () => elapsed }); const later = setTimeout; globalThis.setTimeout = (run, ms, ...args) => { if (run.name !== 'later') return later(run, ms, ...args); delays.push(ms); writeFileSync(${JSON.stringify(delays)}, JSON.stringify(delays)); if (delays.length > 3) throw Error('The wait followed the corrected clock.'); return later(() => { elapsed += ms; wall += ${correction}; run(...args) }, 1); };`,
+        )
+        const ran = await run(m, ['wait', '--id', 'plan', '--follow', '--timeout', '86401'], b.env, process.execPath, ['--import', pathToFileURL(clock).href])
+        expect([ran.code, printed(ran).timedOut]).toEqual([0, true])
+        expect(JSON.parse(readFileSync(delays, 'utf8'))).toEqual([86_400_000, 1000])
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('given more seconds than a timer can count goes on waiting for as long as it was told, and does not say at once that nothing happened', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'artifacts:get' ? { title: 'Plan' } : asked.path === 'delivery:waiting' ? [] : null))
+    try {
+      // Thirty days, which is more milliseconds than a timer of the runtime takes: given that many, it rings at once
+      const child = spawn(process.execPath, [program, 'wait', '--id', 'plan', '--follow', '--timeout', '2592000'], {
+        cwd: m.home,
+        env: { PATH: m.bin, HOME: m.home, IT_HOME: m.it, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', ...b.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let out = ''
+      let err = ''
+      child.stdout.on('data', (piece) => (out += piece))
+      child.stderr.on('data', (piece) => (err += piece))
+      const ended = new Promise<number | null>((resolve) => child.once('close', resolve))
+      const still = await Promise.race([ended.then(() => false), new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 2500))])
+      child.kill('SIGTERM')
+      await ended
+      expect([still, out, err.includes('TimeoutOverflowWarning')]).toEqual([true, '', false])
+    } finally {
+      await b.close()
+    }
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('a connector that cannot start, on a machine where it is all of It there is to run', () => {
@@ -1784,6 +2444,8 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       /^ {2}it version \| it help$/m,
       /^ {2}it update <id> .*\[--title "<title>"\]/m,
       /\[--agent <name>\]/,
+      // The label is the page's from when it was made: an update by the conversation that has the page does not change it, and the help does not say that it does
+      /\[--agent <name>\], a label for who made it,\s+which a page keeps until another conversation has it/,
       /\[--take\]/,
     ])
       expect(ran.out).toMatch(line)
@@ -1876,6 +2538,40 @@ describe.skipIf(process.platform === 'win32')('an It that is not running, under 
     )
 })
 
+describe.skipIf(process.platform === 'win32')('an It that is running and slow to answer', () => {
+  test('a command that has to ask for a token and is given none in time says that It did not answer in time, and not that It is stopped', async () => {
+    const m = machine(true, true)
+    // A base of this test's own, with something where the backend program listens that takes the asking and never answers it
+    const held = await holdBase(24_000, 10)
+    const taken: net.Socket[] = []
+    const silent = net.createServer((socket) => void taken.push(socket.on('error', () => {})))
+    await new Promise<void>((resolve) => silent.listen(held.base + PORTS.backendSite, '127.0.0.1', resolve))
+    try {
+      const key = await exportJWK((await generateKeyPair('ES256', { extractable: true })).privateKey)
+      writeFileSync(path.join(m.it, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'the desk', key }))
+      writeFileSync(path.join(m.it, 'service.json'), JSON.stringify({ port: held.base }))
+      // Asked together: each waits out the whole time a token is given
+      const [asking, far] = await Promise.all([run(m, ['list']), run(m, ['list'], { IT_URL: `http://127.0.0.1:${held.base + PORTS.backendSite}` })])
+      expect([asking.code, asking.out, error(asking)]).toEqual([
+        1,
+        '',
+        {
+          code: 'timeout',
+          message: 'It did not answer in time on this machine.',
+          hint: 'Something took the connection where It listens, so It is most likely running and busy: try again in a moment. If it goes on, `it service logs` says what It met.',
+        },
+      ])
+      expect(taken.length).toBeGreaterThan(0)
+      // An It on another machine that takes the connection and says nothing is named by its address, and is not said to be out of reach
+      expect(error(far)).toMatchObject({ code: 'timeout', message: `The It at http://127.0.0.1:${held.base + PORTS.backendSite} did not answer in time.` })
+    } finally {
+      for (const socket of taken) socket.destroy()
+      await new Promise((resolve) => silent.close(resolve))
+      await held.release()
+    }
+  }, 60_000)
+})
+
 describe.skipIf(process.platform === 'win32')('a machine that It gives no token, under each runtime the program runs under', () => {
   for (const [name, runtime] of RUNTIMES)
     test.skipIf(!runtime)(
@@ -1956,6 +2652,103 @@ describe.skipIf(process.platform === 'win32')('a command that waits for somethin
       },
       60_000,
     )
+})
+
+describe('a network change taken by the running service', () => {
+  async function changing(answer: (read: number, network: boolean) => unknown) {
+    const m = machine(true, true)
+    const held = await holdBase(58_000, 10)
+    const settings = () => JSON.parse(readFileSync(path.join(m.it, 'service.json'), 'utf8')) as { network: boolean }
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify({
+        port: held.base,
+        network: true,
+        tailnet: true,
+        instanceSecret: 'a'.repeat(64),
+        adminKey: 'it-000000000000|made-up',
+        sessionSecret: 'made-up',
+      }),
+    )
+    let reads = 0
+    const answering = (port: number) =>
+      new Promise<http.Server>((resolve) => {
+        const server = http.createServer((req, res) => {
+          req.resume().on('end', () => {
+            if (req.url === '/health') return res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true,"it":true}')
+            const value = answer(++reads, settings().network)
+            const body =
+              value instanceof Refusal
+                ? { status: 'error', errorData: value.data, errorMessage: 'refused', logLines: [] }
+                : { status: 'success', value, logLines: [] }
+            res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+          })
+        })
+        server.listen(port, '127.0.0.1', () => resolve(server))
+      })
+    const servers = await Promise.all([held.base, held.base + PORTS.backendApi].map(answering))
+    const clock = path.join(m.home, 'network-clock.mjs')
+    // Only the network's polling waits move this clock, so requests still take their usual time.
+    writeFileSync(
+      clock,
+      'let offset = 0; const now = Date.now; Date.now = () => now() + offset; const later = setTimeout; globalThis.setTimeout = (run, ms, ...args) => later(() => { if (ms === 200) offset += 5000; run(...args) }, ms === 200 || ms === 2500 ? 1 : ms)\n',
+    )
+    return {
+      settings,
+      reads: () => reads,
+      run: () => run(m, ['network', 'on'], {}, process.execPath, ['--import', pathToFileURL(clock).href]),
+      close: async () => {
+        await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))))
+        await held.release()
+      },
+    }
+  }
+
+  test('looks again until the service reports the requested policy, though networking was on already', async () => {
+    const door = await changing((read) => ({ on: true, wanted: true, tailnet: read < 4 }))
+    try {
+      const ran = await door.run()
+      expect([ran.code, printed(ran).network, door.reads()]).toEqual([0, true, 4])
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('says that the network could not listen and leaves it off where reopening the door falls back to this machine', async () => {
+    const door = await changing((read, network) => ({ on: read < 3 && network, wanted: network, tailnet: read < 3 }))
+    try {
+      const ran = await door.run()
+      expect(ran.code).toBe(1)
+      expect([ran.code, ran.out, error(ran).code, door.settings().network]).toEqual([1, '', 'cannot_listen', false])
+    } finally {
+      await door.close()
+    }
+  })
+
+  test('says that the running service has not taken a policy it still reports differently', async () => {
+    const door = await changing(() => ({ on: true, wanted: true, tailnet: true }))
+    try {
+      const ran = await door.run()
+      expect([ran.code, ran.out, error(ran).code]).toEqual([1, '', 'not_taken'])
+      expect(door.reads()).toBeGreaterThan(2)
+    } finally {
+      await door.close()
+    }
+  })
+
+  for (const report of ['unsaid', 'unavailable'])
+    test(`keeps the earlier network behavior where the applied policy is ${report}`, async () => {
+      const door = await changing(() =>
+        report === 'unsaid' ? { on: true, wanted: true } : new Refusal({ code: 'unavailable', message: 'The report is not available.' }),
+      )
+      try {
+        const ran = await door.run()
+        expect([ran.code, printed(ran).network, door.settings().network]).toEqual([0, true, true])
+        expect(door.reads()).toBe(2)
+      } finally {
+        await door.close()
+      }
+    })
 })
 
 describe.skipIf(process.platform === 'win32' || !python)('what a person at a terminal is told', () => {
@@ -2366,6 +3159,105 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
   })
 })
 
+describe.skipIf(process.platform !== 'linux' || !python)('a setup that leads a person through, on the machine It runs on', () => {
+  /**
+   * A machine that It is set up on, with something answering where It's door and its backend
+   * program listen, as they do while It runs: how it is, what its administrator asks, and what
+   * the machine asks. No systemd is there for the person, so the service cannot be registered,
+   * and the setup ends by saying what is left to do without asking how It is to be reached.
+   */
+  async function setUpHere(answer: (asked: Asked) => unknown = () => null) {
+    const m = machine(false)
+    const held = await holdBase(24_000, 10)
+    const asked: Asked[] = []
+    const answering = (port: number) =>
+      new Promise<http.Server>((resolve) => {
+        const server = http.createServer((req, res) => {
+          const chunks: Buffer[] = []
+          req
+            .on('data', (c: Buffer) => chunks.push(c))
+            .on('end', () => {
+              const json = (value: unknown) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+              if (req.method === 'GET') return req.url === '/health' ? json({ ok: true, it: true }) : res.writeHead(404).end()
+              const call = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as { path: string; args: [Record<string, unknown>] }
+              const one = { path: call.path, args: call.args?.[0] ?? {} }
+              asked.push(one)
+              // The administrator asks whether this machine is still one of the person's, and it is
+              json({ status: 'success', value: one.path === 'bridge:machine' ? { revoked: false } : (answer(one) ?? null), logLines: [] })
+            })
+        })
+        server.listen(port, '127.0.0.1', () => resolve(server))
+      })
+    const servers = await Promise.all([held.base, held.base + PORTS.backendApi, held.base + PORTS.backendSite].map(answering))
+    const key = await exportJWK((await generateKeyPair('ES256', { extractable: true })).privateKey)
+    writeFileSync(path.join(m.it, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'the desk', key }))
+    writeFileSync(
+      path.join(m.it, 'service.json'),
+      JSON.stringify({ port: held.base, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'it-000000000000|made-up', sessionSecret: 'made-up' }),
+    )
+    writeFileSync(
+      path.join(m.it, 'token.json'),
+      JSON.stringify({
+        token: 'a-token',
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        machine: 'machine-1',
+        site: `http://127.0.0.1:${held.base + PORTS.backendSite}`,
+      }),
+    )
+    // The backend program is asked for by name before anything else, and is there
+    writeFileSync(path.join(m.home, 'backend-program'), '#!/bin/sh\nexit 0\n')
+    chmodSync(path.join(m.home, 'backend-program'), 0o755)
+    return {
+      m,
+      asked,
+      env: { IT_BACKEND_BIN: path.join(m.home, 'backend-program'), NO_COLOR: '1' },
+      close: async () => {
+        for (const server of servers) {
+          server.closeAllConnections()
+          await new Promise((resolve) => server.close(resolve))
+        }
+        await held.release()
+      },
+    }
+  }
+
+  test('says of an agent app that is too old which version It needs and to update it, though it is the only app there is and nothing was offered to choose from', async () => {
+    const here = await setUpHere((asked) => (asked.path === 'machines:choose' ? { wakes: [] } : null))
+    try {
+      // The one agent app on the machine is a Pi from before the version It can connect
+      writeFileSync(path.join(here.m.bin, 'pi'), '#!/bin/sh\necho 0.81.0\n')
+      chmodSync(path.join(here.m.bin, 'pi'), 0o755)
+      const ran = await atTerminal(here.m, ['setup'], here.env)
+      const shown = ran.shown.split('\n').map((line) => line.trim())
+      expect(shown.filter((line) => line.includes('Agent apps'))).toEqual([expect.stringContaining('none found that It can connect yet')])
+      expect(shown).toContain('Left for you')
+      expect(shown).toContain('! Pi: It needs Pi 0.82.0 or newer, and this one is 0.81.0. Update Pi, then run `it setup` again.')
+    } finally {
+      await here.close()
+    }
+  }, 60_000)
+
+  test('says that it is looking for the agent apps for as long as it asks each of them, and leaves no line of that behind', async () => {
+    const here = await setUpHere((asked) => (asked.path === 'machines:choose' ? { wakes: [] } : null))
+    try {
+      // An agent app that takes a while to say which version it is, as one that is slow to start does
+      writeFileSync(path.join(here.m.bin, 'pi'), '#!/bin/sh\nPATH=/bin:/usr/bin\nsleep 1\necho 0.81.0\n')
+      chmodSync(path.join(here.m.bin, 'pi'), 0o755)
+      const { shown } = await atTerminal(here.m, ['setup'], here.env)
+      // Drawn, in the place a step is drawn, once this machine has been named and before anything is said of the apps
+      const looking = shown.indexOf('Agent apps           looking for them on this machine')
+      expect(looking).toBeGreaterThan(shown.indexOf('This machine         the desk'))
+      expect(looking).toBeLessThan(shown.indexOf('none found that It can connect yet'))
+      // Each line as it stands once everything drawn in its place has been: none of them says it any more
+      const stands = shown.split('\n').map((line) => line.slice(line.lastIndexOf('\x1b[2K') + 1).trim())
+      expect(stands.filter((line) => line.includes('looking for them'))).toEqual([])
+      expect(stands.filter((line) => line.includes('Agent apps'))).toHaveLength(1)
+    } finally {
+      await here.close()
+    }
+  }, 60_000)
+})
+
 describe.skipIf(process.platform === 'win32')('what a command printed, when the command ends', () => {
   /** Starts a program with its output going into pipes that nobody reads for a moment, as a reader with other things to do leaves them, and gives all of it once the program has ended. */
   const readSlowly = (runtime: string, args: string[], env: Record<string, string> = {}) =>
@@ -2685,6 +3577,31 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
       expect(b.joined).toHaveLength(1)
     } finally {
       await b.close()
+    }
+  })
+
+  test('`it login` says after joining which earlier machine still holds the pages only when the answer names one', async () => {
+    for (const waitsFor of [undefined, 'the earlier laptop']) {
+      const m = machine(false)
+      const b = await backend(
+        m,
+        () => null,
+        () => [200, { machine: 'machine-2', ...(waitsFor === undefined ? {} : { waitsFor }) }],
+      )
+      try {
+        const ran = await run(m, ['login', '--url', b.url, '--code', 'Ab3dEf6hIj9kLm2nOp5q', '--name', 'this laptop', '--no-setup'])
+        expect([ran.code, printed(ran)]).toEqual([0, { machine: 'machine-2', name: 'this laptop' }])
+        expect(ran.err.trim().split('\n')).toEqual([
+          'This machine has joined as "this laptop".',
+          ...(waitsFor === undefined
+            ? []
+            : [
+                'This computer joined before as "the earlier laptop", which is still among your machines, and the pages it made then stay with that one. Revoke "the earlier laptop" on the site\'s Machines page and they come to this computer.',
+              ]),
+        ])
+      } finally {
+        await b.close()
+      }
     }
   })
 
@@ -3319,10 +4236,14 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       'Auto-wake is on for Pi: when you use a page whose conversation is closed, It reopens the conversation and runs the agent on this machine with nobody watching.'
     const m = machine()
     pi(m)
-    // It answers the choice with the apps it reopens closed conversations of on this machine
-    const b = await backend(m, (asked) =>
-      asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : asked.path === 'machines:choose' ? { wakes: ['pi'] } : null,
-    )
+    // It says which apps it reopens closed conversations of on this machine: as things stand when it is asked, and with its answer to the choice
+    let wakes: { harness: string; since: number }[] | undefined
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'machines:me') return { id: 'machine-1', name: 'test', wanted: [], ...(wakes ? { wakes } : {}) }
+      if (asked.path !== 'machines:choose') return null
+      wakes = [{ harness: 'pi', since: 1 }]
+      return { wakes: ['pi'] }
+    })
     try {
       const first = await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)
       expect(first.code).toBe(0)
@@ -3333,6 +4254,12 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       // Run again, as every update runs it, with Pi connected already: not said a second time
       const again = await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)
       expect([again.code, again.err.includes('Auto-wake')]).toEqual([0, false])
+      // The machine was enrolled anew in the place of the one it was, and to It nothing is reopened on it yet. Pi's add-on is
+      // in Pi as it was, and setup switches reopening on with the choice: said, since it is on from here on and was not before
+      wakes = undefined
+      const replaced = await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)
+      expect(replaced.code).toBe(0)
+      expect(replaced.err).toContain(SAID)
     } finally {
       await b.close()
     }

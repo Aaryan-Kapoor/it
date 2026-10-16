@@ -30,10 +30,15 @@ import path from 'node:path'
 
 /** The rule that lets `it`, and nothing else, run outside Codex's sandbox: one line of a file in Codex's `rules` folder. */
 export const CODEX_RULE = 'prefix_rule(pattern=["it"], decision="allow")'
-/** The file a person is told to keep it in: one of their own making, beside the one Codex keeps its own rules in. */
-export const CODEX_RULE_FILE = '~/.codex/rules/it.rules'
-
 const codexHome = () => process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
+
+/**
+ * The file a person is told to keep it in: one of their own making, beside the one Codex keeps
+ * its own rules in. That is in the folder Codex is using, which is the one the rule is then
+ * looked for in: where `CODEX_HOME` names another folder than the usual one, a rule kept in the
+ * usual one is never read, and the person who wrote it there is told to write it again.
+ */
+export const CODEX_RULE_FILE = process.env.CODEX_HOME ? path.join(path.resolve(process.env.CODEX_HOME), 'rules', 'it.rules') : '~/.codex/rules/it.rules'
 
 /** Codex's settings file as text, null when there is none, false when it could not be read. */
 export function codexConfig(home = codexHome()): string | null | false {

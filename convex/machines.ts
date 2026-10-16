@@ -130,6 +130,7 @@ export const wake = mutation({
     const m = await ownMachine(ctx, user._id, machineId)
     if (!(WAKES as readonly string[]).includes(harness)) fail('invalid', 'It cannot reopen a closed conversation of that agent app.')
     if (on && !wakesOn(m.system)) fail('invalid', noWakeHere(m.system))
+    if (on && !(m.wanted ?? []).includes(harness)) fail('invalid', 'Connect that agent app before turning on Auto-wake.')
     const now = m.wakes ?? []
     const is = now.some((w) => w.harness === harness)
     const off = (m.wakesOff ?? []).filter((h) => h !== harness)

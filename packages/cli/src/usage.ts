@@ -28,6 +28,7 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFi
 import { release as osRelease, userInfo } from 'node:os'
 import path from 'node:path'
 import { HARNESSES } from '@it/protocol'
+import { claimLock } from './legacy-lock'
 import { inHome, Problem, VERSION } from './lib'
 
 export const DEFAULT_URL = 'https://itcan.do/api/usage'
@@ -544,6 +545,10 @@ function discard(): void {
 // there, which is to say that none begins. A command that turns reporting on waits in the same
 // way once it has written the new id down, so that none begins under the old one either.
 const decidingFile = () => inHome('telemetry-sending')
+// The empty format had no age-based recovery. Allow ten minutes before reclaiming it.
+const LEGACY_DECISION_MS = 10 * 60_000
+/** Takes the decision marker exclusively, and removes only the file this sender made. */
+const decision = () => claimLock(decidingFile(), LEGACY_DECISION_MS, randomUUID())
 /** The longest the step may take. A sender that stood still for longer does not send on what it saw, and looks again at its next pass. */
 const DECIDING_MOST_MS = 250
 /** How long a command that turns reporting off waits for a sender that is deciding: longer than the step may take. */
@@ -920,11 +925,10 @@ export function startSender(
         const began = performance.now()
         let t: Seen
         let answer: Promise<boolean>
+        const release = decision()
+        // A sender that cannot say it is deciding does not send: nobody turning reporting off could wait for it.
+        if (!release) return
         try {
-          const mine = ordinary(decidingFile(), constants.O_WRONLY | constants.O_CREAT)
-          // A sender that cannot say it is deciding does not send: nobody turning reporting off could wait for it
-          if (!mine) return
-          shut(mine.fd)
           t = look()
           if (t.off) return
           if (!t.who || !t.tag) return forget()
@@ -942,7 +946,7 @@ export function startSender(
             answer = Promise.resolve(false)
           }
         } finally {
-          remove(decidingFile())
+          release()
         }
         let ok = false
         try {
@@ -1080,18 +1084,34 @@ export function thisMachine(role: 'serves' | 'joined'): Properties<'machine.seen
  */
 export async function sendNow<N extends EventName>(name: N, properties: Properties<N>): Promise<void> {
   try {
-    const { off, kept } = standing()
-    const id = off ? null : identity(kept)
     const fits = allowed(name, properties)
-    if (!id || !fits) return
-    const hour = new Date()
-    hour.setUTCMinutes(0, 0, 0)
-    await fetch(url(), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'user-agent': `it/${VERSION}` },
-      body: JSON.stringify({ v: 1, installation: id.who, events: [{ id: randomUUID(), name, at: hour.toISOString(), properties: fits }] }),
-      redirect: 'error',
-      signal: AbortSignal.timeout(4000),
-    }).then((r) => void r.body?.cancel().catch(() => {}))
+    if (!fits) return
+    // Decided on in one step with beginning the request, under the file the sender makes for
+    // that step, and for the same reason: a command that turns reporting off in this moment
+    // waits for the file to go, so that no request begins once it has returned.
+    const began = performance.now()
+    let answer: Promise<Response>
+    const release = decision()
+    if (!release) return
+    try {
+      const { off, kept } = standing()
+      const id = off ? null : identity(kept)
+      if (!id) return
+      const hour = new Date()
+      hour.setUTCMinutes(0, 0, 0)
+      const body = JSON.stringify({ v: 1, installation: id.who, events: [{ id: randomUUID(), name, at: hour.toISOString(), properties: fits }] })
+      // Whoever turned reporting off in the meantime has stopped waiting for this step to end
+      if (performance.now() - began > DECIDING_MOST_MS) return
+      answer = fetch(url(), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'user-agent': `it/${VERSION}` },
+        body,
+        redirect: 'error',
+        signal: AbortSignal.timeout(4000),
+      })
+    } finally {
+      release()
+    }
+    await answer.then((r) => void r.body?.cancel().catch(() => {}))
   } catch {}
 }
