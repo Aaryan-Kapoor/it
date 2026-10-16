@@ -577,7 +577,10 @@ const TYPES: Record<string, string> = {
   wasm: 'application/wasm',
 }
 export function contentType(path: string): string {
-  return TYPES[path.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream'
+  // Only what the table itself holds. A file may be named for a word every object has, such as
+  // `constructor`, and what an object has by nature under that name is no kind of file.
+  const ending = path.split('.').pop()?.toLowerCase() ?? ''
+  return Object.hasOwn(TYPES, ending) ? TYPES[ending]! : 'application/octet-stream'
 }
 
 /** A file in a version, as the CLI declares it and the backend records it. */

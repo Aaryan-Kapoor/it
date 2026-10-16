@@ -1,7 +1,7 @@
-// The content service's tests, with no browser: what a stranger, a script, or a confused client
-// would send. The service is called as the door calls it, with each request, the port it came
-// in on and the address it came from. The backend is stood in for by a key pair whose public
-// half is served the way the backend serves it.
+// The content service's tests, with no browser but in the last group: what a stranger, a
+// script, or a confused client would send. The service is called as the door calls it, with
+// each request, the port it came in on and the address it came from. The backend is stood in
+// for by a key pair whose public half is served the way the backend serves it.
 
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -13,6 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pipeline, Readable } from 'node:stream'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
+import { type Browser, type BrowserType, chromium, firefox } from 'playwright'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { type Asked, type ContentSettings, createContent, pagePolicy } from './src/index'
 import { limit } from './src/limits'
@@ -51,7 +52,7 @@ async function atTheNextFolder(): Promise<{ reached: Promise<void>; goOn(): void
 
 // The port the site would be on. Nothing listens on it or on the one after it: a request is
 // handed to the service with the port it is said to have come in on.
-const BASE = 7300
+const BASE = 27300
 /** The port pages are shown from. */
 const PAGES = BASE + 1
 const SITE = `http://localhost:${BASE}`
@@ -665,8 +666,8 @@ describe('bytes', () => {
     const r = await get(`${at}/v/1/index.html`, DOCUMENT)
     expect(r.status).toBe(200)
     expect(r.text).toContain('<h1>Private page</h1>')
-    // Inside <html>, ahead of everything else, the page's own script included
-    const html = r.text.indexOf('<html>'),
+    // Inside <head>, ahead of everything else, the page's own script included
+    const html = r.text.indexOf('<head>'),
       it = r.text.indexOf('window.__IT__='),
       own = r.text.indexOf('<script src="asset.js">')
     expect(it).toBeGreaterThan(html)
@@ -718,7 +719,7 @@ describe('bytes', () => {
     // Each page as it is sent, with a mark where It is. What a browser does not count as an
     // element (a doctype, comments of every shape, a closing tag, a stray "<") is passed over
     const sent: Record<string, string> = {
-      'doctype.html': '<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en">@<head><script>1</script></head></html>',
+      'doctype.html': '<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en"><head>@<script>1</script></head></html>',
       'quoted.html': `<html data-a="x>y" data-b='<head>' data-c=u/v>@<body><script>1</script></body></html>`,
       'head.html': '<!---><!----><!--a--!><HEAD >@<title>t</title></HEAD>',
       'slash.html': '<html/>@<p>x</p>',
@@ -726,7 +727,7 @@ describe('bytes', () => {
       'closing.html': `</a=b='>@<script>1</script>'><script>2</script>`,
       'named-like.html': '@<htmlx><head></head></htmlx>',
       // A file is read 64 KB at a time: here the first element's tag lies across the end of one piece
-      'across.html': `<!--${'-'.repeat(65_536 - 16)}--><html data-across="${'a>'.repeat(40)}">@<head></head></html>`,
+      'across.html': `<!--${'-'.repeat(65_536 - 16)}--><html data-across="${'a>'.repeat(40)}"><head>@</head></html>`,
       'late.html': `${'words '.repeat(40_000)}@<p>after a quarter of a megabyte</p>`,
       // A tag the page ends in the middle of is thrown away by a browser: It goes before it
       'unclosed-tag.html': 'words @<html lang="en',
@@ -852,6 +853,17 @@ describe('bytes', () => {
     for (const p of ['/v/1/..%2F..%2Fpage2%2F1%2Findex.html', '/v/1/%2e%2e/secret', '/v/1/a//b', '/v/1/%00', '/v/1/%E0%A4%A', '/v/1/docs%5Cread%20me.txt'])
       expect((await get(`${at}${p}`)).status, p).toBe(404)
     expect((await get(`${at}/v/1/missing.txt`)).status).toBe(404)
+  })
+
+  test('a file whose name ends in a word every object has is served as any file of no known kind is', async () => {
+    const prefix = `u/${USER}/named/1/`
+    const names = ['asset.constructor', 'constructor', 'asset.__proto__', '__proto__', 'asset.toString', 'asset.hasOwnProperty']
+    await seedFiles(prefix, { 'index.html': INDEX, ...Object.fromEntries(names.map((name) => [name, `the bytes of ${name}`])) })
+    const named = await open({ p: prefix, a: 'named', s: 'named' })
+    for (const name of names) {
+      const r = await get(`${named.at}/v/1/${name}`)
+      expect([name, r.status, r.headers.get('content-type'), r.text]).toEqual([name, 200, 'application/octet-stream', `the bytes of ${name}`])
+    }
   })
 
   test('a request that asks only what the answer would be is given its headers and no bytes', async () => {
@@ -2663,4 +2675,220 @@ describe('behind a real server', () => {
     await dropped.body!.cancel()
     expect((await fetch(`${at}/v/1/film.mp4`, { headers: { range: 'bytes=0-0' } })).status).toBe(206)
   })
+})
+
+// The one group that has a browser in it. What a page is sent is what the service sends, and
+// what the browser asks for in return is handed to the service, or, when it is for anywhere
+// else, written down and answered with nothing: no request leaves the browser. The browsers
+// are run where Playwright has them installed, and under Node, which is what Playwright runs under.
+const installed = (type: BrowserType) => {
+  try {
+    return !('Bun' in globalThis) && existsSync(type.executablePath())
+  } catch {
+    return false
+  }
+}
+const BROWSERS = [
+  ['Chromium', chromium],
+  ['Firefox', firefox],
+] as const
+for (const [name, type] of BROWSERS) {
+  const why = 'Bun' in globalThis ? 'Playwright, which runs the browser, does not run under Bun' : `Playwright has no ${name} installed on this machine`
+  if (!installed(type)) console.log(`  skip  the tests of where a page in ${name} sends its showing’s token: ${why}`)
+}
+describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
+  ownService()
+  /** The name the pages' port is reached by here, which is no machine's. */
+  const HOST = 'pages.invalid'
+  const OWN = `http://${HOST}:${PAGES}`
+  let browser: Browser
+  // A browser is slow to start on a machine that is busy
+  beforeAll(async () => {
+    if (installed(type)) browser = await type.launch({ timeout: 0 })
+  }, 300_000)
+  afterAll(() => browser?.close())
+
+  test.skipIf(!installed(type))(
+    'a page that takes its addresses from another site still keeps its showing at its own, and that site is asked for nothing that holds the showing’s token',
+    async () => {
+      const prefix = `u/${USER}/based/1/`
+      // A page that takes what it is made of from another site, as a page may: every address in
+      // it is read from there, and what it links to is opened in a window of its own
+      await seedFiles(prefix, {
+        'index.html':
+          '<!doctype html><html><head><base href="http://elsewhere.invalid/assets/" target="_blank"><script src="app.js"></script></head>' +
+          '<body><img src="logo.png"><a id="out" href="next.html">next</a><form id="ask"><input name="q" value="x"></form></body></html>',
+      })
+      const { at, token } = await open({ p: prefix, a: 'based', s: 'based' })
+      const context = await browser.newContext()
+      /** Everything the browser asked for: where, and what it said with it. */
+      const asked: { url: string; said: Record<string, string> }[] = []
+      await context.route('**/*', async (route) => {
+        const url = new URL(route.request().url())
+        asked.push({ url: url.href, said: route.request().headers() })
+        if (url.origin !== OWN) return route.fulfill({ status: 404, body: '' })
+        const r = await show(`${url.pathname}${url.search}`, { host: HOST, headers: route.request().headers() })
+        await route.fulfill({ status: r.status, headers: Object.fromEntries(r.headers), body: r.buf })
+      })
+      const tab = await context.newPage()
+      tab.setDefaultTimeout(120_000)
+      await tab.goto(`${OWN}${at}/v/1/index.html`, { waitUntil: 'load' })
+      const urls = () => asked.map((a) => a.url)
+      // The page's own addresses are read from the other site, as it said
+      expect(urls()).toEqual(expect.arrayContaining(['http://elsewhere.invalid/assets/app.js', 'http://elsewhere.invalid/assets/logo.png']))
+      // It asks to keep its showing where it was shown from, which is the one place the token is for
+      await tab.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+      await expect.poll(() => urls().filter((url) => url.endsWith('/__it/keep')), { timeout: 60_000 }).toEqual([`${OWN}${at}/__it/keep`])
+      // A link, which opens in a window of its own, and a form that names nowhere to go, which goes to the page's own address
+      await Promise.all([context.waitForEvent('page'), tab.click('#out')])
+      await expect.poll(urls, { timeout: 60_000 }).toContain('http://elsewhere.invalid/assets/next.html')
+      await Promise.all([context.waitForEvent('page'), tab.evaluate(() => (document.getElementById('ask') as HTMLFormElement).submit())])
+      await expect.poll(urls, { timeout: 60_000 }).toContain(`${OWN}${at}/v/1/index.html?q=x`)
+      // Of everything asked of anywhere else, nothing holds the token: not the address, and not what was said with it
+      const elsewhere = asked.filter((a) => !a.url.startsWith(`${OWN}/`))
+      expect(elsewhere.length).toBeGreaterThanOrEqual(3)
+      expect(elsewhere.filter((a) => JSON.stringify(a).includes(token))).toEqual([])
+      await context.close()
+    },
+    300_000,
+  )
+
+  test.skipIf(!installed(type))(
+    'a link still leads where it names without auditing the click or telling another site the showing address',
+    async () => {
+      const prefix = `u/${USER}/auditing/1/`
+      const ELSEWHERE = 'http://elsewhere.invalid:27302'
+      const link = `<a id="go" href="${ELSEWHERE}/target" target="_blank" rel="noreferrer" referrerpolicy="no-referrer" ping="${ELSEWHERE}/ping"><span>go</span></a>`
+      const pages: Record<string, string> = {
+        'external.html': link,
+        'fragment.html': `${link.replace(`${ELSEWHERE}/target`, '#end').replace('target="_blank"', '')}<p id="end">end</p>`,
+        'area.html': `<img width="40" height="40" usemap="#map" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"><map name="map"><area id="go" shape="rect" coords="0,0,40,40" href="${ELSEWHERE}/target" target="_blank" ping="${ELSEWHERE}/ping"></map>`,
+        'later.html': `<script>addEventListener('load', () => document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(`<div>${link}</div>`)}))</script>`,
+        'at-once.html': link,
+        'middle.html': link,
+        'plain.html': link.replace(` ping="${ELSEWHERE}/ping"`, ''),
+      }
+      await seedFiles(
+        prefix,
+        Object.fromEntries(
+          Object.entries(pages).map(([file, body]) => [file, `<html><head><meta name="referrer" content="no-referrer"></head><body>${body}</body></html>`]),
+        ),
+      )
+      const { at, token } = await open({ p: prefix, a: 'auditing', s: 'auditing' })
+      const results: unknown[] = []
+      for (const framed of [false, true])
+        for (const file of Object.keys(pages)) {
+          const context = await browser.newContext()
+          try {
+            const asked: { url: string; method: string; said: Record<string, string> }[] = []
+            await context.route('**/*', async (route) => {
+              const request = route.request()
+              const url = new URL(request.url())
+              const headers = await request.allHeaders()
+              if (url.origin === ELSEWHERE) {
+                asked.push({ url: url.href, method: request.method(), said: headers })
+                return route.fulfill({ status: 200, contentType: 'text/html', body: 'elsewhere' })
+              }
+              if (url.origin === `http://${HOST}:${BASE}`)
+                return route.fulfill({
+                  status: 200,
+                  contentType: 'text/html',
+                  body: `<iframe id="page" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" referrerpolicy="no-referrer" src="${OWN}${at}/v/1/${file}"></iframe>`,
+                })
+              if (url.origin !== OWN) return route.fulfill({ status: 404, body: '' })
+              const r = await show(`${url.pathname}${url.search}`, { host: HOST, headers })
+              await route.fulfill({ status: r.status, headers: Object.fromEntries(r.headers), body: r.buf })
+            })
+            const tab = await context.newPage()
+            tab.setDefaultTimeout(120_000)
+            await tab.goto(framed ? `http://${HOST}:${BASE}/` : `${OWN}${at}/v/1/${file}`, { waitUntil: 'load' })
+            const page = framed ? tab.frames().find((frame) => frame.url().startsWith(OWN))! : tab.mainFrame()
+            if (file === 'at-once.html')
+              await page.evaluate((ping) => {
+                const link = document.getElementById('go') as HTMLAnchorElement
+                link.ping = ping
+                link.onclick = () => {
+                  link.ping = ping
+                }
+                ;(link.firstElementChild as HTMLElement).click()
+              }, `${ELSEWHERE}/ping`)
+            else if (file === 'area.html') await page.locator('img').click({ position: { x: 10, y: 10 } })
+            else await page.locator('#go').click({ button: file === 'middle.html' ? 'middle' : 'left', noWaitAfter: true })
+            if (file === 'fragment.html') await expect.poll(() => page.url(), { timeout: 60_000 }).toContain('#end')
+            else await expect.poll(() => asked.some((r) => r.url.endsWith('/target') && r.method === 'GET'), { timeout: 60_000 }).toBe(true)
+            // An audit is sent separately from the navigation. Give either request time to reach the route.
+            await tab.waitForTimeout(100)
+            results.push([
+              file,
+              framed,
+              asked.some((r) => r.method === 'POST' || 'ping-from' in r.said || 'ping-to' in r.said),
+              JSON.stringify(asked).includes(token),
+            ])
+          } finally {
+            await context.close()
+          }
+        }
+      expect(results).toEqual([false, true].flatMap((framed) => Object.keys(pages).map((file) => [file, framed, false, false])))
+    },
+    300_000,
+  )
+
+  test.skipIf(!installed(type))(
+    'a page that says its address may be told to the sites it leads to is held to telling none of it, since its address holds its showing’s token',
+    async () => {
+      const prefix = `u/${USER}/telling/1/`
+      const ELSEWHERE = 'http://elsewhere.invalid'
+      const telling = (policy: string) => `<meta name="referrer" content="${policy}">`
+      // Each page says it in a way of its own, and then leads to another site: in a window of
+      // its own or in its own place, by a link, a form, a script, or by itself after a moment
+      const pages: Record<string, string> = {
+        'meta.html': `<html><head>${telling('unsafe-url')}</head><body><a id="go" target="_blank" href="${ELSEWHERE}/meta">go</a></body></html>`,
+        'old.html': `<html><head>${telling('no-referrer-when-downgrade')}</head><body><a id="go" href="${ELSEWHERE}/old">go</a></body></html>`,
+        'link.html': `<html><body><a id="go" target="_blank" referrerpolicy="unsafe-url" href="${ELSEWHERE}/link">go</a></body></html>`,
+        'form.html': `<html><head>${telling('unsafe-url')}</head><body><form action="${ELSEWHERE}/form"><button id="go">go</button></form></body></html>`,
+        'opened.html': `<html><head>${telling('unsafe-url')}</head><body><a id="go" onclick="window.open('${ELSEWHERE}/opened')">go</a></body></html>`,
+        // Said by the page's script, after the page was read: on the link, and then in the very moment before a window is opened
+        'later.html': `<html><body><a id="go" target="_blank" href="${ELSEWHERE}/later">go</a><script>document.getElementById('go').referrerPolicy = 'unsafe-url'</script></body></html>`,
+        'at-once.html': `<html><body><a id="go">go</a><script>document.getElementById('go').onclick = () => { document.head.insertAdjacentHTML('beforeend', '${telling('unsafe-url')}'); window.open('${ELSEWHERE}/at-once') }</script></body></html>`,
+        'refresh.html': `<html><head>${telling('unsafe-url')}<meta http-equiv="refresh" content="0;url=${ELSEWHERE}/refresh"></head><body></body></html>`,
+      }
+      await seedFiles(prefix, { 'index.html': 'nothing', ...pages })
+      const { at, token } = await open({ p: prefix, a: 'telling', s: 'telling' })
+      /** What each page said to the other site, by itself in a tab and then framed, as the site frames a page. */
+      const told: Record<string, unknown> = {}
+      for (const framed of [false, true])
+        for (const file of Object.keys(pages)) {
+          const context = await browser.newContext()
+          const asked: { url: string; said: Record<string, string> }[] = []
+          await context.route('**/*', async (route) => {
+            const url = new URL(route.request().url())
+            if (url.origin === ELSEWHERE) {
+              asked.push({ url: url.href, said: route.request().headers() })
+              return route.fulfill({ status: 200, contentType: 'text/html', body: 'elsewhere' })
+            }
+            // What stands for the site: a page on the site's port that frames the page
+            if (url.origin === `http://${HOST}:${BASE}`)
+              return route.fulfill({
+                status: 200,
+                contentType: 'text/html',
+                body: `<iframe id="page" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" referrerpolicy="no-referrer" src="${OWN}${at}/v/1/${file}"></iframe>`,
+              })
+            if (url.origin !== OWN) return route.fulfill({ status: 404, body: '' })
+            const r = await show(`${url.pathname}${url.search}`, { host: HOST, headers: route.request().headers() })
+            await route.fulfill({ status: r.status, headers: Object.fromEntries(r.headers), body: r.buf })
+          })
+          const tab = await context.newPage()
+          tab.setDefaultTimeout(120_000)
+          // A page that leaves by itself may have left before it is seen to have loaded
+          await tab.goto(framed ? `http://${HOST}:${BASE}/` : `${OWN}${at}/v/1/${file}`, { waitUntil: 'commit' })
+          if (file !== 'refresh.html') await (framed ? tab.frameLocator('#page').locator('#go') : tab.locator('#go')).click({ noWaitAfter: true })
+          const name = `${file}, ${framed ? 'framed' : 'by itself'}`
+          await expect.poll(() => [name, asked.length], { timeout: 60_000 }).toEqual([name, 1])
+          told[name] = JSON.stringify(asked).includes(token) ? 'its address, token and all' : 'nothing of its token'
+          await context.close()
+        }
+      expect(told).toEqual(Object.fromEntries(Object.keys(told).map((name) => [name, 'nothing of its token'])))
+    },
+    600_000,
+  )
 })

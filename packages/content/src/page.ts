@@ -1,10 +1,14 @@
 // Putting It first in a page, before any of the page's own scripts.
 //
-// It goes inside the page's <html> or <head> when the page begins with one, as that element's
-// first child; before the page's first element when it begins with anything else; and at the
-// end of a page that has no element in it at all (plain words, or only a comment), since
-// without it such a page could never say it has loaded, and the site would go on trying to
-// show it for ever.
+// It goes inside the page's <head> when the page begins with one, as that element's first
+// child; before the page's first element when it begins with anything else; and at the end of
+// a page that has no element in it at all (plain words, or only a comment), since without it
+// such a page could never say it has loaded, and the site would go on trying to show it for
+// ever.
+//
+// The page's own <html> is passed over as a doctype is, and the page begins with what follows
+// it. Put between an <html> and a <head>, It had a browser make a head for it, and the page's
+// own <head> was then thrown away as a second one, with everything the page wrote on it.
 //
 // The page is read a piece at a time and passed on as it is read. What comes before an element
 // is told apart as a browser tells it: a doctype, a comment, a closing tag and plain text are
@@ -127,9 +131,10 @@ export function withTags(page: ReadableStream<Uint8Array>, tags: Uint8Array): Re
   /** Pieces held back: from the "<" that may open a tag, up to where this piece began, and how many bytes they come to. */
   let held: Uint8Array[] | null = null
   let heldBytes = 0
-  /** Whether the tag being read is a closing one; the first element's name so far; and whether It goes inside that element. */
+  /** Whether the tag being read is a closing one; the name so far of the element it opens; whether that is the page's <html>, which is passed over; and whether It goes inside that element. */
   let closing = false
   let name = ''
+  let html = false
   let inside = false
   /** In a comment: how many dashes have just been read, whether they are still the ones that opened it, and whether "--!" has been. */
   let dashes = 0
@@ -150,12 +155,12 @@ export function withTags(page: ReadableStream<Uint8Array>, tags: Uint8Array): Re
       if (to > from) out(piece.subarray(from, to))
       from = to
     }
-    // The end of a tag. A closing tag is passed on: it is no element. With the first element's
-    // tag, It is placed: after the tag when it opens the page's <html> or <head>, and before it
-    // when it opens anything else.
+    // The end of a tag. A closing tag is passed on: it is no element. So is the page's <html>,
+    // which is not where the page begins. With the first element's tag, It is placed: after the
+    // tag when it opens the page's <head>, and before it when it opens anything else.
     const endTag = (i: number): boolean => {
       state = 'text'
-      if (closing) {
+      if (closing || html) {
         release(i + 1)
         return false
       }
@@ -242,7 +247,8 @@ export function withTags(page: ReadableStream<Uint8Array>, tags: Uint8Array): Re
             if (!closing && name.length <= 4) name += String.fromCharCode(c).toLowerCase()
             break
           }
-          inside = !closing && (name === 'html' || name === 'head')
+          html = !closing && name === 'html'
+          inside = !closing && name === 'head'
           if (c === GT) {
             if (endTag(i)) return
           } else state = 'tag'

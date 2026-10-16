@@ -59,6 +59,8 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
 let port: MessagePort | null = null
 let state: Record<string, unknown> = {}
 let revision = 0
+/** Whether the state has arrived. Its revision does not say: a page made with no state is sent an empty one at revision zero. */
+let arrived = false
 const listeners: Listener[] = []
 const waiting = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 const unsent: PageToSite[] = []
@@ -80,9 +82,42 @@ function get(obj: unknown, path: string): unknown {
 // "!path") shows or hides one.
 /** The elements a value from the state has been put into. What the page itself wrote in one, before any value came, is left as it is. */
 const filled = new WeakSet<Element>()
+const written = new WeakMap<Element, { state: unknown; value: string }>()
+const edited = new WeakSet<Element>()
+// Typing may begin before the first state arrives, when there is no value from a binding to compare it with.
+for (const event of ['input', 'change'])
+  document.addEventListener(
+    event,
+    (e) => {
+      if (e.target instanceof Element) edited.add(e.target)
+    },
+    true,
+  )
 function applyBindings(): void {
   for (const el of document.querySelectorAll<HTMLElement>('[data-it-bind]')) {
     const value = get(state, el.getAttribute('data-it-bind') ?? '')
+    if ((el instanceof HTMLInputElement && el.type !== 'checkbox') || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+      const last = written.get(el)
+      const text = value === undefined ? '' : String(value)
+      // A matching snapshot confirms the edit. Later changes can follow this new baseline,
+      // including when typing began before any state arrived.
+      if (el.value === text) {
+        written.set(el, { state: value, value: el.value })
+        edited.delete(el)
+        if (value === undefined) filled.delete(el)
+        else filled.add(el)
+        continue
+      }
+      // A snapshot may change only a status or a stored value. It must not replace an edit,
+      // even when the agent also changes or removes the value this field was bound to.
+      if (last ? el.value !== last.value || Object.is(value, last.state) : edited.has(el)) continue
+      if (value === undefined && !filled.has(el)) continue
+      el.value = text
+      written.set(el, { state: value, value: el.value })
+      if (value === undefined) filled.delete(el)
+      else filled.add(el)
+      continue
+    }
     if (value === undefined) {
       // The value it showed has been taken out of the state: it shows it no longer. Left up, a
       // status the agent had removed went on saying what it said, and an answer it had cleared stayed
@@ -143,8 +178,25 @@ function emit(): void {
   for (const l of [...listeners]) tell(l)
 }
 
+/**
+ * Hands one message to the site. A port sends a copy, and what cannot be copied (a function, an
+ * element of the page) it refuses by throwing. Whoever asked is told so, as of any refusal, and
+ * nothing else is held up by it: thrown on from here, it ended the sending of everything that
+ * had been held for the port, and what came after it was never sent or answered.
+ */
+function post(to: MessagePort, message: PageToSite): void {
+  try {
+    to.postMessage(message)
+  } catch {
+    if (!('requestId' in message)) return
+    const w = waiting.get(message.requestId)
+    waiting.delete(message.requestId)
+    w?.reject(new Error('That could not be sent: what an action or a stored value carries is plain data, with no function or element in it.'))
+  }
+}
+
 function send(message: PageToSite): void {
-  if (port) port.postMessage(message)
+  if (port) post(port, message)
   else unsent.push(message)
 }
 
@@ -159,6 +211,7 @@ function receive(message: SiteToPage): void {
   if (message.type === 'it:state') {
     state = (message.state ?? {}) as Record<string, unknown>
     revision = message.revision
+    arrived = true
     emit()
   } else if (message.type === 'it:result') {
     const w = waiting.get(message.requestId)
@@ -175,7 +228,7 @@ window.addEventListener('message', (e) => {
   if (e.source !== window.parent || e.origin !== config.app || e.data?.type !== 'it:port' || !e.ports[0] || port) return
   port = e.ports[0]
   port.onmessage = (m) => receive(m.data as SiteToPage)
-  for (const m of unsent.splice(0)) port.postMessage(m)
+  for (const m of unsent.splice(0)) post(port, m)
 })
 // This document's own name. The site answers each document once, however often it asks.
 const doc = id()
@@ -187,12 +240,17 @@ function hello(attempt = 0): void {
 
 // A page that sits still asks for nothing, and its showing would run out. Asking this keeps it,
 // and a refusal means it is over: the site is told, and shows the page again.
+// The address is given as a path, and it holds the showing's token. It is made whole here, from
+// where this document was shown from, before anything of the page's own has been read: a page
+// may name another site in a <base>, and a path asked for after that would be asked of that
+// site, token and all.
+const keepAt = new URL(config.keep, window.location.href).href
 let lapsed = false
 function keep(): void {
   // Asked whether or not the tab is showing: a tab the person has switched away from for a
   // while should still be as they left it when they come back
   if (lapsed) return
-  fetch(config.keep, { cache: 'no-store' }).then(
+  fetch(keepAt, { cache: 'no-store' }).then(
     (r) => {
       if (r.status !== 401 || lapsed) return
       lapsed = true
@@ -205,6 +263,58 @@ function keep(): void {
 setInterval(keep, 180_000)
 document.addEventListener('visibilitychange', keep)
 window.addEventListener('online', keep)
+
+// The address a page is shown from holds its showing's token, so nothing of it is to be told to
+// another site. Every answer from the pages' port says so, with `referrer-policy: no-referrer`,
+// but a page's own markup can say otherwise: in a <meta name="referrer">, or in a
+// `referrerpolicy` on a link. Where it does, Firefox sends the whole address, token and all, to
+// a site the page opens in a window of its own. So what a page says of it is put back to
+// telling nothing, as soon as it is in the document, and once more before the page's script
+// opens a window. This makes the leak hard to come by and does not rule it out: it is done a
+// moment after the markup is read and not before, and a document the page makes inside itself
+// is not watched.
+const TELLS_NOTHING = 'no-referrer'
+// A link's auditing request carries this address in its own headers, whatever its referrer policy says.
+function stopAuditing(el: Element): void {
+  if ((el.localName === 'a' || el.localName === 'area') && el.hasAttribute('ping')) el.removeAttribute('ping')
+}
+function quieten(el: Element): void {
+  stopAuditing(el)
+  if (el.localName === 'meta' && el.getAttribute('name')?.toLowerCase() === 'referrer' && el.getAttribute('content') !== TELLS_NOTHING)
+    el.setAttribute('content', TELLS_NOTHING)
+  if (el.hasAttribute('referrerpolicy') && el.getAttribute('referrerpolicy') !== TELLS_NOTHING) el.setAttribute('referrerpolicy', TELLS_NOTHING)
+}
+function quietenWithin(root: ParentNode): void {
+  for (const el of root.querySelectorAll('meta[name], [referrerpolicy], a[ping], area[ping]')) quieten(el)
+}
+new MutationObserver((changes) => {
+  for (const change of changes) {
+    if (change.type === 'attributes') quieten(change.target as Element)
+    else
+      for (const added of change.addedNodes) {
+        if (added.nodeType !== Node.ELEMENT_NODE) continue
+        quieten(added as Element)
+        quietenWithin(added as Element)
+      }
+  }
+}).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['name', 'content', 'referrerpolicy', 'ping'] })
+quietenWithin(document)
+// A script can activate a link before the observer runs. Check it on the way to its handlers
+// and again after them, including a link followed with the middle button.
+for (const event of ['click', 'auxclick'])
+  for (const capture of [true, false])
+    window.addEventListener(
+      event,
+      (e) => {
+        for (const el of e.composedPath()) if (el instanceof Element) stopAuditing(el)
+      },
+      capture,
+    )
+const openWindow = window.open
+window.open = function (this: Window, ...given: Parameters<typeof window.open>) {
+  quietenWithin(document)
+  return openWindow.apply(this, given)
+}
 
 // What the page's own script fails with is said to the site, which says it above the page. The
 // person cannot see a script fail: they see a button that does nothing, and take it for an
@@ -276,7 +386,7 @@ const api = {
   },
   onState(cb: Listener) {
     listeners.push(cb)
-    if (revision > 0) queueMicrotask(() => tell(cb))
+    if (arrived) queueMicrotask(() => tell(cb))
     return () => {
       const i = listeners.indexOf(cb)
       if (i !== -1) listeners.splice(i, 1)

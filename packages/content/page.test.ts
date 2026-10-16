@@ -14,6 +14,8 @@ import { withTags } from './src/page'
 const IT = '<script>(window.order = window.order || []).push("it")</script>'
 const OWN = '<script>(window.order = window.order || []).push("page")</script>'
 const TAGS = new TextEncoder().encode(IT)
+/** A script of the page's own that writes down what the page's head carries, as a page that reads its settings from there does. */
+const HEAD = '<script>(window.order = window.order || []).push("head " + document.head.id + " " + document.head.dataset.theme)</script>'
 
 /** A page as bytes, cut into pieces of a size, as a file is read. */
 function pieces(page: Uint8Array, size: number): ReadableStream<Uint8Array> {
@@ -45,6 +47,12 @@ const PAGES: Record<string, string | Buffer> = {
   'begins with a script': `${OWN}<p>words</p>${OWN}`,
   'begins with words, then <html>': `words <html lang="en">${OWN}`,
   'has <html> and then a <head> with attributes': `<html><head data-x="1">${OWN}</head></html>`,
+  'has a <head> whose attributes the page reads': `<html lang="en"><head id="top" data-theme="dark">${HEAD}</head><body>${OWN}</body></html>`,
+  'has a comment and a line between <html> and such a <head>': `<!doctype html><html>\n<!-- c -->\n<head id="top" data-theme="dark">${HEAD}</head></html>`,
+  'has <html> twice before such a <head>': `<html><html lang="en"><head id="top" data-theme="dark">${HEAD}</head></html>`,
+  'has a closing tag between <html> and such a <head>': `<html></p><head id="top" data-theme="dark">${HEAD}</head></html>`,
+  'has a closing tag that ends the head before such a <head>': `<html></br><head id="top" data-theme="dark">${HEAD}</head></html>`,
+  'has words between <html> and such a <head>': `<html>words<head id="top" data-theme="dark">${HEAD}</head></html>`,
   'has ">" in the attributes of <html>': `<html a=">" b='>' c=d/e>f>${OWN}`,
   'has a quote in an attribute’s name': `<div a"b='>${OWN}'>${OWN}`,
   'has a quote where an attribute would begin': `<div "a">${OWN}">${OWN}`,
@@ -254,11 +262,16 @@ describe('where It is put', () => {
     expect((await placed(unmarked)).equals(Buffer.concat([unmarked, TAGS]))).toBe(true)
   })
 
-  test('where the bytes go: inside <html> or <head>, before any other first element, and at the end of a page with none', async () => {
+  test('where the bytes go: inside a <head> that is the first element, after <html> or without it, before any other first element, and at the end of a page with none', async () => {
     const at = async (page: string) => (await placed(page)).toString().replace(IT, '@')
     expect(await at('<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en"><head></head></html>')).toBe(
-      '<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en">@<head></head></html>',
+      '<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en"><head>@</head></html>',
     )
+    // The page's own <html> is passed over, as often as it is written, and what follows it is looked at as if it came first
+    expect(await at('<html>\n<!-- c -->\n<head id="top"><title>t</title></head>')).toBe('<html>\n<!-- c -->\n<head id="top">@<title>t</title></head>')
+    expect(await at('<html><HTML lang="en"><body class="b">')).toBe('<html><HTML lang="en">@<body class="b">')
+    expect(await at('<html>')).toBe('<html>@')
+    expect(await at('<html><head')).toBe('<html>@<head')
     expect(await at('<!---><!----><!--a--!><HEAD ><title>t</title></HEAD>')).toBe('<!---><!----><!--a--!><HEAD >@<title>t</title></HEAD>')
     expect(await at('<html/><p>x</p>')).toBe('<html/>@<p>x</p>')
     expect(await at('</p>< 1 <? pi ?><!x>text <main id="m"></main>')).toBe('</p>< 1 <? pi ?><!x>text @<main id="m"></main>')
