@@ -317,11 +317,16 @@ beforeEach(() => {
       // On Windows each word is given in quotes, for the shell that starts the app to take off
       const args = process.platform === 'win32' ? given.map((word) => word.replace(/^"(.*)"$/, '$1')) : given
       ran.push({ bin, args: args.join(' '), env: options.env })
-      try {
-        done(null, standIn(bin, args, options.env), '')
-      } catch (err) {
-        done(err as Error, '', (err as Error).message)
-      }
+      // Real app commands reply on a later event-loop turn. A synchronous callback lets
+      // hundreds of filesystem tests run without processing the worker's RPC replies,
+      // long enough on Windows for Vitest to time out even though every test passes.
+      setImmediate(() => {
+        try {
+          done(null, standIn(bin, args, options.env), '')
+        } catch (err) {
+          done(err as Error, '', (err as Error).message)
+        }
+      })
     },
   )
 })
