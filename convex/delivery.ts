@@ -66,10 +66,57 @@ const READ_MOST = 12 * 1024 * 1024
 const CLICK_BESIDE = 2048
 const CLICK_MOST = LIMITS.actionPayloadBytes + CLICK_BESIDE
 
+async function listeningRows(
+  ctx: QueryCtx,
+  user: Doc<'users'>,
+  machine: Doc<'machines'>,
+  listening: { harness: string; id: string }[],
+  read: (rows: Doc<'actions'>[]) => Doc<'actions'>[],
+) {
+  const rows: Doc<'actions'>[] = []
+  // Every conversation the connector may name is looked at first, a few clicks each, oldest
+  // first, so that each has its place whatever else is waiting. Read by the person and the
+  // conversation: a click whose page belonged to a machine that is gone (the person signed
+  // this computer in again, say) has no machine, and still belongs to the conversation that
+  // is here and listening.
+  for (const s of listening.slice(0, LISTENING_MOST)) {
+    // This machine's own, and those with no machine, are each read by themselves: read
+    // together with everything else waiting for the conversation, a few clicks that are
+    // another machine's, or were set aside, could stand in front of one this machine may take.
+    const route = (machineId: Id<'machines'>) =>
+      ctx.db
+        .query('actions')
+        .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id))
+    // These come first and are at most four for each of forty conversations, which is within what may be read whatever they carry
+    const own = read(await route(machine._id).take(2))
+    // Those with no machine are read as exactly the ones this machine may take: this
+    // person's, and not set aside. One that a machine set aside has no machine either, and is
+    // not offered again: it waits for `it wait` and the site, until its page changes hands.
+    // Nothing is read and then left out, so no number of clicks that may not be taken,
+    // another person's or set aside, can stand in front of one that may; and the oldest of
+    // them are the ones offered.
+    const loose = read(
+      await ctx.db
+        .query('actions')
+        .withIndex('by_user_route', (q) =>
+          q
+            .eq('userId', user._id)
+            .eq('delivery', 'pending')
+            .eq('harness', s.harness)
+            .eq('sessionId', s.id)
+            .eq('machineId', undefined)
+            .eq('parkedBy', undefined),
+        )
+        .take(2),
+    )
+    rows.push(...[...own, ...loose].sort((a, b) => a.createdAt - b.createdAt).slice(0, 2))
+  }
+  return rows
+}
+
 /**
- * The clicks this machine can deliver right now. Its connector subscribes to this, and says
- * which conversations are listening. Clicks for conversations that are not are left out, so
- * that a pile of clicks nobody can take never hides one that somebody can.
+ * The array inbox for connectors without paging. Listening conversations have reserved
+ * places; queues use fixed samples. The paged inbox below advances through every name.
  */
 export const inbox = query({
   args: { listening: v.array(session), queues: v.optional(v.array(v.string())) },
@@ -89,49 +136,12 @@ export const inbox = query({
       for (const x of got) left -= bytes.encode(x.payload).length + CLICK_BESIDE
       return got
     }
-    // Every conversation the connector may name is looked at first, a few clicks each, oldest
-    // first, so that each has its place whatever else is waiting. Read by the person and the
-    // conversation: a click whose page belonged to a machine that is gone (the person signed
-    // this computer in again, say) has no machine, and still belongs to the conversation that
-    // is here and listening.
-    for (const s of listening.slice(0, LISTENING_MOST)) {
-      // This machine's own, and those with no machine, are each read by themselves: read
-      // together with everything else waiting for the conversation, a few clicks that are
-      // another machine's, or were set aside, could stand in front of one this machine may take.
-      const route = (machineId: Id<'machines'>) =>
-        ctx.db
-          .query('actions')
-          .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id))
-      // These come first and are at most four for each of forty conversations, which is within what may be read whatever they carry
-      const own = read(await route(machine._id).take(2))
-      // Those with no machine are read as exactly the ones this machine may take: this
-      // person's, and not set aside. One that a machine set aside has no machine either, and is
-      // not offered again: it waits for `it wait` and the site, until its page changes hands.
-      // Nothing is read and then left out, so no number of clicks that may not be taken,
-      // another person's or set aside, can stand in front of one that may; and the oldest of
-      // them are the ones offered.
-      const loose = read(
-        await ctx.db
-          .query('actions')
-          .withIndex('by_user_route', (q) =>
-            q
-              .eq('userId', user._id)
-              .eq('delivery', 'pending')
-              .eq('harness', s.harness)
-              .eq('sessionId', s.id)
-              .eq('machineId', undefined)
-              .eq('parkedBy', undefined),
-          )
-          .take(2),
-      )
-      rows.push(...[...own, ...loose].sort((a, b) => a.createdAt - b.createdAt).slice(0, 2))
-    }
+    rows.push(...(await listeningRows(ctx, user, machine, listening, read)))
     // A harness with a queue of its own takes a click whether or not its conversation is open.
     // Read conversation by conversation, the oldest few of each: one conversation that takes
     // nothing (its thread is gone, say) then stands in the way of no other, and within each,
-    // what was pressed first is delivered first. The conversations are found three ways, so that
-    // no number of them that take nothing can hide one that would: by which have waited
-    // longest, by which were pressed most recently, and in the order of their names.
+    // what was pressed first is delivered first. These fixed samples find conversations by
+    // which have waited longest, by which were pressed most recently, and by their names.
     //
     // A harness whose closed conversations are reopened is read the same way, with three
     // things more. It is read only where the person has switched that on for it on this
@@ -236,6 +246,115 @@ export const inbox = query({
       ctx,
       rows.filter((x) => !seen.has(x._id) && seen.add(x._id)),
     )
+  },
+})
+
+/**
+ * A bounded page of the inbox. The connector keeps each app's last conversation name and
+ * advances once a second, including while everything on the current page remains pending.
+ * Names are keyset cursors: deleting a conversation or adding clicks to an earlier one never
+ * moves the cursor backwards. Reaching the end starts the next pass at the beginning.
+ */
+export const inboxPage = query({
+  args: {
+    listening: v.array(session),
+    queues: v.optional(v.array(v.string())),
+    after: v.array(session),
+  },
+  handler: async (ctx, { listening, queues, after }) => {
+    const { user, machine } = await requireMachine(ctx)
+    let left = READ_MOST
+    const bytes = new TextEncoder()
+    const read = (rows: Doc<'actions'>[]) => {
+      for (const x of rows) left -= bytes.encode(x.payload).length + CLICK_BESIDE
+      return rows
+    }
+    const rows = await listeningRows(ctx, user, machine, listening, read)
+    const next: { harness: string; id: string }[] = []
+    const asked = [...new Set(queues ?? [])].filter((h) => ([...QUEUES, ...WAKES] as readonly string[]).includes(h)).slice(0, 8)
+    for (const [nth, harness] of asked.entries()) {
+      const reopened = !(QUEUES as readonly string[]).includes(harness)
+      const on = wakesOn(machine.system) ? (machine.wakes ?? []).find((w) => w.harness === harness) : undefined
+      if (reopened && !on) continue
+      const from = reopened ? on!.since - WAKE_BACK_MS : 0
+      const each = reopened ? WAKE_MOST : 2
+      // Every app keeps a share of both the response and the read allowance. A conversation
+      // reserves five reads: discovery, its two oldest clicks, and the oldest attended click in
+      // each of the two forms stored by current and older clients. It reserves two response
+      // places so that a person's click can accompany the oldest timer click.
+      const remaining = asked.length - nth
+      const until = left - left / remaining
+      const may = () => Math.max(0, Math.floor((left - until) / CLICK_MOST))
+      let places = Math.floor((150 - rows.length) / remaining)
+      const count = Math.min(12, Math.floor(places / 2), Math.floor(may() / 5))
+      let cursor = after.find((s) => s.harness === harness)?.id ?? ''
+      const found: string[] = []
+      for (let n = 0; n < count; n++) {
+        const head = await ctx.db
+          .query('actions')
+          .withIndex('by_route', (q) => q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).gt('sessionId', cursor))
+          .first()
+        if (!head?.sessionId) {
+          cursor = ''
+          break
+        }
+        read([head])
+        cursor = head.sessionId
+        found.push(cursor)
+      }
+      next.push({ harness, id: cursor })
+      for (const [n, sessionId] of found.entries()) {
+        const rest = found.length - n - 1
+        const stopped = reopened ? ((machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)?.at ?? 0) : 0
+        const since = Math.max(from - 1, stopped)
+        // Leave four reads and two response places for each later conversation, and two
+        // reads for this conversation's attended lookup. Extra places carry its oldest work.
+        const want = Math.min(each, places - 2 * rest, may() - 4 * rest - 2)
+        const batch = read(
+          await ctx.db
+            .query('actions')
+            .withIndex('by_route', (q) =>
+              q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gt('createdAt', since),
+            )
+            .take(want),
+        )
+        if (batch.length && batch.every((c) => c.attended === false)) {
+          const attended: Doc<'actions'>[] = []
+          for (const present of [true, undefined]) {
+            const first = await ctx.db
+              .query('actions')
+              .withIndex('by_attended_route', (q) =>
+                q
+                  .eq('machineId', machine._id)
+                  .eq('delivery', 'pending')
+                  .eq('harness', harness)
+                  .eq('sessionId', sessionId)
+                  .eq('attended', present)
+                  .gt('createdAt', since),
+              )
+              .first()
+            if (first) attended.push(...read([first]))
+          }
+          attended.sort((a, b) => a.createdAt - b.createdAt || a._creationTime - b._creationTime)
+          if (attended[0]) {
+            // The oldest attended click may pass older timer clicks. All selected clicks
+            // retain their order, and the omitted timers stay pending for the next batch.
+            if (batch.length === want) batch.pop()
+            batch.push(attended[0])
+          }
+        }
+        places -= batch.length
+        rows.push(...batch)
+      }
+    }
+    const seen = new Set<string>()
+    return {
+      clicks: await asClicks(
+        ctx,
+        rows.filter((x) => !seen.has(x._id) && seen.add(x._id)),
+      ),
+      after: next,
+    }
   },
 })
 
