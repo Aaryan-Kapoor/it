@@ -483,9 +483,26 @@ async function tourWhenAsked(a: Args) {
   const seconds = text(a, 'timeout') === undefined ? 100 : Number(text(a, 'timeout'))
   if (!Number.isFinite(seconds) || seconds <= 0) throw new Problem('--timeout is a number of seconds.', 'invalid')
   const harness = sessionAsked()?.session.harness
-  const until = Date.now() + seconds * 1000
+  const until = performance.now() + seconds * 1000
+  const waitId = crypto.randomUUID()
+  let first = true
   for (;;) {
-    const { asked } = await call<{ asked: boolean }>('mutation', api.tour.wait, harness ? { harness } : {})
+    const answer = await call<{ asked: boolean }>('mutation', api.tour.wait, {
+      waitId,
+      ...(first ? { first: true } : {}),
+      ...(harness ? { harness } : {}),
+    }).catch((err) => {
+      if (
+        err instanceof Problem &&
+        err.code === 'conflict' &&
+        err.message === 'The person said on the site that they want no tour, so there is nothing to wait for. Give the tour when they ask you for it.'
+      )
+        return null
+      throw err
+    })
+    first = false
+    if (answer === null) return out({ skipped: true, hint: 'The person skipped the tour.' })
+    const { asked } = answer
     if (asked) {
       // What the person does on the tour's first page may come before this agent's first wait
       // for it. The connector is told now that this conversation waits for each thing in turn,
@@ -498,11 +515,11 @@ async function tourWhenAsked(a: Args) {
       }
       return written(process.stdout, tourForOneThatWaited(GUIDE))
     }
-    const left = until - Date.now()
+    const left = until - performance.now()
     if (left <= 0) break
     await new Promise((r) => setTimeout(r, Math.min(TOUR_ASK_EVERY_MS, left)))
   }
-  await call('mutation', api.tour.leave, {}).catch(() => {})
+  await call('mutation', api.tour.leave, { waitId }).catch(() => {})
   return out({
     timedOut: true,
     hint: 'Nobody has pressed "Take the tour" on the site yet. Run this again to go on waiting. If the person has not opened the pairing link yet, that comes first.',

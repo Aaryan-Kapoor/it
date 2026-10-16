@@ -2504,6 +2504,9 @@ describe('the lock one program holds while it changes what is installed', () => 
       // look at a holder starts it, so a round that takes moments elsewhere takes a while there.
       const ofTheSystem = process.platform === 'win32' ? process.env : {}
       const slow = process.platform === 'win32'
+      // Every program this test starts, and what would end those of a round that are late
+      const started: { child: ReturnType<typeof spawn>; ended: Promise<number | null> }[] = []
+      let late: ReturnType<typeof setTimeout> | undefined
       try {
         for (let round = 0; round < 5; round++) {
           const [tally, go] = [path.join(scratch, `tally-${round}`), path.join(scratch, `go-${round}`)]
@@ -2516,18 +2519,28 @@ describe('the lock one program holds while it changes what is installed', () => 
             let said = ''
             child.stdout.on('data', (piece: Buffer) => (said += piece))
             child.stderr.on('data', (piece: Buffer) => (said += piece))
-            return {
+            const contender = {
               child,
               ready: () => said.includes('ready'),
               said: () => said,
-              ended: new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code))),
+              ended: new Promise<number | null>((resolve) => {
+                // Ended, with all it said read: what it said is looked at next
+                child.once('close', (code) => resolve(code))
+                // One that could not be started has ended too, and why is kept with what it said
+                child.once('error', (err) => {
+                  said += String(err)
+                  resolve(null)
+                })
+              }),
             }
+            started.push(contender)
+            return contender
           })
-          // All three are there before any of them comes for the lock
-          await vi.waitFor(() => expect(contenders.every((c) => c.ready())).toBe(true), { timeout: 30_000 })
+          // All three are there before any of them comes for the lock. One that is not is shown with what it said in place of being ready
+          await vi.waitFor(() => expect(contenders.map((c) => c.ready() || c.said())).toEqual([true, true, true]), { timeout: 30_000 })
           writeFileSync(go, '')
           // One that has not ended in a minute never will, or in three on Windows: said with what there is to go by, where the test's own time running out says nothing
-          const late = setTimeout(
+          late = setTimeout(
             () => {
               for (const c of contenders) c.child.kill()
             },
@@ -2555,6 +2568,12 @@ describe('the lock one program holds while it changes what is installed', () => 
           expect([round, beside()]).toEqual([round, []])
         }
       } finally {
+        // A round that failed before its three had ended leaves them waiting for a word that
+        // never comes, in a folder that is about to go. Whatever is still running is ended, and
+        // is seen to have ended, before the folder is taken away
+        clearTimeout(late)
+        for (const { child } of started) if (child.exitCode === null && child.signalCode === null) child.kill()
+        await Promise.all(started.map((c) => c.ended))
         rmSync(scratch, { recursive: true, force: true })
       }
     },

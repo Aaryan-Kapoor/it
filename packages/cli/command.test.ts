@@ -417,6 +417,36 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test('`it tour --wait` ends when the backend turns it away, as it does once the person has said they want no tour, and says why', async () => {
+    const m = machine()
+    const NONE = 'The person said on the site that they want no tour, so there is nothing to wait for. Give the tour when they ask you for it.'
+    let waits = 0
+    const b = await backend(m, (asked) =>
+      asked.path !== 'tour:wait' ? null : ++waits < 2 ? { asked: false } : new Refusal({ code: 'conflict', message: NONE }),
+    )
+    try {
+      const turnedAway = await run(m, ['tour', '--wait'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' })
+      expect([turnedAway.code, printed(turnedAway), turnedAway.err]).toEqual([0, { skipped: true, hint: 'The person skipped the tour.' }, ''])
+      // It asked no more after that, and had nothing to take back: the backend no longer says that it waits
+      expect(b.asked.map((x) => x.path)).toEqual(['tour:wait', 'tour:wait'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a tour wait that lost its registration reports a conflict, without claiming that the person skipped', async () => {
+    const m = machine()
+    const message = 'This tour wait is no longer current. Run it tour --wait again if the person wants a tour.'
+    const b = await backend(m, () => new Refusal({ code: 'conflict', message }))
+    try {
+      const ran = await run(m, ['tour', '--wait'], b.env)
+      expect([ran.code, ran.out, error(ran)]).toEqual([1, '', { code: 'conflict', message }])
+      expect(b.asked.map((x) => x.path)).toEqual(['tour:wait'])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it tour --wait` says it is waiting until the person asks for the tour on the site, prints the tour then, and says when nobody asked', async () => {
     const m = machine()
     let waits = 0
@@ -428,17 +458,19 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       // What is different for an agent that has just installed It comes first, and then the tour as `it tour` prints it
       expect(given.out).toMatch(/^The person pressed "Take the tour" on It's site a moment ago/)
       expect(given.out).toContain('# The It tour')
-      // The tour's first rule is another for such an agent, in the place of the one that sends it to a waiter in the background
+      // The tour's first rule is another for such an agent, in the place of the one that has an agent wait only where nothing arrives by itself
       expect(given.out).toContain('1. **Wait for each thing they do.**')
       expect(given.out).toContain('run `it wait --timeout 100` and act on what it prints')
       expect(given.out).not.toContain('1. **Never block.**')
-      expect(given.out).not.toContain('start `it wait --follow` once, in the background')
+      expect(given.out).not.toContain('Where what they do does arrive by itself, do not wait at all')
       // And the tour as anyone else is given it still has the rule that is replaced here
       expect((await run(m, ['tour'], env)).out).toContain('1. **Never block.**')
       // It said so twice, as the agent app it was run from, and did not say it had given up
+      const waitId = b.asked[0]!.args.waitId
+      expect(waitId).toMatch(/^[0-9a-f-]{36}$/)
       expect(b.asked.map((x) => [x.path, x.args])).toEqual([
-        ['tour:wait', { harness: 'pi' }],
-        ['tour:wait', { harness: 'pi' }],
+        ['tour:wait', { harness: 'pi', waitId, first: true }],
+        ['tour:wait', { harness: 'pi', waitId }],
       ])
       // With the time up and nobody having asked, that is said, and It is told that nobody waits any more
       b.asked.length = 0
@@ -446,7 +478,11 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       const nobody = await run(m, ['tour', '--wait', '--timeout', '1'], env)
       expect(nobody.code).toBe(0)
       expect(JSON.parse(nobody.out)).toMatchObject({ timedOut: true })
-      expect(b.asked.at(-1)!.path).toBe('tour:leave')
+      const nextId = b.asked[0]!.args.waitId
+      expect(nextId).not.toBe(waitId)
+      expect(b.asked[0]!.args.first).toBe(true)
+      expect(b.asked.slice(1).every((x) => x.args.waitId === nextId && x.args.first === undefined)).toBe(true)
+      expect(b.asked.at(-1)).toMatchObject({ path: 'tour:leave', args: { waitId: nextId } })
       const refused = await run(m, ['tour', '--wait', '--timeout', 'soon'], env)
       expect(refused.code).not.toBe(0)
       expect(refused.err).toContain('--timeout is a number of seconds.')

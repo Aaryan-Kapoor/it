@@ -6,7 +6,7 @@ The tour is a menu of things It can be, each a page that is already made, and an
 
 ## Rules
 
-1. **Never block.** What the person does on a page arrives in this conversation by itself, as a message that begins `[It]`, where It's add-on for your harness is connected. `it status` says whether it is: your harness has `"addon": "connected"`, and `connector` has `"ok": true`. If it is not, start `it wait --follow` once, in the background, before the first page, and leave it running for the whole tour. Both being so is needed and is not proof: an agent app may not let an add-on speak where you are running, as Hermes does not in its messaging gateway. So if the person says they picked something and nothing reached you, start the waiter then, and read what it has printed. Where `it wait --follow` is refused because your harness does not tell `it` which conversation this is, name the page that is on the screen, and start it again for each page you show: `it wait --id tour-menu --follow`. Do not run `it wait` in the foreground at any point: it holds your terminal, so the person cannot talk to you.
+1. **Never block.** What the person does on a page arrives in this conversation by itself, as a message that begins `[It]`, where It's add-on for your harness is connected. `it status` says whether it is: your harness has `"addon": "connected"`, and `connector` has `"ok": true`. If it is not, nothing arrives by itself, so wait for each thing they do: after every page you show and every answer you give, run `it wait --timeout 100` and act on what it prints, which is an action, or `{"timedOut": true}` when nothing has happened yet, and then you run it again. Both being so is needed and is not proof: an agent app may not let an add-on speak where you are running, as Hermes does not in its messaging gateway. So if the person says they picked something and nothing reached you, wait in that way from then on. Where `it wait` is refused because your harness does not tell `it` which conversation this is, name the page that is on the screen: `it wait --id tour-menu --timeout 100`. Where what they do does arrive by itself, do not wait at all: a wait holds your terminal, so the person cannot talk to you. And do not use `--follow` or put a wait in the background: the command has to end for you to be shown what it printed.
 2. **Say the quoted lines as they are written.** Each page has a line under **Then say**. Send it as it is. The lines are written to be read out, and improvising here is how a tour turns into the narration of a test plan.
 3. **Show before you speak.** `it tour show` publishes a page and brings it up, in one move. Each page below gives the command and then the line, in that order. In most agent apps your turn ends when you have spoken, so a line said before its page leaves the person reading a sentence and looking at nothing.
 4. **Answer on the page, and say little.** What you do in answer goes into the page's state, with the command its section gives, and the page shows it. In the chat, one short sentence is plenty, and for a move in a game, a few words. Never describe what the page already shows. The person may also type to you in the box above a page: that arrives as an action named `it:message` with their words in `text`, and is answered above the page, with `it say <the page's id> "…"`, since the chat is not where they are looking.
@@ -22,7 +22,7 @@ it displays
 
 If the list is empty, or every display in it has `"paired": false`, the person has no screen paired. Tell them to run `it site`, which opens the site in a browser and pairs that browser, and wait for them. If more than one display is paired, use the one they are most likely looking at, and add `--on "<its name>"` to every `it tour show` below. What `it tour show` prints says which displays were asked to bring the page up, in `shownOn`: if that is empty, nobody is looking at the page, so say that in place of the page's line.
 
-Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written.
+Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written. Keep the `id` and `version` printed by each `it tour show`: together they identify the showing now on the screen.
 
 ## The menu
 
@@ -44,6 +44,45 @@ it tour show next
 
 The menu also has **That's enough for now**, which arrives as **`done`**: go to the ending.
 
+A page gives its buttons back to the person when it is still on the screen forty seconds after one was pressed, and they may press again. So `next` and `menu` carry `from`, the page they were pressed on, and so do `pick`, `done` and `finish`. All five carry `from_version`, the version of that showing, and `attempt`, an increasing number saved before sending so a reload of the same showing continues the count. They also carry `attempt_display`, a random tie-breaker made once per page load and saved with the counter. It stays the same for every action from that load and is never copied from the shared store. Before acting on `pick`, `next`, `menu`, `done` or `finish`, check the showing and attempt with the rules below. If those fields are not shown in the message, run `it action <the action's id>`: its `page` and `version` identify the showing, and its `data` holds the attempt and choice.
+
+The person's latest action on one display wins on every tour page. Across displays, order attempts by the counter first, then by `attempt_display` using JavaScript's string comparison, not locale order. Equal counters therefore have one winner regardless of the order they arrive. This is the tour's rule for simultaneous displays: there is no shared allocation or clock, so it does not claim which simultaneous choice happened last.
+
+Keep `tour.current` as `{ from: <page name>, version: <its version>, attempt: 0, attempt_display: "", choice: null, wanted: null }` for the showing now on the screen, and start with `tour.previous = null`. The previous record is the showing whose action brought up the current page. Keep it after showing a choice, the menu or the ending, or building what they named. A higher attempt pair from that showing replaces its earlier choice even when its page is no longer current. If several actions from one showing are already available, process only the highest `attempt` pair and acknowledge the others without navigating. If chess arrives first and drums later with a higher pair, show drums; if drums arrives first, ignore chess when it arrives. The same rule applies to Next followed by All of them, and Finish followed by See another one.
+
+Apply `takeTourAttempt` when a navigation action arrives. A false result means acknowledge without navigating. A true result means prepare the requested navigation. Immediately before running its command, apply `commitTourAttempt`; a false result means it was superseded, so acknowledge it without running that command. Run navigation commands one at a time, never in parallel. Keep `tour.current` until a command succeeds, then replace it with a fresh record for the `id` and `version` it printed, keeping `tour.previous`. If the command fails, leave `tour.current` as it is and set `tour.previous.choice` back to `null` so a fresh attempt can try again. The page still on the screen must remain current so its Next and All of them buttons can navigate. An identical choice advances the attempt without restarting a page already shown; an unfinished identical choice may still complete.
+
+```js
+function takeTourAttempt(tour, name, data) {
+  const matches = (showing) => showing && data.from === showing.from && data.from_version === showing.version;
+  const showing = matches(tour.current) ? tour.current : matches(tour.previous) ? tour.previous : null;
+  if (!showing) return false;
+  const allowed = data.from === "menu" ? ["pick", "done"] : data.from === "done" ? ["menu", "finish"] : ["next", "menu"];
+  if (!allowed.includes(name)) return false;
+  if (!Number.isSafeInteger(data.attempt) || data.attempt < 1 || typeof data.attempt_display !== "string" || !data.attempt_display) return false;
+  if (data.attempt < showing.attempt || (data.attempt === showing.attempt && data.attempt_display <= showing.attempt_display)) return false;
+  showing.attempt = data.attempt;
+  showing.attempt_display = data.attempt_display;
+  showing.wanted = JSON.stringify([name, data.choice || null, data.text || null]);
+  if (showing.wanted === showing.choice) return false;
+  tour.previous = showing;
+  return true;
+}
+
+function commitTourAttempt(tour, name, data) {
+  const showing = tour.previous;
+  if (!showing || data.from !== showing.from || data.from_version !== showing.version || data.attempt !== showing.attempt || data.attempt_display !== showing.attempt_display) return false;
+  const choice = JSON.stringify([name, data.choice || null, data.text || null]);
+  if (choice !== showing.wanted) return false;
+  showing.choice = choice;
+  return true;
+}
+```
+
+Acknowledge every handled, older or identical action with `it ack <the action's id>`. Accepting navigation from the current destination replaces the previous record and retires the earlier source. A newer attempt from the previous source retires the destination only when its replacement command succeeds. A showing brought up independently, such as a spoken request to return to the tour, also retires both records. Retired requests are discarded and acknowledged, even if you later return to the same page. After clearing the tour, set both records to `null`.
+
+Before handling Finish, read `it actions --id tour-done` and consider every available attempt from that showing. Apply `commitTourAttempt` immediately before `it tour clear`, after processing any newer navigation received while preparing to finish. An older Finish must never clear a menu or another page brought up by a newer action. Once a current Finish clears the tour, discard all further actions from its retired showings.
+
 ## The whiteboard
 
 ```sh
@@ -60,9 +99,9 @@ it action <the action's id> --save drawing.png
 
 If it says that `drawing.png` is there already, that file is the person's: save under another name, and use that name from here on.
 
-**Look at the picture.** Read that file with whatever you read images with, and delete it when you have: the one you saved is yours, and the person did not ask for a file in their folder. Do not decode the picture yourself and do not save it anywhere else, such as `/tmp`: your harness may stop to ask the person about either, and they are looking at the whiteboard, not at you. Where `png` is `null` the drawing was too large to send as a picture, and the strokes are all there is (`it action <the action's id>` prints them): each is `{ points: [[x, y], …], width, erase, color }`, with `x` and `y` from 0 to 1 and the origin at the top left.
+**Look at the picture.** Read that file with whatever you read images with, and delete it when you have: the one you saved is yours, and the person did not ask for a file in their folder. Do not decode the picture yourself and do not save it anywhere else, such as `/tmp`: your harness may stop to ask the person about either, and they are looking at the whiteboard, not at you. Where `png` is `null` the drawing was too large to send as a picture, and the strokes are all there is (`it action <the action's id>` prints them): each is `{ points: [[x, y], …], width, erase, color }`, with `x` and `y` from 0 to 1 and the origin at the top left. Where `strokes` is empty the drawing had more lines than an action holds, and the picture is all there is.
 
-Then draw back, in the same form, adding to their drawing and not starting your own in a corner, and say on the board what you saw. Your lines are drawn in green:
+Then draw back, in the same form, adding to their drawing and not starting your own in a corner, and say on the board what you saw. Your lines are drawn in green. `agent_strokes` is the whole of what you have drawn, so give all of it each time:
 
 ```sh
 it set tour-whiteboard agent_strokes '[{"points":[[0.55,0.30],[0.75,0.30],[0.75,0.55],[0.55,0.55],[0.55,0.30]],"width":4}]'
@@ -70,6 +109,12 @@ it set tour-whiteboard note "saw a house, and gave it a neighbour"
 ```
 
 **Say:** one sentence about what they drew. Not "I received your drawing". If it is a house, say that it is a house. If you cannot tell what it is, say so cheerfully. This one sentence is the whole point of the page. They may draw and send again: answer each one.
+
+`cleared` means they wiped the board, your lines with their own. Take yours out of the state too, since the board draws whatever is there again with the next thing you set, and say nothing:
+
+```sh
+it patch tour-whiteboard '{"agent_strokes":[],"note":""}'
+```
 
 ## The chessboard
 
@@ -79,13 +124,13 @@ it tour show chess
 
 **Then say:** "You're white. Make a move, and I'll answer on the board."
 
-Each `move` action carries `move` (theirs, as `e2e4`), `said` (the same in words), `fen` (the position after it), `legal` (every move you may make, in the same form), `check`, and `over` (`null`, `"checkmate"` or `"stalemate"`). Answer with one of the moves in `legal`, and only one of those:
+Each `move` action carries `request` (the id of this move), `move` (theirs, as `e2e4`), `said` (the same in words), `fen` (the position after it), `legal` (every move you may make, in the same form), `check`, and `over` (`null`, `"checkmate"` or `"stalemate"`). Answer with the exact `request` id, a colon, and one of the moves in `legal`. For a request named `k3fq`:
 
 ```sh
-it set tour-chess reply e7e5
+it set tour-chess reply k3fq:e7e5
 ```
 
-Play properly: develop, take what is hanging, do not walk into mate. Losing on purpose is obvious and insults them. In the chat, say a few words at most ("Knight out." / "Check."), and nothing at all is fine: the board is the conversation. If an `illegal` action arrives, the move you set was not one of the legal ones: set another from the `legal` it carries, and say nothing of it. When `over` is not `null` their move has ended the game: say one line about it. If it is your own move that ends it, the board says so, and nothing more arrives until they start a new game. `reset` means they have, and needs no answer.
+Play properly: develop, take what is hanging, do not walk into mate. Losing on purpose is obvious and insults them. In the chat, say a few words at most ("Knight out." / "Check."), and nothing at all is fine: the board is the conversation. If an `illegal` action arrives, the move you set was not one of the legal ones: set another from the `legal` it carries, prefixed with that action's `request` id and a colon, and say nothing of it. Replies without the matching request id are ignored, including replies to an earlier game. When `over` is not `null` their move has ended the game: say one line about it. If it is your own move that ends it, the board says so, and nothing more arrives until they start a new game. `reset` means they have, and needs no answer.
 
 ## The checklist
 
@@ -111,13 +156,13 @@ it tour show drums
 
 **Then say:** "Tap out a beat on the pads. When you stop, I'll play between yours."
 
-The `beat` action carries `rows` (`hat`, `clap`, `snare`, `kick`, from the top) and `pattern`, one string of eight steps for each row, with `x` where they put a hit. The eight steps are one bar: the first, third, fifth and seventh are its four beats, and the others fall between them. Answer with your own hits in the same form, on steps they left empty, so that the two together make a groove: hats between the beats, a clap on the third or the seventh step if nothing is there, a kick that pushes into the next beat:
+The `beat` action carries `request`, the id of this beat, `rows` (`hat`, `clap`, `snare`, `kick`, from the top) and `pattern`, one string of eight steps for each row, with `x` where they put a hit. The eight steps are one bar: the first, third, fifth and seventh are its four beats, and the others fall between them. Answer with your own hits in the same form, on steps they left empty, so that the two together make a groove: hats between the beats, a clap on the third or the seventh step if nothing is there, a kick that pushes into the next beat:
 
 ```sh
-it set tour-drums theirs '["..x...x.","....x...","........","...x...."]'
+it set tour-drums theirs '{"request":"the exact request id","pattern":["..x...x.","....x...","........","...x...."],"note":"I added hats between your hits."}'
 ```
 
-**Say:** one sentence about what you added. They will hear it. `cleared` means they emptied the pads: empty yours too, with `it set tour-drums theirs '[]'`, and say nothing.
+**Say:** one sentence about what you added. They will hear it. Keep the exact `request` id with the pattern and optional note in the same value. The page ignores replies for an earlier beat. `cleared` means the page has emptied both patterns already. Say nothing and send no pattern in response.
 
 ## The big red button
 
@@ -145,7 +190,7 @@ it tour show done
 
 **Then say:** "That's the tour."
 
-Two buttons are on it. **See another one** arrives as `menu`: show the menu again. **Finish the tour** arrives as `finish`. Then remove the tour's pages, which sends their screen back to their own pages, and stop the `it wait --follow` you started, if you started one:
+Two buttons are on it. **See another one** arrives as `menu`: show the menu again. **Finish the tour** arrives as `finish`. Apply the navigation rules above, including the final attempt check. Only a current Finish removes the tour's pages, which sends their screen back to their own pages:
 
 ```sh
 it tour clear

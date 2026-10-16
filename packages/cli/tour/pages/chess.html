@@ -337,6 +337,8 @@
     var pos = C.read(C.START), now = C.state(pos);   // the position, and how it stands for the side to move
     var picked = -1, goes = {}, last = null;          // the square picked up, where it may go, and the last move
     var waiting = false, sent = false, turn = 0;      // waiting for the agent; whether it has been told; which move this is
+    var pendingId = null;
+    var early = null;                                 // what the agent set for this move before it was known to have been told
     var cells = [], shown = [], figures = [], home = 12;
 
     function figure(p) {
@@ -469,18 +471,24 @@
       var before = { pos: pos, last: last }, draw = put(m, 180), at = turn;
       waiting = !now.over;
       sent = false;
+      early = null;
+      pendingId = Array.from(crypto.getRandomValues(new Uint8Array(16)), (n) => n.toString(16).padStart(2, "0")).join("");
       render();
       draw();
       Tour.say("you", told(m, true));
-      Tour.act("move", { move: C.uci(m), said: C.said(m, now), fen: C.fen(pos), legal: now.legal.map(C.uci), check: now.check, over: now.over }).then(() => {
+      Tour.act("move", { request: pendingId, move: C.uci(m), said: C.said(m, now), fen: C.fen(pos), legal: now.legal.map(C.uci), check: now.check, over: now.over }).then(() => {
         if (turn !== at) return;
+        var kept = early;
         sent = true;
+        early = null;
         // A move that ended the game has no answer to wait for
         if (now.over) Tour.plate("", false);
+        // The agent had answered already: its answer is played now
+        if (kept) answer(kept.reply, kept.fresh);
       }, () => {
         if (turn !== at) return;
         // The agent was not told: the move is taken back, so that the board and the agent do not come apart
-        pos = before.pos; last = before.last; now = C.state(pos); waiting = false; turn++;
+        pos = before.pos; last = before.last; now = C.state(pos); waiting = false; early = null; pendingId = null; turn++;
         Tour.say("you", "");
         render();
       });
@@ -493,6 +501,7 @@
     function theirs(m) {
       var draw = put(m, 250);
       waiting = false;
+      pendingId = null;
       render();
       draw();
       Tour.plate(brief(m), false);
@@ -508,13 +517,21 @@
     }
 
     // What the agent set as its move. It counts only while the move is the agent's and the agent
-    // has been told of the person's: anything seen before that was set for an earlier position.
+    // has been told of the person's. The agent may be told, and answer, before the page hears
+    // that it was: a connection that dropped between the two brings them back in that order. So
+    // what is set meanwhile is kept for that move, and played when the move is known to have gone.
     function answer(reply, fresh) {
-      if (!waiting || !sent || now.over || pos.turn !== "b" || !reply.trim()) return;
-      var m = C.find(now.legal, reply);
+      if (!waiting || now.over || pos.turn !== "b" || !pendingId) return;
+      var prefix = pendingId + ":";
+      if (!reply.startsWith(prefix)) return;
+      var move = reply.slice(prefix.length).trim();
+      if (!move) return;
+      // Hearing the same answer twice before the move was accepted must keep its request for a correction.
+      if (!sent) { early = { reply: reply, fresh: fresh || !!(early && early.reply === reply && early.fresh) }; return; }
+      var m = C.find(now.legal, move);
       if (m) theirs(m);
       // Not a move it may make: the agent is told so, once for what it set, and the person is shown nothing of it
-      else if (fresh) Tour.act("illegal", { move: reply.slice(0, 40), fen: C.fen(pos), legal: now.legal.map(C.uci) }).catch(() => {});
+      else if (fresh) Tour.act("illegal", { request: pendingId, move: move.slice(0, 40), fen: C.fen(pos), legal: now.legal.map(C.uci) }).catch(() => {});
     }
     var text = (v) => (v == null ? "" : String(v));
     var revision = () => (typeof It.revision === "number" ? It.revision : -1);
@@ -528,8 +545,7 @@
         seenReply = reply;
         answer(reply, true);
       } else if (again && note === seenNote) {
-        // The state was written again and reads the same: the same move set a second time, as
-        // the first answer of a new game may well be the last of the one before
+        // A repeated state still belongs only to the request its reply names.
         answer(reply, false);
       }
       if (note !== seenNote) {
@@ -539,12 +555,13 @@
     }
 
     $("new").addEventListener("click", () => {
-      turn++;
-      pos = C.read(C.START); now = C.state(pos); last = null; picked = -1; waiting = false; sent = false;
+      var at = ++turn;
+      pendingId = null;
+      pos = C.read(C.START); now = C.state(pos); last = null; picked = -1; waiting = false; sent = false; early = null;
       render();
       Tour.say("you", "started a new game");
       Tour.say("did", "");
-      Tour.act("reset", {}).then(() => Tour.plate("", false), () => {});
+      Tour.act("reset", {}).then(() => { if (turn === at) Tour.plate("", false); }, () => {});
     });
 
     It.onState(heard);

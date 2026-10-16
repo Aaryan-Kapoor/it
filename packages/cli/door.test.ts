@@ -1739,6 +1739,10 @@ describe('What the door passes on to the backend', () => {
       await nothingMoreFor(hasty)
       hasty.end()
       expect(hasty.text()).not.toContain(' 200 ')
+      // The door may have begun to ask the backend before what followed had arrived. That
+      // connection is another than the caller's, and the door closes it in its own time, so its
+      // closing is waited for, and what the backend was sent is looked at only then
+      await until(() => lone.ended() === lone.heard().length)
       expect(lone.heard().join('')).not.toMatch(/POST|update_environment_variables/)
       expect(lone.heard().filter((asked) => !asked.startsWith('GET /api/1.46.0/sync HTTP/1.1\r\n'))).toEqual([])
       expect(other.said.join('\n')).toMatch(/door refused a request \(websocket_version\)/)

@@ -1680,3 +1680,20 @@ describe('whom the backend believes', () => {
     expect(config.providers.map((p) => p.applicationID).sort()).toEqual(['it-browser', 'it-machine'])
   })
 })
+
+describe('the allowance for session tokens', () => {
+  test('thirty tokens exhaust one session until the clock refills its allowance', async () => {
+    const { t, machine } = await installed()
+    const owner = await ownerOf(t, machine)
+    const hash = await t.run(async (ctx) => (await ctx.db.query('sessions').first())!.secretHash)
+    const issue = () => code(t.mutation(internal.sessions._present, { presented: [{ name: nameOf(owner.session), hash }] }))
+    // Pairing has already issued the first token. The frozen clock gives no refill.
+    for (let n = 1; n < 30; n++) expect(await issue()).toBe('ok')
+    expect(await issue()).toBe('rate_limited')
+    vi.advanceTimersByTime(999)
+    expect(await issue()).toBe('rate_limited')
+    vi.advanceTimersByTime(1)
+    expect(await issue()).toBe('ok')
+    expect(await issue()).toBe('rate_limited')
+  })
+})

@@ -1,3 +1,4 @@
+/*navigation.js*/
 // What every page of the tour does the same way: it finds the agent's name, keeps its plate,
 // says under the card what each of the two did, and has the two buttons that go on. A page
 // tells the agent what was done with It.action and hears back through the page's state.
@@ -39,20 +40,49 @@ window.Tour = (() => {
       throw new Error('not sent')
     })
   }
-  // The two buttons that go on. Each is an ordinary action: the agent is what moves the tour on.
+  // How long an agent has to show what was asked for before the buttons that asked are the
+  // person's again. The site gives an agent as long to bring the tour up.
+  var SLOW = 40000
+  // The two buttons that go on. Each is an ordinary action: the agent is what moves the tour on,
+  // and the page it shows takes this one away. That It took a press is not the agent having
+  // moved on: where this page is still here a while after, the buttons are given back with a
+  // word of why, and the person may press again or go the other way.
   function rail() {
     var more = $('t-more'),
       next = $('t-next')
+    if (!more || !next) return
+    var navigation = window.TourNavigation(It, P.tour_id || null)
+    var attempt = 0
+    var pending = false
+    function lock() {
+      more.disabled = next.disabled = pending || !navigation.ready()
+    }
+    navigation.onState(lock)
+    lock()
     var go = (btn, name, waiting) => {
       if (!btn) return
       btn.addEventListener('click', () => {
+        if (!navigation.ready() || pending) return
+        var current = attempt = navigation.next()
+        pending = true
         var was = btn.textContent
-        more.disabled = next.disabled = true
-        btn.textContent = waiting
-        It.action(name, { from: P.tour_id || null }).catch(() => {
-          more.disabled = next.disabled = false
+        var back = () => {
+          if (attempt !== current) return
+          pending = false
+          lock()
           btn.textContent = was
-        })
+        }
+        lock()
+        btn.textContent = waiting
+        navigation.send(name, {}, current).then(
+          () =>
+            setTimeout(() => {
+              if (attempt !== current) return
+              back()
+              plate('has not answered', false)
+            }, SLOW),
+          back,
+        )
       })
     }
     go(more, 'menu', 'One moment…')

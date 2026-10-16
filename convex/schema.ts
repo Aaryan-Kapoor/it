@@ -43,6 +43,8 @@ export default defineSchema({
   tours: defineTable({
     userId: v.id('users'),
     waitingUntil: v.optional(v.number()),
+    waitingId: v.optional(v.string()),
+    waitingCancelled: v.optional(v.boolean()),
     by: v.optional(v.string()),
     askedAt: v.optional(v.number()),
     takenAt: v.optional(v.number()),
