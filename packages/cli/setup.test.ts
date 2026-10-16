@@ -1740,6 +1740,47 @@ describe('managed plugin and marketplace ownership', () => {
   ]
   const mutations = (bin: string) => commands(bin).filter((command) => /\b(?:uninstall|remove|add|install|enable)\b/.test(command))
 
+  const managed = SHARED.filter(({ id }) => ['claude-code', 'codex', 'openclaw'].includes(id))
+
+  test.each(managed.flatMap((app) => ['reconnect', 'disconnect'].map((recovery) => ({ ...app, recovery }))))(
+    '$bin can $recovery a legacy record without profile metadata when the current plugin proves ownership',
+    async ({ id, bin, variable, recovery }) => {
+      const profile = path.join(tmp, 'current-profile')
+      vi.stubEnv(variable, profile)
+      await connect(id, () => {})
+      put(stampFile(id), JSON.stringify({ installs: [{ version: 'previous-version', at: 0 }] }))
+      ran = []
+      if (recovery === 'reconnect') {
+        expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+        expect(noted(id).installs[0]!.env).toEqual({ [variable]: profile })
+      }
+      expect(await disconnect(id, () => {})).toBe(true)
+      expect(existsSync(stampFile(id))).toBe(false)
+      expect(mutations(bin).some((words) => /uninstall|remove/.test(words))).toBe(true)
+      expect(ran.filter((r) => r.bin === bin && r.args !== '--version').every((r) => r.env[variable] === profile)).toBe(true)
+      expect((await statusOf(id))!.addon).toBe('not_connected')
+    },
+  )
+
+  test.each(managed.flatMap((app) => ['missing', 'foreign'].map((proof) => ({ ...app, proof }))))(
+    '$bin refuses a legacy record with a $proof ownership note',
+    async ({ id, bin, note, proof }) => {
+      await connect(id, () => {})
+      const file = note(folderOf(bin))
+      if (proof === 'missing') rmSync(file)
+      else put(file, JSON.stringify({ home: path.join(tmp, 'another-it') }))
+      const record = JSON.stringify({ installs: [{ version: 'previous-version', at: 0 }] })
+      put(stampFile(id), record)
+      const saved = under(folderOf(bin))
+      ran = []
+      expect((await connect(id, () => {})).addon).toBe('error')
+      expect(await disconnect(id, () => {})).toBe(false)
+      expect(mutations(bin)).toEqual([])
+      expect(under(folderOf(bin))).toEqual(saved)
+      expect(read(stampFile(id))).toBe(record)
+    },
+  )
+
   test.each(apps)('$bin retires obsolete packaged files before installing the refreshed source', async ({ id, bin, install, manifest }) => {
     const addon = ADDONS[id]!
     const obsolete = `${id === 'codex' ? 'plugins/it-bridge' : 'it-bridge'}/old-command/command.md`

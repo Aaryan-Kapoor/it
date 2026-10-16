@@ -601,7 +601,11 @@ async function openclawHas(at: Place): Promise<{ enabled?: boolean; status?: str
   }
 }
 
-/** The plugin and marketplace names must belong to this installation before either is changed. */
+/**
+ * The plugin and marketplace names must belong to this installation before either is changed.
+ * A legacy record without profile metadata is checked in the caller's current place, just as
+ * it is for removal. It still needs the plugin's ownership note and the matching marketplace.
+ */
 async function marketplacePreflight(id: 'claude-code' | 'codex', at: Place, was: Installation | undefined): Promise<string | undefined> {
   const claude = id === 'claude-code'
   const bin = claude ? 'claude' : 'codex'
@@ -640,7 +644,7 @@ async function marketplacePreflight(id: 'claude-code' | 'codex', at: Place, was:
       if (!claude && object(plugin.source).source !== 'local') return conflict
       if (typeof source !== 'string' || !path.isAbsolute(source)) return retry
       const from = readJson<{ home?: unknown }>(path.join(source, HOME_NOTE))?.home
-      if (!was || !placed(was) || typeof from !== 'string' || real(from) !== thisHome()) return conflict
+      if (!was || typeof from !== 'string' || real(from) !== thisHome()) return conflict
       ours.push(plugin)
     }
     if (ours.length > 1) return conflict
@@ -652,7 +656,7 @@ async function marketplacePreflight(id: 'claude-code' | 'codex', at: Place, was:
     for (const market of matching) {
       const root = claude ? market.path : market.root
       if (claude && market.source !== 'directory') return conflict
-      if (!was || !placed(was) || typeof root !== 'string' || !path.isAbsolute(root) || real(root) !== real(addonDir(id))) return conflict
+      if (!was || typeof root !== 'string' || !path.isAbsolute(root) || real(root) !== real(addonDir(id))) return conflict
       if (!lstatSync(root).isDirectory() || !holds(thisHome(), real(root))) return conflict
       // Read before unpacking: unpacking must not erase evidence of another plugin in this marketplace.
       const file = path.join(root, claude ? '.claude-plugin' : '.agents/plugins', 'marketplace.json')
@@ -1099,8 +1103,9 @@ Object.assign(ADAPTERS, {
       if (plugin === null)
         return 'It could not inspect the OpenClaw plugin. Nothing was changed. Run `openclaw plugins inspect it-bridge --json`, then retry `it setup`.'
       if (plugin === undefined) return undefined
+      // Legacy records use the current place, but still need the installed plugin's proof of ownership.
       const from = typeof plugin.rootDir === 'string' ? readJson<{ home?: unknown }>(path.join(plugin.rootDir, HOME_NOTE))?.home : undefined
-      if (!was || !placed(was) || typeof from !== 'string' || real(from) !== thisHome())
+      if (!was || typeof from !== 'string' || real(from) !== thisHome())
         return 'The OpenClaw plugin it-bridge is not owned by this installation. Nothing was changed. Inspect it with `openclaw plugins inspect it-bridge --json`. If you choose to remove it, use `openclaw plugins uninstall it-bridge`, then run `it setup` again.'
       return undefined
     },
