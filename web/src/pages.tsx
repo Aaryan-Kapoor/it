@@ -1,7 +1,7 @@
 // The person's pages: the grid of all of them, and one of them shown.
 import { ALIVE, LIMITS, NOUN, WAKE_BACK_MS } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
-import { Component, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { copy, IconBack, IconLink, IconPin, IconSay, IconSend, IconStop, IconX, Mark } from './brand'
 import { agentName, ago, api, displayKey, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
@@ -258,6 +258,7 @@ function DeletionReceipts({ empty = false }: { empty?: boolean }) {
       )}
     </section>
   )
+  if (empty && pending.length === 0) return <Empty owner={true} notice={status} />
   return empty ? (
     <main className="grid-view">
       {status}
@@ -273,10 +274,18 @@ function DeletionReceipts({ empty = false }: { empty?: boolean }) {
  * the way into it. After that, things to ask an agent for: the tour's own screen does not come
  * back when its pages are taken away at the end of it.
  */
-function Empty({ owner }: { owner: boolean }) {
+function Empty({ owner, notice }: { owner: boolean; notice?: ReactNode }) {
   const tour = useTour()
   if (!tour.known) return <main className="grid-view" role="status" />
-  return tour.done && !tour.waiting && !tour.coming ? <Starters owner={owner} /> : <Welcome owner={owner} />
+  if (tour.done && !tour.waiting && !tour.coming) return <Starters owner={owner} notice={notice} />
+  return notice ? (
+    <main className="grid-view">
+      {notice}
+      <p className="grid-empty">No pages to show. Ask your agent to make a page.</p>
+    </main>
+  ) : (
+    <Welcome owner={owner} />
+  )
 }
 
 /**

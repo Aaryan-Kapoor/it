@@ -1,11 +1,12 @@
 import { getFunctionName } from 'convex/server'
-import { act, createElement } from 'react'
+import { act, createElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { Card } from './pages'
 
 let receipts: { job: string; title: string; state: string }[]
 let unavailable = false
+let tourDone = false
 const asked = vi.fn()
 vi.mock('convex/react', () => ({
   useQuery: (fn: unknown) => {
@@ -16,9 +17,9 @@ vi.mock('convex/react', () => ({
   useMutation: () => vi.fn(),
 }))
 vi.mock('./welcome', () => ({
-  useTour: () => ({ known: true }),
+  useTour: () => ({ known: true, done: tourDone }),
   Welcome: () => createElement('main', { className: 'hello' }, 'Welcome'),
-  Starters: () => null,
+  Starters: ({ notice }: { notice?: ReactNode }) => createElement('main', { className: 'starters' }, notice, 'Things to ask for'),
 }))
 vi.mock('./preview', () => ({ Preview: () => null }))
 vi.mock('./mount', () => ({ Mount: () => null }))
@@ -29,6 +30,7 @@ beforeEach(() => {
   receipts = [{ job: 'deletion-1', title: 'Trip plan', state: 'pending' }]
   asked.mockClear()
   unavailable = false
+  tourDone = false
   host = document.body.appendChild(document.createElement('div'))
   root = createRoot(host)
 })
@@ -90,4 +92,17 @@ test('an older backend without the receipt query leaves ordinary pages usable an
   await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Try again')!.click())
   expect(host.textContent).not.toContain('Deletion status is unavailable')
   expect(host.querySelector('a[href="/p/trip-plan"]')).not.toBeNull()
+})
+
+test('finishing the tour returns to suggestions even while its completed deletion receipt is retained', async () => {
+  tourDone = true
+  await draw()
+  expect(host.textContent).toContain('is being deleted.')
+  receipts[0]!.state = 'completed'
+  await draw()
+  expect(host.querySelector('main.starters')).not.toBeNull()
+  expect(host.querySelector('main.hello')).toBeNull()
+  expect(host.textContent).toContain('Completed deletions (1)')
+  await act(async () => host.querySelector('button')!.click())
+  expect(host.textContent).toContain('Trip plan: deletion confirmed.')
 })
