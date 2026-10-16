@@ -1259,6 +1259,9 @@ describe('sending', () => {
   })
   test('a batch that cannot be sent is tried five times, less and less often, and then dropped', async () => {
     told()
+    // The send's safety check also reads performance.now(). Keep that clock under the
+    // test's control, so slow disk work cannot defer a pass of this simulated schedule.
+    ownClock()
     let now = 0
     const tries: number[] = []
     const sender = usage.startSender({
