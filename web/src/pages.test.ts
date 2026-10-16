@@ -2,6 +2,7 @@
 // backend. What it must get right: it speaks of the click just made the moment it is made, and
 // never goes on saying what became of the one before.
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -20,11 +21,12 @@ const told = new Set<() => void>()
 /** What the backend answers each click with, in the order they were sent: nothing, until the test lets it. */
 const answers: ((said: { actionId: string }) => void)[] = []
 const client = {
-  mutation: vi.fn(
-    () =>
-      new Promise<{ actionId: string }>((resolve) => {
-        answers.push(resolve)
-      }),
+  mutation: vi.fn((fn: unknown) =>
+    getFunctionName(fn as never) === 'actions:replayGrant'
+      ? Promise.resolve({ until: Date.now() + 6 * 86400_000 })
+      : new Promise<{ actionId: string }>((resolve) => {
+          answers.push(resolve)
+        }),
   ),
   connectionState: () => ({ isWebSocketConnected: connected }),
   subscribeToConnectionState: (fn: () => void) => {
@@ -33,13 +35,20 @@ const client = {
   },
 }
 /** What the backend is to answer each stop with, in the order they were asked: nothing, until the test lets it. */
-const stopsAsked: { answer: (said: { stopping: boolean }) => void; refuse: (why: unknown) => void }[] = []
-const askedToStop = () => new Promise<{ stopping: boolean }>((answer, refuse) => void stopsAsked.push({ answer, refuse }))
+const stopsAsked: {
+  input: { expectedRun?: string; expectedSession?: string }
+  answer: (said: { stopping: boolean }) => void
+  refuse: (why: unknown) => void
+}[] = []
+const askedToStop = (input: { expectedRun?: string; expectedSession?: string }) =>
+  new Promise<{ stopping: boolean }>((answer, refuse) => void stopsAsked.push({ input, answer, refuse }))
+const queries: { name: string; args: unknown }[] = []
 vi.mock('convex/react', () => ({
   useConvex: () => client,
   useMutation: (fn: unknown) => (getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : async () => null),
   useQuery: (fn: unknown, args: unknown) => {
     const name = getFunctionName(fn as never)
+    queries.push({ name, args })
     if (name === 'machines:list' && args !== 'skip') inventoryAsked()
     return args === 'skip' ? undefined : { 'artifacts:get': PAGE, 'actions:forArtifact': recent, 'machines:list': machines }[name]
   },
@@ -59,19 +68,19 @@ const envelope = (id: string): Sent => ({ v: 1, clientActionId: id, name: 'appro
 const tick = () => act(async () => new Promise<void>((r) => setTimeout(r, 0)))
 /** Longer than a stop is on its way before the bar says so. */
 const aWhile = () => act(async () => new Promise<void>((r) => setTimeout(r, 800)))
-async function shown() {
+async function shown(owner = true) {
   const { PageView } = await import('./pages')
   const outbox = await import('./outbox')
   outbox.outboxBelongsTo('user-1', 'session-1')
   host = document.body.appendChild(document.createElement('div'))
   root = createRoot(host)
-  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: true })))
+  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner })))
   return outbox
 }
 /** Draws the page again where it is, as it is drawn when the backend has something new to say of it. */
-async function drawnAgain() {
+async function drawnAgain(owner = true) {
   const { PageView } = await import('./pages')
-  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: true })))
+  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner })))
 }
 
 beforeEach(() => {
@@ -95,6 +104,7 @@ beforeEach(() => {
   told.clear()
   answers.length = 0
   stopsAsked.length = 0
+  queries.length = 0
   client.mutation.mockClear()
   inventoryAsked.mockClear()
 })
@@ -114,6 +124,17 @@ const connection = (up: boolean) =>
   })
 
 describe('what the page’s bar says of the last thing the person did', () => {
+  test.each([true, false])('the live page omits version history from its subscription when owner is %s', async (owner) => {
+    await shown(owner)
+    const pageQueries = () => queries.filter((q) => q.name === 'artifacts:get').map((q) => q.args)
+    expect(pageQueries()).toEqual([{ slug: 'plan', history: false }])
+    queries.length = 0
+    recent = [{ at: NOW - 2000, delivery: 'pending', outcome: null }]
+    await drawnAgain(owner)
+    expect(pageQueries()).toEqual([{ slug: 'plan', history: false }])
+    expect(said()).toBe('Sent. Waiting for your agent')
+  })
+
   test('when It has not been reachable for a few seconds the bar says so, whatever was last done, and stops saying so when It is back', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
@@ -711,13 +732,17 @@ describe('what the page’s bar says of the last thing the person did', () => {
   })
 
   test('a stop that was asked of one run of the conversation is not said of the next, which can be stopped in its turn', async () => {
-    Object.assign(PAGE, { run: { since: NOW - 60_000, stopping: false }, machineSeenAt: NOW })
+    Object.assign(PAGE, { run: { identity: 'original-run', since: NOW - 60_000, stopping: false }, machineSeenAt: NOW })
     await shown()
+    const { hasPending } = await import('./pending')
     await act(async () => stops()[0]!.click())
+    expect(hasPending()).toBe(true)
+    expect(stopsAsked[0]!.input).toMatchObject({ expectedRun: 'original-run', expectedSession: 'session-1' })
     await act(async () => stopsAsked[0]!.answer({ stopping: true }))
+    expect(hasPending()).toBe(false)
     expect(host.querySelector('.working')?.textContent).toBe('Stopping')
     // The machine reopens the conversation for something done since, before the page has heard that the first run ended
-    Object.assign(PAGE, { run: { since: NOW, stopping: false } })
+    Object.assign(PAGE, { run: { identity: 'next-run', since: NOW - 60_000, stopping: false } })
     await drawnAgain()
     expect(host.querySelector('.working')?.textContent).toContain('Working')
     expect(stops().length).toBe(1)
@@ -786,4 +811,30 @@ describe('Escape on a page', () => {
     await pressed()
     expect(location.pathname).toBe('/')
   })
+})
+
+test('a refused pre-upgrade request stays visible after reopening without being sent again', async () => {
+  const outbox = await shown()
+  const key = 'it.outbox.user-1.page-1.legacy-request'
+  const message = 'Reload It before sending new requests. This saved request has no replay deadline. Check what your agent received before sending it again.'
+  localStorage.setItem(key, JSON.stringify({ user: 'user-1', artifactId: 'page-1', envelope: envelope('legacy-request'), at: NOW - 60_000 }))
+  const mutation = vi.fn(async () => {
+    throw new ConvexError({ code: 'conflict', message })
+  })
+  const backend = { mutation, connectionState: () => ({ isWebSocketConnected: true }) } as never
+  await act(async () => outbox.drain(backend, 'user-1'))
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(message)
+  expect(outbox.unsent('user-1', 'page-1')).toBe(0)
+  await act(async () => root.unmount())
+  host.remove()
+  await shown()
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(message)
+  await act(async () => outbox.drain(backend, 'user-1'))
+  expect(mutation).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    vi.mocked(Date.now).mockReturnValue(NOW + 7 * 86400_000)
+    await outbox.drain(backend, 'user-1')
+  })
+  expect(localStorage.getItem(key)).toBeNull()
+  expect(host.querySelector('[role="alert"]')).toBeNull()
 })

@@ -3,10 +3,11 @@ import { ALIVE, LIMITS, NOUN, WAKE_BACK_MS } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { copy, IconBack, IconLink, IconPin, IconSay, IconSend, IconStop, IconX, Mark } from './brand'
-import { agentName, ago, api, displayKey, type Id, navigate, refusal, useNow } from './lib'
+import { agentName, ago, api, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
-import { onItsWayUntil, outboxChanges, typedOnItsWay, typedWaiting, unsaved, unsent, watchOutbox } from './outbox'
+import { dismissMessage, message, onItsWayUntil, outboxChanges, pendingMessage, refusedClick, thisSession, unsaved, unsent, watchOutbox } from './outbox'
+import { holdPending } from './pending'
 import { Preview } from './preview'
 import { type PageConnection, reportedConnection } from './readiness'
 import { Starters, useTour, Welcome } from './welcome'
@@ -209,7 +210,7 @@ function Empty({ owner }: { owner: boolean }) {
 export const wasShown = new Set<string>()
 
 export function PageView({ slug, user, owner }: { slug: string; user: string; owner: boolean }) {
-  const page = useQuery(api.artifacts.get, { slug })
+  const page = useQuery(api.artifacts.get, { slug, history: false })
   const now = useNow()
   useEffect(() => {
     if (page) wasShown.add(slug)
@@ -275,14 +276,16 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
             {fault.message}
           </span>
         )}
+        <RefusedClick user={user} artifactId={page.id} />
         {/* What became of what was done on the page is said aloud too, to whoever cannot see it change */}
         <span className="page-nav-said" role="status">
           {page.run ? (
             <Working
               // Another run of the conversation is another thing to stop: what was asked of the one before is not said of it
-              key={page.run.since}
+              key={page.run.identity}
               artifactId={page.id as Id<'artifacts'>}
               stopping={page.run.stopping}
+              expectedRun={page.run.identity}
               user={user}
               machine={page.machine}
               machineSeenAt={page.machineSeenAt}
@@ -368,6 +371,17 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
   )
 }
 
+/** A saved click from before an upgrade could not be confirmed and must not disappear silently. */
+function RefusedClick({ user, artifactId }: { user: string; artifactId: string }) {
+  useSyncExternalStore(watchOutbox, outboxChanges)
+  const refused = refusedClick(user, artifactId)
+  return refused ? (
+    <span className="status page-request-refused" data-tone="bad" role="alert">
+      {refused}
+    </span>
+  ) : null
+}
+
 /** How long after something was done on a page it is still shown as under way, where nothing has come of it. */
 const UNDER_WAY_MS = 10 * 60_000
 /**
@@ -399,6 +413,8 @@ export const SAID_FOR_MS = 30 * 60_000
  * taken. So that someone at a display does not have to go to the agent's own window to say a
  * word, or to read one.
  */
+const fresh = () => `typed-${Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('')}`
+
 function Talk({
   user,
   artifactId,
@@ -416,7 +432,9 @@ function Talk({
 }) {
   const convex = useConvex()
   const now = useNow()
-  const [text, setText] = useState('')
+  useSyncExternalStore(watchOutbox, outboxChanges)
+  const restored = pendingMessage(user, artifactId)
+  const [text, setText] = useState(() => restored?.text ?? '')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const box = useRef<HTMLInputElement>(null)
@@ -424,8 +442,21 @@ function Talk({
   // One id for what is in the box until it has been taken, so that sending it twice over a
   // connection that dropped is one message. Not `randomUUID`, which a browser offers only to a
   // site it reached securely
-  const fresh = () => `typed-${Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('')}`
-  const id = useRef(fresh())
+  const id = useRef(restored?.id ?? fresh())
+  const pendingDraft = useRef(restored ? { id: restored.id, edits: 0 } : null)
+  useEffect(() => {
+    if (restored && pendingDraft.current?.id !== restored.id && edits.current === 0 && !sending) {
+      setText(restored.text)
+      id.current = restored.id
+      pendingDraft.current = { id: restored.id, edits: edits.current }
+    }
+    if (!restored && !sending && pendingDraft.current !== null) {
+      if (edits.current === pendingDraft.current.edits) setText('')
+      pendingDraft.current = null
+      setError('')
+      id.current = fresh()
+    }
+  }, [restored, sending])
   // The line a person closed stays closed, in this tab: the next thing the agent says is another line
   const closedKey = `it.said.${artifactId}`
   const [closed, setClosed] = useState(() => Number(sessionStorage.getItem(closedKey) ?? 0))
@@ -440,19 +471,22 @@ function Talk({
     // The box can be typed in while this is on its way. An edit back to the same words is still
     // a draft of its own, so it is cleared only where nothing has been typed since.
     const sent = edits.current
+    if (restored?.refused) {
+      dismissMessage(user, artifactId, restored.id)
+      pendingDraft.current = null
+      id.current = fresh()
+    }
+    pendingDraft.current = { id: id.current, edits: sent }
     setSending(true)
     setError('')
-    // Nothing of it is kept in this browser: said on the page's bar until It has it, and the site is not loaded afresh over it
-    const taken = typedOnItsWay(user, artifactId)
     try {
-      await convex.mutation(api.actions.message, { artifactId, displayKey: displayKey(), clientActionId: id.current, text: typed })
+      await message(convex, user, artifactId, id.current, typed)
       id.current = fresh()
       if (edits.current === sent) setText('')
     } catch (err) {
-      // Left in the box, to be sent again: nothing of it is kept anywhere else
+      if (!pendingMessage(user, artifactId)) pendingDraft.current = null
       setError(refusal(err).message)
     } finally {
-      taken()
       setSending(false)
     }
   }
@@ -505,12 +539,19 @@ function Talk({
               onClose()
             }}
           />
-          <button type="submit" className="page-talk-send" disabled={sending || !text.trim()} aria-label="Send" title="Send (enter)">
+          <button
+            type="submit"
+            className="page-talk-send"
+            disabled={sending || (restored !== null && !restored.refused) || !text.trim()}
+            aria-label="Send"
+            title="Send (enter)"
+          >
             <IconSend />
           </button>
-          {error && (
+          {restored && restored.text !== text && <span role="status">Saved message: {restored.text}</span>}
+          {(error || restored?.refused) && (
             <span className="error" role="alert">
-              {error}
+              {error || restored?.refused}
             </span>
           )}
         </form>
@@ -526,6 +567,7 @@ function Talk({
 function Working({
   artifactId,
   stopping,
+  expectedRun,
   user,
   machine,
   machineSeenAt,
@@ -533,6 +575,7 @@ function Working({
 }: {
   artifactId: Id<'artifacts'>
   stopping: boolean
+  expectedRun: string
   user: string
   machine: string | null
   machineSeenAt: number | null
@@ -558,34 +601,30 @@ function Working({
   const now = useNow(1_000)
   useSyncExternalStore(watchOutbox, outboxChanges)
   // Something done here that this browser would not store is lost with the tab, whatever the agent is doing: said beside the rest
-  const keepOpen =
-    typedWaiting(user, artifactId) > 0 ? (
-      <span className="status" data-tone="wait">
-        Not sent yet. What you typed is only in this tab, so keep it open
-      </span>
-    ) : (
-      unsaved(user, artifactId) > 0 && (
-        <span className="status" data-tone="wait">
-          Not sent yet. This browser could not save it, so keep this tab open
-        </span>
-      )
-    )
+  const keepOpen = unsaved(user, artifactId) > 0 && (
+    <span className="status" data-tone="wait">
+      Not sent yet. This browser could not save it, so keep this tab open
+    </span>
+  )
   // That it is working is the machine's own word, and is as good as the machine is there to
   // give it: one that has gone quiet, or said it was stopping, may have ended the run or may
   // not, and cannot be told to stop until it is back. Said as that, and not as work going on.
   const askStop = () => {
     setSending(true)
-    stop({ artifactId }).then(
-      (said) => {
-        setSending(false)
-        // It may answer that nothing was running there to stop any more: the stop is offered again, until the bar goes with the run
-        setAsked(said.stopping)
-      },
-      (err) => {
-        setSending(false)
-        say(refusal(err).message, 'error')
-      },
-    )
+    const release = holdPending(user)
+    stop({ artifactId, expectedRun, expectedSession: thisSession() })
+      .then(
+        (said) => {
+          setSending(false)
+          // It may answer that nothing was running there to stop any more: the stop is offered again, until the bar goes with the run
+          setAsked(said.stopping)
+        },
+        (err) => {
+          setSending(false)
+          say(refusal(err).message, 'error')
+        },
+      )
+      .finally(release)
   }
   // A stop on its way is lost with the tab, as anything is that is nowhere but here: said beside
   // the rest until It has answered, or the page hears from It that the run is being stopped
@@ -740,13 +779,6 @@ function ActionStatus({
   // The bar speaks of the last thing that is still waiting, where anything is: that something
   // done after it was dealt with does not make it so. Otherwise of the last thing done.
   const last = stillWaiting[0] ?? recent?.[0]
-  // What was typed to the agent is never kept here, and is in this tab alone until It has it
-  if (typedWaiting(user, artifactId) > 0)
-    return (
-      <span className="status" data-tone="wait">
-        {onItsWay ? 'Sending' : 'Not sent yet'}. What you typed is only in this tab, so keep it open
-      </span>
-    )
   // Sent with no copy kept here, because this browser would not store one: closing the tab now would lose it
   if (unsaved(user, artifactId) > 0)
     return (

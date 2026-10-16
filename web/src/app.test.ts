@@ -18,6 +18,7 @@ let answers: Record<string, (args: any) => unknown>
 let watched: Record<string, unknown>
 const ask = async (fn: unknown, args: unknown) => {
   const name = getFunctionName(fn as never)
+  if (name === 'actions:replayGrant') return { until: Date.now() + 6 * 86400_000 }
   asked.push({ what: name, args })
   return answers[name]?.(args) ?? null
 }

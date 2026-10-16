@@ -1,4 +1,5 @@
 // The site's outbox: a click is kept in this browser only while nobody knows what became of it.
+import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { forgetAll, keepFor, letGoElsewhere } from './lib'
@@ -10,6 +11,7 @@ const refuse = (code: string, extra: Record<string, unknown> = {}) => new Convex
 function backend(answers: (unknown | Error | 'never')[]) {
   const calls: { artifactId: string; envelope: Sent }[] = []
   const mutation = vi.fn((_fn: unknown, args: { artifactId: string; envelope: Sent }) => {
+    if (getFunctionName(_fn as never) === 'actions:replayGrant') return Promise.resolve({ until: Date.now() + 6 * 86400_000 })
     calls.push(args)
     const next = answers.shift()
     if (next === 'never') return new Promise(() => {})
@@ -33,6 +35,7 @@ beforeEach(() => {
 describe('the outbox', () => {
   test('a click too old to send is dropped when the site starts, whoever it was kept for and whoever is paired here now', async () => {
     const WEEK = 7 * 86_400_000
+    outboxBelongsTo(null)
     keep('alice', 'click-old-0001', Date.now() - WEEK - 60_000)
     keep('alice', 'click-new-0001', Date.now() - WEEK + 60_000)
     // Kept for people who are not paired here, and may never be again
@@ -40,7 +43,6 @@ describe('the outbox', () => {
     keep('bob', 'click-new-0002')
     // And one that cannot be read at all
     localStorage.setItem('it.outbox.carol.page1.click-0003', '{not json')
-    outboxBelongsTo(null)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     dropOld()
     expect(stored().sort()).toEqual(['it.outbox.alice.page1.click-new-0001', 'it.outbox.bob.page1.click-new-0002'])
@@ -133,6 +135,7 @@ describe('the outbox', () => {
       const calls: string[] = []
       const client = {
         mutation: vi.fn((_fn: unknown, args: { artifactId: string; envelope: Sent }) => {
+          if (getFunctionName(_fn as never) === 'actions:replayGrant') return Promise.resolve({ until: Date.now() + 6 * 86400_000 })
           calls.push(args.envelope.clientActionId)
           return args.artifactId === 'page-a' ? Promise.reject(refuse('rate_limited', { retryAfterMs: 1000 })) : Promise.resolve({ actionId: 'b1' })
         }),
@@ -162,6 +165,7 @@ describe('the outbox', () => {
       let troubleLeft = 1
       const client = {
         mutation: vi.fn((_fn: unknown, args: { artifactId: string; envelope: Sent }) => {
+          if (getFunctionName(_fn as never) === 'actions:replayGrant') return Promise.resolve({ until: Date.now() + 6 * 86400_000 })
           calls.push(args.envelope.clientActionId)
           if (args.artifactId === 'page-a') return Promise.reject(refuse('rate_limited', { retryAfterMs: 1000 }))
           // B's first try meets trouble that has passed by the next
@@ -209,7 +213,7 @@ describe('the outbox', () => {
       give(await work({ name: 'lock' }))
       await draining
       expect(b.calls).toEqual([])
-      expect(stored()).toEqual(['it.outbox.alice.page1.click-0090'])
+      expect(stored()).toEqual([])
     } finally {
       Reflect.deleteProperty(navigator, 'locks')
     }
@@ -224,6 +228,7 @@ describe('the outbox', () => {
       const calls: string[] = []
       const client = {
         mutation: vi.fn((_fn: unknown, args: { artifactId: string; envelope: Sent }) => {
+          if (getFunctionName(_fn as never) === 'actions:replayGrant') return Promise.resolve({ until: Date.now() + 6 * 86400_000 })
           calls.push(args.envelope.clientActionId)
           // Page A has used up what it is allowed, and goes on being refused. Page B has not.
           return args.artifactId === 'page-a' ? Promise.reject(refuse('rate_limited', { retryAfterMs: 1000 })) : Promise.resolve({ actionId: 'b1' })
@@ -261,13 +266,14 @@ describe('the outbox', () => {
     expect(stored()).toEqual([])
   })
 
-  test('if the browser is paired for someone else while clicks are being sent, sending stops and nothing of theirs is removed', async () => {
+  test('if the browser is paired for someone else while legacy clicks are being sent, sending stops and their saved payloads are discarded', async () => {
     keep('alice', 'click-0012')
     keep('alice', 'click-0013')
     const calls: string[] = []
     const client = {
       connectionState: () => ({ isWebSocketConnected: true }),
       mutation: vi.fn(async (_fn: unknown, args: { envelope: Sent }) => {
+        if (getFunctionName(_fn as never) === 'actions:replayGrant') return Promise.resolve({ until: Date.now() + 6 * 86400_000 })
         calls.push(args.envelope.clientActionId)
         // While the first is on its way, the browser is paired for Bob. The answer that comes
         // back is the one Bob would get: there is no such page of his.
@@ -277,7 +283,7 @@ describe('the outbox', () => {
     } as never
     await drain(client, 'alice')
     expect(calls).toEqual(['click-0012'])
-    expect(stored().length).toBe(2)
+    expect(stored()).toEqual([])
   })
 
   test('a "not now" that comes back after the page has gone leaves the click to be sent later', async () => {
@@ -305,6 +311,61 @@ describe('the outbox', () => {
     } finally {
       full.mockRestore()
     }
+  })
+
+  test.each(['invalid', 'not_found', 'conflict'])('unsaved clicks refused with %s leave room for another request', async (code) => {
+    const full = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    const b = backend(Array.from({ length: 100 }, () => refuse(code)))
+    try {
+      // Each refusal settles its request, so none may keep a place in the browser's limit of 100 grants.
+      for (let i = 0; i < 100; i++) {
+        await expect(submit(b.client, 'alice', 'page1', envelope(`refused-click-${i}`))).rejects.toThrow(code)
+      }
+      await expect(submit(b.client, 'alice', 'page1', envelope('accepted-click'))).resolves.toEqual({ actionId: 'a1' })
+      expect(b.calls).toHaveLength(101)
+      expect(stored()).toEqual([])
+      expect(unsaved('alice', 'page1')).toBe(0)
+    } finally {
+      full.mockRestore()
+    }
+  })
+
+  test('a retry reuses its original deadline after storage recovers from an unconfirmed request', async () => {
+    outboxBelongsTo('alice', 'session-1')
+    const b = backend([new Error('answer lost'), { actionId: 'already-accepted' }])
+    const full = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    await expect(submit(b.client, 'alice', 'page1', envelope('click-unrecorded'))).rejects.toThrow('answer lost')
+    full.mockRestore()
+    const deadline = (b.calls[0] as unknown as { replayUntil: number }).replayUntil
+    const now = vi.spyOn(Date, 'now').mockReturnValue(deadline + 1)
+    try {
+      await submit(b.client, 'alice', 'page1', envelope('click-unrecorded'))
+      expect((b.calls[1] as unknown as { replayUntil: number }).replayUntil).toBe(deadline)
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  test.each(['legacy', 'session-bound'] as const)('a cold unpaired start discards %s work only after the pairing has been answered', (kind) => {
+    outboxBelongsTo(null)
+    const key = 'it.outbox.alice.page1.old-session-click'
+    const saved = {
+      user: 'alice',
+      artifactId: 'page1',
+      envelope: envelope('old-session-click'),
+      ...(kind === 'session-bound' ? { format: 2, session: 'ended-session' } : {}),
+      at: Date.now(),
+    }
+    localStorage.setItem(key, JSON.stringify(saved))
+    outboxBelongsTo(null, null, false)
+    expect(localStorage.getItem(key)).not.toBeNull()
+    outboxBelongsTo(null, null, true)
+    expect(localStorage.getItem(key)).toBeNull()
+    expect(localStorage.getItem('it.display')).toBe('a-display-key-000001')
   })
 
   test('what a page may send is checked before anything is stored', async () => {
@@ -410,6 +471,7 @@ describe('the outbox', () => {
     const client = {
       connectionState: () => ({ isWebSocketConnected: true }),
       mutation: vi.fn((_fn: unknown, args: { envelope: Sent }) => {
+        if (getFunctionName(_fn as never) === 'actions:replayGrant') return Promise.resolve({ until: Date.now() + 6 * 86400_000 })
         calls.push(args.envelope.clientActionId)
         return calls.length === 1 ? new Promise((r) => (release = r)) : Promise.resolve({ actionId: 'x' })
       }),
@@ -472,6 +534,7 @@ describe('the outbox', () => {
     const client = {
       connectionState: () => ({ isWebSocketConnected: true }),
       mutation: vi.fn((_fn: unknown, args: { envelope: Sent }) => {
+        if (getFunctionName(_fn as never) === 'actions:replayGrant') return Promise.resolve({ until: Date.now() + 6 * 86400_000 })
         calls.push(args.envelope.clientActionId)
         return new Promise((r) => (answer = r))
       }),
@@ -543,7 +606,12 @@ describe('the outbox', () => {
     try {
       // One tab is sending a click, and the answer is slow in coming
       let answer: (v: unknown) => void = () => {}
-      const first = { connectionState: () => ({ isWebSocketConnected: true }), mutation: vi.fn(() => new Promise((r) => (answer = r))) } as never
+      const first = {
+        connectionState: () => ({ isWebSocketConnected: true }),
+        mutation: vi.fn((fn: unknown) =>
+          getFunctionName(fn as never) === 'actions:replayGrant' ? Promise.resolve({ until: Date.now() + 6 * 86400_000 }) : new Promise((r) => (answer = r)),
+        ),
+      } as never
       const sent = submit(first, 'alice', 'page1', envelope('click-0101'))
       await new Promise((r) => setTimeout(r, 20))
       // The browser put that tab to sleep: its hold, kept up by a timer, has run out
@@ -571,7 +639,12 @@ describe('the outbox', () => {
     vi.useFakeTimers()
     try {
       let answer: (v: unknown) => void = () => {}
-      const client = { connectionState: () => ({ isWebSocketConnected: true }), mutation: vi.fn(() => new Promise((r) => (answer = r))) } as never
+      const client = {
+        connectionState: () => ({ isWebSocketConnected: true }),
+        mutation: vi.fn((fn: unknown) =>
+          getFunctionName(fn as never) === 'actions:replayGrant' ? Promise.resolve({ until: Date.now() + 6 * 86400_000 }) : new Promise((r) => (answer = r)),
+        ),
+      } as never
       const sent = submit(client, 'alice', 'page1', envelope('click-0100'))
       await vi.advanceTimersByTimeAsync(10)
       const heldAt = () => JSON.parse(localStorage.getItem('it.outbox.alice.page1.click-0100') ?? '{}').held as number
@@ -595,7 +668,12 @@ describe('the outbox', () => {
     })
     try {
       let release: (v: unknown) => void = () => {}
-      const client = { connectionState: () => ({ isWebSocketConnected: true }), mutation: vi.fn(() => new Promise((r) => (release = r))) } as never
+      const client = {
+        connectionState: () => ({ isWebSocketConnected: true }),
+        mutation: vi.fn((fn: unknown) =>
+          getFunctionName(fn as never) === 'actions:replayGrant' ? Promise.resolve({ until: Date.now() + 6 * 86400_000 }) : new Promise((r) => (release = r)),
+        ),
+      } as never
       const sent = submit(client, 'alice', 'page1', envelope('click-0090'))
       await new Promise((r) => setTimeout(r, 10))
       expect([unsaved('alice', 'page1'), unsaved('alice', 'page2')]).toEqual([1, 0])
@@ -618,7 +696,9 @@ describe('a click that is on its way when everything this browser keeps is let g
       refuseWith = no
     })
     const mutation = vi.fn(() => answer)
-    return { client: { mutation, connectionState: () => ({ isWebSocketConnected: true }) } as never, mutation, accept, refuseWith }
+    const dispatch = (fn: unknown) =>
+      getFunctionName(fn as never) === 'actions:replayGrant' ? Promise.resolve({ until: Date.now() + 6 * 86400_000 }) : mutation()
+    return { client: { mutation: dispatch, connectionState: () => ({ isWebSocketConnected: true }) } as never, mutation, accept, refuseWith }
   }
   const PRIVATE = '{"typed":"what the person wrote"}'
   const everything = () => [...Object.keys(localStorage), ...Object.keys(sessionStorage)]

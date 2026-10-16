@@ -18,6 +18,7 @@ const client = {
   connectionState: () => ({ isWebSocketConnected: true }),
   mutation: vi.fn(async (fn: unknown, args: unknown) => {
     const name = getFunctionName(fn as never)
+    if (name === 'actions:replayGrant') return { until: Date.now() + 6 * 86400_000 }
     calls.push({ fn: name, args })
     if (name === 'mounts:create') return { mountId: `mount-${calls.filter((c) => c.fn === name).length}`, version: 7 }
     if (name === 'actions:submit') return { actionId: 'action-1' }

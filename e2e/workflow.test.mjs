@@ -519,10 +519,10 @@ describe('what docs/troubleshooting.md says the door refused', () => {
 
 describe('what docs/add-ons.md says of the agent apps', () => {
   const page = readFileSync(path.join(root, 'docs', 'add-ons.md'), 'utf8')
-  const setup = readFileSync(path.join(root, 'packages/cli/src/setup.ts'), 'utf8')
 
-  test('names for each the oldest version that setup installs an add-on into, as setup has it', () => {
-    const known = [...setup.matchAll(/^ {2}(?:'[a-z-]+'|[a-z]+): \{ label: '([^']+)', bin: '[^']+', min: '([^']+)' \},$/gm)].map((m) => `| ${m[1]} | ${m[2]} |`)
+  test('names for each the oldest version that setup installs an add-on into, as setup has it', async () => {
+    const { KNOWN } = await import('../packages/cli/src/setup.ts')
+    const known = Object.values(KNOWN).map(({ label, min }) => `| ${label} | ${min} |`)
     expect(known.length).toBe(6)
     const from = page.indexOf('| Agent app | The oldest version `it setup` installs into |')
     expect(from).toBeGreaterThan(-1)
