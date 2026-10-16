@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { lstatSync, readdirSync, readFileSync, rmdirSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
+import { removeAbandonedUploads } from '@it/content'
 import { HARNESSES } from '@it/protocol'
 import { ADDONS } from './addons.generated'
 import { INSTALLATION_FILE } from './installation'
@@ -9,7 +10,7 @@ import { home, Problem } from './lib'
 import { aloneAt, holderRuns, startOf } from './serve/backend'
 import { addonHookCommand, itHomeWritten } from './setup'
 
-/** These are individual files It reserves in a marked home. No directory is removed recursively. */
+/** These are individual files It reserves in a marked home. */
 const ROOT_FILES = [
   'service.json',
   'machine.json',
@@ -143,6 +144,18 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
     }
   }
   for (const name of ROOT_FILES) remove(name)
+  // Atomic writes reserve sidecars only beside these fixed records, never arbitrary filenames.
+  const records: Record<string, string[]> = {
+    '': [...ROOT_FILES.filter((name) => name.endsWith('.json')), 'updates-off', 'conversation-notes-erasing', ...(!keepAddons ? [INSTALLATION_FILE] : [])],
+    backend: ['erased.json'],
+    ...(!keepAddons ? { addons: ['asked-for.json', ...HARNESSES.map((id) => `${id}.json`)] } : {}),
+  }
+  for (const [dir, names] of Object.entries(records)) {
+    for (const name of dir ? children(dir) : readdirSync(folder)) {
+      const sidecar = /^(.*)\.([1-9]\d*)\.tmp$/.exec(name)
+      if (sidecar && names.includes(sidecar[1]!) && abandoned(sidecar[2]!)) remove(dir ? `${dir}/${name}` : name)
+    }
+  }
   for (const name of [...DATABASE_FILES, 'erased.json']) remove(`backend/${name}`)
   for (const name of children('backend')) {
     const match = COPY.exec(name)
@@ -174,6 +187,8 @@ export function removeInstallationFiles(folder: string, keepAddons: boolean): st
     empty(`backend/bin/${release}`)
   }
   for (const file of ['content.sqlite', 'content.sqlite-wal', 'content.sqlite-shm', 'content.sqlite-journal']) remove(`content-data/${file}`)
+  const uploads = directory('content/tmp')
+  if (uploads) removeAbandonedUploads(uploads)
   // A manifest gives the exact filenames of a page. No glob can mistake an unknown sibling for one.
   for (const user of children('content/manifest/u')) {
     for (const page of children(`content/manifest/u/${user}`)) {

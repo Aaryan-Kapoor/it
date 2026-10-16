@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import { createFiles } from '../content/src/files'
 import { ADDONS, LICENSE } from './src/addons.generated'
 import { INSTALLATION, INSTALLATION_FILE, installationHome, legacyInstallation, markedInstallation, markInstallation } from './src/installation'
 import { home } from './src/lib'
@@ -221,6 +222,110 @@ describe('installation ownership', () => {
     expect(removeInstallationFiles(kept, false)).toEqual(['logs'])
     for (const name of ['reopened-notes.txt', 'reopened-123-4.txt.notes', 'reopened-123-4.txt/notes'])
       expect(readFileSync(path.join(kept, 'logs', name), 'utf8')).toBe('mine')
+  })
+
+  test('cleanup removes abandoned atomic-write sidecars only for fixed records', () => {
+    const dead = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    const clean = folder()
+    markInstallation(clean)
+    for (const record of [
+      'machine.json',
+      'telemetry.json',
+      'conversation-notes-erasing',
+      INSTALLATION_FILE,
+      'addons/asked-for.json',
+      'addons/pi.json',
+      'backend/erased.json',
+    ])
+      put(clean, `${record}.${dead}.tmp`, '{')
+    expect(removeInstallationFiles(clean, false)).toEqual([])
+    expect(existsSync(clean)).toBe(false)
+
+    const kept = folder()
+    markInstallation(kept)
+    const names = [
+      `machine.json.${process.pid}.tmp`,
+      `notes.json.${dead}.tmp`,
+      `LICENSE.md.${dead}.tmp`,
+      `machine.json.${dead}.tmp.notes`,
+      `machine.json.${dead}.tmp/notes`,
+      'machine.json.0.tmp',
+      'machine.json.-1.tmp',
+      'machine.json.9007199254740992.tmp',
+      `project/machine.json.${dead}.tmp`,
+      `addons/personal.json.${dead}.tmp`,
+    ]
+    for (const name of names) put(kept, name, 'mine')
+    removeInstallationFiles(kept, false)
+    for (const name of names) expect(readFileSync(path.join(kept, name), 'utf8')).toBe('mine')
+  })
+
+  test.skipIf(process.platform === 'win32')('cleanup preserves linked atomic-write sidecars and their targets', () => {
+    const at = folder()
+    markInstallation(at)
+    const outside = put(folder(), 'mine', 'mine')
+    const dead = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    const name = `machine.json.${dead}.tmp`
+    symlinkSync(outside, path.join(at, name))
+    expect(removeInstallationFiles(at, false)).toEqual([name])
+    expect(lstatSync(path.join(at, name)).isSymbolicLink()).toBe(true)
+    expect(readFileSync(outside, 'utf8')).toBe('mine')
+  })
+
+  test('cleanup removes abandoned upload staging folders and preserves live or unrecognised holders', () => {
+    const dead = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    const stage = (at: string, pid: number, note?: string) => {
+      const name = `${pid}-${randomUUID()}`
+      put(at, `content/tmp/${name}/holder`, note ?? name)
+      put(at, `content/tmp/${name}/part`, 'half a file')
+      return name
+    }
+    const clean = folder()
+    markInstallation(clean)
+    stage(clean, dead)
+    expect(removeInstallationFiles(clean, false)).toEqual([])
+    expect(existsSync(clean)).toBe(false)
+
+    const kept = folder()
+    markInstallation(kept)
+    const files = createFiles(path.join(kept, 'content'))
+    try {
+      const current = readdirSync(path.join(kept, 'content/tmp'))[0]!
+      const live = stage(kept, process.ppid)
+      const wrong = stage(kept, dead, 'another holder')
+      const missing = stage(kept, dead)
+      rmSync(path.join(kept, 'content/tmp', missing, 'holder'))
+      const directoryNote = stage(kept, dead)
+      rmSync(path.join(kept, 'content/tmp', directoryNote, 'holder'))
+      mkdirSync(path.join(kept, 'content/tmp', directoryNote, 'holder'))
+      put(kept, 'content/tmp/personal/holder', 'personal')
+      put(kept, 'content/tmp/personal/part', 'mine')
+      const abandoned = stage(kept, dead)
+      expect(removeInstallationFiles(kept, false)).toEqual(['content'])
+      expect(existsSync(path.join(kept, 'content/tmp', abandoned))).toBe(false)
+      expect(readdirSync(path.join(kept, 'content/tmp')).sort()).toEqual([current, live, wrong, missing, directoryNote, 'personal'].sort())
+      for (const name of [live, wrong, missing, directoryNote]) expect(readFileSync(path.join(kept, 'content/tmp', name, 'part'), 'utf8')).toBe('half a file')
+      expect(readFileSync(path.join(kept, 'content/tmp/personal/part'), 'utf8')).toBe('mine')
+    } finally {
+      files.close()
+    }
+  })
+
+  test.skipIf(process.platform === 'win32').each(['content', 'tmp', 'staging', 'holder'])('cleanup preserves upload staging through a linked %s', (kind) => {
+    const at = folder()
+    const outside = folder()
+    markInstallation(at)
+    const dead = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
+    const name = `${dead}-${randomUUID()}`
+    const relative = { content: 'content', tmp: 'content/tmp', staging: `content/tmp/${name}`, holder: `content/tmp/${name}/holder` }[kind]!
+    const target = put(outside, 'holder', name)
+    put(outside, 'part', 'mine')
+    mkdirSync(path.dirname(path.join(at, relative)), { recursive: true })
+    symlinkSync(kind === 'holder' ? target : outside, path.join(at, relative), kind === 'holder' ? 'file' : 'dir')
+    expect(removeInstallationFiles(at, false)).toEqual(['content'])
+    expect(lstatSync(path.join(at, relative)).isSymbolicLink()).toBe(true)
+    expect(readFileSync(target, 'utf8')).toBe(name)
+    expect(readFileSync(path.join(outside, 'part'), 'utf8')).toBe('mine')
   })
 
   test.each(['upgrade', 'backend'])('cleanup removes abandoned %s downloads and preserves live or unknown files', (kind) => {
