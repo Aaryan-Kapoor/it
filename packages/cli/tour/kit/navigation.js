@@ -1,6 +1,8 @@
 // A navigation attempt is saved before it is sent, so reloading the same showing cannot reuse it.
 window.TourNavigation = (It, from) => {
   var attempt = 0
+  // The page has no display id. Keep a random tie-breaker for this load, never one read from the shared store.
+  var display = crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16).padStart(8, '0')).join('')
   var key = 'tour-navigation'
   function ready() {
     return !It.store || It.revision > 0
@@ -11,9 +13,9 @@ window.TourNavigation = (It, from) => {
     return ++attempt
   }
   function send(name, data, current) {
-    var payload = Object.assign({}, data, { from: from, from_version: It.version, attempt: current })
+    var payload = Object.assign({}, data, { from: from, from_version: It.version, attempt: current, attempt_display: display })
     if (!It.store) return It.action(name, payload)
-    return It.store.set(key, { version: It.version, attempt: current }).then(() => It.action(name, payload))
+    return It.store.set(key, { version: It.version, attempt: current, attempt_display: display }).then(() => It.action(name, payload))
   }
   // Saving the counter also sends state. It is not the agent opening the page again.
   function onState(fn) {
