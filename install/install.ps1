@@ -113,11 +113,7 @@
     if ((Get-Kind $path) -eq 'folder') { throw "$path is a folder, and It is not installed over one. Nothing was installed." }
   }
   foreach ($place in $target, $license, $notices) { Assert-NoFolder $place }
-  # What is downloaded is kept, until it has been checked, in a folder made for this run inside
-  # It's own, under a name that cannot be guessed, so that nothing can have been put in it
-  # beforehand
-  $stage = Join-Path $root ('.install.' + [Guid]::NewGuid().ToString('N'))
-  [IO.Directory]::CreateDirectory($stage) | Out-Null
+  $stage = $null
   # Windows PowerShell on an older system does not offer TLS 1.2 unless asked to. It is asked
   # for the length of this install, and the session's setting is put back afterwards. A session
   # that leaves the choice to Windows is left as it is: Windows offers it already.
@@ -127,6 +123,23 @@
   $replacing = $false
   $kept = $false
   try {
+    # Take the lock before staging or downloading, so uninstall sees this install even
+    # while it waits for the network. Only one install can make the file. Windows removes it when it
+    # is closed, which it is when this ends, however this ends. One that no install holds was
+    # left when the machine itself stopped, and is removed here; one that an install holds
+    # cannot be.
+    function Open-Lock {
+      [IO.FileStream]::new((Join-Path $root '.installing'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
+    }
+    try { $lock = Open-Lock } catch {
+      try { [IO.File]::Delete((Join-Path $root '.installing')); $lock = Open-Lock }
+      catch { throw "Another install of It is putting its files in $root. Run this again when it has finished." }
+    }
+    # What is downloaded is kept, until it has been checked, in a folder made for this run inside
+    # It's own, under a name that cannot be guessed, so that nothing can have been put in it
+    # beforehand
+    $stage = Join-Path $root ('.install.' + [Guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($stage) | Out-Null
     if ([int]$tls -ne 0) { try { [Net.ServicePointManager]::SecurityProtocol = $tls -bor [Net.SecurityProtocolType]::Tls12 } catch {} }
     # Each download is asked for one address at a time, so that where a redirect may lead is
     # decided here and not by whichever PowerShell this is: Windows PowerShell, left to itself,
@@ -222,18 +235,6 @@
     } catch { $why = "Windows would not start it: $($_.Exception.GetBaseException().Message)" }
     if (-not $starts) { throw "The program for Windows does not start on this system. Nothing was installed. $why Where Windows Security or a policy of this computer stopped it, the Protection history in Windows Security says so." }
     if ($led) { Write-Host "`r" -NoNewline; $open = $false; Write-Done 'Downloaded for Windows, and checked' }
-    # One install at a time puts its files in place. The lock is a file, which only one can
-    # make. It is held open for the moment the replacing takes, and Windows removes it when it
-    # is closed, which it is when this ends, however this ends. One that no install holds was
-    # left when the machine itself stopped, and is removed here; one that an install holds
-    # cannot be.
-    function Open-Lock {
-      [IO.FileStream]::new((Join-Path $root '.installing'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
-    }
-    try { $lock = Open-Lock } catch {
-      try { [IO.File]::Delete((Join-Path $root '.installing')); $lock = Open-Lock }
-      catch { throw "Another install of It is putting its files in $root. Run this again when it has finished." }
-    }
     # The program, terms and installation record are put in place together. Each goes in by a move, which
     # never writes through a link to wherever it leads and never goes into a folder. What was
     # at each place is moved aside first and kept until every file is in, and is put back if
@@ -397,7 +398,7 @@
       }
     }
     # The folder made for this run goes, with whatever is still in it, and then the lock
-    if (-not $kept) { try { [IO.Directory]::Delete($stage, $true) } catch {} }
+    if ($stage -and -not $kept) { try { [IO.Directory]::Delete($stage, $true) } catch {} }
     if ($lock) { try { $lock.Dispose() } catch {} }
     try { [Net.ServicePointManager]::SecurityProtocol = $tls } catch {}
     # What went wrong is said on a line of its own

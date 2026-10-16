@@ -322,6 +322,46 @@ trap 'exit 131' QUIT
 trap 'exit 141' PIPE
 trap 'exit 143' TERM
 
+# Take the lock before making a staging folder or downloading anything. Uninstall uses
+# this same lock and must see an install that is still waiting for its first download.
+# Taking it and recording that it is ours are two steps, so a signal waits until both are
+# done. Downloads remain interruptible, and cleanup gives the lock back if one stops.
+trap ':' HUP INT QUIT PIPE TERM
+# A lock is taken from the install that holds it only when that install has stopped running:
+# when the lock names a process on this machine, and no such process is there. However old a
+# lock is, one whose process is running is left alone, and so is one held on another machine,
+# and one that names nobody, which was made this moment or by an install that was killed as it
+# made it. Only one install at a time may take a lock over, and it reads who holds the lock
+# once it is that one, so that a lock just taken over by one install is never taken from it by
+# the next.
+if ! mkdir "${lock}" 2>/dev/null; then
+  if mkdir "${lock}.taking" 2>/dev/null; then
+    holder
+    if [ -n "${by}" ] && [ "${on}" = "${here}" ] && ! running "${by}"; then
+      rm -f -- "${lock}/owner" 2>/dev/null || true
+      if rmdir "${lock}" 2>/dev/null && mkdir "${lock}" 2>/dev/null; then took=1; fi
+    fi
+    rmdir "${lock}.taking" 2>/dev/null || true
+  fi
+  if [ "${took}" = 0 ]; then
+    holder
+    if [ -n "${by}" ]; then who=", process ${by} on ${on},"; else who=""; fi
+    say "Another install of It${who} is putting its files in ${HOME_DIR}. Run this again when it has finished. A lock is taken over by itself only once the process it names is gone from this machine. If no install of It is running, remove the folder ${lock} and, if it is there, the folder ${lock}.taking first." >&2
+    exit 1
+  fi
+fi
+if ! say "${me}" 2>/dev/null > "${lock}/owner"; then
+  rmdir "${lock}" 2>/dev/null || true
+  say "The lock ${lock} could not be written. Nothing was installed." >&2
+  exit 1
+fi
+locked=1
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 131' QUIT
+trap 'exit 141' PIPE
+trap 'exit 143' TERM
+
 # What is downloaded is kept, until it has been checked, in a folder made for this run, which
 # only this user can look inside and which nothing can have been put in beforehand. Its name
 # cannot be guessed. On a system with no mktemp its name can be, and there making it fails if
@@ -391,44 +431,10 @@ if [ "${tried}" != 0 ]; then
 fi
 if [ "${led}" = 1 ]; then did "Downloaded for ${os} ${arch}, and checked"; fi
 
-# From here until the lock is given up, a signal does not stop this. Taking the lock and
-# noting that it was taken are two steps, and stopped between them it would leave a lock that
-# nothing removes; and once the replacing has begun, the only way to leave one release's files
-# together is to finish it, or to put back what was there, and neither is to be cut short. The
-# signal is taken and nothing is done about it, which is not the same as being deaf to it: a
-# command started by a shell that is deaf to a signal is deaf to it too, and one that was
-# moving a file and had stuck could then not be stopped. As it is, a signal sent to everything
-# this started stops that command, and what was there is put back.
+# Once replacing begins, a signal must not leave files from different releases together.
+# A command moving a file still receives the signal, and cleanup puts back what was there
+# if that command stops. The shell itself stays to finish the replacement or its cleanup.
 trap ':' HUP INT QUIT PIPE TERM
-# A lock is taken from the install that holds it only when that install has stopped running:
-# when the lock names a process on this machine, and no such process is there. However old a
-# lock is, one whose process is running is left alone, and so is one held on another machine,
-# and one that names nobody, which was made this moment or by an install that was killed as it
-# made it. Only one install at a time may take a lock over, and it reads who holds the lock
-# once it is that one, so that a lock just taken over by one install is never taken from it by
-# the next.
-if ! mkdir "${lock}" 2>/dev/null; then
-  if mkdir "${lock}.taking" 2>/dev/null; then
-    holder
-    if [ -n "${by}" ] && [ "${on}" = "${here}" ] && ! running "${by}"; then
-      rm -f -- "${lock}/owner" 2>/dev/null || true
-      if rmdir "${lock}" 2>/dev/null && mkdir "${lock}" 2>/dev/null; then took=1; fi
-    fi
-    rmdir "${lock}.taking" 2>/dev/null || true
-  fi
-  if [ "${took}" = 0 ]; then
-    holder
-    if [ -n "${by}" ]; then who=", process ${by} on ${on},"; else who=""; fi
-    say "Another install of It${who} is putting its files in ${HOME_DIR}. Run this again when it has finished. A lock is taken over by itself only once the process it names is gone from this machine. If no install of It is running, remove the folder ${lock} and, if it is there, the folder ${lock}.taking first." >&2
-    exit 1
-  fi
-fi
-if ! say "${me}" 2>/dev/null > "${lock}/owner"; then
-  rmdir "${lock}" 2>/dev/null || true
-  say "The lock ${lock} could not be written. Nothing was installed." >&2
-  exit 1
-fi
-locked=1
 # A damaged or linked ownership record is never silently replaced.
 installation='{"product":"It","format":1,"about":"This folder holds an installation of It."}'
 if [ -e "${HOME_DIR}/installation.json" ] || [ -L "${HOME_DIR}/installation.json" ]; then
