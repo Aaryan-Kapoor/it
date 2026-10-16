@@ -313,6 +313,25 @@ describe('the outbox', () => {
     }
   })
 
+  test.each(['invalid', 'not_found', 'conflict'])('unsaved clicks refused with %s leave room for another request', async (code) => {
+    const full = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    const b = backend(Array.from({ length: 100 }, () => refuse(code)))
+    try {
+      // Each refusal settles its request, so none may keep a place in the browser's limit of 100 grants.
+      for (let i = 0; i < 100; i++) {
+        await expect(submit(b.client, 'alice', 'page1', envelope(`refused-click-${i}`))).rejects.toThrow(code)
+      }
+      await expect(submit(b.client, 'alice', 'page1', envelope('accepted-click'))).resolves.toEqual({ actionId: 'a1' })
+      expect(b.calls).toHaveLength(101)
+      expect(stored()).toEqual([])
+      expect(unsaved('alice', 'page1')).toBe(0)
+    } finally {
+      full.mockRestore()
+    }
+  })
+
   test('a retry reuses its original deadline after storage recovers from an unconfirmed request', async () => {
     outboxBelongsTo('alice', 'session-1')
     const b = backend([new Error('answer lost'), { actionId: 'already-accepted' }])

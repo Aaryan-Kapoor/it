@@ -49,7 +49,7 @@ interface Entry {
 
 const keyOf = (user: string, artifactId: string, id: string) => `${PREFIX}${user}.${artifactId}.${id}`
 // A request whose answer was lost must keep its original deadline even when storage refused it.
-// These bounded records contain no payload and stay until confirmation or the pairing ends.
+// These bounded records contain no payload and stay until a settled answer or the pairing ends.
 const memoryGrants = new Map<string, { session: string | null; until: number }>()
 
 // Whatever shows what became of a click is told the moment what is kept here changes, so that
@@ -469,6 +469,7 @@ async function sendNow(
         memoryGrants.delete(key)
         return result
       } catch (err) {
+        if (settled(err)) memoryGrants.delete(key)
         if (!mine() || ((!stillThere() || operation !== undefined) && !settled(err))) {
           // Nobody was told what became of it: it stays, and is sent when it can be
           keep = true
