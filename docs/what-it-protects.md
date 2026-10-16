@@ -46,13 +46,17 @@ The door answers only to the machine's own names and addresses. A request that n
 
 ### What It asks of itself goes to itself
 
-The `it` command, the connector and the service ask It's own backend and its own door for everything they do. None of those requests goes through a proxy that the environment names, with `HTTP_PROXY`, `HTTPS_PROXY` or a variable like them, so a key or a token that It sends to itself is never handed to a proxy. The one request It does send through such a proxy is the download of the backend program.
+The `it` command, the connector and the service ask It's own backend and its own door for everything they do. None of those requests goes through a proxy that the environment names, with `HTTP_PROXY`, `HTTPS_PROXY` or a variable like them, so a key or a token that It sends to itself is never handed to a proxy. The one request It does send through such a proxy is the download of the backend program. What the add-ons inside the agent apps ask of the connector on this machine goes through no proxy either, and [Add-ons](add-ons.md#what-every-add-on-does) says how each makes sure of it.
 
 ### What is on the disk is yours alone
 
 It's folder, `~/.it`, is made so that only your user can look inside it, and each file that holds a secret is written for your user alone. The backend program It fetched is yours alone to read and to run, and what that program makes is yours alone as well. On Windows a file has the permissions of the folder it is in, so those files are as private as the folder: your own profile is, and a folder you name with `IT_HOME` is as private as you made it.
 
 A machine's key is made on that machine, and its private half never leaves it. A machine proves itself by signing a statement that is good for one use, and is given a token for five minutes. Revoking a machine on the site takes effect on its next call.
+
+### Changes to shared files keep a way back
+
+When It changes a shell profile or Codex's settings, or replaces or removes files it copied into an agent app, it keeps the original file at a named recovery path beside it. An edit saved just before It moves that file goes with the original. A file another writer creates at the vacated name is left in place. Linked profiles keep their symlink, and the target and its original keep their file permissions. [Recovery originals](data.md#recovery-originals) explains how to restore them and the limit of 20 originals per file.
 
 ### What is uploaded is what was declared
 
@@ -69,6 +73,10 @@ One file beside the log is not like it. While a conversation that It reopened is
 The backend program is fetched from its own release, and kept only if it matches a SHA-256 checksum written in It's source. `IT_BACKEND_RELEASES` names another place to fetch it from, which is an https address or this machine itself over plain http, and anything else it holds is refused before anything is asked. Whatever it names, what arrives is kept only if it matches that same checksum. The install script checks the program it downloads against the checksum published beside it. That second check guards against a damaged download and is not a signature: whoever could replace the program in a release could replace the checksum too.
 
 ## What It does not protect
+
+### Shared file edits are not a transaction with other apps
+
+It does not share a lock with your editor or agent app. A file is briefly absent between being moved to recovery and its replacement being placed. A crash then can leave only the recovery original, and another writer can change the current file or an open original again afterwards. It cannot promise that a series of saves by another program all survive. Close other writers before restoring an original. Recovery copies do not expire, can contain private settings, and remain beside external files after uninstall until you remove them. Files you placed inside `IT_HOME`, and originals beside them, are deleted with that folder. A full recovery folder stops further changes to that file. Plugins installed or removed by an app's own commands remain that app's responsibility.
 
 ### Other accounts on the same computer are not kept out
 
@@ -109,6 +117,10 @@ Auto-wake is on for an agent app from when you connect it on a machine, and stay
 So think of who can do something on a page. You can, from any paired browser. So can a paired screen, and whoever can pair one. On your network everything travels in the clear, so someone there who reads one request of a paired browser can send one of their own. And another account on the same computer can reach the door. What they send reaches the agent as text: the name of what was pressed and the first 2,000 characters of what it carried, for up to eight things done at once, and the agent can read the whole of each. That is enough to ask an agent for something you did not.
 
 What It does about it: the text is marked as coming from a page, a conversation is reopened only on a machine and for an app where it is on, what you have turned off is turned on again by nobody but you, while It's service is running it asks a run to end after fifteen minutes and ends it if it does not, and Stop on the page ends it and what it started once its machine has heard: a machine that is out of reach is told when it is back, and the page says so meanwhile. If the service itself dies during a run, the agent goes on until the service starts again, which is when it looks at the runs it had noted and ends what is left of them. A reopened Codex conversation is kept to Codex's sandbox, with It's own folder writable too. None of that makes an agent refuse a request. Leave Auto-wake on where you would accept that agent acting on anything a page can send, and turn it off where you would not.
+
+### Hermes can switch conversations during a handover
+
+The Hermes add-on checks that a click still belongs to the conversation in its chat before handing it over. Hermes does not let the add-on make that check and the handover one operation. A switch after the last check can send the click to the replacement conversation. In the terminal, a `/resume` entered just after the check for waiting input can do this too. [Add-ons](add-ons.md#hermes-agent) describes these limits.
 
 ### It is not made for the public internet
 

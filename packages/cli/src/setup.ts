@@ -10,11 +10,12 @@ import {
   closeSync,
   constants,
   existsSync,
+  fchmodSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
-  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -28,7 +29,8 @@ import path from 'node:path'
 import { HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
 import { ADDONS, LICENSE } from './addons.generated'
 import { codexConfig } from './codex-settings'
-import { harnessEnv, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
+import { harnessEnv, home, inHome, Problem, readJson, VERSION, writePrivate } from './lib'
+import { checkHardLinks, keepOriginal, putAbsent, removeOriginal, removeOwnOriginals, restoreAbsent, withoutFileWait } from './preserve'
 import { alone as oneAtATime } from './serve/backend'
 
 export type AddonState = 'connected' | 'not_connected' | 'needs_approval' | 'too_old' | 'unavailable' | 'error'
@@ -224,11 +226,6 @@ function lookAt(root: string, file: string): Found {
     return { is: absent(err) ? 'none' : 'closed' }
   }
 }
-/** Whether a file is there and holds just what this program put in it. */
-const asPut = (root: string, f: Put) => {
-  const now = lookAt(root, f.path)
-  return now.is === 'file' && now.sha256 === f.sha256
-}
 /**
  * Makes a folder inside a harness's folder, one step at a time. A step that is a link leading
  * out of the harness's folder is not gone through, so nothing is ever made on the far side of it.
@@ -253,17 +250,29 @@ function makeWithin(root: string, dir: string): void {
  * and the file of that name is made new by this very call and never opened through a link: what
  * is written can go nowhere but into that new file.
  */
-function putInPlace(data: Buffer, to: string): void {
+function putInPlace(data: Buffer, to: string, before?: () => string | undefined, mode?: number, publishing?: () => void): void {
   const part = `${to}.${randomBytes(12).toString('hex')}.part`
   const made = openSync(part, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o666)
   try {
     try {
       writeFileSync(made, data)
+      if (mode !== undefined) fchmodSync(made, mode)
+      fsyncSync(made)
     } finally {
       closeSync(made)
     }
-    // Tried again for a little while on Windows, where a program that looks into every new file may have this one open for a moment
-    rename(part, to)
+    // Check publication support before moving any existing entry, including a person's
+    // file or directory. Probe with the staged file because directories cannot be linked.
+    checkHardLinks(part, `${part}.link-check`)
+    // Publish at a free name after preserving what occupied it.
+    const original = before?.()
+    try {
+      publishing?.()
+      putAbsent(part, to)
+    } catch (err) {
+      if (original) restoreAbsent(original, to)
+      throw err
+    }
   } catch (err) {
     rmSync(part, { force: true })
     throw err
@@ -427,6 +436,11 @@ interface Adapter {
    * add-on was installed is noted with it, and its removal is done with the same.
    */
   profile: readonly string[]
+  /**
+   * Set for a harness that gives a conversation the same name in every folder it keeps its
+   * settings in. Its add-on is then in one of those folders at most: see `staying`.
+   */
+  single?: boolean
   /** For an add-on whose files this program copies in itself: the harness's folder they go into, as things stand now. */
   folder?(): Promise<string>
   /** Whether our add-on is installed in the harness right now, and switched on. `was` is what this program noted when it installed one there. */
@@ -442,7 +456,12 @@ interface Adapter {
    */
   note?(at: Place): Promise<string | null>
   /** `wrote` is told, each time a file has been written, every file of the add-on that is this program's now. */
-  install(dir: string, at: Place, was: Installation | undefined, wrote: (files: Put[]) => void): Promise<Ran & { files?: Put[]; aside?: string[] }>
+  install(
+    dir: string,
+    at: Place,
+    was: Installation | undefined,
+    wrote: (files: Put[]) => void,
+  ): Promise<Ran & { files?: Put[]; aside?: string[]; recovery?: string[] }>
   /** Takes the add-on out. What it returns are the files it did not take out. */
   remove(at: Place, was?: Installation): Promise<Left | undefined>
   /** Something the person still has to do inside the harness, if anything. */
@@ -451,6 +470,9 @@ interface Adapter {
 
 /** The files of an add-on that a removal left where they were. */
 interface Left {
+  recovery?: string[]
+  /** The host has not yet confirmed removal, so companion cleanup has not run. */
+  pending?: boolean
   /** Changed by the person since they were put there, so theirs to keep or to take out. */
   changed: string[]
   /** Could not be looked at, or could not be taken out. */
@@ -525,7 +547,7 @@ function withSkill(
   dir: string,
   was: Installation | undefined,
   wrote: (files: Put[]) => void,
-): Ran & { files?: Put[]; aside?: string[] } {
+): Ran & { files?: Put[]; aside?: string[]; recovery?: string[] } {
   if (!installed.ok) return installed
   const put = putFiles(
     root,
@@ -536,14 +558,14 @@ function withSkill(
     was,
     wrote,
   )
-  return { ok: put.err === undefined, out: installed.out, err: put.err ?? installed.err, files: put.files, aside: put.aside }
+  return { ok: put.err === undefined, out: installed.out, err: put.err ?? installed.err, files: put.files, aside: put.aside, recovery: put.recovery }
 }
 /** Takes the skill out again, where this program has a note of putting it there. An installation from before the skill was put beside the plugin has none, and nothing to take. */
 function withoutSkill(root: string, was: Installation | undefined): Left | undefined {
   if (!was?.files) return undefined
   const left = takeFiles(root, was.files)
   takeFolders(root, [path.dirname(SKILL_FILE)])
-  return left.changed.length || left.closed.length || left.outside.length ? left : undefined
+  return left.changed.length || left.closed.length || left.outside.length || left.recovery?.length ? left : undefined
 }
 
 const ADAPTERS: Partial<Record<Harness, Adapter>> = {
@@ -575,8 +597,11 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       const env = envAt(this.profile, at)
       await run('claude', ['plugin', 'uninstall', `${PLUGIN}@${MARKET}`], 60_000, env)
       // The place it was installed from goes only once the add-on itself is seen to be gone:
-      // while it is still listed, there is something left to try removing again
-      if ((await this.present(at)) === false) await run('claude', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
+      // while it is still listed, there is something left to try removing again. The skill
+      // goes then too, and no sooner: a plugin that stayed would go on telling the agent to
+      // load a skill that was no longer there.
+      if ((await this.present(at)) !== false) return { changed: [], closed: [], outside: [], pending: true }
+      await run('claude', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
       return withoutSkill(settingsAt(at, 'CLAUDE_CONFIG_DIR', '.claude'), was)
     },
   },
@@ -611,8 +636,9 @@ const ADAPTERS: Partial<Record<Harness, Adapter>> = {
       await run('codex', ['plugin', 'remove', `${PLUGIN}@${MARKET}`], 60_000, env)
       // Its marketplace is what `present` looks in. It goes only once the add-on is seen to be
       // gone from Codex (whoever removed it): otherwise a failed removal would look like a
-      // finished one.
-      if ((await this.present(at)) === false) await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
+      // finished one. The skill goes then too, and no sooner, as in Claude Code.
+      if ((await this.present(at)) !== false) return { changed: [], closed: [], outside: [], pending: true }
+      await run('codex', ['plugin', 'marketplace', 'remove', MARKET], 60_000, env)
       return withoutSkill(settingsAt(at, 'CODEX_HOME', '.codex'), was)
     },
     pending() {
@@ -651,22 +677,6 @@ interface Copied {
   before?(at: Place, was: Installation | undefined): Promise<void>
 }
 
-/** Whether a folder holds nothing but files this program put there, unchanged, and what Python leaves beside code it has run. */
-function onlyOurs(root: string, dir: string, files: Put[]): boolean {
-  try {
-    return readdirSync(dir, { withFileTypes: true }).every((entry) => {
-      const full = path.join(dir, entry.name)
-      // What Python leaves is compiled code and nothing else: any other file kept there is the person's
-      if (entry.isDirectory() && entry.name === '__pycache__')
-        return readdirSync(full, { withFileTypes: true }).every((left) => left.isFile() && left.name.endsWith('.pyc'))
-      if (entry.isDirectory()) return onlyOurs(root, full, files)
-      return files.some((f) => f.path === full && asPut(root, f))
-    })
-  } catch {
-    return false
-  }
-}
-
 /** A file an add-on is to have in a harness's folder: where, and what it holds. */
 interface Wanted {
   to: string
@@ -679,21 +689,30 @@ interface Wanted {
  * that is still as it left it, is written over. Whatever else stands in a file's place is the
  * person's, though it hold the very same words, and is kept beside the new one under another
  * name. `wanted` is asked for here, so that a file of the add-on that cannot be read is a
- * failure like any other. `wrote` is told, each time a file has been written, every file that is
- * this program's now. What is returned says the same at the end, with what was set aside, and
- * with why it stopped where it did not finish.
+ * failure like any other. `wrote` is told, each time a file is about to be put in a place that was
+ * empty and each time one has been written, every file that is this program's now. What is
+ * returned says the same at the end, with what was set aside, and with why it stopped where it
+ * did not finish.
  */
 function putFiles(
   root: string,
   wanted: () => Wanted[],
   was: Installation | undefined,
   wrote: (files: Put[]) => void,
-): { files: Put[]; aside: string[]; err?: string } {
+): { files: Put[]; aside: string[]; recovery: string[]; err?: string } {
   const kept: string[] = []
+  const recovery: string[] = []
   // The files that are this program's: what the last install left, and then each file this
   // one writes, from the moment it has been written and no sooner
   const mine = new Map((was?.files ?? []).map((f) => [f.path, f.sha256]))
   const noted = () => [...mine].map(([file, sha256]) => ({ path: file, sha256 }))
+  const finished = (original: string, sha256: string) => {
+    const saved = lookAt(root, original)
+    if (saved.is === 'file' && saved.sha256 === sha256) {
+      removeOriginal(original)
+      recovery.splice(recovery.indexOf(original), 1)
+    }
+  }
   try {
     const files = wanted()
     const look = (file: string) => {
@@ -710,28 +729,57 @@ function putFiles(
       const own = now.is === 'file' && mine.get(f.to) === now.sha256
       if (own && now.sha256 === f.sha256) continue
       makeWithin(root, path.dirname(f.to))
-      // Whatever is there that this program did not put there, or that has been changed
-      // since, is the person's, though it hold the very same words
-      if (now.is !== 'none' && !own) {
-        const name = aside(f.to)
-        renameSync(f.to, name)
-        mine.delete(f.to)
-        kept.push(name)
+      const mode = now.is === 'file' ? statSync(f.to).mode & 0o777 : undefined
+      const previous = mine.get(f.to)
+      let original: string | undefined
+      try {
+        putInPlace(
+          f.data,
+          f.to,
+          () => {
+            if (now.is === 'none') return undefined
+            if (own) removeOwnOriginals(f.to, now.sha256)
+            // Moving the actual entry captures a save after the checksum, even an atomic save.
+            const name = own ? keepOriginal(f.to) : aside(f.to)
+            if (!own) renameSync(f.to, name)
+            mine.delete(f.to)
+            ;(own ? recovery : kept).push(name)
+            if (own) original = name
+            return name
+          },
+          mode,
+          () => {
+            // Record the replacement before publication, so an interrupted install still
+            // knows every file it may have published. Removal also checks its checksum.
+            mine.set(f.to, f.sha256)
+            wrote(noted())
+          },
+        )
+      } catch (err) {
+        if (previous === undefined) mine.delete(f.to)
+        else mine.set(f.to, previous)
+        throw err
       }
-      putInPlace(f.data, f.to)
       mine.set(f.to, f.sha256)
       wrote(noted())
+      if (original && previous) finished(original, previous)
     }
     // A file noted as put there that this add-on does not have is taken away, where it is still as it was put
     for (const [file, sha256] of [...mine]) {
       if (files.some((f) => f.to === file)) continue
       const now = lookAt(root, file)
-      if (now.is === 'file' && now.sha256 === sha256) rmSync(file, { force: true })
+      if (now.is === 'file' && now.sha256 === sha256) {
+        removeOwnOriginals(file, sha256)
+        const original = keepOriginal(file)
+        recovery.push(original)
+        if (look(file).is !== 'none') throw new Error(`${file} was recreated by another program, so its removal is unfinished`)
+        finished(original, sha256)
+      }
       if (now.is !== 'closed') mine.delete(file)
     }
-    return { files: noted(), aside: kept }
+    return { files: noted(), aside: kept, recovery }
   } catch (err) {
-    return { files: noted(), aside: kept, err: (err as Error).message }
+    return { files: noted(), aside: kept, recovery, err: (err as Error).message }
   }
 }
 
@@ -744,14 +792,28 @@ function leaveAs(left: Left, file: string, now: Found): void {
 function takeFiles(root: string, files: Put[]): Left {
   const left: Left = { changed: [], closed: [], outside: [] }
   for (const f of files) {
-    const now = lookAt(root, f.path)
-    if (now.is !== 'file' || now.sha256 !== f.sha256) leaveAs(left, f.path, now)
-    else
-      try {
-        rmSync(f.path)
-      } catch (err) {
-        if (!absent(err)) left.closed.push(f.path)
+    try {
+      const now = lookAt(root, f.path)
+      if (now.is === 'outside' || now.is === 'closed') {
+        leaveAs(left, f.path, now)
+        continue
       }
+      removeOwnOriginals(f.path, f.sha256)
+      if (now.is !== 'file' || now.sha256 !== f.sha256) leaveAs(left, f.path, now)
+      else {
+        const original = keepOriginal(f.path)
+        const after = lookAt(root, f.path)
+        leaveAs(left, f.path, after)
+        const saved = lookAt(root, original)
+        if (after.is === 'none' && saved.is === 'file' && saved.sha256 === f.sha256) removeOriginal(original)
+        else {
+          left.recovery ??= []
+          left.recovery.push(original)
+        }
+      }
+    } catch (err) {
+      if (!absent(err)) left.closed.push(f.path)
+    }
   }
   return left
 }
@@ -807,8 +869,8 @@ function copied(id: Harness, c: Copied): Adapter {
         was,
         wrote,
       )
-      if (put.err !== undefined) return { ok: false, out: '', err: put.err, files: put.files, aside: put.aside }
-      return { ...((await c.after?.(at)) ?? { ok: true, out: '', err: '' }), files: put.files, aside: put.aside }
+      if (put.err !== undefined) return { ok: false, out: '', err: put.err, files: put.files, aside: put.aside, recovery: put.recovery }
+      return { ...((await c.after?.(at)) ?? { ok: true, out: '', err: '' }), files: put.files, aside: put.aside, recovery: put.recovery }
     },
     async remove(at, was) {
       const root = at.dir!
@@ -887,6 +949,9 @@ Object.assign(ADAPTERS, {
   // the change by itself; one that is stopped picks it up when it next starts.
   openclaw: {
     profile: OPENCLAW_VARS,
+    // OpenClaw names a conversation by a key such as `agent:main:main`, which is the same in
+    // every profile, and the add-on asks the connector for a conversation's clicks by that key
+    single: true,
     async installed(at) {
       const ours = await openclawHas(at)
       return ours?.enabled === true && ours.status !== 'error'
@@ -936,14 +1001,10 @@ Object.assign(ADAPTERS, {
     after(at) {
       return run('hermes', ['plugins', 'enable', PLUGIN], 60_000, envAt(this.profile, at))
     },
-    async before(at, was) {
-      // Hermes's own command for removing a plugin takes the plugin's folder away whole, and
-      // with it the person's permission for the plugin in their settings. It is used when that
-      // folder holds nothing but what this program put there. When the person has changed or
-      // added something in it, the plugin is switched off with Hermes's own command instead,
-      // and only this program's files are taken out.
-      const whole = was?.files !== undefined && onlyOurs(at.dir!, path.join(at.dir!, 'plugins', PLUGIN), was.files)
-      await run('hermes', ['plugins', whole ? 'remove' : 'disable', PLUGIN], 60_000, envAt(this.profile, at))
+    async before(at) {
+      // A whole-folder removal can erase files saved after an ownership check. Disable it
+      // through Hermes and preserve each copied file ourselves, leaving every other entry.
+      await run('hermes', ['plugins', 'disable', PLUGIN], 60_000, envAt(this.profile, at))
     },
   }),
 } satisfies Partial<Record<Harness, Adapter>>)
@@ -1091,6 +1152,62 @@ function onRecord(from: string, id: Harness, at: Place): boolean {
 const elsewhere = (id: Harness, from: string | null, at: Place): Other | null =>
   from && real(from) !== thisHome() ? { home: from, kept: onRecord(from, id, at) } : null
 
+/** Check the folder holding an add-on, rather than an optional config file or its surviving parent. */
+const installationFolders = (id: Harness, i: Installation) => {
+  const env = i.env ?? {}
+  // An empty saved environment means the default profile. No saved environment means its place is unknown.
+  const state = id === 'openclaw' && i.env ? (env.OPENCLAW_STATE_DIR ?? path.join(env.OPENCLAW_HOME ?? os.homedir(), '.openclaw')) : undefined
+  return [
+    ...Object.entries(env)
+      .filter(([key]) => !OPENCLAW_VARS.includes(key as (typeof OPENCLAW_VARS)[number]))
+      .map(([, folder]) => folder),
+    ...(state ? [state] : []),
+    ...(i.dir ? [i.dir] : []),
+  ].map((folder) => reached(path.resolve(folder.replace(/^~(?=$|[\\/])/, os.homedir()))))
+}
+
+/** Whether every folder an installation was made in is seen to be gone, and the add-on with it. One that cannot be looked at is not known to be. */
+const folderGone = (id: Harness, i: Installation) => {
+  const folders = installationFolders(id, i)
+  return folders.length > 0 && folders.every((seen) => seen === 'none')
+}
+/**
+ * Of the installations on record for a harness that is connected in one folder only, the one
+ * that stays: the one made last. Every add-on of such a harness asks the one connector of this
+ * It folder for a conversation's clicks by the conversation's name, and the name is the same in
+ * each of the harness's folders. Two of them would each be handed what was done on the other's
+ * pages, and whichever asked first would put it into a conversation of its own. So a second is
+ * never installed, and where an It from before installed two, all but this one are taken out.
+ */
+const staying = (id: Harness, all: Installation[]): Installation | undefined => all.filter((i) => !folderGone(id, i)).at(-1)
+/** The folder the harness says holds its add-on, with links and other spellings resolved. An uncertain place never permits removal. */
+async function profileFolder(adapter: Pick<Adapter, 'note'>, at: Place): Promise<string | undefined> {
+  const file = await adapter.note?.(at)
+  if (!file) return undefined
+  try {
+    const dir = realpathSync.native(path.dirname(file))
+    return statSync(dir).isDirectory() ? dir : undefined
+  } catch {
+    return undefined
+  }
+}
+const sameProfile = async (adapter: Pick<Adapter, 'note'>, a: Place, b: Place): Promise<boolean> => {
+  const [first, second] = await Promise.all([profileFolder(adapter, a), profileFolder(adapter, b)])
+  return first !== undefined && first === second
+}
+async function profileFolders(id: Harness, adapter: Pick<Adapter, 'note'>, all: Installation[]): Promise<Map<Installation, string | undefined>> {
+  const folders = new Map<Installation, string | undefined>()
+  for (const i of all) if (!folderGone(id, i)) folders.set(i, placed(i) ? await profileFolder(adapter, placed(i)!) : undefined)
+  return folders
+}
+const unfinishedProfiles = (label: string) =>
+  `It has not finished taking its add-on out of the other ${label} profiles. A second profile may still receive and answer clicks on your ${label} pages, including new pages. Run \`it setup\` again to retry; the background service will retry as well.`
+const uncertainProfiles = (label: string) =>
+  `It could not tell whether the recorded ${label} places are different folders, so no add-on was removed. A second profile may still receive and answer clicks on your ${label} pages, including new pages. Run \`it setup\` again to retry; the background service will retry as well.`
+/** What a person is told when such a harness is asked for in a second folder. It may be shown on the site, and names no folder. */
+const oneOnly = (label: string) =>
+  `It’s add-on is already in another folder that ${label} keeps its settings in, and it is connected in one only: ${label} gives a conversation the same name in each, so what is done on a page made in one could reach a conversation in the other. To have it here instead, untick ${label} in \`it setup\`, which takes the add-on out of that folder, and then run \`it setup\` again from here.`
+
 /** What is found out about a harness in one look: its status, and what the status rests on. */
 interface Seen {
   status: HarnessStatus
@@ -1122,7 +1239,23 @@ async function look(id: Harness): Promise<Seen | HarnessStatus | null> {
     }
   const at = await whereNow(adapter)
   const all = installations(id)
-  const was = all.find((i) => samePlace(placed(i) ?? at, at))
+  let was = all.find((i) => samePlace(placed(i) ?? at, at))
+  // Connected in one folder only, and that folder is another than this one
+  const stays = adapter.single ? staying(id, all) : undefined
+  if (stays && all.some((i) => i !== stays && !folderGone(id, i))) {
+    const folders = await profileFolders(id, adapter, all)
+    const detail = [...folders.values()].some((dir) => dir === undefined)
+      ? uncertainProfiles(KNOWN[id].label)
+      : [...folders.values()].some((dir) => dir !== folders.get(stays))
+        ? unfinishedProfiles(KNOWN[id].label)
+        : undefined
+    if (detail) return { adapter, at, all, was, from: null, other: null, status: { id, version, addon: 'error', detail } }
+  }
+  if (stays && !samePlace(placed(stays) ?? at, at)) {
+    if (!(await sameProfile(adapter, placed(stays) ?? at, at)))
+      return { adapter, at, all, was, from: null, other: null, status: { id, version, addon: 'unavailable', detail: oneOnly(KNOWN[id].label) } }
+    was = stays
+  }
   // An add-on that another It folder installed brings clicks to that folder's connector, not to
   // this one's. While that folder still has it on record it stays that folder's, and It is not
   // connected here. One that no folder has on record is nobody's, and is replaced when asked for.
@@ -1209,7 +1342,60 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   const seen = await look(id)
   if (!seen) return { id, addon: 'error', detail: `${label} was not found on this machine.` }
   if (!('status' in seen)) return seen
-  const { status: before, adapter, at, all, was, from, other } = seen
+  const { status: before, adapter, at, from, other } = seen
+  let { all, was } = seen
+  if (adapter.single) {
+    // Confirmed absence needs no folder comparison. Keep unknown places and failed
+    // inspections, but retire an installation the app says is gone before choosing one to keep.
+    const remaining: Installation[] = []
+    for (const installation of all) {
+      if (folderGone(id, installation)) continue
+      const place = placed(installation)
+      if (!place || (await adapter.present(place, installation)) !== false) remaining.push(installation)
+    }
+    if (remaining.length !== all.length) {
+      keep(id, remaining)
+      return connect(id, say, forLog)
+    }
+  }
+  // A harness that is connected in one folder only. Which folder that is goes by what is on
+  // record and not by where this command was run from, so that a setup in a terminal and the
+  // background service, which may each find the harness pointed somewhere else, agree on it
+  // and neither moves the add-on away from under the other.
+  const stays = adapter.single ? staying(id, all) : undefined
+  if (stays) {
+    const where = (i: Installation) => placed(i) ?? at
+    if (all.some((i) => i !== stays && !folderGone(id, i))) {
+      const folders = await profileFolders(id, adapter, all)
+      if ([...folders.values()].some((dir) => dir === undefined)) {
+        const detail = uncertainProfiles(label)
+        say(`${label}: ${detail}`)
+        return { id, version: before.version, addon: 'error', detail }
+      }
+      // Two records of one real folder are one installation. Retiring an alias never asks the harness to uninstall anything.
+      all = all.filter((i) => i === stays || folders.get(i) !== folders.get(stays))
+      keep(id, all)
+      if (all.some((i) => i !== stays)) {
+        say(
+          `${label}: It’s add-on was in more than one of the folders ${label} keeps its settings in, where each could be handed what was done on the other’s pages. It will try to take the add-on out of all but the one it was put into last.`,
+        )
+        await disconnect(id, say, { only: (i) => !samePlace(where(i), where(stays)) }, forLog)
+        all = installations(id)
+        if (all.some((i) => i !== staying(id, all) && !folderGone(id, i))) {
+          const detail = unfinishedProfiles(label)
+          say(`${label}: ${detail}`)
+          return { id, version: before.version, addon: 'error', detail }
+        }
+        // Cleanup may have changed what the harness has. Inspect it afresh before deciding whether to install anything.
+        return connect(id, say, forLog)
+      }
+      was = all.find((i) => samePlace(where(i), at)) ?? ((await sameProfile(adapter, where(stays), at)) ? stays : undefined)
+    }
+    if (!samePlace(where(stays), at) && !(await sameProfile(adapter, where(stays), at))) {
+      say(forLog ? `${label}: its add-on is in another of its settings folders already, and was not put into this one` : `${label}: ${oneOnly(label)}`)
+      return { id, version: before.version, addon: 'unavailable', detail: oneOnly(label) }
+    }
+  }
   if (other?.kept) {
     say(
       forLog
@@ -1224,6 +1410,11 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   // the newer: someone who went back to an earlier It on purpose gets that It's add-on. Only a
   // connector, which was running before the newer It came, leaves the newer add-on alone.
   if (doing === 'leave to the newer program' && !forLog) doing = 'install'
+  // Connected, and at this version, with a file that this program put there seen to be gone:
+  // the skill above all, which an It from before took out when an app would not let go of its
+  // plugin. The add-on is put in again whole. A file that is there and has been changed is the
+  // person's, and is no reason to.
+  if (doing === 'nothing' && was?.files?.some((f) => reached(f.path) === 'none')) doing = 'install'
   if (doing === 'nothing') return before
   if (doing === 'leave to the newer program') {
     newer = true
@@ -1252,8 +1443,9 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
   const others = all.filter((i) => i !== was)
   const noted = (version: string, files?: Put[]): Installation[] => [...others, { version, at: Date.now(), by: VERSION, env: at.env, dir: at.dir, files }]
   keep(id, noted('installing', was?.files))
-  // Each file is noted once it has been written: a file that an install never got as far as
-  // writing is not this program's, whatever was there under its name
+  // Each file is noted as it is written, from the moment before it is put into an empty place:
+  // a file that an install never got as far as is not this program's, whatever was there under
+  // its name
   const r = await adapter.install(dir, at, was, (files) => keep(id, noted('installing', files)))
   if (r.aside?.length) {
     const one = r.aside.length === 1
@@ -1264,6 +1456,12 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
         : `${found} ${one ? 'was' : 'were'} in the add-on’s place. Nothing was written over: ${one ? 'it is' : 'each is'} kept beside the add-on, as ${r.aside.join(', ')}`,
     )
   }
+  if (r.recovery?.length)
+    say(
+      forLog
+        ? `${label}: ${r.recovery.length} originals were kept for recovery`
+        : `${label}: originals are kept for recovery at ${r.recovery.join(', ')}. Review them before removing their numbered folders`,
+    )
   if (!r.ok) {
     if (r.files) keep(id, noted('installing', r.files))
     return { id, version: before.version, addon: 'error', detail: (r.err || r.out).split('\n').slice(-3).join(' ').slice(0, 200) }
@@ -1276,8 +1474,9 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
 export async function disconnect(
   id: Harness,
   say: (line: string) => void,
-  // What does the removing, and whether the harness can be run at all: given by the tests
-  how: { adapter?: Pick<Adapter, 'remove' | 'present' | 'note'>; runnable?: () => Promise<boolean> } = {},
+  // What does the removing, and whether the harness can be run at all: given by the tests. And
+  // which installations are to go, where it is not all of them: the rest stay on record
+  how: { adapter?: Pick<Adapter, 'remove' | 'present' | 'note'>; runnable?: () => Promise<boolean>; only?: (was: Installation) => boolean } = {},
   forLog = false,
 ): Promise<boolean> {
   const label = KNOWN[id].label
@@ -1292,12 +1491,13 @@ export async function disconnect(
     say(`${label} could not be run from here, so its add-on was left as it is`)
     return false
   }
-  say(`disconnecting ${label}`)
+  if (!how.only) say(`disconnecting ${label}`)
   for (const was of left) {
+    if (how.only && !how.only(was)) continue
     const at = placed(was) ?? (await whereNow(ADAPTERS[id]))
     // A settings folder the person has deleted since took the add-on with it. The harness is
     // not asked about such a folder: asking would only make it anew.
-    const folders = [...Object.values(was.env ?? {}), ...(was.dir ? [was.dir] : [])].map(reached)
+    const folders = installationFolders(id, was)
     // A folder that cannot be looked at is not known to be gone, and neither is what is in it
     if (folders.length && !folders.includes('there') && folders.includes('closed')) {
       say(`${label}: the folder its add-on was put into could not be looked at, so the add-on was left as it is and the note of it is kept`)
@@ -1316,6 +1516,16 @@ export async function disconnect(
         )
       } else {
         const stayed = await adapter.remove(at, was)
+        if (stayed?.recovery?.length)
+          say(
+            forLog
+              ? `${label}: ${stayed.recovery.length} originals were kept for recovery`
+              : `${label}: originals are kept for recovery at ${stayed.recovery.join(', ')}. Review them before removing their numbered folders`,
+          )
+        if (stayed?.pending) {
+          say(`${label}: removal has not been confirmed, so the companion files and installation note are kept for another try`)
+          continue
+        }
         if (stayed?.nowhere) {
           say(
             `${label}: It has a note of putting its add-on there that does not say where ${label} kept its settings then, and no add-on of It’s is where ${label} keeps them now. Nothing was touched, and the note is kept`,
@@ -1433,6 +1643,11 @@ let reconciling: Promise<void> = Promise.resolve()
  * in the words of a harness's own installer or of an error, which can hold a path or a name.
  */
 export function reconcile(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog = false): Promise<void> {
+  if (forLog) return withoutFileWait(() => reconcileWithFiles(chosen, say, forLog))
+  return reconcileWithFiles(chosen, say, forLog)
+}
+
+function reconcileWithFiles(chosen: readonly string[] | (() => readonly string[]), say: (line: string) => void, forLog: boolean): Promise<void> {
   // One run's failure (the lock could not be had, say) is that run's alone: the next still runs
   reconciling = reconciling
     .catch(() => {})

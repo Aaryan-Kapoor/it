@@ -1954,7 +1954,7 @@ describe.skipIf(process.platform === 'win32')('a connector that cannot start, on
     mkdirSync(deep)
     writeFileSync(path.join(deep, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'test', key: {} }))
     const { written, running } = await served(m, path.join(m.home, 'it.log'), { IT_HOME: deep })
-    expect(written).toMatch(/ connector: could not start: home_too_long\n$/)
+    expect(written).toMatch(/ connector: could not start: home_too_long\n/)
     expect(written).not.toContain('PRIVATE-NAME')
     expect(running).toBe(true)
   })
@@ -4449,9 +4449,63 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       await b.close()
     }
   })
+
+  test('an app whose add-on is held back, or one It does not know, named to `--only` on a machine that is not set up, is refused before anything is begun there', async () => {
+    // As the install script leaves a machine. A first run asks for the backend program before
+    // anything else, and here there is none to be had: a setup that got that far would end saying so
+    const m = machine(false)
+    const first = { IT_BACKEND_BIN: path.join(m.home, 'no-such-program'), IT_PORT: String(SITE_PORT + 500) }
+    const releaseFile = path.join(m.it, 'releases.json')
+    const releaseBefore = JSON.stringify({ base: 'https://example.invalid/original' })
+    writeFileSync(releaseFile, releaseBefore)
+    Object.assign(first, { IT_INSTALL_BASE: 'https://example.invalid/replacement' })
+    const begun = () => ['service.json', 'machine.json', 'backend'].filter((name) => existsSync(path.join(m.it, name)))
+    const held = await run(m, ['setup', '--only', 'openclaw', '--no-service'], first)
+    expect([held.code, error(held).code]).toEqual([2, 'invalid'])
+    expect(readFileSync(releaseFile, 'utf8')).toBe(releaseBefore)
+    expect(error(held).message).toMatch(/has not yet been tried in a chat channel.*run `IT_EXPERIMENTAL=openclaw it setup` once\.$/)
+    const unknown = await run(m, ['setup', '--only', 'pi,no-such-app', '--no-service'], first)
+    expect([unknown.code, error(unknown).message]).toEqual([2, 'Not an agent app It knows: no-such-app'])
+    expect(readFileSync(releaseFile, 'utf8')).toBe(releaseBefore)
+    expect(begun()).toEqual([])
+    // Asked for by a person at a terminal, who is led step by step, it is refused before the first step
+    if (python) {
+      const led = await atTerminal(m, ['setup', '--only', 'openclaw', '--no-service'], first)
+      expect(led.code).toBe(2)
+      expect(led.shown).toContain('run `IT_EXPERIMENTAL=openclaw it setup` once')
+      expect(led.shown).not.toContain('Backend program')
+      expect(begun()).toEqual([])
+    }
+    // Asked for by name with the variable, it is not refused, and the setup goes on to its first step
+    const asked = await run(m, ['setup', '--only', 'openclaw', '--no-service'], { ...first, IT_EXPERIMENTAL: 'openclaw' })
+    expect([asked.code, error(asked).code]).toEqual([1, 'backend_program'])
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent will find `it`', () => {
+  const zsh = [process.env.IT_TEST_ZSH, '/bin/zsh', '/usr/bin/zsh'].find((file): file is string => Boolean(file && existsSync(file)))
+  test.skipIf(!zsh)('does not accept an unused zsh profile as proof that a new terminal will find It', async () => {
+    const m = machine()
+    const dir = path.join(m.home, 'zsh-files')
+    mkdirSync(dir)
+    writeFileSync(path.join(m.home, '.zshenv'), `ZDOTDIR='${dir}'\n`)
+    const line = `export PATH='${path.join(m.it, 'bin')}':"$PATH"`
+    writeFileSync(path.join(m.home, '.zshrc'), `${line}\n`)
+    const b = await backend({ it: m.it })
+    try {
+      const env = { ...b.env, SHELL: zsh! }
+      const unused = await run(m, ['setup', '--yes', '--no-service'], env)
+      expect(unused.code).toBe(0)
+      expect(unused.err).toContain('`it` is not on your PATH yet')
+      writeFileSync(path.join(dir, '.zshrc'), `${line}\n`)
+      const active = await run(m, ['setup', '--yes', '--no-service'], env)
+      expect(active.code).toBe(0)
+      expect(active.err).not.toContain('`it` is not on your PATH yet')
+    } finally {
+      await b.close()
+    }
+  })
+
   test('says that It’s folder of programs is not on the PATH, with the line that puts it there, and says nothing once it is', async () => {
     // A home with an apostrophe in its name: the line must still be one a shell reads as meant
     const m = machine()

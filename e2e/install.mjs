@@ -40,6 +40,7 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? '  ok  ' : '  FAIL'} ${name}${ok || !detail ? '' : `\n         ${redact(String(detail)).slice(0, 600)}`}`)
 }
 const windows = process.platform === 'win32'
+const zshBinary = [process.env.IT_TEST_ZSH, '/bin/zsh', '/usr/bin/zsh'].find((file) => file && existsSync(file))
 const program = windows ? 'it-windows-x64.exe' : `it-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
 if (!existsSync(path.join(built, program)) || !existsSync(path.join(built, 'SHA256SUMS'))) {
   console.error(`no ${program} in ${built}: build the programs first with node packages/cli/release.mjs`)
@@ -515,12 +516,14 @@ try {
       noteSaysOff.code === 0 && existsSync(noteSaysOff.it) && !saysOfUsage(noteSaysOff) && read(path.join(noteSaysOff.folder, 'telemetry.json')) === saysOff,
       noteSaysOff.said,
     )
-    const zsh = await install('zsh', {}, { shell: '/bin/zsh' })
-    check(
-      'someone whose shell is zsh gets the line in the file zsh reads, made if it was not there, and in no other',
-      zsh.code === 0 && read(path.join(zsh.home, '.zshrc'))?.includes('export PATH=') && read(path.join(zsh.home, '.profile')) === null,
-      zsh.said,
-    )
+    if (zshBinary) {
+      const zsh = await install('zsh', {}, { shell: zshBinary })
+      check(
+        'someone whose shell is zsh gets the line in the file zsh reads, made if it was not there, and in no other',
+        zsh.code === 0 && read(path.join(zsh.home, '.zshrc'))?.includes('export PATH=') && read(path.join(zsh.home, '.profile')) === null,
+        zsh.said,
+      )
+    } else console.log('  skip  zsh is not installed; real zsh profile checks need it')
     // fish reads none of those files, and is given one of It's own, in fish's own words
     // Where fish keeps its files is said by a variable where one is set, and the machine this runs on may set one: it is
     // set here to a folder of this install's own, so that nothing is written into the home of whoever runs the suite
@@ -579,16 +582,42 @@ try {
         (await loginShell(bashNeither)) === path.join(bashNeither.folder, 'bin'),
       `${bashNeither.said}\nfirst on a login shell's PATH: ${await loginShell(bashNeither)}`,
     )
-    mkdirSync(path.join(tmp, 'zdotdir', 'kept for zsh'), { recursive: true })
-    const zdotdir = await install('zdotdir', { ZDOTDIR: path.join(tmp, 'zdotdir', 'kept for zsh') }, { shell: '/bin/zsh' })
-    check(
-      'someone whose zsh keeps its files in another folder gets the line in the file there, and none is made in their home',
-      zdotdir.code === 0 &&
-        read(path.join(tmp, 'zdotdir', 'kept for zsh', '.zshrc'))?.includes('export PATH=') &&
-        read(path.join(zdotdir.home, '.zshrc')) === null &&
-        zdotdir.said.includes(path.join(tmp, 'zdotdir', 'kept for zsh', '.zshrc')),
-      zdotdir.said,
-    )
+    if (zshBinary) {
+      mkdirSync(path.join(tmp, 'zdotdir', 'kept for zsh'), { recursive: true })
+      const zdotdir = await install('zdotdir', { ZDOTDIR: path.join(tmp, 'zdotdir', 'kept for zsh') }, { shell: zshBinary })
+      check(
+        'someone whose zsh keeps its files in another folder gets the line in the file there, and none is made in their home',
+        zdotdir.code === 0 &&
+          read(path.join(tmp, 'zdotdir', 'kept for zsh', '.zshrc'))?.includes('export PATH=') &&
+          read(path.join(zdotdir.home, '.zshrc')) === null &&
+          zdotdir.said.includes(path.join(tmp, 'zdotdir', 'kept for zsh', '.zshrc')),
+        zdotdir.said,
+      )
+
+      const customHome = path.join(tmp, 'zdotdir-local')
+      const customDir = path.join(customHome, 'shell-files')
+      mkdirSync(customDir, { recursive: true })
+      writeFileSync(path.join(customHome, '.zshenv'), 'ZDOTDIR="$HOME/shell-files"\n')
+      const local = await install('zdotdir-local', {}, { shell: zshBinary })
+      check(
+        'a nonexported ZDOTDIR is used by the installer and a fresh zsh finds It there',
+        local.code === 0 &&
+          read(path.join(customDir, '.zshrc'))?.includes('export PATH=') &&
+          read(path.join(customHome, '.zshrc')) === null &&
+          spawnSync(zshBinary, ['-i', '-c', 'command -v it'], { env: { HOME: customHome, PATH: '/usr/bin:/bin' }, encoding: 'utf8' }).stdout.trim() ===
+            local.it,
+        local.said,
+      )
+      mkdirSync(path.join(tmp, 'zsh-hung'), { recursive: true })
+      writeFileSync(path.join(tmp, 'zsh-hung', '.zshenv'), 'sleep 60\n')
+      const began = Date.now()
+      const hung = await install('zsh-hung', {}, { shell: zshBinary })
+      check(
+        'hung zsh startup is bounded without timeout(1) and no unused profile is claimed to work',
+        hung.code === 0 && Date.now() - began < 15_000 && read(path.join(hung.home, '.zshrc')) === null && /PATH file was left alone/.test(hung.said),
+        hung.said,
+      )
+    }
     mkdirSync(path.join(tmp, 'mentioned'), { recursive: true })
     writeFileSync(path.join(tmp, 'mentioned', '.profile'), `# I once had ${path.join(tmp, 'mentioned', '.it', 'bin')} on my PATH\n`)
     const mentioned = await install('mentioned')

@@ -42,7 +42,7 @@ SETTLE_SECONDS = 1.0  # how long a turn must have been over before a click is ha
 REFUSED_SECONDS = 60.0  # how long a conversation is left alone after Hermes would not take a message for it
 REFUSED_TIMES = 3  # after this many refusals in a row it is forgotten, until it has another turn
 REMEMBERED = 2000  # how many handed-over clicks are remembered
-MOST_TALKS = 20  # how many conversations one Hermes process is asked for at once (a gateway may hold hundreds)
+MOST_TALKS = 40  # how many conversations one Hermes process is asked for at once, which is as many as the connector watches (a gateway may hold hundreds)
 _CANNOT_TELL = object()
 
 
@@ -532,15 +532,20 @@ class _Bridge:
             self._ask("/ack", {"ids": again})
         if not fresh or self._busy(talk):
             return
-        with self._lock:
-            if talk.closed or talk.id != session:
-                return
-        # The person may have gone to another conversation while the connector was answering
+        # This calls into Hermes and may read its configuration. A hook can replace the
+        # conversation while that happens, so check our record after the host has answered.
         if not self._reachable(talk):
             return
+        # The connector's own wording, as it is: it names each click so a repeat can be told apart.
+        text = "\n".join(c["text"] for c in fresh)
+        with self._lock:
+            # A message goes by the chat's name, which /new, /resume or /branch can give to
+            # another conversation. A click for the one it left stays with the connector.
+            if talk.closed or talk.id != session or self._talks.get(talk.key) is not talk:
+                return
         try:
-            # The connector's own wording, as it is: it names each click so a repeat can be told apart
-            text = "\n".join(c["text"] for c in fresh)
+            # The host accepts only a chat key, with no expected conversation id. This check
+            # cannot prevent a switch inside Hermes after we hand the message to it.
             # By name only where there is a name. In the terminal there is none, and an older
             # Hermes does not know the word for it at all.
             taken = (self._ctx.inject_message(text, session_key=talk.key) if talk.key else self._ctx.inject_message(text)) is True

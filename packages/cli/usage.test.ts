@@ -1897,6 +1897,8 @@ describe('what cannot be trusted', () => {
   })
   test('what is sent is built from the table of what is allowed, and from nothing else in the line', async () => {
     told()
+    // This tests allowed fields, so disk speed must not expire the send decision.
+    ownClock()
     const { id, at, tag } = aLine()
     // Properties that are allowed, on an object of a kind that carries more than its own keys
     writeFileSync(

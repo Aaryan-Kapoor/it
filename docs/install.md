@@ -19,6 +19,17 @@ irm https://itcan.do/install.ps1 | iex             # Windows
 
 Each command downloads one program for your system, checks it against its published checksum and puts it in `~/.it/bin`, with the license and the third-party notices beside it in `~/.it`. It asks for no administrator rights, and it installs no runtime and no package manager. It also adds `~/.it/bin` to your PATH, by a line in your shell's profile or in your user settings on Windows. Where the folder is on the PATH already, your profile is left as it is, unless none of the files your shell reads names the folder: then only the terminal you are in has it, as the one `it uninstall` was run in does, and the line is added so that a new terminal has it too. The checksum is published in the same place as the program, so it guards against a download that was damaged or cut short, and it is not a signature.
 
+On macOS and Linux the shell named by `SHELL` selects these files. Missing files are made, and an existing profile that is a symlink is written through to its target.
+
+| Shell | Files that receive the PATH line |
+|---|---|
+| bash | `~/.bashrc`, and the first existing file in `~/.bash_profile`, `~/.bash_login`, `~/.profile`. If none exists, `~/.profile` is made |
+| zsh | `.zshrc` in the directory zsh reports after reading `.zshenv`. This includes a `ZDOTDIR` set there without `export`, and otherwise uses zsh's inherited `ZDOTDIR` or your home directory. Zsh has five seconds to answer. If it fails, hangs or reports a relative directory, the installer leaves the file alone and says to add the line yourself |
+| fish | `$XDG_CONFIG_HOME/fish/conf.d/it.fish`, or `~/.config/fish/conf.d/it.fish` when that variable is unset |
+| Any other shell, or no `SHELL` | `~/.profile` |
+
+On Windows the installer edits your account's PATH in the registry, and edits none of these shell files.
+
 Run at a terminal, the command says what it did in a few lines and goes straight on into the setup, which the next section describes. Run by a script or an agent, it installs, says in sentences what it did, and names the command that sets It up, and the two commands an agent goes on with, which ask nothing at a terminal. Nothing is said at a terminal of the counts It reports of its use: the first screen of its site says it, and [Usage reporting](usage-reporting.md) says what is sent and how to turn it off.
 
 The programs are built for five systems: Linux and macOS on Intel and ARM chips, and Windows on Intel. Three variables change what the scripts do. `IT_HOME` names another folder than `~/.it` for everything It keeps. `IT_VERSION` names a release other than the latest, by its tag. `IT_INSTALL_NO_PATH`, set to anything, leaves your PATH alone.
@@ -115,10 +126,14 @@ To remove It altogether, run `it uninstall`. It asks first, because every page I
 
 1. It takes It's add-on out of every agent app, as `it setup --none` does.
 2. It stops the background service and takes its registration away, as `it service uninstall` does, and asks an `it serve` you started yourself in that folder to stop.
-3. It takes `~/.it/bin` off your PATH. The install script added it with a comment, `# It`, and one line in your shell's profile, and those lines are removed; a profile that held nothing else was made by the installer and is removed too. On Windows the folder is on the PATH that Windows keeps for your account, and it is taken off there, with every other entry left as it was kept.
+3. It takes `~/.it/bin` off your PATH. The install script added it with a comment, `# It`, and one line in your shell's profile, and those lines are removed; an ordinary profile that holds nothing else is removed too. A symlink stays, with an empty target. On Windows the folder is on the PATH that Windows keeps for your account, and it is taken off there, with every other entry left as it was kept.
 4. It deletes `~/.it`. Everything It kept goes with it, the program included. Where the folder is a link to another one, the folder it leads to is deleted, and then the link. On Windows, where a program that is running cannot delete its own file, the program first moves itself out of the folder to where Windows keeps temporary files, says where, and leaves Windows one line to run the next time you sign in, which deletes it there. You can delete it yourself before then.
 
 Where an add-on could not be taken out, because its agent app could not be run at that moment, It says so, deletes everything else, and keeps two folders: `~/.it/addons`, which holds its note of where it put the add-on, and `~/.it/bin`, which holds the program. Running `~/.it/bin/it uninstall` again once the app can be run takes the add-on out and deletes what was kept. Deleting `~/.it` yourself leaves the add-on in the app.
+
+On macOS and Linux uninstall checks all the bash files in the table, `~/.zshrc`, `.zshrc` under an inherited `ZDOTDIR`, the effective zsh directory when `SHELL` names zsh, and the fish file under the current `XDG_CONFIG_HOME`. It removes only the exact installer line for this It folder, its comment, and its preceding blank line. Other contents stay. If you changed your shell or its configuration directory after installation, check its former files yourself. A zsh that cannot report its directory is called out, and that unknown file cannot be cleaned up automatically.
+
+When uninstall changes a profile or Codex's settings, it keeps the original until the change is confirmed, then deletes it. Copied add-on originals whose bytes still match It's record are also deleted after a successful replacement or removal, including leftovers found during uninstall. Failed changes and personal edits remain available for recovery. See [Recovery originals](data.md#recovery-originals) for their names, the limit of 20 unresolved copies per file, and how to restore or remove them.
 
 It also clears what Codex and Claude Code keep of an add-on after it is removed: their copy of it, and Codex's note that you trusted its hooks. The conversations you held are yours and are left as they are, with the messages that begin `[It]` in them.
 

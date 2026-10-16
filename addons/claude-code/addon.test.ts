@@ -702,6 +702,51 @@ describe('the Claude Code add-on', () => {
     expect(host.submits.length).toBe(1)
   })
 
+  // A module has no connection of its own: what it asks goes through Claude Code's own fetch.
+  // Claude Code 2.1.296 was run with a module that asks a port on this machine, a proxy named
+  // in each of these ways, and something listening as that proxy: over a socket the proxy was
+  // sent nothing, and over a port it was sent the request, address and all, unless NO_PROXY or
+  // no_proxy listed 127.0.0.1 or an asterisk. Naming `localhost` there did not spare it.
+  test('over a port, nothing at all is asked where Claude Code would send it through a proxy named in the environment, and over the socket everything still is', async () => {
+    const PROXY = 'http://proxy.example:8080'
+    /** How many questions a session puts to the connector in two checks, started with this in its environment and this file of the connector's. */
+    const questions = async (env: Record<string, string>, file: Record<string, unknown>) => {
+      writeFileSync(path.join(home, 'connector.json'), JSON.stringify(file))
+      const host = fakeHost()
+      Object.assign(host.env, env)
+      let put = 0
+      const own = host.$.http.fetch
+      host.$.http.fetch = (url, init) => {
+        put++
+        // Over a port the answer does not matter here: whether anything was asked is what is counted
+        return init.socketPath ? own(url, init) : Promise.resolve({ ok: false, status: 502, text: '' })
+      }
+      vi.resetModules()
+      const { register } = await import('./it-bridge/hooks/register.js')
+      register(host.on)
+      await host.fire('session.start')
+      await host.tick()
+      await host.settle()
+      return put
+    }
+    const port = { port: 24680, token: 'b'.repeat(48) }
+    const socket = { socket: path.join(home, 'connector.sock'), token: 'a'.repeat(48) }
+    // With no proxy named, the port is asked
+    expect(await questions({}, port)).toBeGreaterThan(0)
+    // Each variable Claude Code takes a proxy from, in capitals or small letters, keeps the port from being asked
+    for (const name of ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'])
+      expect([name, await questions({ [name]: PROXY }, port)]).toEqual([name, 0])
+    // Unless the environment says that this machine's own address, or every address, is asked directly
+    expect(await questions({ HTTP_PROXY: PROXY, NO_PROXY: 'internal.example, 127.0.0.1' }, port)).toBeGreaterThan(0)
+    expect(await questions({ HTTP_PROXY: PROXY, no_proxy: '127.0.0.1' }, port)).toBeGreaterThan(0)
+    expect(await questions({ HTTP_PROXY: PROXY, NO_PROXY: '*' }, port)).toBeGreaterThan(0)
+    // Another name for this machine does not say so, and neither does one of the two lists when the other disagrees
+    expect(await questions({ HTTP_PROXY: PROXY, NO_PROXY: 'localhost' }, port)).toBe(0)
+    expect(await questions({ HTTP_PROXY: PROXY, NO_PROXY: '127.0.0.1', no_proxy: 'internal.example' }, port)).toBe(0)
+    // The socket is asked whatever the environment names: Claude Code sends nothing for a socket through a proxy
+    expect(await questions({ HTTP_PROXY: PROXY, HTTPS_PROXY: PROXY, ALL_PROXY: PROXY }, socket)).toBeGreaterThan(0)
+  })
+
   test('over a port the token is never sent, and an answer that is not sealed with it is not believed', async () => {
     const { createHmac } = await import('node:crypto')
     const token = 'b'.repeat(48)
@@ -835,7 +880,7 @@ describe('what Claude Code asks of a module before it loads it', () => {
     const asked = [...source.matchAll(/\$\.env\.(get|set)\(\s*([^)\s,]*)/g)].map((m) => m[2])
     expect(asked.length).toBeGreaterThan(3)
     // A name written out begins and ends with a quote
-    expect(asked.filter((name) => !/^'[A-Z_]+'$/.test(name))).toEqual([])
+    expect(asked.filter((name) => !/^'[A-Za-z_]+'$/.test(name))).toEqual([])
   })
 
   test('a click that comes with no words is given to nobody: Claude Code takes no empty message, and no empty note beside what a tool gave back', async () => {

@@ -11,9 +11,10 @@
 # What it installs goes in ~/.it, or in the folder IT_HOME names instead, and that folder is set
 # so that only you can look inside it. Outside that folder it changes one thing: the file your
 # shell reads when it starts, so that the program's folder is on your PATH. For zsh that is
-# .zshrc, in the folder ZDOTDIR names if it names one. For bash it is .bashrc and whichever of
-# .bash_profile, .bash_login and .profile a login shell reads. For any other shell it is
-# .profile. Each of those is given a blank line, a comment and one line, once, and is made if
+# .zshrc, in the folder zsh reports after reading .zshenv. For bash it is .bashrc and whichever of
+# .bash_profile, .bash_login and .profile a login shell reads. For fish it is
+# $XDG_CONFIG_HOME/fish/conf.d/it.fish, or ~/.config/fish/conf.d/it.fish. For another shell
+# it is .profile. Each of those is given a blank line, a comment and one line, once, and is made if
 # it is not there.
 #
 # To join an It that runs on another computer, give it the command that It's site shows under
@@ -466,15 +467,26 @@ add_line() {
   # said once, below, and not also in the shell's own words
   if printf '\n# It\n%s\n' "${line}" 2>/dev/null >> "$1"; then changed="${changed} $2"; else refused="${refused} $2"; fi
 }
+# The installed program bounds this asking on macOS too, without timeout(1). A failed asking
+# must not turn the unused default .zshrc into proof that a new terminal can find It.
+zsh_dir=""
+if [ "$(basename -- "${SHELL:-sh}")" = zsh ] && [ -z "${IT_INSTALL_NO_PATH:-}" ]; then
+  if zsh_dir=$("${DIR}/it" shell-profile 2>/dev/null); then
+    case "${zsh_dir}" in /*) : ;; *) zsh_dir="" ;; esac
+  fi
+  if [ -z "${zsh_dir}" ]; then
+    say "Zsh did not report its startup folder within five seconds. Its PATH file was left alone. Add ${DIR} to the PATH in the .zshrc your zsh reads." >&2
+    zsh_dir=""
+  fi
+fi
 # Calls $1 with each file this person's shell reads when it starts, and with what the file is
 # called when saying what was done
 each_profile() {
   case "$(basename -- "${SHELL:-sh}")" in
-    # zsh keeps its files in the folder ZDOTDIR names, and in the home folder when it names none
+    # A nonexported ZDOTDIR in .zshenv is part of this answer too.
     zsh)
-      if [ -n "${ZDOTDIR:-}" ]; then "$1" "${ZDOTDIR}/.zshrc" "${ZDOTDIR}/.zshrc"
-      else "$1" "${HOME}/.zshrc" "~/.zshrc"
-      fi
+      if [ -n "${zsh_dir}" ]; then "$1" "${zsh_dir}/.zshrc" "${zsh_dir}/.zshrc"
+      else refused=" zsh startup folder"; fi
       ;;
     # bash reads .bashrc, except when it is started as a login shell: then it reads the first
     # of these three that is there, and no other
