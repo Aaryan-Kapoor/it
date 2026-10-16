@@ -366,19 +366,44 @@ function powershell(script: string, forMs?: number) {
 const powershellAsked = (script: string) => powershell(script, ASKED_WINDOWS_MS)
 
 /**
- * The It folder the task Windows has registered runs the service from, or null when no task is
- * registered or it cannot be asked. It is read from the task's own action: the task is started
+ * Every It folder this account's tasks run the service from. Both the account task and an
+ * owned legacy task may exist. A failed discovery throws before installation changes either.
+ * Each folder is read from the task's own action: the task is started
  * in the folder's `bin`, where its launcher is. The folder's name is asked for as the bytes of
  * it in UTF-8, written in base64, and read back from those: a name with a letter outside the
  * code page PowerShell prints in would otherwise come back as the name of some other folder.
  */
-export function windowsRegisteredFor(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): string | null {
+export function windowsRegisteredFolders(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): string[] {
   const asked = ask(`${windowsTask()}
-if ($task) { [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($task.Actions[0].WorkingDirectory)) }`)
-  const said = asked.ok ? (asked.out.split(/\r?\n/)[0]?.trim() ?? '') : ''
-  // Only what is base64 from end to end is the folder's name. Anything else is PowerShell saying something of its own
-  const bin = said.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(said) ? Buffer.from(said, 'base64').toString('utf8') : ''
-  return bin ? path.win32.dirname(bin.replace(/[\\/]+$/, '')) : null
+foreach ($owned in @($task, $legacy)) {
+  if ($owned) { [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($owned.Actions[0].WorkingDirectory)) }
+}`)
+  if (!asked.ok) throw new Error(`reading the registered tasks failed: ${asked.out}`)
+  const folders: string[] = []
+  for (const line of asked.out.trim() ? asked.out.trim().split(/\r?\n/) : []) {
+    const said = line.trim()
+    // Only a whole base64 line is a folder. A partial answer is not enough to stop both services.
+    const bin =
+      said.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(said)
+        ? Buffer.from(said, 'base64')
+            .toString('utf8')
+            .replace(/[\\/]+$/, '')
+        : ''
+    if (!path.win32.isAbsolute(bin) || path.win32.basename(bin).toLowerCase() !== 'bin')
+      throw new Error('The registered task folders could not be read. The tasks were left unchanged.')
+    const folder = path.win32.dirname(bin)
+    if (!folders.some((other) => sameWindowsFolder(other, folder))) folders.push(folder)
+  }
+  return folders
+}
+/** This folder's registration when present, otherwise the account's preferred task, or none. */
+export function windowsRegisteredFor(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): string | null {
+  try {
+    const folders = windowsRegisteredFolders(ask)
+    return folders.find((folder) => sameWindowsFolder(folder, home())) ?? folders[0] ?? null
+  } catch {
+    return null
+  }
 }
 /** Whether two addresses name the same folder on Windows, where the case of a letter and which way a slash leans make no difference. */
 export const sameWindowsFolder = (a: string, b: string): boolean => {
@@ -651,10 +676,11 @@ export function install(): ServiceStatus {
   } else if (process.platform === 'win32') {
     // Windows ends a task's programs outright, with no word to the service that it is to
     // close its door and stop its backend program in its turn. So the service that is running
-    // is asked to stop, and waited for, before its task is touched: this folder's, and the
-    // one the task was registered for when that is another.
-    const registered = windowsRegisteredFor()
-    for (const folder of registered && !sameWindowsFolder(registered, home()) ? [registered, home()] : [home()]) askToStop(folder)
+    // is asked to stop, and waited for, before either task is touched: this folder's, the
+    // account task's, and the owned legacy task's, which may each name a different folder.
+    const folders = windowsRegisteredFolders()
+    if (!folders.some((folder) => sameWindowsFolder(folder, home()))) folders.push(home())
+    for (const folder of folders) askToStop(folder)
     mkdirSync(path.dirname(windowsLauncherFile()), { recursive: true })
     writeDefinition(windowsLauncherFile(), windowsLauncher(cmd, env))
     const r = powershell(windowsScript(path.dirname(windowsLauncherFile()), path.basename(windowsLauncherFile())))

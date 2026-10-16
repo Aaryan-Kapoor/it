@@ -1718,7 +1718,7 @@ describe('background service definitions', () => {
     expect(windowsRegisteredFor(task(printed('C:\\Users\\Ada\\.it\\bin\\')))).toBe('C:\\Users\\Ada\\.it')
     expect(asked[0]).toContain("$name = 'it-' + $sid")
     expect(asked[0]).toContain('Test-ItTask $legacy')
-    expect(asked[0]).toContain('[System.Text.Encoding]::UTF8.GetBytes($task.Actions[0].WorkingDirectory)')
+    expect(asked[0]).toContain('[System.Text.Encoding]::UTF8.GetBytes($owned.Actions[0].WorkingDirectory)')
     // A folder whose name has letters that no one code page holds is read as itself, whichever code page PowerShell prints in
     expect(windowsRegisteredFor(task(printed('C:\\Users\\René 漢字\\.it\\bin')))).toBe('C:\\Users\\René 漢字\\.it')
     expect(sameWindowsFolder(windowsRegisteredFor(task(printed('C:\\Users\\René 漢字\\.it\\bin')))!, 'c:/users/rené 漢字/.it')).toBe(true)

@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { psQuote, WINDOWS_CLEANUP, windowsDeletionCommand } from './src/lib'
-import { windowsLauncher, windowsRecovery, windowsRemoval, windowsScript, windowsTask } from './src/service'
+import { windowsLauncher, windowsRecovery, windowsRegisteredFolders, windowsRegisteredFor, windowsRemoval, windowsScript, windowsTask } from './src/service'
 
 const powershell = (script: string) =>
   spawnSync(
@@ -27,6 +27,24 @@ test('the launcher repairs a missing standalone program before attempting to sta
   const launcher = windowsLauncher(['C:\\it\\bin\\it.exe', 'serve'], {})
   expect(launcher.indexOf('if not exist')).toBeLessThan(launcher.indexOf('it.exe" serve'))
   expect(windowsLauncher(['C:\\node.exe', 'it.mjs', 'serve'], {})).not.toContain('EncodedCommand')
+})
+
+test('task discovery reads every folder, deduplicates Windows spellings and refuses partial answers', () => {
+  const encoded = (folder: string) => Buffer.from(folder).toString('base64')
+  const ask = () => ({ ok: true, out: ['C:\\account\\bin', 'C:\\legacy 漢字\\bin', 'c:/ACCOUNT/bin/'].map(encoded).join('\r\n') })
+  expect(windowsRegisteredFolders(ask)).toEqual(['C:\\account', 'C:\\legacy 漢字'])
+  expect(windowsRegisteredFolders(() => ({ ok: true, out: '' }))).toEqual([])
+  expect(() => windowsRegisteredFolders(() => ({ ok: true, out: `${ask().out}\r\nWARNING: incomplete answer` }))).toThrow(/could not be read/)
+  expect(() => windowsRegisteredFolders(() => ({ ok: false, out: 'scheduler unavailable' }))).toThrow(/scheduler unavailable/)
+  const before = process.env.IT_HOME
+  try {
+    const folder = path.join(os.tmpdir(), 'it-legacy-registration')
+    process.env.IT_HOME = folder
+    expect(windowsRegisteredFor(() => ({ ok: true, out: `${encoded('C:\\account\\bin')}\r\n${encoded(path.join(folder, 'bin'))}` }))).toBe(folder)
+  } finally {
+    if (before === undefined) delete process.env.IT_HOME
+    else process.env.IT_HOME = before
+  }
 })
 
 describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows PowerShell', () => {
@@ -145,6 +163,31 @@ function Get-ScheduledTask { param($TaskPath, $ErrorAction); $candidate }
     expect(selected("$candidate.TaskName = 'it-' + $sid").stdout.trim()).toMatch(/^it-S-1-/)
   })
 
+  test.each(['legacy only', 'both', 'same folder', 'foreign legacy', 'another scheduler folder'])(
+    'native discovery lists every owned installation (%s)',
+    (state) => {
+      const fixture = `
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+function New-ItTestTask($name, $folder, $owner, $taskPath) {
+  [pscustomobject]@{ TaskName = $name; TaskPath = $taskPath; Principal = [pscustomobject]@{ UserId = $owner }; Actions = @([pscustomobject]@{ Execute = 'conhost.exe'; Arguments = '--headless cmd.exe /d /c .\\it-service.cmd'; WorkingDirectory = $folder }) }
+}
+$fixtures = @(
+  ${state === 'legacy only' ? '' : "(New-ItTestTask ('it-' + $sid) 'C:\\account\\bin' $sid '\\')"}
+  (New-ItTestTask 'it' '${state === 'same folder' ? 'c:\\ACCOUNT\\bin' : 'C:\\legacy 漢字\\bin'}' ${state === 'foreign legacy' ? "'S-1-5-18'" : '$sid'} '${state === 'another scheduler folder' ? '\\Other\\' : '\\'}')
+)
+function Get-ScheduledTask {
+  [CmdletBinding()] param([string]$TaskPath)
+  $fixtures | Where-Object { $_.TaskPath -eq $TaskPath }
+}
+`
+      const folders = windowsRegisteredFolders((script) => {
+        const ran = powershell(`${fixture}\n${script}`)
+        return { ok: ran.status === 0, out: `${ran.stdout}${ran.stderr}`.trim() }
+      })
+      expect(folders).toEqual(state === 'legacy only' ? ['C:\\legacy 漢字'] : state === 'both' ? ['C:\\account', 'C:\\legacy 漢字'] : ['C:\\account'])
+    },
+  )
+
   test.skipIf(!process.env.CI)('the scheduler migrates and removes only isolated test registrations', () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-task-'))
     const bin = path.join(folder, 'bin')
@@ -163,6 +206,15 @@ function Get-ScheduledTask { param($TaskPath, $ErrorAction); $candidate }
       expect(installed.status, installed.stderr).toBe(0)
       const selected = powershell(`${scoped(windowsTask())}\nif ($legacy) { throw 'legacy task remains' }; $task.TaskName`)
       expect(selected.stdout.trim()).toMatch(new RegExp(`^${prefix}-S-1-`))
+      // An older installation can recreate its legacy task after migration. Both owned
+      // registrations must be discovered, and only the matching folder may remove one.
+      const recreated = powershell(legacy)
+      expect(recreated.status, recreated.stderr).toBe(0)
+      const registered = windowsRegisteredFolders((script) => {
+        const ran = powershell(scoped(script))
+        return { ok: ran.status === 0, out: `${ran.stdout}${ran.stderr}`.trim() }
+      })
+      expect(registered).toEqual([path.dirname(nextBin), path.dirname(bin)])
       const left = powershell(scoped(windowsRemoval(bin)))
       expect(left.status, left.stderr).toBe(0)
       expect(powershell(`${scoped(windowsTask())}\n$task.Actions[0].WorkingDirectory`).stdout.trim()).toBe(nextBin)

@@ -1,5 +1,6 @@
 // What the background service is given when it is registered, and what is kept of it when it
 // is registered again: checked on the definitions themselves, with no system asked to take one.
+import * as childProcess from 'node:child_process'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
@@ -24,6 +25,8 @@ import {
   windowsRemoval,
   windowsScript,
 } from './src/service'
+
+vi.mock('node:child_process', async (original) => ({ ...(await original<typeof import('node:child_process')>()) }))
 
 describe('what a service is given of the shell that registered it', () => {
   test('that the person’s shell is not to be asked is said to the service, which is what would ask it', () => {
@@ -292,6 +295,88 @@ ${windowsRemoval('C:\\it\\bin')}
       expect(ran.stdout.trim().split(/\r?\n/).filter(Boolean)).toEqual(root === 'this folder' ? ['stopped \\it', 'removed \\it'] : [])
     },
   )
+})
+
+describe('migrating Windows tasks', () => {
+  test('waits for both owned installations and this folder before ending either launcher', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-migrate-'))
+    const before = { home: process.env.IT_HOME, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+    const folders = ['account', 'legacy', 'current'].map((name) => path.join(folder, name))
+    const checks = new Map<number, number>()
+    const stopped = new Set<string>()
+    const changed: string[] = []
+    for (const [i, at] of folders.entries()) {
+      mkdirSync(at)
+      writeFileSync(path.join(at, 'connector.json'), JSON.stringify({ pid: 100_000 + i }))
+    }
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      expect(signal).toBe(0)
+      const at = folders[pid - 100_000]!
+      expect(at).toBeDefined()
+      if (existsSync(stopFile(at))) {
+        const count = (checks.get(pid) ?? 0) + 1
+        checks.set(pid, count)
+        // Receiving the stop file is not enough: the service still has work to finish.
+        if (count >= 2) {
+          stopped.add(at)
+          throw Object.assign(new Error('stopped'), { code: 'ESRCH' })
+        }
+      }
+      return true
+    })
+    const run = vi.spyOn(childProcess, 'spawnSync').mockImplementation((_cmd, args) => {
+      const script = Buffer.from((args as string[]).at(-1)!, 'base64').toString('utf16le')
+      let stdout = ''
+      if (script.includes('Register-ScheduledTask')) {
+        changed.push(script)
+        expect([...stopped].sort()).toEqual([...folders].sort())
+      } else if (script.includes('GetBytes(')) {
+        stdout = folders
+          .slice(0, 2)
+          .map((at) => Buffer.from(path.join(at, 'bin')).toString('base64'))
+          .join('\r\n')
+      } else stdout = 'it-test\r\nReady'
+      return { status: 0, stdout, stderr: '', pid: 0, output: [], signal: null }
+    })
+    try {
+      process.env.IT_HOME = folders[2]
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(install().registered).toBe(true)
+      expect(changed).toHaveLength(1)
+      expect(folders.every((at) => existsSync(stopFile(at)))).toBe(true)
+    } finally {
+      run.mockRestore()
+      kill.mockRestore()
+      Object.defineProperty(process, 'platform', before.platform)
+      if (before.home === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before.home
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('leaves both launchers alone when their folders cannot be discovered', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-unread-tasks-'))
+    const before = { home: process.env.IT_HOME, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+    const changed: string[] = []
+    const run = vi.spyOn(childProcess, 'spawnSync').mockImplementation((_cmd, args) => {
+      const script = Buffer.from((args as string[]).at(-1)!, 'base64').toString('utf16le')
+      if (script.includes('Register-ScheduledTask')) changed.push(script)
+      return { status: 1, stdout: '', stderr: 'scheduler unavailable', pid: 0, output: [], signal: null }
+    })
+    try {
+      process.env.IT_HOME = folder
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(() => install()).toThrow(/scheduler unavailable/)
+      expect(changed).toEqual([])
+      expect(existsSync(path.join(folder, 'bin', 'it-service.cmd'))).toBe(false)
+    } finally {
+      run.mockRestore()
+      Object.defineProperty(process, 'platform', before.platform)
+      if (before.home === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before.home
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
 })
 
 test('a backend cannot start while uninstall removes its folder, even after the inner lock has gone', async () => {
