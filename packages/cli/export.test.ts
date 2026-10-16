@@ -2,7 +2,8 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import net from 'node:net'
 import { chromium, firefox } from 'playwright'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import * as lib from './src/lib'
 import { doorKey, type ServiceConfig } from './src/serve/config'
 import { type Arrival, type Door, type DoorParts, makeDoor, startDoor } from './src/serve/door'
 import { bases } from './test-ports'
@@ -272,6 +273,51 @@ describe('streamed record downloads', () => {
     await until(() => cancelled)
     slow = false
     expect((await prepare()).status).toBe(200)
+  })
+
+  test.each(['fails', 'finishes'])('a cancelled query that later %s cannot release a replacement export', async (outcome) => {
+    let entered!: () => void
+    const querying = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    let finish!: (response: Response) => void
+    let fail!: (error: Error) => void
+    const query = new Promise<Response>((resolve, reject) => {
+      finish = resolve
+      fail = reject
+    })
+    const direct = lib.direct
+    const request = vi.spyOn(lib, 'direct').mockImplementation((url, options) => {
+      if (JSON.parse(String(options?.body ?? '{}')).path === 'account:exportMachines') {
+        entered()
+        return query
+      }
+      return direct(url, options)
+    })
+    try {
+      const response = await door.answer(arrival(await link()))
+      const reader = response.body!.getReader()
+      await reader.read()
+      const pending = reader.read()
+      await querying
+      await reader.cancel()
+      expect((await pending).done).toBe(true)
+      const replacement = await link()
+
+      // Let the old pull settle only after the replacement owns this session.
+      if (outcome === 'fails') fail(new Error('The cancelled query failed.'))
+      else finish(Response.json({ status: 'success', value: { machines: [], next: null } }))
+      expect((await prepare()).status).toBe(429)
+
+      // Cancelling the replacement still releases its own slot.
+      const next = await door.answer(arrival(replacement))
+      expect(next.status).toBe(200)
+      await next.body!.cancel()
+      expect((await prepare()).status).toBe(200)
+    } finally {
+      finish(Response.json({ status: 'success', value: { machines: [], next: null } }))
+      request.mockRestore()
+    }
   })
 
   // Playwright runs under Node, including when the door runs under Bun. Its browser

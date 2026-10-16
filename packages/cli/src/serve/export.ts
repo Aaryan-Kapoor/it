@@ -28,7 +28,7 @@ class Refused extends Error {
 /** Downloads use one batch at a time and the browser's own file download, including in Firefox over plain HTTP. */
 export function recordExports(site: string, api: string, doorKey: string, now = Date.now) {
   const running = new Set<AbortController>()
-  const sessions = new Set<string>()
+  const sessions = new Map<string, AbortController>()
   const waiting = new Map<string, { session: string; start: Start; stop: AbortController; release: () => void; claimed: () => void; expires: number }>()
   const failed = (error: unknown) =>
     error instanceof Refused ? reply(error.status, error.message) : reply(502, 'The records could not be read. Try again shortly.')
@@ -74,12 +74,15 @@ export function recordExports(site: string, api: string, doorKey: string, now = 
       signal?.addEventListener('abort', abort, { once: true })
       let id = ''
       let ownerSession = ''
+      let released = false
       let timer: ReturnType<typeof setTimeout> | undefined
       const release = () => {
+        if (released) return
+        released = true
         clearTimeout(timer)
         waiting.delete(id)
         running.delete(stop)
-        if (ownerSession) sessions.delete(ownerSession)
+        if (sessions.get(ownerSession) === stop) sessions.delete(ownerSession)
         stop.abort()
       }
       try {
@@ -87,7 +90,7 @@ export function recordExports(site: string, api: string, doorKey: string, now = 
         const who = await session(cookie, stop.signal)
         if (who.session !== expected) throw new Refused(409, 'This browser has been paired again. Start the download again.')
         if (sessions.has(who.session)) throw new Refused(429, 'An export is already waiting or downloading. Check Downloads or try again in a minute.')
-        sessions.add(who.session)
+        sessions.set(who.session, stop)
         ownerSession = who.session
         const start = await call<Start>(who, 'exportStart', {}, stop.signal, true)
         if (start.owner !== who.user) throw new Error('Export owner changed.')
