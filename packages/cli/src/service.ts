@@ -9,7 +9,7 @@
 // that program cannot be counted on to hear, by ending it once it has been asked. What stops
 // the service is held to asking, on every system.
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
@@ -519,6 +519,49 @@ let registeredOnWindows: boolean | undefined
 /** A note that It is what made this account stay after logout, kept in It's folder. */
 const lingerNote = () => path.join(home(), 'linger-by-it')
 
+/** The note It writes is an empty regular file. A changed file or a link is the person's. */
+function ownsLingerNote(folder: string): boolean {
+  const stat = lstatSync(path.join(folder, 'linger-by-it'), { throwIfNoEntry: false })
+  return !!stat?.isFile() && stat.size === 0
+}
+
+/** The folder named by the exact log argument the systemd definition writer emits. */
+function systemdHome(definition: string): string | undefined {
+  const token = /^ExecStart=.* "--log" ("(?:\\.|[^"\\])*")\s*$/m.exec(definition)?.[1]
+  if (!token) return undefined
+  try {
+    const log = (JSON.parse(token) as string).replaceAll('%%', '%').replaceAll('$$', '$')
+    if (systemdQuote(log, true) !== token || !path.isAbsolute(log) || path.basename(log) !== 'it.log' || path.basename(path.dirname(log)) !== 'logs')
+      return undefined
+    return path.dirname(path.dirname(log))
+  } catch {
+    return undefined
+  }
+}
+
+/** Keep the evidence of who enabled lingering with the service, without changing the account setting. */
+function moveLingerNote(from: string, to: string): void {
+  try {
+    const source = realpathSync(from)
+    const destination = realpathSync(to)
+    if (source === destination || !ownsLingerNote(source)) return
+    const target = path.join(destination, 'linger-by-it')
+    if (!lstatSync(target, { throwIfNoEntry: false })) writeFileSync(target, '', { flag: 'wx', mode: 0o600 })
+    if (ownsLingerNote(destination)) rmSync(path.join(source, 'linger-by-it'))
+  } catch {
+    // A failed transfer keeps the original note for another attempt.
+  }
+}
+
+/** Older versions could move the service without its linger note. Removing the earlier home repairs that handover. */
+export function passLingerToRegisteredService(): void {
+  if (process.platform !== 'linux') return
+  try {
+    const registered = systemdHome(readFileSync(unitPath(), 'utf8'))
+    if (registered) moveLingerNote(home(), registered)
+  } catch {}
+}
+
 export function reachable(): boolean {
   if (process.platform !== 'linux') return true
   const asked = run('systemctl', ['--user', 'show-environment'], ASKED_MS)
@@ -598,6 +641,8 @@ export function install(): ServiceStatus {
       }
     try {
       if (stayedNot && !existsSync(lingerNote())) writeFileSync(lingerNote(), '', { mode: 0o600 })
+      const previous = before === null ? undefined : systemdHome(before)
+      if (previous) moveLingerNote(previous, home())
     } catch {}
   } else if (process.platform === 'darwin') {
     const before = existsSync(plistPath()) ? readFileSync(plistPath(), 'utf8') : null
@@ -661,7 +706,7 @@ export function uninstall(patience = STOP_MS): void {
     rmSync(unitPath(), { force: true })
     run('systemctl', ['--user', 'daemon-reload'])
     // The account stays after logout only because It asked for that: it stops doing so
-    if (existsSync(lingerNote())) {
+    if (ownsLingerNote(home())) {
       run('loginctl', ['disable-linger', os.userInfo().username])
       rmSync(lingerNote(), { force: true })
     }

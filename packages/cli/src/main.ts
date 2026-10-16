@@ -1385,7 +1385,8 @@ async function uninstall(a: Args) {
     // nothing left to run.
     // The one service a machine has belongs to the It folder its definition names. One that runs
     // It from another folder is another It's, and is left as it is.
-    if (service.definedFor() !== 'another folder') {
+    if (service.definedFor() === 'another folder') service.passLingerToRegisteredService()
+    else {
       const was = service.definedFor() === 'this folder'
       try {
         service.uninstall()

@@ -1138,6 +1138,58 @@ describe.skipIf(process.platform === 'win32' || process.platform !== 'linux')('a
     expect((await run(refused.m, ['service', 'uninstall'])).code).toBe(0)
     expect(refused.asked()).not.toMatch(/disable-linger/)
   })
+
+  test.each([false, true])('the linger note follows the service to another installation, including an earlier replacement: %s', async (earlier) => {
+    const system = withSystem(false)
+    const m = system.m
+    const settings = JSON.stringify({ port: SITE_PORT, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' })
+    writeFileSync(path.join(m.it, 'service.json'), settings)
+    expect((await run(m, ['service', 'install'])).code).toBe(0)
+    const oldNote = path.join(m.it, 'linger-by-it')
+    expect(readFileSync(oldNote, 'utf8')).toBe('')
+    const loginctl = path.join(m.bin, 'loginctl')
+    writeFileSync(loginctl, readFileSync(loginctl, 'utf8').replace('Linger=no', 'Linger=yes'))
+    const next = path.join(m.home, 'second-it')
+    mkdirSync(next)
+    writeFileSync(path.join(next, INSTALLATION_FILE), INSTALLATION)
+    writeFileSync(path.join(next, 'machine.json'), readFileSync(path.join(m.it, 'machine.json')))
+    writeFileSync(path.join(next, 'service.json'), settings)
+    const installed = await run(m, ['service', 'install'], { IT_HOME: next })
+    expect([installed.code, installed.err]).toEqual([0, ''])
+    const nextNote = path.join(next, 'linger-by-it')
+    if (earlier) {
+      // Older versions replaced the definition but left the note in the earlier home.
+      rmSync(nextNote, { force: true })
+      writeFileSync(oldNote, '')
+    } else {
+      expect(existsSync(oldNote)).toBe(false)
+      expect(readFileSync(nextNote, 'utf8')).toBe('')
+    }
+    const removed = await run(m, ['uninstall', '--yes'])
+    expect([removed.code, printed(removed).removed, existsSync(m.it)]).toEqual([0, true, false])
+    expect(readFileSync(nextNote, 'utf8')).toBe('')
+    expect(system.asked()).not.toMatch(/disable-linger/)
+    const last = await run(m, ['uninstall', '--yes'], { IT_HOME: next })
+    expect([last.code, printed(last).removed, existsSync(next)]).toEqual([0, true, false])
+    expect(system.asked()).toMatch(/loginctl disable-linger/)
+  })
+
+  test.each([false, true])('a modified linger note is kept without changing the account, linked: %s', async (linked) => {
+    const system = withSystem(false)
+    const m = system.m
+    expect((await run(m, ['service', 'install'])).code).toBe(0)
+    const note = path.join(m.it, 'linger-by-it')
+    const outside = path.join(m.home, 'mine')
+    writeFileSync(outside, 'mine')
+    if (linked) {
+      rmSync(note)
+      symlinkSync(outside, note)
+    } else writeFileSync(note, 'mine')
+    expect((await run(m, ['service', 'uninstall'])).code).toBe(0)
+    expect(readFileSync(note, 'utf8')).toBe('mine')
+    expect(readFileSync(outside, 'utf8')).toBe('mine')
+    expect(system.asked()).not.toMatch(/disable-linger/)
+  })
 })
 
 describe.skipIf(process.platform !== 'linux')('a service registered where IT_UPDATE_CHECK says not to look for a newer version', () => {
