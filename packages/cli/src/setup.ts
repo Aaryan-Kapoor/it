@@ -1571,8 +1571,6 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
     )
     return before
   }
-  const refused = await adapter.preflight?.(at, was)
-  if (refused) return { id, version: before.version, addon: 'error', detail: refused }
   // Copied files from an unrecorded installation are kept aside when replaced.
   let doing = other ? 'install' : await whatToDo(before.addon, was?.version, ADDONS[id]!.version, () => adapter.present(at, was), was?.at, undefined, was?.by)
   // A person who runs setup with this program has chosen this program, whichever of the two is
@@ -1594,6 +1592,8 @@ export async function connect(id: Harness, say: (line: string) => void, forLog =
       ...before,
       detail: `It’s add-on is switched off inside ${label}. Switch it on there, or untick ${label} here and tick it again to have the add-on installed afresh.`,
     }
+  const refused = await adapter.preflight?.(at, was)
+  if (refused) return { id, version: before.version, addon: 'error', detail: refused }
   say(`connecting ${label}`)
   // The person is told plainly when what is about to be replaced is not something this It
   // folder put there: an add-on from an It folder that keeps no note of it any more, or one

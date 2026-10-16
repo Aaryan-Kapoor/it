@@ -1777,6 +1777,53 @@ describe('managed plugin and marketplace ownership', () => {
 
   const managed = SHARED.filter(({ id }) => ['claude-code', 'codex', 'openclaw'].includes(id))
 
+  const inspections = [
+    ...apps.flatMap((app) => [
+      { ...app, command: app.list, reads: app.bin === 'claude' ? 2 : 0 },
+      { ...app, command: 'plugin marketplace list --json', reads: 0 },
+    ]),
+    { id: 'openclaw' as const, bin: 'openclaw', command: 'plugins inspect it-bridge --json', reads: 3 },
+  ]
+  test.each(inspections.flatMap((app) => [false, true].flatMap((forLog) => ['failure', 'malformed'].map((reply) => ({ ...app, forLog, reply })))))(
+    '$bin keeps a no-op connection with background logging $forLog when an extra $command inspection would return $reply',
+    async ({ id, bin, command, reads, forLog, reply }) => {
+      const before = await connect(id, () => {})
+      expect(before.addon).toMatch(/^(connected|needs_approval)$/)
+      const record = read(stampFile(id))
+      const previousReply = fake.execFile.getMockImplementation()!
+      let inspections = 0
+      fake.execFile.mockImplementation((...args: unknown[]) => {
+        const [called, words] = args as [string, string[]]
+        if (called === bin && words.map((word) => word.replace(/^"(.*)"$/, '$1')).join(' ') === command && ++inspections > reads) {
+          if (reply === 'failure') failing.push(`${bin} ${command}`)
+          else replies.set(`${bin} ${command}`, 'not JSON')
+        }
+        return previousReply(...args)
+      })
+      ran = []
+      const output = lines()
+      expect(await connect(id, output.say, forLog)).toEqual(before)
+      expect(inspections).toBe(reads)
+      expect(mutations(bin)).toEqual([])
+      expect(output.said).toEqual([])
+      expect(read(stampFile(id))).toBe(record)
+    },
+  )
+
+  test.each(apps)('$bin still checks ownership when a missing skill requires installation at the carried version', async ({ id, bin }) => {
+    await connect(id, () => {})
+    const record = read(stampFile(id))
+    const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+    rmSync(skill)
+    failing = [`${bin} plugin marketplace list --json`]
+    ran = []
+    expect((await connect(id, () => {}, true)).addon).toBe('error')
+    expect(commands(bin)).toContain('plugin marketplace list --json')
+    expect(mutations(bin)).toEqual([])
+    expect(existsSync(skill)).toBe(false)
+    expect(read(stampFile(id))).toBe(record)
+  })
+
   test.each(managed.flatMap((app) => ['reconnect', 'disconnect'].map((recovery) => ({ ...app, recovery }))))(
     '$bin can $recovery a legacy record without profile metadata when the current plugin proves ownership',
     async ({ id, bin, variable, recovery }) => {
@@ -2028,6 +2075,9 @@ describe('managed plugin and marketplace ownership', () => {
     '$bin refuses a $replacement replaced with a link to another folder',
     async ({ id, bin, manifest, replacement }) => {
       await connect(id, () => {})
+      const previous = noted(id)
+      previous.installs[0]!.version = 'previous-version'
+      put(stampFile(id), JSON.stringify(previous))
       const dir = path.join(process.env.IT_HOME!, 'addons', id)
       const file = path.join(dir, manifest)
       const saved = read(file)
@@ -2084,6 +2134,9 @@ describe('managed plugin and marketplace ownership', () => {
 
   test.each(apps)('$bin preserves a foreign replacement even with an older installation on record', async ({ id, bin }) => {
     await connect(id, () => {})
+    const previous = noted(id)
+    previous.installs[0]!.version = 'previous-version'
+    put(stampFile(id), JSON.stringify(previous))
     const saved = read(stampFile(id))
     const foreign = path.join(tmp, 'foreign-marketplace')
     put(path.join(foreign, 'personal.txt'), 'The person owns this replacement.')
@@ -2098,6 +2151,9 @@ describe('managed plugin and marketplace ownership', () => {
 
   test.each(apps)('$bin preserves a marketplace that offers another plugin before unpacking or removal', async ({ id, bin, manifest }) => {
     await connect(id, () => {})
+    const previous = noted(id)
+    previous.installs[0]!.version = 'previous-version'
+    put(stampFile(id), JSON.stringify(previous))
     const file = path.join(process.env.IT_HOME!, 'addons', id, manifest)
     const contents = JSON.parse(read(file))
     contents.plugins.push({ name: 'personal-plugin', source: './personal-plugin' })
@@ -2114,6 +2170,9 @@ describe('managed plugin and marketplace ownership', () => {
 
   test.each(apps)('$bin leaves other installed plugins in the marketplace alone even when its manifest no longer lists them', async ({ id, bin, list }) => {
     await connect(id, () => {})
+    const previous = noted(id)
+    previous.installs[0]!.version = 'previous-version'
+    put(stampFile(id), JSON.stringify(previous))
     const response = JSON.parse(standIn(bin, list.split(' '), process.env))
     const other = bin === 'claude' ? { id: 'personal-plugin@it' } : { pluginId: 'personal-plugin@it' }
     if (bin === 'claude') response.push(other)
