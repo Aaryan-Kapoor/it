@@ -49,12 +49,14 @@ jobs:
     steps:
       - name: The one line from the page, on macOS and Linux
         if: runner.os != 'Windows'
-        run: curl -fsSL -H 'X-It-CI: 1' https://itcan.do/install.sh | sh
+        run: |
+          curl -fsSL -H 'X-It-CI: 1' https://itcan.do/install.sh | sh
       # In the PowerShell that Windows comes with, which is the one a person has
       - name: The one line from the page, on Windows
         if: runner.os == 'Windows'
         shell: powershell
-        run: irm -Headers @{ 'X-It-CI' = '1' } https://itcan.do/install.ps1 | iex
+        run: |
+          irm -Headers @{ 'X-It-CI' = '1' } https://itcan.do/install.ps1 | iex
       - name: Where it was put
         run: |
           if [ "$RUNNER_OS" = Windows ]; then echo "IT=$HOME/.it/bin/it.exe" >> "$GITHUB_ENV"; else echo "IT=$HOME/.it/bin/it" >> "$GITHUB_ENV"; fi
