@@ -252,6 +252,9 @@ process.once('SIGTERM', () => {
     const removed = it(['service', 'uninstall', '--json'], 180_000)
     registered = removed.code !== 0
     check('the replacement is removed after the slow-stop check', !registered, removed.said.slice(-600))
+    // The fixture removes its own files before uninstall checks that the installation is empty.
+    // Unknown files at the top of It's folder are deliberately kept by uninstall.
+    if (!registered) for (const file of [slow, ready, stopped]) rmSync(file, { force: true })
   }
 
   const whole = it(['uninstall', '--yes', '--json'], 180_000)
