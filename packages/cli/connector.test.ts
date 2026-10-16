@@ -1189,6 +1189,23 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-6'))?.clicks.map((c) => c.id)).toEqual(['click-6'])
   })
 
+  test('new clicks stay fresh after the observation table fills with clicks taken elsewhere', async () => {
+    standIn()
+    await start()
+    // An unconnected app leaves the observations here without this connector confirming any.
+    const elsewhere = Array.from({ length: 5000 }, (_, n) => ({ ...click(n + 100), session: { harness: 'other', id: 'elsewhere' } }))
+    offered(...elsewhere)
+    await pass()
+    offered()
+    await pass()
+    expect(called('delivery:handedOff')).toEqual([])
+    await turn(6, true)
+    offered(click(6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    expect(stand.codex).toEqual([])
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-6'))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+  })
+
   test('repeated offers keep their first observation after the local wall clock is corrected backwards', async () => {
     await start()
     await turn(6, true)

@@ -2513,10 +2513,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const here = performance.now()
         for (const click of clicks) {
           // A new owner gets its own window, including when the observation table is full.
-          // Repeated offers to the same conversation keep their age. Confirmed deliveries free space.
+          // Repeated offers to the same conversation keep their age. Old observations are
+          // evicted even when another connector took the click and this one never confirmed it.
           const seen = hookSeen.get(click.id)
           const destination = tag(click)
-          if (seen?.tag !== destination && (seen || hookSeen.size < 5000)) hookSeen.set(click.id, { tag: destination, at: here })
+          if (seen?.tag === destination) continue
+          hookSeen.delete(click.id)
+          hookSeen.set(click.id, { tag: destination, at: here })
+          while (hookSeen.size > 5000) hookSeen.delete(hookSeen.keys().next().value!)
         }
         inbox = clicks
         void route()
