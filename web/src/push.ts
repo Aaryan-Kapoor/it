@@ -69,10 +69,15 @@ export async function turnOnPush(convex: ConvexReactClient, off = localStorage.g
   /** What this attempt itself put in the browser: the script, where none was registered before it, and its subscription. */
   const made: { script?: ServiceWorkerRegistration; subscription?: PushSubscription } = {}
   /** Stops an attempt that was overtaken, taking away again what it made unless a later attempt has begun. */
-  const stopped = async (): Promise<string> => {
+  const stopped = async (subscribed?: string): Promise<string> => {
     if (attempt === mine) {
+      // Another tab's Off can reach the backend before our subscribe. Clear that late
+      // subscription afterwards, while it still belongs to this person's attempt.
+      if (subscribed && keptFor() === person && localStorage.getItem(PUSH_OFF) !== off)
+        await convex.mutation(api.push.unsubscribe, { key: subscribed }).catch(() => {})
+      if (attempt !== mine) return 'Signed out'
       await made.subscription?.unsubscribe().catch(() => {})
-      await made.script?.unregister().catch(() => {})
+      if (attempt === mine) await made.script?.unregister().catch(() => {})
     }
     return 'Signed out'
   }
@@ -106,8 +111,9 @@ export async function turnOnPush(convex: ConvexReactClient, off = localStorage.g
     made.subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytes(key) })
     if (overtaken()) return stopped()
     const sub = made.subscription
-    await convex.mutation(api.push.subscribe, { key: displayKey(), endpoint: sub.endpoint, p256dh: b64u(sub.getKey('p256dh')), auth: b64u(sub.getKey('auth')) })
-    if (overtaken()) return stopped()
+    const display = displayKey()
+    await convex.mutation(api.push.subscribe, { key: display, endpoint: sub.endpoint, p256dh: b64u(sub.getKey('p256dh')), auth: b64u(sub.getKey('auth')) })
+    if (overtaken()) return stopped(display)
     return 'on'
   } catch (err) {
     // Refused or failed after it was overtaken, as the backend refuses a browser whose session is over: what it made goes all the same
