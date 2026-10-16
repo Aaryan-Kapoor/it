@@ -1212,6 +1212,31 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     }
   })
 
+  test.each([
+    { harness: 'codex', id: 'thread-6' },
+    { harness: 'pi', id: 'thread-7' },
+  ])('a pending click gets a fresh hook window when its page moves from $harness:$id to another conversation', async (session) => {
+    standIn()
+    await start()
+    await turn(7, true)
+    stand.closed.add('thread-6')
+    const first = { ...click(6), session }
+    const elapsed = performance.now()
+    offered(first)
+    await pass()
+    expect(called('delivery:claim')).toEqual([])
+    // The same click is offered to the new owner after its old hook window has expired.
+    const monotonic = vi.spyOn(performance, 'now').mockReturnValue(elapsed + 9_000)
+    try {
+      offered({ ...first, session: { harness: 'codex', id: 'thread-7' } })
+      await until(() => called('delivery:claim').includes('click-6'))
+      expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-7'))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+      expect(stand.codex).toEqual([])
+    } finally {
+      monotonic.mockRestore()
+    }
+  })
+
   /** The first observation happened before the routing pass, which now runs past its hook window. */
   const offeredEarlier = (...clicks: ReturnType<typeof click>[]) => {
     const time = vi.spyOn(performance, 'now').mockReturnValueOnce(performance.now() - 9_000)

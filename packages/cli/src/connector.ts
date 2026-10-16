@@ -886,8 +886,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** When this machine first saw each click that waits for a closed conversation, by the clock that is never set back. */
   const firstSeen = new Map<string, number>()
-  /** Hook freshness starts at this connector's first observation, independently of either machine's wall clock. */
-  const hookSeen = new Map<string, number>()
+  /** Hook freshness starts when this connector first sees a click for its current conversation, independently of either machine's wall clock. */
+  const hookSeen = new Map<string, { tag: string; at: number }>()
   const reopenedNow = new Map<string, AbortController>()
   /** The name each of them has with It, by which It says which run a person stopped. */
   const runNames = new Map<string, string>()
@@ -1913,7 +1913,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // and before anything was asked for it. Given to the turn's next hook, this one would
         // be read before it: so it follows the earlier one, and is handed over after it.
         const queuedBefore = inTurn && ([...queues.keys()].some((line) => follow(line) === key) || [...behindTurn.values()].some((b) => follow(b.key) === key))
-        const forAddOn = listening || (inTurn && performance.now() - (hookSeen.get(click.id) ?? Number.NEGATIVE_INFINITY) < FRESH_MS && !queuedBefore)
+        const seen = hookSeen.get(click.id)
+        const fresh = seen?.tag === tag(click) && performance.now() - seen.at < FRESH_MS
+        const forAddOn = listening || (inTurn && fresh && !queuedBefore)
         // Which of the other ways it goes, asked only where the first does not take it
         const way = forAddOn
           ? undefined
@@ -2509,9 +2511,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
       (clicks: Offered[]) => {
         const here = performance.now()
         for (const click of clicks) {
-          // A full observation table declines another hook hold; it must not forget old ids
-          // and give a repeated offer a new freshness window. Confirmed deliveries free space.
-          if (!hookSeen.has(click.id) && hookSeen.size < 5000) hookSeen.set(click.id, here)
+          // A new owner gets its own window, including when the observation table is full.
+          // Repeated offers to the same conversation keep their age. Confirmed deliveries free space.
+          const seen = hookSeen.get(click.id)
+          const destination = tag(click)
+          if (seen?.tag !== destination && (seen || hookSeen.size < 5000)) hookSeen.set(click.id, { tag: destination, at: here })
         }
         inbox = clicks
         void route()
