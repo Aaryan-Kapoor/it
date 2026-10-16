@@ -747,6 +747,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
     return { takeAway, wait }
   }
   const noteMark = (key: string, texts: string[], fallback: MarkFallback) => {
+    // Exhausted marks still belong to their hooks. Keep them and use the normal short line
+    // for this click when no durable slot is free, rather than holding up another conversation.
+    if (!recovery.hasMarkRoom) return undefined
     const entry = { id: randomBytes(8).toString('hex'), texts, at: Date.now(), fallback }
     recovery.change(() => marked.set(key, [...(marked.get(key) ?? []), entry]))
     return markReceipt(key, entry)

@@ -2474,6 +2474,47 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
   const inFull = (n: number, name = 'approve {"plan":"B"}') =>
     `[It] The page "A page" (page-${n}) sent this just after someone used it: ${name} [action click-${n}]`
 
+  test.each(['codex', 't3-codex', 't3-claude'])('a full mark record uses the normal short line through %s without losing older marks', async (via) => {
+    const harness = via === 't3-claude' ? 'claude-code' : 'codex'
+    if (via !== 'codex') {
+      withT3Code()
+      stand.t3.threads.set('thread-9', 't3-thread-9')
+    }
+    const marks = Array.from({ length: 200 }, (_, n) => ({
+      id: `old-mark-${n}`,
+      texts: [`Saved text ${n}`],
+      at: Date.now(),
+      fallback: { via: 'codex', text: 'Saved short line' },
+      retry: { attempts: 4, nextAt: null },
+    }))
+    await start('socket', { wanted: ['codex', 'claude-code'], found: [...CONNECTED, { id: 'claude-code', addon: 'connected' }] }, (folder) => {
+      writeFileSync(path.join(folder, 'heard.json'), JSON.stringify({ [`${harness}:thread-9`]: 1 }))
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({
+          version: 1,
+          waiters: [],
+          marks: [['codex:thread-6', marks]],
+          accepted: [],
+          returning: [],
+        }),
+      )
+    })
+    offered({ ...click(9), session: { harness, id: 'thread-9' }, name: 'it:message', payload: '{"text":"Make the board bigger"}' })
+    if (via === 'codex') {
+      await until(() => stand.codex.length === 1)
+      expect(stand.codex[0]!.args).toContain('--message=[It] "A page" (page-9), typed above it: read it with `it action click-9` [action click-9]')
+      expect(JSON.stringify(stand.codex[0]!.args)).not.toContain('bigger')
+      stand.codex[0]!.end()
+    } else {
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]).toEqual({ thread: 't3-thread-9', text: '[It] "A page" (page-9), typed above it: Make the board bigger [action click-9]' })
+    }
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    expect(readJson<{ marks: unknown }>(path.join(home, 'delivery-recovery.json'))!.marks).toEqual([['codex:thread-6', marks]])
+    expect(await behindMarks(6)).toEqual(marks.flatMap((m) => m.texts))
+  })
+
   test('a conversation whose hooks are heard from is given the mark alone in its thread, and its hook is handed what the mark stands for, once', async () => {
     withT3Code()
     stand.t3.threads.set('thread-8', 't3-thread-h')

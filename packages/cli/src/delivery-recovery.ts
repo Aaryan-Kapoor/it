@@ -174,6 +174,10 @@ export class DeliveryRecovery {
     }
   }
 
+  get hasMarkRoom(): boolean {
+    return [...this.marks.values()].reduce((n, marks) => n + marks.length, 0) < MOST
+  }
+
   /**
    * Reuse the one-day click lookback for reopening a conversation. Before these records,
    * restart lost every waiter copy; the app queue and normal claim recovery kept the click.
