@@ -13,24 +13,36 @@ interface Navigation {
   text?: string
 }
 
-/** The decision rule shipped in the guide, which the agent applies before showing a choice. */
-function guide(version: number) {
-  const rule = /```js\n(function takeMenuAttempt[\s\S]*?)\n```/.exec(GUIDE)?.[1]
-  expect(rule, 'The guide carries its menu decision rule.').toBeDefined()
-  const take = runInNewContext(`${rule}\ntakeMenuAttempt`) as (menu: object, name: string, data: Navigation) => boolean
-  const menu = { version, attempt: 0, choice: null }
+/** The decision rules shipped in the guide, applied before navigation and immediately before its command. */
+function guide(version: number, from = 'menu') {
+  const rule = /```js\n(function takeTourAttempt[\s\S]*?)\n```/.exec(GUIDE)?.[1]
+  expect(rule, 'The guide carries its navigation decision rules.').toBeDefined()
+  const { take, commit } = runInNewContext(`${rule}\n({ take: takeTourAttempt, commit: commitTourAttempt })`)
+  const record = (from: string, version: number) => ({ from, version, attempt: 0, choice: null, wanted: null })
+  const tour: { current: object | null; previous: object | null } = { current: record(from, version), previous: null }
   const shown: string[] = []
+  let nextVersion = version
+  function complete(action: { name: string; data: unknown }) {
+    const data = action.data as Navigation
+    if (!commit(tour, action.name, data)) return
+    const destination = action.name === 'pick' ? data.choice! : action.name
+    shown.push(destination)
+    if (action.name === 'finish') tour.current = tour.previous = null
+    else tour.current = record(destination, ++nextVersion)
+  }
   return {
     shown,
+    begin: (action: { name: string; data: unknown }) => take(tour, action.name, action.data),
+    complete,
     receive(action: { name: string; data: unknown }) {
-      const data = action.data as Navigation
-      if (take(menu, action.name, data)) shown.push(action.name === 'done' ? 'done' : data.choice!)
+      if (take(tour, action.name, action.data)) complete(action)
     },
+    showing: () => tour.current as { from: string; version: number },
   }
 }
 
 /** A showing of a tour page, with its version fixed and the clock moved by the test. */
-async function opened(name: string, version: number) {
+async function opened(name: string, version: number, saved?: Record<string, unknown>, loading = false, persist: () => Promise<void> = async () => {}) {
   const page = tourPage(name)
   const sent: { name: string; data: unknown; accept: () => Promise<void>; refuse: () => Promise<void> }[] = []
   const listeners: (() => void)[] = []
@@ -43,8 +55,21 @@ async function opened(name: string, version: number) {
     pretendToBeVisual: true,
     beforeParse(w: any) {
       w.It = {
-        state: JSON.parse(page.state),
+        state: { ...JSON.parse(page.state), ...(saved && !loading ? { _page: { ...saved } } : {}) },
         version,
+        revision: loading ? 0 : 1,
+        ...(saved && {
+          store: {
+            get: (key: string) => (w.It.revision ? saved[key] : undefined),
+            set: async (key: string, value: unknown) => {
+              await persist()
+              saved[key] = value
+              w.It.state = { ...w.It.state, _page: { ...saved } }
+              w.It.revision++
+              for (const fn of listeners) fn()
+            },
+          },
+        }),
         onState: (fn: () => void) => {
           listeners.push(fn)
           return () => {}
@@ -78,7 +103,15 @@ async function opened(name: string, version: number) {
   return {
     sent,
     $: (selector: string) => w.document.querySelector(selector),
+    settled,
+    loaded: () => {
+      w.It.revision = 1
+      w.It.state = { ...w.It.state, _page: { ...saved } }
+      for (const fn of listeners) fn()
+    },
     reopen: () => {
+      w.It.state = { ...w.It.state, seen: ['chess'] }
+      w.It.revision++
       for (const fn of listeners) fn()
     },
     async advance(ms: number) {
@@ -196,6 +229,32 @@ describe('the tour navigation requests', () => {
     }
   })
 
+  test.each(['oldest first', 'newest first'])('a menu reload retains the attempt count when processed %s', async (order) => {
+    const saved: Record<string, unknown> = {}
+    const before = await opened('menu', 3, saved)
+    let after: Awaited<ReturnType<typeof opened>> | undefined
+    try {
+      before.$('.thing[data-choice="chess"]').click()
+      await before.settled()
+      expect(before.$('.thing[data-choice="drums"]').disabled).toBe(true)
+      await before.sent[0]!.accept()
+      before.close()
+      after = await opened('menu', 3, saved, true)
+      expect(after.$('.thing[data-choice="drums"]').disabled).toBe(true)
+      after.loaded()
+      after.$('.thing[data-choice="drums"]').click()
+      await after.settled()
+      expect(after.sent[0]!.data).toMatchObject({ attempt: 2 })
+      const actions = [before.sent[0]!, after.sent[0]!]
+      const agent = guide(3)
+      for (const action of order === 'oldest first' ? actions : actions.reverse()) agent.receive(action)
+      expect(agent.shown.at(-1)).toBe('drums')
+    } finally {
+      before.close()
+      after?.close()
+    }
+  })
+
   test.each(['accept', 'refuse'] as const)('an older sending result cannot change the current attempt when it is %s', async (result) => {
     const menu = await opened('menu', 3)
     try {
@@ -228,8 +287,8 @@ describe('the tour navigation requests', () => {
         expect(button.disabled).toBe(false)
         button.click()
         expect(ending.sent.map(({ name, data }) => ({ name, data }))).toEqual([
-          { name: action, data: { from: 'done', from_version: 7 } },
-          { name: action, data: { from: 'done', from_version: 7 } },
+          { name: action, data: { from: 'done', from_version: 7, attempt: 1 } },
+          { name: action, data: { from: 'done', from_version: 7, attempt: 2 } },
         ])
       } finally {
         ending.close()
@@ -245,25 +304,210 @@ describe('the tour navigation requests', () => {
       await page.advance(SLOW)
       page.$('#t-more').click()
       expect(page.sent.map(({ name, data }) => ({ name, data }))).toEqual([
-        { name: 'next', data: { from: 'button', from_version: 5 } },
-        { name: 'menu', data: { from: 'button', from_version: 5 } },
+        { name: 'next', data: { from: 'button', from_version: 5, attempt: 1 } },
+        { name: 'menu', data: { from: 'button', from_version: 5, attempt: 2 } },
       ])
     } finally {
       page.close()
     }
   })
 
-  test('the guide acknowledges superseded menu attempts and keeps the showing guard for other navigation', () => {
+  test.each(['oldest first', 'newest first'])('the latest shared button wins when processed %s', async (order) => {
+    const page = await opened('button', 5)
+    try {
+      page.$('#t-next').click()
+      await page.sent[0]!.accept()
+      await page.advance(SLOW)
+      page.$('#t-more').click()
+      const agent = guide(5, 'button')
+      for (const action of order === 'oldest first' ? page.sent : [...page.sent].reverse()) agent.receive(action)
+      expect(agent.shown).toEqual(order === 'oldest first' ? ['next', 'menu'] : ['menu'])
+    } finally {
+      page.close()
+    }
+  })
+
+  test('a delayed Finish cannot clear the tour after See another one supersedes it', async () => {
+    const page = await opened('done', 7)
+    try {
+      page.$('#finish').click()
+      await page.sent[0]!.accept()
+      await page.advance(SLOW)
+      page.$('#more').click()
+      const agent = guide(7, 'done')
+      expect(agent.begin(page.sent[0]!)).toBe(true)
+      agent.receive(page.sent[1]!)
+      agent.complete(page.sent[0]!)
+      agent.receive(page.sent[0]!)
+      expect(agent.shown).toEqual(['menu'])
+    } finally {
+      page.close()
+    }
+  })
+
+  test.each([
+    ['menu', '.thing[data-choice="chess"]', '.thing[data-choice="drums"]'],
+    ['button', '#t-next', '#t-more'],
+    ['done', '#finish', '#more'],
+  ])('%s keeps attempts over reloads and starts again for a new showing', async (name, first, second) => {
+    const saved: Record<string, unknown> = {}
+    const before = await opened(name!, 3, saved)
+    let after: Awaited<ReturnType<typeof opened>> | undefined
+    let later: Awaited<ReturnType<typeof opened>> | undefined
+    try {
+      before.$(first!).click()
+      await before.settled()
+      expect(before.$(second!).disabled).toBe(true)
+      await before.sent[0]!.accept()
+      before.close()
+      after = await opened(name!, 3, saved, true)
+      expect(after.$(second!).disabled).toBe(true)
+      after.loaded()
+      after.$(second!).click()
+      await after.settled()
+      expect(after.sent[0]!.data).toMatchObject({ attempt: 2 })
+      expect(after.$(first!).disabled).toBe(true)
+      after.close()
+      later = await opened(name!, 4, saved)
+      later.$(first!).click()
+      await later.settled()
+      expect(later.sent[0]!.data).toMatchObject({ from_version: 4, attempt: 1 })
+    } finally {
+      before.close()
+      after?.close()
+      later?.close()
+    }
+  })
+
+  test.each(['accept', 'refuse'] as const)('the ending ignores an older sending result when it is %s', async (result) => {
+    const page = await opened('done', 7, {})
+    try {
+      page.$('#finish').click()
+      await page.settled()
+      page.reopen()
+      page.$('#more').click()
+      await page.settled()
+      await page.sent[1]!.accept()
+      await page.advance(SLOW - 1)
+      await page.sent[0]![result]()
+      expect(page.$('#more').disabled).toBe(true)
+      expect(page.$('#status').textContent).toBe('One moment')
+      await page.advance(1)
+      expect(page.$('#more').disabled).toBe(false)
+    } finally {
+      page.close()
+    }
+  })
+
+  test('a newer Finish can clear the menu shown for an earlier ending action, only once', () => {
+    const agent = guide(7, 'done')
+    const menu = { name: 'menu', data: { from: 'done', from_version: 7, attempt: 1 } }
+    const finish = { name: 'finish', data: { from: 'done', from_version: 7, attempt: 2 } }
+    agent.receive(menu)
+    agent.receive(finish)
+    agent.receive(finish)
+    agent.receive(menu)
+    expect(agent.shown).toEqual(['menu', 'finish'])
+  })
+
+  test('an older Finish arriving after a newer menu action never clears the tour', () => {
+    const agent = guide(7, 'done')
+    agent.receive({ name: 'menu', data: { from: 'done', from_version: 7, attempt: 2 } })
+    agent.receive({ name: 'finish', data: { from: 'done', from_version: 7, attempt: 1 } })
+    expect(agent.shown).toEqual(['menu'])
+  })
+
+  test('a retry of Next does not restart its destination and retires earlier alternatives', () => {
+    const agent = guide(5, 'button')
+    const action = (name: string, attempt: number) => ({ name, data: { from: 'button', from_version: 5, attempt } })
+    agent.receive(action('next', 1))
+    agent.receive(action('next', 3))
+    agent.receive(action('menu', 2))
+    expect(agent.shown).toEqual(['next'])
+  })
+
+  test('navigation from a destination retires attempts from the showing that led to it', () => {
+    const agent = guide(7, 'done')
+    agent.receive({ name: 'menu', data: { from: 'done', from_version: 7, attempt: 1 } })
+    const menu = agent.showing()
+    agent.receive({ name: 'pick', data: { choice: 'chess', from: menu.from, from_version: menu.version, attempt: 1 } })
+    agent.receive({ name: 'finish', data: { from: 'done', from_version: 7, attempt: 2 } })
+    expect(agent.shown).toEqual(['menu', 'chess'])
+  })
+
+  test('a superseded destination cannot navigate after the source chooses another page', () => {
+    const agent = guide(3)
+    const pick = (choice: string, attempt: number) => ({ name: 'pick', data: { choice, from: 'menu', from_version: 3, attempt } })
+    agent.receive(pick('chess', 1))
+    const chess = agent.showing()
+    agent.receive(pick('drums', 2))
+    agent.receive({ name: 'next', data: { from: chess.from, from_version: chess.version, attempt: 1 } })
+    expect(agent.shown).toEqual(['chess', 'drums'])
+  })
+
+  test('an identical Finish retry can complete while the older Finish is still being prepared', () => {
+    const agent = guide(7, 'done')
+    const action = (attempt: number) => ({ name: 'finish', data: { from: 'done', from_version: 7, attempt } })
+    expect(agent.begin(action(1))).toBe(true)
+    agent.receive(action(2))
+    agent.complete(action(1))
+    expect(agent.shown).toEqual(['finish'])
+  })
+
+  test.each([
+    ['menu', '.thing[data-choice="chess"]'],
+    ['button', '#t-next'],
+    ['done', '#finish'],
+  ])('%s sends nothing until its attempt is saved and recovers when saving fails', async (name, selector) => {
+    const writes: { accept: () => void; refuse: () => void }[] = []
+    const page = await opened(
+      name!,
+      3,
+      {},
+      false,
+      () =>
+        new Promise<void>((resolve, reject) => {
+          writes.push({ accept: resolve, refuse: () => reject(new Error('not saved')) })
+        }),
+    )
+    try {
+      page.$(selector!).click()
+      await page.settled()
+      expect(page.sent).toHaveLength(0)
+      expect(page.$(selector!).disabled).toBe(true)
+      writes[0]!.refuse()
+      await page.settled()
+      expect(page.sent).toHaveLength(0)
+      expect(page.$(selector!).disabled).toBe(false)
+      page.$(selector!).click()
+      writes[1]!.accept()
+      await page.settled()
+      expect(page.sent[0]!.data).toMatchObject({ attempt: 2 })
+      expect(page.$(selector!).disabled).toBe(true)
+    } finally {
+      page.close()
+    }
+  })
+
+  test('an older Finish cannot commit while a newer identical Finish is being prepared', () => {
+    const agent = guide(7, 'done')
+    const action = (attempt: number) => ({ name: 'finish', data: { from: 'done', from_version: 7, attempt } })
+    expect(agent.begin(action(1))).toBe(true)
+    expect(agent.begin(action(2))).toBe(true)
+    agent.complete(action(1))
+    expect(agent.shown).toEqual([])
+    agent.complete(action(2))
+    expect(agent.shown).toEqual(['finish'])
+  })
+
+  test('the guide guards every navigation command and checks queued actions before clearing', () => {
     expect(GUIDE).toContain('Keep the `id` and `version` printed by each `it tour show`')
     expect(GUIDE).toContain('`pick`, `next`, `menu`, `done` or `finish`')
-    expect(GUIDE).toContain('compare `tour-<from>` and `from_version` with that `id` and `version`')
-    expect(GUIDE).toContain('except for a newer attempt from the menu showing kept below')
-    expect(GUIDE).toContain('even if you later return to the same page')
     expect(GUIDE).toContain("`it action <the action's id>`")
     expect(GUIDE).toContain('its `page` and `version` identify the showing')
-    expect(GUIDE).toContain('Keep this record after showing a choice')
     expect(GUIDE).toContain('process only the highest `attempt`')
     expect(GUIDE).toContain("`it ack <the action's id>`")
-    expect(GUIDE).toContain('Forget the record when another menu is shown, navigation from a destination is accepted, or the tour is cleared')
+    expect(GUIDE).toContain('it actions --id tour-done')
+    expect(GUIDE).toContain('immediately before `it tour clear`')
   })
 })

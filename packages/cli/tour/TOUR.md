@@ -44,26 +44,41 @@ it tour show next
 
 The menu also has **That's enough for now**, which arrives as **`done`**: go to the ending.
 
-A page gives its buttons back to the person when it is still on the screen forty seconds after one was pressed, and they may press again. So `next` and `menu` carry `from`, the page they were pressed on, and so do `pick`, `done` and `finish`. All five carry `from_version`, the version of that showing. Before acting on `pick`, `next`, `menu`, `done` or `finish`, compare `tour-<from>` and `from_version` with that `id` and `version`. Act only when both match, except for a newer attempt from the menu showing kept below. If those fields are not shown in the message, run `it action <the action's id>`: its `page` and `version` identify the showing, and its `data` holds the attempt and choice.
+A page gives its buttons back to the person when it is still on the screen forty seconds after one was pressed, and they may press again. So `next` and `menu` carry `from`, the page they were pressed on, and so do `pick`, `done` and `finish`. All five carry `from_version`, the version of that showing, and `attempt`, an increasing number saved before sending so a reload of the same showing continues the count. Before acting on `pick`, `next`, `menu`, `done` or `finish`, check the showing and attempt with the rules below. If those fields are not shown in the message, run `it action <the action's id>`: its `page` and `version` identify the showing, and its `data` holds the attempt and choice.
 
-Each menu `pick` and `done` carries `attempt`, an increasing number for that showing, starting at 1. The person's latest choice wins. For each new menu showing, keep a record `{ version: <the menu's version>, attempt: 0, choice: null }`. Keep this record after showing a choice, building what they named or showing the ending in response to that menu. A higher attempt from that same showing replaces its earlier choice even when the menu is no longer current. If several menu actions are already available, process only the highest `attempt` and acknowledge the others without showing their choices. If chess arrives first and drums later with a higher attempt, show drums; if drums arrives first, ignore chess when it arrives.
+The person's latest action wins on every tour page. Keep `tour.current` as `{ from: <page name>, version: <its version>, attempt: 0, choice: null, wanted: null }` for the showing now on the screen, and start with `tour.previous = null`. The previous record is the showing whose action brought up the current page. Keep it after showing a choice, the menu or the ending, or building what they named. A higher attempt from that showing replaces its earlier choice even when its page is no longer current. If several actions from one showing are already available, process only the highest `attempt` and acknowledge the others without navigating. If chess arrives first and drums later with a higher attempt, show drums; if drums arrives first, ignore chess when it arrives. The same rule applies to Next followed by All of them, and Finish followed by See another one.
 
-Apply this decision rule to menu actions. `menu` is that retained record, `name` is the action name and `data` is what the action carried. A false result means acknowledge without navigating. A true result means show the requested choice or ending, then acknowledge. Increasing the attempt even for an identical choice keeps older choices from replacing it. An identical choice must not restart a page already shown. If showing the choice fails, set `menu.choice` back to `null` so a fresh attempt can try again.
+Apply `takeTourAttempt` when a navigation action arrives. A false result means acknowledge without navigating. A true result means prepare the requested navigation. Immediately before running its command, apply `commitTourAttempt`; a false result means it was superseded, so acknowledge it without running that command. Run navigation commands one at a time, never in parallel. Once a command succeeds, set `tour.current` to a fresh record for the `id` and `version` it printed, keeping `tour.previous`. If the command fails, set `tour.previous.choice` back to `null` so a fresh attempt can try again. An identical choice advances the attempt without restarting a page already shown; an unfinished identical choice may still complete.
 
 ```js
-function takeMenuAttempt(menu, name, data) {
-  if (!menu || data.from !== "menu" || data.from_version !== menu.version) return false;
-  if (name !== "pick" && name !== "done") return false;
-  if (!Number.isSafeInteger(data.attempt) || data.attempt <= menu.attempt) return false;
-  menu.attempt = data.attempt;
+function takeTourAttempt(tour, name, data) {
+  const matches = (showing) => showing && data.from === showing.from && data.from_version === showing.version;
+  const showing = matches(tour.current) ? tour.current : matches(tour.previous) ? tour.previous : null;
+  if (!showing) return false;
+  const allowed = data.from === "menu" ? ["pick", "done"] : data.from === "done" ? ["menu", "finish"] : ["next", "menu"];
+  if (!allowed.includes(name)) return false;
+  if (!Number.isSafeInteger(data.attempt) || data.attempt <= showing.attempt) return false;
+  showing.attempt = data.attempt;
+  showing.wanted = JSON.stringify([name, data.choice || null, data.text || null]);
+  if (showing.wanted === showing.choice) return false;
+  tour.previous = showing;
+  tour.current = null;
+  return true;
+}
+
+function commitTourAttempt(tour, name, data) {
+  const showing = tour.previous;
+  if (!showing || data.from !== showing.from || data.from_version !== showing.version || data.attempt !== showing.attempt) return false;
   const choice = JSON.stringify([name, data.choice || null, data.text || null]);
-  if (choice === menu.choice) return false;
-  menu.choice = choice;
+  if (choice !== showing.wanted) return false;
+  showing.choice = choice;
   return true;
 }
 ```
 
-Acknowledge every handled, older or identical menu action with `it ack <the action's id>`. Forget the record when another menu is shown, navigation from a destination is accepted, or the tour is cleared. Requests from those retired showings are discarded and acknowledged, even if you later return to the same page. For navigation outside the retained menu showing, discard every queued request from the showing you left. A later showing has a new version, and a queued retry must never restart it.
+Acknowledge every handled, older or identical action with `it ack <the action's id>`. Accepting navigation from the current destination replaces the previous record and retires the earlier source. A newer attempt from the previous source retires the destination it superseded. A showing brought up independently, such as a spoken request to return to the tour, also retires both records. Retired requests are discarded and acknowledged, even if you later return to the same page. After clearing the tour, set both records to `null`.
+
+Before handling Finish, read `it actions --id tour-done` and consider every available attempt from that showing. Apply `commitTourAttempt` immediately before `it tour clear`, after processing any newer navigation received while preparing to finish. An older Finish must never clear a menu or another page brought up by a newer action. Once a current Finish clears the tour, discard all further actions from its retired showings.
 
 ## The whiteboard
 
@@ -172,7 +187,7 @@ it tour show done
 
 **Then say:** "That's the tour."
 
-Two buttons are on it. **See another one** arrives as `menu`: show the menu again. **Finish the tour** arrives as `finish`. Then remove the tour's pages, which sends their screen back to their own pages:
+Two buttons are on it. **See another one** arrives as `menu`: show the menu again. **Finish the tour** arrives as `finish`. Apply the navigation rules above, including the final attempt check. Only a current Finish removes the tour's pages, which sends their screen back to their own pages:
 
 ```sh
 it tour clear

@@ -12,7 +12,7 @@ const from = path.join(here, 'tour')
 const guide = readFileSync(path.join(from, 'TOUR.md'), 'utf8')
 const said = JSON.parse(readFileSync(path.join(from, 'pages.json'), 'utf8'))
 const kit = (name) => readFileSync(path.join(from, 'kit', name), 'utf8').trimEnd()
-const KIT = { '/*kit.css*/': kit('kit.css'), '/*kit.js*/': kit('kit.js'), '<!--rail-->': kit('rail.html') }
+const KIT = { '/*kit.css*/': kit('kit.css'), '/*kit.js*/': kit('kit.js'), '<!--rail-->': kit('rail.html'), '/*navigation.js*/': kit('navigation.js') }
 const pages = {}
 for (const [name, page] of Object.entries(said)) {
   let html = readFileSync(path.join(from, 'pages', `${name}.html`), 'utf8')

@@ -163,6 +163,7 @@
     </div>
   </main>
 <script>
+  /*navigation.js*/
   // Picking one tells the agent which. The agent marks what has been seen, in the page's
   // state, so that coming back here shows how far the tour has got.
   (() => {
@@ -172,8 +173,10 @@
       var things = [].slice.call(grid.querySelectorAll(".thing"));
       var text = document.getElementById("text"), make = document.getElementById("make"), enough = document.getElementById("enough");
       var sent = null, slow = 0, attempt = 0;
+      var navigation = window.TourNavigation(It, "menu");
       var agent = (window.__PARAMS || {}).agent || "Your agent";
       function lock(on) {
+        on = on || !navigation.ready();
         things.forEach((t) => { t.disabled = on; });
         text.disabled = on; make.disabled = on || !text.value.trim(); enough.disabled = on;
       }
@@ -212,16 +215,17 @@
       }
       function pick(choice, more) {
         clearTimeout(slow);
-        var current = ++attempt;
+        if (!navigation.ready()) return;
+        var current = attempt = navigation.next();
         sent = choice;
         render();
-        var data = { choice: choice, from: "menu", from_version: It.version, attempt: current };
+        var data = { choice: choice };
         if (more) data.text = more;
         // Something of the person's own is made from nothing, which takes an agent longer than that, and is waited for
-        It.action("pick", data).then(() => { if (choice !== "other") unanswered(current); }, () => { if (attempt !== current) return; sent = null; render(); status.textContent = ""; });
+        navigation.send("pick", data, current).then(() => { if (choice !== "other") unanswered(current); }, () => { if (attempt !== current) return; sent = null; render(); status.textContent = ""; });
       }
       things.forEach((t) => t.addEventListener("click", () => pick(t.getAttribute("data-choice"))));
-      text.addEventListener("input", () => { make.disabled = !text.value.trim(); });
+      text.addEventListener("input", () => { make.disabled = !navigation.ready() || !!sent || !text.value.trim(); });
       document.getElementById("own").addEventListener("submit", (e) => {
         e.preventDefault();
         var said = text.value.trim();
@@ -229,15 +233,16 @@
       });
       enough.addEventListener("click", () => {
         clearTimeout(slow);
-        var current = ++attempt;
+        if (!navigation.ready()) return;
+        var current = attempt = navigation.next();
         sent = "done";
         render();
         status.textContent = agent + " is wrapping up.";
-        It.action("done", { from: "menu", from_version: It.version, attempt: current }).then(() => unanswered(current), () => { if (attempt !== current) return; sent = null; render(); });
+        navigation.send("done", {}, current).then(() => unanswered(current), () => { if (attempt !== current) return; sent = null; render(); });
       });
-      It.onState(() => {
+      navigation.onState((answered) => {
         // A menu the agent has opened again takes what was sent from it as answered
-        if ((It.state || {}).status === "open") { sent = null; clearTimeout(slow); }
+        if (answered && (It.state || {}).status === "open") { sent = null; clearTimeout(slow); }
         render();
       });
       render();
