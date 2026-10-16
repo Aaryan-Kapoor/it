@@ -415,6 +415,43 @@ export function itHomeWritten(text: string, elsewhere = process.env.IT_HOME ? pa
     .replace(/^IT_HOME_AT_SETUP = None$/m, () => `IT_HOME_AT_SETUP = ${JSON.stringify(elsewhere)}`)
 }
 
+/** Keeps files outside the current package beside its source, where the app cannot load them. */
+function retireUnpacked(dir: string, files: string[]): void {
+  makeWithin(home(), dir)
+  if (!lstatSync(dir).isDirectory()) throw new Error(`${dir} is not an ordinary folder, so it was left as it is`)
+  const wanted = new Set(files.map((rel) => path.join(dir, ...rel.split('/'))))
+  const folders = new Set<string>()
+  for (const file of wanted) {
+    for (let parent = path.dirname(file); parent !== dir; parent = path.dirname(parent)) folders.add(parent)
+  }
+  const extra: string[] = []
+  const inspect = (folder: string) => {
+    for (const entry of readdirSync(folder, { withFileTypes: true })) {
+      const file = path.join(folder, entry.name)
+      if (wanted.has(file)) continue
+      if (folders.has(file)) {
+        if (entry.isSymbolicLink()) throw new Error(`${file} is not an ordinary folder, so it was left as it is`)
+        if (entry.isDirectory()) {
+          inspect(file)
+          continue
+        }
+      }
+      extra.push(file)
+    }
+  }
+  inspect(dir)
+  if (!extra.length) return
+  // Earlier packages did not record their source files. Keep everything that is no longer
+  // packaged, since it may include the person's own files. A fresh sibling cannot be loaded
+  // as part of this plugin, and no existing backup is replaced. Move links without following them.
+  const saved = mkdtempSync(`${dir}.set-aside-by-it-`)
+  for (const file of extra) {
+    const to = path.join(saved, path.relative(dir, file))
+    makeWithin(saved, path.dirname(to))
+    rename(file, to)
+  }
+}
+
 /** Writes an add-on's files where the harness will install them from. */
 export function unpack(id: Harness): string {
   const addon = ADDONS[id]
@@ -427,6 +464,7 @@ export function unpack(id: Harness): string {
     mkdirSync(home(), { recursive: true })
     writeFileSync(inHome('LICENSE.md'), LICENSE)
   }
+  retireUnpacked(dir, Object.keys(addon.files))
   const it = shim()
   // The launcher's address, written so that a shell reads it as one word whatever is in it:
   // a space, an apostrophe, a dollar sign. On Windows a harness may hand a hook to cmd or to
@@ -451,7 +489,7 @@ export function unpack(id: Harness): string {
     else content = itHomeWritten(text)
     // A registered marketplace must keep its manifest and ownership note throughout an upgrade.
     // Replacing whole files in place leaves those proofs readable if unpacking stops, so the
-    // next setup or disconnect can pass the same ownership checks. Other files are left alone.
+    // next setup or disconnect can pass the same ownership checks.
     putInPlace(Buffer.from(content), file)
   }
   return dir

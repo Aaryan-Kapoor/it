@@ -1740,6 +1740,90 @@ describe('managed plugin and marketplace ownership', () => {
   ]
   const mutations = (bin: string) => commands(bin).filter((command) => /\b(?:uninstall|remove|add|install|enable)\b/.test(command))
 
+  test.each(apps)('$bin retires obsolete packaged files before installing the refreshed source', async ({ id, bin, install, manifest }) => {
+    const addon = ADDONS[id]!
+    const obsolete = `${id === 'codex' ? 'plugins/it-bridge' : 'it-bridge'}/old-command/command.md`
+    addon.files[obsolete] = 'The previous packaged command.'
+    try {
+      await connect(id, () => {})
+    } finally {
+      delete addon.files[obsolete]
+    }
+    const dir = path.join(process.env.IT_HOME!, 'addons', id)
+    const record = noted(id)
+    record.installs[0]!.version = 'previous-version'
+    put(stampFile(id), JSON.stringify(record))
+    put(path.join(dir, 'personal.txt'), 'The person added this file.')
+    mkdirSync(path.join(dir, 'empty-old-folder'))
+    const outside = path.join(tmp, 'unrelated')
+    put(path.join(outside, 'keep.txt'), 'Keep the linked folder unchanged.')
+    symlinkSync(outside, path.join(dir, 'old-linked-folder'), 'junction')
+    const previousReply = fake.execFile.getMockImplementation()!
+    let installed = false
+    fake.execFile.mockImplementation((...args: unknown[]) => {
+      const [called, words] = args as [string, string[]]
+      if (called === bin && words.join(' ') === install) {
+        installed = true
+        expect(under(dir)).toEqual(Object.keys(addon.files).sort())
+      }
+      return previousReply(...args)
+    })
+    expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+    expect(installed).toBe(true)
+    expect(under(dir)).toEqual(Object.keys(addon.files).sort())
+    expect(JSON.parse(read(path.join(dir, manifest))).name).toBe('it')
+    const saved = readdirSync(path.dirname(dir)).find((name) => name.startsWith(`${id}.set-aside-by-it-`))!
+    expect(saved).toBeDefined()
+    const retired = path.join(path.dirname(dir), saved)
+    expect(read(path.join(retired, obsolete))).toBe('The previous packaged command.')
+    expect(read(path.join(retired, 'personal.txt'))).toBe('The person added this file.')
+    expect(lstatSync(path.join(retired, 'old-linked-folder')).isSymbolicLink()).toBe(true)
+    expect(read(path.join(outside, 'keep.txt'))).toBe('Keep the linked folder unchanged.')
+    expect(existsSync(path.join(dir, 'empty-old-folder'))).toBe(false)
+    unpack(id)
+    expect(readdirSync(path.dirname(dir)).filter((name) => name.startsWith(`${id}.set-aside-by-it-`))).toEqual([saved])
+    expect(await disconnect(id, () => {})).toBe(true)
+  })
+
+  test.each(apps.flatMap((app) => ['before', 'after'].flatMap((boundary) => ['reconnect', 'disconnect'].map((recovery) => ({ ...app, boundary, recovery })))))(
+    '$bin can $recovery when retiring an obsolete file stops $boundary its rename',
+    async ({ id, bin, manifest, boundary, recovery }) => {
+      await connect(id, () => {})
+      const dir = path.join(process.env.IT_HOME!, 'addons', id)
+      const note = path.join(dir, id === 'codex' ? 'plugins/it-bridge/it-home.json' : 'it-bridge/it-home.json')
+      const before = { manifest: read(path.join(dir, manifest)), note: read(note) }
+      const record = noted(id)
+      record.installs[0]!.version = 'previous-version'
+      put(stampFile(id), JSON.stringify(record))
+      const obsolete = path.join(dir, 'obsolete.txt')
+      put(obsolete, 'The previous package.')
+      const original = fs.renameSync
+      fs.renameSync = ((from, to) => {
+        if (String(from) !== obsolete) return original(from, to)
+        if (boundary === 'after') original(from, to)
+        throw new Error('the program stopped while retiring a file')
+      }) as typeof fs.renameSync
+      syncBuiltinESMExports()
+      ran = []
+      try {
+        await expect(connect(id, () => {})).rejects.toThrow('the program stopped while retiring a file')
+      } finally {
+        fs.renameSync = original
+        syncBuiltinESMExports()
+      }
+      expect(read(path.join(dir, manifest))).toBe(before.manifest)
+      expect(read(note)).toBe(before.note)
+      expect(mutations(bin)).toEqual([])
+      expect(noted(id).installs[0]!.version).toBe('installing')
+      // Both recovery paths must still pass the ordinary ownership checks.
+      if (recovery === 'disconnect') expect(await disconnect(id, () => {})).toBe(true)
+      expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
+      expect(existsSync(obsolete)).toBe(false)
+      expect(under(dir)).toEqual(Object.keys(ADDONS[id]!.files).sort())
+      expect(await disconnect(id, () => {})).toBe(true)
+    },
+  )
+
   const interruptedUnpack = async (id: 'claude-code' | 'codex', rel: string, boundary: string) => {
     const target = path.join(process.env.IT_HOME!, 'addons', id, rel)
     const original = { open: fs.openSync, write: fs.writeFileSync, rename: fs.renameSync }
