@@ -495,6 +495,51 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
 
   const recoveryClaims = () => readJson<{ returning: string[]; targets: [string, string][] }>(path.join(home, 'delivery-recovery.json'))!
 
+  test.each(['lost', 'failed write', 'unanswered'] as const)(
+    'a held lease %s retires its durable claim only after confirmed loss and a successful save',
+    async (outcome) => {
+      standIn()
+      let now = Date.now()
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+      let blocked: string | undefined
+      try {
+        await start()
+        await turn(6, true)
+        offered({ ...click(6), at: now })
+        await until(async () => (await local<{ held: number }>('/health'))?.held === 1)
+        offered()
+        await pass()
+        expect(recoveryClaims().returning).toEqual(['click-6'])
+        stand.answer = (name) => {
+          if (name !== 'delivery:renew') return undefined
+          if (outcome === 'unanswered') throw new Error('offline')
+          return []
+        }
+        if (outcome === 'failed write') {
+          blocked = `${path.join(home, 'delivery-recovery.json')}.${process.pid}.tmp`
+          mkdirSync(blocked)
+        }
+        now += outcome === 'unanswered' ? 31_000 : 11_000
+        await pass(2)
+        expect(called('delivery:renew')).toContain('click-6')
+        expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+        if (outcome === 'failed write') {
+          expect(recoveryClaims().returning).toEqual(['click-6'])
+          rmSync(blocked!, { recursive: true })
+          blocked = undefined
+          await pass()
+        }
+        expect(recoveryClaims().returning).toEqual(outcome === 'unanswered' ? ['click-6'] : [])
+        expect(recoveryClaims().targets).toEqual(outcome === 'unanswered' ? [['click-6', 'codex:thread-6']] : [])
+        expect(called('delivery:release')).toEqual([])
+        expect(called('delivery:handedOff')).toEqual([])
+      } finally {
+        if (blocked) rmSync(blocked, { recursive: true, force: true })
+        clock.mockRestore()
+      }
+    },
+  )
+
   test.each([false, true])('acknowledged releases and parks retire durable claims, with recovery write failure %s', async (diskFails) => {
     standIn()
     await start()

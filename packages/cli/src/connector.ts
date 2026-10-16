@@ -841,6 +841,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
     })
     claimAttempts.delete(id)
   }
+  /** Confirmed lease losses whose durable cleanup may still need a successful write. */
+  const lostClaims = new Map<string, object | undefined>()
+  const retireLostClaims = () => {
+    for (const [id, attempt] of lostClaims) {
+      try {
+        retireClaim(id, attempt)
+        lostClaims.delete(id)
+      } catch (err) {
+        seldom('recovery-lost', `could not retire the lost claim (${why(err)}); trying again`)
+      }
+    }
+  }
   const release = async (id: string) => {
     const attempt = claimAttempts.get(id)
     try {
@@ -1033,6 +1045,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   let over = false
   recovery.onErase = () => {
+    lostClaims.clear()
     closing = true
     over = true
     stopping?.(0)
@@ -1935,6 +1948,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (routing || closing || unfitting || recovery.erased) return
     routing = true
     try {
+      retireLostClaims()
       recovery.pruneWaiters()
       if (givingBack === 'due') {
         const asked = await recoverBatch()
@@ -2042,6 +2056,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // someone else's, so serving it from here stops.
           // Counted from before the request went out: the backend's clock started no later than that
           const asked = steady()
+          const attempt = claimAttempts.get(id)
           const kept = await call<string[]>('mutation', api.delivery.renew, { ids: [id] }).catch(() => null)
           // While that was being asked, the click may have been handed over or given to a waiting
           // agent: it is not held here then, and nothing about it is lost
@@ -2051,6 +2066,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
           if (kept?.includes(id)) h.leaseUntil = asked + LEASE_MS
           else if (kept !== null || at > h.leaseUntil - 2000) {
             held.delete(id)
+            // A refused renewal proves this claim is over. An unanswered renewal does not.
+            // Stop serving it even if saving the cleanup fails, and retry that save separately.
+            if (kept !== null) {
+              lostClaims.set(id, attempt)
+              retireLostClaims()
+            }
             journal('lost', id)
             say(
               `click ${id} is not this machine's to deliver any more (${kept === null ? 'It could not be reached to keep it' : 'It gave it to another'}); it goes back to waiting`,
