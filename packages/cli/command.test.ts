@@ -2172,6 +2172,25 @@ syncBuiltinESMExports()
     expect(readFileSync(path.join(m.home, '.profile'), 'utf8')).toBe(profile)
   })
 
+  test('setup with a mistaken IT_HOME refuses a project before writing records, even on a second attempt', async () => {
+    const m = machine(false)
+    const project = path.join(m.home, 'project')
+    for (const name of ['backend', 'bin', 'content', 'logs']) {
+      mkdirSync(path.join(project, name), { recursive: true })
+      writeFileSync(path.join(project, name, 'source'), 'mine')
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const refused = await run(m, ['setup', '--none', '--no-service'], { IT_HOME: project })
+      expect(refused.code).toBe(2)
+      expect(error(refused).message).toContain('contains files but no It records')
+      expect(error(refused).hint).toContain('IT_HOME')
+      expect(error(refused).hint).toContain('empty folder')
+      expect(readdirSync(project).sort()).toEqual(['backend', 'bin', 'content', 'logs'])
+    }
+    expect((await run(m, ['uninstall', '--yes'], { IT_HOME: project })).code).toBe(2)
+    for (const name of ['backend', 'bin', 'content', 'logs']) expect(readFileSync(path.join(project, name, 'source'), 'utf8')).toBe('mine')
+  })
+
   test('`it uninstall` refuses unrelated JSON records and preserves unknown files in a marked installation', async () => {
     const m = machine(true, true)
     writeFileSync(

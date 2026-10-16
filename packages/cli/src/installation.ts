@@ -1,7 +1,9 @@
-import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync } from 'node:fs'
 import path from 'node:path'
+import { HARNESSES } from '@it/protocol'
 import { LICENSE } from './addons.generated'
 import { Problem, writePrivate } from './lib'
+import { installationFile, ROOT_FILES } from './uninstall-files'
 
 export const INSTALLATION_FILE = 'installation.json'
 // The installers write these same bytes before putting the folder on PATH.
@@ -58,8 +60,28 @@ export function checkInstallationRecord(folder: string): boolean {
   return marked
 }
 
+/** Check before setup writes even a lock or a reporting record, so its own writes cannot make a project look like an existing home. */
+export function checkInstallationFolder(folder: string): void {
+  if (!lstatSync(folder, { throwIfNoEntry: false })) return
+  const records = ROOT_FILES.filter((name) => name !== 'LICENSE.md' && name !== 'THIRD_PARTY_NOTICES.md')
+  if (
+    installationFile(folder, INSTALLATION_FILE) ||
+    records.some((name) => installationFile(folder, name)) ||
+    HARNESSES.some((name) => installationFile(folder, `addons/${name}.json`)) ||
+    legacyInstallation(folder) ||
+    readdirSync(folder).length === 0
+  )
+    return
+  throw new Problem(
+    "The chosen folder contains files but no It records. Setup cannot use it because uninstall removes It's own subfolders whole.",
+    'invalid',
+    'Set IT_HOME to an empty folder or an existing It home, or unset IT_HOME to use the usual installation folder.',
+  )
+}
+
 /** Setup deliberately chooses this folder. Existing files are never taken for a marker. */
 export function markInstallation(folder: string): void {
+  checkInstallationFolder(folder)
   mkdirSync(folder, { recursive: true, mode: 0o700 })
   if (!checkInstallationRecord(folder)) writePrivate(path.join(folder, INSTALLATION_FILE), INSTALLATION)
 }

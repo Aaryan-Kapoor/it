@@ -30,7 +30,7 @@ import { local } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import * as flow from './flow'
 import { hook } from './hooks'
-import { checkInstallationRecord, legacyInstallation, markedInstallation, markInstallation } from './installation'
+import { checkInstallationFolder, checkInstallationRecord, legacyInstallation, markedInstallation, markInstallation } from './installation'
 import { withInstallerLock } from './installer-lock'
 import {
   api,
@@ -2514,6 +2514,7 @@ async function main(argv: string[]): Promise<void> {
     return
   }
   noMore(cmd, a)
+  if (cmd === 'setup' || cmd === 'login') checkInstallationFolder(home())
   // A rejected command changes no reporting setting either.
   usage.heed()
   // Counting begins with the first command, whoever runs it, and nothing is said of it here: the

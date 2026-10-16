@@ -78,6 +78,28 @@ describe('installation ownership', () => {
     expect(readFileSync(path.join(at, `${INSTALLATION_FILE}.unreadable`), 'utf8')).toBe('{')
   })
 
+  test('setup refuses a non-empty project with no It records before marking its folder', () => {
+    const at = folder()
+    for (const name of ['backend', 'bin', 'content', 'logs']) put(at, `${name}/source`, 'mine')
+    put(at, 'LICENSE.md', LICENSE)
+    put(at, 'THIRD_PARTY_NOTICES.md')
+    expect(() => markInstallation(at)).toThrow('contains files but no It records')
+    expect(existsSync(path.join(at, INSTALLATION_FILE))).toBe(false)
+    for (const name of ['backend', 'bin', 'content', 'logs']) expect(readFileSync(path.join(at, name, 'source'), 'utf8')).toBe('mine')
+  })
+
+  test.each(['machine.json', 'service.json', 'left.json', 'delivery-recovery.json.unreadable', 'addons/pi.json'])(
+    'setup can mark an existing home whose only It record is %s',
+    (record) => {
+      const at = folder()
+      put(at, record, '{}')
+      put(at, 'notes', 'mine')
+      markInstallation(at)
+      expect(markedInstallation(at)).toBe(true)
+      expect(readFileSync(path.join(at, 'notes'), 'utf8')).toBe('mine')
+    },
+  )
+
   test('each installed executable finds its own marked home and an explicit IT_HOME wins', () => {
     const first = folder()
     const second = folder()
