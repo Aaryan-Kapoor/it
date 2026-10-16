@@ -1487,6 +1487,28 @@ describe('what the connector writes down about installing and removing', () => {
 })
 
 describe('what a person is told about an app', () => {
+  test('setup follows a changed protocol minimum for the queue', async () => {
+    vi.doMock('@it/protocol', async () => ({
+      ...(await vi.importActual<typeof import('@it/protocol')>('@it/protocol')),
+      CODEX_MIN_VERSION: '0.161.0',
+    }))
+    vi.resetModules()
+    try {
+      const changed = await import('./src/setup')
+      expect((await changed.detectAll()).find((h) => h.id === 'codex')).toMatchObject({
+        version: '0.160.0',
+        addon: 'too_old',
+        detail: 'It needs Codex 0.161.0 or newer, and this one is 0.160.0. Update Codex, then run `it setup` again.',
+      })
+      VERSIONS.codex = 'codex-cli 0.161.0'
+      expect((await changed.detectAll()).find((h) => h.id === 'codex')).toMatchObject({ version: '0.161.0', addon: 'not_connected' })
+    } finally {
+      VERSIONS.codex = 'codex-cli 0.160.0'
+      vi.doUnmock('@it/protocol')
+      vi.resetModules()
+    }
+  })
+
   test('that is too old says which version is needed, which was found, and what to do', async () => {
     VERSIONS.claude = '2.1.100 (Claude Code)'
     try {

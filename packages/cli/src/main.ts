@@ -3214,7 +3214,7 @@ async function main(argv: string[]): Promise<void> {
       const mine = asked?.session
       // Which conversation this is was a choice among the apps that had marked this command: said, so that an agent that is another one knows
       const guessed = sessionNote(asked, `This ${NOUN.one} was shown for`, `run \`it open ${slug}\` again with IT_HARNESS and IT_SESSION set to your own.`)
-      if (mine) noteConversation(mine)
+      if (mine) await noteConversation(mine)
       const result = await onDisplay(a, () =>
         call<Shown & { took?: boolean }>('mutation', api.displays.show, {
           slug,
