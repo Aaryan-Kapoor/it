@@ -391,6 +391,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               machineSeenAt={page.machineSeenAt}
               machineGone={page.machineGone === true}
               machinePaused={page.machinePaused ?? null}
+              addonRuntime={page.addonRuntime ?? null}
               pending={page.pending}
               // Whether a closed conversation is reopened is said to every browser alike. Only the owner may switch it on
               wakes={page.wake}
@@ -782,6 +783,7 @@ function ActionStatus({
   machineSeenAt,
   machineGone,
   machinePaused,
+  addonRuntime,
   pending,
   wakes,
   mayWake,
@@ -800,6 +802,7 @@ function ActionStatus({
   machineGone: boolean
   /** Why the page's machine, though it is there, hands nothing to an agent for now. Null where it does. */
   machinePaused: string | null
+  addonRuntime: { state: string; idle?: boolean; detail: string } | null
   /** How many things done on the page are waiting for its agent, as It counts them: all of them, however long ago they were done. */
   pending: number
   /** Where the page's agent app can have a closed conversation reopened: the machine that would, and whether that is switched on there. */
@@ -976,6 +979,13 @@ function ActionStatus({
   // A conversation is reopened only for what was done in the last day. For anything older the
   // switch would change nothing, so it is not offered, and the bar says what would bring it
   const tooOld = now - last.at > WAKE_BACK_MS
+  const addonBlocked = addonRuntime?.state === 'incompatible' || addonRuntime?.idle === false
+  if (slow && !busy && addonBlocked)
+    return (
+      <span className="status" data-tone="wait">
+        Sent. {addonRuntime?.detail}
+      </span>
+    )
   const offer = mayWake && wakes && readiness?.state === 'connected' && !wakes.on && slow && !busy && !tooOld
   // Its app is not connected on that machine. The machine hands nothing to such an app and
   // reopens no conversation of it, whatever Auto-wake is set to, so opening the conversation
@@ -1025,7 +1035,7 @@ function ActionStatus({
           : slow && tooOld
             ? `Sent more than a day ago${waiting > 1 ? ` (${waiting})` : ''}. ${agent ?? 'Your agent'} gets it when its conversation is next open`
             : slow && !wakes?.on
-              ? `Sent. ${agent ?? 'Your agent'} is not listening${waiting > 1 ? ` (${waiting})` : ''}: its conversation looks closed`
+              ? `Sent. ${agent ?? 'Your agent'} is not listening${waiting > 1 ? ` (${waiting})` : ''}. Open its conversation and check the add-on under Machines`
               : `Sent. Waiting for your agent${waiting > 1 ? ` (${waiting})` : ''}`}
       </span>
       {offer && (

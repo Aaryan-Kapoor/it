@@ -212,6 +212,7 @@ export function carryOn(
   /** `run` is this run's own name, which no other run of the conversation has: what the run starts carries it on, and is found by it wherever it goes. */
   marks: { harness: string; session: string; run?: string },
   opts: {
+    env?: NodeJS.ProcessEnv
     patience?: number
     signal?: AbortSignal
     said?: (words: string) => void
@@ -250,7 +251,7 @@ export function carryOn(
         // was started, and an app that believes PWD over the folder it is in (OpenCode does)
         // would hold the conversation in one folder and wait for it in another, and never end.
         env: {
-          ...Object.fromEntries(Object.entries(harnessEnv()).filter(([k]) => k !== 'OLDPWD')),
+          ...Object.fromEntries(Object.entries(opts.env ?? harnessEnv()).filter(([k]) => k !== 'OLDPWD')),
           PWD: cwd,
           IT_HARNESS: marks.harness,
           IT_SESSION: marks.session,
@@ -783,7 +784,7 @@ export class Budget {
   }
 }
 
-const heldAsked = new Map<string, { at: number; held: boolean }>()
+const heldAsked = new Map<string, { at: number; held: boolean | null }>()
 /**
  * Whether some Codex on this machine has a conversation open: in its window, in an editor or
  * another app that runs Codex, or for the minute after it was closed. Such a Codex takes a
@@ -797,13 +798,13 @@ const heldAsked = new Map<string, { at: number; held: boolean }>()
  * long as the conversation is open in some Codex. A Codex that was ended without warning
  * leaves its file behind, so where the system says who has a file open, that is asked too.
  */
-export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), now = Date.now()): boolean {
+export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), now = Date.now()): boolean | null {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(thread)) return false
   const lock = path.join(codexHome, 'thread-writer-locks', `${thread}.lock`)
   // Asked for every action that waits, on every pass: what was found is good for a moment
   const asked = heldAsked.get(lock)
   if (asked && now - asked.at < 1500) return asked.held
-  const held = existsSync(lock) && openSomewhere(lock) !== false
+  const held = existsSync(lock) ? openSomewhere(lock) : false
   if (heldAsked.size > 500) heldAsked.clear()
   heldAsked.set(lock, { at: now, held })
   return held

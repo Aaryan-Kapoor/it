@@ -7,8 +7,11 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { behindMark, MARK, WHEN } from '@it/protocol'
+import { ADDON_API } from './addon-runtime'
+import { ADDONS } from './addons.generated'
 import { type Delivered, local } from './connector'
 import { handed, textOf, written } from './lib'
+import { profileOf } from './profiles'
 import { hookSeenFile } from './setup'
 
 async function stdin(): Promise<Record<string, any>> {
@@ -42,7 +45,14 @@ async function codex(): Promise<void> {
   // Codex runs the agent's own commands where It's folder cannot be written, so the `it` that
   // publishes a page there cannot note it, and a conversation whose folder is not known is
   // never reopened.
-  const from = { harness: 'codex', session, ...(typeof ev.cwd === 'string' && path.isAbsolute(ev.cwd) ? { folder: ev.cwd } : {}) }
+  const from = {
+    harness: 'codex',
+    session,
+    profile: profileOf('codex'),
+    instance: `codex-${session}`,
+    addon: { api: ADDON_API, version: ADDONS.codex!.version, delivery: true, idle: true },
+    ...(typeof ev.cwd === 'string' && path.isAbsolute(ev.cwd) ? { folder: ev.cwd } : {}),
+  }
   if (event === 'SessionStart') {
     // Said to Codex as a conversation starts, beside what it is given then: when a page is the
     // answer. Written out before the connector is told, so that a connector that is slow or

@@ -188,7 +188,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null }]
     await shown()
     // Nothing on its machine took it: nobody was listening
-    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
     await act(async () => root.unmount())
     host.remove()
     // A machine has it in hand and cannot give it to the agent yet: the agent is at work
@@ -203,6 +203,22 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { wakeFailed: null })
   })
 
+  test('a waiting page gives the loaded add-on’s repair advice instead of diagnosing a closed conversation', async () => {
+    Object.assign(PAGE, {
+      machineSeenAt: NOW,
+      agent: 'opencode',
+      addonRuntime: { state: 'active', idle: false, detail: 'Open the saved conversation and send a message to start listening.' },
+    })
+    recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null }]
+    await shown()
+    expect(said()).toBe('Sent. Open the saved conversation and send a message to start listening.')
+    expect(host.textContent).not.toContain('Wake it')
+    Object.assign(PAGE, { addonRuntime: { state: 'incompatible', detail: 'Restart the app to load its updated add-on.' } })
+    await drawnAgain()
+    expect(said()).toBe('Sent. Restart the app to load its updated add-on.')
+    Object.assign(PAGE, { addonRuntime: null, agent: 'pi' })
+  })
+
   test('what was settled is said for ten minutes and then no more, and what is still waiting is said for as long as it waits', async () => {
     Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi' })
     // Done eleven minutes ago: nothing more to say of it
@@ -214,7 +230,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     // Waiting for eleven minutes, with nobody listening: still said, since nothing has come of it
     recent = [{ at: NOW - 11 * 60_000, delivery: 'pending', outcome: null }]
     await shown()
-    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
     Object.assign(PAGE, { agent: 'claude-code' })
   })
 
@@ -223,7 +239,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { machineSeenAt: NOW - 60_000, agent: 'pi' })
     recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null }]
     await shown()
-    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
     await act(async () => root.unmount())
     host.remove()
     // Quiet for longer than three of them: a laptop whose lid was closed
@@ -382,7 +398,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     ]
     Object.assign(PAGE, { pending: 1, wake: null })
     await shown()
-    expect(said()).toBe('Sent. Claude Code is not listening: its conversation looks closed')
+    expect(said()).toBe('Sent. Claude Code is not listening. Open its conversation and check the add-on under Machines')
     await act(async () => root.unmount())
     host.remove()
     // And where what still waits is older than the last things done that the bar is told of, It’s own count says so
@@ -437,8 +453,8 @@ describe('what the page’s bar says of the last thing the person did', () => {
     host.remove()
     Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: false } })
     expect(await each()).toEqual([
-      ['Sent. Claude Code is not listening: its conversation looks closed', true],
-      ['Sent. Claude Code is not listening: its conversation looks closed', false],
+      ['Sent. Claude Code is not listening. Open its conversation and check the add-on under Machines', true],
+      ['Sent. Claude Code is not listening. Open its conversation and check the add-on under Machines', false],
     ])
     Object.assign(PAGE, { wake: null, pending: 0 })
   })
@@ -468,7 +484,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
       ]
       Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'pi', on: false } })
       await drawnAgain()
-      expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+      expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
       expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(true)
     } finally {
       Object.assign(PAGE, { agent: 'claude-code', wake: null, pending: 0 })
@@ -651,7 +667,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     // Fitting again, it is said as anything else that waits
     Object.assign(PAGE, { machinePaused: null, pending: 1 })
     await shown()
-    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
     Object.assign(PAGE, { wake: null, pending: 0, agent: 'claude-code' })
   })
 

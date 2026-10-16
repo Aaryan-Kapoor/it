@@ -15,6 +15,7 @@ import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renam
 import http from 'node:http'
 import path from 'node:path'
 import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, MARK, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
+import { AddonRuntimes } from './addon-runtime'
 import {
   DeliveryRecovery,
   eraseDeliveryRecovery,
@@ -46,7 +47,8 @@ import {
   writePrivate,
 } from './lib'
 import { incompatible } from './login'
-import { conversationFolder, noteConversation } from './publish'
+import { profileEnvironment, readProfile } from './profiles'
+import { conversationFolder, conversationProfile, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
@@ -133,7 +135,7 @@ const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads
 const WAITER_BYTES = 700_000 // and how large the clicks in one answer to a waiter may be together: `it wait` reads no more than a megabyte
 const keyOf = (harness: string, id: string) => `${harness}:${id}`
 /** Everything an add-on or a command asks the connector for. */
-const ROUTES = ['/health', '/session', '/clicks', '/waiting', '/ack', '/runs']
+const ROUTES = ['/health', '/addon', '/session', '/clicks', '/waiting', '/ack', '/runs']
 /** What was asked for, as it may be written down: one of the connector's own routes, or one fixed word for anything else. */
 const routeOf = (asked: string | undefined): string => {
   const route = (asked ?? '').split('?')[0]!
@@ -265,10 +267,9 @@ export function wayOf(of: { inT3: () => boolean; codexOpen: () => boolean; reope
 }
 
 /** Null when Codex took the message. Otherwise why it did not, for the log: never what Codex printed, which may repeat the message. */
-export function codexQueue(thread: string, text: string): Promise<string | null> {
+export function codexQueue(thread: string, text: string, env: NodeJS.ProcessEnv = harnessEnv()): Promise<string | null> {
   // A thread id is letters, digits and dashes. Anything else is not one, and is never put on a command line.
   if (!/^[A-Za-z0-9_-]{1,200}$/.test(thread)) return Promise.resolve('its conversation id is not one Codex would have made')
-  const env = harnessEnv()
   const codex = codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync)
   if (!codex) return Promise.resolve('Codex was not found')
   // No shell, ever: the text holds a page's title and what a person typed into it
@@ -417,6 +418,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // It has said, no app is taken to be connected.
   let wantedNow: string[] | null = null
   let found: HarnessStatus[] = []
+  const runtimes = new AddonRuntimes()
   // When an add-on's speaking last had the machine looked at again, and what does the looking, once the connector has begun to report
   let lookedAgainAt = 0
   let lookAgain: () => Promise<void> = async () => {}
@@ -531,7 +533,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // with no hook to say so. No Codex holds its conversation from then on, so no turn is
     // running there. Taken for running, each click of the next half hour was kept a minute
     // for a hook that could not come, while the page said the agent was busy.
-    if (key.startsWith('codex:') && !codexHeld(threadOf(key))) {
+    if (key.startsWith('codex:') && codexOpen(key) === false) {
       s.busy = false
       return false
     }
@@ -1380,16 +1382,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // A conversation that was cleared carries on under another id, and it is that one which is carried on
     const now = { harness: session.harness, id: key.slice(key.indexOf(':') + 1) }
     const cwd = conversationFolder(now) ?? conversationFolder(session)
+    if (runtimes.blocksWake(now.harness))
+      return 'an open app cannot confirm which idle conversations it holds; send a message in the conversation to start listening'
     if (!cwd) return 'the folder its conversation was held in is not known on this machine, or is gone'
     // With what the person's shell gives a program, where this is the background service: an
     // app that takes its key from there cannot be reopened without it
     await shellLearned()
-    const env = harnessEnv()
+    const env = profileEnvironment(now.harness, conversationProfile(now) ?? conversationProfile(session), harnessEnv())
+    if (typeof env === 'string') return env
     const how = carrying(now.harness, now.id, text, {
       codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync),
       itHome: home(),
       // The mode the person last had the conversation in, and where `it` is installed
-      mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd) ?? claudeModeOf(session.id, cwd)) : null,
+      mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd, env.CLAUDE_CONFIG_DIR) ?? claudeModeOf(session.id, cwd, env.CLAUDE_CONFIG_DIR)) : null,
       itAt: [
         ...new Set([path.join(home(), 'bin', process.platform === 'win32' ? 'it.exe' : 'it'), process.execPath].filter((p) => /[\\/]it(\.exe)?$/.test(p))),
       ],
@@ -1437,7 +1442,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // And the person opening the conversation themselves: its own add-on is asking by now,
       // and is given the click in the open app, where another turn begun beside it would cross it
       const open = sessions.get(key)
-      if (closing || unfitting || lostBefore.delete(key) || !wanted() || (open !== undefined && Date.now() - open.seen < LIVE_MS)) {
+      if (
+        closing ||
+        unfitting ||
+        runtimes.blocksWake(now.harness) ||
+        lostBefore.delete(key) ||
+        !wanted() ||
+        (open !== undefined && Date.now() - open.seen < LIVE_MS)
+      ) {
         ended = NOT_STARTED
         return ended
       }
@@ -1447,6 +1459,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         cwd,
         { harness: now.harness, session: now.id, run: runId },
         {
+          env,
           signal: stop.signal,
           // Ended without the system saying what of it was left: it stays noted, and is looked at again before its conversation is next reopened
           unsure: () => {
@@ -1559,7 +1572,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const atWork = (session: { harness: string; id: string }, now: number) => {
     if (session.harness !== 'claude-code') return false
     const cwd = conversationFolder(session)
-    const wrote = cwd ? claudeWroteAt(session.id, cwd) : null
+    const env = profileEnvironment(session.harness, conversationProfile(session), harnessEnv())
+    const wrote = cwd && typeof env !== 'string' ? claudeWroteAt(session.id, cwd, env.CLAUDE_CONFIG_DIR) : null
     if (wrote === null || now - wrote >= CLAUDE_QUIET_MS) return false
     // What this machine's own reopening of it wrote is not somebody at work in it
     const ours = ranUntil.get(follow(keyOf(session.harness, session.id)))
@@ -1567,6 +1581,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** The id Codex knows a conversation by now: the one it carries on under, if it was cleared. */
   const threadOf = (key: string) => key.slice(key.indexOf(':') + 1)
+  const codexOpen = (key: string) => {
+    const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: threadOf(key) }), harnessEnv())
+    return typeof env === 'string' ? null : codexHeld(threadOf(key), env.CODEX_HOME)
+  }
   async function queueNow(click: Offered, reopening: boolean, t3?: { server: T3; thread: string }): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
     const receiptSlots: string[] = []
@@ -1610,7 +1628,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if ((reopening && !wakes(harness, click.at)) || (starting && !room(key, someoneThere(click)))) return
       // Codex's queue is for a conversation some Codex has open. One that was closed while this
       // click stood in line is not given it: the click is looked at afresh on the next pass.
-      if (!reopening && !t3 && !codexHeld(threadOf(key))) return
+      if (!reopening && !t3 && codexOpen(key) !== true) return
       // Only if it is still for this conversation on this machine: the page may have changed
       // hands while the click stood in line here
       // The hold is counted from before it was asked for: It starts counting when it gives it,
@@ -1783,7 +1801,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
       // hook of It's hands the agent the rest, and otherwise one short line for each click
       const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
-      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexQueue(threadOf(follow(key)), text))
+      const put = (text: string) => {
+        if (t3) return t3Send(t3.server, t3.thread, text)
+        const thread = threadOf(follow(key))
+        const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: thread }), harnessEnv())
+        return typeof env === 'string' ? Promise.resolve(env) : codexQueue(thread, text, env)
+      }
       if (!reopening && turnRunning(follow(key), Date.now())) {
         await recovery.keepWaiters([click, ...withIt], follow(key))
       }
@@ -2245,8 +2268,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
           ? undefined
           : wayOf({
               inT3: heldInT3,
-              codexOpen: () => codex && connected('codex') && !reopenedNow.has(key) && codexHeld(threadOf(key)),
-              reopens: () => wakes(session.harness, click.at) && connected(session.harness),
+              codexOpen: () => codex && connected('codex') && !reopenedNow.has(key) && codexOpen(key) === true,
+              reopens: () =>
+                wakes(session.harness, click.at) && connected(session.harness) && (!codex || codexOpen(key) === false) && !runtimes.blocksWake(session.harness),
             })
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
@@ -2342,6 +2366,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         200,
         {
           ok: true,
+          addons: Object.fromEntries(found.map((h) => [h.id, runtimes.status(h.id)])),
           ...(unfitting && unfitting !== NOT_ASKED ? { unfit: `${unfitting.message} ${unfitting.hint ?? ''}`.trim() } : {}),
           ...(unfitting === NOT_ASKED ? { unchecked: true } : {}),
           ...(unread || unsettled.size ? { heldRuns: (unread ? 1 : 0) + unsettled.size } : {}),
@@ -2383,6 +2408,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       const due = (recovery.marks.get(key) ?? []).filter((m) => body.own !== true || Date.now() - m.at > MARK_ASKED_MS)
       return [200, { ok: true, marks: due.map((m) => m.id), texts: due.flatMap((m) => m.texts) }]
     }
+    if (req.method === 'POST' && url.pathname === '/addon') {
+      const runtime = runtimes.hear(harness, body.instance, body.addon)
+      return runtime ? [200, { ok: runtime.state === 'active', api: 1, runtime }] : [400, { error: 'invalid add-on report' }]
+    }
     if (url.pathname === '/session' || url.pathname === '/clicks') {
       if (!harness || !id) return [400, { error: 'say which harness and session' }]
       // An add-on in an app that is not connected (one the person has disconnected, still
@@ -2395,35 +2424,26 @@ async function connecting(say: (line: string) => void): Promise<void> {
           )
         return [200, url.pathname === '/session' ? { ok: true } : { clicks: [] }]
       }
+      const runtime = body.addon === undefined ? undefined : runtimes.hear(harness, body.instance, body.addon)
+      const blocked = body.addon !== undefined && runtime?.state !== 'active'
+      // The session metadata still uses this API when only the loaded build is stale.
+      if (blocked && (!runtime || body.addon.api !== 1)) return [200, { ok: false, clicks: [], runtime }]
       const key = keyOf(harness, id)
       // An add-on that can see which folder its conversation is held in says so, and it is noted
       // here: where the app runs the agent's commands with It's folder shut to them (Codex does),
       // the `it` that publishes a page cannot note it itself, and without it the conversation
       // could never be reopened.
-      if (typeof body.folder === 'string' && body.folder.length <= 4096 && path.isAbsolute(body.folder)) void noteConversation({ harness, id }, body.folder)
-      // An add-on that speaks is one its app lets run. Where the last look found it waiting for
-      // the person's yes, as Codex has an add-on's hooks wait, that has been given since: the
-      // machine is looked at again now, and not at the next half hour, until when `it status`
-      // would go on saying that something is left for the person to do. Not more often than
-      // every quarter of a minute, since a look runs every app's own command.
-      if (found.some((h) => h.id === harness && h.addon === 'needs_approval') && Date.now() - lookedAgainAt > 15_000) {
-        lookedAgainAt = Date.now()
-        void lookAgain()
+      const previous = typeof body.was === 'string' && body.was && body.was !== id && body.was.length <= 200 ? { harness, id: body.was } : undefined
+      const profile =
+        readProfile(harness, body.profile) ??
+        readProfile(harness, conversationProfile({ harness, id })) ??
+        (previous ? readProfile(harness, conversationProfile(previous)) : undefined)
+      if (typeof body.folder === 'string' && body.folder.length <= 4096 && path.isAbsolute(body.folder))
+        void noteConversation({ harness, id }, body.folder, profile ?? null)
+      else if (previous && !conversationProfile({ harness, id })) {
+        const folder = conversationFolder(previous)
+        if (folder && profile) void noteConversation({ harness, id }, folder, profile)
       }
-      const s = sessions.get(key) ?? { seen: 0, busy: false, busyAt: 0 }
-      const isNew = Date.now() - s.seen > KNOWN_MS
-      s.seen = Date.now()
-      if (typeof body.busy === 'boolean') {
-        s.busy = body.busy
-        s.busyAt = Date.now()
-        // A turn has begun in a conversation that It is not reopening: the person is in it
-        // themselves, and what they stopped is no longer its last turn. The note of the stop
-        // is let go, where it would otherwise be told to the agent at some later reopening,
-        // of a turn that by then was long over.
-        if (body.busy && !reopenedNow.has(follow(key)) && [key, follow(key)].map((k) => stoppedByPerson.delete(k)).some(Boolean)) keepStopped()
-      }
-      sessions.set(key, s)
-      if (isNew && (harness === 'codex' || harness === 'claude-code')) noteHeard(key)
       let changed = false
       // A conversation that is here under its own id is not somewhere else under another
       if (aliases.delete(key)) changed = true
@@ -2450,6 +2470,33 @@ async function connecting(say: (line: string) => void): Promise<void> {
           url.pathname === '/session' && typeof body.busy === 'boolean',
         )
       if (changed && !over) writePrivate(aliasFile(), Object.fromEntries(aliases))
+      if (blocked) {
+        if (changed) watch()
+        return [200, { ok: false, clicks: [], runtime }]
+      }
+      // An add-on that speaks is one its app lets run. Where the last look found it waiting for
+      // the person's yes, as Codex has an add-on's hooks wait, that has been given since: the
+      // machine is looked at again now, and not at the next half hour, until when `it status`
+      // would go on saying that something is left for the person to do. Not more often than
+      // every quarter of a minute, since a look runs every app's own command.
+      if (found.some((h) => h.id === harness && h.addon === 'needs_approval') && Date.now() - lookedAgainAt > 15_000) {
+        lookedAgainAt = Date.now()
+        void lookAgain()
+      }
+      const s = sessions.get(key) ?? { seen: 0, busy: false, busyAt: 0 }
+      const isNew = Date.now() - s.seen > KNOWN_MS
+      s.seen = Date.now()
+      if (typeof body.busy === 'boolean') {
+        s.busy = body.busy
+        s.busyAt = Date.now()
+        // A turn has begun in a conversation that It is not reopening: the person is in it
+        // themselves, and what they stopped is no longer its last turn. The note of the stop
+        // is let go, where it would otherwise be told to the agent at some later reopening,
+        // of a turn that by then was long over.
+        if (body.busy && !reopenedNow.has(follow(key)) && [key, follow(key)].map((k) => stoppedByPerson.delete(k)).some(Boolean)) keepStopped()
+      }
+      sessions.set(key, s)
+      if (isNew && (harness === 'codex' || harness === 'claude-code')) noteHeard(key)
       // The harness as It knows it, and never as whoever asked spelled it
       if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
       if (changed && typeof body.was === 'string') say(`${a(agentOf(harness))} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
@@ -2979,7 +3026,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     // With the newest version this machine has learned of, where it looks for one and the It it
     // reports to takes that: one that is older than this program does not, and is told the rest
-    const told = { connectorVersion: VERSION, harnesses: found }
+    const told = { connectorVersion: VERSION, harnesses: found.map((h) => ({ ...h, runtime: runtimes.status(h.id) })) }
+    const legacy = { connectorVersion: VERSION, harnesses: found }
     // And with the system it runs on, which an It of the same age takes too
     const fuller = Date.now() >= plainUntil
     await call(
@@ -2993,12 +3041,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
             paused: unfitting ? (unfitting === NOT_ASKED ? 'unchecked' : 'unfit') : '',
             ...(latestKnown !== undefined ? { latest: latestKnown } : {}),
           }
-        : told,
+        : legacy,
     )
       .catch(async (err) => {
         if (fuller && (err as { code?: string }).code !== 'unauthenticated') {
           plainUntil = Date.now() + 10 * 60_000
-          await call('mutation', api.machines.report, told)
+          await call('mutation', api.machines.report, legacy)
           return
         }
         throw err

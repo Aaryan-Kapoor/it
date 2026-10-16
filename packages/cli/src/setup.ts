@@ -29,6 +29,7 @@ import {
 import os from 'node:os'
 import path from 'node:path'
 import { CODEX_MIN_VERSION, HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
+import type { AddonRuntime } from './addon-runtime'
 import { ADDONS, LICENSE } from './addons.generated'
 import { codexConfig } from './codex-settings'
 import { harnessEnv, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
@@ -41,6 +42,7 @@ export interface HarnessStatus {
   version?: string
   addon: AddonState
   detail?: string
+  runtime?: AddonRuntime
 }
 
 interface Known {

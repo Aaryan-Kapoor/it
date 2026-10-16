@@ -4,7 +4,8 @@ import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
+import { profileOf } from './src/profiles'
+import { conversationFolder, conversationProfile, conversationsFile, noteConversation } from './src/publish'
 
 let scratch: string
 let before: string | undefined
@@ -62,6 +63,29 @@ describe('the conversation folders It remembers', () => {
     }
   })
 
+  test('keeps a changed profile at the same folder after yielding for the conversation lock', async () => {
+    const session = { harness: 'codex', id: 'profile-changed' }
+    const first = profileOf('codex', { CODEX_HOME: path.join(scratch, 'first') })!
+    const second = profileOf('codex', { CODEX_HOME: path.join(scratch, 'second') })!
+    await noteConversation(session, scratch, first)
+    const lock = `${conversationsFile()}.lock`
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, holder: 'a'.repeat(16) }))
+    const wait = vi.spyOn(Atomics, 'wait').mockImplementation(() => {
+      throw new Error('the event loop must not wait')
+    })
+    const noted = noteConversation(session, scratch, second)
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(wait).not.toHaveBeenCalled()
+    expect(conversationProfile(session)).toEqual(first)
+    rmSync(lock)
+    await noted
+    expect(conversationProfile(session)).toEqual(second)
+    // An older hook sends no profile. Its folder report keeps the last recorded one.
+    await noteConversation(session, path.join(scratch, 'moved'), null)
+    expect(conversationProfile(session)).toEqual(second)
+    expect(JSON.parse(readFileSync(conversationsFile(), 'utf8'))['codex:profile-changed'].cwd).toBe(path.join(scratch, 'moved'))
+  })
+
   test('lets the event loop run while another writer holds the lock and keeps both notes when it is released', async () => {
     const lock = `${conversationsFile()}.lock`
     writeFileSync(lock, JSON.stringify({ pid: process.pid, holder: 'a'.repeat(16) }))
@@ -84,7 +108,7 @@ describe('the conversation folders It remembers', () => {
     const lock = `${conversationsFile()}.lock`
     writeFileSync(lock, JSON.stringify({ pid: process.pid, holder: 'a'.repeat(16) }))
     const noted = noteConversation({ harness: 'codex', id: 'waiting' }, scratch)
-    const record = JSON.stringify({ 'codex:waiting': { cwd: scratch, at: 1 } })
+    const record = JSON.stringify({ 'codex:waiting': { cwd: scratch, at: 1, profile: profileOf('codex') } })
     writeFileSync(conversationsFile(), record)
     rmSync(lock)
     const flush = vi.spyOn(fs, 'fsyncSync')

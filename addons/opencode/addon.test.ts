@@ -115,6 +115,7 @@ async function fakeConnector(listenOn: string | number) {
     /** When above zero, each click offered is padded with this many characters, to make an answer longer than any real one. */
     padding: 0,
     asked: [] as Asked[],
+    runtimes: [] as any[],
     acked: [] as string[],
   }
   const server = http.createServer(async (req, res) => {
@@ -122,14 +123,16 @@ async function fakeConnector(listenOn: string | number) {
     for await (const chunk of req) text += chunk
     const url = new URL(req.url ?? '/', 'http://local')
     const body = text ? JSON.parse(text) : undefined
-    state.asked.push({
-      method: req.method ?? '',
-      path: url.pathname,
-      harness: url.searchParams.get('harness'),
-      session: url.searchParams.get('session'),
-      token: req.headers['x-it-token'] as string | undefined,
-      body,
-    })
+    if (url.pathname === '/addon') state.runtimes.push(body)
+    if (url.pathname !== '/addon')
+      state.asked.push({
+        method: req.method ?? '',
+        path: url.pathname,
+        harness: url.searchParams.get('harness'),
+        session: url.searchParams.get('session'),
+        token: req.headers['x-it-token'] as string | undefined,
+        body,
+      })
     // Over a socket the token is shown. Over a port it is not: the request carries a code made
     // from it, and so does the answer, as the real connector's do.
     const overPort = typeof listenOn !== 'string'
@@ -144,7 +147,7 @@ async function fakeConnector(listenOn: string | number) {
       ? req.headers['x-it-mac'] === sealed(`${req.method}\n${req.url}\n${text}`) && req.headers['x-it-token'] === undefined
       : req.headers['x-it-token'] === state.token
     if (!known) return answer(401, { error: 'not for you' })
-    if (req.method === 'GET' && url.pathname === '/clicks') {
+    if (url.pathname === '/clicks') {
       return answer(200, { clicks: state.padding ? state.offered.map((c) => ({ ...c, title: 'x'.repeat(state.padding) })) : state.offered })
     }
     if (req.method === 'POST' && url.pathname === '/ack') {
@@ -152,6 +155,7 @@ async function fakeConnector(listenOn: string | number) {
       if (!state.deaf) state.offered = state.offered.filter((c) => !body.ids.includes(c.id))
       return answer(200, { ok: true, acked: body.ids.length })
     }
+    if (req.method === 'POST' && url.pathname === '/addon') return answer(200, { ok: true })
     if (req.method === 'POST' && url.pathname === '/session') return answer(200, { ok: true })
     return answer(404, { error: 'no such thing' })
   })
@@ -396,7 +400,9 @@ describe('the OpenCode add-on', () => {
     // What the subagent itself is sent says nothing about the agent the conversation is in
     await says(hooks, 'ses_grandchild', { agent: 'explore' })
     await seconds(2)
-    expect(outside.put).toBe(0)
+    expect(outside.put).toBe(2)
+    expect(c.state.runtimes).toHaveLength(2)
+    expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { api: 1, delivery: true, idle: false } })
     expect(c.state.asked).toEqual([])
     await says(hooks, 'ses_parent')
     await settled()
@@ -432,7 +438,9 @@ describe('the OpenCode add-on', () => {
     expect(await command(hooks, 'ses_child')).toEqual({})
     await says(hooks, 'ses_child')
     await seconds(2)
-    expect(outside.put).toBe(0)
+    expect(outside.put).toBe(2)
+    expect(c.state.runtimes).toHaveLength(2)
+    expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { api: 1, delivery: true, idle: false } })
     expect(c.state.asked).toEqual([])
     expect(prompts).toEqual([])
     // The failure is not remembered: the next command is looked up afresh
@@ -463,7 +471,7 @@ describe('the OpenCode add-on', () => {
     expect(c.polls().length).toBe(2)
     await seconds(3)
     expect(c.polls().length).toBe(5)
-    for (const a of c.polls()) expect(a).toMatchObject({ method: 'GET', harness: 'opencode', session: 'ses_one', token: TOKEN })
+    for (const a of c.polls()) expect(a).toMatchObject({ method: 'POST', harness: 'opencode', session: 'ses_one', token: TOKEN })
   })
 
   it('starts asking when a message reaches a conversation, before any command has run', async () => {
@@ -638,9 +646,12 @@ describe('the OpenCode add-on', () => {
     expect(c.polls().length).toBe(asksBefore)
     await seconds(1)
     expect(state.tried).toBe(4)
+    c.state.runtimes.length = 0
     vi.setSystemTime(Date.now() + 178_000)
     await seconds(1)
     expect(state.tried).toBe(4)
+    expect(c.polls().length).toBe(asksBefore + 1)
+    expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { delivery: true, idle: false } })
     await seconds(1)
     expect(state.tried).toBe(5)
     expect(c.state.acked).toEqual([])
@@ -726,7 +737,9 @@ describe('the OpenCode add-on', () => {
     await says(hooks, 'ses_child', { agent: 'explore' })
     await seconds(2)
     // Nothing is asked either, so the connector does not set the click aside where nothing else could have it
-    expect(outside.put).toBe(0)
+    expect(outside.put).toBe(2)
+    expect(c.state.runtimes).toHaveLength(2)
+    expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { api: 1, delivery: true, idle: false } })
     expect(c.state.asked).toEqual([])
     expect(prompts).toEqual([])
     await says(hooks, 'ses_one', { agent: 'plan' })
@@ -960,6 +973,16 @@ describe('the OpenCode add-on', () => {
     })
   })
 
+  it('reports a missing host API while no conversation is selected', async () => {
+    standIn()
+    const c = await connector()
+    const hooks = await addon.ItBridge({ client: { session: {} } } as any)
+    loaded.push(hooks)
+    await seconds(2)
+    expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { api: 1, delivery: false, idle: false } })
+    expect(c.polls()).toEqual([])
+  })
+
   it('throws nothing when OpenCode itself cannot be asked about a conversation', async () => {
     standIn()
     const hooks = await addon.ItBridge({
@@ -982,7 +1005,9 @@ describe('the OpenCode add-on', () => {
     await hooks['chat.message']({ sessionID: 'ses_one' }, { message: { agent: 'build' }, parts: [] } as any)
     await seconds(2)
     // And nothing is asked about it, so the connector sets no click aside for it
-    expect(outside.put).toBe(0)
+    expect(outside.put).toBe(2)
+    expect(c.state.runtimes).toHaveLength(2)
+    expect(c.state.runtimes[0]).toMatchObject({ harness: 'opencode', addon: { api: 1, delivery: true, idle: false } })
     expect(c.state.asked).toEqual([])
     expect(rejections).toEqual([])
   })

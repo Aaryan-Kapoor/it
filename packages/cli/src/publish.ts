@@ -7,6 +7,7 @@ import path from 'node:path'
 import { type FileEntry, isSafePath, LIMITS, NOUN, PUBLICATION, uploadBudgetMs } from '@it/protocol'
 import { claimLock } from './legacy-lock'
 import { api, call, direct, doorRefusal, inHome, machine, Problem, readJson, sessionAsked, sessionNote, throughDoor, writePrivate } from './lib'
+import { type Profile, profileOf } from './profiles'
 import { aloneAt } from './serve/backend'
 import { makeOnce } from './serve/config'
 import { agentOf, filesBand, record, sizeBand } from './usage'
@@ -177,12 +178,18 @@ const CONVERSATIONS = 300
  * has been closed is reopened from the folder it was held in, and only this machine knows which
  * that was. The note is kept here and sent nowhere.
  */
-export async function noteConversation(session: { harness: string; id: string }, cwd = process.cwd()): Promise<void> {
+export async function noteConversation(
+  session: { harness: string; id: string },
+  cwd = process.cwd(),
+  profile: Profile | null | undefined = profileOf(session.harness),
+): Promise<void> {
   try {
     const key = `${session.harness}:${session.id}`
-    const read = () => readJson<Record<string, { cwd: string; at: number }>>(conversationsFile()) ?? {}
+    type Note = { cwd: string; at: number; profile?: Profile }
+    const read = () => readJson<Record<string, Note>>(conversationsFile()) ?? {}
+    const unchanged = (noted: Note | undefined) => noted?.cwd === cwd && JSON.stringify(noted?.profile) === JSON.stringify(profile ?? noted?.profile)
     // Hooks report the folder on every event. An unchanged note needs no lock or disk flush.
-    if (read()[key]?.cwd === cwd) return
+    if (unchanged(read()[key])) return
     // Preserve the command's three-second chance to keep its note under contention, but
     // yield between attempts so hooks never stop the connector from answering other work.
     const until = performance.now() + 3000
@@ -192,8 +199,9 @@ export async function noteConversation(session: { harness: string; id: string },
         try {
           // Another writer may have changed the notes before this command took the lock.
           const kept = read()
-          if (kept[key]?.cwd === cwd) return
-          kept[key] = { cwd, at: Date.now() }
+          if (unchanged(kept[key])) return
+          const selected = profile ?? kept[key]?.profile
+          kept[key] = { cwd, at: Date.now(), ...(selected ? { profile: selected } : {}) }
           const newest = Object.entries(kept)
             .filter(([, noted]) => typeof noted?.cwd === 'string' && typeof noted.at === 'number')
             .sort((a, b) => b[1].at - a[1].at)
@@ -206,12 +214,17 @@ export async function noteConversation(session: { harness: string; id: string },
       }
       // A short jitter keeps commands that started together from retrying together.
       await sleep(5 + Math.random() * 20)
-      if (read()[key]?.cwd === cwd) return
+      if (unchanged(read()[key])) return
     }
   } catch {
     // A note that cannot be kept keeps nothing from being published
   }
 }
+/** The recorded profile stays local, alongside the working folder. */
+export function conversationProfile(session: { harness: string; id: string }): unknown {
+  return readJson<Record<string, { profile?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]?.profile
+}
+
 /** The folder a conversation was last known to be working in, if it is still there. */
 export function conversationFolder(session: { harness: string; id: string }): string | undefined {
   const cwd = readJson<Record<string, { cwd?: unknown }>>(conversationsFile())?.[`${session.harness}:${session.id}`]?.cwd

@@ -224,6 +224,30 @@ describe('the Claude Code add-on', () => {
     expect(describeClick({ ...fault, payload: null })).toContain('an error it gave no words for')
   })
 
+  test('keeps reporting when the submission API was missing as the session started', async () => {
+    vi.resetModules()
+    const { register } = await import('./it-bridge/hooks/register.js')
+    const host = fakeHost()
+    delete (host.$.prompt as { submit?: unknown }).submit
+    register(host.on)
+    await host.fire('session.start')
+    await host.tick()
+    await host.tick()
+    expect(asked.filter((a) => a.path === '/addon')).toHaveLength(3)
+    expect(host.submits).toEqual([])
+    expect(acks()).toEqual([])
+  })
+
+  test('reports a missing submission API without taking a click', async () => {
+    const host = await start()
+    delete (host.$.prompt as { submit?: unknown }).submit
+    offered = [{ id: 'click-missing', text: 'A click' }]
+    await host.tick()
+    expect(asked.find((a) => a.path === '/addon')?.body).toMatchObject({ harness: 'claude-code', addon: { api: 1, delivery: false } })
+    expect(host.submits).toEqual([])
+    expect(acks()).toEqual([])
+  })
+
   test('an idle conversation is given a click as a turn, in the connector’s own words, and only then is it reported', async () => {
     const host = await start()
     // The words an agent is given for a click, as the connector makes them
@@ -476,7 +500,7 @@ describe('the Claude Code add-on', () => {
     await host.fire('session.end', { reason: 'clear', sessionId: 'session-1' })
     host.state.session = 'session-2'
     await host.tick()
-    expect(asked.find((a) => a.path === '/session')?.body).toEqual({ harness: 'claude-code', session: 'session-2', was: 'session-1' })
+    expect(asked.find((a) => a.path === '/session')?.body).toMatchObject({ harness: 'claude-code', session: 'session-2', was: 'session-1' })
     expect(host.env.IT_SESSION).toBe('session-2')
     expect(asked.at(-1)!.path).toBe('/clicks?harness=claude-code&session=session-2')
   })

@@ -183,6 +183,18 @@ class Connector:
                     outer.refused += 1
                     return self.answer(401, {"error": "not for you"})
                 body = json.loads(sent or b"{}")
+                if self.path.startswith("/clicks?"):
+                    url = urlsplit(self.path)
+                    query = parse_qs(url.query)
+                    harness, session = query.get("harness", [""])[0], query.get("session", [""])[0]
+                    outer.log.append(("clicks", harness, session))
+                    if outer.asking:
+                        outer.asking(session)
+                    offered = list(outer.offers.get(session, []))
+                    return self.answer(200, {"clicks": [{**c, "title": "x" * outer.padding} for c in offered] if outer.padding else offered})
+                if self.path == "/addon":
+                    outer.runtime = body
+                    return self.answer(200, {"ok": True})
                 if self.path == "/ack":
                     outer.log.append(("ack", tuple(body["ids"])))
                     for session in outer.offers:
@@ -388,6 +400,20 @@ class Case(unittest.TestCase):
 
 
 class InTheTerminal(Case):
+    def test_an_idle_loaded_host_reports_the_missing_discovery_hook_without_guessing_a_session(self):
+        self.terminal()
+        self.assertTrue(until(lambda: hasattr(self.connector, "runtime")))
+        self.assertEqual(self.connector.runtime["harness"], "hermes")
+        self.assertEqual(self.connector.runtime["addon"]["api"], 1)
+        self.assertFalse(self.connector.runtime["addon"]["idle"])
+        self.assertEqual(self.connector.asked(), [])
+
+    def test_a_missing_message_api_is_reported_without_taking_clicks(self):
+        hermes = self.terminal()
+        hermes.inject_message = None
+        self.assertTrue(until(lambda: hasattr(self.connector, "runtime") and not self.connector.runtime["addon"]["delivery"]))
+        self.assertEqual(self.connector.asked(), [])
+
     def test_it_asks_for_the_conversation_its_shell_commands_report(self):
         hermes = self.terminal()
         self.assertEqual(self.connector.log, [], "nothing is asked before a conversation has a turn")
