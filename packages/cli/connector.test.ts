@@ -109,7 +109,7 @@ vi.mock('./src/lib', async (original) => {
       if (path.basename(args[0]) === 'runs.json') stand.savedRuns.push(JSON.parse(JSON.stringify(args[1])))
     },
     writePrivateAsync: (...args: Parameters<typeof real.writePrivateAsync>) => {
-      const saving = real.writePrivateAsync(...args)
+      const saving = stand.failedWrites.has(path.basename(args[0])) ? Promise.reject(new Error('disk full')) : real.writePrivateAsync(...args)
       stand.saving.add(saving)
       void saving.finally(() => stand.saving.delete(saving)).catch(() => {})
       return saving
@@ -1900,6 +1900,79 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await takenByTheQueue(6)
     expect(called('delivery:handedOff')).toEqual(['click-6'])
     expect(said.filter((line) => line.includes('recovery record could not be read'))).toHaveLength(1)
+  })
+
+  test('a failed waiter cleanup save does not prevent connector startup or its next answer', async () => {
+    standIn()
+    stand.failedWrites.add('delivery-recovery.json')
+    await start('socket', {}, (folder) => {
+      const expired = { ...click(6), at: Date.now() - WAKE_BACK_MS }
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({
+          version: 1,
+          waiters: [[expired.id, { click: expired, key: 'codex:thread-6' }]],
+          marks: [],
+          accepted: [],
+          returning: [],
+        }),
+      )
+    })
+    await pass(2)
+    expect(await local('/waiting', { method: 'POST', body: { id: 'finished', done: true } })).toEqual({ ok: true })
+    expect(said.filter((line) => line.includes('could not save waiter cleanup'))).toHaveLength(1)
+    stand.failedWrites.clear()
+    await pass()
+    expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+  })
+
+  test('a failed waiter cleanup save leaves lease renewal and confirmation running', async () => {
+    standIn()
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      await start()
+      stand.answer = (name) => {
+        if (name === 'delivery:handedOff') throw new Error('offline')
+      }
+      await turn(7, true)
+      await takenByTheQueue(7)
+      await turn(6, true)
+      offered({ ...click(6), at: now })
+      await until(async () => (await local<{ held: number }>('/health'))?.held === 1)
+      offered()
+      await pass()
+      stand.calls.length = 0
+      stand.answer = null
+      stand.closed.add('thread-7')
+      stand.failedWrites.add('delivery-recovery.json')
+      now += 11_000
+      await pass(2)
+      expect(called('delivery:renew')).toContain('click-6')
+      expect(called('delivery:handedOff')).toContain('click-7')
+      expect(said.filter((line) => line.includes('could not save waiter cleanup'))).toHaveLength(1)
+      stand.failedWrites.clear()
+      await pass()
+      expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+    } finally {
+      stand.failedWrites.clear()
+      clock.mockRestore()
+    }
+  })
+
+  test('a failed save of a printed waiter receipt still answers and retries its cleanup', async () => {
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    stand.failedWrites.add('delivery-recovery.json')
+    const done = () => local('/waiting', { method: 'POST', body: { id: 'waiter-6', got: ['click-6'], done: true } })
+    expect(await done()).toEqual({ ok: true })
+    expect(await done()).toEqual({ ok: true })
+    expect(said.filter((line) => line.includes('could not save waiter cleanup'))).toHaveLength(1)
+    stand.failedWrites.clear()
+    expect(await done()).toEqual({ ok: true })
+    expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
   })
 
   test('closing Codex without an ending hook removes copies made for its running turn', async () => {

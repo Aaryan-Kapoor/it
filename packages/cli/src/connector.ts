@@ -507,7 +507,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * message that stands behind it.
    */
   const recovery = new DeliveryRecovery(say)
-  await recovery.pruneWaiters()
+  // Removing old copies is bookkeeping, so a failed save must not prevent delivery.
+  // The unchanged saved record remains available for the next cleanup to retry.
+  const cleanupFailed = (err: unknown) => seldom('waiter-cleanup', `could not save waiter cleanup (${why(err)}); trying again`)
+  await recovery.pruneWaiters().catch(cleanupFailed)
   for (const id of recovery.accepted) toConfirm.set(id, 'queue')
   /**
    * For how long a click given to one waiter is not given to another. The first is printing it
@@ -2074,7 +2077,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Discovery outlives the click that started it, including a completed fallback delivery.
       for (const [key, session] of t3Pending) if (connected(session.harness)) t3For(key, session)
       await retireLostClaims()
-      await recovery.pruneWaiters(Date.now(), (key, restored) => (!restored || sessions.has(follow(key))) && !turnRunning(follow(key), Date.now()))
+      await recovery
+        .pruneWaiters(Date.now(), (key, restored) => (!restored || sessions.has(follow(key))) && !turnRunning(follow(key), Date.now()))
+        .catch(cleanupFailed)
       if (givingBack === 'due') {
         const asked = await recoverBatch()
         if (asked === null) {
@@ -2342,7 +2347,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // Route 4: nothing to do. The click stays waiting and the site shows it.
       }
     } catch (err) {
-      if (!closing) say(`delivery: ${why(err)}`)
+      if (!closing) seldom('delivery', `delivery: ${why(err)}`)
     } finally {
       routing = false
     }
@@ -2614,12 +2619,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     if (req.method === 'POST' && url.pathname === '/waiting') {
       if (recovery.erased) return [200, { ok: true, clicks: [] }]
-      await recovery.pruneWaiters(Date.now(), (key, restored) => (!restored || sessions.has(follow(key))) && !turnRunning(follow(key), Date.now()))
+      await recovery
+        .pruneWaiters(Date.now(), (key, restored) => (!restored || sessions.has(follow(key))) && !turnRunning(follow(key), Date.now()))
+        .catch(cleanupFailed)
       const who = String(body.id ?? '')
       if (!who) return [400, { error: 'say who is waiting' }]
       // What the waiter says it has printed, of what was kept for a turn that waits, is let go of
       const got: string[] = Array.isArray(body.got) ? body.got.slice(0, 1000).filter((id: unknown): id is string => typeof id === 'string') : []
-      await recovery.printed(who, got)
+      await recovery.printed(who, got).catch(cleanupFailed)
       for (const id of got) {
         const sent = submitting.get(id)
         if (sent?.given?.who === who) sent.printed = true
