@@ -585,6 +585,8 @@ describe('turning it off', () => {
   })
   test('turned off and on again between two passes, nothing recorded before is sent, under the old id or the new', async () => {
     told()
+    // Test the identity change without disk speed expiring the send decision.
+    vi.useFakeTimers({ toFake: ['performance'] })
     const before = kept().installation!
     const stale = { ...aLine(), id: randomUUID() }
     // Some left by commands, and some the connector recorded itself
@@ -619,6 +621,8 @@ describe('turning it off', () => {
   })
   test('given a new id while a send is on its way, the send is given up and what it carried is never tried again', async () => {
     told()
+    // The send must begin before the identity changes, regardless of disk speed.
+    vi.useFakeTimers({ toFake: ['performance'] })
     let given: AbortSignal | undefined
     const posts: string[] = []
     let now = 0
@@ -1356,6 +1360,8 @@ await sendNow('installation.removed', { age: 'under 1 day' })
 
   test.each([false, true])('concurrent senders recover a dead owner with a dead earlier claimant: %s', async (claimed) => {
     told()
+    // Test claim recovery without disk speed expiring the send decision.
+    vi.useFakeTimers({ toFake: ['performance'] })
     const deciding = path.join(home, 'telemetry-sending')
     const pid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }))
     const left = { pid, holder: randomUUID() }
@@ -1648,6 +1654,8 @@ await sendNow('installation.removed', { age: 'under 1 day' })
 describe('sending', () => {
   test('a command that exits leaves a line, and the connector sends it with what it recorded itself', async () => {
     told()
+    // Batch age follows the supplied clock; disk speed must not expire the send decision.
+    vi.useFakeTimers({ toFake: ['performance'] })
     published()
     expect(lines()).toHaveLength(1)
     const posts: string[] = []
