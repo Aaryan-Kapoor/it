@@ -2469,6 +2469,51 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     }
   })
 
+  test('a long discovery backoff does not delay another conversation’s shorter routing timer', async () => {
+    standIn(true)
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    let now = Date.now()
+    let elapsed = 0
+    const wall = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const advance = async (ms: number) => {
+      now += ms
+      elapsed += ms
+      await vi.advanceTimersByTimeAsync(ms)
+      await settled()
+    }
+    try {
+      offered(click(3))
+      await until(() => stand.t3.asked.length === 1)
+      offered()
+      await settled()
+      for (const delay of [300, 600, 1200, 2400, 4800, 9600, 19_200, 38_400]) {
+        const asked = stand.t3.asked.length
+        stand.t3.asked.at(-1)!.answer(undefined, false)
+        await settled()
+        await advance(delay + 10)
+        expect(stand.t3.asked).toHaveLength(asked + 1)
+      }
+      // Move just past a heartbeat, so the new click's settle pass must run before the next
+      // one-second fallback. The stalled search now asks for another pass a minute away.
+      await advance(1000 - (elapsed % 1000))
+      stand.t3.asked.at(-1)!.answer(undefined, false)
+      await settled()
+      offered({ ...click(4), at: now })
+      await until(() => stand.t3.asked.at(-1)?.ids.includes('thread-4') === true)
+      stand.t3.asked.at(-1)!.answer('t3-thread-d')
+      await settled()
+      await advance(10)
+      expect(stand.t3.sent).toEqual([])
+      await advance(300)
+      expect(stand.t3.sent).toHaveLength(1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-d')
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
   test('another incomplete batch does not restart the delivery wait', async () => {
     withT3Code()
     stand.t3.slow = true

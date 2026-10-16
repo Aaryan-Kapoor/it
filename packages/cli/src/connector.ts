@@ -1764,8 +1764,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
 
   /** Looks at what is waiting again in a moment, and not only at the next second: what is reopened at once is not kept waiting for the clock. */
   let sooner: ReturnType<typeof setTimeout> | undefined
+  let soonerAt = 0
   const soon = (ms: number) => {
-    if (sooner) return
+    const at = steady() + ms
+    if (sooner && soonerAt <= at) return
+    // A discovery retry may be a minute away. A click whose route is ready sooner keeps
+    // its earlier pass, rather than waiting for that retry or the next one-second tick.
+    if (sooner) clearTimeout(sooner)
+    soonerAt = at
     sooner = setTimeout(() => {
       sooner = undefined
       void route()
