@@ -58,6 +58,8 @@ A machine's key is made on that machine, and its private half never leaves it. A
 
 An agent publishes a page by declaring its files, each with its size and checksum, and is given leave to upload exactly those. A file that was not declared, or does not match what was declared, is refused, and a page is switched to a new version only when every file of it has been checked on the disk.
 
+A publication has thirty minutes to upload and finish, including retries. The permission to upload expires a minute after that deadline, and deletion is remembered for an hour so an upload cannot put removed bytes back. The command and the door each allow a file a minute plus its size at 20,000 bytes per second. A stalled upload is ended when that time is up.
+
 ### Logs name things by id
 
 What It writes down carries ids, counts, fixed codes and reasons. It never carries a credential, a title, a file's path, a name a person typed, an address on your network, an error's own words, or anything a page or a person sent.

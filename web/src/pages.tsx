@@ -208,7 +208,9 @@ function Empty({ owner }: { owner: boolean }) {
 export const wasShown = new Set<string>()
 
 export function PageView({ slug, user, owner }: { slug: string; user: string; owner: boolean }) {
-  const page = useQuery(api.artifacts.get, { slug, history: false })
+  // The service can retain older backend functions while serving these bundled assets.
+  // Keep the request shape those functions accept.
+  const page = useQuery(api.artifacts.get, { slug })
   const now = useNow()
   useEffect(() => {
     if (page) wasShown.add(slug)

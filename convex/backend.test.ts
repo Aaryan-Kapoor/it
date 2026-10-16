@@ -2,7 +2,7 @@
 // The backend's own tests: who may do what, and that what is stored is what was meant.
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
-import { ALIVE, describeClick, LEASE_MS, LIMITS, QUOTA, STORE_KEY } from '@it/protocol'
+import { ALIVE, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORE_KEY } from '@it/protocol'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
@@ -1031,7 +1031,7 @@ describe('publishing', () => {
     content.verifyOk = true
     expect((await m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: 2 })).version).toBe(2)
     expect(await alice.browser.query(api.artifacts.get, { slug: 'plan' })).toMatchObject({ version: 2, title: 'Plan, revised' })
-    expect(await code(m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: 2 }))).toBe('conflict')
+    expect(await code(m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: 2 }))).toBe('ok')
     const verify = content.calls.filter((c) => c.op === 'verify').at(-1)!
     expect(verify.body.prefix).toMatch(/^u\/[^/]+\/[^/]+\/2\/$/)
   })
@@ -1046,7 +1046,7 @@ describe('publishing', () => {
     const jwks = createLocalJWKSet(await (await t.fetch('/.well-known/jwks.json')).json())
     const { payload } = await jwtVerify(begun.upload.grant, jwks, { issuer: SITE, audience: 'it-upload' })
     expect(payload.p).toBe(stage.body.prefix)
-    expect(payload.exp! - payload.iat!).toBe(900)
+    expect(payload.exp! - payload.iat!).toBe(PUBLICATION.grantSeconds)
     await expect(jwtVerify(begun.upload.grant, jwks, { issuer: SITE, audience: 'it-content' })).rejects.toThrow()
   })
 
@@ -1149,7 +1149,7 @@ describe('publishing', () => {
     }
     expect(await code(m.as.action(api.publish.begin, { slug: 'one-more', title: 'x', files: page }))).toBe('limit')
     // The grant for p0 ran out long ago, so beginning p0 again replaces its abandoned attempt
-    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    await vi.advanceTimersByTimeAsync(PUBLICATION.grantTailMs)
     expect(await code(m.as.action(api.publish.begin, { slug: 'p0', title: 'x', files: page }))).toBe('ok')
     expect((await totals(t)).stagingCount).toBe(QUOTA.staging)
   })
@@ -1445,6 +1445,86 @@ describe('tour page ownership', () => {
     await finish(m, begun)
     return begun
   }
+
+  test.each(['same conversation', 'another conversation'])('atomic opening for the %s revokes the mark only when a display can show it', async (who) => {
+    const t = backend()
+    const p = await person(t, 'tour-atomic-open')
+    const m = await machineOf(t, 'tour-atomic-open')
+    const current = await publish(m, 'tour-checklist', { title: 'A checklist', tour: 'checklist', state: '{"added":[],"note":""}', session: SESSION })
+    const pending = await start(m, 'checklist', '{"added":[],"note":""}')
+    const before = await t.run((ctx) => ctx.db.get(current.artifactId))
+    const session = who === 'same conversation' ? SESSION : { ...SESSION, id: 'next-conversation' }
+    await expect(m.as.mutation(api.displays.show, { slug: current.slug, display: 'missing', session })).rejects.toThrow('No display has that name')
+    expect(await t.run((ctx) => ctx.db.get(current.artifactId))).toEqual(before)
+    // A tour showing follows publication and asks for no second takeover.
+    await m.as.mutation(api.displays.show, { slug: current.slug, display: p.display.name })
+    expect(await t.run((ctx) => ctx.db.get(current.artifactId))).toEqual(before)
+    expect(await m.as.mutation(api.displays.show, { slug: current.slug, display: p.display.name, session })).toMatchObject({
+      displays: [p.display.name],
+      took: who !== 'same conversation',
+    })
+    expect(await t.run((ctx) => ctx.db.get(current.artifactId))).toMatchObject({ tour: null, session })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({ deleted: [], kept: [current.slug], seen: 0 })
+  })
+
+  test('a tour refusal survives lost replies to finish and resume after the staging version is removed', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-receipt')
+    const current = await make(m, 'checklist', '{"added":[],"note":""}')
+    const request = {
+      slug: current.slug,
+      title: 'A checklist',
+      state: '{"added":[],"note":""}',
+      files: page,
+      tour: 'checklist',
+      operation: 'tour-publication-receipt',
+    }
+    const pending = await m.as.action(api.publish.begin, request)
+    await m.as.mutation(api.state.patch, { slug: current.slug, patch: '{"note":"keep this answer"}' })
+    const state = await m.as.query(api.state.get, { slug: current.slug })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    const checked = content.calls.filter((c) => c.op === 'verify').length
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query('versions')
+          .filter((q) => q.eq(q.field('status'), 'staging'))
+          .collect(),
+      ),
+    ).toEqual([])
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    const resumed = await m.as.action(api.publish.resume, { operation: request.operation })
+    expect(resumed).toMatchObject({ artifactId: pending.artifactId, version: pending.version, upload: { grant: '' } })
+    await expect(finish(m, resumed)).rejects.toThrow('Nothing was replaced')
+    await expect(finish(m, await m.as.action(api.publish.begin, request))).rejects.toThrow('Nothing was replaced')
+    expect(content.calls.filter((c) => c.op === 'verify')).toHaveLength(checked)
+    expect(await m.as.query(api.state.get, { slug: current.slug })).toEqual(state)
+    expect((await m.as.query(api.artifacts.get, { slug: current.slug })).version).toBe(current.version)
+    const receipts = await t.run((ctx) => ctx.db.query('publications').collect())
+    expect(receipts.find((receipt) => receipt.artifactId === pending.artifactId && receipt.version === pending.version)?.result).toMatchObject({
+      tourConflict: true,
+    })
+  })
+
+  test('one publication identity cannot be reused with different tour intent', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-operation-intent')
+    const request = {
+      slug: 'tour-checklist',
+      title: 'A checklist',
+      files: page,
+      state: '{"added":[],"note":""}',
+      tour: 'checklist',
+      operation: 'tour-operation-intent',
+    }
+    const pending = await m.as.action(api.publish.begin, request)
+    expect(await m.as.action(api.publish.begin, request)).toMatchObject({ artifactId: pending.artifactId, version: pending.version })
+    await expect(m.as.action(api.publish.begin, { ...request, tour: undefined })).rejects.toThrow('another request')
+    await finish(m, pending)
+    await expect(m.as.action(api.publish.begin, { ...request, tour: undefined })).rejects.toThrow('another request')
+    expect((await t.run((ctx) => ctx.db.get(pending.artifactId)))!.tour?.name).toBe('checklist')
+  })
 
   test('a legacy page with the same id, title and full state is adopted once and keeps its mark on later showings', async () => {
     const t = backend()
@@ -6055,5 +6135,189 @@ describe('what is written down', () => {
     } finally {
       out.stop()
     }
+  })
+})
+
+describe('publication transactions', () => {
+  test('opening validates the display before ownership and showing commit together', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const first = await machineOf(t, 'alice')
+    const next = await machineOf(t, 'alice', 'next')
+    const p = await publish(first, 'atomic', { session: SESSION })
+    const mine = { harness: 'pi', id: 'new-conversation' }
+    expect(await code(next.as.mutation(api.displays.show, { slug: 'atomic', display: 'missing', session: mine }))).toBe('not_found')
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ machineId: first.id, session: SESSION })
+    const screen = await paired(t, 'alice', 'screen', displayKey('atomic'))
+    const shown = await next.as.mutation(api.displays.show, { slug: 'atomic', display: screen.display.name, session: mine })
+    expect(shown).toMatchObject({ took: true, displays: [screen.display.name] })
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ machineId: next.id, session: mine })
+    expect(await t.run((ctx) => ctx.db.get(screen.display.id))).toMatchObject({ showing: { artifactId: p.artifactId } })
+    const before = await t.run((ctx) => ctx.db.get(screen.display.id))
+    // Validation reached after display writes still rolls back both parts of the mutation.
+    expect(await code(first.as.mutation(api.displays.show, { slug: 'atomic', session: { harness: 'x'.repeat(41), id: 'bad' } }))).toBe('invalid')
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ machineId: next.id, session: mine })
+    expect(await t.run((ctx) => ctx.db.get(screen.display.id))).toEqual(before)
+  })
+
+  test('only an explicit label from the owning conversation changes its label', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const owner = await machineOf(t, 'alice')
+    const other = await machineOf(t, 'alice', 'other')
+    const p = await publish(owner, 'label', { session: SESSION, agent: 'Original' })
+    await publish(owner, 'label', { session: SESSION, agent: 'Renamed', agentExplicit: true })
+    await publish(owner, 'label', { session: SESSION, agent: SESSION.harness })
+    await publish(other, 'label', { session: SESSION, agent: 'Foreign', agentExplicit: true })
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ agent: 'Renamed', machineId: owner.id, session: SESSION })
+  })
+
+  test('an automatic alias takeover refuses an owner changed before begin or during upload', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const owner = await machineOf(t, 'alice')
+    const other = await machineOf(t, 'alice', 'other')
+    const p = await publish(owner, 'alias', { session: SESSION })
+    const next = { harness: SESSION.harness, id: 'continued' }
+    const expectedOwner = { machineId: owner.id, session: SESSION }
+    const request = { slug: 'alias', title: 'continued', files: page, session: next, take: true, expectedOwner }
+    const begun = await owner.as.action(api.publish.begin, request)
+    await other.as.mutation(api.artifacts.take, { slug: 'alias', session: next })
+    expect(await code(owner.as.action(api.publish.finish, { artifactId: p.artifactId, version: begun.version }))).toBe('conflict')
+    expect(await code(owner.as.action(api.publish.begin, request))).toBe('conflict')
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ machineId: other.id, currentVersion: 1 })
+    await publish(owner, 'alias', { session: next, take: true })
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ machineId: owner.id, session: next })
+  })
+
+  test('a lost completion is recovered after newer publications prune its content version', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const request = { slug: 'receipt', title: 'Original', files: page, operation: 'stable-publication-identity' }
+    const begun = await m.as.action(api.publish.begin, request)
+    const original = await m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })
+    const checked = content.calls.filter((c) => c.op === 'verify').length
+    expect(await m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })).toEqual(original)
+    expect(content.calls.filter((c) => c.op === 'verify')).toHaveLength(checked)
+    for (let n = 0; n < LIMITS.versionsKept + 1; n++) await publish(m, 'receipt')
+    expect((await t.run((ctx) => ctx.db.query('versions').collect())).some((v) => v.artifactId === begun.artifactId && v.n === 1)).toBe(false)
+    const live = await t.run((ctx) => ctx.db.get(begun.artifactId))
+    const again = await m.as.action(api.publish.begin, request)
+    expect(again).toMatchObject({ artifactId: begun.artifactId, version: 1, upload: { grant: '' } })
+    expect(await m.as.action(api.publish.resume, { operation: request.operation })).toEqual(again)
+    const other = await machineOf(t, 'alice', 'other')
+    expect(await code(other.as.action(api.publish.resume, { operation: request.operation }))).toBe('not_found')
+    expect(await m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: 1 })).toEqual(original)
+    expect(await t.run((ctx) => ctx.db.get(begun.artifactId))).toEqual(live)
+    expect(await code(m.as.action(api.publish.begin, { ...request, title: 'Different request' }))).toBe('conflict')
+  })
+
+  test('a failed preparation keeps a named publication available to recover', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const operation = 'preparation-can-be-retried'
+    content.stageOk = false
+    expect(await code(m.as.action(api.publish.begin, { slug: 'prepared', title: 'Prepared', files: page, operation }))).toBe('unavailable')
+    content.stageOk = true
+    const resumed = await m.as.action(api.publish.resume, { operation })
+    expect(resumed.version).toBe(1)
+    expect(await m.as.action(api.publish.finish, { artifactId: resumed.artifactId, version: resumed.version })).toMatchObject({ version: 1 })
+    expect(await totals(t)).toMatchObject({ stagingCount: 0, stagingBytes: 0 })
+  })
+
+  test('a delayed preparation failure cannot abandon a resumed publication', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    let reached!: () => void
+    let release!: () => void
+    const preparing = new Promise<void>((resolve) => (reached = resolve))
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const fetchContent = vi.mocked(fetch).getMockImplementation()!
+    let first = true
+    vi.mocked(fetch).mockImplementation(async (...args) => {
+      if (String(args[0]).endsWith('/control/stage') && first) {
+        first = false
+        reached()
+        await held
+        return new Response(null, { status: 503 })
+      }
+      return fetchContent(...args)
+    })
+    const operation = 'concurrent-preparation-failure'
+    const beginning = code(m.as.action(api.publish.begin, { slug: 'shared', title: 'Shared', files: page, operation }))
+    try {
+      await preparing
+      const resumed = await m.as.action(api.publish.resume, { operation })
+      release()
+      expect(await beginning).toBe('unavailable')
+      expect(await m.as.action(api.publish.finish, { artifactId: resumed.artifactId, version: resumed.version })).toMatchObject({ version: 1 })
+      expect(await totals(t)).toMatchObject({ stagingCount: 0, stagingBytes: 0 })
+    } finally {
+      release()
+      await beginning
+    }
+  })
+
+  test('a recorded completion is recovered when new finishes have exhausted their rate limit', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const request = { slug: 'limited-receipt', title: 'Original', files: page, operation: 'limited-publication-identity' }
+    const begun = await m.as.action(api.publish.begin, request)
+    const args = { artifactId: begun.artifactId, version: begun.version }
+    const original = await m.as.action(api.publish.finish, args)
+    const next = await m.as.action(api.publish.begin, { ...request, operation: 'another-publication-identity' })
+    const waiting = { artifactId: next.artifactId, version: next.version }
+    for (let n = 0; n < 29; n++) await m.as.mutation(internal.publish._gate, waiting)
+    expect(await code(m.as.action(api.publish.finish, waiting))).toBe('rate_limited')
+    const checked = content.calls.filter((c) => c.op === 'verify').length
+    expect(await m.as.action(api.publish.resume, { operation: request.operation })).toMatchObject({ version: 1, upload: { grant: '' } })
+    for (let n = 0; n < 3; n++) expect(await m.as.action(api.publish.finish, args)).toEqual(original)
+    expect(content.calls.filter((c) => c.op === 'verify')).toHaveLength(checked)
+    expect(await code(m.as.action(api.publish.finish, waiting))).toBe('rate_limited')
+    expect(await t.run((ctx) => ctx.db.get(begun.artifactId))).toMatchObject({ currentVersion: 1, lastVersion: 2 })
+    vi.setSystemTime(Date.now() + 1000)
+    expect(await m.as.action(api.publish.finish, waiting)).toMatchObject({ version: 2 })
+  })
+
+  test('publication outcomes leave with the page and expire after thirty days', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'removed-receipt')
+    expect(await t.run((ctx) => ctx.db.query('publications').collect())).toHaveLength(1)
+    await alice.browser.mutation(api.artifacts.remove, { artifactId: p.artifactId })
+    await settle(t)
+    expect(await t.run((ctx) => ctx.db.query('publications').collect())).toEqual([])
+    await publish(m, 'old-receipt')
+    vi.setSystemTime(Date.now() + PUBLICATION.receiptDays * 86_400_000 + 1)
+    await t.mutation(internal.retention.sweepRecords, {})
+    expect(await t.run((ctx) => ctx.db.query('publications').collect())).toEqual([])
+  })
+
+  test('the fixed publication budget covers a slow full version and cannot be renewed', async () => {
+    const { PUBLICATION, uploadBudgetMs } = await import('@it/protocol')
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const files = Array.from({ length: 100 }, (_, n) => ({ path: n ? `${n}.bin` : 'index.html', size: 1024 * 1024, sha256: sha }))
+    const request = { slug: 'slow', title: 'Slow', files, operation: 'fixed-publication-budget' }
+    const begun = await m.as.action(api.publish.begin, request)
+    const time = Math.ceil((LIMITS.versionBytes / 100_000) * 1000)
+    expect(uploadBudgetMs(LIMITS.fileBytes)).toBeGreaterThan((LIMITS.fileBytes / 35_000) * 1000)
+    expect(PUBLICATION.budgetMs).toBeGreaterThan(time)
+    expect(PUBLICATION.deletedSeconds * 1000).toBeGreaterThan(PUBLICATION.grantTailMs)
+    vi.setSystemTime(Date.now() + time)
+    expect((await m.as.action(api.publish.begin, request)).deadline).toBe(begun.deadline)
+    expect((await m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })).version).toBe(1)
+    const late = await m.as.action(api.publish.begin, { slug: 'slow', title: 'Too late', files: page })
+    vi.setSystemTime(Date.now() + PUBLICATION.budgetMs)
+    expect(await code(m.as.action(api.publish.finish, { artifactId: late.artifactId, version: late.version }))).toBe('conflict')
+    await m.as.mutation(api.publish.abandon, { artifactId: late.artifactId, version: late.version })
+    await m.as.mutation(api.publish.abandon, { artifactId: late.artifactId, version: late.version })
+    expect(await totals(t)).toMatchObject({ stagingCount: 0, stagingBytes: 0 })
   })
 })

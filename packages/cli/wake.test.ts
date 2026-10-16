@@ -540,9 +540,16 @@ describe('the folder a conversation was held in', () => {
   test('only so many are remembered, the ones noted last', () => {
     const folder = path.join(scratch, 'held here')
     mkdirSync(folder)
-    for (let n = 0; n < 305; n++) noteConversation({ harness: 'claude-code', id: `session-${n}` }, folder)
+    // Seed the existing history once: this tests eviction, not hundreds of durable writes.
+    writeFileSync(
+      conversationsFile(),
+      JSON.stringify(Object.fromEntries(Array.from({ length: 300 }, (_, n) => [`claude-code:session-${n}`, { cwd: folder, at: n }]))),
+    )
+    for (let n = 300; n < 305; n++) noteConversation({ harness: 'claude-code', id: `session-${n}` }, folder)
     const kept = Object.keys(JSON.parse(readFileSync(conversationsFile(), 'utf8')))
     expect(kept.length).toBe(300)
+    for (let n = 0; n < 5; n++) expect(conversationFolder({ harness: 'claude-code', id: `session-${n}` })).toBeUndefined()
+    expect(conversationFolder({ harness: 'claude-code', id: 'session-5' })).toBe(folder)
     expect(conversationFolder({ harness: 'claude-code', id: 'session-304' })).toBe(folder)
   })
 

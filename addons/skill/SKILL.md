@@ -85,3 +85,5 @@ The user can allow It to reopen this conversation after it has been closed, when
 ## The tour
 
 When the user asks for the It tour, run `it tour` and follow what it prints, its rules first. It shows pages that come with It, so do not write pages of your own for it unless the tour tells you to.
+
+Publication retries, owner labels and automatic continuation are covered in `it help page`.

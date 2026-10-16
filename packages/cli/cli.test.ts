@@ -1717,7 +1717,7 @@ describe('background service definitions', () => {
     expect(windowsRegisteredFor(task(printed('C:\\Users\\Ada\\.it\\bin')))).toBe('C:\\Users\\Ada\\.it')
     expect(windowsRegisteredFor(task(printed('C:\\Users\\Ada\\.it\\bin\\')))).toBe('C:\\Users\\Ada\\.it')
     expect(asked[0]).toBe(
-      "[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((Get-ScheduledTask -TaskName 'it' -ErrorAction Stop).Actions[0].WorkingDirectory))",
+      "[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((Get-ScheduledTask -TaskName 'it' -TaskPath '\\' -ErrorAction Stop).Actions[0].WorkingDirectory))",
     )
     // A folder whose name has letters that no one code page holds is read as itself, whichever code page PowerShell prints in
     expect(windowsRegisteredFor(task(printed('C:\\Users\\René 漢字\\.it\\bin')))).toBe('C:\\Users\\René 漢字\\.it')
@@ -1814,7 +1814,7 @@ describe('background service definitions', () => {
         expect(runs.map((line) => line.split(' ')[0])).toEqual(['stopped'])
         const script = Buffer.from(runs[0]!.split(' ')[1]!, 'base64').toString('utf16le')
         expect(script).toMatch(
-          /Stop-ScheduledTask -TaskName 'it' .*; Unregister-ScheduledTask -TaskName 'it' .*; if \(Get-ScheduledTask -TaskName 'it' .*\) \{ .*exit 3 \}/,
+          /Stop-ScheduledTask -TaskName 'it' .*; Unregister-ScheduledTask -TaskName 'it' .*; if \(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop .*\) \{ .*exit 3 \} \}; exit 0$/,
         )
         expect([existsSync(launcher), runningFor(folder)]).toEqual([false, false])
         // Where Windows still has the task afterwards, or could not be asked, that is said and what the task starts is left where it is

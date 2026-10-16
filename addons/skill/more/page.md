@@ -48,3 +48,9 @@ A command that goes past one of these is refused with the code `limit`, and one 
 - **A page that asks for its own files too often is refused.** The files of one showing may be asked for 3,000 times in a minute. A page that fetches its own files in a loop is answered 429 past that, until the minute is over.
 - **A page that sends too much at once is refused.** The site takes 20 messages from a page at once, actions and stored values together, and then five a second, and It takes 30 actions from one page before it slows that page to one a second. The promise that `It.action`, `It.commit` and `It.store.set` return rejects when what was sent was refused, for being too large or for coming too fast, and it was then not taken. Catch that, and say so on the page, so that the user can press again.
 - **At most 500 actions wait on one page.** An action waits until an agent takes it, and past 500 the page's next one is refused. If you read actions with `it actions`, run `it ack` for each one you have dealt with.
+
+## Publishing and ownership
+
+An explicit `--agent <name>` on `create` or `update` changes the label when this conversation owns the page. Omitting it keeps the label. Updating another conversation's page does not change its label unless you take it with `--take`. Automatic continuation under an earlier local conversation id succeeds only while the page still has the owner that was checked.
+
+`it open` checks the display and changes the page's owner in the same operation that shows it. If no requested display can show it, the owner stays as it was. A publication has thirty minutes, including retries. An identical command already running is reported as `busy`; wait for it to end before retrying. If its answer cannot be confirmed, run the identical command again when It can be reached. It recovers that publication's result before making another version.

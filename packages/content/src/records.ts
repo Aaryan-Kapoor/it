@@ -11,6 +11,7 @@
 // refuse could still be good, and is then cleared away.
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
+import { PUBLICATION } from '@it/protocol'
 
 type Value = string | number
 interface Statement {
@@ -38,9 +39,9 @@ const SWEEP_EVERY_S = 120
 /**
  * How long a deletion is remembered. Longer than anything the backend signed before the deletion
  * stays good: a message to declare a version's files is good for a minute, and a grant to upload
- * them for a quarter of an hour.
+ * them for the finite publication budget.
  */
-const DELETED_KEPT_S = 3600
+const DELETED_KEPT_S = PUBLICATION.deletedSeconds
 
 export interface Records {
   /** 'ok' if this ticket has not been spent and is still within its life; it is now spent. Otherwise which of the two it was. */

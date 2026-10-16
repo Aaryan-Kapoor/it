@@ -1,11 +1,11 @@
 // Publishing a page, in two steps so that a crash in the middle leaves the old version live:
 // `begin` records what is about to be uploaded and returns a grant to upload it; `finish`
 // checks the upload with the content service and then switches the page to the new version.
-import { AUDIENCE, isSafePath, isSlug, LIMITS, parseJson, QUOTA, RETENTION, STORE_KEY, TOUR, TOUR_NAMES } from '@it/protocol'
+import { AUDIENCE, isSafePath, isSlug, LIMITS, PUBLICATION, parseJson, QUOTA, RETENTION, STORE_KEY, TOUR, TOUR_NAMES } from '@it/protocol'
 import { ConvexError, v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { action, internalMutation, type MutationCtx, mutation, type QueryCtx } from './_generated/server'
+import { type ActionCtx, action, internalMutation, internalQuery, type MutationCtx, mutation, type QueryCtx } from './_generated/server'
 import { prefixOf } from './artifacts'
 import { door, site } from './config'
 import { removeLater } from './content'
@@ -17,12 +17,15 @@ import { kind, log } from './lib/log'
 import { mint } from './lib/signing'
 import { bump, tally } from './lib/tally'
 import { adoptTourPage, isTourPage, pageState, startTourPage } from './lib/tourPages'
-import { fileEntry, session } from './schema'
+import { expectedOwner, fileEntry, session } from './schema'
 import { noteRevision } from './state'
 
 const beginArgs = {
   /** Only the built-in tour asks for this. A matching legacy page may be adopted once. */
   tour: v.optional(v.string()),
+  operation: v.optional(v.string()),
+  agentExplicit: v.optional(v.boolean()),
+  expectedOwner: v.optional(expectedOwner),
   slug: v.optional(v.string()),
   title: v.string(),
   files: v.array(fileEntry),
@@ -40,9 +43,9 @@ const beginArgs = {
    */
   own: v.optional(v.boolean()),
 }
-const UPLOAD_SECONDS = 900
+const UPLOAD_SECONDS = PUBLICATION.grantSeconds
 /** How long after a grant was given something might still be written with it. */
-export const GRANT_TAIL_MS = (UPLOAD_SECONDS + 300) * 1000
+export const GRANT_TAIL_MS = PUBLICATION.grantTailMs
 
 /**
  * Whether a page is another conversation's than the one publishing: it has been shown, a
@@ -88,6 +91,7 @@ async function takeStart(ctx: MutationCtx, versionId: Id<'versions'>): Promise<s
 export async function dropStaging(ctx: MutationCtx, ver: Doc<'versions'>, opts: { keepPage?: boolean } = {}): Promise<void> {
   if (await ctx.db.get(ver.userId)) await bump(ctx, ver.userId, { stagingCount: -1, stagingBytes: -ver.bytes })
   await takeStart(ctx, ver._id)
+  if (ver.publicationId && (await ctx.db.get(ver.publicationId))) await ctx.db.patch(ver.publicationId, { abandoned: true })
   await ctx.db.delete(ver._id)
   if (opts.keepPage) return
   const artifact = await ctx.db.get(ver.artifactId)
@@ -110,9 +114,38 @@ export async function dropStaging(ctx: MutationCtx, ver: Doc<'versions'>, opts: 
 }
 
 export const _begin = internalMutation({
-  args: beginArgs,
+  args: { ...beginArgs, requestHash: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { user, machine } = await requireMachine(ctx)
+    if (args.operation !== undefined) {
+      if (!/^[a-zA-Z0-9_-]{16,100}$/.test(args.operation)) fail('invalid', 'That is not a publication identity.')
+      const previous = await ctx.db
+        .query('publications')
+        .withIndex('by_user_key', (q) => q.eq('userId', user._id).eq('key', args.operation!))
+        .unique()
+      if (previous) {
+        if (previous.machineId !== machine._id || previous.requestHash !== args.requestHash)
+          fail('conflict', 'That publication identity was used for another request.')
+        if (previous.abandoned) fail('conflict', 'That publication was abandoned.')
+        const a = await ownArtifact(ctx, user._id, previous.artifactId)
+        const ver = await ctx.db
+          .query('versions')
+          .withIndex('by_artifact_n', (q) => q.eq('artifactId', a._id).eq('n', previous.version))
+          .unique()
+        if (!previous.result && (!ver || Date.now() >= previous.createdAt + PUBLICATION.budgetMs)) fail('conflict', 'That publication has expired.')
+        return {
+          artifactId: a._id,
+          versionId: ver?._id,
+          slug: a.slug,
+          n: previous.version,
+          prefix: prefixOf(user._id, a._id, previous.version),
+          bytes: ver?.bytes ?? 0,
+          operation: previous.key,
+          deadline: previous.createdAt + PUBLICATION.budgetMs,
+          result: previous.result,
+        }
+      }
+    }
     await rateLimit(ctx, 'publish', user._id)
     // A title is one line of text. Characters that are not text (a line break, a NUL) are taken
     // as spaces: a title is put into the message an agent reads, and onto a command line
@@ -147,6 +180,7 @@ export const _begin = internalMutation({
     }
     if (args.session && (args.session.harness.length > 40 || args.session.id.length > 200)) fail('invalid', 'That is not a session.')
     // Taking a page over means its clicks come to the conversation that said so, so there has to be one
+    if (args.expectedOwner && (!args.take || !args.session)) fail('invalid', 'An expected owner requires a takeover from a conversation.')
     if (args.take && !args.session) fail('invalid', 'Taking a page over only works from inside an agent conversation.')
 
     if (args.tour !== undefined && (!TOUR_NAMES.includes(args.tour) || args.slug !== `${TOUR.prefix}${args.tour}` || args.state === undefined))
@@ -179,13 +213,23 @@ export const _begin = internalMutation({
     const now = Date.now()
     // Making a page of one's own is a conversation's to do: from a plain terminal there is none to keep a page for
     const own = args.own === true && args.take !== true && args.session !== undefined
-    const who = { machineId: machine._id, session: args.session, agent: args.agent?.slice(0, 60), take: args.take === true, ...(own ? { own: true } : {}) }
+    const who = {
+      machineId: machine._id,
+      session: args.session,
+      agent: args.agent?.slice(0, 60),
+      take: args.take === true,
+      agentExplicit: args.agentExplicit,
+      expectedOwner: args.expectedOwner,
+      ...(own ? { own: true } : {}),
+    }
     let artifact = args.slug ? await artifactBySlug(ctx, user._id, args.slug) : null
     if (artifact && args.tour !== undefined && !isTourPage(artifact, args.tour)) {
       const adopted = await adoptTourPage(ctx, artifact, args.tour, title, args.state!)
       if (!adopted) fail('conflict', TOUR_CONFLICT)
       artifact = adopted
     }
+    if (args.expectedOwner && (!artifact || !ownerMatches(artifact, args.expectedOwner)))
+      fail('conflict', 'The page changed owner. Read it before publishing again.')
     // Refused before anything is begun, and again when it is shown, in case two began it together
     if (artifact && own && (await anothers(ctx, artifact, who))) {
       log('publish.refused', { reason: 'anothers', userId: user._id, artifactId: artifact._id }, 'warn')
@@ -235,6 +279,16 @@ export const _begin = internalMutation({
     }
     quota(totals.stagingCount, QUOTA.staging, 'publishes in progress', user._id)
     await ctx.db.patch(artifact._id, { lastVersion: n })
+    const operation = args.operation ?? crypto.randomUUID()
+    const publicationId = await ctx.db.insert('publications', {
+      userId: user._id,
+      machineId: machine._id,
+      key: operation,
+      requestHash: args.requestHash,
+      artifactId: artifact._id,
+      version: n,
+      createdAt: now,
+    })
     const versionId = await ctx.db.insert('versions', {
       ...(args.tour === undefined
         ? {}
@@ -246,6 +300,7 @@ export const _begin = internalMutation({
               revision: (await pageState(ctx, artifact._id))?.revision ?? 0,
             },
           }),
+      publicationId,
       artifactId: artifact._id,
       userId: user._id,
       n,
@@ -266,7 +321,17 @@ export const _begin = internalMutation({
       await rateLimit(ctx, 'stateKilobytes', user._id, kilobytes)
       await ctx.db.insert('starts', { versionId, artifactId: artifact._id, json: args.state })
     }
-    return { artifactId: artifact._id, versionId, slug: artifact.slug, n, prefix: prefixOf(user._id, artifact._id, n), bytes }
+    return {
+      artifactId: artifact._id,
+      versionId,
+      slug: artifact.slug,
+      n,
+      prefix: prefixOf(user._id, artifact._id, n),
+      bytes,
+      operation,
+      deadline: now + PUBLICATION.budgetMs,
+      result: undefined,
+    }
   },
 })
 
@@ -314,20 +379,114 @@ export const abandon = mutation({
 /** Step one: declare the files. Returns where to upload them and a grant that allows it. */
 export const begin = action({
   args: beginArgs,
-  handler: async (ctx, args): Promise<{ artifactId: Id<'artifacts'>; slug: string; version: number; upload: { url: string; grant: string } }> => {
-    const r = await overClashes(() => ctx.runMutation(internal.publish._begin, args))
-    try {
-      // The content service is told exactly which files to expect, so the grant allows those and nothing else
-      await ctx.runAction(internal.content.stage, { prefix: r.prefix, files: args.files })
-    } catch (err) {
-      log('publish.unavailable', { step: 'stage', artifactId: r.artifactId, version: r.n, kind: kind(err) }, 'error')
-      await overClashes(() => ctx.runMutation(internal.publish._abandon, { versionId: r.versionId }))
-      throw new ConvexError({ code: 'unavailable', message: 'The page could not be prepared for upload. Try again in a moment.' })
-    }
-    const grant = await mint(ctx, AUDIENCE.upload, r.prefix, { p: r.prefix }, UPLOAD_SECONDS)
-    return { artifactId: r.artifactId, slug: r.slug, version: r.n, upload: { url: `${door()}/upload/`, grant } }
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ artifactId: Id<'artifacts'>; slug: string; version: number; operation: string; deadline: number; upload: { url: string; grant: string } }> => {
+    const requestHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(args)))), (b) =>
+      b.toString(16).padStart(2, '0'),
+    ).join('')
+    const r = await overClashes(() => ctx.runMutation(internal.publish._begin, { ...args, requestHash }))
+    return prepared(ctx, r, args.files, args.operation !== undefined)
   },
 })
+
+/** Recovers exactly the files and ownership intent saved by begin. */
+export const _resume = internalQuery({
+  args: { operation: v.string() },
+  handler: async (ctx, { operation }) => {
+    const { user, machine } = await requireMachine(ctx)
+    const previous = await ctx.db
+      .query('publications')
+      .withIndex('by_user_key', (q) => q.eq('userId', user._id).eq('key', operation))
+      .unique()
+    if (!previous || previous.machineId !== machine._id) fail('not_found', 'That publication is not recorded.')
+    if (previous.abandoned) fail('conflict', 'That publication was abandoned.')
+    const a = await ownArtifact(ctx, user._id, previous.artifactId)
+    const ver = await ctx.db
+      .query('versions')
+      .withIndex('by_artifact_n', (q) => q.eq('artifactId', a._id).eq('n', previous.version))
+      .unique()
+    if (!previous.result && (!ver || Date.now() >= previous.createdAt + PUBLICATION.budgetMs)) fail('conflict', 'That publication has expired.')
+    return {
+      artifactId: a._id,
+      versionId: ver?._id,
+      slug: a.slug,
+      n: previous.version,
+      prefix: prefixOf(user._id, a._id, previous.version),
+      operation: previous.key,
+      deadline: previous.createdAt + PUBLICATION.budgetMs,
+      result: previous.result,
+      files: ver?.files ?? [],
+    }
+  },
+})
+export const resume = action({
+  args: { operation: v.string() },
+  handler: async (ctx, args): Promise<Prepared> => {
+    const r = await ctx.runQuery(internal.publish._resume, args)
+    return prepared(ctx, r, r.files)
+  },
+})
+type Prepared = { artifactId: Id<'artifacts'>; slug: string; version: number; operation: string; deadline: number; upload: { url: string; grant: string } }
+async function prepared(
+  ctx: ActionCtx,
+  r: {
+    artifactId: Id<'artifacts'>
+    versionId?: Id<'versions'>
+    slug: string
+    n: number
+    prefix: string
+    operation: string
+    deadline: number
+    result?: Doc<'publications'>['result']
+  },
+  files: Doc<'versions'>['files'],
+  recoverable = true,
+): Promise<Prepared> {
+  if (r.result)
+    return {
+      artifactId: r.artifactId,
+      slug: r.slug,
+      version: r.n,
+      operation: r.operation,
+      deadline: r.deadline,
+      upload: { url: `${door()}/upload/`, grant: '' },
+    }
+
+  try {
+    // The content service is told exactly which files to expect, so the grant allows those and nothing else
+    await ctx.runAction(internal.content.stage, { prefix: r.prefix, files })
+  } catch (err) {
+    log('publish.unavailable', { step: 'stage', artifactId: r.artifactId, version: r.n, kind: kind(err) }, 'error')
+    // A caller may have lost this reply and resumed the same named publication already.
+    // Keep its staging version for recovery or expiry; a late failure must not erase it.
+    if (!recoverable) await overClashes(() => ctx.runMutation(internal.publish._abandon, { versionId: r.versionId! }))
+    throw new ConvexError({ code: 'unavailable', message: 'The page could not be prepared for upload. Try again in a moment.' })
+  }
+  const grant = await mint(
+    ctx,
+    AUDIENCE.upload,
+    r.prefix,
+    { p: r.prefix },
+    Math.max(1, Math.ceil((r.deadline - Date.now()) / 1000) + UPLOAD_SECONDS - PUBLICATION.budgetMs / 1000),
+  )
+  return { artifactId: r.artifactId, slug: r.slug, version: r.n, operation: r.operation, deadline: r.deadline, upload: { url: `${door()}/upload/`, grant } }
+}
+
+function ownerMatches(a: Doc<'artifacts'>, expected: { machineId: Id<'machines'>; session: { harness: string; id: string } }): boolean {
+  return a.machineId === expected.machineId && a.session?.harness === expected.session.harness && a.session.id === expected.session.id
+}
+async function receipt(ctx: QueryCtx, artifactId: Id<'artifacts'>, version: number) {
+  return ctx.db
+    .query('publications')
+    .withIndex('by_artifact_n', (q) => q.eq('artifactId', artifactId).eq('version', version))
+    .unique()
+}
+async function recorded(ctx: QueryCtx, userId: Id<'users'>, artifactId: Id<'artifacts'>, version: number) {
+  await ownArtifact(ctx, userId, artifactId)
+  return (await receipt(ctx, artifactId, version))?.result
+}
 
 async function staged(ctx: QueryCtx, userId: Id<'users'>, artifactId: Id<'artifacts'>, version: number) {
   const a = await ownArtifact(ctx, userId, artifactId)
@@ -344,9 +503,12 @@ export const _gate = internalMutation({
   args: { artifactId: v.id('artifacts'), version: v.number() },
   handler: async (ctx, { artifactId, version }) => {
     const { user } = await requireMachine(ctx)
+    const result = await recorded(ctx, user._id, artifactId, version)
+    if (result) return { result }
     await rateLimit(ctx, 'finish', user._id)
     const { ver } = await staged(ctx, user._id, artifactId, version)
-    return { prefix: prefixOf(user._id, artifactId, version), files: ver.files }
+    if (Date.now() >= ver.createdAt + PUBLICATION.budgetMs) fail('conflict', 'That publication has expired.')
+    return { waiting: { prefix: prefixOf(user._id, artifactId, version), files: ver.files } }
   },
 })
 
@@ -354,7 +516,37 @@ export const _finish = internalMutation({
   args: { artifactId: v.id('artifacts'), version: v.number() },
   handler: async (ctx, { artifactId, version }) => {
     const { user } = await requireMachine(ctx)
+    const result = await recorded(ctx, user._id, artifactId, version)
+    if (result) return result
     const { a, ver } = await staged(ctx, user._id, artifactId, version)
+    if (Date.now() >= ver.createdAt + PUBLICATION.budgetMs) fail('conflict', 'That publication has expired.')
+    const remember = async (done: {
+      slug: string
+      version: number
+      superseded: boolean
+      anothers?: boolean
+      ownerChanged?: boolean
+      tourConflict?: boolean
+      elsewhere?: boolean
+      took?: boolean
+    }) => {
+      const result = { ...done, url: `${site()}/p/${done.slug}` }
+      const existing = await receipt(ctx, artifactId, version)
+      if (existing) await ctx.db.patch(existing._id, { result })
+      else {
+        const { machine } = await requireMachine(ctx)
+        await ctx.db.insert('publications', {
+          userId: user._id,
+          machineId: machine._id,
+          key: crypto.randomUUID(),
+          artifactId,
+          version,
+          createdAt: Date.now(),
+          result,
+        })
+      }
+      return result
+    }
     // Either way this publish is over
     await bump(ctx, user._id, { stagingCount: -1, stagingBytes: -ver.bytes })
     if (
@@ -367,18 +559,24 @@ export const _finish = internalMutation({
       await takeStart(ctx, ver._id)
       await ctx.db.delete(ver._id)
       await removeLater(ctx, prefixOf(user._id, a._id, version), { grantMayBeLive: true })
-      return { slug: a.slug, version: a.currentVersion ?? version, superseded: false, tourConflict: true }
+      return remember({ slug: a.slug, version: a.currentVersion ?? version, superseded: false, tourConflict: true })
     }
     // Two conversations began a page of the same id at the same moment, and the other finished
     // first: the page is its own, and this publish is put away unshown. Looked at before
     // whether a newer publish finished first, which the other's may also be: what this
     // conversation has to be told is whose page it is, and not to read it and publish again.
+    if (ver.by?.expectedOwner && !ownerMatches(a, ver.by.expectedOwner)) {
+      await takeStart(ctx, ver._id)
+      await ctx.db.delete(ver._id)
+      await removeLater(ctx, prefixOf(user._id, a._id, version), { grantMayBeLive: true })
+      return remember({ slug: a.slug, version: a.currentVersion ?? version, superseded: false, ownerChanged: true })
+    }
     if (ver.by?.own && (await anothers(ctx, a, ver.by))) {
       await takeStart(ctx, ver._id)
       await ctx.db.delete(ver._id)
       await removeLater(ctx, prefixOf(user._id, a._id, version), { grantMayBeLive: true })
       log('publish.refused', { reason: 'anothers', userId: user._id, artifactId: a._id, at: 'finish' }, 'warn')
-      return { slug: a.slug, version: a.currentVersion ?? version, superseded: false, anothers: true }
+      return remember({ slug: a.slug, version: a.currentVersion ?? version, superseded: false, anothers: true })
     }
     // A slower publish must not replace a newer one that finished first, even if the page has
     // since been rolled back to something older
@@ -386,7 +584,7 @@ export const _finish = internalMutation({
       await takeStart(ctx, ver._id)
       await ctx.db.delete(ver._id)
       await removeLater(ctx, prefixOf(user._id, a._id, version), { grantMayBeLive: true })
-      return { slug: a.slug, version: a.currentVersion ?? version, superseded: true }
+      return remember({ slug: a.slug, version: a.currentVersion ?? version, superseded: true })
     }
     const live = await ctx.db
       .query('versions')
@@ -460,6 +658,13 @@ export const _finish = internalMutation({
       bytes,
       updatedAt: Date.now(),
       title: ver.title ?? a.title,
+      ...(ver.by?.agentExplicit &&
+      ver.by.agent !== undefined &&
+      ver.by.machineId === a.machineId &&
+      ver.by.session?.harness === a.session?.harness &&
+      ver.by.session?.id === a.session?.id
+        ? { agent: ver.by.agent }
+        : {}),
       ...(moves ? { machineId: ver.by!.machineId, session: ver.by!.session, agent: ver.by!.agent ?? a.agent } : {}),
     })
     // Clicks already waiting on the page go where the page went
@@ -474,7 +679,7 @@ export const _finish = internalMutation({
       (ver.by.machineId !== a.machineId || JSON.stringify(ver.by.session) !== JSON.stringify(a.session))
     // And one that took a page which another conversation had is told that too: what is done on it comes to it now
     const took = moves && a.currentVersion !== undefined && a.session !== undefined && ver.by?.session !== undefined
-    return { slug: a.slug, version, superseded: false, ...(elsewhere ? { elsewhere: true } : {}), ...(took ? { took: true } : {}) }
+    return remember({ slug: a.slug, version, superseded: false, ...(elsewhere ? { elsewhere: true } : {}), ...(took ? { took: true } : {}) })
   },
 })
 
@@ -482,7 +687,9 @@ export const _finish = internalMutation({
 export const finish = action({
   args: { artifactId: v.id('artifacts'), version: v.number() },
   handler: async (ctx, args): Promise<{ slug: string; version: number; url: string; elsewhere?: boolean; took?: boolean }> => {
-    const waiting = await overClashes(() => ctx.runMutation(internal.publish._gate, args))
+    const gate = await overClashes(() => ctx.runMutation(internal.publish._gate, args))
+    if (gate.result) return outcome(gate.result)
+    const waiting = gate.waiting!
     let checked: { ok: boolean; missing: string[] }
     try {
       checked = await ctx.runAction(internal.content.verify, waiting)
@@ -495,20 +702,17 @@ export const finish = action({
       fail('invalid', `${checked.missing.length === 1 ? 'One file' : `${checked.missing.length} files`} did not arrive intact. Publish again.`)
     }
     const done = await overClashes(() => ctx.runMutation(internal.publish._finish, args))
-    // A newer publish of the same page finished first, and this one was put away unshown. Its
-    // agent is told so: told "published", it would wait for clicks on something nobody can see.
-    if (done.superseded) fail('conflict', 'A newer publish of this page finished first, so this one was not shown. Read the page before publishing again.')
-    if ('tourConflict' in done && done.tourConflict) fail('conflict', TOUR_CONFLICT)
-    if ('anothers' in done && done.anothers) fail('conflict', ANOTHERS, { anothers: true })
-    return {
-      slug: done.slug,
-      version: done.version,
-      url: `${site()}/p/${done.slug}`,
-      ...('elsewhere' in done && done.elsewhere ? { elsewhere: true } : {}),
-      ...('took' in done && done.took ? { took: true } : {}),
-    }
+    return outcome(done)
   },
 })
 
 /** How long an unfinished publish is kept before the sweep removes it. */
 export const STAGING_MS = RETENTION.stagingHours * 3_600_000
+
+function outcome(done: NonNullable<Doc<'publications'>['result']>) {
+  if (done.tourConflict) fail('conflict', TOUR_CONFLICT)
+  if (done.superseded) fail('conflict', 'A newer publish of this page finished first, so this one was not shown. Read the page before publishing again.')
+  if (done.anothers) fail('conflict', ANOTHERS, { anothers: true })
+  if (done.ownerChanged) fail('conflict', 'The page changed owner. Read it before publishing again.')
+  return { slug: done.slug, version: done.version, url: done.url, ...(done.elsewhere ? { elsewhere: true } : {}), ...(done.took ? { took: true } : {}) }
+}

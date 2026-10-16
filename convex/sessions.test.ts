@@ -381,18 +381,20 @@ describe('a display whose browser’s pairing has ended', () => {
     expect(await machine.mutation(api.displays.show, { slug: 'plan', display: 'Kitchen' })).toEqual({
       displays: [],
       notShown: [{ display: 'Kitchen', reason: 'not_paired' }],
+      took: false,
     })
     // Asked onto every display: it is shown on the ones that are paired, and that one is named as left out
     expect(await machine.mutation(api.displays.show, { slug: 'plan' })).toEqual({
       displays: ['Laptop'],
       notShown: [{ display: 'Kitchen', reason: 'not_paired' }],
+      took: false,
     })
     expect([await asked(t, 'the-laptop-display-key-01'), await asked(t, KEY)]).toEqual([true, false])
     // A name no display has is still refused as that
     expect(await code(machine.mutation(api.displays.show, { slug: 'plan', display: 'Garage' }))).toBe('not_found')
     // Paired again, it is asked onto as any display is
     await register(await screenOf(t, owner), KEY)
-    expect(await machine.mutation(api.displays.show, { slug: 'plan', display: 'kitchen' })).toEqual({ displays: ['Kitchen'], notShown: [] })
+    expect(await machine.mutation(api.displays.show, { slug: 'plan', display: 'kitchen' })).toEqual({ displays: ['Kitchen'], notShown: [], took: false })
     // The time of a showing, by which a display tells a new asking from one it has seen, never goes back, though the clock does
     const shownAt = async () => (await t.run((ctx) => ctx.db.query('displays').collect())).find((d) => d.name === 'Kitchen')?.showing?.at ?? 0
     const first = await shownAt()
