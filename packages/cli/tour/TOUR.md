@@ -50,7 +50,7 @@ The person's latest action on one display wins on every tour page. Across displa
 
 Keep `tour.current` as `{ from: <page name>, version: <its version>, attempt: 0, attempt_display: "", choice: null, wanted: null }` for the showing now on the screen, and start with `tour.previous = null`. The previous record is the showing whose action brought up the current page. Keep it after showing a choice, the menu or the ending, or building what they named. A higher attempt pair from that showing replaces its earlier choice even when its page is no longer current. If several actions from one showing are already available, process only the highest `attempt` pair and acknowledge the others without navigating. If chess arrives first and drums later with a higher pair, show drums; if drums arrives first, ignore chess when it arrives. The same rule applies to Next followed by All of them, and Finish followed by See another one.
 
-Apply `takeTourAttempt` when a navigation action arrives. A false result means acknowledge without navigating. A true result means prepare the requested navigation. Immediately before running its command, apply `commitTourAttempt`; a false result means it was superseded, so acknowledge it without running that command. Run navigation commands one at a time, never in parallel. Once a command succeeds, set `tour.current` to a fresh record for the `id` and `version` it printed, keeping `tour.previous`. If the command fails, set `tour.previous.choice` back to `null` so a fresh attempt can try again. An identical choice advances the attempt without restarting a page already shown; an unfinished identical choice may still complete.
+Apply `takeTourAttempt` when a navigation action arrives. A false result means acknowledge without navigating. A true result means prepare the requested navigation. Immediately before running its command, apply `commitTourAttempt`; a false result means it was superseded, so acknowledge it without running that command. Run navigation commands one at a time, never in parallel. Keep `tour.current` until a command succeeds, then replace it with a fresh record for the `id` and `version` it printed, keeping `tour.previous`. If the command fails, leave `tour.current` as it is and set `tour.previous.choice` back to `null` so a fresh attempt can try again. The page still on the screen must remain current so its Next and All of them buttons can navigate. An identical choice advances the attempt without restarting a page already shown; an unfinished identical choice may still complete.
 
 ```js
 function takeTourAttempt(tour, name, data) {
@@ -66,7 +66,6 @@ function takeTourAttempt(tour, name, data) {
   showing.wanted = JSON.stringify([name, data.choice || null, data.text || null]);
   if (showing.wanted === showing.choice) return false;
   tour.previous = showing;
-  tour.current = null;
   return true;
 }
 
@@ -80,7 +79,7 @@ function commitTourAttempt(tour, name, data) {
 }
 ```
 
-Acknowledge every handled, older or identical action with `it ack <the action's id>`. Accepting navigation from the current destination replaces the previous record and retires the earlier source. A newer attempt from the previous source retires the destination it superseded. A showing brought up independently, such as a spoken request to return to the tour, also retires both records. Retired requests are discarded and acknowledged, even if you later return to the same page. After clearing the tour, set both records to `null`.
+Acknowledge every handled, older or identical action with `it ack <the action's id>`. Accepting navigation from the current destination replaces the previous record and retires the earlier source. A newer attempt from the previous source retires the destination only when its replacement command succeeds. A showing brought up independently, such as a spoken request to return to the tour, also retires both records. Retired requests are discarded and acknowledged, even if you later return to the same page. After clearing the tour, set both records to `null`.
 
 Before handling Finish, read `it actions --id tour-done` and consider every available attempt from that showing. Apply `commitTourAttempt` immediately before `it tour clear`, after processing any newer navigation received while preparing to finish. An older Finish must never clear a menu or another page brought up by a newer action. Once a current Finish clears the tour, discard all further actions from its retired showings.
 

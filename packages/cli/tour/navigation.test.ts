@@ -14,18 +14,31 @@ interface Navigation {
   text?: string
 }
 
+interface Showing {
+  from: string
+  version: number
+  attempt: number
+  attempt_display: string
+  choice: string | null
+  wanted: string | null
+}
+
 /** The decision rules shipped in the guide, applied before navigation and immediately before its command. */
 function guide(version: number, from = 'menu') {
   const rule = /```js\n(function takeTourAttempt[\s\S]*?)\n```/.exec(GUIDE)?.[1]
   expect(rule, 'The guide carries its navigation decision rules.').toBeDefined()
   const { take, commit } = runInNewContext(`${rule}\n({ take: takeTourAttempt, commit: commitTourAttempt })`)
-  const record = (from: string, version: number) => ({ from, version, attempt: 0, attempt_display: '', choice: null, wanted: null })
-  const tour: { current: object | null; previous: object | null } = { current: record(from, version), previous: null }
+  const record = (from: string, version: number): Showing => ({ from, version, attempt: 0, attempt_display: '', choice: null, wanted: null })
+  const tour: { current: Showing | null; previous: Showing | null } = { current: record(from, version), previous: null }
   const shown: string[] = []
   let nextVersion = version
-  function complete(action: { name: string; data: unknown }) {
+  function complete(action: { name: string; data: unknown }, succeeds = true) {
     const data = action.data as Navigation
     if (!commit(tour, action.name, data)) return
+    if (!succeeds) {
+      tour.previous!.choice = null
+      return
+    }
     const destination = action.name === 'pick' ? data.choice! : action.name
     shown.push(destination)
     if (action.name === 'finish') tour.current = tour.previous = null
@@ -38,7 +51,7 @@ function guide(version: number, from = 'menu') {
     receive(action: { name: string; data: unknown }) {
       if (take(tour, action.name, action.data)) complete(action)
     },
-    showing: () => tour.current as { from: string; version: number },
+    showing: () => tour.current!,
   }
 }
 
@@ -520,6 +533,35 @@ describe('the tour navigation requests', () => {
     const chess = agent.showing()
     agent.receive(pick('drums', 2))
     agent.receive({ name: 'next', data: { from: chess.from, from_version: chess.version, attempt: 1, attempt_display: 'display-a' } })
+    expect(agent.shown).toEqual(['chess', 'drums'])
+  })
+
+  test.each(['next', 'menu'])('the displayed destination can still use %s when its replacement command fails', (name) => {
+    const agent = guide(3)
+    const pick = (choice: string, attempt: number) => ({ name: 'pick', data: { choice, from: 'menu', from_version: 3, attempt, attempt_display: 'display-a' } })
+    agent.receive(pick('chess', 1))
+    const chess = agent.showing()
+    const replacement = pick('drums', 2)
+    expect(agent.begin(replacement)).toBe(true)
+    agent.complete(replacement, false)
+    agent.receive({ name, data: { from: chess.from, from_version: chess.version, attempt: 1, attempt_display: 'display-a' } })
+    expect(agent.shown).toEqual(['chess', name])
+    agent.receive(pick('drums', 3))
+    expect(agent.shown).toEqual(['chess', name])
+  })
+
+  test('a failed replacement keeps the displayed destination until a fresh attempt succeeds', () => {
+    const agent = guide(3)
+    const pick = (choice: string, attempt: number) => ({ name: 'pick', data: { choice, from: 'menu', from_version: 3, attempt, attempt_display: 'display-a' } })
+    agent.receive(pick('chess', 1))
+    const chess = agent.showing()
+    const replacement = pick('drums', 2)
+    expect(agent.begin(replacement)).toBe(true)
+    agent.complete(replacement, false)
+    expect(agent.showing()).toBe(chess)
+    agent.receive(pick('drums', 3))
+    expect(agent.shown).toEqual(['chess', 'drums'])
+    agent.receive({ name: 'menu', data: { from: chess.from, from_version: chess.version, attempt: 1, attempt_display: 'display-a' } })
     expect(agent.shown).toEqual(['chess', 'drums'])
   })
 
