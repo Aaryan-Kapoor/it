@@ -2,7 +2,7 @@
 // erased, and what is simply too old to keep.
 // Every step removes a small batch and asks to be run again while a batch came back full, so
 // no run reads more than it should and nothing is left behind because there was a lot of it.
-import { RETENTION } from '@it/protocol'
+import { PUBLICATION, RETENTION } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
@@ -63,7 +63,12 @@ async function removeHangers(ctx: MutationCtx, artifactId: Id<'artifacts'>): Pro
     .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
     .take(LIGHT)
   for (const n of notifications) await ctx.db.delete(n._id)
-  const more = versions.length === VERSIONS || actions.length === HEAVY || notifications.length === LIGHT
+  const publications = await ctx.db
+    .query('publications')
+    .withIndex('by_artifact_n', (q) => q.eq('artifactId', artifactId))
+    .take(LIGHT)
+  for (const p of publications) await ctx.db.delete(p._id)
+  const more = publications.length === LIGHT || versions.length === VERSIONS || actions.length === HEAVY || notifications.length === LIGHT
   if (!more) await forgetCounts(ctx, artifactId)
   return more
 }
@@ -128,7 +133,7 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
     .take(LIGHT)
   for (const n of notifications) await ctx.db.delete(n._id)
   if (notifications.length === LIGHT) return true
-  for (const table of ['projects', 'forgotten'] as const) {
+  for (const table of ['projects', 'forgotten', 'publications'] as const) {
     const rows = await ctx.db
       .query(table)
       .withIndex('by_user_key', (q: any) => q.eq('userId', userId))
@@ -259,6 +264,12 @@ export const sweepRecords = internalMutation({
       await ctx.db
         .query('deletions')
         .withIndex('by_completed', (q) => q.gt('completedAt', 0).lt('completedAt', now - 7 * DAY))
+        .take(LIGHT),
+    )
+    await drop(
+      await ctx.db
+        .query('publications')
+        .withIndex('by_created', (q) => q.lt('createdAt', now - PUBLICATION.receiptDays * DAY))
         .take(LIGHT),
     )
     await drop(

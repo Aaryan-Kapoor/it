@@ -29,7 +29,7 @@ import net from 'node:net'
 import os from 'node:os'
 import type { Duplex } from 'node:stream'
 import { createContent, pagePolicy } from '@it/content'
-import { contentPort, LIMITS, onThisMachine } from '@it/protocol'
+import { contentPort, LIMITS, onThisMachine, uploadBudgetMs } from '@it/protocol'
 import { direct, inHome, Problem } from '../lib'
 import type { Backend } from './backend'
 import { doorKey, type ServiceConfig } from './config'
@@ -711,7 +711,7 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       if (length === null) return refuse(411, 'length_required')
       if (length > LIMITS.fileBytes) return unread('too_large')
       // A file is passed on as it arrives, for as many bytes as it said and no more
-      const file = a.body ? held(a.body, length, patience * 20) : null
+      const file = a.body ? held(a.body, length, (uploadBudgetMs(length) * patience) / PATIENCE_MS) : null
       return toContent('upload', a, url, file?.stream ?? null, file?.over)
     }
     if (path.startsWith('/control/')) {
@@ -1048,7 +1048,7 @@ const listenNode: Listen = (address, port, door, api, patience) => {
     requireHostHeader: false,
     // Headers that do not arrive, and a request that never ends, are given up on
     headersTimeout: 15_000,
-    requestTimeout: patience * 20 + 60_000,
+    requestTimeout: (uploadBudgetMs(LIMITS.fileBytes) * patience) / PATIENCE_MS + 60_000,
   })
   // Inside the standalone program a connection on which nothing moves is closed, as it is on the site's port there
   if (standalone) server.setTimeout(IDLE_S * 1000)

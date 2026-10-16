@@ -195,6 +195,7 @@ async function backend(
   const asked: Asked[] = []
   const joined: Record<string, unknown>[] = []
   const uploads: { path: string; bytes: number }[] = []
+  const upload: { answer: () => number | Promise<number> } = { answer: () => 200 }
   const live: string[] = []
   const token = { asked: 0, answer: (): [status: number, body: unknown] => [200, { token: 'a-token', expires_in: 300 }] }
   const server = http.createServer((req, res) => {
@@ -213,7 +214,7 @@ async function backend(
         }
         if (req.method === 'PUT') {
           uploads.push({ path: req.url ?? '', bytes: Buffer.concat(chunks).length })
-          return json({})
+          return json({}, await upload.answer())
         }
         if (req.method === 'POST' && req.url === '/bridge/enroll') {
           const sent = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
@@ -225,6 +226,10 @@ async function backend(
         const one = { path: call.path, args: call.args?.[0] ?? {} }
         asked.push(one)
         const said = await answer(one)
+        if (said === Symbol.for('drop-answer')) {
+          req.socket.destroy()
+          return
+        }
         if (said instanceof Refusal) return json({ status: 'error', errorMessage: 'refused', errorData: said.data, logLines: [] })
         json({ status: 'success', value: said ?? null, logLines: [] })
       })
@@ -241,6 +246,7 @@ async function backend(
     asked,
     joined,
     uploads,
+    upload,
     live,
     token,
     env: { IT_URL: url, IT_SITE_URL: url },
@@ -667,17 +673,13 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     const m = machine()
     const b = await backend(m, ({ path: fn, args }) => {
       if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 3, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
-      if (fn === 'publish:finish') return new Refusal({ code: 'unavailable', message: 'The upload could not be checked just now. Try again in a moment.' })
+      if (fn === 'publish:finish') return new Refusal({ code: 'invalid', message: 'One file did not arrive intact. Publish again.' })
       return null
     })
     try {
       const ran = await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], b.env)
       // What is said is why it was not finished, whatever became of giving it up
-      expect([ran.code, ran.out, error(ran)]).toEqual([
-        1,
-        '',
-        { code: 'unavailable', message: 'The upload could not be checked just now. Try again in a moment.' },
-      ])
+      expect([ran.code, ran.out, error(ran)]).toEqual([2, '', { code: 'invalid', message: 'One file did not arrive intact. Publish again.' }])
       expect(b.asked.filter((x) => x.path.startsWith('publish:')).map((x) => [x.path, x.args.artifactId, x.args.version])).toEqual([
         ['publish:begin', undefined, undefined],
         ['publish:finish', 'artifact-1', 3],
@@ -1305,71 +1307,248 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
-  test('`it open` says so, and does not end well, where the page was shown and could not be made this conversation’s', async () => {
+  test('`it open` asks for ownership and showing in one transaction and reports its refusal', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>
-      asked.path === 'artifacts:take'
-        ? new Refusal({ code: 'rate_limited', message: 'Too many of those at once. Try again shortly.' })
-        : asked.path === 'displays:show'
-          ? { displays: ['Kitchen'] }
+      asked.path === 'displays:show'
+        ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
+        : asked.path === 'displays:list'
+          ? [{ name: 'Kitchen' }]
           : null,
     )
     try {
-      const opened = await run(m, ['open', 'board'], { ...b.env, CODEX_THREAD_ID: 'codex-today' })
-      expect([opened.code, printed(opened)]).toEqual([
-        1,
-        {
-          id: 'board',
-          shownOn: ['Kitchen'],
-          notTaken: { code: 'rate_limited', message: 'Too many of those at once. Try again shortly.' },
-          hint: 'The page is shown, and it is still another conversation’s: what is done on it does not come here. Run `it open board` again before you ask the person to use it.',
-        },
-      ])
+      const opened = await run(m, ['open', 'board', '--on', 'Kichen'], { ...b.env, CODEX_THREAD_ID: 'codex-today' })
+      expect([opened.code, opened.out, error(opened).code]).toEqual([1, '', 'not_found'])
+      expect(b.asked.filter((x) => x.path === 'artifacts:take')).toEqual([])
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({
+        slug: 'board',
+        display: 'Kichen',
+        session: { harness: 'codex', id: 'codex-today' },
+        agent: 'codex',
+      })
     } finally {
       await b.close()
     }
   })
 
-  test('`it open` says that the page is this conversation’s now, and does not end well, where it was taken from another and could then not be shown', async () => {
+  test('an explicit publishing label is distinguished from the inferred app name', async () => {
     const m = machine()
-    const b = await backend(m, (asked) =>
-      asked.path === 'artifacts:take'
-        ? { took: true }
-        : asked.path === 'displays:show'
-          ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
-          : asked.path === 'displays:list'
-            ? [{ name: 'Kitchen' }]
+    const b = await backend(m, ({ path: fn }) =>
+      fn === 'artifacts:get'
+        ? { title: 'Plan' }
+        : fn === 'publish:begin'
+          ? { artifactId: 'artifact-1', slug: 'plan', version: 2, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+          : fn === 'publish:finish'
+            ? { slug: 'plan', version: 2, url: `${b.url}/p/plan` }
             : null,
     )
     try {
-      const opened = await run(m, ['open', 'board', '--on', 'Kichen'], { ...b.env, CODEX_THREAD_ID: 'codex-today' })
-      expect([opened.code, opened.err, printed(opened)]).toEqual([
-        1,
-        '',
-        {
-          id: 'board',
-          shownOn: [],
-          notShown: { code: 'not_found', message: 'No display is called "Kichen".', hint: 'Displays: "Kitchen"' },
-          note: 'This page was another conversation’s, and is this one’s now: what is done on it comes here.',
-          hint: 'The page was not shown, and `notShown` says why. It was made this conversation’s before that, and stays so. Run `it open board` again to show it.',
-        },
-      ])
-      // Where nothing was taken, a page that could not be shown is said as it always was, and nothing is printed
-      const own = await backend(m, (asked) =>
-        asked.path === 'artifacts:take'
-          ? { took: false }
-          : asked.path === 'displays:show'
-            ? new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
-            : asked.path === 'displays:list'
-              ? [{ name: 'Kitchen' }]
-              : null,
-      )
-      try {
-        const again = await run(m, ['open', 'board', '--on', 'Kichen'], { ...own.env, CODEX_THREAD_ID: 'codex-today' })
-        expect([again.code, again.out, error(again).code]).toEqual([1, '', 'not_found'])
-      } finally {
-        await own.close()
+      const env = { ...b.env, CODEX_THREAD_ID: 'label-conversation' }
+      expect((await run(m, ['update', 'plan', '--html', '<p>hi</p>'], env)).code).toBe(0)
+      expect(b.asked.findLast((x) => x.path === 'publish:begin')!.args).toMatchObject({ agent: 'codex' })
+      expect(b.asked.findLast((x) => x.path === 'publish:begin')!.args.agentExplicit).toBeUndefined()
+      expect((await run(m, ['update', 'plan', '--html', '<p>hi</p>', '--agent', 'New label'], env)).code).toBe(0)
+      expect(b.asked.findLast((x) => x.path === 'publish:begin')!.args).toMatchObject({ agent: 'New label', agentExplicit: true })
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a publication recovers a lost answer once in place and across another invocation', async () => {
+    const m = machine()
+    let committed = false
+    let loss = 1
+    let title = 'Original'
+    const identities: unknown[] = []
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'artifacts:get') return { title }
+      if (asked.path === 'publish:begin' || asked.path === 'publish:resume') {
+        identities.push(asked.args.operation)
+        return { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: committed ? '' : 'a-grant' } }
       }
+      if (asked.path === 'publish:finish') {
+        committed = true
+        if (loss-- > 0) return Symbol.for('drop-answer')
+        return { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      }
+      return null
+    })
+    try {
+      const args = ['update', 'plan', '--html', '<p>hi</p>']
+      const first = await run(m, args, b.env)
+      expect([first.code, printed(first).version, b.uploads.length]).toEqual([0, 1, 1])
+      committed = false
+      loss = 3
+      expect((await run(m, args, b.env)).code).toBe(1)
+      expect(b.asked.filter((x) => x.path === 'publish:abandon')).toEqual([])
+      const uploads = b.uploads.length
+      title = 'A newer publication changed this title'
+      loss = 0
+      const recovered = await run(m, args, b.env)
+      expect([recovered.code, printed(recovered).version, b.uploads.length]).toEqual([0, 1, uploads])
+      expect(identities[1]).toBe(identities[2])
+      expect(identities[0]).not.toBe(identities[1])
+      expect(readdirSync(path.join(m.it, 'publication-pending'))).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a concurrent command leaves the receipt alone while the first begin is still being recorded', async () => {
+    const m = machine()
+    let release!: () => void
+    let reached!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const beginning = new Promise<void>((resolve) => (reached = resolve))
+    let committed = false
+    let lost = 3
+    const b = await backend(m, async ({ path: fn }) => {
+      if (fn === 'publish:begin') {
+        reached()
+        await held
+      }
+      if (fn === 'publish:resume' && !committed) return new Refusal({ code: 'not_found', message: 'That publication is not recorded.' })
+      if (fn === 'publish:begin' || fn === 'publish:resume')
+        return { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: committed ? '' : 'a-grant' } }
+      if (fn === 'publish:finish') {
+        committed = true
+        if (lost-- > 0) return Symbol.for('drop-answer')
+        return { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      }
+      return null
+    })
+    const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+    const first = run(m, args, b.env)
+    try {
+      await beginning
+      const folder = path.join(m.it, 'publication-pending')
+      const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
+      const pending = readFileSync(file, 'utf8')
+      const concurrent = await run(m, args, b.env)
+      expect([concurrent.code, error(concurrent).code]).toEqual([1, 'busy'])
+      expect(readFileSync(file, 'utf8')).toBe(pending)
+      expect(b.asked.filter((x) => x.path === 'publish:resume')).toHaveLength(0)
+      release()
+      expect((await first).code).toBe(1)
+      expect(readFileSync(file, 'utf8')).toBe(pending)
+      const recovered = await run(m, args, b.env)
+      expect([recovered.code, printed(recovered).version, b.uploads.length]).toEqual([0, 1, 1])
+      expect(b.asked.filter((x) => x.path === 'publish:begin')).toHaveLength(1)
+      expect(b.asked.filter((x) => x.path === 'publish:abandon')).toEqual([])
+      expect(b.asked.filter((x) => x.path === 'publish:resume').every((x) => x.args.operation === JSON.parse(pending).operation)).toBe(true)
+      expect(readdirSync(folder)).toEqual([])
+    } finally {
+      release()
+      await first
+      await b.close()
+    }
+  })
+
+  test('a concurrent command cannot abandon the publication while its uploader is still working', async () => {
+    const m = machine()
+    let reached!: () => void
+    let release!: () => void
+    const uploading = new Promise<void>((resolve) => (reached = resolve))
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let uploads = 0
+    let abandoned = false
+    const b = await backend(m, ({ path: fn }) => {
+      if (fn === 'publish:begin' || fn === 'publish:resume')
+        return { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      if (fn === 'publish:abandon') abandoned = true
+      if (fn === 'publish:finish')
+        return abandoned ? new Refusal({ code: 'conflict', message: 'That publication was abandoned.' }) : { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      return null
+    })
+    b.upload.answer = async () => {
+      if (++uploads !== 1) return 400
+      reached()
+      await held
+      return 200
+    }
+    const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+    const first = run(m, args, b.env)
+    try {
+      await uploading
+      const folder = path.join(m.it, 'publication-pending')
+      const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
+      const pending = readFileSync(file, 'utf8')
+      const concurrent = await run(m, args, b.env)
+      expect([concurrent.code, error(concurrent).code]).toEqual([1, 'busy'])
+      expect(readFileSync(file, 'utf8')).toBe(pending)
+      expect([uploads, abandoned]).toEqual([1, false])
+      release()
+      const done = await first
+      expect([done.code, printed(done).version]).toEqual([0, 1])
+      expect(b.asked.filter((x) => x.path.startsWith('publish:')).map((x) => x.path)).toEqual(['publish:begin', 'publish:finish'])
+      expect(readdirSync(folder)).toEqual([])
+    } finally {
+      release()
+      await first
+      await b.close()
+    }
+  })
+
+  test.each(['not_found', 'rate_limited'])('an uncertain begin answered with %s keeps its identity when recovery still finds nothing', async (refusal) => {
+    const m = machine()
+    const b = await backend(m, ({ path: fn }) =>
+      fn === 'publish:begin'
+        ? new Refusal({ code: refusal, message: 'The publication could not be prepared.' })
+        : new Refusal({ code: 'not_found', message: 'That publication is not recorded.' }),
+    )
+    try {
+      const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+      expect((await run(m, args, b.env)).code).toBe(1)
+      const folder = path.join(m.it, 'publication-pending')
+      expect(readdirSync(folder)).toHaveLength(1)
+      const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
+      const pending = readFileSync(file, 'utf8')
+      expect((await run(m, args, b.env)).code).toBe(1)
+      expect(readFileSync(file, 'utf8')).toBe(pending)
+      expect(b.asked.filter((x) => x.path === 'publish:begin')).toHaveLength(1)
+      expect(b.asked.filter((x) => x.path === 'publish:resume')).toHaveLength(3)
+      expect(b.uploads).toEqual([])
+      writeFileSync(file, JSON.stringify({ ...JSON.parse(pending), at: 0 }))
+      const calls = b.asked.length
+      expect(error(await run(m, args, b.env)).code).toBe('conflict')
+      expect(b.asked).toHaveLength(calls)
+      expect(existsSync(file)).toBe(true)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test.each(['publish:resume', 'publish:finish'])('a lost completion keeps its receipt when %s is rate limited', async (limited) => {
+    const m = machine()
+    let committed = false
+    let lost = limited === 'publish:resume' ? 3 : 1
+    let blocked = true
+    const b = await backend(m, ({ path: fn }) => {
+      if (fn === limited && committed && lost <= 0 && blocked) return new Refusal({ code: 'rate_limited', message: 'Too many requests. Try again shortly.' })
+      if (fn === 'publish:begin' || fn === 'publish:resume')
+        return { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: committed ? '' : 'a-grant' } }
+      if (fn === 'publish:finish') {
+        committed = true
+        if (lost-- > 0) return Symbol.for('drop-answer')
+        return { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      }
+      return null
+    })
+    try {
+      const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+      expect((await run(m, args, b.env)).code).toBe(1)
+      const folder = path.join(m.it, 'publication-pending')
+      expect(readdirSync(folder)).toHaveLength(1)
+      const file = path.join(folder, readdirSync(folder).find((name) => name.endsWith('.json'))!)
+      const pending = readFileSync(file, 'utf8')
+      expect((await run(m, args, b.env)).code).toBe(1)
+      expect(readFileSync(file, 'utf8')).toBe(pending)
+      blocked = false
+      const recovered = await run(m, args, b.env)
+      expect([recovered.code, printed(recovered).version, b.uploads.length]).toEqual([0, 1, 1])
+      expect(b.asked.filter((x) => x.path === 'publish:begin')).toHaveLength(1)
+      expect(b.asked.filter((x) => x.path === 'publish:abandon')).toEqual([])
+      expect(readdirSync(folder)).toEqual([])
     } finally {
       await b.close()
     }
@@ -1752,44 +1931,6 @@ describe.skipIf(process.platform !== 'linux')('a service registered where IT_UPD
 })
 
 describe.skipIf(process.platform === 'win32')('taking It off a machine', () => {
-  test('a failed data removal restores the service settings so that uninstall can be tried again', async () => {
-    const m = machine(true, true)
-    for (const name of ['systemctl', 'launchctl', 'loginctl']) writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
-    const settings = path.join(m.it, 'service.json')
-    writeFileSync(
-      settings,
-      JSON.stringify({ port: await ports.next(), network: false, instanceSecret: 'ab'.repeat(32), adminKey: 'fixture', sessionSecret: 'fixture' }),
-    )
-    const original = readFileSync(settings, 'utf8')
-    const database = path.join(m.it, 'backend', 'db.sqlite3')
-    mkdirSync(path.dirname(database), { recursive: true })
-    writeFileSync(database, 'the retained database')
-    const preload = path.join(m.home, 'busy-database.mjs')
-    writeFileSync(
-      preload,
-      `import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
-const remove = fs.rmSync;
-fs.rmSync = (file, options) => {
-  if (String(file) === ${JSON.stringify(database)}) throw Object.assign(new Error('The database is busy.'), { code: 'EBUSY' });
-  return remove(file, options);
-};
-syncBuiltinESMExports();
-`,
-    )
-    const env = { PATH: `${m.bin}:/usr/bin:/bin` }
-    try {
-      const failed = await run(m, ['uninstall', '--yes'], env, process.execPath, ['--import', pathToFileURL(preload).href])
-      expect([failed.code, printed(failed).removed]).toEqual([0, false])
-      expect(readFileSync(settings, 'utf8')).toBe(original)
-      expect(readFileSync(database, 'utf8')).toBe('the retained database')
-      const retried = await run(m, ['uninstall', '--yes'], env)
-      expect([retried.code, printed(retried).removed, existsSync(m.it)]).toEqual([0, true, false])
-    } finally {
-      await ports.release()
-    }
-  })
-
   test.each(['no task', 'refused', 'silent refusal', 'unavailable', 'an empty error'])(
     'on Windows, uninstall with no service or lock handles a scheduler that says %s in words',
     async (answer) => {
@@ -2029,6 +2170,54 @@ process.exit(answer === 'no task' && /exit 0\\s*$/.test(script) ? 0 : 1)
     const second = await run(m, ['uninstall', '--yes'])
     expect([second.code, printed(second).removed, existsSync(m.it), existsSync(path.join(m.home, 'pi-has'))]).toEqual([0, true, false, false])
     expect(ran().some((words) => words.startsWith('remove '))).toBe(true)
+  })
+
+  test.each([false, true])('`it uninstall` preserves settings after a failed removal so it can be retried, with retained add-ons %s', async (retained) => {
+    const m = machine(true, true)
+    const settings = JSON.stringify({ port: SITE_PORT, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' })
+    writeFileSync(path.join(m.it, 'service.json'), settings)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+      writeFileSync(path.join(m.bin, name), '#!/bin/sh\nexit 0\n')
+      chmodSync(path.join(m.bin, name), 0o755)
+    }
+    mkdirSync(path.join(m.it, 'backend'))
+    writeFileSync(path.join(m.it, 'backend', 'pages.sqlite3'), 'the pages')
+    if (retained) {
+      mkdirSync(path.join(m.it, 'bin'))
+      mkdirSync(path.join(m.it, 'addons', 'pi'), { recursive: true })
+      writeFileSync(path.join(m.it, 'bin', 'it'), '#!/bin/sh\n')
+      writeFileSync(path.join(m.it, 'addons', 'pi.json'), JSON.stringify({ installs: [{ version: '0.1.0', at: 1, by: '0.1.22', env: {} }] }))
+      writeFileSync(path.join(m.home, 'pi-has'), `${path.join(m.it, 'addons', 'pi')}\n`)
+    }
+    const preload = path.join(m.home, 'refuse-removal.mjs')
+    writeFileSync(
+      preload,
+      `import fs from 'node:fs'
+import path from 'node:path'
+import { syncBuiltinESMExports } from 'node:module'
+const remove = fs.rmSync
+fs.rmSync = (file, options) => {
+  if (String(file) === path.join(process.env.IT_HOME, 'backend', 'pages.sqlite3')) {
+    throw Object.assign(new Error('the backend file is locked'), { code: 'EBUSY' })
+  }
+  return remove(file, options)
+}
+syncBuiltinESMExports()
+`,
+    )
+    const first = await run(m, ['uninstall', '--yes'], {}, process.execPath, ['--import', pathToFileURL(preload).href])
+    expect([first.code, printed(first).removed]).toEqual([0, false])
+    expect(printed(first).left.some((line: string) => line.includes('could not be fully cleaned'))).toBe(true)
+    expect(readFileSync(path.join(m.it, 'service.json'), 'utf8')).toBe(settings)
+    expect(readFileSync(path.join(m.it, 'backend', 'pages.sqlite3'), 'utf8')).toBe('the pages')
+    if (process.platform !== 'win32') expect(statSync(path.join(m.it, 'service.json')).mode & 0o077).toBe(0)
+    const ran = retained ? pi(m) : undefined
+    const second = await run(m, ['uninstall', '--yes'])
+    expect([second.code, printed(second).removed, existsSync(m.it)]).toEqual([0, true, false])
+    if (ran) {
+      expect(ran().some((words) => words.startsWith('remove '))).toBe(true)
+      expect(existsSync(path.join(m.home, 'pi-has'))).toBe(false)
+    }
   })
 
   test('`it uninstall` deletes the folder It is kept in where the folder it was told of is a link to it, and the link with it', async () => {
@@ -2439,6 +2628,7 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
       // On this machine it is this conversation's own page, under the id it had before, and is made again
       has = { ...has, machineId: 'machine-1' }
       expect([(await create()).code, taken()]).toEqual([0, true])
+      expect(b.asked.findLast((x) => x.path === 'publish:begin')!.args.expectedOwner).toEqual({ machineId: 'machine-1', session: has.session })
     } finally {
       await b.close()
     }
@@ -2459,7 +2649,7 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
           : asked.path === 'artifacts:take'
             ? { took: true }
             : asked.path === 'displays:show'
-              ? { displays: ['Kitchen'] }
+              ? { displays: ['Kitchen'], took: Boolean(asked.args.session) }
               : asked.path === 'publish:finish'
                 ? // The backend's word on what became of the page: taken by a publish that asked for it, left where it was by one that did not
                   {
@@ -2535,7 +2725,7 @@ describe.skipIf(process.platform === 'win32')('a page another conversation made'
       // A conversation that only brings the page up for its person takes it as well: it is the one they are talking to
       b.asked.length = 0
       const opened = await run(m, ['open', 'board'], mine)
-      expect(b.asked.find((x) => x.path === 'artifacts:take')!.args).toEqual({
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({
         slug: 'board',
         session: { harness: 'codex', id: 'codex-today' },
         agent: 'codex',
@@ -3559,7 +3749,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       /^ {2}it update <id> .*\[--title "<title>"\]/m,
       /\[--agent <name>\]/,
       // The label is the page's from when it was made: an update by the conversation that has the page does not change it, and the help does not say that it does
-      /\[--agent <name>\], a label for who made it,\s+which a page keeps until another conversation has it/,
+      /\[--agent <name>\], a label for who made it,\s+which its owning conversation can change explicitly/,
       /\[--take\]/,
     ])
       expect(ran.out).toMatch(line)

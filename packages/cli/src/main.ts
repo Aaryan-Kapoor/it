@@ -406,7 +406,8 @@ async function create(a: Args) {
     if (!(err instanceof Problem) || err.code !== 'anothers' || slug === undefined) throw err
     const theirs = await call<Made>('query', api.artifacts.get, { slug }).catch(() => null)
     // The same conversation, under the id its app gave it before it was cleared or carried on: the page is its own
-    if (theirs?.session && carriedOn(theirs.session, theirs.machineId)) done = await publish({ ...page, take: true })
+    if (theirs?.session && carriedOn(theirs.session, theirs.machineId))
+      done = await publish({ ...page, take: true, expectedOwner: { machineId: theirs.machineId!, session: theirs.session } })
     else throw anothers(slug, theirs)
   }
   await published(done, a, done.version === 1)
@@ -2864,7 +2865,7 @@ Pages
   it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open] [--on "<display>"]
   it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open] [--on "<display>"]
                                  Both take [--agent <name>], a label for who made it,
-                                 which a ${NOUN.one} keeps until another conversation has it, and
+                                 which its owning conversation can change explicitly, and
                                  [--take], which gives the ${NOUN.one} to this conversation.
                                  Without --take, create makes nothing under an id that is
                                  another conversation's ${NOUN.one}, and says whose it is.
@@ -3405,51 +3406,17 @@ async function main(argv: string[]): Promise<void> {
       const mine = asked?.session
       // Which conversation this is was a choice among the apps that had marked this command: said, so that an agent that is another one knows
       const guessed = sessionNote(asked, `This ${NOUN.one} was shown for`, `run \`it open ${slug}\` again with IT_HARNESS and IT_SESSION set to your own.`)
-      let took = false
-      let notTaken: Problem | undefined
-      if (mine) {
-        await noteConversation(mine)
-        // A page that is not there is said by the showing itself, below. Anything else that kept
-        // the page from being taken is said beside what was shown: the page is up, and what is
-        // done on it still goes to the conversation that had it, which the agent has to know
-        // before it asks its person to use it.
-        took = await call<{ took: boolean }>('mutation', api.artifacts.take, { slug, session: mine, agent: mine.harness }).then(
-          (r) => r.took === true,
-          (err) => {
-            if (err instanceof Problem && err.code !== 'not_found') notTaken = err
-            return false
-          },
-        )
-      }
+      if (mine) await noteConversation(mine)
+      const result = await onDisplay(a, () =>
+        call<Shown & { took?: boolean }>('mutation', api.displays.show, {
+          slug,
+          ...(text(a, 'on') ? { display: text(a, 'on') } : {}),
+          ...(mine ? { session: mine, agent: mine.harness } : {}),
+        }),
+      )
+      const took = result.took === true
+      const shown = shownAs(result)
       const taken = `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
-      let shown: ReturnType<typeof shownAs>
-      try {
-        shown = shownAs(await show(slug, a))
-      } catch (err) {
-        if (!took || !(err instanceof Problem)) throw err
-        // The page was made this conversation's a moment ago, and that stands whatever became of
-        // showing it. Told only that there is no such display, an agent takes it that nothing was
-        // changed, while what is done on the page, where it is still up, now comes to it
-        process.exitCode = 1
-        return out({
-          id: slug,
-          shownOn: [],
-          notShown: { code: err.code, message: err.message, ...(err.hint ? { hint: err.hint } : {}) },
-          note: taken,
-          hint: `The ${NOUN.one} was not shown, and \`notShown\` says why. It was made this conversation’s before that, and stays so. Run \`it open ${slug}\` again to show it.`,
-          ...(guessed ? { session: guessed } : {}),
-        })
-      }
-      if (notTaken) {
-        process.exitCode = 1
-        return out({
-          id: slug,
-          ...shown,
-          notTaken: { code: notTaken.code, message: notTaken.message },
-          hint: `The ${NOUN.one} is shown, and it is still another conversation’s: what is done on it does not come here. Run \`it open ${slug}\` again before you ask the person to use it.`,
-          ...(guessed ? { session: guessed } : {}),
-        })
-      }
       return out({
         id: slug,
         ...shown,

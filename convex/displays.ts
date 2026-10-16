@@ -3,6 +3,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { action, internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
+import { takePage } from './artifacts'
 import { revokeLater } from './content'
 import {
   artifactBySlug,
@@ -21,6 +22,7 @@ import { fail } from './lib/errors'
 import { quota, rateLimit } from './lib/limits'
 import { log } from './lib/log'
 import { mint } from './lib/signing'
+import { session } from './schema'
 import { endSession, signOutDisplay } from './sessions'
 
 const KEY = /^[A-Za-z0-9_-]{16,128}$/
@@ -381,9 +383,9 @@ export const forget = mutation({
  * which shows nothing until that browser is paired again.
  */
 export const show = mutation({
-  args: { slug: v.string(), display: v.optional(v.string()) },
-  handler: async (ctx, { slug, display }) => {
-    const { user } = await requireMachine(ctx)
+  args: { slug: v.string(), display: v.optional(v.string()), session: v.optional(session), agent: v.optional(v.string()) },
+  handler: async (ctx, { slug, display, session: mine, agent }) => {
+    const { user, machine } = await requireMachine(ctx)
     await rateLimit(ctx, 'show', user._id)
     const artifact = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
     const all = await ctx.db
@@ -408,6 +410,9 @@ export const show = mutation({
         shown.push(name)
       } else notShown.push({ display: name, reason: 'not_paired' })
     }
-    return { displays: shown, notShown }
+    // A page changes owner only if at least one requested display can show it. All display
+    // changes and ownership changes commit together, including the rate-limit checks.
+    const took = mine && shown.length ? (await takePage(ctx, artifact, machine, mine, agent)).took : false
+    return { displays: shown, notShown, took }
   },
 })

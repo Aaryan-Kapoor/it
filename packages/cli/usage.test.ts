@@ -1335,8 +1335,12 @@ await sendNow('installation.removed', { age: 'under 1 day' })
     child.stdout!.on('data', (text) => (said += text))
     const posts: string[] = []
     const sender = noting(posts)
+    const clock = vi.spyOn(performance, 'now')
     try {
       await begun(() => said.includes('deciding'))
+      // Ownership recovery is tested here. Slow disk work must not expire the parent's decision.
+      // The child keeps its real clock and remains stalled until it is killed.
+      clock.mockReturnValue(0)
       const owner = readFileSync(deciding, 'utf8')
       expect(JSON.parse(owner)).toMatchObject({ pid: child.pid })
       // Neither an old timestamp nor a sender standing still past its send budget proves exit.
@@ -1354,6 +1358,7 @@ await sendNow('installation.removed', { age: 'under 1 day' })
     } finally {
       child.kill('SIGKILL')
       await ended
+      clock.mockRestore()
       sender.stop()
       rmSync(scratch, { recursive: true, force: true })
     }
@@ -2140,8 +2145,8 @@ describe('what cannot be trusted', () => {
   })
   test('however many files stand in It’s folder, a pass and a turning off touch only the two they know by name', async () => {
     told()
-    // Test the file and batch bounds without disk speed expiring a send decision.
-    vi.useFakeTimers({ toFake: ['performance'] })
+    // This tests which files are touched, so disk speed must not expire the decision first.
+    ownClock()
     const good = aLine()
     const one = Array.from({ length: 400 }, () => `${JSON.stringify({ ...good, id: randomUUID() })}\n`).join('')
     for (let i = 0; i < 300; i++) writeFileSync(`${spool()}.${10_000 + i}`, '')

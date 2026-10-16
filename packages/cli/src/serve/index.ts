@@ -270,6 +270,9 @@ function removeNotes(): boolean {
     any ||= existsSync(file())
     rmSync(file(), { force: true })
   }
+  const publications = inHome('publication-pending')
+  any ||= existsSync(publications)
+  rmSync(publications, { recursive: true, force: true })
   return any
 }
 /** Its presence means conversation notes still need removing after the connector has stopped. It names nobody. */

@@ -28,6 +28,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { type FileHandle, lstat, mkdir, open, readdir, readFile, rename, rmdir, unlink } from 'node:fs/promises'
@@ -64,7 +65,7 @@ export interface Files {
     allowed: (move: () => void) => boolean,
   ): Promise<'ok' | 'bytes_differ' | 'size_differs' | 'cut_short' | 'no_folder'>
   remove(prefix: string, file: string): Promise<void>
-  declare(prefix: string, files: ({ path: string } & Declared)[]): Promise<void>
+  declare(prefix: string, files: ({ path: string } & Declared)[], allowed?: (move: () => void) => boolean): Promise<void>
   /** The files declared for a version, or null if none were. */
   declared(prefix: string): Promise<Map<string, Declared> | null>
   /** What is stored under a version, by the name each file is kept under, with its size. */
@@ -72,7 +73,7 @@ export interface Files {
   /** The SHA-256 of a stored file as it is on disk now, by the name it is kept under. */
   checksum(prefix: string, name: string): Promise<string | null>
   /** Removes every file stored under a version but the ones kept under these names, and says how many it removed. */
-  only(prefix: string, names: Set<string>): Promise<number>
+  only(prefix: string, names: Set<string>, allowed?: (remove: () => void) => boolean): Promise<number>
   /** Removes what was declared under a prefix and then what was stored, at most `most` files of them. `more` says whether any are left. */
   clear(prefix: string, most: number): Promise<{ removed: number; more: boolean }>
   /** Lets go of the folder: what was still arriving here is cleared away. */
@@ -241,6 +242,28 @@ export function createFiles(folder: string): Files {
     }
   }
 
+  /** Reads the manifest while the caller holds the service's write lock, with no await before a file is moved or removed. */
+  function declaredNow(prefix: string): ({ path: string } & Declared)[] | null {
+    const dir = manifestFolder(prefix)
+    let at = root
+    let handle: number | undefined
+    try {
+      for (const part of path.relative(root, dir).split(path.sep)) {
+        at = path.join(at, part)
+        if (!lstatSync(at).isDirectory()) throw linked()
+      }
+      const file = path.join(dir, 'files.json')
+      if (!lstatSync(file).isFile()) return null
+      handle = openSync(file, READ)
+      return JSON.parse(readFileSync(handle, 'utf8')) as ({ path: string } & Declared)[]
+    } catch (err) {
+      if (gone(err) || (err as { code?: string }).code === 'ELOOP') return null
+      throw err
+    } finally {
+      if (handle !== undefined) closeSync(handle)
+    }
+  }
+
   /**
    * Writes a file whole or not at all: under another name first, and then moved into place.
    * Answers whether it was placed, was not written whole, or its version was no longer writable.
@@ -377,7 +400,21 @@ export function createFiles(folder: string): Files {
         return 'no_folder'
       }
       let fault: 'bytes_differ' | 'size_differs' | 'cut_short' = 'cut_short'
-      const placed = await place(to, allowed, async (handle) => {
+      // A restored database can reuse this version's prefix. The manifest may have changed
+      // while these bytes arrived: check its actual contents under the same lock as declaration
+      // replacement and cleanup, immediately before the rename. An old upload cannot restore
+      // a removed file or overwrite a replacement with different bytes.
+      const stillDeclared = (move: () => void) => {
+        let placed = false
+        allowed(() => {
+          const current = declaredNow(prefix)?.find((f) => f.path === file)
+          if (current?.size !== declared.size || current.sha256 !== declared.sha256) return
+          move()
+          placed = true
+        })
+        return placed
+      }
+      const placed = await place(to, stillDeclared, async (handle) => {
         const hash = createHash('sha256')
         let size = 0
         const reader = body?.getReader()
@@ -418,13 +455,13 @@ export function createFiles(folder: string): Files {
       await emptied(path.dirname(at))
     },
 
-    async declare(prefix, files) {
+    async declare(prefix, files, allowed) {
       const to = path.join(manifestFolder(prefix), 'files.json')
       await there(path.dirname(to))
       await mkdir(path.dirname(to), { recursive: true, mode: 0o700 })
       if (!(await there(path.dirname(to)))) throw new Error('what was declared could not be kept')
       const text = JSON.stringify(files)
-      const placed = await place(to, undefined, async (handle) => {
+      const placed = await place(to, allowed, async (handle) => {
         await handle.writeFile(text)
         return true
       })
@@ -476,7 +513,7 @@ export function createFiles(folder: string): Files {
       return hash.digest('hex')
     },
 
-    async only(prefix, names) {
+    async only(prefix, names, allowed) {
       const dir = versionFolder(prefix)
       if (!(await there(dir))) return 0
       let found: string[]
@@ -490,10 +527,24 @@ export function createFiles(folder: string): Files {
       for (const name of found) {
         // What counts as stored is a file, as `stored` has it: nothing else there is looked for when a version is checked
         if (names.has(name) || !(await isFile(path.join(dir, name)))) continue
-        await unlink(path.join(dir, name)).catch((err) => {
-          if (!gone(err)) throw err
-        })
-        removed += 1
+        let taken = false
+        const remove = () => {
+          // Another declaration can replace ours while the directory is being read. Its
+          // newly declared files must survive our cleanup, including in another service.
+          if (allowed) {
+            const current = declaredNow(prefix)
+            if (!current || current.some((f) => nameOf(f.path) === name)) return
+          }
+          try {
+            unlinkSync(path.join(dir, name))
+            taken = true
+          } catch (err) {
+            if (!gone(err)) throw err
+          }
+        }
+        if (allowed) allowed(remove)
+        else remove()
+        if (taken) removed += 1
       }
       return removed
     },
