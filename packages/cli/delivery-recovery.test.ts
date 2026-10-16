@@ -340,3 +340,12 @@ test('a mark that would exceed the byte bound falls back without replacing the e
   await store.claim(['new'], 'codex:other')
   expect([...open().returning]).toEqual(['new'])
 })
+
+test('a recovered click that changes conversation replaces its earlier waiter copy', async () => {
+  const store = open()
+  await store.keepWaiters([copy.click], copy.key)
+  await store.giveWaiters('earlier-waiter', 1, () => true)
+  const moved = { ...copy.click, session: { harness: 'codex', id: 'new-thread' } }
+  await store.keepWaiters([moved], 'codex:new-thread')
+  expect(open().waiters.get('action')).toEqual({ click: moved, key: 'codex:new-thread' })
+})

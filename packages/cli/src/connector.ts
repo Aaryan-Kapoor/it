@@ -856,7 +856,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
     await recovery.claim(ids, keyOf(session.harness, session.id))
     for (const id of ids) claimAttempts.set(id, attempt)
     const got = await call<string[]>('mutation', api.delivery.claim, { ids, for: session })
-    for (const id of ids) if (!got.includes(id)) await retireClaim(id, attempt)
+    const refused = ids.filter((id) => !got.includes(id))
+    for (const id of refused) {
+      // A recovered row is only a snapshot. A waiter or another machine may have taken
+      // it since; only a fresh inbox offer can make it eligible for another claim.
+      recoveredClicks.delete(id)
+      lostClaims.set(id, attempt)
+    }
+    if (refused.length) await retireLostClaims()
     return got
   }
   let inbox: Offered[] = []
@@ -1951,7 +1958,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
                     try {
                       const click = await call<Offered & { delivery: string }>('query', api.delivery.get, { id })
                       if (!click) throw new Error('unanswered')
-                      return { id, click: click.delivery === 'pending' ? click : null }
+                      if (click.delivery === 'pending') {
+                        // Older get answers do not say whether a pending click is parked.
+                        // Keep its ordering hold until the inbox actually offers it, without
+                        // preventing unrelated conversations from receiving their clicks.
+                        if (click.session && !recovery.targets.has(id)) await recovery.recover([], [[id, keyOf(click.session.harness, click.session.id)]])
+                        throw new Error('waiting for the recovered click to be offered')
+                      }
+                      return { id, click: null }
                     } catch (err) {
                       if ((err as { code?: string }).code === 'not_found') return { id, click: null }
                       throw err

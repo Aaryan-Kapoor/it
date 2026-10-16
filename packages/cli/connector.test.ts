@@ -943,7 +943,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     me([{ harness: 'codex', sessionId: 'thread-1', stop: true, run: name }])
     await until(() => ended().length > 0, 25_000)
     expect(ended()).toEqual([name])
-    expect(said.some((line) => line.includes('was stopped by the person'))).toBe(true)
+    await until(() => said.some((line) => line.includes('was stopped by the person')))
   }, 90_000)
 
   test('a conversation that a connector which died left running is ended, with what it had started, before anything is handed out, and is told that its turn was cut off', async () => {
@@ -1754,6 +1754,68 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:claim')).toEqual(['click-6'])
     expect(recoveryClaims().returning).not.toContain('disconnected')
     expect(recoveryClaims().targets.some(([id]) => id === 'disconnected')).toBe(false)
+  })
+
+  test.each([false, true])('a refused recovered claim drops its stale snapshot, including when cleanup fails: %s', async (diskFails) => {
+    standIn()
+    let available = false
+    let blocked: string | undefined
+    stand.answer = (name, args) => {
+      if (name === 'delivery:giveBackBatch') return { back: ['stale'], done: true }
+      if (name === 'delivery:recover') return [{ id: 'stale', click: { ...click(6), id: 'stale' } }]
+      if (name === 'delivery:claim' && args.ids.includes('stale') && !available) {
+        if (diskFails && !blocked) {
+          blocked = `${path.join(home, 'delivery-recovery.json')}.${process.pid}.tmp`
+          mkdirSync(blocked)
+        }
+        return []
+      }
+      return undefined
+    }
+    await start('socket', { wanted: ['pi'] })
+    await pass()
+    wants(['codex'])
+    await pass()
+    expect(called('delivery:claim')).toEqual(['stale'])
+    await pass(5)
+    expect(called('delivery:claim')).toEqual(['stale'])
+    if (blocked) {
+      expect(recoveryClaims().returning).toEqual(['stale'])
+      rmSync(blocked, { recursive: true })
+      blocked = undefined
+      await pass()
+    }
+    expect(recoveryClaims().returning).toEqual([])
+    available = true
+    offered({ ...click(6), id: 'stale', name: 'offered again' })
+    await pass()
+    await until(() => stand.codex.length === 1)
+    expect(stand.codex[0]!.args.join(' ')).toContain('offered again')
+  })
+
+  test('a legacy pending result is not delivered until the inbox proves it is no longer parked', async () => {
+    standIn()
+    const parked = { ...click(6), id: 'parked' }
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch') return { back: ['parked'], done: true, routes: [{ id: 'parked', session: parked.session }] }
+      if (name === 'delivery:recover') throw new Error('Could not find public function for delivery:recover')
+      // Older get answers omit parkedBy. A pending result alone is not permission to deliver.
+      if (name === 'delivery:get') return { ...parked, delivery: 'pending' }
+      return undefined
+    }
+    await start()
+    await pass(5)
+    expect(stand.codex).toHaveLength(0)
+    expect(called('delivery:claim')).toEqual([])
+    offered(click(7))
+    await pass()
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')).toEqual(['click-7'])
+    // Reopening or reviving the conversation makes its click visible in the real inbox.
+    offered(parked, click(7))
+    await pass()
+    await until(() => stand.codex.length === 2)
+    expect(called('delivery:claim')).toEqual(['click-7', 'parked'])
   })
 
   test('an accepted queue receipt still prevents resubmission after its backend confirmation was lost', async () => {
@@ -2929,6 +2991,9 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     stand.codex[0]!.end()
     await until(() => called('delivery:handedOff').includes('click-9'))
     offered()
+    // Confirmation now flushes its receipt asynchronously. Finish it before making
+    // the next atomic save fail, rather than racing its temporary file.
+    await settled()
     const file = path.join(home, 'delivery-recovery.json')
     const before = readFileSync(file, 'utf8')
     const blocked = `${file}.${process.pid}.tmp`

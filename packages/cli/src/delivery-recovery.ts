@@ -234,7 +234,10 @@ export class DeliveryRecovery {
 
   keepWaiters(clicks: readonly Offered[], key: string): Promise<void> {
     return this.change((data) => {
-      for (const click of clicks) if (!data.waiters.has(click.id)) data.waiters.set(click.id, { click, key })
+      for (const click of clicks) {
+        const kept = data.waiters.get(click.id)
+        if (!kept || kept.key !== key || this.encode(kept.click) !== this.encode(click)) data.waiters.set(click.id, { click, key })
+      }
     })
   }
 
