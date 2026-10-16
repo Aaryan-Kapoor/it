@@ -12,7 +12,6 @@ import {
   existsSync,
   fchmodSync,
   fsyncSync,
-  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -31,7 +30,7 @@ import { HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
 import { ADDONS, LICENSE } from './addons.generated'
 import { codexConfig } from './codex-settings'
 import { harnessEnv, home, inHome, Problem, readJson, VERSION, writePrivate } from './lib'
-import { keepOriginal, putAbsent, restoreAbsent } from './preserve'
+import { checkHardLinks, keepOriginal, putAbsent, restoreAbsent } from './preserve'
 import { alone as oneAtATime } from './serve/backend'
 
 export type AddonState = 'connected' | 'not_connected' | 'needs_approval' | 'too_old' | 'unavailable' | 'error'
@@ -264,9 +263,7 @@ function putInPlace(data: Buffer, to: string, before?: () => string | undefined,
     }
     // Check publication support before moving any existing entry, including a person's
     // file or directory. Probe with the staged file because directories cannot be linked.
-    const probe = `${part}.link-check`
-    linkSync(part, probe)
-    rmSync(probe)
+    checkHardLinks(part, `${part}.link-check`)
     // Publish at a free name after preserving what occupied it.
     const original = before?.()
     try {
@@ -787,6 +784,7 @@ function takeFiles(root: string, files: Put[]): Left {
       try {
         left.recovery ??= []
         left.recovery.push(keepOriginal(f.path))
+        leaveAs(left, f.path, lookAt(root, f.path))
       } catch (err) {
         if (!absent(err)) left.closed.push(f.path)
       }

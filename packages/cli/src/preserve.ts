@@ -30,6 +30,12 @@ function tryFile(change: () => void): void {
   }
 }
 
+/** Checks hard-link support before preservation, allowing for transient Windows sharing violations. */
+export function checkHardLinks(file: string, probe: string): void {
+  tryFile(() => linkSync(file, probe))
+  tryFile(() => unlinkSync(probe))
+}
+
 /** Originals are never expired. A full folder stops the next change until its owner reviews it. */
 export const ORIGINAL_LIMIT = 20
 
@@ -73,8 +79,7 @@ export function keepOriginal(file: string): string {
       // Verify this filesystem can publish without replacing a concurrent save before moving
       // the installed file. Unsupported hard links leave that file in place.
       const probe = path.join(place, 'link-check')
-      tryFile(() => linkSync(target, probe))
-      tryFile(() => unlinkSync(probe))
+      checkHardLinks(target, probe)
       tryFile(() => renameSync(target, saved))
       return saved
     } catch (err) {

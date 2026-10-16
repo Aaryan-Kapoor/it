@@ -705,6 +705,40 @@ describe('the skill, for the two apps whose add-on is a plugin of their own', ()
     { id: 'claude-code' as const, bin: 'claude', variable: 'CLAUDE_CONFIG_DIR', label: 'Claude Code' },
     { id: 'codex' as const, bin: 'codex', variable: 'CODEX_HOME', label: 'Codex' },
   ]
+  test.each(APPS.flatMap((app) => [false, true].map((edited) => ({ ...app, edited }))))(
+    'keeps a recreated companion skill on record after removing the plugin from $label, with a personal edit $edited',
+    async ({ id, bin, edited }) => {
+      await connect(id, () => {})
+      const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
+      const recreated = edited ? 'a personal edit' : SKILL
+      const rename = fs.renameSync
+      fs.renameSync = (from, to) => {
+        rename(from, to)
+        if (String(from) === skill) writeFileSync(skill, recreated)
+      }
+      syncBuiltinESMExports()
+      const { said, say } = lines()
+      try {
+        expect(await disconnect(id, say)).toBe(false)
+      } finally {
+        fs.renameSync = rename
+        syncBuiltinESMExports()
+      }
+      expect(read(skill)).toBe(recreated)
+      expect(read(`${skill}.it-recovery/1/original`)).toBe(SKILL)
+      expect(noted(id).installs[0]!.files).toContainEqual({ path: skill, sha256: sha(SKILL) })
+      expect(said.join('\n')).toContain('not all gone')
+      expect(kept[bin]!.get(folderOf(bin))!.on).toBeUndefined()
+      expect(await disconnect(id, () => {})).toBe(!edited)
+      expect(existsSync(skill)).toBe(edited)
+      if (edited) {
+        expect(read(skill)).toBe(recreated)
+        rmSync(skill)
+        expect(await disconnect(id, () => {})).toBe(true)
+      }
+      expect(existsSync(stampFile(id))).toBe(false)
+    },
+  )
   test.each(APPS)('$label is given the skill beside the person’s own skills, and it is taken out again with the add-on', async ({ id, bin }) => {
     const skill = path.join(folderOf(bin), 'skills/it/SKILL.md')
     expect((await connect(id, () => {})).addon).toMatch(/^(connected|needs_approval)$/)
@@ -2070,6 +2104,40 @@ describe('what a person is told about an app', () => {
 describe('on Windows', () => {
   const platform = process.platform
   afterEach(() => Object.defineProperty(process, 'platform', { value: platform }))
+
+  test.each(['EPERM', 'EACCES', 'EBUSY'])('retries %s when removing a hard-link probe before setting aside a user file', async (code) => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    const folder = folderOf('opencode')
+    const plugin = path.join(folder, 'plugins/it-bridge.js')
+    put(plugin, 'a personal plugin')
+    const original = { rmSync: fs.rmSync, unlinkSync: fs.unlinkSync }
+    let attempts = 0
+    const busy = (name: fs.PathLike) => {
+      if (String(name).startsWith(`${plugin}.`) && String(name).endsWith('.part.link-check') && ++attempts === 1)
+        throw Object.assign(new Error('probe is busy'), { code })
+    }
+    fs.rmSync = (name, options) => {
+      busy(name)
+      original.rmSync(name, options)
+    }
+    fs.unlinkSync = (name) => {
+      busy(name)
+      original.unlinkSync(name)
+    }
+    syncBuiltinESMExports()
+    try {
+      expect((await connect('opencode', () => {})).addon).toBe('connected')
+    } finally {
+      Object.assign(fs, original)
+      syncBuiltinESMExports()
+    }
+    expect(attempts).toBe(2)
+    expect(read(`${plugin}.set-aside-by-it`)).toBe('a personal plugin')
+    expect(under(folder).some((file) => file.endsWith('.part') || file.endsWith('.link-check'))).toBe(false)
+    expect(noted('opencode').installs[0]!.files!.map((file) => file.path)).toContain(plugin)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(read(`${plugin}.set-aside-by-it`)).toBe('a personal plugin')
+  })
 
   test('a hook’s command is written without quotes when the launcher’s address needs none, so that cmd and PowerShell both run it', () => {
     Object.defineProperty(process, 'platform', { value: 'win32' })
