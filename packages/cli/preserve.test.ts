@@ -24,7 +24,7 @@ import { keepOriginal, ORIGINAL_LIMIT, putAbsent, restoreAbsent } from './src/pr
 
 let folder: string
 let file: string
-const original = { renameSync: fs.renameSync, linkSync: fs.linkSync, unlinkSync: fs.unlinkSync }
+const original = { renameSync: fs.renameSync, linkSync: fs.linkSync, unlinkSync: fs.unlinkSync, mkdirSync: fs.mkdirSync }
 beforeEach(() => {
   folder = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'it-preserve-')))
   file = path.join(folder, 'settings')
@@ -118,6 +118,32 @@ test('restores the original after publication fails and keeps its recovery name'
   writeFileSync(file, 'a later in-place save')
   expect(readFileSync(copy(), 'utf8')).toBe('before')
   expect(readdirSync(folder).sort()).toEqual(['settings', 'settings.it-recovery'])
+})
+
+test('leaves an empty directory recreated at the final restoration step untouched', () => {
+  const saved = `${file}.set-aside-by-it`
+  mkdirSync(saved)
+  writeFileSync(path.join(saved, 'notes.txt'), 'original content')
+  let recreated: number | undefined
+  const recreate = (target: fs.PathLike) => {
+    if (target !== file || existsSync(file)) return
+    original.mkdirSync(file)
+    recreated = lstatSync(file).ino
+  }
+  fs.renameSync = (from, to) => {
+    recreate(to)
+    return original.renameSync(from, to)
+  }
+  fs.mkdirSync = ((target, options) => {
+    recreate(target)
+    return original.mkdirSync(target, options)
+  }) as typeof fs.mkdirSync
+  syncBuiltinESMExports()
+  restoreAbsent(saved, file)
+  expect(recreated).toBeDefined()
+  expect(readdirSync(file)).toEqual([])
+  expect(lstatSync(file).ino).toBe(recreated)
+  expect(readFileSync(path.join(saved, 'notes.txt'), 'utf8')).toBe('original content')
 })
 
 test('retains twenty originals without expiring any and refuses the next change', () => {

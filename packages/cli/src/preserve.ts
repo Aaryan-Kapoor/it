@@ -3,6 +3,7 @@ import {
   chmodSync,
   constants,
   copyFileSync,
+  cpSync,
   linkSync,
   lstatSync,
   mkdirSync,
@@ -104,9 +105,18 @@ export function restoreAbsent(original: string, target: string): void {
   const part = `${target}.it-${randomUUID()}.part`
   let made = false
   try {
+    const entry = lstatSync(original)
+    if (entry.isDirectory()) {
+      // Reserve the name exclusively before copying: a checked rename could replace an
+      // empty directory recreated after the check. Keep the saved tree independent too.
+      tryFile(() => mkdirSync(target, { mode: 0o700 }))
+      cpSync(original, target, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true, mode: constants.COPYFILE_EXCL })
+      chmodSync(target, entry.mode)
+      return
+    }
     // A restored file must not share its inode with the saved original: a later in-place
     // save to the live name would otherwise change the recovery copy too.
-    if (lstatSync(original).isSymbolicLink()) {
+    if (entry.isSymbolicLink()) {
       // Creating a symlink is already exclusive. Hard-link publication follows the source
       // symlink on some systems, which would restore its target instead of the link itself.
       const link = readlinkSync(original)

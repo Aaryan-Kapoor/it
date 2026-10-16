@@ -315,6 +315,66 @@ afterEach(() => {
 })
 
 describe('an add-on whose files It copies into an app’s folder', () => {
+  test.each(
+    ['file', 'directory'].flatMap((kind) =>
+      ['record', 'publication'].flatMap((failure) => ['absent', 'file', 'directory'].map((destination) => ({ kind, failure, destination }))),
+    ),
+  )('preserves a user-owned $kind after $failure fails with the destination $destination', async ({ kind, failure, destination }) => {
+    const folder = folderOf('opencode')
+    const plugin = path.join(folder, 'plugins/it-bridge.js')
+    const saved = `${plugin}.set-aside-by-it`
+    const content = (name: string) => (kind === 'directory' ? path.join(name, 'nested/notes.txt') : name)
+    put(content(plugin), "the person's own content")
+    if (process.platform !== 'win32') chmodSync(plugin, kind === 'directory' ? 0o750 : 0o640)
+    const before = lstatSync(plugin)
+    const original = { renameSync: fs.renameSync, linkSync: fs.linkSync }
+    let failed = false
+    let recreated: fs.Stats | undefined
+    const fail = () => {
+      if (failed) return
+      failed = true
+      expect(existsSync(plugin)).toBe(false)
+      expect(read(content(saved))).toBe("the person's own content")
+      if (destination === 'file') put(plugin, 'a concurrent save')
+      if (destination === 'directory') mkdirSync(plugin)
+      if (destination !== 'absent') recreated = lstatSync(plugin)
+      throw Object.assign(new Error(`${failure} failed`), { code: 'ENOSPC' })
+    }
+    fs.renameSync = (from, to) => {
+      if (failure === 'record' && to === stampFile('opencode') && existsSync(saved)) fail()
+      return original.renameSync(from, to)
+    }
+    fs.linkSync = (from, to) => {
+      if (failure === 'publication' && to === plugin) fail()
+      return original.linkSync(from, to)
+    }
+    syncBuiltinESMExports()
+    try {
+      expect(await connect('opencode', () => {})).toMatchObject({ addon: 'error', detail: expect.stringContaining(`${failure} failed`) })
+    } finally {
+      Object.assign(fs, original)
+      syncBuiltinESMExports()
+    }
+    expect(failed).toBe(true)
+    if (destination === 'absent') {
+      expect(read(content(plugin))).toBe("the person's own content")
+      expect(lstatSync(plugin).isDirectory()).toBe(kind === 'directory')
+      expect(lstatSync(plugin).mode).toBe(before.mode)
+      expect(lstatSync(plugin).ino).not.toBe(lstatSync(saved).ino)
+      writeFileSync(content(plugin), 'a later save')
+      expect(read(content(saved))).toBe("the person's own content")
+    } else {
+      expect(lstatSync(plugin).ino).toBe(recreated!.ino)
+      if (destination === 'file') expect(read(plugin)).toBe('a concurrent save')
+      else expect(readdirSync(plugin)).toEqual([])
+      expect(read(content(saved))).toBe("the person's own content")
+    }
+    expect(noted('opencode').installs[0]!.files ?? []).toEqual([])
+    expect(under(folder).some((file) => file.endsWith('.part') || file.endsWith('.link-check'))).toBe(false)
+    expect(await disconnect('opencode', () => {})).toBe(true)
+    expect(existsSync(plugin)).toBe(true)
+  })
+
   test.each(['file', 'directory'])('leaves a user-owned %s in place when its filesystem cannot make hard links', async (kind) => {
     const folder = folderOf('opencode')
     const plugin = path.join(folder, 'plugins/it-bridge.js')
