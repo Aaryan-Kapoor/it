@@ -37,21 +37,14 @@ const b64u = (buf: ArrayBuffer | null) =>
     .replace(/\//g, '_')
     .replace(/=+$/, '')
 
-// Turning notifications on takes a few steps, each of which waits on the person, the browser
-// or the network. If the person signs out while they are under way, or everything is erased,
-// the steps that remain must not put the site's script or a subscription back. Each "off" moves
-// this on, and an "on" that finds it moved since it started undoes what it made itself.
+// Every wait can be overtaken. `generation` stops work after Off, sign-out or erasure in this
+// tab; `attempt` keeps older work from touching what a later On has made; `keptFor()` keeps it
+// from acting for a person the browser no longer belongs to. `PUSH_OFF` shares Off across tabs:
+// its presence blocks repairs, and a changed value stops work already under way. Only a
+// successful On clears it. Stopped attempts undo only what they made, unless a later On owns it.
 let generation = 0
-// An Off choice in another tab must stop an older repair here too. A fresh value is kept in
-// shared origin storage before Off waits, and is read again after each wait.
-const PUSH_OFF = 'it.pushOff'
-
-// Each attempt to turn notifications on has a number. One that has been overtaken stops where
-// it is, at whichever step it finds so. Overtaken by a later attempt, it touches nothing: what
-// is in the browser by then belongs to that one. Overtaken by a sign-out or an erasing, it
-// takes away again what it made itself, the script it registered and the subscription it made,
-// and nothing that was there before it or that anything later put there.
 let attempt = 0
+const PUSH_OFF = 'it.pushOff'
 /** Asks for permission, subscribes this browser, and gives the subscription to this display. Returns 'on' or a short reason. */
 export async function turnOnPush(convex: ConvexReactClient, off = localStorage.getItem(PUSH_OFF)): Promise<string> {
   const started = generation
@@ -114,6 +107,7 @@ export async function turnOnPush(convex: ConvexReactClient, off = localStorage.g
     const display = displayKey()
     await convex.mutation(api.push.subscribe, { key: display, endpoint: sub.endpoint, p256dh: b64u(sub.getKey('p256dh')), auth: b64u(sub.getKey('auth')) })
     if (overtaken()) return stopped(display)
+    localStorage.removeItem(PUSH_OFF)
     return 'on'
   } catch (err) {
     // Refused or failed after it was overtaken, as the backend refuses a browser whose session is over: what it made goes all the same
@@ -218,6 +212,7 @@ export async function mendPush(convex: ConvexReactClient): Promise<void> {
     const begun = attempt
     const person = keptFor()
     const off = localStorage.getItem(PUSH_OFF)
+    if (off !== null) return
     const overtaken = () => generation !== started || keptFor() !== person || localStorage.getItem(PUSH_OFF) !== off
     const registration = await navigator.serviceWorker?.getRegistration()
     if (overtaken() || attempt !== begun) return
