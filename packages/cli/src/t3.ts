@@ -31,8 +31,15 @@ import { direct, directWebSocket, readJson } from './lib'
 const PROTOCOL = '2'
 /** How long T3 Code is given to answer anything. */
 const ANSWER_MS = 20_000
-/** How many threads are looked into for a conversation, the likeliest first. */
+/** How many threads are looked into in one pass, the likeliest first. */
 const LOOKED_INTO = 24
+/**
+ * Four batches reach beyond the first shortlist without letting one conversation read every
+ * thread in a large workspace. Failed reads use the same budget, so retries are bounded too.
+ */
+const SEARCH_READS = 4 * LOOKED_INTO
+/** One pass includes issuing a session, listing threads and reading their details. */
+const DISCOVERY_MS = 5_000
 
 /** A T3 Code server that is running on this machine: where it answers, the folder it keeps its things in, and the program it is. */
 export interface T3 {
@@ -76,7 +83,8 @@ export function t3Server(home = process.env.T3CODE_HOME || path.join(os.homedir(
 let session: { home: string; token: string; until: number } | undefined
 
 /** Asks T3 Code's own command for a session that may read threads and send to them. Nothing where it gave none. */
-function issued(t3: T3): Promise<string | undefined> {
+function issued(t3: T3, signal?: AbortSignal): Promise<string | undefined> {
+  if (signal?.aborted) return Promise.resolve(undefined)
   if (session && session.home === t3.home && Date.now() < session.until - 60_000) return Promise.resolve(session.token)
   return new Promise((resolve) => {
     execFile(
@@ -97,7 +105,7 @@ function issued(t3: T3): Promise<string | undefined> {
         'It',
         '--json',
       ],
-      { timeout: ANSWER_MS, windowsHide: true, maxBuffer: 1024 * 1024 },
+      { timeout: ANSWER_MS, signal, windowsHide: true, maxBuffer: 1024 * 1024 },
       (err, stdout) => {
         if (err) return resolve(undefined)
         try {
@@ -120,15 +128,15 @@ function issued(t3: T3): Promise<string | undefined> {
  * on this machine, and a proxy named in the environment would otherwise be handed the session
  * and everything said under it.
  */
-async function ask<T>(t3: T3, method: 'GET' | 'POST', pathname: string): Promise<T | undefined> {
+async function ask<T>(t3: T3, method: 'GET' | 'POST', pathname: string, signal?: AbortSignal): Promise<T | undefined> {
   for (let tried = 0; tried < 2; tried++) {
-    const token = await issued(t3)
+    const token = await issued(t3, signal)
     if (!token) return undefined
     try {
       const answer = await direct(`${t3.origin}${pathname}`, {
         method,
         headers: { authorization: `Bearer ${token}`, 'x-t3-orchestration-protocol': PROTOCOL },
-        signal: AbortSignal.timeout(ANSWER_MS),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(ANSWER_MS)]) : AbortSignal.timeout(ANSWER_MS),
       })
       // A session the server no longer knows (it was started anew, or the session was revoked) is asked for afresh, once
       if (answer.status === 401 && tried === 0) {
@@ -209,25 +217,69 @@ export function holds(snapshot: unknown, ids: readonly string[]): boolean {
   )
 }
 
+/** Progress belongs to one server and one set of native conversation ids. */
+export interface T3Search {
+  scope?: string
+  pending: string[]
+  /** Snapshot requests made, including failed reads. */
+  read: number
+  /** Whether the one listing for this search fits within its read budget. */
+  listed?: 'whole' | 'limited'
+  /** Candidates already attempted, so another failed read is not counted as progress. */
+  attempted: Set<string>
+}
+
+export type T3ThreadResult = { status: 'found'; thread: string } | { status: 'absent' | 'limited' } | { status: 'incomplete'; progressed: boolean }
+
 /**
- * The thread of T3 Code that a conversation is held in: its id, null where T3 Code has no
- * thread of it, and nothing where T3 Code could not be asked, of its threads or of any one of
- * the likeliest that did not turn out to hold it. `ids` are the ids the agent app
- * has given the conversation, of which the thread carries the one it resumes from.
+ * Looks through another batch of active threads. An unread thread goes behind those still
+ * waiting, so it stays retryable without keeping an older matching thread out of reach.
+ * Only a complete successful search says that the conversation is absent. A search that
+ * uses its read budget stops as limited, without claiming anything about unread threads.
  */
-export async function t3ThreadOf(t3: T3, of: { harness: string; ids: readonly string[]; cwd?: string }): Promise<string | null | undefined> {
-  const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell')
-  if (!shell || !Array.isArray(shell.threads)) return undefined
-  let unread = false
-  for (const id of likeliest(shell, of)) {
-    const snapshot = await ask<unknown>(t3, 'GET', `/api/orchestration/threads/${encodeURIComponent(id)}/bounded`)
-    // One thread that cannot be read says nothing of the others
-    if (snapshot === undefined) unread = true
-    else if (holds(snapshot, of.ids)) return id
+export async function t3ThreadOf(
+  t3: T3,
+  of: { harness: string; ids: readonly string[]; cwd?: string },
+  search: T3Search = { pending: [], read: 0, attempted: new Set() },
+  signal: AbortSignal = AbortSignal.timeout(DISCOVERY_MS),
+): Promise<T3ThreadResult> {
+  const scope = JSON.stringify([t3.home, t3.origin, of.harness, [...of.ids].sort(), of.cwd])
+  if (search.scope !== scope) {
+    search.scope = scope
+    search.pending = []
+    search.read = 0
+    search.listed = undefined
+    search.attempted.clear()
   }
-  // And nothing of itself: it may be the one. Only where every thread was read is the
-  // conversation said to be in none, which whoever asked takes as so for hours
-  return unread ? undefined : null
+  if (!search.listed) {
+    const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell', signal)
+    if (!shell || !Array.isArray(shell.threads)) return { status: 'incomplete', progressed: false }
+    // Keep one extra id only to tell a complete search from a truncated one. Later passes
+    // use this same listing; another search can see threads added or changed meanwhile.
+    const ranked = likeliest(shell, of, SEARCH_READS + 1)
+    search.listed = ranked.length > SEARCH_READS ? 'limited' : 'whole'
+    search.pending = ranked.slice(0, SEARCH_READS)
+  }
+  let progressed = false
+  const count = Math.min(LOOKED_INTO, search.pending.length, SEARCH_READS - search.read)
+  for (let i = 0; i < count && !signal.aborted; i++) {
+    const id = search.pending.shift()!
+    if (!search.attempted.has(id)) progressed = true
+    search.attempted.add(id)
+    search.read++
+    const snapshot = await ask<{ projection?: { providerThreads?: unknown } }>(
+      t3,
+      'GET',
+      `/api/orchestration/threads/${encodeURIComponent(id)}/bounded`,
+      signal,
+    )
+    if (!Array.isArray(snapshot?.projection?.providerThreads)) search.pending.push(id)
+    else if (holds(snapshot, of.ids)) return { status: 'found', thread: id }
+    else progressed = true
+  }
+  if (!search.pending.length && search.listed === 'whole') return { status: 'absent' }
+  if (search.read >= SEARCH_READS || !search.pending.length) return { status: 'limited' }
+  return { status: 'incomplete', progressed }
 }
 
 /**
