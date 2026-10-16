@@ -421,29 +421,53 @@ export const release = mutation({
  * first, that would reach its conversation ahead of what was done before it. The answer names
  * what went back, so that the connector takes nothing newer until it is offered these again.
  */
+/** Resolves returned claims without waiting for a bounded inbox subscription to include them. */
+export const recover = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, { ids }) => {
+    const { user, machine } = await requireMachine(ctx)
+    const rows = []
+    for (const id of ids.slice(0, 32)) {
+      const normalized = ctx.db.normalizeId('actions', id)
+      const x = normalized ? await ctx.db.get(normalized) : null
+      if (!x || x.userId !== user._id || x.delivery !== 'pending' || x.parkedBy || (await stoppedSince(ctx, x))) {
+        rows.push({ id, click: null })
+        continue
+      }
+      const to = await destination(ctx, x.artifactId)
+      const [click] = to.machineId !== undefined && to.machineId !== machine._id ? [] : await asClicks(ctx, [{ ...x, ...to }])
+      rows.push({ id, click: click ?? null })
+    }
+    return rows
+  },
+})
+
+/** A bounded part of recovery, including whether every lease this machine held was examined. */
 export const giveBackBatch = mutation({
   args: {},
   handler: async (ctx) => {
-    const { machine } = await requireMachine(ctx)
-    // At most two MiB of action payloads, with room for the page and machine records read
-    // with them. Foreign leases are excluded by the index, before anything is read. Every
-    // processed row leaves this index range, so asking again progresses even if an entire
-    // batch was stopped.
     const most = 64
+    const { machine, user } = await requireMachine(ctx)
+    // At most two MiB of action payloads, with room for the page and machine records read
+    // with them. Foreign leases are excluded by the index, before anything is read. Every processed
+    // row leaves this index range, so asking again progresses even if an entire batch was stopped.
     const leased = await ctx.db
       .query('actions')
       .withIndex('by_lease_machine', (q) => q.eq('leaseMachineId', machine._id).eq('delivery', 'leased'))
       .take(most)
     const back: Id<'actions'>[] = []
+    const routes: { id: string; session: { harness: string; id: string } | null }[] = []
     for (const x of leased) {
       if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
       else {
-        await ctx.db.patch(x._id, await backToWaiting(ctx, x))
+        const waiting = await backToWaiting(ctx, x)
+        await ctx.db.patch(x._id, waiting)
         back.push(x._id)
+        routes.push({ id: x._id, session: waiting.harness && waiting.sessionId ? { harness: waiting.harness, id: waiting.sessionId } : null })
       }
     }
     if (back.length) log('lease.given_back', { machineId: machine._id, count: back.length })
-    return { back, done: leased.length < most }
+    return { back, done: leased.length < most, routes, person: user._id }
   },
 })
 

@@ -74,6 +74,7 @@ describe('the agent skill', () => {
   })
 
   test('names only fields that the commands print', () => {
+    const commands = main + source('../../packages/cli/src/wait.ts')
     for (const field of [
       'url',
       'shownOn',
@@ -90,7 +91,7 @@ describe('the agent skill', () => {
       'connector',
     ]) {
       expect(skill, field).toContain(field)
-      expect(main, field).toMatch(new RegExp(`\\b${field}\\b`))
+      expect(commands, field).toMatch(new RegExp(`\\b${field}\\b`))
     }
     // What `it status` says of an add-on and of the connector
     const setup = source('../../packages/cli/src/setup.ts')
