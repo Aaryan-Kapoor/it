@@ -1374,24 +1374,9 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     }
   })
 
-  test('recovery still accepts an older backend’s array answer when it has no batch function', async () => {
-    stand.answer = (name) => {
-      if (name === 'delivery:giveBackBatch') throw new Error(`Could not find public function for '${name}'.`)
-      if (name === 'delivery:giveBack') return ['click-left']
-      return undefined
-    }
-    await start()
-    offered(click(6))
-    await until(() => stand.calls.some((c) => c.name === 'delivery:giveBack'))
-    expect(called('delivery:claim')).toEqual([])
-    offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
-    await until(() => stand.codex.length === 1)
-    expect(called('delivery:claim')[0]).toBe('click-left')
-  })
-
   test('an It from before it could be asked that is asked to give back each click the journal names, a record that was cut short among them or not', async () => {
     stand.answer = (name) => {
-      if (name === 'delivery:giveBackBatch' || name === 'delivery:giveBack') throw new Error(`Could not find public function for '${name}'.`)
+      if (name === 'delivery:giveBackBatch') throw new Error(`Could not find public function for '${name}'.`)
       return undefined
     }
     await start('socket', {}, (folder) =>
@@ -1409,6 +1394,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     offered(click(6))
     await until(() => called('delivery:release').includes('click-left'))
     expect(called('delivery:release')).toEqual(['click-left'])
+    expect(stand.calls.some((c) => c.name === 'delivery:giveBack')).toBe(false)
     expect(called('delivery:claim')).toEqual([])
     offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
     await until(() => stand.codex.length === 1)
