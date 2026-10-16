@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { get as pageQuery, takePage } from './artifacts'
-import { inbox as inboxQuery } from './delivery'
+import { inboxPage as inboxPageQuery, inbox as inboxQuery } from './delivery'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -335,6 +335,7 @@ describe('who a caller is', () => {
       () => t.query(api.displays.list, {}),
       () => t.query(api.machines.list, {}),
       () => t.query(api.delivery.inbox, { listening: [] }),
+      () => t.query(api.delivery.inboxPage, { listening: [], after: [] }),
       () => t.query(api.delivery.get, { id: 'x' }),
       () => t.query(api.state.get, { slug: 'x' }),
       () => t.query(api.notifications.list, { key: displayKey('a') }),
@@ -389,6 +390,7 @@ describe('who a caller is', () => {
       () => alice.browser.action(api.publish.begin, { title: 'x', files: page }),
       () => alice.browser.mutation(api.state.patch, { slug: 'plan', patch: '{}' }),
       () => alice.browser.query(api.delivery.inbox, { listening: [] }),
+      () => alice.browser.query(api.delivery.inboxPage, { listening: [], after: [] }),
       () => alice.browser.query(api.delivery.get, { id: 'x' }),
       () => alice.browser.mutation(api.notifications.send, { text: 'hi' }),
       () => alice.browser.mutation(api.displays.show, { slug: 'plan' }),
@@ -2587,86 +2589,99 @@ describe('clicks and their delivery', () => {
     expect((await alice.browser.query(api.artifacts.list, {})).map((x) => [x.slug, x.pending])).toEqual([['other', 40]])
   })
 
-  test('the inbox reads less than the backend lets a query read, though forty conversations listen and five queues hold more of the largest clicks than that', async () => {
-    const t = backend()
-    await person(t, 'alice')
-    const m = await machineOf(t, 'alice')
-    const queues = ['codex', 'claude-code', 'pi', 'opencode', 'hermes']
-    const listening = Array.from({ length: 40 }, (_, i) => ({ harness: 'claude-code', id: `z-listener-${String(i).padStart(2, '0')}` }))
-    const now = Date.now()
-    // Each carries as much as an action may
-    const payload = JSON.stringify({ text: 'x'.repeat(LIMITS.actionPayloadBytes - 11) })
-    await t.run(async (ctx) => {
-      const machine = (await ctx.db.get(m.id as never)) as { _id: never; userId: never }
-      await ctx.db.patch(machine._id, { wakes: queues.map((harness) => ({ harness, since: now - 10_000 })) })
-      let pages = 0
-      const put = async (of: { harness: string; id: string }, n: number, at: number, addressed = true) => {
-        const artifactId = await ctx.db.insert('artifacts', {
-          userId: machine.userId,
-          slug: `page-${++pages}`,
-          title: 'Page',
-          currentVersion: 1,
-          lastVersion: 1,
-          bytes: 1,
-          createdAt: now,
-          updatedAt: now,
-          machineId: machine._id,
-          session: of,
-          waiting: n,
-        })
-        for (let i = 0; i < n; i++)
-          await ctx.db.insert('actions', {
+  test.each([false, true])(
+    'the inbox stays within its byte and response limits with forty listeners and five queues of maximum payloads, paged: %s',
+    async (paged) => {
+      const t = backend()
+      await person(t, 'alice')
+      const m = await machineOf(t, 'alice')
+      const queues = ['codex', 'claude-code', 'pi', 'opencode', 'hermes']
+      const listening = Array.from({ length: 40 }, (_, i) => ({ harness: 'claude-code', id: `z-listener-${String(i).padStart(2, '0')}` }))
+      const now = Date.now()
+      // Each carries as much as an action may
+      const payload = JSON.stringify({ text: 'x'.repeat(LIMITS.actionPayloadBytes - 11) })
+      await t.run(async (ctx) => {
+        const machine = (await ctx.db.get(m.id as never)) as { _id: never; userId: never }
+        await ctx.db.patch(machine._id, { wakes: queues.map((harness) => ({ harness, since: now - 10_000 })) })
+        let pages = 0
+        const put = async (of: { harness: string; id: string }, n: number, at: number, addressed = true) => {
+          const artifactId = await ctx.db.insert('artifacts', {
             userId: machine.userId,
+            slug: `page-${++pages}`,
             title: 'Page',
-            artifactId,
-            clientActionId: `click-${pages}-${String(i).padStart(3, '0')}`,
-            name: 'press',
-            payload,
-            contentVersion: 1,
-            createdAt: at + i,
-            delivery: 'pending',
-            ...(addressed ? { machineId: machine._id } : {}),
-            harness: of.harness,
-            sessionId: of.id,
+            currentVersion: 1,
+            lastVersion: 1,
+            bytes: 1,
+            createdAt: now,
+            updatedAt: now,
+            machineId: machine._id,
+            session: of,
+            waiting: n,
           })
-      }
-      for (const s of listening) {
-        await put(s, 2, now - 500)
-        // And two that are addressed to no machine, as a click is whose page was made on a machine that is gone
-        await put(s, 2, now - 400, false)
-      }
+          // The paged case must also pay for both attended-index reads beyond timer clicks.
+          const attendedLookups = paged && addressed && !of.id.startsWith('z-listener')
+          const count = attendedLookups ? Math.max(n, 10) : n
+          for (let i = 0; i < count; i++)
+            await ctx.db.insert('actions', {
+              userId: machine.userId,
+              title: 'Page',
+              artifactId,
+              clientActionId: `click-${pages}-${String(i).padStart(3, '0')}`,
+              name: 'press',
+              payload,
+              ...(attendedLookups ? { attended: i === count - 1 ? undefined : i === count - 2 } : {}),
+              contentVersion: 1,
+              createdAt: at + i,
+              delivery: 'pending',
+              ...(addressed ? { machineId: machine._id } : {}),
+              harness: of.harness,
+              sessionId: of.id,
+            })
+        }
+        for (const s of listening) {
+          await put(s, 2, now - 500)
+          // And two that are addressed to no machine, as a click is whose page was made on a machine that is gone
+          await put(s, 2, now - 400, false)
+        }
+        for (const harness of queues) {
+          // One conversation that has waited longest, one that was used last, and twelve more by their names
+          await put({ harness, id: 'b-old' }, 40, now - 3000)
+          await put({ harness, id: 'c-new' }, 20, now - 100)
+          for (let n = 0; n < 12; n++) await put({ harness, id: `a-head${String(n).padStart(2, '0')}` }, 1, now - 1500)
+        }
+      })
+      // The query itself, asked as the machine asks it, with everything it reads of a click counted: also what it reads twice
+      const asked = await t.run(async (ctx) => {
+        const { db, read } = watched(ctx.db)
+        const identity = { issuer: SITE, subject: m.id, kind: 'machine' }
+        const answer = await ((paged ? inboxPageQuery : inboxQuery) as any)._handler(
+          { ...ctx, db, auth: { getUserIdentity: async () => identity } },
+          { listening, queues, ...(paged ? { after: [{ harness: 'codex', id: 'a-head05' }] } : {}) },
+        )
+        const clicks: { id: string; at: number; attended: boolean | null; session: { harness: string; id: string } }[] = paged ? answer.clicks : answer
+        const carried = read.filter((row) => typeof row.payload === 'string').map((row) => new TextEncoder().encode(row.payload).length)
+        return { read: carried.reduce((sum, n) => sum + n + 2048, 0), clicks }
+      })
+      // The backend refuses a query that reads over 16 MB. Include every repeated read and
+      // the allowance for each action's fields beside its maximum payload.
+      expect(asked.read).toBeLessThanOrEqual(12 * 1024 * 1024)
+      const of = (harness: string, id: string) => asked.clicks.filter((c) => c.session.harness === harness && c.session.id === id)
+      // Listeners keep their oldest two. Each queue has room for a conversation's oldest
+      // work and, in the paged case, its attended click beyond the timer backlog.
+      for (const s of listening) expect(of(s.harness, s.id).map((c) => c.at)).toEqual([now - 500, now - 499])
       for (const harness of queues) {
-        // One conversation that has waited longest, one that was used last, and twelve more by their names
-        await put({ harness, id: 'b-old' }, 40, now - 3000)
-        await put({ harness, id: 'c-new' }, 20, now - 100)
-        for (let n = 0; n < 12; n++) await put({ harness, id: `a-head${String(n).padStart(2, '0')}` }, 1, now - 1500)
+        const id = paged ? (harness === 'codex' ? 'a-head06' : 'a-head00') : 'b-old'
+        const oldest = of(harness, id).map((c) => c.at)
+        expect(oldest.length).toBeGreaterThan(0)
+        if (paged) {
+          expect(oldest).toEqual([now - 1500, now - 1500 + 8])
+          expect(of(harness, id).at(-1)?.attended).toBe(true)
+        } else expect(oldest).toEqual(oldest.map((_, i) => now - 3000 + i))
       }
-    })
-    // The query itself, asked as the machine asks it, with everything it reads of a click counted: also what it reads twice
-    const asked = await t.run(async (ctx) => {
-      const { db, read } = watched(ctx.db)
-      const identity = { issuer: SITE, subject: m.id, kind: 'machine' }
-      const clicks: { id: string; at: number; session: { harness: string; id: string } }[] = await (inboxQuery as any)._handler(
-        { ...ctx, db, auth: { getUserIdentity: async () => identity } },
-        { listening, queues },
-      )
-      const carried = read.filter((row) => typeof row.payload === 'string').map((row) => new TextEncoder().encode(row.payload).length)
-      return { read: carried.reduce((sum, n) => sum + n, 0), clicks }
-    })
-    // The backend lets a query read 16 MB, and refuses it whole past that. Five hundred and
-    // twenty clicks wait here, of 32 KB each, and reading them as they were once read came to more
-    expect(asked.read).toBeLessThanOrEqual(12 * 1024 * 1024)
-    const of = (harness: string, id: string) => asked.clicks.filter((c) => c.session.harness === harness && c.session.id === id)
-    // Every conversation that listens has its two oldest, and every queue the oldest of the conversation that has waited longest in it
-    for (const s of listening) expect(of(s.harness, s.id).map((c) => c.at)).toEqual([now - 500, now - 499])
-    for (const harness of queues) {
-      const oldest = of(harness, 'b-old').map((c) => c.at)
-      expect(oldest.length).toBeGreaterThan(0)
-      expect(oldest).toEqual(oldest.map((_, i) => now - 3000 + i))
-    }
-    expect(asked.clicks.length).toBeLessThanOrEqual(150)
-    expect(new Set(asked.clicks.map((c) => c.id)).size).toBe(asked.clicks.length)
-  })
+      expect(asked.clicks.length).toBeLessThanOrEqual(150)
+      expect(new Set(asked.clicks.map((c) => c.id)).size).toBe(asked.clicks.length)
+    },
+  )
 
   test('a reopened conversation is said to be running for as long as its machine says so, and anyone who can use the page can stop it: what was waiting by then goes with the stop', async () => {
     const { t, alice, m, p, click } = await setup()
@@ -4865,6 +4880,86 @@ describe('cases at the edges', () => {
         )
       return ids
     })
+
+  test('inbox discovery reaches a middle conversation while twelve earlier names stay pending', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const now = Date.now()
+    for (let i = 0; i < 12; i++) {
+      const p = await publish(m, `busy-${i}`, { session: { harness: 'codex', id: `a-${String(i).padStart(2, '0')}` } })
+      await insertClicks(t, p.artifactId, 4, {}, now - 1000)
+      await insertClicks(t, p.artifactId, 2, {}, now + 1000)
+    }
+    const p = await publish(m, 'middle', { session: { harness: 'codex', id: 'z-middle' } })
+    const [wanted] = await insertClicks(t, p.artifactId, 1, {}, now)
+    const found = new Map<string, number>()
+    let after: { harness: string; id: string }[] = []
+    for (let cycle = 0; cycle < 4; cycle++) {
+      const page = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['codex'], after })
+      after = page.after
+      for (const c of page.clicks) found.set(c.id, (found.get(c.id) ?? 0) + 1)
+      if (cycle === 0) expect(after).toEqual([{ harness: 'codex', id: 'a-11' }])
+    }
+    expect(found.get(wanted!)).toBe(2)
+    expect(after).toEqual([{ harness: 'codex', id: '' }])
+  })
+
+  test('an attended click behind eight timer clicks has a place in the first reopening batch', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan', { session: SESSION })
+    await t.run((ctx) => ctx.db.patch(m.id, { wanted: ['claude-code'], harnesses: [{ id: 'claude-code', addon: 'connected' }] }))
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    const timers = await insertClicks(t, p.artifactId, 8, { attended: false }, Date.now() - 1000)
+    const [attended] = await insertClicks(t, p.artifactId, 1, { attended: true })
+    const { clicks } = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['claude-code'], after: [] })
+    expect(clicks.map((c) => c.id)).toEqual([...timers.slice(0, 7), attended])
+    expect(await m.as.mutation(api.delivery.claim, { ids: clicks.map((c) => c.id), for: SESSION })).toEqual(clicks.map((c) => c.id))
+    expect((await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['claude-code'], after: [] })).clicks.map((c) => c.id)).toEqual([timers[7]])
+  })
+
+  test('a deleted cursor and new earlier conversations do not reset discovery before it rolls over', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const made: { harness: string; id: string }[] = []
+    for (let n = 0; n < 26; n++) {
+      const of = { harness: 'codex', id: `thread-${String(n).padStart(2, '0')}` }
+      const p = await publish(m, `page-${n}`, { session: of })
+      await insertClicks(t, p.artifactId, 2)
+      made.push(of)
+    }
+    const first = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['codex'], after: [] })
+    expect(first.after).toEqual([{ harness: 'codex', id: 'thread-11' }])
+    await m.as.mutation(api.artifacts.remove, { slug: 'page-11' })
+    const early = await publish(m, 'new-early', { session: { harness: 'codex', id: 'a-new' } })
+    await insertClicks(t, early.artifactId, 1)
+    const second = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['codex'], after: first.after })
+    expect(second.clicks.map((c) => c.session)).toEqual(made.slice(12, 24).flatMap((s) => [s, s]))
+    const third = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['codex'], after: second.after })
+    expect(third.clicks.map((c) => c.session)).toEqual(made.slice(24).flatMap((s) => [s, s]))
+    expect(third.after).toEqual([{ harness: 'codex', id: '' }])
+    const rolled = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['codex'], after: third.after })
+    expect(rolled.clicks[0]?.artifact).toBe('new-early')
+  })
+
+  test.each([true, undefined])('attended discovery finds both stored forms beyond timer clicks and respects stops, attended: %s', async (attended) => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const now = Date.now()
+    const p = await publish(m, 'plan', { session: SESSION })
+    await t.run((ctx) =>
+      ctx.db.patch(m.id, { wakes: [{ harness: SESSION.harness, since: now }], stops: [{ harness: SESSION.harness, sessionId: SESSION.id, at: now - 100 }] }),
+    )
+    await insertClicks(t, p.artifactId, 1, { attended }, now - 101)
+    const timers = await insertClicks(t, p.artifactId, 80, { attended: false }, now)
+    const [attendedId] = await insertClicks(t, p.artifactId, 1, { attended }, now + 100)
+    const answer = await m.as.query(api.delivery.inboxPage, { listening: [], queues: [SESSION.harness], after: [] })
+    expect(answer.clicks.map((c) => c.id)).toEqual([...timers.slice(0, 7), attendedId])
+  })
 
   test('a queue with large old clicks still offers a recent conversation in its original order on every asking', async () => {
     const t = backend()

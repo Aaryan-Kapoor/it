@@ -356,6 +356,7 @@ export default defineSchema({
     .index('by_artifact_client', ['artifactId', 'clientActionId'])
     .index('by_route', ['machineId', 'delivery', 'harness', 'sessionId', 'createdAt'])
     .index('by_harness', ['machineId', 'delivery', 'harness', 'createdAt'])
+    .index('by_attended_route', ['machineId', 'delivery', 'harness', 'sessionId', 'attended', 'createdAt'])
     .index('by_artifact', ['artifactId', 'createdAt'])
     .index('by_artifact_delivery', ['artifactId', 'delivery', 'createdAt'])
     .index('by_user_delivery', ['userId', 'delivery', 'createdAt'])

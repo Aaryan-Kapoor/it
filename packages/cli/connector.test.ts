@@ -117,12 +117,13 @@ vi.mock('./src/lib', async (original) => {
     live: () => ({
       onUpdate: (fn: any, args: unknown, heard: (value: any) => void) => {
         stand.watching.set(getFunctionName(fn), (value) => {
+          const page = getFunctionName(fn) === 'delivery:inboxPage' && Array.isArray(value) ? { clicks: value, after: [] } : value
           // Pages in these delivery fixtures were published by a known app profile. The working folder may still be unknown.
-          if (getFunctionName(fn) === 'delivery:inbox' && stand.profiles)
-            for (const click of value ?? []) {
+          if (getFunctionName(fn) === 'delivery:inboxPage' && stand.profiles)
+            for (const click of page?.clicks ?? []) {
               if (click.session && !conversationProfile(click.session)) noteConversation(click.session, '/not-a-recorded-working-folder')
             }
-          heard(value)
+          heard(page)
         })
         stand.asking.set(getFunctionName(fn), args)
         return () => {}
@@ -224,7 +225,7 @@ async function start(
   const running = runConnector((line) => said.push(line))
   // It is up once it answers, watches the backend, and can be told to stop
   const stopper = () => process.listeners('SIGTERM').find((l) => !had.SIGTERM.has(l)) as ((signal: string) => void) | undefined
-  await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inbox') && stand.watching.has('machines:me') && stopper() !== undefined)
+  await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inboxPage') && stand.watching.has('machines:me') && stopper() !== undefined)
   if (!apps.deferSettings) wants(apps.wanted ?? ['codex', 'pi'])
   stop = async () => {
     stopper()!('SIGTERM')
@@ -525,7 +526,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     attended: true,
     session: { harness: 'codex', id: `thread-${n}` },
   })
-  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inbox')!(clicks)
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
   test('Unknown Codex liveness never queues or reopens a conversation, and a waiter can still take its click.', async () => {
     standIn()
     await start()
@@ -2694,17 +2695,45 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     attended: true,
     session: { harness, id: `conversation-${n}` },
   })
-  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inbox')!(clicks)
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
   const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
   const session = (harness: string, n: number, more: Record<string, unknown> = {}) =>
     local('/session', { method: 'POST', body: { harness, session: `conversation-${n}`, ...more } })
   const clicksFor = (harness: string, n: number) => local<{ clicks: { id: string }[] }>(`/clicks?harness=${harness}&session=conversation-${n}`)
 
+  test('inbox discovery advances without new clicks and keeps its cursor through listener changes', async () => {
+    standIn()
+    await start()
+    const cursor = () => (stand.asking.get('delivery:inboxPage') as { after: { harness: string; id: string }[] }).after
+    const first = stand.watching.get('delivery:inboxPage')!
+    first({ clicks: [], after: [{ harness: 'codex', id: 'thread-12' }] })
+    await pass()
+    expect(cursor()).toEqual([{ harness: 'codex', id: 'thread-12' }])
+    // A late answer from the old subscription cannot rewind the next page.
+    first({ clicks: [], after: [{ harness: 'codex', id: 'thread-01' }] })
+    await pass()
+    expect(cursor()).toEqual([{ harness: 'codex', id: 'thread-12' }])
+    stand.watching.get('delivery:inboxPage')!({ clicks: [], after: [{ harness: 'codex', id: 'thread-24' }] })
+    await session('pi', 5)
+    expect(cursor()).toEqual([{ harness: 'codex', id: 'thread-24' }])
+    // A subscription that has no answer yet leaves its place unchanged.
+    await session('pi', 6)
+    expect(cursor()).toEqual([{ harness: 'codex', id: 'thread-24' }])
+    stand.watching.get('delivery:inboxPage')!({ clicks: [], after: [{ harness: 'codex', id: '' }] })
+    await pass()
+    expect(cursor()).toEqual([{ harness: 'codex', id: '' }])
+    // Even after rollover recreates the original arguments, its old callback stays obsolete.
+    stand.watching.get('delivery:inboxPage')!({ clicks: [], after: [{ harness: 'codex', id: 'thread-36' }] })
+    first({ clicks: [], after: [{ harness: 'codex', id: 'thread-01' }] })
+    await pass()
+    expect(cursor()).toEqual([{ harness: 'codex', id: 'thread-36' }])
+  })
+
   test('with none connected, Codex’s own command is never run for a click, and the connector asks It for no click of Codex’s queue', async () => {
     standIn()
     // Codex is on the machine, with nothing of It's in it, and the person chose no app
     await start('socket', { wanted: [], found: [{ id: 'codex', version: '1.0.0', addon: 'not_connected' }] })
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: [] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({ listening: [], queues: [], after: [] })
     // Should a click for a Codex conversation be offered all the same, it is left where it is:
     // when it is offered, and at each pass the connector makes afterwards
     offered(click('codex', 1))
@@ -2717,7 +2746,7 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
   test('before It has said which apps the person chose, none is taken to be connected', async () => {
     standIn()
     await start('socket', { wanted: ['codex'] })
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: ['codex'] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({ listening: [], queues: ['codex'], after: [{ harness: 'codex', id: '' }] })
     await stop?.()
     stop = null
     stand.watching.clear()
@@ -2727,12 +2756,12 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     process.env.IT_HOME = home
     const had = new Set(process.listeners('SIGTERM'))
     const running = runConnector((line) => said.push(line))
-    await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inbox'))
+    await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inboxPage'))
     stop = async () => {
       ;(process.listeners('SIGTERM').find((l) => !had.has(l)) as (signal: string) => void)('SIGTERM')
       await running
     }
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: [] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({ listening: [], queues: [], after: [] })
     offered(click('codex', 2))
     await settled()
     await pass(2)
@@ -2744,7 +2773,7 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     standIn()
     for (const addon of ['too_old', 'not_connected', 'unavailable', 'error']) {
       await start('socket', { wanted: ['codex'], found: [{ id: 'codex', version: '1.0.0', addon }] })
-      expect([addon, stand.asking.get('delivery:inbox')]).toEqual([addon, { listening: [], queues: [] }])
+      expect([addon, stand.asking.get('delivery:inboxPage')]).toEqual([addon, { listening: [], queues: [], after: [] }])
       offered(click('codex', 3))
       await settled()
       await pass(2)
@@ -2790,7 +2819,7 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     expect(await session('pi', 5)).toEqual({ ok: true })
     expect(await clicksFor('pi', 5)).toEqual({ clicks: [] })
     expect((await local<{ sessions: string[] }>('/health'))?.sessions).toEqual([])
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: ['codex'] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({ listening: [], queues: ['codex'], after: [{ harness: 'codex', id: '' }] })
     offered(click('pi', 5))
     await settled()
     await pass(2)
@@ -2802,7 +2831,11 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     // Chosen, the same add-on is listened for and given its click
     wants(['codex', 'pi'])
     expect(await session('pi', 5)).toEqual({ ok: true })
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [{ harness: 'pi', id: 'conversation-5' }], queues: ['codex'] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({
+      listening: [{ harness: 'pi', id: 'conversation-5' }],
+      queues: ['codex'],
+      after: [{ harness: 'codex', id: '' }],
+    })
     offered(click('pi', 5))
     await until(() => called('delivery:claim').includes('click-5'))
     expect((await clicksFor('pi', 5))?.clicks.map((c) => c.id)).toEqual(['click-5'])
@@ -2863,7 +2896,7 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     wants([])
     await until(() => called('delivery:release').includes('click-6'))
     expect((await local<{ held: number }>('/health'))?.held).toBe(0)
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: [] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({ listening: [], queues: [], after: [] })
     expect((await clicksFor('pi', 6))?.clicks).toEqual([])
     // A place comes free for the click that stood in line, and Codex is not run for it
     stand.codex[0]!.end()
@@ -2990,7 +3023,7 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
 describe.skipIf(process.platform === 'win32')('what the connector writes down when something goes wrong', () => {
   const session = { harness: 'pi', id: 'conversation-1' }
   const offer = () =>
-    stand.watching.get('delivery:inbox')!([
+    stand.watching.get('delivery:inboxPage')!([
       { id: 'click-1', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
     ])
   /** The line the connector writes when asking It for a click fails with this error. */
@@ -3060,7 +3093,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-1' } })).toEqual({ ok: true })
     let answerClaim: (ids: string[]) => void = () => {}
     stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
-    stand.watching.get('delivery:inbox')!([
+    stand.watching.get('delivery:inboxPage')!([
       { id: 'click-9', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
     ])
     const asked = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
@@ -3075,7 +3108,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     await start()
     const session = { harness: 'pi', id: 'conversation-1' }
     expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-1' } })).toEqual({ ok: true })
-    stand.watching.get('delivery:inbox')!([
+    stand.watching.get('delivery:inboxPage')!([
       { id: 'click-5', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
     ])
     const asked = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
@@ -3094,7 +3127,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     await start()
     const session = { harness: 'pi', id: 'conversation-1' }
     expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-1' } })).toEqual({ ok: true })
-    stand.watching.get('delivery:inbox')!([
+    stand.watching.get('delivery:inboxPage')!([
       { id: 'click-5', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
     ])
     for (let n = 0; n < 100 && (await local<{ held: number }>('/health'))?.held !== 1; n++) await new Promise((r) => setTimeout(r, 30))
@@ -3102,7 +3135,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     // From here It cannot be reached to make the hold good again, and gives the click to another machine when its half minute
     // is over: it is no longer among what It offers this one
     stand.answer = (name) => (name === 'delivery:renew' ? Promise.reject(new Error('no answer')) : undefined)
-    stand.watching.get('delivery:inbox')!([])
+    stand.watching.get('delivery:inboxPage')!([])
     expect((await local<{ held: number }>('/health'))?.held).toBe(1)
     const began = Date.now()
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -3142,7 +3175,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
         .filter((line) => line.id === 'click-1')
         .map((line) => line.event)
     // The click is there before its conversation is heard from, so nothing is done with it yet
-    stand.watching.get('delivery:inbox')!([click])
+    stand.watching.get('delivery:inboxPage')!([click])
     let answerClaim: (ids: string[]) => void = () => {}
     stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
     // The add-on asks, by the bytes, on a connection of its own, and its asking is what has the click claimed for it
@@ -3179,7 +3212,7 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     attended: true,
     session: { harness: 'codex', id: `thread-${thread}` },
   })
-  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inbox')!(clicks)
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
   const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
   const turn = (n: number, busy: boolean) => local('/session', { method: 'POST', body: { harness: 'codex', session: `thread-${n}`, busy } })
   /**
@@ -3211,6 +3244,50 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     if (answer?.clicks?.length) printed.set(n, [...(printed.get(n) ?? []), ...answer.clicks.map((c) => c.id)])
     return answer
   }
+
+  test.each([false, true])('an attended ninth click is delivered after timer turns exhaust their budget, while discovery advances: %s', async (rotate) => {
+    withT3Code()
+    standIn()
+    stand.t3.threads.set('thread-30', 't3-thread-budget')
+    await start()
+    for (let n = 1; n <= 3; n++) {
+      offered({ ...click(n, 30), attended: false })
+      await until(() => called('delivery:handedOff').includes(`click-${n}`))
+    }
+    expect(stand.t3.sent).toHaveLength(3)
+    const timers = Array.from({ length: 8 }, (_, i) => ({ ...click(10 + i, 30), attended: false }))
+    offered(...timers)
+    await pass(2)
+    expect(stand.t3.sent).toHaveLength(3)
+    const attended = click(18, 30)
+    const answer = stand.answer!
+    let resume: (() => void) | undefined
+    stand.answer = (name, args) => {
+      if (rotate && name === 'delivery:claim' && args.ids[0] === timers[0]!.id && !resume)
+        return new Promise((resolve) => {
+          resume = () => resolve(answer(name, args) ?? args.ids)
+        })
+      return answer(name, args)
+    }
+    stand.watching.get('delivery:inboxPage')!({ clicks: [...timers, attended], after: [{ harness: 'codex', id: 'thread-30' }] })
+    if (rotate) {
+      await until(() => resume !== undefined)
+      await pass()
+      offered()
+      resume!()
+    }
+    await pass(2)
+    expect(stand.t3.sent).toHaveLength(4)
+    const sent = stand.t3.sent[3]!.text
+    expect([...sent.matchAll(/\[action ([^\]]+)\]/g)].map((m) => m[1])).toEqual([...timers.slice(0, 7), attended].map((c) => c.id))
+    for (const c of [...timers.slice(0, 7), attended]) expect(sent).toContain(`[action ${c.id}]`)
+    expect(sent).not.toContain(`[action ${timers[7]!.id}]`)
+    expect(called('delivery:handedOff')).toContain(attended.id)
+    expect(called('delivery:handedOff')).not.toContain(timers[7]!.id)
+    offered(timers[7]!)
+    await pass(2)
+    expect(stand.t3.sent).toHaveLength(4)
+  })
 
   test('one whose conversation is held in a thread is put to the thread, though some Codex has the conversation open, and Codex’s queue is not used', async () => {
     withT3Code()

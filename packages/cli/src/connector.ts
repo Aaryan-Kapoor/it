@@ -1565,9 +1565,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
     void call('mutation', api.machines.wakeFailed, { for: session, why: words ? `${why}, and its last words were: ${words}` : why }).catch(() => {})
   }
   /** Whether anybody was at the page for any click that is waiting for a click's conversation. One such, and the conversation is reopened as for a person, whatever else waits in front of it. */
-  const someoneThere = (click: Offered) =>
+  const someoneThere = (click: Offered, offered = inbox) =>
     click.attended !== false ||
-    inbox.some((c) => c.id !== click.id && c.attended !== false && c.session?.harness === click.session?.harness && c.session?.id === click.session?.id)
+    offered.some((c) => c.id !== click.id && c.attended !== false && c.session?.harness === click.session?.harness && c.session?.id === click.session?.id)
   /** Whether a conversation that is not listening is at work all the same, in a window It cannot see into: Claude Code wrote of it a moment ago. */
   const atWork = (session: { harness: string; id: string }, now: number) => {
     if (session.harness !== 'claude-code') return false
@@ -1585,7 +1585,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: threadOf(key) }), harnessEnv())
     return typeof env === 'string' ? null : codexHeld(threadOf(key), env.CODEX_HOME)
   }
-  async function queueNow(click: Offered, reopening: boolean, t3?: { server: T3; thread: string }): Promise<void> {
+  async function queueNow(click: Offered, reopening: boolean, offered: Offered[], t3?: { server: T3; thread: string }): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
     const receiptSlots: string[] = []
     /** This hand-over is finished: what its renewals are answered from now on is about nothing that is running. */
@@ -1625,7 +1625,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // disconnected it while the click stood in line
       if (!connected(harness)) return
       // Nor is a conversation reopened once the person has switched that off, or more often than it may be
-      if ((reopening && !wakes(harness, click.at)) || (starting && !room(key, someoneThere(click)))) return
+      if ((reopening && !wakes(harness, click.at)) || (starting && !room(key, someoneThere(click, offered)))) return
       // Codex's queue is for a conversation some Codex has open. One that was closed while this
       // click stood in line is not given it: the click is looked at afresh on the next pass.
       if (!reopening && !t3 && codexOpen(key) !== true) return
@@ -1651,7 +1651,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (starting) {
         // Everything else that is waiting for the conversation goes with it, in the one
         // message: a conversation reopened for five clicks is reopened once, and reads all five
-        const more = inbox
+        const eligible = offered
           .filter(
             (c) =>
               c.id !== click.id &&
@@ -1667,14 +1667,22 @@ async function connecting(say: (line: string) => void): Promise<void> {
               !awaited(c, Date.now()),
           )
           .sort((a, b) => a.at - b.at)
-          .slice(
-            0,
-            Math.min(
-              WAKE_MOST - 1,
-              Math.max(0, ACCEPTED_MOST - recovery.accepted.size - queueReceipts.size),
-              reopening ? Infinity : Math.max(0, waiterRoom(follow(key)) - 1),
-            ),
-          )
+        const most = Math.min(
+          WAKE_MOST - 1,
+          Math.max(0, ACCEPTED_MOST - recovery.accepted.size - queueReceipts.size),
+          reopening ? Infinity : Math.max(0, waiterRoom(follow(key)) - 1),
+        )
+        const more = eligible.slice(0, most)
+        // A person may pass older timer clicks, but must be in the batch that spends the
+        // attended allowance. The remaining timers keep their order and stay pending.
+        if (most > 0 && click.attended === false && more.every((c) => c.attended === false)) {
+          const attended = eligible.find((c) => c.attended !== false)
+          if (attended) {
+            if (more.length === most) more.pop()
+            more.push(attended)
+            more.sort((a, b) => a.at - b.at)
+          }
+        }
         if (more.length) {
           for (const c of more) {
             queueReceipts.set(c.id, key)
@@ -2032,7 +2040,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // as it asks, and is looked at again when that hand-over is over.
     if (reopening && before.length) return false
     queueing.add(click.id)
-    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening, t3)))
+    // Discovery advances while a command waits for its place. Keep this conversation's
+    // offers with it, especially the attended click that permits this turn. Claims still
+    // check ownership and whether each click is pending when the command gets its place.
+    const offered = inbox.filter((c) => c.session?.harness === click.session!.harness && c.session?.id === click.session!.id)
+    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening, offered, t3)))
     queues.set(key, next)
     void next.then(() => {
       if (queues.get(key) === next) queues.delete(key)
@@ -2858,9 +2870,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // their own, of the apps the person has connected. When who is here changes, or which apps are
   // connected, so does what is watched.
   let watching = ''
+  let watchingScope = ''
+  let watchGeneration = 0
+  const inboxAfter = new Map<string, string>()
+  let nextInbox: { harness: string; id: string }[] | null = null
   let saidTooMany = false
   let unwatch: (() => void) | null = null
-  function watch(): void {
+  function watch(advance = false): void {
     const now = Date.now()
     // The conversations that are here, the one heard from most recently first
     const here = [...sessions]
@@ -2882,15 +2898,29 @@ async function connecting(say: (line: string) => void): Promise<void> {
       .map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
     // A click is asked for an app's own queue only while that app is connected, and for a
     // conversation that is closed only where it may be reopened
-    const args = { listening, queues: [...new Set<string>([...QUEUES, ...WAKES.filter((h) => wakesNow.has(h))])].filter(connected) }
+    const scope = { listening, queues: [...new Set<string>([...QUEUES, ...WAKES.filter((h) => wakesNow.has(h))])].filter(connected) }
+    const scopeKey = JSON.stringify(scope)
+    // A changed listener set advances an answered page too. Frequent add-on updates cannot
+    // restart discovery at the first names, and an unanswered subscription advances nothing.
+    if (nextInbox && (advance || scopeKey !== watchingScope)) {
+      for (const s of nextInbox) inboxAfter.set(s.harness, s.id)
+      nextInbox = null
+    }
+    watchingScope = scopeKey
+    const args = { ...scope, after: scope.queues.map((harness) => ({ harness, id: inboxAfter.get(harness) ?? '' })) }
     const next = JSON.stringify(args)
     if (next === watching) return
     watching = next
+    const generation = ++watchGeneration
     unwatch?.()
     unwatch = client.onUpdate(
-      api.delivery.inbox,
+      api.delivery.inboxPage,
       args,
-      (clicks: Offered[]) => {
+      (page: { clicks: Offered[]; after: { harness: string; id: string }[] }) => {
+        // Ignore an answer already in flight when that subscription was replaced.
+        if (watchGeneration !== generation) return
+        const clicks = page.clicks
+        nextInbox = page.after
         const here = performance.now()
         for (const click of clicks) {
           // A new owner gets its own window, including when the observation table is full.
@@ -3172,6 +3202,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const tick = setInterval(() => {
     void finishRuns()
     void route()
+    watch(true)
   }, 1000)
   // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
   const alive = setInterval(() => void report(), ALIVE.everyMs)
