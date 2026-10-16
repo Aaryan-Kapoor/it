@@ -25,7 +25,7 @@ import {
 } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
+import { CODEX_MIN_VERSION, HARNESSES, type Harness, newer as newerVersion } from '@it/protocol'
 import { ADDONS, LICENSE } from './addons.generated'
 import { codexConfig } from './codex-settings'
 import { harnessEnv, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
@@ -46,8 +46,7 @@ interface Known {
 }
 export const KNOWN: Record<Harness, Known> = {
   'claude-code': { label: 'Claude Code', bin: 'claude', min: '2.1.287' },
-  // 0.160.0 is the first that says which conversations are open (see `codexHeld`), which is how a click knows whether Codex's queue will take it
-  codex: { label: 'Codex', bin: 'codex', min: '0.160.0' },
+  codex: { label: 'Codex', bin: 'codex', min: CODEX_MIN_VERSION },
   openclaw: { label: 'OpenClaw', bin: 'openclaw', min: '2026.9.6' },
   hermes: { label: 'Hermes Agent', bin: 'hermes', min: '0.20.1' },
   opencode: { label: 'OpenCode', bin: 'opencode', min: '1.18.32' },

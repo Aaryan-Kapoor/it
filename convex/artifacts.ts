@@ -1,4 +1,4 @@
-import { LIMITS, newer, QUOTA, WAKES, wakesOn } from '@it/protocol'
+import { CODEX_MIN_VERSION, LIMITS, newer, QUOTA, WAKES, wakesOn } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -250,12 +250,12 @@ function connection(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): Conne
     case 'connected':
       state = report.addon
   }
-  // This minimum matches Codex's supported version in setup. An unreadable version proves nothing.
+  // An unreadable version proves nothing about whether the app supports queued clicks.
   const queue =
     harness === 'codex' &&
     (state === 'connected' || state === 'needs_approval') &&
     /^v?\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(report?.version ?? '') &&
-    !newer('0.160.0', report?.version)
+    !newer(CODEX_MIN_VERSION, report?.version)
   return { harness, state, queue }
 }
 
