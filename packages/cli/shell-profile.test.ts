@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
+import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { zshDirectory } from './src/shell-profile'
 
 const made: string[] = []
@@ -58,6 +59,7 @@ describe.skipIf(process.platform === 'win32' || !zsh)('zsh startup folders', () 
     const itHome = path.join(home, '.it')
     const bin = path.join(itHome, 'bin')
     mkdirSync(bin, { recursive: true })
+    writeFileSync(path.join(itHome, INSTALLATION_FILE), INSTALLATION)
     writeFileSync(path.join(itHome, 'machine.json'), JSON.stringify({ id: 'test-machine', key: {} }))
     for (const name of ['systemctl', 'launchctl']) {
       writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 1\n')
