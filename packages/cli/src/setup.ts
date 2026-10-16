@@ -1027,6 +1027,10 @@ function copied(id: Harness, c: Copied): Adapter {
       // that it is It's add-on. A file of that name which does not is the person's own, and
       // nothing is asked of the harness.
       if (!was?.files) {
+        // A first install can stop while unpacking, before any destination file is recorded.
+        // Forget that attempt only at its recorded place, with every possible file confirmed
+        // absent. No app command is needed, and an unknown or redirected path is not absence.
+        if (was?.version === 'installing' && placed(was)?.dir && all(at).every((f) => lookAt(root, f.to).is === 'none')) return undefined
         const now = lookAt(root, main)
         if (now.is === 'closed') return { changed: [], closed: [main], outside: [] }
         if (now.is !== 'file' || !readFileSync(main, 'utf8').includes('The It add-on for ')) return NOWHERE

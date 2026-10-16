@@ -498,6 +498,41 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     expect(noted('opencode').installs.map((i) => i.version)).toEqual([ADDONS.opencode!.version])
   })
 
+  test.each(
+    (['opencode', 'hermes'] as const).flatMap((id) =>
+      ['absent', 'companion file', 'redirected folder', 'unplaced record'].map((destination) => ({ id, destination })),
+    ),
+  )('a first $id install that stops during unpacking can disconnect only a confirmed empty place: $destination', async ({ id, destination }) => {
+    const folder = folderOf(id)
+    put(path.join(folder, 'personal.txt'), 'The person keeps this.')
+    const skill = path.join(folder, 'skills/it/SKILL.md')
+    const outside = path.join(tmp, 'other-skills')
+    if (destination === 'companion file') put(skill, 'Keep this skill.')
+    if (destination === 'redirected folder') {
+      put(path.join(outside, 'it/SKILL.md'), 'Keep this linked skill.')
+      symlinkSync(outside, path.join(folder, 'skills'), 'junction')
+    }
+    const source = id === 'opencode' ? 'plugins/it-bridge.js' : 'it-bridge/__init__.py'
+    mkdirSync(path.join(process.env.IT_HOME!, 'addons', id, source), { recursive: true })
+    await expect(connect(id, () => {})).rejects.toThrow('cannot be replaced safely')
+    expect(noted(id).installs[0]!.version).toBe('installing')
+    expect(noted(id).installs[0]!.files).toBeUndefined()
+    if (destination === 'unplaced record') put(stampFile(id), JSON.stringify({ installs: [{ version: 'installing', at: 0 }] }))
+    const record = read(stampFile(id))
+    ran = []
+    expect(await disconnect(id, () => {})).toBe(destination === 'absent')
+    expect(commands(id).filter((words) => /remove|disable|uninstall/.test(words))).toEqual([])
+    expect(read(path.join(folder, 'personal.txt'))).toBe('The person keeps this.')
+    if (destination === 'absent') {
+      expect(existsSync(stampFile(id))).toBe(false)
+      expect(holdsAddons()).toBe(false)
+    } else {
+      expect(read(stampFile(id))).toBe(record)
+      if (destination === 'companion file') expect(read(skill)).toBe('Keep this skill.')
+      if (destination === 'redirected folder') expect(read(skill)).toBe('Keep this linked skill.')
+    }
+  })
+
   test('an install that stops half way leaves a note of every file it wrote, and they are removed with it', async () => {
     const folder = folderOf('hermes')
     failing = ['hermes plugins enable it-bridge']
