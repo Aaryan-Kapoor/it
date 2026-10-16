@@ -1330,8 +1330,12 @@ await sendNow('installation.removed', { age: 'under 1 day' })
     child.stdout!.on('data', (text) => (said += text))
     const posts: string[] = []
     const sender = noting(posts)
+    const clock = vi.spyOn(performance, 'now')
     try {
       await begun(() => said.includes('deciding'))
+      // Ownership recovery is tested here. Slow disk work must not expire the parent's decision.
+      // The child keeps its real clock and remains stalled until it is killed.
+      clock.mockReturnValue(0)
       const owner = readFileSync(deciding, 'utf8')
       expect(JSON.parse(owner)).toMatchObject({ pid: child.pid })
       // Neither an old timestamp nor a sender standing still past its send budget proves exit.
@@ -1349,6 +1353,7 @@ await sendNow('installation.removed', { age: 'under 1 day' })
     } finally {
       child.kill('SIGKILL')
       await ended
+      clock.mockRestore()
       sender.stop()
       rmSync(scratch, { recursive: true, force: true })
     }
@@ -1363,6 +1368,8 @@ await sendNow('installation.removed', { age: 'under 1 day' })
     fs.utimesSync(deciding, new Date('2099-01-01'), new Date('2099-01-01'))
     if (claimed) writeFileSync(`${deciding}.after.${left.holder}`, JSON.stringify({ pid, holder: randomUUID() }))
     const other = await another()
+    // Recovering two abandoned claims can exceed the send budget on a busy disk.
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0)
     const requests: string[] = []
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
       requests.push(readFileSync(deciding, 'utf8'))
@@ -1392,6 +1399,7 @@ await sendNow('installation.removed', { age: 'under 1 day' })
       expect(readdirSync(home).filter((file) => file.startsWith('telemetry-sending'))).toEqual([])
     } finally {
       fetch.mockRestore()
+      clock.mockRestore()
     }
   })
 
