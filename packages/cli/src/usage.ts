@@ -28,6 +28,7 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFi
 import { release as osRelease, userInfo } from 'node:os'
 import path from 'node:path'
 import { HARNESSES } from '@it/protocol'
+import { claimLock } from './legacy-lock'
 import { inHome, Problem, VERSION } from './lib'
 
 export const DEFAULT_URL = 'https://itcan.do/api/usage'
@@ -400,9 +401,9 @@ const takenFile = () => inHome('usage.jsonl.taken')
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 /**
- * The settings as the file is this moment. A file of any other shape than It writes holds
- * neither a telling nor an id. Whether reporting is on or off is nothing the settings say: that
- * is the off file's alone, and whatever else a settings file holds is passed over.
+ * The settings as the file is this moment. It reads valid `told` and `installation` fields
+ * from an object and ignores unknown fields. If either known field is invalid, neither is
+ * used. Whether reporting is on or off is nothing the settings say: that is the off file's alone.
  */
 function fresh(): Settings {
   let value: unknown = null
@@ -425,19 +426,26 @@ function save(settings: Settings): void {
   known = { file: settingsFile(), tag: tagFrom(settings) }
 }
 
-type Variable = 'IT_TELEMETRY_ENABLED' | 'DO_NOT_TRACK'
+type Variable = 'IT_TELEMETRY_ENABLED' | 'DO_NOT_TRACK' | 'CI'
 /** What a variable holds, without the spaces or quotes that a shell, a unit file or an env file may leave around it. */
 const held = (name: Variable): string => (process.env[name] ?? '').replace(/^[\s'"]+|[\s'"]+$/g, '').toLowerCase()
+/** Whether a variable is set to something other than the few values that plainly mean "no". */
+const said = (name: Variable): boolean => !['', '0', 'false', 'no', 'off'].includes(held(name))
 /**
  * Which variable in this process's environment turns reporting off, if one does. DO_NOT_TRACK
  * is read by its own convention: any value but an empty one and the few that plainly mean "no".
+ * CI is read the same way. It is set on a machine that builds and tests software, where an It
+ * is installed, tried and taken away again and is nobody's installation, and it turns reporting
+ * off there unless IT_TELEMETRY_URL names where to send, as a test of reporting does.
  */
 const offInEnvironment = (): Variable | null =>
   ['false', '0', 'off', 'no', 'n', 'disabled'].includes(held('IT_TELEMETRY_ENABLED'))
     ? 'IT_TELEMETRY_ENABLED'
-    : !['', '0', 'false', 'no', 'off'].includes(held('DO_NOT_TRACK'))
+    : said('DO_NOT_TRACK')
       ? 'DO_NOT_TRACK'
-      : null
+      : said('CI') && !process.env.IT_TELEMETRY_URL
+        ? 'CI'
+        : null
 /** Whether anything at all has this name. Where that cannot be told, something is taken to. */
 const stands = (file: string): boolean => {
   try {
@@ -475,6 +483,7 @@ const SAID_BY: Record<string, Status['because']> = {
   command: 'it telemetry off',
   IT_TELEMETRY_ENABLED: 'IT_TELEMETRY_ENABLED',
   DO_NOT_TRACK: 'DO_NOT_TRACK',
+  CI: 'CI',
 }
 /** Why reporting is off, or null when it is on. A variable set where this command runs is named before anything that was written down. */
 function whyOff(): Status['because'] | null {
@@ -544,6 +553,10 @@ function discard(): void {
 // there, which is to say that none begins. A command that turns reporting on waits in the same
 // way once it has written the new id down, so that none begins under the old one either.
 const decidingFile = () => inHome('telemetry-sending')
+// The empty format had no age-based recovery. Allow ten minutes before reclaiming it.
+const LEGACY_DECISION_MS = 10 * 60_000
+/** Takes the decision marker exclusively, and removes only the file this sender made. */
+const decision = () => claimLock(decidingFile(), LEGACY_DECISION_MS, randomUUID())
 /** The longest the step may take. A sender that stood still for longer does not send on what it saw, and looks again at its next pass. */
 const DECIDING_MOST_MS = 250
 /** How long a command that turns reporting off waits for a sender that is deciding: longer than the step may take. */
@@ -920,11 +933,10 @@ export function startSender(
         const began = performance.now()
         let t: Seen
         let answer: Promise<boolean>
+        const release = decision()
+        // A sender that cannot say it is deciding does not send: nobody turning reporting off could wait for it.
+        if (!release) return
         try {
-          const mine = ordinary(decidingFile(), constants.O_WRONLY | constants.O_CREAT)
-          // A sender that cannot say it is deciding does not send: nobody turning reporting off could wait for it
-          if (!mine) return
-          shut(mine.fd)
           t = look()
           if (t.off) return
           if (!t.who || !t.tag) return forget()
@@ -942,7 +954,7 @@ export function startSender(
             answer = Promise.resolve(false)
           }
         } finally {
-          remove(decidingFile())
+          release()
         }
         let ok = false
         try {
@@ -1080,18 +1092,34 @@ export function thisMachine(role: 'serves' | 'joined'): Properties<'machine.seen
  */
 export async function sendNow<N extends EventName>(name: N, properties: Properties<N>): Promise<void> {
   try {
-    const { off, kept } = standing()
-    const id = off ? null : identity(kept)
     const fits = allowed(name, properties)
-    if (!id || !fits) return
-    const hour = new Date()
-    hour.setUTCMinutes(0, 0, 0)
-    await fetch(url(), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'user-agent': `it/${VERSION}` },
-      body: JSON.stringify({ v: 1, installation: id.who, events: [{ id: randomUUID(), name, at: hour.toISOString(), properties: fits }] }),
-      redirect: 'error',
-      signal: AbortSignal.timeout(4000),
-    }).then((r) => void r.body?.cancel().catch(() => {}))
+    if (!fits) return
+    // Decided on in one step with beginning the request, under the file the sender makes for
+    // that step, and for the same reason: a command that turns reporting off in this moment
+    // waits for the file to go, so that no request begins once it has returned.
+    const began = performance.now()
+    let answer: Promise<Response>
+    const release = decision()
+    if (!release) return
+    try {
+      const { off, kept } = standing()
+      const id = off ? null : identity(kept)
+      if (!id) return
+      const hour = new Date()
+      hour.setUTCMinutes(0, 0, 0)
+      const body = JSON.stringify({ v: 1, installation: id.who, events: [{ id: randomUUID(), name, at: hour.toISOString(), properties: fits }] })
+      // Whoever turned reporting off in the meantime has stopped waiting for this step to end
+      if (performance.now() - began > DECIDING_MOST_MS) return
+      answer = fetch(url(), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'user-agent': `it/${VERSION}` },
+        body,
+        redirect: 'error',
+        signal: AbortSignal.timeout(4000),
+      })
+    } finally {
+      release()
+    }
+    await answer.then((r) => void r.body?.cancel().catch(() => {}))
   } catch {}
 }

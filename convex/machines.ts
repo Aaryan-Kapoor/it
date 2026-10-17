@@ -7,7 +7,7 @@ import { stoppedSince } from './actions'
 import { ownMachine, requireMachine, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
 import { log } from './lib/log'
-import { session } from './schema'
+import { addonRuntime, session } from './schema'
 import { lineOf, pairedOf, revokeMachine } from './sessions'
 
 const view = (m: Doc<'machines'>) => ({
@@ -130,6 +130,11 @@ export const wake = mutation({
     const m = await ownMachine(ctx, user._id, machineId)
     if (!(WAKES as readonly string[]).includes(harness)) fail('invalid', 'It cannot reopen a closed conversation of that agent app.')
     if (on && !wakesOn(m.system)) fail('invalid', noWakeHere(m.system))
+    if (
+      on &&
+      (!(m.wanted ?? []).includes(harness) || !(m.harnesses ?? []).some((h) => h.id === harness && (h.addon === 'connected' || h.addon === 'needs_approval')))
+    )
+      fail('invalid', 'Connect that agent app before turning on Auto-wake.')
     const now = m.wakes ?? []
     const is = now.some((w) => w.harness === harness)
     const off = (m.wakesOff ?? []).filter((h) => h !== harness)
@@ -163,6 +168,8 @@ export const upgrade = mutation({
         .take(QUOTA.machines)
       const runsIt = all.find((x) => !x.byMachine && !x.bySession)
       if (runsIt && newer(m.latest, runsIt.connectorVersion)) fail('conflict', 'Update the machine It runs on first.', { first: true })
+      if (runsIt && newer(runsIt.connectorVersion, m.latest))
+        fail('conflict', 'That release is older than the machine It runs on. Run `it upgrade --check` on this machine to check for a matching release.')
     }
     // Asked for again while it is at work, it is the same asking
     if (m.upgrade?.state === 'working' && Date.now() - m.upgrade.at < UPGRADE_MS) return null
@@ -328,12 +335,37 @@ export const me = query({
 })
 
 /** The harnesses found on a machine, as it reports them, and as they are kept: only the ones It knows, and nothing long. */
-const found = v.array(v.object({ id: v.string(), version: v.optional(v.string()), addon: v.string(), detail: v.optional(v.string()) }))
-const kept = (harnesses: { id: string; version?: string; addon: string; detail?: string }[]) =>
+const found = v.array(
+  v.object({ id: v.string(), version: v.optional(v.string()), addon: v.string(), detail: v.optional(v.string()), runtime: v.optional(addonRuntime) }),
+)
+const kept = (
+  harnesses: {
+    id: string
+    version?: string
+    addon: string
+    detail?: string
+    runtime?: { state: 'active' | 'inactive' | 'unverified' | 'incompatible'; version?: string; idle?: boolean; detail: string }
+  }[],
+) =>
   harnesses
     .filter((h) => (HARNESSES as readonly string[]).includes(h.id))
     .slice(0, HARNESSES.length)
-    .map((h) => ({ id: h.id, version: h.version?.slice(0, 40), addon: h.addon.slice(0, 40), detail: h.detail?.slice(0, 600) }))
+    .map((h) => ({
+      id: h.id,
+      version: h.version?.slice(0, 40),
+      addon: h.addon.slice(0, 40),
+      detail: h.detail?.slice(0, 600),
+      ...(h.runtime
+        ? {
+            runtime: {
+              state: h.runtime.state,
+              version: h.runtime.version?.slice(0, 40),
+              ...(h.runtime.idle === undefined ? {} : { idle: h.runtime.idle }),
+              detail: h.runtime.detail.slice(0, 600),
+            },
+          }
+        : {}),
+    }))
 
 /**
  * `it setup` says what it found on the machine, so that the site can show it before a connector

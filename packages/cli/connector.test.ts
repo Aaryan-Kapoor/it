@@ -9,10 +9,12 @@ import { syncBuiltinESMExports } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { MARK, PROTOCOL_VERSION } from '@it/protocol'
+import { MARK, PROTOCOL_VERSION, WAKE_BACK_MS } from '@it/protocol'
 import { getFunctionName } from 'convex/server'
-import { afterEach, describe, expect, test, vi } from 'vitest'
-import { conversationFolder, noteConversation } from './src/publish'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { ADDONS } from './src/addons.generated'
+import { conversationFolder, conversationProfile, noteConversation } from './src/publish'
+import * as wake from './src/wake'
 
 const stand = vi.hoisted(() => ({
   /** What the connector watches the backend for, by the name of the function, and how to tell it something new. */
@@ -23,12 +25,17 @@ const stand = vi.hoisted(() => ({
   found: [] as { id: string; version?: string; addon: string }[],
   /** Every call the connector made to the backend. */
   calls: [] as { name: string; args: any }[],
+  saving: new Set<Promise<void>>(),
   /** What a call answers, when the test wants something other than the usual. Undefined leaves it to the usual. */
   answer: null as null | ((name: string, args: any) => unknown),
   /** Every time Codex's own command was started, and how the test ends it. */
-  codex: [] as { args: string[]; end: (err?: unknown) => void }[],
+  codex: [] as { args: string[]; env?: NodeJS.ProcessEnv; end: (err?: unknown) => void }[],
   /** The Codex conversations that no Codex has open. Every other one is open somewhere, as it is in a window. */
   closed: new Set<string>(),
+  failedWrites: new Set<string>(),
+  savedRuns: [] as Record<string, unknown>[],
+  unknown: new Set<string>(),
+  profiles: true,
   /**
    * T3 Code as a test has it, which is not running unless the test says so: the thread each
    * conversation is held in, by the conversation's id; every time it was asked which thread
@@ -39,7 +46,7 @@ const stand = vi.hoisted(() => ({
     running: false,
     threads: new Map<string, string>(),
     slow: false,
-    asked: [] as { ids: string[]; answer: (thread: string | null | undefined) => void }[],
+    asked: [] as { ids: string[]; answer: (thread: string | null | undefined | Error | { status: 'limited' }, progressed?: boolean) => void }[],
     sent: [] as { thread: string; text: string }[],
     /** What T3 Code says where it will not take a message, and what it refused. */
     refusing: null as string | null,
@@ -51,9 +58,14 @@ const stand = vi.hoisted(() => ({
 vi.mock('./src/t3', () => ({
   t3Server: () => (stand.t3.running ? { origin: 'http://127.0.0.1:1', home: '/no-t3-code', program: 't3' } : undefined),
   t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }) =>
-    new Promise<string | null | undefined>((answer) => {
+    new Promise<{ thread: string | null | undefined | Error | { status: 'limited' }; progressed: boolean }>((resolve) => {
+      const answer = (thread: string | null | undefined | Error | { status: 'limited' }, progressed = true) => resolve({ thread, progressed })
       stand.t3.asked.push({ ids: [...of.ids], answer })
       if (!stand.t3.slow) answer(of.ids.map((id) => stand.t3.threads.get(id)).find((thread) => thread !== undefined) ?? null)
+    }).then(({ thread, progressed }) => {
+      if (thread instanceof Error) throw thread
+      if (typeof thread === 'object' && thread !== null) return thread
+      return thread === undefined ? { status: 'incomplete', progressed } : thread === null ? { status: 'absent' } : { status: 'found', thread }
     }),
   t3Send: async (_t3: unknown, thread: string, text: string) => {
     if (stand.t3.refusing !== null) {
@@ -68,12 +80,12 @@ vi.mock('./src/t3', () => ({
 // (wake.test.ts tries that against real files). Here the test says which are closed.
 vi.mock('./src/wake', async (original) => ({
   ...(await original<typeof import('./src/wake')>()),
-  codexHeld: (thread: string) => !stand.closed.has(thread),
+  codexHeld: (thread: string) => (stand.unknown.has(thread) ? null : !stand.closed.has(thread)),
 }))
 vi.mock('node:child_process', async (original) => ({
   ...(await original<typeof import('node:child_process')>()),
-  execFile: (_bin: string, args: string[], _options: unknown, done: (err: unknown) => void) => {
-    stand.codex.push({ args, end: (err) => done(err ?? null) })
+  execFile: (_bin: string, args: string[], options: { env?: NodeJS.ProcessEnv }, done: (err: unknown) => void) => {
+    stand.codex.push({ args, env: options.env, end: (err) => done(err ?? null) })
   },
 }))
 vi.mock('./src/setup', () => ({ detectAll: async () => stand.found, newerProgramSeen: () => false, reconcile: async () => {} }))
@@ -91,9 +103,28 @@ vi.mock('./src/lib', async (original) => {
   const real = await original<typeof import('./src/lib')>()
   return {
     ...real,
+    writePrivate: (...args: Parameters<typeof real.writePrivate>) => {
+      if (stand.failedWrites.has(path.basename(args[0]))) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+      real.writePrivate(...args)
+      if (path.basename(args[0]) === 'runs.json') stand.savedRuns.push(JSON.parse(JSON.stringify(args[1])))
+    },
+    writePrivateAsync: (...args: Parameters<typeof real.writePrivateAsync>) => {
+      const saving = stand.failedWrites.has(path.basename(args[0])) ? Promise.reject(new Error('disk full')) : real.writePrivateAsync(...args)
+      stand.saving.add(saving)
+      void saving.finally(() => stand.saving.delete(saving)).catch(() => {})
+      return saving
+    },
     live: () => ({
       onUpdate: (fn: any, args: unknown, heard: (value: any) => void) => {
-        stand.watching.set(getFunctionName(fn), heard)
+        stand.watching.set(getFunctionName(fn), (value) => {
+          const page = getFunctionName(fn) === 'delivery:inboxPage' && Array.isArray(value) ? { clicks: value, after: [] } : value
+          // Pages in these delivery fixtures were published by a known app profile. The working folder may still be unknown.
+          if (getFunctionName(fn) === 'delivery:inboxPage' && stand.profiles)
+            for (const click of page?.clicks ?? []) {
+              if (click.session && !conversationProfile(click.session)) noteConversation(click.session, '/not-a-recorded-working-folder')
+            }
+          heard(page)
+        })
         stand.asking.set(getFunctionName(fn), args)
         return () => {}
       },
@@ -107,6 +138,7 @@ vi.mock('./src/lib', async (original) => {
       // The backend as it answers when nothing is in the way: what is asked for is given
       if (name === 'delivery:claim' || name === 'delivery:renew') return args.ids
       if (name === 'delivery:lost') return []
+      if (name === 'delivery:giveBackBatch') return { back: [], done: true }
       if (name === 'delivery:handedOff') return { already: false }
       return null
     },
@@ -114,6 +146,8 @@ vi.mock('./src/lib', async (original) => {
 })
 
 import { type ConnectorInfo, infoFile, local, mac, runConnector, wayOf } from './src/connector'
+import { DeliveryRecovery, eraseDeliveryRecovery } from './src/delivery-recovery'
+import * as files from './src/lib'
 import { readJson } from './src/lib'
 import { alone, startOf } from './src/serve/backend'
 import { identity, SINCE_TOLD, WAS_STOPPED } from './src/wake'
@@ -135,7 +169,14 @@ async function until(what: () => boolean | Promise<boolean>, ms = 8000): Promise
  * those are a test's to give here. So by the end of a turn it has done what it does, and what
  * it has not done by then it does not do.
  */
-const settled = () => new Promise((r) => reallyNext(r))
+const settled = async () => {
+  // The connector now flushes receipts asynchronously. A pass is not settled merely
+  // because its microtasks ran; wait for its real disk writes without advancing time.
+  do {
+    await Promise.allSettled([...stand.saving])
+    await new Promise((r) => reallyNext(r))
+  } while (stand.saving.size)
+}
 /** The connector's once-a-second timer is a stand-in, and its other waits too when asked: its passes run when a test says. To be called before it starts. */
 const standIn = (waits = false) => vi.useFakeTimers({ toFake: [...(waits ? (['setTimeout', 'clearTimeout'] as const) : []), 'setInterval', 'clearInterval'] })
 /** A second passes for the connector whose timer is a stand-in: it makes the pass it makes every second, and that pass is over. */
@@ -163,15 +204,20 @@ const CONNECTED = [
  */
 async function start(
   over: 'socket' | 'port' = 'socket',
-  apps: { wanted?: string[]; found?: typeof stand.found } = {},
+  apps: { wanted?: string[]; found?: typeof stand.found; deferSettings?: boolean } = {},
   /** What is put into the folder before the connector starts in it. */
   first: (home: string) => void = () => {},
+  existing?: string,
 ): Promise<ConnectorInfo> {
   stand.found = apps.found ?? CONNECTED
-  home = mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
+  home = existing ?? mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
   // Every folder a test starts a connector in is taken away when the test is over, and not only the last
   made.push(home)
   process.env.IT_HOME = home
+  for (const key of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'PI_CODING_AGENT_DIR', 'HERMES_HOME']) {
+    process.env[key] = path.join(home, key)
+    mkdirSync(process.env[key]!, { recursive: true })
+  }
   first(home)
   if (over === 'port') process.env.IT_CONNECTOR_PORT = '1'
   else delete process.env.IT_CONNECTOR_PORT
@@ -179,8 +225,8 @@ async function start(
   const running = runConnector((line) => said.push(line))
   // It is up once it answers, watches the backend, and can be told to stop
   const stopper = () => process.listeners('SIGTERM').find((l) => !had.SIGTERM.has(l)) as ((signal: string) => void) | undefined
-  await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inbox') && stand.watching.has('machines:me') && stopper() !== undefined)
-  wants(apps.wanted ?? ['codex', 'pi'])
+  await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inboxPage') && stand.watching.has('machines:me') && stopper() !== undefined)
+  if (!apps.deferSettings) wants(apps.wanted ?? ['codex', 'pi'])
   stop = async () => {
     stopper()!('SIGTERM')
     await running
@@ -209,6 +255,10 @@ afterEach(async () => {
   said.length = 0
   stand.codex.length = 0
   stand.closed.clear()
+  stand.failedWrites.clear()
+  stand.savedRuns.length = 0
+  stand.unknown.clear()
+  stand.profiles = true
   stand.answer = null
   // A lookup a test left unanswered is answered, so that nothing of it outlasts the test
   for (const asked of stand.t3.asked) asked.answer(null)
@@ -289,6 +339,20 @@ describe('the lock one connector holds for a folder', () => {
     await until(() => failed !== undefined || stopper() !== undefined)
     return failed ? { code: failed.code, message: failed.message } : 'running'
   }
+
+  test.skipIf(process.platform === 'win32')(
+    'a connector that cannot write down where it listens closes what it opened, and leaves no socket behind',
+    async () => {
+      folder()
+      // Where the note goes there is a folder with something in it, which nothing can be written in place of
+      mkdirSync(path.join(home, 'connector.json', 'in-the-way'), { recursive: true })
+      const started = await starting()
+      expect(started).not.toBe('running')
+      expect(existsSync(path.join(home, 'connector.sock'))).toBe(false)
+      // And the lock is let go, for the next try
+      expect(existsSync(lock())).toBe(false)
+    },
+  )
 
   test('names its holder for as long as the connector runs, is let go when it stops, and leaves nothing beside it', async () => {
     await start()
@@ -462,13 +526,263 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     attended: true,
     session: { harness: 'codex', id: `thread-${n}` },
   })
-  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inbox')!(clicks)
-  const waitingFor = (n: number) =>
-    local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
-      method: 'POST',
-      body: { id: `waiter-${n}`, session: { harness: 'codex', id: `thread-${n}` } },
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
+  test('Unknown Codex liveness never queues or reopens a conversation, and a waiter can still take its click.', async () => {
+    standIn()
+    await start()
+    stand.unknown.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await pass(2)
+    expect(stand.codex).toEqual([])
+    expect(stand.calls.filter((c) => c.name === 'delivery:handedOff' || c.name === 'machines:runBegan')).toEqual([])
+    expect((await waitingFor(1))?.ok).toBe(true)
+  })
+
+  test('A legacy conversation with no profile receives its click through Codex’s queue in the service’s environment.', async () => {
+    stand.profiles = false
+    await start('socket', {}, (home) => {
+      writeFileSync(path.join(home, 'conversations.json'), JSON.stringify({ 'codex:thread-1': { cwd: home, at: Date.now() } }))
     })
+    offered(click(1))
+    await until(() => stand.codex.length === 1)
+    expect(stand.codex[0]!.args).toContain('--thread=thread-1')
+    expect(stand.codex[0]!.env?.CODEX_HOME).toBe(process.env.CODEX_HOME)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    expect(conversationProfile({ harness: 'codex', id: 'thread-1' })).toBeUndefined()
+  })
+
+  test('Auto-wake reopens a legacy conversation with no profile in the service’s environment and gives it the click.', async () => {
+    stand.profiles = false
+    await start('socket', {}, (home) => {
+      writeFileSync(path.join(home, 'conversations.json'), JSON.stringify({ 'codex:thread-1': { cwd: home, at: Date.now() } }))
+      const bin = path.join(home, 'bin')
+      mkdirSync(bin)
+      writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\nprintf \'%s\' "$CODEX_HOME" > "$IT_HOME/profile-used"\ncat > "$IT_HOME/given"\n', { mode: 0o755 })
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    })
+    stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    expect(readFileSync(path.join(home, 'profile-used'), 'utf8')).toBe(process.env.CODEX_HOME)
+    expect(readFileSync(path.join(home, 'given'), 'utf8')).toContain('[action click-1]')
+    expect(stand.codex).toEqual([])
+    expect(conversationProfile({ harness: 'codex', id: 'thread-1' })).toBeUndefined()
+  })
+
+  test.each(['open', 'closed'])('A Codex conversation that is %s and whose recorded profile is gone is neither queued nor reopened.', async (state) => {
+    standIn()
+    stand.profiles = false
+    await start()
+    const session = { harness: 'codex', id: 'thread-1' }
+    noteConversation(session, home)
+    const profile = process.env.CODEX_HOME!
+    rmSync(profile, { recursive: true })
+    process.env.CODEX_HOME = path.join(home, 'another-profile')
+    mkdirSync(process.env.CODEX_HOME)
+    if (state === 'closed') stand.closed.add('thread-1')
+    stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+    offered(click(1))
+    await pass(2)
+    expect(stand.codex).toEqual([])
+    expect(stand.calls.filter((c) => c.name === 'delivery:claim' || c.name === 'machines:runBegan')).toEqual([])
+    expect(conversationProfile(session)).toMatchObject({ paths: { CODEX_HOME: profile } })
+  })
+
+  test('an incompatible build keeps an authenticated session move without listening for clicks', async () => {
+    standIn()
+    await start()
+    const profile = { version: 1 as const, paths: { PI_CODING_AGENT_DIR: home } }
+    noteConversation({ harness: 'pi', id: 'session-old' }, home, profile)
+    const report = {
+      harness: 'pi',
+      session: 'session-new',
+      was: 'session-old',
+      instance: 'loaded-one',
+      addon: { api: 1, version: 'old-build', delivery: true, idle: true },
+    }
+    expect(await local('/session', { method: 'POST', body: report })).toMatchObject({ ok: false })
+    expect(readJson<Record<string, string>>(path.join(home, 'aliases.json'))?.['pi:session-old']).toBe('pi:session-new')
+    expect(conversationProfile({ harness: 'pi', id: 'session-new' })).toEqual(profile)
+    expect(conversationFolder({ harness: 'pi', id: 'session-new' })).toBe(home)
+    expect((await local<{ sessions: unknown[] }>('/health'))?.sessions).toEqual([])
+    expect(stand.calls.filter((c) => c.name === 'delivery:claim')).toEqual([])
+  })
+
+  test('Stale loaded code receives no clicks and its status names the repair.', async () => {
+    standIn()
+    await start()
+    const report = { harness: 'pi', session: 'session-one', instance: 'loaded-one', addon: { api: 1, version: 'old-build', delivery: true, idle: true } }
+    offered({ ...click(1), session: { harness: 'pi', id: 'session-one' } })
+    expect(await local('/clicks', { method: 'POST', body: report })).toMatchObject({ ok: false, clicks: [], runtime: { state: 'incompatible' } })
+    const health = await local<{ addons: Record<string, { detail: string }> }>('/health')
+    expect(health?.addons.pi?.detail).toMatch(/restart the agent app/)
+    expect(stand.calls.filter((c) => c.name === 'delivery:claim')).toEqual([])
+    report.addon.version = ADDONS.pi!.version
+    const heard = await local<{ clicks: unknown[] }>('/clicks', { method: 'POST', body: report })
+    expect(heard?.clicks).toHaveLength(1)
+  })
+
+  test('An open host without idle discovery leaves unknown conversations in the inbox.', async () => {
+    standIn()
+    await start('socket', { wanted: ['opencode'], found: [{ id: 'opencode', addon: 'connected' }] })
+    stand.watching.get('machines:me')!({ wanted: ['opencode'], wakes: [{ harness: 'opencode', since: Date.now() - 60_000 }] })
+    await local('/addon', {
+      method: 'POST',
+      body: { harness: 'opencode', instance: 'open-app', addon: { api: 1, version: ADDONS.opencode!.version, delivery: true, idle: false } },
+    })
+    offered({ ...click(1), session: { harness: 'opencode', id: 'ses_idle' } })
+    await pass(2)
+    expect(stand.calls.filter((c) => c.name === 'delivery:claim' || c.name === 'machines:runBegan')).toEqual([])
+    expect((await local<{ sessions: unknown[] }>('/health'))?.sessions).toEqual([])
+  })
+
+  /** What each waiter has been given, which it says with its next asking, as `it wait` does once it has printed it. */
+  const printed = new Map<number, string[]>()
+  beforeEach(() => printed.clear())
+  /** A waiter asks. `lost` is an answer that never reached it: it has printed nothing of it, and says nothing of it next time. */
+  const waitingFor = async (n: number, lost = false) => {
+    const answer = await local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
+      method: 'POST',
+      body: { id: `waiter-${n}`, session: { harness: 'codex', id: `thread-${n}` }, ...(printed.has(n) ? { got: printed.get(n) } : {}) },
+    })
+    if (!lost && answer?.clicks?.length) printed.set(n, [...(printed.get(n) ?? []), ...answer.clicks.map((c) => c.id)])
+    return answer
+  }
   const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
+
+  const recoveryClaims = () => readJson<{ returning: string[]; targets: [string, string][] }>(path.join(home, 'delivery-recovery.json'))!
+
+  test.each(['lost', 'failed write', 'unanswered'] as const)(
+    'a held lease %s retires its durable claim only after confirmed loss and a successful save',
+    async (outcome) => {
+      standIn()
+      let now = Date.now()
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+      let blocked: string | undefined
+      try {
+        await start()
+        await turn(6, true)
+        offered({ ...click(6), at: now })
+        await until(async () => (await local<{ held: number }>('/health'))?.held === 1)
+        offered()
+        await pass()
+        expect(recoveryClaims().returning).toEqual(['click-6'])
+        stand.answer = (name) => {
+          if (name !== 'delivery:renew') return undefined
+          if (outcome === 'unanswered') throw new Error('offline')
+          return []
+        }
+        if (outcome === 'failed write') {
+          blocked = `${path.join(home, 'delivery-recovery.json')}.${process.pid}.tmp`
+          mkdirSync(blocked)
+        }
+        now += outcome === 'unanswered' ? 31_000 : 11_000
+        await pass(2)
+        expect(called('delivery:renew')).toContain('click-6')
+        expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+        if (outcome === 'failed write') {
+          expect(recoveryClaims().returning).toEqual(['click-6'])
+          rmSync(blocked!, { recursive: true })
+          blocked = undefined
+          await pass()
+        }
+        expect(recoveryClaims().returning).toEqual(outcome === 'unanswered' ? ['click-6'] : [])
+        expect(recoveryClaims().targets).toEqual(outcome === 'unanswered' ? [['click-6', 'codex:thread-6']] : [])
+        expect(called('delivery:release')).toEqual([])
+        expect(called('delivery:handedOff')).toEqual([])
+      } finally {
+        if (blocked) rmSync(blocked, { recursive: true, force: true })
+        clock.mockRestore()
+      }
+    },
+  )
+
+  test.each([false, true])('acknowledged releases and parks retire durable claims, with recovery write failure %s', async (diskFails) => {
+    standIn()
+    await start()
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let releaseFails = true
+    let parkFails = true
+    stand.answer = (name) => {
+      if (name === 'delivery:release' && releaseFails) throw new Error('offline')
+      if (name === 'delivery:park') return !parkFails
+      return undefined
+    }
+    try {
+      offered(click(1))
+      await until(() => stand.codex.length === 1)
+      stand.codex[0]!.end(new Error('declined'))
+      await until(() => called('delivery:release').length === 1)
+      await settled()
+      expect(recoveryClaims().returning).toEqual(['click-1'])
+      releaseFails = false
+      for (let n = 2; n <= 4; n++) {
+        now += 601_000
+        await pass()
+        await until(() => stand.codex.length === n)
+        stand.codex[n - 1]!.end(new Error('declined'))
+        await until(() => called(n === 4 ? 'delivery:park' : 'delivery:release').length >= (n === 4 ? 1 : n))
+        await settled()
+        expect(recoveryClaims().returning).toEqual(n === 4 ? ['click-1'] : [])
+        if (n < 4) expect(recoveryClaims().targets).toEqual([])
+      }
+      parkFails = false
+      if (diskFails) {
+        const saving = vi.spyOn(DeliveryRecovery.prototype, 'retire').mockImplementation(() => {
+          throw new Error('disk unavailable')
+        })
+        try {
+          await pass()
+          await settled()
+          expect(recoveryClaims().returning).toEqual(['click-1'])
+        } finally {
+          saving.mockRestore()
+        }
+      }
+      await pass()
+      await until(() => recoveryClaims().returning.length === 0)
+      expect(recoveryClaims().targets).toEqual([])
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('a delayed release acknowledgement cannot retire a newer claim of the same click', async () => {
+    standIn()
+    await start()
+    await turn(6, true)
+    offered({ ...click(6), at: Date.now() })
+    await pass()
+    await until(() => called('delivery:claim').length === 1)
+    let acknowledge!: (value: null) => void
+    stand.answer = (name) =>
+      name === 'delivery:release'
+        ? new Promise((resolve) => {
+            acknowledge = resolve
+          })
+        : undefined
+    await waitingFor(6)
+    await until(() => acknowledge !== undefined)
+    await local('/waiting', { method: 'POST', body: { id: 'waiter-6', done: true } })
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6000)
+    try {
+      await pass()
+      await until(() => called('delivery:claim').length === 2)
+      acknowledge(null)
+      stand.answer = null
+      await settled()
+      expect(recoveryClaims().returning).toEqual(['click-6'])
+      expect(recoveryClaims().targets).toEqual([['click-6', 'codex:thread-6']])
+    } finally {
+      acknowledge(null)
+      stand.answer = null
+      clock.mockRestore()
+    }
+  })
 
   test('one that stood in line for a place is left for the waiter once its place comes', async () => {
     await start()
@@ -510,6 +824,25 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     } finally {
       rmSync(folder, { recursive: true, force: true })
     }
+  })
+
+  test('answers a hook while its conversation note waits for another writer, then keeps the note after the writer finishes', async () => {
+    await start()
+    const lock = path.join(home, 'conversations.json.lock')
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, holder: 'a'.repeat(16) }))
+    const wait = vi.spyOn(Atomics, 'wait').mockImplementation(() => {
+      throw new Error('a hook must not block the connector')
+    })
+    const session = { harness: 'codex', id: 'waiting-for-note' }
+    try {
+      expect(await local('/session', { method: 'POST', body: { harness: session.harness, session: session.id, folder: home } })).toMatchObject({ ok: true })
+      expect(wait).not.toHaveBeenCalled()
+      expect(conversationFolder(session)).toBeUndefined()
+    } finally {
+      rmSync(lock, { force: true })
+      wait.mockRestore()
+    }
+    await until(() => conversationFolder(session) === home)
   })
 
   test('what the connector before it wrote down of the turns it cut off is kept until each conversation has been told, however often the connector is started again', async () => {
@@ -774,8 +1107,201 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     me([{ harness: 'codex', sessionId: 'thread-1', stop: true, run: name }])
     await until(() => ended().length > 0, 25_000)
     expect(ended()).toEqual([name])
-    expect(said.some((line) => line.includes('was stopped by the person'))).toBe(true)
+    await until(() => said.some((line) => line.includes('was stopped by the person')))
   }, 90_000)
+
+  test.skipIf(process.platform === 'win32').each([false, true])(
+    'a Stop whose notice cannot be saved keeps its evidence through a restart with run writes failing %s',
+    async (failRun) => {
+      const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(bin, folder)
+      const command = path.join(bin, 'codex')
+      writeFileSync(command, `#!/bin/sh\ncat > ${bin}/given\nexec sleep 120\n`, { mode: 0o755 })
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      const on = { wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] }
+      stand.watching.get('machines:me')!(on)
+      offered(click(1))
+      await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0)
+      const run = stand.calls.find((c) => c.name === 'machines:runBegan')!.args.run
+      stand.failedWrites.add('stopped.json')
+      if (failRun) stand.failedWrites.add('runs.json')
+      stand.watching.get('machines:me')!({ ...on, runs: [{ harness: 'codex', sessionId: 'thread-1', stop: true, run }] })
+      await until(async () => (await local<{ held: unknown[] }>('/runs'))!.held.length === 1)
+      expect(stand.calls.filter((c) => c.name === 'machines:runEnded')).toEqual([])
+      expect(readJson<Record<string, unknown>>(path.join(home, 'runs.json'))?.['codex:thread-1']).toMatchObject(failRun ? { unsure: true } : { stopped: true })
+      const previousHome = home
+      await stop?.()
+      stop = null
+      stand.failedWrites.clear()
+      stand.calls.length = 0
+      stand.watching.clear()
+      writeFileSync(command, `#!/bin/sh\ncat > ${bin}/next\nexit 0\n`, { mode: 0o755 })
+      await start('socket', {}, () => {}, previousHome)
+      if (!failRun) {
+        expect(readJson(path.join(home, 'stopped.json'))).toEqual(['codex:thread-1'])
+        expect(existsSync(path.join(home, 'runs.json'))).toBe(false)
+      }
+      stand.watching.get('machines:me')!({ ...on, runs: [{ harness: 'codex', sessionId: 'thread-1', stop: true, run }] })
+      expect((await local<{ held: unknown[] }>('/runs'))!.held).toEqual([])
+      await until(() => stand.calls.some((c) => c.name === 'machines:runEnded' && c.args.run === run))
+      offered({ ...click(1), id: 'click-after-stop' })
+      await until(() => existsSync(path.join(bin, 'next')) && readFileSync(path.join(bin, 'next'), 'utf8').length > 0)
+      const given = readFileSync(path.join(bin, 'next'), 'utf8')
+      expect(given).toContain(WAS_STOPPED)
+      expect(given).toContain('[action click-after-stop]')
+      expect(given).not.toContain('[action click-1]')
+    },
+    30_000,
+  )
+
+  test.skipIf(process.platform !== 'linux').each([false, true])(
+    'failed run and cutoff writes preserve the record, and restart holds it only while inspection still fails: %s',
+    async (inspectionFails) => {
+      const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(bin, folder)
+      writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\ncat > ${bin}/given\nexec sleep 120\n`, { mode: 0o755 })
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      const on = { wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] }
+      stand.watching.get('machines:me')!(on)
+      offered(click(1))
+      await until(() => existsSync(path.join(bin, 'given')) && readFileSync(path.join(bin, 'given'), 'utf8').length > 0)
+      const file = path.join(home, 'runs.json')
+      const original = readFileSync(file, 'utf8')
+      const record = JSON.parse(original)['codex:thread-1'] as { pid: number; unsure: boolean }
+      expect(record.unsure).toBe(true)
+      const previousHome = home
+      const read = fs.readdirSync
+      try {
+        stand.failedWrites.add('runs.json')
+        stand.failedWrites.add('cut-off.json')
+        fs.readdirSync = ((where: unknown, ...args: unknown[]) => {
+          if (where === '/proc') throw Object.assign(new Error('inspection failed'), { code: 'EIO' })
+          return (read as any)(where, ...args)
+        }) as typeof fs.readdirSync
+        syncBuiltinESMExports()
+        await stop?.()
+        stop = null
+        expect(readFileSync(file, 'utf8')).toBe(original)
+        stand.failedWrites.clear()
+        stand.calls.length = 0
+        stand.watching.clear()
+        if (!inspectionFails) {
+          fs.readdirSync = read
+          syncBuiltinESMExports()
+        }
+        await start('socket', {}, () => {}, previousHome)
+        if (inspectionFails) {
+          expect((await local<{ held: { key: string }[] }>('/runs'))!.held.map((r) => r.key)).toEqual(['codex:thread-1'])
+          expect(readJson<Record<string, unknown>>(file)?.['codex:thread-1']).toMatchObject({ unsure: true })
+          stand.watching.get('machines:me')!(on)
+          offered({ ...click(1), id: 'new-click' })
+          await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'))
+          expect(stand.calls.filter((c) => c.name === 'machines:runBegan')).toEqual([])
+          expect(await local('/runs', { method: 'POST', body: { clear: true, of: ['codex:thread-1'] } })).toEqual({ cleared: 1 })
+        } else {
+          expect(existsSync(file)).toBe(false)
+          expect(readJson(path.join(home, 'cut-off.json'))).toEqual(['codex:thread-1'])
+        }
+        expect((await local<{ held: unknown[] }>('/runs'))!.held).toEqual([])
+      } finally {
+        fs.readdirSync = read
+        syncBuiltinESMExports()
+        stand.failedWrites.clear()
+        // The test ends the process whose inspection it made fail, by that process's own id.
+        if (identity([record.pid]).has(record.pid)) process.kill(record.pid, 'SIGTERM')
+        await until(() => !identity([record.pid]).has(record.pid))
+      }
+    },
+    30_000,
+  )
+
+  test.each(['ended', 'gone', 'unknown'] as const)(
+    'a run saved before a connector crash is held only when recovery answers unknown, rather than %s',
+    async (outcome) => {
+      const ended = vi.spyOn(wake, 'endTree').mockResolvedValue(outcome)
+      try {
+        await start('socket', {}, (home) => {
+          writeFileSync(
+            path.join(home, 'runs.json'),
+            JSON.stringify({ 'codex:thread-1': { pid: 900_001, since: 'tick 1', told: SINCE_TOLD, run: 'interrupted-run', unsure: true } }),
+          )
+        })
+        expect(ended).toHaveBeenCalledWith(900_001, 'tick 1', {
+          harness: 'codex',
+          session: 'thread-1',
+          run: 'interrupted-run',
+          told: SINCE_TOLD,
+          boot: undefined,
+        })
+        expect((await local<{ held: unknown[] }>('/runs'))!.held).toHaveLength(outcome === 'unknown' ? 1 : 0)
+        expect(existsSync(path.join(home, 'runs.json'))).toBe(outcome === 'unknown')
+        if (outcome !== 'unknown') expect(readJson(path.join(home, 'cut-off.json'))).toEqual(['codex:thread-1'])
+      } finally {
+        ended.mockRestore()
+      }
+    },
+  )
+
+  test('an uncertain legacy run without a run mark stays held when its leader is gone', async () => {
+    await start('socket', {}, (home) => {
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({
+          'codex:thread-1': { pid: process.pid, since: 'Thu Jan  1 00:00:00 1970', told: SINCE_TOLD, unsure: true, boot: wake.bootId() },
+        }),
+      )
+    })
+    expect((await local<{ held: { key: string }[] }>('/runs'))!.held.map((run) => run.key)).toEqual(['codex:thread-1'])
+    expect(readJson<Record<string, unknown>>(path.join(home, 'runs.json'))?.['codex:thread-1']).toMatchObject({ unsure: true })
+    expect(await local('/runs', { method: 'POST', body: { clear: true, of: ['codex:thread-1'] } })).toEqual({ cleared: 1 })
+    expect((await local<{ held: unknown[] }>('/runs'))!.held).toEqual([])
+  })
+
+  test.skipIf(process.platform === 'win32')('recovery leaves a legacy run alive when its conservative checkpoint cannot be saved', async () => {
+    const leader = spawn('sleep', ['300'], { detached: true, stdio: 'ignore' })
+    const exited = new Promise((resolve) => leader.once('exit', resolve))
+    const record = { 'codex:thread-1': { pid: leader.pid!, since: identity([leader.pid!]).get(leader.pid!)!, told: SINCE_TOLD } }
+    try {
+      await start('socket', {}, (home) => {
+        writeFileSync(path.join(home, 'runs.json'), JSON.stringify(record))
+        stand.failedWrites.add('runs.json')
+      })
+      expect(identity([leader.pid!]).has(leader.pid!)).toBe(true)
+      expect(readJson(path.join(home, 'runs.json'))).toEqual(record)
+      expect((await local<{ held: unknown[] }>('/runs'))!.held).toHaveLength(1)
+    } finally {
+      stand.failedWrites.clear()
+      if (identity([leader.pid!]).has(leader.pid!)) leader.kill('SIGKILL')
+      await exited
+    }
+  })
+
+  test.skipIf(process.platform !== 'linux')('a known reboot releases uncertainty while keeping the Stop notice', async () => {
+    await start('socket', {}, (home) => {
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({
+          'codex:thread-1': {
+            pid: process.pid,
+            since: identity([process.pid]).get(process.pid),
+            told: SINCE_TOLD,
+            boot: '00000000-0000-4000-8000-000000000000',
+            unsure: true,
+            stopped: true,
+          },
+        }),
+      )
+    })
+    expect((await local<{ held: unknown[] }>('/runs'))!.held).toEqual([])
+    expect(existsSync(path.join(home, 'runs.json'))).toBe(false)
+    expect(readJson(path.join(home, 'stopped.json'))).toEqual(['codex:thread-1'])
+  })
 
   test('a conversation that a connector which died left running is ended, with what it had started, before anything is handed out, and is told that its turn was cut off', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
@@ -811,6 +1337,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     // By the time it is up, both the agent and its command are gone, and this program, whose number the other note held, is not
     expect([alive(left.pid!), alive(its), alive(process.pid)]).toEqual([false, false, true])
     expect(existsSync(path.join(home, 'runs.json'))).toBe(false)
+    // The first recovery checkpoint still names every run that has not been examined.
+    expect(Object.keys(stand.savedRuns[0]!)).toEqual(['codex:thread-1', 'codex:thread-2'])
     expect(said.some((line) => /^a codex conversation \([0-9a-f]{8}\) was still running from before this started/.test(line))).toBe(true)
     // Reopened for the same thing, it is told that its turn was cut off
     stand.closed.add('thread-1')
@@ -1084,6 +1612,23 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(existsSync(path.join(home, 'stopped.json'))).toBe(false)
   })
 
+  test('only the latest 200 stopped conversations are kept, including after a restart', async () => {
+    const keys = Array.from({ length: 205 }, (_, n) => `codex:stopped-${n}`)
+    await start('socket', {}, (home) => writeFileSync(path.join(home, 'stopped.json'), JSON.stringify(keys.slice(0, 200))))
+    stand.watching.get('machines:me')!({
+      wanted: ['codex'],
+      runs: keys.slice(200).map((key) => ({ harness: 'codex', sessionId: key.slice(6), stop: true })),
+    })
+    expect(readJson(path.join(home, 'stopped.json'))).toEqual(keys.slice(5))
+    const previousHome = home
+    await stop?.()
+    stop = null
+    stand.watching.clear()
+    await start('socket', {}, () => {}, previousHome)
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'stopped-204', busy: true } })
+    expect(readJson(path.join(home, 'stopped.json'))).toEqual(keys.slice(5, -1))
+  })
+
   test('asked to stop, the connector tells It that its machine is going, so that its pages wait for the machine at once', async () => {
     await start()
     expect(stand.calls.some((c) => c.name === 'machines:report')).toBe(true)
@@ -1104,6 +1649,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.codex).toEqual([])
     // The person opens the conversation in Codex. The click is still on offer, and the pause before the next reopening has ten seconds to run.
     stand.closed.clear()
+    stand.unknown.clear()
+    stand.profiles = true
     offered(click(1))
     await until(() => stand.codex.length === 1)
     expect(stand.codex[0]!.args).toContain('--thread=thread-1')
@@ -1157,10 +1704,91 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   })
 
   const turn = (n: number, busy: boolean) => local('/session', { method: 'POST', body: { harness: 'codex', session: `thread-${n}`, busy } })
+
+  test.each([-60_000, 60_000])('a first observation is fresh for a running Codex turn when the host clock differs by %i milliseconds', async (skew) => {
+    await start()
+    await turn(6, true)
+    offered({ ...click(6), at: Date.now() + skew })
+    await until(() => called('delivery:claim').includes('click-6'))
+    expect(stand.codex).toEqual([])
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-6'))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+  })
+
+  test('new clicks stay fresh after the observation table fills with clicks taken elsewhere', async () => {
+    standIn()
+    await start()
+    // An unconnected app leaves the observations here without this connector confirming any.
+    const elsewhere = Array.from({ length: 5000 }, (_, n) => ({ ...click(n + 100), session: { harness: 'other', id: 'elsewhere' } }))
+    offered(...elsewhere)
+    await pass()
+    offered()
+    await pass()
+    expect(called('delivery:handedOff')).toEqual([])
+    await turn(6, true)
+    offered(click(6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    expect(stand.codex).toEqual([])
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-6'))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+  })
+
+  test('repeated offers keep their first observation after the local wall clock is corrected backwards', async () => {
+    await start()
+    await turn(6, true)
+    const first = { ...click(6), at: Date.now() + 60_000 }
+    const elapsed = performance.now()
+    // The first claim loses a race, so the same click is offered again later.
+    stand.answer = (name) => (name === 'delivery:claim' ? [] : undefined)
+    offered(first)
+    await until(() => called('delivery:claim').includes('click-6'))
+    await settled()
+    stand.answer = null
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() - 120_000)
+    const monotonic = vi.spyOn(performance, 'now').mockReturnValue(elapsed + 9_000)
+    try {
+      offered(first)
+      await until(() => stand.codex.length === 1)
+      expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-6'))?.clicks).toEqual([])
+    } finally {
+      wall.mockRestore()
+      monotonic.mockRestore()
+    }
+  })
+
+  test.each([
+    { harness: 'codex', id: 'thread-6' },
+    { harness: 'pi', id: 'thread-7' },
+  ])('a pending click gets a fresh hook window when its page moves from $harness:$id to another conversation', async (session) => {
+    standIn()
+    await start()
+    await turn(7, true)
+    stand.closed.add('thread-6')
+    const first = { ...click(6), session }
+    const elapsed = performance.now()
+    offered(first)
+    await pass()
+    expect(called('delivery:claim')).toEqual([])
+    // The same click is offered to the new owner after its old hook window has expired.
+    const monotonic = vi.spyOn(performance, 'now').mockReturnValue(elapsed + 9_000)
+    try {
+      offered({ ...first, session: { harness: 'codex', id: 'thread-7' } })
+      await until(() => called('delivery:claim').includes('click-6'))
+      expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-7'))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+      expect(stand.codex).toEqual([])
+    } finally {
+      monotonic.mockRestore()
+    }
+  })
+
+  /** The first observation happened before the routing pass, which now runs past its hook window. */
+  const offeredEarlier = (...clicks: ReturnType<typeof click>[]) => {
+    const time = vi.spyOn(performance, 'now').mockReturnValue(performance.now() - 9_000)
+    offered(...clicks)
+    time.mockRestore()
+  }
   /** Offers a click, lets Codex's command take it, and waits until It has been told so. */
   const takenByTheQueue = async (n: number) => {
     const commands = stand.codex.length
-    offered(click(n))
+    offeredEarlier(click(n))
     await until(() => stand.codex.length === commands + 1)
     stand.codex[commands]!.end()
     await until(() => called('delivery:handedOff').includes(`click-${n}`))
@@ -1182,16 +1810,13 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   })
 
   test('more than one answer can carry is given to a waiter over several askings, each click once and none lost', async () => {
+    standIn()
     await start()
     expect(await turn(6, true)).toEqual({ ok: true })
     // Thirty-four clicks that each carry as much as a click may, taken by Codex’s queue behind the turn that is running
     const carried = JSON.stringify('x'.repeat(31_000))
     const ids: string[] = []
-    // Each of the sixty-eight waits below is given half a minute and not the usual eight seconds:
-    // nothing here is held to a time, and on a machine that is busy with the other suites one
-    // step of so many has taken longer than eight
-    // Where a step does not come about, what the connector did and said by then is told: on
-    // one of the workflow's machines the first step has not, and nothing said why
+    // A failed wait says how far the hand-over got.
     const sofar = (step: string, i: number) => (err: unknown) => {
       throw new Error(
         `${step} of click ${i} did not come about: ${JSON.stringify({
@@ -1208,11 +1833,16 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     for (let i = 0; i < 34; i++) {
       const commands = stand.codex.length
       ids.push(`click-big-${i}`)
-      offered({ ...click(6), id: ids[i]!, payload: carried })
+      offeredEarlier({ ...click(6), id: ids[i]!, payload: carried })
       await until(() => stand.codex.length === commands + 1, 30_000).catch(sofar('Codex’s command', i))
+      // A claimed click is no longer on offer from the backend. Withdraw it before the
+      // command ends, so a timer cannot submit the stale offer again after confirmation.
+      offered()
       stand.codex[commands]!.end()
       await until(() => called('delivery:handedOff').includes(ids[i]!), 30_000).catch(sofar('telling It', i))
-      offered()
+      // Exercise the timer between hand-overs, even when the runner finishes them quickly.
+      await pass()
+      expect(stand.codex.length).toBe(commands + 1)
     }
     // Together they are over a megabyte, which is more than a waiter reads of one answer
     expect(ids.length * carried.length).toBeGreaterThan(1_000_000)
@@ -1263,6 +1893,854 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(called('delivery:handedOff')).toEqual(['click-6'])
   })
 
+  test('an unreadable recovery record is kept aside once and does not stop click delivery', async () => {
+    await start('socket', {}, (folder) => writeFileSync(path.join(folder, 'delivery-recovery.json'), '{broken'))
+    expect(readFileSync(path.join(home, 'delivery-recovery.json.unreadable'), 'utf8')).toBe('{broken')
+    expect(said.filter((line) => line.includes('recovery record could not be read'))).toHaveLength(1)
+    await takenByTheQueue(6)
+    expect(called('delivery:handedOff')).toEqual(['click-6'])
+    expect(said.filter((line) => line.includes('recovery record could not be read'))).toHaveLength(1)
+  })
+
+  test('a failed waiter cleanup save does not prevent connector startup or its next answer', async () => {
+    standIn()
+    stand.failedWrites.add('delivery-recovery.json')
+    await start('socket', {}, (folder) => {
+      const expired = { ...click(6), at: Date.now() - WAKE_BACK_MS }
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({
+          version: 1,
+          waiters: [[expired.id, { click: expired, key: 'codex:thread-6' }]],
+          marks: [],
+          accepted: [],
+          returning: [],
+        }),
+      )
+    })
+    await pass(2)
+    expect(await local('/waiting', { method: 'POST', body: { id: 'finished', done: true } })).toEqual({ ok: true })
+    expect(said.filter((line) => line.includes('could not save waiter cleanup'))).toHaveLength(1)
+    stand.failedWrites.clear()
+    await pass()
+    expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+  })
+
+  test('a failed waiter cleanup save leaves lease renewal and confirmation running', async () => {
+    standIn()
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      await start()
+      stand.answer = (name) => {
+        if (name === 'delivery:handedOff') throw new Error('offline')
+      }
+      await turn(7, true)
+      await takenByTheQueue(7)
+      await turn(6, true)
+      offered({ ...click(6), at: now })
+      await until(async () => (await local<{ held: number }>('/health'))?.held === 1)
+      offered()
+      await pass()
+      stand.calls.length = 0
+      stand.answer = null
+      stand.closed.add('thread-7')
+      stand.failedWrites.add('delivery-recovery.json')
+      now += 11_000
+      await pass(2)
+      expect(called('delivery:renew')).toContain('click-6')
+      expect(called('delivery:handedOff')).toContain('click-7')
+      expect(said.filter((line) => line.includes('could not save waiter cleanup'))).toHaveLength(1)
+      stand.failedWrites.clear()
+      await pass()
+      expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+    } finally {
+      stand.failedWrites.clear()
+      clock.mockRestore()
+    }
+  })
+
+  test('a failed save of a printed waiter receipt still answers and retries its cleanup', async () => {
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    stand.failedWrites.add('delivery-recovery.json')
+    const done = () => local('/waiting', { method: 'POST', body: { id: 'waiter-6', got: ['click-6'], done: true } })
+    expect(await done()).toEqual({ ok: true })
+    expect(await done()).toEqual({ ok: true })
+    expect(said.filter((line) => line.includes('could not save waiter cleanup'))).toHaveLength(1)
+    stand.failedWrites.clear()
+    expect(await done()).toEqual({ ok: true })
+    expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+  })
+
+  test('closing Codex without an ending hook removes copies made for its running turn', async () => {
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    stand.closed.add('thread-6')
+    expect((await waitingFor(6, true))?.clicks).toBeUndefined()
+    expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+    expect(called('delivery:handedOff')).toEqual(['click-6'])
+  })
+
+  test('a live copy is removed when its quiet turn and its remembered session have both expired', async () => {
+    standIn()
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_600_001)
+    try {
+      // Both timers become due before the queued recovery write runs. The session is gone,
+      // but this connector made the copy itself and knows the turn it was kept behind.
+      vi.advanceTimersByTime(60_000)
+      await settled()
+      expect((await waitingFor(6, true))?.clicks).toBeUndefined()
+      expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('asking again for an unanswered copy keeps its first receipt without rewriting the record', async () => {
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    const file = path.join(home, 'delivery-recovery.json')
+    const before = readFileSync(file, 'utf8')
+    const blocked = `${file}.${process.pid}.tmp`
+    mkdirSync(blocked)
+    try {
+      expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+      expect(readFileSync(file, 'utf8')).toBe(before)
+    } finally {
+      rmSync(blocked, { recursive: true })
+    }
+  })
+
+  test.each(['/session', '/marked', '/waiting'])('a nearly full restored record still answers %s and keeps its receipts', async (endpoint) => {
+    await start('socket', {}, (folder) => {
+      const old = { ...click(1), id: 'old', at: Date.now() - 20_000, payload: '' }
+      const record = {
+        version: 1,
+        accepted: [],
+        returning: [],
+        targets: [],
+        marks: [['codex:thread-6', [{ id: 'mark', texts: ['Private text'], at: Date.now() }]]],
+        waiters: [
+          ['old', { key: 'codex:thread-1', click: old }],
+          ['click-6', { key: 'codex:thread-6', click: click(6) }],
+        ],
+      }
+      old.payload = 'x'.repeat(16_000_000 - Buffer.byteLength(JSON.stringify(record)) - 1)
+      writeFileSync(path.join(folder, 'delivery-recovery.json'), JSON.stringify(record))
+    })
+    const body =
+      endpoint === '/session'
+        ? { harness: 'codex', session: 'longer-thread-6', was: 'thread-6' }
+        : endpoint === '/marked'
+          ? { harness: 'codex', session: 'thread-6', taken: ['not-this-mark'] }
+          : { id: 'waiter-6', session: { harness: 'codex', id: 'thread-6' } }
+    expect(await local(endpoint, { method: 'POST', body })).toMatchObject({ ok: true })
+    const kept = readJson<{ waiters: [string, unknown][]; marks: unknown[] }>(path.join(home, 'delivery-recovery.json'))!
+    expect(kept.marks).toHaveLength(1)
+    if (endpoint !== '/marked') expect(kept.waiters.map(([id]) => id)).toEqual(['click-6'])
+  })
+
+  test('a slow recovery save leaves the add-on answer free to meet its 300 millisecond deadline', async () => {
+    standIn(true)
+    await start('socket', {}, (folder) =>
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({
+          version: 1,
+          accepted: [],
+          returning: [],
+          marks: [],
+          waiters: [['large', { key: 'codex:other', click: { ...click(6), id: 'large', payload: 'x'.repeat(15_000_000) } }]],
+        }),
+      ),
+    )
+    const write = files.writePrivateAsync
+    let resume = () => {}
+    const blocked = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    let began = false
+    const saving = vi.spyOn(files, 'writePrivateAsync').mockImplementation(async (...args) => {
+      began = true
+      await blocked
+      await write(...args)
+    })
+    try {
+      offered({ ...click(8), session: { harness: 'pi', id: 'thread-8' } })
+      let answered = false
+      const asking = local<{ clicks: unknown[] }>('/clicks?harness=pi&session=thread-8').finally(() => {
+        answered = true
+      })
+      await until(() => began)
+      expect(called('delivery:claim')).toEqual([])
+      expect(answered).toBe(false)
+      vi.advanceTimersByTime(300)
+      expect((await asking)?.clicks).toEqual([])
+      // The claim is not sent until its receipt has actually reached the disk.
+      expect(called('delivery:claim')).toEqual([])
+      resume()
+      await until(() => called('delivery:claim').includes('click-8'))
+    } finally {
+      resume()
+      saving.mockRestore()
+    }
+  })
+
+  test('a waiter copy and its receipt survive consecutive connector restarts', async () => {
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    const restart = async () => {
+      const previous = home
+      await stop!()
+      stop = null
+      await start('socket', {}, (folder) => {
+        for (const name of ['delivery-recovery.json', 'aliases.json', 'heard.json']) {
+          if (existsSync(path.join(previous, name))) writeFileSync(path.join(folder, name), readFileSync(path.join(previous, name)))
+        }
+      })
+    }
+    await restart()
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    await waitingFor(6)
+    await restart()
+    expect((await waitingFor(6))?.clicks).toBeUndefined()
+  })
+
+  test.each(['codex', 't3'])('restored copies at one conversation limit do not block another %s queue', async (via) => {
+    if (via === 't3') {
+      stand.t3.running = true
+      stand.t3.threads.set('thread-6', 't3-6')
+      stand.t3.threads.set('thread-7', 't3-7')
+    }
+    await start('socket', {}, (folder) => {
+      const waiters = Array.from({ length: 200 }, (_, n) => {
+        const id = `old-${n}`
+        return [id, { click: { ...click(6), id }, key: 'codex:thread-6' }]
+      })
+      writeFileSync(path.join(folder, 'delivery-recovery.json'), JSON.stringify({ version: 1, waiters, marks: [], accepted: [], returning: [] }))
+    })
+    await turn(7, true)
+    offeredEarlier(click(6), click(7))
+    await until(() => (via === 't3' ? stand.t3.sent.length === 1 : stand.codex.length === 1))
+    if (via === 'codex') stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-7'))
+    expect(called('delivery:claim')).toEqual(['click-7'])
+    const kept = readJson<{ waiters: [string, unknown][] }>(path.join(home, 'delivery-recovery.json'))!
+    expect(kept.waiters).toHaveLength(200)
+    expect((await waitingFor(7))?.clicks?.map((c) => c.id)).toEqual(['click-7'])
+  })
+
+  test.each(['confirmed', 'unconfirmed', 'pending'] as const)('an expired restored copy leaves its %s click on the existing restart path', async (state) => {
+    standIn()
+    const expired = { ...click(6), at: Date.now() - WAKE_BACK_MS - 1 }
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch') return { back: state === 'pending' ? [expired.id] : [], done: true }
+      if (name === 'delivery:recover') return [{ id: expired.id, click: expired }]
+      return undefined
+    }
+    await start('socket', {}, (folder) => {
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({
+          version: 1,
+          waiters: [[expired.id, { click: expired, key: 'codex:thread-6' }]],
+          marks: [],
+          accepted: state === 'unconfirmed' ? [expired.id] : [],
+          returning: state === 'confirmed' ? [] : [expired.id],
+        }),
+      )
+      // Before durable copies, a queued receipt was recovered from the journal alone.
+      const event = state === 'confirmed' ? 'confirmed' : state === 'unconfirmed' ? 'queued' : 'queueing'
+      writeFileSync(path.join(folder, 'journal.jsonl'), `${JSON.stringify({ event, id: expired.id })}\n`)
+    })
+    await pass(3)
+    expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+    if (state === 'pending') {
+      await until(() => stand.codex.length === 1)
+      stand.codex[0]!.end()
+      await until(() => called('delivery:handedOff').includes(expired.id))
+      expect(called('delivery:claim')).toEqual([expired.id])
+    } else {
+      expect(stand.codex).toHaveLength(0)
+      expect(called('delivery:claim')).toEqual([])
+      expect(called('delivery:handedOff')).toEqual(state === 'unconfirmed' ? [expired.id] : [])
+    }
+    expect((await waitingFor(6))?.clicks).toBeUndefined()
+    expect(called('delivery:release')).toEqual([])
+    expect(called('delivery:park')).toEqual([])
+  })
+
+  test('an unexpired restored copy is kept until its age limit, even without another restart', async () => {
+    standIn()
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const kept = { ...click(6), at: now - WAKE_BACK_MS + 1000 }
+      await start('socket', {}, (folder) =>
+        writeFileSync(
+          path.join(folder, 'delivery-recovery.json'),
+          JSON.stringify({
+            version: 1,
+            waiters: [[kept.id, { click: kept, key: 'codex:thread-6' }]],
+            marks: [],
+            accepted: [],
+            returning: [],
+          }),
+        ),
+      )
+      expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual([kept.id])
+      now += 1000
+      await pass()
+      expect(readJson<{ waiters: unknown[] }>(path.join(home, 'delivery-recovery.json'))!.waiters).toEqual([])
+      expect((await waitingFor(6))?.clicks).toBeUndefined()
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('a returned click cannot be overtaken after more than three seconds without visibility', async () => {
+    standIn()
+    stand.answer = (name) => (name === 'delivery:giveBackBatch' ? { back: ['click-left'], done: true } : undefined)
+    await start()
+    offered(click(6))
+    await settled()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5000)
+    try {
+      await pass(5)
+      expect(called('delivery:claim')).toEqual([])
+    } finally {
+      clock.mockRestore()
+    }
+    offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
+    await pass()
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')[0]).toBe('click-left')
+  })
+
+  test('a failed legacy release stays unresolved until it succeeds', async () => {
+    standIn()
+    let failed = true
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch' || name === 'delivery:giveBack') throw new Error(`Could not find public function for '${name}'.`)
+      if (name === 'delivery:release' && failed) throw new Error('offline')
+      return undefined
+    }
+    await start('socket', {}, (folder) => writeFileSync(path.join(folder, 'journal.jsonl'), `${JSON.stringify({ event: 'claimed', id: 'click-left' })}\n`))
+    offered(click(6))
+    await pass(5)
+    expect(called('delivery:claim')).toEqual([])
+    failed = false
+    await pass(5)
+    expect(called('delivery:claim')).toEqual([])
+    offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
+    await pass()
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')[0]).toBe('click-left')
+  })
+
+  test('recovery fetches an older click omitted by the inbox and lets unrelated conversations progress', async () => {
+    standIn()
+    let reachable = false
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch')
+        return { back: ['click-left'], done: true, routes: [{ id: 'click-left', session: { harness: 'codex', id: 'thread-6' } }] }
+      if (name === 'delivery:recover') {
+        if (!reachable) throw new Error('offline')
+        return [{ id: 'click-left', click: { ...click(6), id: 'click-left', at: Date.now() - 20_000 } }]
+      }
+      return undefined
+    }
+    await start()
+    offered(click(6), click(7))
+    await pass()
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')).toEqual(['click-7'])
+    reachable = true
+    await pass()
+    await until(() => stand.codex.length === 2)
+    expect(called('delivery:claim')[1]).toBe('click-left')
+    stand.codex[1]!.end()
+    await pass()
+    await until(() => called('delivery:claim').includes('click-6'))
+  })
+
+  test('a returned click intentionally excluded from subscriptions never holds another conversation', async () => {
+    stand.answer = (name) =>
+      name === 'delivery:giveBackBatch'
+        ? { back: ['disconnected'], done: true }
+        : name === 'delivery:recover'
+          ? [{ id: 'disconnected', click: { ...click(9), id: 'disconnected', session: { harness: 'opencode', id: 'closed' } } }]
+          : undefined
+    await start()
+    offered(click(6))
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')).toEqual(['click-6'])
+    expect(recoveryClaims().returning).not.toContain('disconnected')
+    expect(recoveryClaims().targets.some(([id]) => id === 'disconnected')).toBe(false)
+  })
+
+  test.each([false, true])('a refused recovered claim drops its stale snapshot, including when cleanup fails: %s', async (diskFails) => {
+    standIn()
+    let available = false
+    let blocked: string | undefined
+    stand.answer = (name, args) => {
+      if (name === 'delivery:giveBackBatch') return { back: ['stale'], done: true }
+      if (name === 'delivery:recover') return [{ id: 'stale', click: { ...click(6), id: 'stale' } }]
+      if (name === 'delivery:claim' && args.ids.includes('stale') && !available) {
+        if (diskFails && !blocked) {
+          blocked = `${path.join(home, 'delivery-recovery.json')}.${process.pid}.tmp`
+          mkdirSync(blocked)
+        }
+        return []
+      }
+      return undefined
+    }
+    await start('socket', { wanted: ['pi'] })
+    await pass()
+    wants(['codex'])
+    await pass()
+    expect(called('delivery:claim')).toEqual(['stale'])
+    await pass(5)
+    expect(called('delivery:claim')).toEqual(['stale'])
+    if (blocked) {
+      expect(recoveryClaims().returning).toEqual(['stale'])
+      rmSync(blocked, { recursive: true })
+      blocked = undefined
+      await pass()
+    }
+    expect(recoveryClaims().returning).toEqual([])
+    available = true
+    offered({ ...click(6), id: 'stale', name: 'offered again' })
+    await pass()
+    await until(() => stand.codex.length === 1)
+    expect(stand.codex[0]!.args.join(' ')).toContain('offered again')
+  })
+
+  test('a legacy pending result is not delivered until the inbox proves it is no longer parked', async () => {
+    standIn()
+    const parked = { ...click(6), id: 'parked' }
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch') return { back: ['parked'], done: true, routes: [{ id: 'parked', session: parked.session }] }
+      if (name === 'delivery:recover') throw new Error('Could not find public function for delivery:recover')
+      // Older get answers omit parkedBy. A pending result alone is not permission to deliver.
+      if (name === 'delivery:get') return { ...parked, delivery: 'pending' }
+      return undefined
+    }
+    await start()
+    await pass(5)
+    expect(stand.codex).toHaveLength(0)
+    expect(called('delivery:claim')).toEqual([])
+    offered(click(7))
+    await pass()
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')).toEqual(['click-7'])
+    // Reopening or reviving the conversation makes its click visible in the real inbox.
+    offered(parked, click(7))
+    await pass()
+    await until(() => stand.codex.length === 2)
+    expect(called('delivery:claim')).toEqual(['click-7', 'parked'])
+  })
+
+  test('an accepted queue receipt still prevents resubmission after its backend confirmation was lost', async () => {
+    await start()
+    await turn(6, true)
+    stand.answer = (name) => {
+      if (name === 'delivery:handedOff') throw new Error('offline')
+      return undefined
+    }
+    offeredEarlier(click(6))
+    await until(() => stand.codex.length === 1)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-6'))
+    const previous = home
+    await stop!()
+    stop = null
+    stand.answer = (name) => (name === 'delivery:giveBackBatch' ? { back: ['click-6'], done: true } : undefined)
+    await start('socket', {}, (folder) => {
+      writeFileSync(path.join(folder, 'delivery-recovery.json'), readFileSync(path.join(previous, 'delivery-recovery.json')))
+    })
+    offered(click(6))
+    await until(() => called('delivery:handedOff').length >= 2)
+    expect(stand.codex).toHaveLength(1)
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+  })
+
+  test.each(['codex', 't3'] as const)('a successful %s handoff is still confirmed when its durable receipt cannot be saved', async (via) => {
+    standIn()
+    const t3 = await import('./src/t3')
+    const send = t3.t3Send
+    const temporary = () => `${path.join(home, 'delivery-recovery.json')}.${process.pid}.tmp`
+    const sending = vi.spyOn(t3, 't3Send').mockImplementation(async (...args) => {
+      const result = await send(...args)
+      mkdirSync(temporary())
+      return result
+    })
+    let reachable = false
+    stand.answer = (name) => {
+      if (name === 'delivery:handedOff' && !reachable) throw new Error('offline')
+      return undefined
+    }
+    try {
+      if (via === 't3') {
+        stand.t3.running = true
+        stand.t3.threads.set('thread-6', 't3-6')
+      }
+      await start()
+      await turn(6, true)
+      const clicks = via === 't3' ? [click(6), { ...click(7), session: click(6).session }] : [click(6)]
+      const ids = clicks.map((c) => c.id)
+      offeredEarlier(...clicks)
+      for (let i = 0; i < 5 && stand.codex.length + stand.t3.sent.length === 0; i++) await pass()
+      expect(stand.codex.length + stand.t3.sent.length).toBe(1)
+      if (via === 'codex') {
+        mkdirSync(temporary())
+        stand.codex[0]!.end()
+      }
+      offered()
+      await pass(2)
+      expect([...new Set(called('delivery:handedOff'))]).toEqual(ids)
+      expect(called('delivery:release')).toEqual([])
+      expect(recoveryClaims().returning).toEqual(ids)
+      rmSync(temporary(), { recursive: true })
+      reachable = true
+      await pass(2)
+      expect(recoveryClaims().returning).toEqual([])
+      expect(recoveryClaims().targets).toEqual([])
+      offered(...clicks)
+      await pass(2)
+      expect(stand.codex.length + stand.t3.sent.length).toBe(1)
+      expect(called('delivery:claim')).toEqual(ids)
+      expect(called('delivery:release')).toEqual([])
+      expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(ids)
+    } finally {
+      sending.mockRestore()
+      rmSync(temporary(), { recursive: true, force: true })
+    }
+  })
+
+  test('a restored accepted receipt is reconciled even when the backend already removed the click from its inbox', async () => {
+    standIn()
+    await start('socket', {}, (folder) =>
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({ version: 1, waiters: [], marks: [], accepted: ['accepted'], returning: ['accepted'] }),
+      ),
+    )
+    stand.answer = (name) => (name === 'delivery:recover' ? [{ id: 'accepted', click: null }] : undefined)
+    offered()
+    await pass()
+    expect(called('delivery:handedOff')).toContain('accepted')
+    expect(JSON.parse(readFileSync(path.join(home, 'delivery-recovery.json'), 'utf8')).accepted).toEqual([])
+    expect(stand.codex).toHaveLength(0)
+  })
+
+  test('outstanding queue commands reserve durable receipt space before another app can accept a click', async () => {
+    stand.answer = (name) => {
+      if (name === 'delivery:handedOff') throw new Error('offline')
+      return undefined
+    }
+    await start('socket', {}, (folder) =>
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({ version: 1, waiters: [], marks: [], accepted: Array.from({ length: 199 }, (_, n) => `accepted-${n}`), returning: [] }),
+      ),
+    )
+    offered(click(1), click(2), click(3))
+    await until(() => stand.codex.length > 0)
+    await settled()
+    expect(stand.codex).toHaveLength(1)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    expect(JSON.parse(readFileSync(path.join(home, 'delivery-recovery.json'), 'utf8')).accepted).toHaveLength(200)
+    expect(stand.codex).toHaveLength(1)
+  })
+
+  test('a queue is never used when its waiter recovery copy could not be persisted', async () => {
+    await start()
+    await turn(6, true)
+    const file = path.join(home, 'delivery-recovery.json')
+    rmSync(file, { force: true })
+    mkdirSync(file)
+    offered(click(6))
+    await settled()
+    await settled()
+    expect(stand.codex).toHaveLength(0)
+    expect(called('delivery:claim')).toEqual([])
+    rmSync(file, { recursive: true })
+  })
+
+  test('a connector started anew has It give back what this machine still holds, and takes nothing that was done after until it is offered that again', async () => {
+    // The connector before this one claimed a click and ended before it had handed it over: It
+    // holds that click back until its lease runs out, and offers the next one meanwhile
+    stand.answer = (name) => (name === 'delivery:giveBackBatch' ? { back: ['click-left'], done: true } : undefined)
+    await start()
+    offered(click(6))
+    await until(() => stand.calls.some((c) => c.name === 'delivery:giveBackBatch'))
+    await new Promise((r) => setTimeout(r, 600))
+    expect(called('delivery:claim')).toEqual([])
+    // It offers the earlier one again, and they go in the order they were made
+    offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')[0]).toBe('click-left')
+  })
+
+  test('where It cannot be asked for them yet, nothing is taken, and it is asked again', async () => {
+    let refuses = true
+    stand.answer = (name) => {
+      if (name !== 'delivery:giveBackBatch') return undefined
+      if (refuses) throw new Error('It did not answer in time, so whether that went through is not known.')
+      return { back: [], done: true }
+    }
+    await start()
+    offered(click(6))
+    await until(() => stand.calls.filter((c) => c.name === 'delivery:giveBackBatch').length >= 2, 10_000)
+    expect(called('delivery:claim')).toEqual([])
+    expect(stand.codex).toEqual([])
+    refuses = false
+    await until(() => stand.codex.length === 1, 10_000)
+    expect(called('delivery:claim')).toEqual(['click-6'])
+  }, 30_000)
+
+  test('recovery finishes every batch before routing, including empty batches and a later batch that cannot yet be read', async () => {
+    standIn(true)
+    let batches = 0
+    let readable = false
+    stand.answer = (name) => {
+      if (name !== 'delivery:giveBackBatch') return undefined
+      batches++
+      if (batches === 1) return { back: ['click-left'], done: false }
+      // Stopped clicks fill a batch but none goes back to waiting.
+      if (batches === 2) return { back: [], done: false }
+      if (!readable) throw new Error('The next recovery batch could not be read.')
+      return { back: [], done: true }
+    }
+    await start()
+    offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
+    await pass(3)
+    expect(batches).toBeGreaterThan(2)
+    // Even after the old initial-retry deadline, an incomplete batch sequence is not complete.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 40_000)
+    try {
+      await pass(2)
+      expect(called('delivery:claim')).toEqual([])
+      expect(stand.codex).toEqual([])
+      readable = true
+      await pass(2)
+      await until(() => stand.codex.length === 1)
+      expect(called('delivery:claim')[0]).toBe('click-left')
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('an unanswered first recovery batch still blocks routing after old leases expire', async () => {
+    standIn(true)
+    let readable = false
+    stand.answer = (name) => {
+      if (name !== 'delivery:giveBackBatch') return undefined
+      if (!readable) throw new Error('Recovery is temporarily unavailable.')
+      return { back: [], done: true }
+    }
+    await start()
+    offered(click(6))
+    await pass(2)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 90_000)
+    try {
+      await pass(2)
+      expect(called('delivery:claim')).toEqual([])
+      expect(stand.codex).toEqual([])
+      readable = true
+      await pass(2)
+      await until(() => stand.codex.length === 1)
+      expect(called('delivery:claim')).toEqual(['click-6'])
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('an It from before it could be asked that is asked to give back each click the journal names, a record that was cut short among them or not', async () => {
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch') throw new Error(`Could not find public function for '${name}'.`)
+      return undefined
+    }
+    await start('socket', {}, (folder) =>
+      writeFileSync(
+        path.join(folder, 'journal.jsonl'),
+        [
+          `${JSON.stringify({ t: Date.now() - 5000, event: 'claimed', id: 'click-done' })}\n`,
+          `${JSON.stringify({ t: Date.now() - 4000, event: 'acked', id: 'click-done' })}\n`,
+          // A record that a crash cut short, with nothing to end its line: it is passed over, and says nothing of what was written after it
+          '{"t":17,"event":"cla',
+          `\n${JSON.stringify({ t: Date.now() - 2000, event: 'claimed', id: 'click-left' })}\n`,
+        ].join(''),
+      ),
+    )
+    offered(click(6))
+    await until(() => called('delivery:release').includes('click-left'))
+    expect(called('delivery:release')).toEqual(['click-left'])
+    expect(stand.calls.some((c) => c.name === 'delivery:giveBack')).toBe(false)
+    expect(called('delivery:claim')).toEqual([])
+    offered({ ...click(6), id: 'click-left', at: Date.now() - 20_000 }, click(6))
+    await until(() => stand.codex.length === 1)
+    expect(called('delivery:claim')[0]).toBe('click-left')
+  })
+
+  test('a click made while Codex’s queue holds an earlier one behind the running turn follows it into the queue, and is not given to the turn’s next hook ahead of it', async () => {
+    await start()
+    expect(await turn(6, true)).toEqual({ ok: true })
+    await takenByTheQueue(6)
+    const commands = stand.codex.length
+    // Made this moment, which by itself would have it kept for the turn's next hook
+    offered({ ...click(6), id: 'click-6-later', at: Date.now() })
+    await until(() => stand.codex.length === commands + 1)
+    expect(called('delivery:claim')).toContain('click-6-later')
+    // The hook that comes next is handed nothing: the earlier click is read first, when the turn is done, and this one after it
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-6'))?.clicks).toEqual([])
+  })
+
+  test('nor is it given to the next hook while the earlier one has only its place in line for the queue, and nothing has been asked for it yet', async () => {
+    await start()
+    expect(await turn(6, true)).toEqual({ ok: true })
+    // The earlier click's claim is not answered yet: it is in neither of Codex's hands nor behind the turn
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name, args) => (name === 'delivery:claim' && args.ids.includes('click-6') ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    offeredEarlier(click(6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    offered(click(6), { ...click(6), id: 'click-6-later', at: Date.now() })
+    await new Promise((r) => setTimeout(r, 300))
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-6'))?.clicks).toEqual([])
+    expect(called('delivery:claim')).not.toContain('click-6-later')
+    answerClaim(['click-6'])
+    await until(() => stand.codex.length === 1)
+  })
+
+  test('an older click’s reserved queue place still precedes a new hook click after the conversation changes its id', async () => {
+    await start()
+    await turn(6, true)
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name, args) => (name === 'delivery:claim' && args.ids.includes('click-6') ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    offeredEarlier(click(6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    try {
+      expect(await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-60', was: 'thread-6', busy: true } })).toEqual({ ok: true })
+      offered({ ...click(60), at: Date.now() })
+      const hook = await local<{ clicks: { id: string }[] }>('/clicks?harness=codex&session=thread-60')
+      expect(hook?.clicks).toEqual([])
+      expect(called('delivery:claim')).not.toContain('click-60')
+      // The running turn ends before the old claim answers, so the queued click uses a mark.
+      await turn(60, false)
+    } finally {
+      answerClaim(['click-6'])
+    }
+    await until(() => stand.codex.length === 1)
+    expect(stand.codex[0]!.args).toContain('--thread=thread-60')
+    expect((await local<{ texts: string[] }>('/marked', { method: 'POST', body: { harness: 'codex', session: 'thread-60' } }))?.texts[0]).toContain('click-6')
+    stand.codex[0]!.end()
+    await until(() => stand.codex.length === 2)
+    expect(called('delivery:claim')).toEqual(['click-6', 'click-60'])
+  })
+
+  test('a queued click is not repeated to a waiter when a new turn also changes the conversation id', async () => {
+    await start()
+    await turn(6, true)
+    await takenByTheQueue(6)
+    await turn(7, true)
+    await takenByTheQueue(7)
+    // Codex has advanced the queued click into a turn and reports the new conversation id with it.
+    expect(await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-60', was: 'thread-6', busy: true } })).toEqual({ ok: true })
+    expect((await waitingFor(60))?.clicks).toBeUndefined()
+    expect(readJson<{ waiters: [string, unknown][] }>(path.join(home, 'delivery-recovery.json'))!.waiters.map(([id]) => id)).toEqual(['click-7'])
+    // Another conversation is still in its earlier turn, so its waiter can still have its queued click.
+    expect((await waitingFor(7))?.clicks?.map((c) => c.id)).toEqual(['click-7'])
+    expect(called('delivery:handedOff')).toEqual(['click-6', 'click-7'])
+  })
+
+  test.each([false, true])('a turn begun while Codex is taking a click keeps its waiter copy, unless already printed: %s', async (printedEarly) => {
+    standIn()
+    await start()
+    await turn(6, false)
+    offered(click(6))
+    await until(() => stand.codex.length === 1)
+    // The queue command has started against an idle conversation. A new turn starts before
+    // it accepts the click, which now waits behind that turn in Codex's queue.
+    await turn(6, true)
+    if (printedEarly) {
+      expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+      expect((await waitingFor(6))?.clicks).toBeUndefined()
+    }
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-6'))
+    offered()
+    await settled()
+    expect(readJson<{ waiters: [string, unknown][] }>(path.join(home, 'delivery-recovery.json'))!.waiters.map(([id]) => id)).toEqual(
+      printedEarly ? [] : ['click-6'],
+    )
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(printedEarly ? undefined : ['click-6'])
+  })
+
+  test('a waiter that says it has a click while Codex’s command for it is still to answer is not given it again once the command has', async () => {
+    await start()
+    expect(await turn(6, true)).toEqual({ ok: true })
+    offeredEarlier(click(6))
+    await until(() => stand.codex.length === 1)
+    // Codex's command has been started and has not answered: the waiter of the running turn is given the click meanwhile
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    // It prints it and says so, and only then does the command answer
+    expect((await waitingFor(6))?.clicks).toBeUndefined()
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-6'))
+    offered()
+    // The next wait of the turn, by another waiter and well after, is given nothing of it
+    const next = () =>
+      local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
+        method: 'POST',
+        body: { id: 'waiter-6-next', session: { harness: 'codex', id: 'thread-6' } },
+      })
+    expect((await next())?.clicks).toBeUndefined()
+    await new Promise((r) => setTimeout(r, 10_200))
+    expect((await next())?.clicks).toBeUndefined()
+  }, 30_000)
+
+  test('a waiter that an answer never reached is given the click again when it next asks, and no more once it says that it has it', async () => {
+    await start()
+    expect(await turn(6, true)).toEqual({ ok: true })
+    await takenByTheQueue(6)
+    // The answer that carried the click is lost on its way. The wait has printed nothing, and asks again two seconds on
+    expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    // It has printed it now, and says so with its next asking
+    expect((await waitingFor(6))?.clicks).toBeUndefined()
+    expect(called('delivery:handedOff')).toEqual(['click-6'])
+  })
+
+  test('a waiter that went away without saying it had the click leaves it for the next wait of that turn, though not at once', async () => {
+    await start()
+    expect(await turn(6, true)).toEqual({ ok: true })
+    await takenByTheQueue(6)
+    const next = () =>
+      local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
+        method: 'POST',
+        body: { id: 'waiter-6-next', session: { harness: 'codex', id: 'thread-6' } },
+      })
+    expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    // The first may be printing it this moment, so another wait is not given it yet
+    expect((await next())?.clicks).toBeUndefined()
+    // Ten seconds on the first has not said that it has it: it never did, or is gone
+    await new Promise((r) => setTimeout(r, 10_200))
+    expect((await next())?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+  }, 30_000)
+
   test('one that Codex’s queue took is not given to a waiter once the turn has ended or another has begun, nor when no turn was running', async () => {
     await start()
     // The turn ends: Codex now starts one with the click, and the agent has it from Codex
@@ -1292,17 +2770,45 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     attended: true,
     session: { harness, id: `conversation-${n}` },
   })
-  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inbox')!(clicks)
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
   const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
   const session = (harness: string, n: number, more: Record<string, unknown> = {}) =>
     local('/session', { method: 'POST', body: { harness, session: `conversation-${n}`, ...more } })
   const clicksFor = (harness: string, n: number) => local<{ clicks: { id: string }[] }>(`/clicks?harness=${harness}&session=conversation-${n}`)
 
+  test('inbox discovery advances without new clicks and keeps its cursor through listener changes', async () => {
+    standIn()
+    await start()
+    const cursor = () => (stand.asking.get('delivery:inboxPage') as { after: { harness: string; id: string }[] }).after
+    const first = stand.watching.get('delivery:inboxPage')!
+    first({ clicks: [], after: [{ harness: 'codex', id: 'thread-12' }] })
+    await pass()
+    expect(cursor()).toEqual([{ harness: 'codex', id: 'thread-12' }])
+    // A late answer from the old subscription cannot rewind the next page.
+    first({ clicks: [], after: [{ harness: 'codex', id: 'thread-01' }] })
+    await pass()
+    expect(cursor()).toEqual([{ harness: 'codex', id: 'thread-12' }])
+    stand.watching.get('delivery:inboxPage')!({ clicks: [], after: [{ harness: 'codex', id: 'thread-24' }] })
+    await session('pi', 5)
+    expect(cursor()).toEqual([{ harness: 'codex', id: 'thread-24' }])
+    // A subscription that has no answer yet leaves its place unchanged.
+    await session('pi', 6)
+    expect(cursor()).toEqual([{ harness: 'codex', id: 'thread-24' }])
+    stand.watching.get('delivery:inboxPage')!({ clicks: [], after: [{ harness: 'codex', id: '' }] })
+    await pass()
+    expect(cursor()).toEqual([{ harness: 'codex', id: '' }])
+    // Even after rollover recreates the original arguments, its old callback stays obsolete.
+    stand.watching.get('delivery:inboxPage')!({ clicks: [], after: [{ harness: 'codex', id: 'thread-36' }] })
+    first({ clicks: [], after: [{ harness: 'codex', id: 'thread-01' }] })
+    await pass()
+    expect(cursor()).toEqual([{ harness: 'codex', id: 'thread-36' }])
+  })
+
   test('with none connected, Codex’s own command is never run for a click, and the connector asks It for no click of Codex’s queue', async () => {
     standIn()
     // Codex is on the machine, with nothing of It's in it, and the person chose no app
     await start('socket', { wanted: [], found: [{ id: 'codex', version: '1.0.0', addon: 'not_connected' }] })
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: [] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({ listening: [], queues: [], after: [] })
     // Should a click for a Codex conversation be offered all the same, it is left where it is:
     // when it is offered, and at each pass the connector makes afterwards
     offered(click('codex', 1))
@@ -1315,7 +2821,7 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
   test('before It has said which apps the person chose, none is taken to be connected', async () => {
     standIn()
     await start('socket', { wanted: ['codex'] })
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: ['codex'] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({ listening: [], queues: ['codex'], after: [{ harness: 'codex', id: '' }] })
     await stop?.()
     stop = null
     stand.watching.clear()
@@ -1325,12 +2831,12 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     process.env.IT_HOME = home
     const had = new Set(process.listeners('SIGTERM'))
     const running = runConnector((line) => said.push(line))
-    await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inbox'))
+    await until(() => existsSync(infoFile()) && stand.watching.has('delivery:inboxPage'))
     stop = async () => {
       ;(process.listeners('SIGTERM').find((l) => !had.has(l)) as (signal: string) => void)('SIGTERM')
       await running
     }
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: [] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({ listening: [], queues: [], after: [] })
     offered(click('codex', 2))
     await settled()
     await pass(2)
@@ -1342,7 +2848,7 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     standIn()
     for (const addon of ['too_old', 'not_connected', 'unavailable', 'error']) {
       await start('socket', { wanted: ['codex'], found: [{ id: 'codex', version: '1.0.0', addon }] })
-      expect([addon, stand.asking.get('delivery:inbox')]).toEqual([addon, { listening: [], queues: [] }])
+      expect([addon, stand.asking.get('delivery:inboxPage')]).toEqual([addon, { listening: [], queues: [], after: [] }])
       offered(click('codex', 3))
       await settled()
       await pass(2)
@@ -1388,7 +2894,7 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     expect(await session('pi', 5)).toEqual({ ok: true })
     expect(await clicksFor('pi', 5)).toEqual({ clicks: [] })
     expect((await local<{ sessions: string[] }>('/health'))?.sessions).toEqual([])
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: ['codex'] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({ listening: [], queues: ['codex'], after: [{ harness: 'codex', id: '' }] })
     offered(click('pi', 5))
     await settled()
     await pass(2)
@@ -1400,10 +2906,57 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     // Chosen, the same add-on is listened for and given its click
     wants(['codex', 'pi'])
     expect(await session('pi', 5)).toEqual({ ok: true })
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [{ harness: 'pi', id: 'conversation-5' }], queues: ['codex'] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({
+      listening: [{ harness: 'pi', id: 'conversation-5' }],
+      queues: ['codex'],
+      after: [{ harness: 'codex', id: '' }],
+    })
     offered(click('pi', 5))
     await until(() => called('delivery:claim').includes('click-5'))
     expect((await clicksFor('pi', 5))?.clicks.map((c) => c.id)).toEqual(['click-5'])
+  })
+
+  test.each(['current', 'stale'])('a click already held follows a session move reported by a %s build', async (build) => {
+    await start()
+    await session('pi', 6)
+    offered(click('pi', 6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    // Given, and waiting to go in with a command's result when the person clears the conversation
+    expect((await clicksFor('pi', 6))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+    const runtime = { instance: 'loaded-pi', addon: { api: 1, version: ADDONS.pi!.version, delivery: true, idle: true } }
+    expect(
+      await session('pi', 60, {
+        was: 'conversation-6',
+        ...runtime,
+        addon: { ...runtime.addon, version: build === 'stale' ? 'old-build' : runtime.addon.version },
+      }),
+    ).toMatchObject({ ok: build === 'current' })
+    // After the current build loads, the held click is immediately available under the new id.
+    const answer = await local<{ clicks: { id: string }[] }>('/clicks', {
+      method: 'POST',
+      body: { harness: 'pi', session: 'conversation-60', ...runtime },
+    })
+    expect(answer?.clicks.map((c) => c.id)).toEqual(['click-6'])
+    expect(called('delivery:release')).toEqual([])
+  })
+
+  test('what a connector that has stopped was still in the middle of is written down nowhere: its notes are no longer its own', async () => {
+    await start()
+    await session('pi', 6)
+    // The claim of a click is on its way to It when the connector is stopped
+    let answerClaim: (ids: string[]) => void = () => {}
+    stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
+    offered(click('pi', 6))
+    await until(() => called('delivery:claim').includes('click-6'))
+    const folder = home
+    await stop?.()
+    stop = null
+    // The service clears what the connector had noted, as it does when everything is erased
+    rmSync(path.join(folder, 'journal.jsonl'), { force: true })
+    // The answer comes after all, and what the connector does with it then leaves no note behind
+    answerClaim(['click-6'])
+    await new Promise((r) => setTimeout(r, 300))
+    expect(existsSync(path.join(folder, 'journal.jsonl'))).toBe(false)
   })
 
   test('a click held for an add-on goes back to waiting when the person disconnects its app, and Codex’s command is not run for one that stood in line', async () => {
@@ -1418,7 +2971,7 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
     wants([])
     await until(() => called('delivery:release').includes('click-6'))
     expect((await local<{ held: number }>('/health'))?.held).toBe(0)
-    expect(stand.asking.get('delivery:inbox')).toEqual({ listening: [], queues: [] })
+    expect(stand.asking.get('delivery:inboxPage')).toEqual({ listening: [], queues: [], after: [] })
     expect((await clicksFor('pi', 6))?.clicks).toEqual([])
     // A place comes free for the click that stood in line, and Codex is not run for it
     stand.codex[0]!.end()
@@ -1545,7 +3098,7 @@ describe.skipIf(process.platform === 'win32')('an agent app that is not connecte
 describe.skipIf(process.platform === 'win32')('what the connector writes down when something goes wrong', () => {
   const session = { harness: 'pi', id: 'conversation-1' }
   const offer = () =>
-    stand.watching.get('delivery:inbox')!([
+    stand.watching.get('delivery:inboxPage')!([
       { id: 'click-1', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
     ])
   /** The line the connector writes when asking It for a click fails with this error. */
@@ -1615,7 +3168,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-1' } })).toEqual({ ok: true })
     let answerClaim: (ids: string[]) => void = () => {}
     stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
-    stand.watching.get('delivery:inbox')!([
+    stand.watching.get('delivery:inboxPage')!([
       { id: 'click-9', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
     ])
     const asked = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
@@ -1630,7 +3183,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     await start()
     const session = { harness: 'pi', id: 'conversation-1' }
     expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-1' } })).toEqual({ ok: true })
-    stand.watching.get('delivery:inbox')!([
+    stand.watching.get('delivery:inboxPage')!([
       { id: 'click-5', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
     ])
     const asked = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
@@ -1649,7 +3202,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     await start()
     const session = { harness: 'pi', id: 'conversation-1' }
     expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-1' } })).toEqual({ ok: true })
-    stand.watching.get('delivery:inbox')!([
+    stand.watching.get('delivery:inboxPage')!([
       { id: 'click-5', artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session },
     ])
     for (let n = 0; n < 100 && (await local<{ held: number }>('/health'))?.held !== 1; n++) await new Promise((r) => setTimeout(r, 30))
@@ -1657,7 +3210,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     // From here It cannot be reached to make the hold good again, and gives the click to another machine when its half minute
     // is over: it is no longer among what It offers this one
     stand.answer = (name) => (name === 'delivery:renew' ? Promise.reject(new Error('no answer')) : undefined)
-    stand.watching.get('delivery:inbox')!([])
+    stand.watching.get('delivery:inboxPage')!([])
     expect((await local<{ held: number }>('/health'))?.held).toBe(1)
     const began = Date.now()
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -1697,7 +3250,7 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
         .filter((line) => line.id === 'click-1')
         .map((line) => line.event)
     // The click is there before its conversation is heard from, so nothing is done with it yet
-    stand.watching.get('delivery:inbox')!([click])
+    stand.watching.get('delivery:inboxPage')!([click])
     let answerClaim: (ids: string[]) => void = () => {}
     stand.answer = (name) => (name === 'delivery:claim' ? new Promise<string[]>((r) => (answerClaim = r)) : undefined)
     // The add-on asks, by the bytes, on a connection of its own, and its asking is what has the click claimed for it
@@ -1734,7 +3287,7 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     attended: true,
     session: { harness: 'codex', id: `thread-${thread}` },
   })
-  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inbox')!(clicks)
+  const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
   const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
   const turn = (n: number, busy: boolean) => local('/session', { method: 'POST', body: { harness: 'codex', session: `thread-${n}`, busy } })
   /**
@@ -1750,11 +3303,66 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       return undefined
     }
   }
-  const waitingFor = (n: number, page?: number) =>
-    local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
+  /** What each waiter has been given, which it says with its next asking, as `it wait` does once it has printed it. */
+  const printed = new Map<number, string[]>()
+  beforeEach(() => printed.clear())
+  const waitingFor = async (n: number, page?: number) => {
+    const answer = await local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
       method: 'POST',
-      body: { id: `waiter-${n}`, session: { harness: 'codex', id: `thread-${n}` }, ...(page === undefined ? {} : { slug: `page-${page}` }) },
+      body: {
+        id: `waiter-${n}`,
+        session: { harness: 'codex', id: `thread-${n}` },
+        ...(page === undefined ? {} : { slug: `page-${page}` }),
+        ...(printed.has(n) ? { got: printed.get(n) } : {}),
+      },
     })
+    if (answer?.clicks?.length) printed.set(n, [...(printed.get(n) ?? []), ...answer.clicks.map((c) => c.id)])
+    return answer
+  }
+
+  test.each([false, true])('an attended ninth click is delivered after timer turns exhaust their budget, while discovery advances: %s', async (rotate) => {
+    withT3Code()
+    standIn()
+    stand.t3.threads.set('thread-30', 't3-thread-budget')
+    await start()
+    for (let n = 1; n <= 3; n++) {
+      offered({ ...click(n, 30), attended: false })
+      await until(() => called('delivery:handedOff').includes(`click-${n}`))
+    }
+    expect(stand.t3.sent).toHaveLength(3)
+    const timers = Array.from({ length: 8 }, (_, i) => ({ ...click(10 + i, 30), attended: false }))
+    offered(...timers)
+    await pass(2)
+    expect(stand.t3.sent).toHaveLength(3)
+    const attended = click(18, 30)
+    const answer = stand.answer!
+    let resume: (() => void) | undefined
+    stand.answer = (name, args) => {
+      if (rotate && name === 'delivery:claim' && args.ids[0] === timers[0]!.id && !resume)
+        return new Promise((resolve) => {
+          resume = () => resolve(answer(name, args) ?? args.ids)
+        })
+      return answer(name, args)
+    }
+    stand.watching.get('delivery:inboxPage')!({ clicks: [...timers, attended], after: [{ harness: 'codex', id: 'thread-30' }] })
+    if (rotate) {
+      await until(() => resume !== undefined)
+      await pass()
+      offered()
+      resume!()
+    }
+    await pass(2)
+    expect(stand.t3.sent).toHaveLength(4)
+    const sent = stand.t3.sent[3]!.text
+    expect([...sent.matchAll(/\[action ([^\]]+)\]/g)].map((m) => m[1])).toEqual([...timers.slice(0, 7), attended].map((c) => c.id))
+    for (const c of [...timers.slice(0, 7), attended]) expect(sent).toContain(`[action ${c.id}]`)
+    expect(sent).not.toContain(`[action ${timers[7]!.id}]`)
+    expect(called('delivery:handedOff')).toContain(attended.id)
+    expect(called('delivery:handedOff')).not.toContain(timers[7]!.id)
+    offered(timers[7]!)
+    await pass(2)
+    expect(stand.t3.sent).toHaveLength(4)
+  })
 
   test('one whose conversation is held in a thread is put to the thread, though some Codex has the conversation open, and Codex’s queue is not used', async () => {
     withT3Code()
@@ -1800,6 +3408,47 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
   const inFull = (n: number, name = 'approve {"plan":"B"}') =>
     `[It] The page "A page" (page-${n}) sent this just after someone used it: ${name} [action click-${n}]`
 
+  test.each(['codex', 't3-codex', 't3-claude'])('a full mark record uses the normal short line through %s without losing older marks', async (via) => {
+    const harness = via === 't3-claude' ? 'claude-code' : 'codex'
+    if (via !== 'codex') {
+      withT3Code()
+      stand.t3.threads.set('thread-9', 't3-thread-9')
+    }
+    const marks = Array.from({ length: 200 }, (_, n) => ({
+      id: `old-mark-${n}`,
+      texts: [`Saved text ${n}`],
+      at: Date.now(),
+      fallback: { via: 'codex', text: 'Saved short line' },
+      retry: { attempts: 4, nextAt: null },
+    }))
+    await start('socket', { wanted: ['codex', 'claude-code'], found: [...CONNECTED, { id: 'claude-code', addon: 'connected' }] }, (folder) => {
+      writeFileSync(path.join(folder, 'heard.json'), JSON.stringify({ [`${harness}:thread-9`]: 1 }))
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({
+          version: 1,
+          waiters: [],
+          marks: [['codex:thread-6', marks]],
+          accepted: [],
+          returning: [],
+        }),
+      )
+    })
+    offered({ ...click(9), session: { harness, id: 'thread-9' }, name: 'it:message', payload: '{"text":"Make the board bigger"}' })
+    if (via === 'codex') {
+      await until(() => stand.codex.length === 1)
+      expect(stand.codex[0]!.args).toContain('--message=[It] "A page" (page-9), typed above it: read it with `it action click-9` [action click-9]')
+      expect(JSON.stringify(stand.codex[0]!.args)).not.toContain('bigger')
+      stand.codex[0]!.end()
+    } else {
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]).toEqual({ thread: 't3-thread-9', text: '[It] "A page" (page-9), typed above it: Make the board bigger [action click-9]' })
+    }
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    expect(readJson<{ marks: unknown }>(path.join(home, 'delivery-recovery.json'))!.marks).toEqual([['codex:thread-6', marks]])
+    expect(await behindMarks(6)).toEqual(marks.flatMap((m) => m.texts))
+  })
+
   test('a conversation whose hooks are heard from is given the mark alone in its thread, and its hook is handed what the mark stands for, once', async () => {
     withT3Code()
     stand.t3.threads.set('thread-8', 't3-thread-h')
@@ -1826,6 +3475,227 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.codex).toEqual([])
   })
 
+  test('an accepted mark survives restart without being submitted again and only its own receipt removes it', async () => {
+    await start()
+    await heard(9)
+    offered(click(9))
+    await until(() => stand.codex.length === 1)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    const before = await asksBehind(9)
+    const previous = home
+    await stop!()
+    stop = null
+    await start('socket', {}, (folder) => {
+      for (const name of ['delivery-recovery.json', 'heard.json']) {
+        if (existsSync(path.join(previous, name))) writeFileSync(path.join(folder, name), readFileSync(path.join(previous, name)))
+      }
+    })
+    expect(await asksBehind(9)).toEqual(before)
+    wants([])
+    expect((await asksBehind(9))?.texts).toEqual([])
+    wants(['codex'])
+    await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-99', was: 'thread-9' } })
+    expect(await asksBehind(99)).toEqual(before)
+    expect(await asksBehind(1, { taken: before!.marks })).toEqual({ ok: true })
+    expect(await asksBehind(9)).toEqual(before)
+    expect(stand.codex).toHaveLength(1)
+    await asksBehind(9, { taken: before!.marks })
+    expect((await asksBehind(9))?.texts).toEqual([])
+  })
+
+  test.each(['codex', 't3'] as const)('a restored %s mark sends its short-line fallback after settings and recovery answer', async (via) => {
+    standIn(true)
+    if (via === 't3') {
+      withT3Code()
+      stand.t3.threads.set('thread-9', 't3-thread-nine')
+    }
+    await start()
+    await heard(9)
+    offered({ ...click(9), name: 'it:message', payload: '{"text":"Private fallback message"}' })
+    for (let i = 0; i < 5 && stand.codex.length + stand.t3.sent.length < 1; i++) await pass()
+    if (via === 'codex') stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    offered()
+    const previous = home
+    await stop!()
+    stop = null
+    let reconciled = false
+    stand.answer = (name) => {
+      if (name === 'delivery:giveBackBatch' && !reconciled) throw new Error('offline')
+      return undefined
+    }
+    await start('socket', { deferSettings: true }, (folder) => {
+      for (const name of ['delivery-recovery.json', 'heard.json']) writeFileSync(path.join(folder, name), readFileSync(path.join(previous, name)))
+    })
+    await pass(25)
+    expect(stand.codex.length + stand.t3.sent.length).toBe(1)
+    wants(['codex'])
+    await pass(25)
+    expect(stand.codex.length + stand.t3.sent.length).toBe(1)
+    reconciled = true
+    await pass(25)
+    await until(() => stand.codex.length + stand.t3.sent.length === 2)
+    if (via === 'codex') {
+      expect(stand.codex[1]!.args).toContain('--message=[It] "A page" (page-9), typed above it: read it with `it action click-9` [action click-9]')
+      expect(JSON.stringify(stand.codex)).not.toContain('Private fallback message')
+      stand.codex[1]!.end()
+    } else {
+      expect(stand.t3.sent[1]).toEqual({ thread: 't3-thread-nine', text: '[It] "A page" (page-9), typed above it: Private fallback message [action click-9]' })
+      expect(stand.codex).toEqual([])
+    }
+    await until(async () => (await behindMarks(9))?.length === 0)
+  })
+
+  const savedMark = () =>
+    readJson<{ marks: [string, { retry?: { attempts: number; nextAt: number | null } }[]][] }>(path.join(home, 'delivery-recovery.json'))!.marks[0]![1][0]!
+  const restartMarks = async () => {
+    const previous = home
+    await stop!()
+    stop = null
+    await start('socket', {}, (folder) => {
+      for (const name of ['delivery-recovery.json', 'heard.json']) writeFileSync(path.join(folder, name), readFileSync(path.join(previous, name)))
+    })
+    await pass()
+  }
+
+  test.each(['codex', 't3'] as const)('a %s mark keeps its backoff and retry limit across consecutive restarts', async (via) => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    if (via === 't3') {
+      withT3Code()
+      stand.t3.threads.set('thread-9', 't3-thread-nine')
+    }
+    await start()
+    await heard(9)
+    offered(click(9))
+    for (let i = 0; i < 5 && stand.codex.length + stand.t3.sent.length < 1; i++) await pass()
+    if (via === 'codex') stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    offered()
+    stand.t3.refusing = 'offline'
+    const attempts = () => (via === 'codex' ? stand.codex.length - 1 : stand.t3.refused.length)
+    await pass(20)
+    for (let n = 1; n <= 4; n++) {
+      expect(attempts()).toBe(n)
+      if (via === 'codex') stand.codex[n]!.end(new Error('declined'))
+      await settled()
+      const retry = savedMark().retry!
+      expect(retry.attempts).toBe(n)
+      if (n === 4) expect(retry.nextAt).toBeNull()
+      else expect(retry.nextAt).toBe(Date.now() + [20_000, 60_000, 300_000][n - 1]!)
+      await restartMarks()
+      expect(savedMark().retry).toEqual(retry)
+      expect(attempts()).toBe(n)
+      if (n < 4) {
+        await vi.advanceTimersByTimeAsync(retry.nextAt! - Date.now() - 1)
+        expect(attempts()).toBe(n)
+        await vi.advanceTimersByTimeAsync(1)
+        await settled()
+      }
+    }
+    await pass(600)
+    expect(attempts()).toBe(4)
+    expect(await behindMarks(9)).toEqual([inFull(9)])
+    await hasThem(9)
+    expect(await behindMarks(9)).toEqual([])
+  })
+
+  test('an interrupted fallback attempt is already counted when the connector restarts', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    await start()
+    await heard(9)
+    offered(click(9))
+    await pass()
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    offered()
+    await pass(20)
+    expect(stand.codex).toHaveLength(2)
+    const retry = savedMark().retry!
+    expect(retry).toEqual({ attempts: 1, nextAt: Date.now() + 20_000 })
+    await restartMarks()
+    // A late answer from the stopped connector cannot change the restored progress.
+    stand.codex[1]!.end(new Error('declined'))
+    await settled()
+    expect(savedMark().retry).toEqual(retry)
+    await vi.advanceTimersByTimeAsync(retry.nextAt! - Date.now() - 1)
+    expect(stand.codex).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await settled()
+    expect(stand.codex).toHaveLength(3)
+    expect(savedMark().retry?.attempts).toBe(2)
+  })
+
+  test('a fallback waits for durable progress and retries after a failed atomic write', async () => {
+    standIn(true)
+    await start()
+    await heard(9)
+    offered(click(9))
+    await pass()
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-9'))
+    offered()
+    // Confirmation now flushes its receipt asynchronously. Finish it before making
+    // the next atomic save fail, rather than racing its temporary file.
+    await settled()
+    const file = path.join(home, 'delivery-recovery.json')
+    const before = readFileSync(file, 'utf8')
+    const blocked = `${file}.${process.pid}.tmp`
+    mkdirSync(blocked)
+    await pass(20)
+    expect(stand.codex).toHaveLength(1)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    rmSync(blocked, { recursive: true })
+    await pass(20)
+    expect(stand.codex).toHaveLength(2)
+    expect(savedMark().retry?.attempts).toBe(1)
+    stand.codex[1]!.end(new Error('declined'))
+    await settled()
+    await pass(20)
+    expect(stand.codex).toHaveLength(3)
+    expect(savedMark().retry?.attempts).toBe(2)
+  })
+
+  test.each(['acknowledged', 'disconnected', 'closed', 'erased'] as const)('a restored mark is not sent after it is %s', async (state) => {
+    standIn(true)
+    await start('socket', {}, (folder) =>
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({
+          version: 1,
+          waiters: [],
+          accepted: [],
+          returning: [],
+          marks: [
+            [
+              'codex:thread-9',
+              [
+                {
+                  id: 'restored-mark',
+                  texts: ['Private text'],
+                  at: Date.now(),
+                  fallback: { via: 'codex', text: '[It] safe short line' },
+                },
+              ],
+            ],
+          ],
+        }),
+      ),
+    )
+    if (state === 'acknowledged') await asksBehind(9, { taken: ['restored-mark'] })
+    if (state === 'disconnected') wants([])
+    if (state === 'closed') stand.closed.add('thread-9')
+    if (state === 'erased') {
+      eraseDeliveryRecovery()
+      await stop!()
+      stop = null
+    }
+    await pass(25)
+    expect(stand.codex).toEqual([])
+    if (state === 'erased') expect(existsSync(path.join(home, 'delivery-recovery.json'))).toBe(false)
+    else if (state !== 'acknowledged') expect(readJson<{ marks: unknown[] }>(path.join(home, 'delivery-recovery.json'))?.marks).toHaveLength(1)
+  })
+
   test('the mark goes into Codex’s queue as well, and what a person typed is handed over behind it and kept off the command line', async () => {
     await start()
     await heard(9)
@@ -1846,6 +3716,34 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     offered(click(10))
     await until(() => stand.t3.sent.length >= 1)
     expect(stand.t3.sent[0]).toEqual({ thread: 't3-thread-j', text: MARK })
+  })
+
+  test.each([false, true])('an unanswered Codex mark retries in its recorded profile unless that profile has gone: %s', async (gone) => {
+    standIn(true)
+    await start()
+    const profile = path.join(home, 'conversation-profile')
+    mkdirSync(profile)
+    await noteConversation({ harness: 'codex', id: 'thread-11' }, home, { version: 1, paths: { CODEX_HOME: profile } })
+    const held = vi.spyOn(wake, 'codexHeld').mockImplementation((_thread, folder) => folder === profile)
+    try {
+      await heard(11)
+      offered(click(11))
+      await pass(2)
+      expect(stand.codex).toHaveLength(1)
+      expect(stand.codex[0]!.args).toContain(`--message=${MARK}`)
+      stand.codex[0]!.end()
+      await until(() => called('delivery:handedOff').includes('click-11'))
+      offered()
+      if (gone) rmSync(profile, { recursive: true })
+      await pass(21)
+      expect(stand.codex).toHaveLength(gone ? 1 : 2)
+      if (!gone) {
+        expect(stand.codex[1]!.env?.CODEX_HOME).toBe(profile)
+        expect(stand.codex[1]!.args).toContain('--message=[It] "A page" (page-11): approve, with details [action click-11]')
+      }
+    } finally {
+      held.mockRestore()
+    }
   })
 
   test('a mark that no hook asks about is followed by the short line, so that the agent is told after all, and the conversation is given no mark again', async () => {
@@ -1872,6 +3770,77 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     offered({ ...click(11), id: 'click-11-next' })
     for (let i = 0; i < 5 && stand.t3.sent.length < 3; i++) await pass()
     expect(stand.t3.sent[2]).toEqual({ thread: 't3-thread-k', text: '[It] "A page" (page-11): approve, with details [action click-11-next]' })
+  })
+
+  test('a conversation that let a mark time out keeps receiving the short line after its id changes', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-11', 't3-thread-k')
+    standIn(true)
+    await start()
+    await heard(11)
+    offered(click(11))
+    for (let i = 0; i < 5 && stand.t3.sent.length < 1; i++) await pass()
+    expect(stand.t3.sent).toEqual([{ thread: 't3-thread-k', text: MARK }])
+    await until(() => called('delivery:handedOff').includes('click-11'))
+    offered()
+    await pass(21)
+    await until(() => stand.t3.sent.length === 2)
+    expect(stand.t3.sent[1]!.text).toContain('[action click-11]')
+    expect(await behindMarks(11)).toEqual([])
+
+    expect(await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-110', was: 'thread-11' } })).toEqual({ ok: true })
+    stand.t3.threads.set('thread-110', 't3-thread-k')
+    offered(click(110))
+    // The next click goes as the short line without another mark or another wait for a hook.
+    for (let i = 0; i < 5 && stand.t3.sent.length < 3; i++) await pass()
+    await until(() => stand.t3.sent.length === 3)
+    expect(stand.t3.sent[2]).toEqual({ thread: 't3-thread-k', text: '[It] "A page" (page-110): approve, with details [action click-110]' })
+    expect(await behindMarks(110)).toEqual([])
+  })
+
+  test('once the person has disconnected the app, no hook of it is handed what a mark stood for, and no short line follows the mark', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-13', 't3-thread-m')
+    standIn(true)
+    await start()
+    await heard(13)
+    offered(click(13))
+    for (let i = 0; i < 5 && stand.t3.sent.length < 1; i++) await pass()
+    expect(stand.t3.sent).toEqual([{ thread: 't3-thread-m', text: MARK }])
+    await until(() => called('delivery:handedOff').includes('click-13'))
+    offered()
+    expect(await behindMarks(13)).toEqual([inFull(13)])
+    // The person disconnects Codex before any hook has said that it has it
+    stand.watching.get('machines:me')!({ wanted: [] })
+    await settled()
+    expect(await behindMarks(13)).toEqual([])
+    await pass(25)
+    expect(stand.t3.sent.length).toBe(1)
+    // Connected again, the next hook of the conversation is handed it after all
+    stand.watching.get('machines:me')!({ wanted: ['codex'] })
+    await settled()
+    expect(await behindMarks(13)).toEqual([inFull(13)])
+  })
+
+  test('a mark goes with its conversation to the id it carries on under, and is still followed by the short line there', async () => {
+    withT3Code()
+    stand.t3.threads.set('thread-14', 't3-thread-n')
+    standIn(true)
+    await start()
+    await heard(14)
+    offered(click(14))
+    for (let i = 0; i < 5 && stand.t3.sent.length < 1; i++) await pass()
+    expect(stand.t3.sent).toEqual([{ thread: 't3-thread-n', text: MARK }])
+    await until(() => called('delivery:handedOff').includes('click-14'))
+    offered()
+    // The conversation is cleared before any hook has asked: it carries on under another id
+    expect(await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-140', was: 'thread-14' } })).toEqual({ ok: true })
+    expect(await behindMarks(140)).toEqual([inFull(14)])
+    // No hook says that it has it, so the short line follows as it would have
+    await pass(21)
+    await until(() => stand.t3.sent.length === 2)
+    expect(stand.t3.sent[1]!.text).toContain('[action click-14]')
+    expect(await behindMarks(140)).toEqual([])
   })
 
   test('where the short line is not taken either, it is tried again, and what the mark stood for is kept for a hook all the while', async () => {
@@ -1919,6 +3888,179 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.t3.asked.length).toBe(1)
   })
 
+  test('a search at its read limit uses the fallback route and starts afresh only after six hours', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    stand.t3.asked[0]!.answer({ status: 'limited' })
+    await until(() => stand.codex.length === 1)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-3'))
+    offered({ ...click(3), id: 'before-next-search' })
+    await until(() => stand.codex.length === 2)
+    expect(stand.t3.asked).toHaveLength(1)
+    stand.codex[1]!.end()
+    await until(() => called('delivery:handedOff').includes('before-next-search'))
+    offered()
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 3_600_000 + 1000)
+    try {
+      offered({ ...click(3), id: 'after-search-limit' })
+      await until(() => stand.t3.asked.length === 2)
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(stand.codex).toHaveLength(2)
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
+  test('an incomplete thread search continues before using another route, also with Auto-wake off', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    stand.t3.asked[0]!.answer(undefined)
+    await until(() => stand.t3.asked.length === 2)
+    expect(stand.codex).toEqual([])
+    stand.t3.asked[1]!.answer('t3-thread-c')
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+    expect(stand.codex).toEqual([])
+    expect(stand.calls.some((c) => c.name === 'machines:runStarted')).toBe(false)
+  })
+
+  test.each(['unread', 'failed'] as const)('a persistently %s search backs off up to a minute and resets when a batch makes progress', async (failure) => {
+    standIn(true)
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    let now = Date.now()
+    const wall = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      offered(click(3))
+      await until(() => stand.t3.asked.length === 1)
+      // Continuation must obey its retry time even after the original click leaves the inbox.
+      offered()
+      await settled()
+      const advance = async (ms: number) => {
+        now += ms
+        await vi.advanceTimersByTimeAsync(ms)
+        offered()
+        await settled()
+      }
+      const retry = async (delay: number, progressed = false) => {
+        const count = stand.t3.asked.length
+        stand.t3.asked.at(-1)!.answer(failure === 'failed' && !progressed ? new Error('unavailable') : undefined, progressed)
+        await settled()
+        await advance(delay - 1)
+        expect(stand.t3.asked).toHaveLength(count)
+        await advance(1)
+        expect(stand.t3.asked).toHaveLength(count + 1)
+      }
+      for (const delay of [300, 600, 1200, 2400, 4800, 9600, 19_200, 38_400, 60_000, 60_000]) await retry(delay)
+      // Finite batches continue quickly; a successful batch clears earlier failures.
+      await retry(300, true)
+      await retry(300, true)
+      await retry(300)
+      await retry(600)
+      stand.t3.asked.at(-1)!.answer('t3-thread-c')
+      await settled()
+      offered({ ...click(3), id: 'after-recovery' })
+      await advance(10)
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(stand.codex).toEqual([])
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
+  test('a long discovery backoff does not delay another conversation’s shorter routing timer', async () => {
+    standIn(true)
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    let now = Date.now()
+    let elapsed = 0
+    const wall = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const advance = async (ms: number) => {
+      now += ms
+      elapsed += ms
+      await vi.advanceTimersByTimeAsync(ms)
+      await settled()
+    }
+    try {
+      offered(click(3))
+      await until(() => stand.t3.asked.length === 1)
+      offered()
+      await settled()
+      for (const delay of [300, 600, 1200, 2400, 4800, 9600, 19_200, 38_400]) {
+        const asked = stand.t3.asked.length
+        stand.t3.asked.at(-1)!.answer(undefined, false)
+        await settled()
+        await advance(delay + 10)
+        expect(stand.t3.asked).toHaveLength(asked + 1)
+      }
+      // Move just past a heartbeat, so the new click's settle pass must run before the next
+      // one-second fallback. The stalled search now asks for another pass a minute away.
+      await advance(1000 - (elapsed % 1000))
+      stand.t3.asked.at(-1)!.answer(undefined, false)
+      await settled()
+      offered({ ...click(4), at: now })
+      await until(() => stand.t3.asked.at(-1)?.ids.includes('thread-4') === true)
+      stand.t3.asked.at(-1)!.answer('t3-thread-d')
+      await settled()
+      await advance(10)
+      expect(stand.t3.sent).toEqual([])
+      await advance(300)
+      expect(stand.t3.sent).toHaveLength(1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-d')
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
+  test('another incomplete batch does not restart the delivery wait', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    stand.t3.asked[0]!.answer(undefined)
+    await until(() => stand.t3.asked.length === 2)
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6_000)
+    try {
+      stand.t3.asked[1]!.answer(undefined)
+      await until(() => stand.codex.length === 1)
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
+  test('an incomplete search finishes after its click left the inbox through the fallback route', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    await until(() => stand.codex.length === 1, 12_000)
+    stand.codex[0]!.end()
+    await until(() => called('delivery:handedOff').includes('click-3'))
+    offered()
+    stand.t3.asked[0]!.answer(undefined)
+    await until(() => stand.t3.asked.length === 2)
+    stand.t3.asked[1]!.answer('t3-thread-c')
+    await settled()
+    offered({ ...click(3), id: 'click-after-search' })
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.codex.length).toBe(1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+  }, 30_000)
+
   test('a T3 Code that does not say which thread holds a conversation is waited for only so long: the click then goes into Codex’s queue, and what T3 Code says in the end holds for the next', async () => {
     withT3Code()
     stand.t3.slow = true
@@ -1955,7 +4097,9 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     // Two things done on two pages of the one conversation, which go to the thread together
     const first = click(4)
     const second = { ...click(5, 4), id: 'click-5' }
+    const time = vi.spyOn(performance, 'now').mockReturnValue(performance.now() - 9_000)
     offered(first, second)
+    time.mockRestore()
     await until(() => stand.t3.sent.length >= 1)
     expect(stand.t3.sent[0]!.text).toBe(
       '[It] "A page" (page-4): approve, with details [action click-4]\n[It] "A page" (page-5): approve, with details [action click-5]',

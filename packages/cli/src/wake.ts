@@ -212,6 +212,7 @@ export function carryOn(
   /** `run` is this run's own name, which no other run of the conversation has: what the run starts carries it on, and is found by it wherever it goes. */
   marks: { harness: string; session: string; run?: string },
   opts: {
+    env?: NodeJS.ProcessEnv
     patience?: number
     signal?: AbortSignal
     said?: (words: string) => void
@@ -250,7 +251,7 @@ export function carryOn(
         // was started, and an app that believes PWD over the folder it is in (OpenCode does)
         // would hold the conversation in one folder and wait for it in another, and never end.
         env: {
-          ...Object.fromEntries(Object.entries(harnessEnv()).filter(([k]) => k !== 'OLDPWD')),
+          ...Object.fromEntries(Object.entries(opts.env ?? harnessEnv()).filter(([k]) => k !== 'OLDPWD')),
           PWD: cwd,
           IT_HARNESS: marks.harness,
           IT_SESSION: marks.session,
@@ -273,8 +274,6 @@ export function carryOn(
       if (over) return
       over = true
       clearTimeout(timer)
-      // The harder ending that was set going is left to come: whatever of this run is still
-      // there in a few seconds is ended then, whether or not the run has been said to be over
       opts.signal?.removeEventListener('abort', stop)
       // Ended by itself and badly: what it printed last is the only word there is of why
       if (itsOwn && printed && opts.said)
@@ -286,70 +285,35 @@ export function carryOn(
       resolve(why)
     }
     let stopped = false
-    // Asked to end, and ended for it a few seconds later if it has not: a turn that is stopped stops
-    // Everything it started is ended with it, so that a command an agent is in the middle of
-    // does not run on after the agent is gone. Its group is signalled, and so is every process
-    // that descends from it, since an app may start a tool's command in a group of its own.
-    // Those are found before anything is ended: once a parent is gone, its children are no
-    // longer known as its own.
-    const signal = (how: 'SIGTERM' | 'SIGKILL', all: number[]) => {
-      try {
-        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, how)
-        else child.kill(how)
-      } catch {
-        child.kill(how)
-      }
-      for (const pid of all)
-        try {
-          process.kill(pid, how)
-        } catch {}
-    }
-    // Being ended: what of it is still there, and what it is to be said to have ended as. Nothing
-    // of a run is said to be over while a process of it can still act: the click it was reopened
-    // for would be tried again beside it.
-    let ending: { left: () => number[]; why: string | null; hard: boolean } | null = null
+    // The identity is captured while this child is ours. Every later signal checks it again.
+    const since = child.pid ? identity([child.pid]).get(child.pid) : undefined
+    let ending = false
     const quit = (why: string | null) => {
       if (ending) return
+      ending = true
       if (process.platform === 'win32') {
-        // Windows has no group to signal: its own command ends a process with everything it started
-        ending = { left: () => [], why, hard: true }
-        if (child.pid) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {})
-        child.kill()
+        // Windows cannot inspect inherited marks. Keep the record if its tree command fails.
+        if (!child.pid) return end(why)
+        execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, (err) => {
+          if (err) opts.unsure?.()
+          end(why)
+        })
         return
       }
-      const under = child.pid ? descendantsKnown(child.pid) : []
-      const all = under ?? []
-      // Each as the process it is now, so that a number the system has since given to another
-      // process is not taken for one of these
-      const were = processes(all)
-      // Where the system would not say what the run had started, or which of it is still
-      // there, its group is still ended, and whoever noted the run is told that this was all
-      // that could be done: something it started in a group of its own may be left
-      if (under === null || were === null) opts.unsure?.()
-      const left = () => {
-        const is = processes(all)
-        if (is === null) {
-          opts.unsure?.()
-          return []
-        }
-        return [...is].filter(([pid, since]) => were?.get(pid) === since).map(([pid]) => pid)
+      if (!child.pid || since === undefined) {
+        opts.unsure?.()
+        return end(why)
       }
-      ending = { left, why, hard: false }
-      signal('SIGTERM', all)
-      const harder = setTimeout(() => {
-        signal('SIGKILL', left())
-        if (ending) ending.hard = true
-        // Ended that way, there is nothing left of it to wait for: said to be over, if its own ending did not say so
-        setTimeout(() => end(why), 1500).unref?.()
-      }, 5000)
-      harder.unref?.()
-    }
-    /** Says the run is over once nothing of it is left, looking a few times a second until the harder ending has come. */
-    const settle = () => {
-      const state = ending
-      if (!state) return
-      if (state.hard || state.left().length === 0) return end(state.why)
-      setTimeout(settle, 250).unref?.()
+      void endTree(child.pid, since, { ...marks, told: SINCE_TOLD }).then(
+        (outcome) => {
+          if (outcome === 'unknown') opts.unsure?.()
+          end(why)
+        },
+        () => {
+          opts.unsure?.()
+          end(why)
+        },
+      )
     }
     const stop = () => {
       stopped = true
@@ -363,7 +327,7 @@ export function carryOn(
     }, patience)
     child.once('error', (err) => end((err as NodeJS.ErrnoException).code === 'ENOENT' ? `${how.app} was not found` : `${how.app} could not be started`))
     child.once('exit', (code, signal) =>
-      ending ? settle() : stopped ? end(STOPPED) : code === 0 ? end(null) : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),
+      ending ? undefined : stopped ? end(STOPPED) : code === 0 ? end(null) : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),
     )
     child.stdin?.on('error', () => {})
     // Whoever started it is told which process it is, to write down, before it is given
@@ -416,8 +380,10 @@ export async function endTree(
   // Noted by a program that told a process's start another way than this one does: what has
   // the number now cannot be told to be it or not to be, and is neither ended nor forgotten
   if (!itself && now.has(pid) && of !== undefined && of.told !== SINCE_TOLD) return 'unknown'
-  // Another process has the number now: neither it nor its group is what was noted
-  if (!itself && now.has(pid)) return 'gone'
+  // Another process has the number now: neither it nor its group is what was noted, and
+  // neither is looked at or signalled. That says nothing of what the run left elsewhere,
+  // which is found below by the run's own name where the note carries one.
+  const reused = !itself && now.has(pid)
   let all: number[]
   let group = false
   // What is in its group and does not say whose it is: never signalled, and the run is not known to be over while any of it is there
@@ -425,17 +391,23 @@ export async function endTree(
   // Whatever carries this run's own name, wherever it is by now: a command the run started in
   // a group of its own is in neither the run's family nor its group once the run is gone, and
   // is the run's all the same. No other run has the name, so what carries it is ended with it.
-  const strays = of?.run ? marked(of.run) : []
-  if (strays === null) return 'unknown'
-  if (itself) {
+  const markedNow = of?.run ? marked(of.run, since) : new Map<number, string>()
+  // Failed discovery leaves uncertainty, but does not prevent ending processes whose
+  // identities can still be checked. In particular, Stop still reaches a known leader.
+  let uncertain = markedNow === null
+  const strays = [...(markedNow?.keys() ?? [])]
+  if (reused) {
+    if (!strays.length) return uncertain ? 'unknown' : 'gone'
+    all = strays
+  } else if (itself) {
     const under = descendantsKnown(pid)
-    if (under === null) return 'unknown'
-    all = [...new Set([pid, ...under, ...strays])]
+    if (under === null) uncertain = true
+    all = [...new Set([pid, ...(under ?? []), ...strays])]
     group = true
   } else {
     const members = inGroup(pid)
     if (members === null) return 'unknown'
-    if (!members.length && !strays.length) return 'gone'
+    if (!members.length && !strays.length) return uncertain ? 'unknown' : 'gone'
     if (!of) return 'unknown'
     const whose = members.map((p) => [p, strays.includes(p) ? true : belongs(p, of)] as const)
     all = [...new Set([...whose.filter(([, is]) => is === true).map(([p]) => p), ...strays])]
@@ -445,49 +417,73 @@ export async function endTree(
     others = whose.filter(([, is]) => is !== true).map(([p]) => p)
     if (!all.length) return 'unknown'
   }
-  const were = processes(all)
-  if (were === null) return 'unknown'
-  /** What of it is still there: null where that cannot be told, which is not the same as nothing. */
-  const left = (): number[] | null => {
-    const is = processes(all)
-    return is === null ? null : [...is].filter(([p, at]) => were.get(p) === at).map(([p]) => p)
+  let were = processes(all)
+  if (were === null) {
+    uncertain = true
+    were = new Map([...now, ...(markedNow ?? [])].filter(([p]) => all.includes(p)))
   }
-  const groupThere = () => {
-    if (!group) return false
-    try {
-      process.kill(-pid, 0)
-      return true
-    } catch {
-      return false
+  for (const p of strays) if (were.get(p) !== markedNow!.get(p)) were.delete(p)
+  // A failed inspection cannot be undone by an empty later snapshot. A detached command may
+  // have lost its mark while the system would not let us read it.
+  const signalled = new Map<number, string>()
+  const left = (): Map<number, string> => {
+    const found = of?.run ? marked(of.run, since) : new Map<number, string>()
+    if (found === null) uncertain = true
+    else for (const [p, at] of found) were.set(p, at)
+    // One identity snapshot for the whole tick. On macOS each call runs ps, so asking for
+    // every process separately would keep the connector from answering while Stop runs.
+    const is = processes([...were.keys()])
+    if (is === null) uncertain = true
+    const still = new Map<number, string>()
+    for (const [p, at] of were) {
+      if (is?.get(p) === at) still.set(p, at)
     }
+    return still
   }
-  const anything = (): boolean | null => {
-    const still = left()
-    return still === null ? null : still.length > 0 || groupThere()
-  }
-  const signal = (how: 'SIGTERM' | 'SIGKILL', to: number[]) => {
-    // Its group too, where the run itself is there to say the group is its own: what it
-    // started is in it unless it was moved out
-    if (group)
+  const signal = (how: 'SIGTERM' | 'SIGKILL', to: Map<number, string>) => {
+    // The leader's number may already belong to someone else. Its group is signalled only
+    // while the leader itself still proves whose group it is.
+    let groupSignalled = false
+    if (group && (how === 'SIGKILL' || signalled.get(pid) !== since) && to.get(pid) === since)
       try {
         process.kill(-pid, how)
+        groupSignalled = true
       } catch {}
-    for (const p of to)
+    for (const [p, at] of to) {
+      if (groupSignalled && p === pid) {
+        signalled.set(pid, since)
+        continue
+      }
       try {
         process.kill(p, how)
-      } catch {}
+        signalled.set(p, at)
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') uncertain = true
+      }
+    }
   }
-  signal('SIGTERM', all)
-  for (let waited = 0; waited < 5000 && anything() !== false; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
-  if (anything() !== false) {
-    // Only what is still seen to be what it was: a number that cannot be looked at now may be another process's
-    signal('SIGKILL', left() ?? [])
-    for (let waited = 0; waited < 2000 && anything() !== false; waited += 250) await new Promise((resolve) => setTimeout(resolve, 250))
+  // Look for inherited run marks throughout both stages, including after the leader exits.
+  // Two empty looks allow a child that is still starting to expose its environment.
+  let empty = 0
+  for (let waited = 0; waited <= 7000; waited += 250) {
+    const still = left()
+    if (still.size === 0) {
+      if (++empty >= 2) {
+        const members = inGroup(pid)
+        if (members === null) return 'unknown'
+        // A zombie cannot act. Anything else in the old group that could not be identified
+        // remains a reason to keep the run, and is never signalled by its number alone.
+        const remaining = processes(members)
+        if (remaining === null || (!reused && remaining.size > 0) || others.some((p) => remaining.has(p))) return 'unknown'
+        return uncertain ? 'unknown' : 'ended'
+      }
+    } else {
+      empty = 0
+      signal(waited >= 5000 ? 'SIGKILL' : 'SIGTERM', waited >= 5000 ? still : new Map([...still].filter(([p, at]) => signalled.get(p) !== at)))
+    }
+    if (waited < 7000) await new Promise((resolve) => setTimeout(resolve, 250))
   }
-  if (anything() !== false) return 'unknown'
-  if (!others.length) return 'ended'
-  const still = inGroup(pid)
-  return still !== null && !still.some((p) => others.includes(p)) ? 'ended' : 'unknown'
+  return 'unknown'
 }
 
 /**
@@ -602,9 +598,9 @@ function belongs(pid: number, of: { harness: string; session: string }): boolean
  * Null where the system could not be asked. Another person's process cannot be read and is
  * passed over: it is not this run's, which runs as this person.
  */
-function marked(run: string): number[] | null {
+function marked(run: string, since: string): Map<number, string> | null {
   const mark = `IT_RUN=${run}`
-  const found: number[] = []
+  const found = new Map<number, string>()
   if (process.platform === 'linux') {
     let listed: string[]
     try {
@@ -615,19 +611,48 @@ function marked(run: string): number[] | null {
     for (const name of listed) {
       if (!/^\d+$/.test(name)) continue
       try {
-        if (readFileSync(`/proc/${name}/environ`, 'utf8').split('\0').includes(mark)) found.push(Number(name))
-      } catch {}
+        const pid = Number(name)
+        const before = processes([pid])
+        if (before === null) return null
+        if (!before.has(pid)) continue
+        // A child cannot predate its run. This also excludes older programs whose protected
+        // environments this user cannot read. Unknown ages stay conservative.
+        if (/^tick \d+$/.test(since) && Number(before.get(pid)!.slice(5)) < Number(since.slice(5))) continue
+        if (readFileSync(`/proc/${name}/environ`, 'utf8').split('\0').includes(mark)) {
+          const after = processes([pid])
+          if (after === null) return null
+          if (after.get(pid) === before.get(pid)) found.set(pid, before.get(pid)!)
+        }
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        if (code === 'ENOENT' || code === 'ESRCH') continue
+        // The process may have exited between its stat and environment reads. A zombie's
+        // environment is no longer readable, but it cannot start or continue any work.
+        const after = processes([Number(name)])
+        if (after !== null && after.size === 0) continue
+        // Another user's environment is private. An unreadable process of our own may be
+        // a detached command, so it prevents a claim that the run has finished.
+        try {
+          if (statSync(`/proc/${name}`).uid !== process.getuid?.()) continue
+        } catch (gone) {
+          if (['ENOENT', 'ESRCH'].includes((gone as NodeJS.ErrnoException).code ?? '')) continue
+        }
+        return null
+      }
     }
   } else {
-    // With what each was started with after its words, which macOS shows of one's own processes
-    const said = ps(['-A', '-E', '-ww', '-o', 'pid=', '-o', 'command='])
+    // Read the identity and inherited marks together. Looking up each match again would
+    // start several ps commands per child; the caller checks all identities together before
+    // signalling, so a number reused since this listing is still left alone.
+    const said = ps(['-A', '-E', '-ww', '-o', 'pid=', '-o', 'lstart=', '-o', 'command='])
     if (said === null) return null
     for (const line of said.split('\n')) {
-      const m = /^\s*(\d+)\s(.*)$/.exec(line)
-      if (m && ` ${m[2]} `.includes(` ${mark} `)) found.push(Number(m[1]))
+      const m = /^\s*(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line)
+      if (m && ` ${m[3]} `.includes(` ${mark} `)) found.set(Number(m[1]), m[2]!)
     }
   }
-  return found.filter((pid) => pid !== process.pid)
+  found.delete(process.pid)
+  return found
 }
 
 /**
@@ -658,7 +683,9 @@ export function processes(pids: number[]): Map<number, string> | null {
       try {
         const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
         // After the name, which stands in brackets and may hold anything, the twentieth word is the start
-        const ticks = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+        const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+        if (fields[0] === 'Z' || fields[0] === 'X') continue
+        const ticks = fields[19]
         if (!ticks || !/^\d+$/.test(ticks)) return null
         found.set(pid, `tick ${ticks}`)
       } catch (err) {
@@ -757,7 +784,7 @@ export class Budget {
   }
 }
 
-const heldAsked = new Map<string, { at: number; held: boolean }>()
+const heldAsked = new Map<string, { at: number; held: boolean | null }>()
 /**
  * Whether some Codex on this machine has a conversation open: in its window, in an editor or
  * another app that runs Codex, or for the minute after it was closed. Such a Codex takes a
@@ -771,13 +798,13 @@ const heldAsked = new Map<string, { at: number; held: boolean }>()
  * long as the conversation is open in some Codex. A Codex that was ended without warning
  * leaves its file behind, so where the system says who has a file open, that is asked too.
  */
-export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), now = Date.now()): boolean {
+export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), now = Date.now()): boolean | null {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(thread)) return false
   const lock = path.join(codexHome, 'thread-writer-locks', `${thread}.lock`)
   // Asked for every action that waits, on every pass: what was found is good for a moment
   const asked = heldAsked.get(lock)
   if (asked && now - asked.at < 1500) return asked.held
-  const held = existsSync(lock) && openSomewhere(lock) !== false
+  const held = existsSync(lock) ? openSomewhere(lock) : false
   if (heldAsked.size > 500) heldAsked.clear()
   heldAsked.set(lock, { at: now, held })
   return held

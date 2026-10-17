@@ -2,17 +2,20 @@
 // system uses for that. All three run the same command, `it serve`.
 //   Linux    a systemd user unit, it.service
 //   macOS    a launchd agent, dev.it
-//   Windows  a scheduled task at logon, named it
+//   Windows  a scheduled task at logon, named for this account's SID
 //
 // However it is stopped, the service is asked to stop and waited for. It stops the backend
 // program itself, last: by asking and by nothing else on Linux and macOS, and on Windows, where
 // that program cannot be counted on to hear, by ending it once it has been asked. What stops
 // the service is held to asking, on every system.
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { home, inHome, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
+import { holderRuns } from './serve/backend'
+import { resetStartup, startupStatus } from './serve/startup'
+import { watch, watched } from './upgrade'
 
 const NAME = 'it'
 const LABEL = 'dev.it'
@@ -23,6 +26,7 @@ export interface ServiceStatus {
   where: string
   /** Something the person should know about how it was set up. */
   note?: string
+  startup?: ReturnType<typeof startupStatus>
 }
 
 /** The command the service runs: this program, by the address it was started from. */
@@ -31,9 +35,12 @@ export function command(): string[] {
   const underRuntime = script !== undefined && /\.(m?js|ts)$/.test(script)
   // The program is told where to write its log, and keeps that file to a sensible size itself:
   // a supervisor that appends output to a file never trims it
-  return [process.execPath, ...(underRuntime ? [path.resolve(script)] : []), 'serve', '--log', logFile()]
+  return [process.execPath, ...(underRuntime ? [path.resolve(script)] : []), 'serve', '--supervised', '--log', logFile()]
 }
 export const logFile = () => inHome('logs', 'it.log')
+/** A launch argument belongs to this process alone, unlike an inherited environment marker. */
+export const supervised = () => process.argv.includes('--supervised')
+export const restartsAfterUpgrade = () => supervised() && process.platform !== 'win32' && installedHere()
 
 /**
  * The file by which a service is asked to stop where the system has no way of its own to ask:
@@ -50,9 +57,29 @@ const alive = (pid: unknown): pid is number => {
     return false
   }
 }
-/** Whether a service is running for an It folder, by what a running one keeps there: the backend's lock, or, on a machine that only joined an It, the connector's note. */
-export const runningFor = (folder: string): boolean =>
-  alive(readJson<{ pid?: unknown }>(path.join(folder, 'backend', 'lock'))?.pid) || alive(readJson<{ pid?: unknown }>(path.join(folder, 'connector.json'))?.pid)
+/**
+ * Whether the process a lock names is running. A number alone does not say so for long: once
+ * the service has died, the number is given to another process, which is then waited for and
+ * never stops. So the lock is asked which process it meant, where it says when that one was
+ * started, as every lock It writes does.
+ */
+const held = (lock: { pid?: unknown; started?: unknown; where?: unknown } | null | undefined): boolean => {
+  const pid = lock?.pid
+  if (!alive(pid)) return false
+  return typeof lock?.started !== 'string' || typeof lock.where !== 'string' || holderRuns({ pid, started: lock.started, where: lock.where })
+}
+/**
+ * Whether a service is running for an It folder, by what a running one keeps there: the
+ * backend's lock, or, on a machine that only joined an It, the connector's note. The note has
+ * the connector's number and nothing else of the process, so the connector's own lock beside
+ * it is what says which process that number was.
+ */
+export const runningFor = (folder: string): boolean => {
+  if (held(readJson(path.join(folder, 'backend', 'lock')))) return true
+  const noted = readJson<{ pid?: unknown }>(path.join(folder, 'connector.json'))?.pid
+  const lock = readJson<{ pid?: unknown }>(path.join(folder, 'connector.lock'))
+  return lock?.pid === noted ? held(lock) : alive(noted)
+}
 const sleep = (ms: number) => void Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 /** How long a service that was asked to stop is waited for before that is said. It is never made to stop. */
 const STOP_MS = 5 * 60_000
@@ -73,12 +100,17 @@ export function askToStop(folder: string, forMs = STOP_MS): void {
  * is ended and has not answered. A command that changes something is given no limit, since
  * some of them wait for the service to stop, which takes as long as it takes.
  */
-function run(cmd: string, args: string[], forMs?: number): { ok: boolean; out: string } {
+function run(cmd: string, args: string[], forMs?: number): { ok: boolean; out: string; status: number | null } {
   // The environment is named, though it is this program's own: Bun looks for a command along
   // the path it started with unless it is given one, and Node along the path as it is now.
   // Given it, both find the system's command where this program would be told to look.
-  const r = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, env: process.env, ...(forMs === undefined ? {} : { timeout: forMs }) })
-  return { ok: r.status === 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() }
+  const r = spawnSync(cmd, args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: process.env,
+    ...(forMs === undefined ? {} : { timeout: forMs, killSignal: 'SIGKILL' as const }),
+  })
+  return { ok: r.status === 0, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim(), status: r.status }
 }
 /** How long the system is given to answer a question about the service. */
 const ASKED_MS = 10_000
@@ -94,13 +126,17 @@ function must(cmd: string, args: string[], what: string): void {
 // It counts from, which backend program it runs or where it fetches one from, and which backend
 // it talks to, when the shell that installed it said, which harnesses the service may touch at
 // all (it reconciles add-ons by itself, and must leave alone what the shell that installed it
-// was told to leave alone), where usage is reported to, and where the person keeps each
+// was told to leave alone), where usage is reported to, whether the person's shell may be asked
+// what it gives a program, which only the service ever asks, and where the person keeps each
 // harness's settings when that is not the usual place, so that the connector looks where the
 // shell that ran `it setup` looked.
 //
 // Whether usage is reported at all is not in the list. That is kept in a file in It's folder,
 // which the service reads. A copy of the off switch saved in a service's definition would turn
 // reporting off again every time the service started, after the person had turned it back on.
+// Nor, for the same reason, is whether It looks for a newer version: where the shell that
+// registers the service says that it is not to, that is written into the same file as
+// `it updates off` writes (see `install`).
 export function environment(from: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = { PATH: from.PATH ?? from.Path ?? '' }
   for (const k of [
@@ -114,6 +150,7 @@ export function environment(from: NodeJS.ProcessEnv = process.env): Record<strin
     'IT_HARNESSES',
     'IT_EXPERIMENTAL',
     'IT_TELEMETRY_URL',
+    'IT_SHELL_ENV',
     ...PROFILE_VARS,
   ])
     if (from[k]) out[k] = from[k]!
@@ -204,6 +241,25 @@ function cmdWord(w: string): string {
   if (/["\r\n]/.test(w)) throw new Error('a path on this machine has a character that cannot be written into the launcher')
   return `"${w.replace(/%/g, '%%')}"`
 }
+/** Restores the recorded previous executable after an interrupted replacement. */
+export function windowsRecovery(program: string): string {
+  return `
+$ErrorActionPreference = 'Stop'
+$program = ${psQuote(program)}
+if (Test-Path -LiteralPath $program) { exit 0 }
+$note = $program + '.recovery.json'
+if (-not (Test-Path -LiteralPath $note)) { throw 'It is missing. Run the installer again.' }
+$record = Get-Content -Raw -LiteralPath $note | ConvertFrom-Json
+if ($record.file -cnotmatch '^it\\.old\\.[0-9]+\\.exe$' -or $record.sha256 -cnotmatch '^[a-f0-9]{64}$' -or ($record.pid -isnot [int] -and $record.pid -isnot [long]) -or $record.pid -le 1 -or $record.started -isnot [string] -or $record.started -cnotmatch '^[0-9]+$') { throw 'The recovery record cannot be read. Run the installer again.' }
+$writer = Get-Process -Id $record.pid -ErrorAction SilentlyContinue
+if ($writer -and $writer.StartTime.ToFileTimeUtc().ToString() -ceq $record.started) { throw 'An install or update is still running.' }
+$old = Join-Path ([IO.Path]::GetDirectoryName($program)) $record.file
+$item = Get-Item -Force -LiteralPath $old
+if (($item.Attributes -band ([IO.FileAttributes]::ReparsePoint -bor [IO.FileAttributes]::Directory)) -ne 0 -or (Get-FileHash -Algorithm SHA256 -LiteralPath $old).Hash -ine $record.sha256) { throw 'The previous program does not match its recovery record. Run the installer again.' }
+[IO.File]::Move($old, $program)
+Remove-Item -LiteralPath $note -Force
+`.trim()
+}
 /**
  * What the scheduled task runs on Windows: a .cmd file that gives the service its settings and
  * then starts the program. A task has no environment of its own to put them in, so the file
@@ -231,29 +287,69 @@ export function windowsLauncher(cmd: string[], env: Record<string, string>): str
   // this file's own cmd.exe with it. The Task Scheduler is told to do the same a minute after
   // a task has failed, and was seen not to, which is why it is done here. The wait is a ping,
   // since `timeout` refuses to wait where it has no keyboard to be interrupted from.
-  lines.push(':again', cmd.map(cmdWord).join(' '), 'if %errorlevel% equ 0 exit /b 0', 'ping -n 6 127.0.0.1 >nul 2>&1', 'goto again')
+  lines.push(':again')
+  if (cmd[0] && path.win32.basename(cmd[0]).toLowerCase() === 'it.exe') {
+    const recovery = Buffer.from(windowsRecovery(cmd[0]), 'utf16le').toString('base64')
+    lines.push(`if not exist ${cmdWord(cmd[0])} powershell.exe -NoProfile -NonInteractive -EncodedCommand ${recovery}`)
+  }
+  lines.push(cmd.map(cmdWord).join(' '), 'if %errorlevel% equ 0 exit /b 0', 'ping -n 6 127.0.0.1 >nul 2>&1', 'goto again')
   return `${lines.join('\r\n')}\r\n`
 }
 const windowsLauncherFile = () => inHome('bin', 'it-service.cmd')
 
 const ps = psQuote
+/** Selects only this account's task, or a legacy launcher owned by this account. */
+export function windowsTask(): string {
+  return `
+$ErrorActionPreference = 'Stop'
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$name = 'it-' + $sid
+function Test-ItTask($candidate) {
+  if (-not $candidate -or @($candidate.Actions).Count -ne 1) { return $false }
+  try {
+    $owner = [string]$candidate.Principal.UserId
+    if ($owner -notmatch '^S-1-') { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value }
+  } catch { return $false }
+  $action = $candidate.Actions[0]
+  return $owner -eq $sid -and $action.Execute -ieq 'conhost.exe' -and $action.Arguments -ieq ${ps('--headless cmd.exe /d /c .\\it-service.cmd')} -and [IO.Path]::IsPathRooted($action.WorkingDirectory) -and [IO.Path]::GetFileName(([string]$action.WorkingDirectory).TrimEnd('\\')) -ieq 'bin'
+}
+$tasks = @(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop)
+$task = $tasks | Where-Object { $_.TaskName -eq $name }
+if ($task -and -not (Test-ItTask $task)) { throw 'The task for this account is not an It launcher owned by this account. It was left unchanged.' }
+$legacy = $tasks | Where-Object { $_.TaskName -eq 'it' }
+if (-not (Test-ItTask $legacy)) { $legacy = $null }
+if (-not $task) { $task = $legacy }
+`.trim()
+}
 export function windowsScript(folder: string, launcher: string): string {
-  // The task runs the launcher by its bare name, started in the launcher's folder. The folder's
-  // own name then passes through no command line, where a space, an ampersand or a caret in it
-  // would have to be quoted for three programs in turn. A .cmd file is run by cmd.exe, which
-  // is named here, and conhost --headless keeps a console window from appearing at logon.
-  // A task that is still running is stopped first. Registering the task again does not touch
-  // it, and starting a task that is running starts nothing, so one set up with the old settings
-  // would otherwise go on as it was. By now the service itself has been asked to stop and has
-  // (see `install`): what this ends is the window it was started in.
   return [
-    `Stop-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue`,
+    windowsTask(),
+    // The service was asked to stop before this script runs. Only its launcher remains.
+    'if ($task) { Stop-ScheduledTask -InputObject $task -ErrorAction Stop }',
+    'if ($legacy -and $legacy.TaskName -ne $task.TaskName) { Stop-ScheduledTask -InputObject $legacy -ErrorAction Stop }',
     `$action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ${ps(`--headless cmd.exe /d /c .\\${launcher}`)} -WorkingDirectory ${ps(folder)}`,
-    '$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME',
+    '$trigger = New-ScheduledTaskTrigger -AtLogOn -User $sid',
+    '$principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive -RunLevel Limited',
     '$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)',
-    `Register-ScheduledTask -TaskName ${ps(NAME)} -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null`,
-    `Start-ScheduledTask -TaskName ${ps(NAME)}`,
+    "Register-ScheduledTask -TaskPath '\\' -TaskName $name -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null",
+    // Keep the old registration until the account's new one exists. If migration fails,
+    // remove the new registration so two launchers are not left for the next sign-in.
+    "if ($legacy) { try { Unregister-ScheduledTask -InputObject $legacy -Confirm:$false -ErrorAction Stop } catch { Unregister-ScheduledTask -TaskPath '\\' -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue; throw } }",
+    "Start-ScheduledTask -TaskPath '\\' -TaskName $name -ErrorAction Stop",
   ].join('\n')
+}
+/** Takes away only an owned task whose launcher starts in this folder. */
+export function windowsRemoval(folder: string): string {
+  const started = ps(folder.replace(/\//g, '\\').replace(/\\+$/, ''))
+  return `${windowsTask()}
+$ownedTasks = @($task, $legacy) | Where-Object { $_ } | Sort-Object TaskName -Unique
+foreach ($owned in $ownedTasks) {
+  if (([string]$owned.Actions[0].WorkingDirectory).Replace('/', '\\').TrimEnd('\\') -ieq ${started}) {
+    Stop-ScheduledTask -InputObject $owned -ErrorAction Stop
+    Unregister-ScheduledTask -InputObject $owned -Confirm:$false -ErrorAction Stop
+    if (Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq $owned.TaskName }) { throw 'Windows still has the task' }
+  }
+}; exit 0`
 }
 /**
  * What every script given to PowerShell begins with. PowerShell says how far it has got with
@@ -281,20 +377,44 @@ function powershell(script: string, forMs?: number) {
 const powershellAsked = (script: string) => powershell(script, ASKED_WINDOWS_MS)
 
 /**
- * The It folder the task Windows has registered runs the service from, or null when no task is
- * registered or it cannot be asked. It is read from the task's own action: the task is started
+ * Every It folder this account's tasks run the service from. Both the account task and an
+ * owned legacy task may exist. A failed discovery throws before installation changes either.
+ * Each folder is read from the task's own action: the task is started
  * in the folder's `bin`, where its launcher is. The folder's name is asked for as the bytes of
  * it in UTF-8, written in base64, and read back from those: a name with a letter outside the
  * code page PowerShell prints in would otherwise come back as the name of some other folder.
  */
+export function windowsRegisteredFolders(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): string[] {
+  const asked = ask(`${windowsTask()}
+foreach ($owned in @($task, $legacy)) {
+  if ($owned) { [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($owned.Actions[0].WorkingDirectory)) }
+}`)
+  if (!asked.ok) throw new Error(`reading the registered tasks failed: ${asked.out}`)
+  const folders: string[] = []
+  for (const line of asked.out.trim() ? asked.out.trim().split(/\r?\n/) : []) {
+    const said = line.trim()
+    // Only a whole base64 line is a folder. A partial answer is not enough to stop both services.
+    const bin =
+      said.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(said)
+        ? Buffer.from(said, 'base64')
+            .toString('utf8')
+            .replace(/[\\/]+$/, '')
+        : ''
+    if (!path.win32.isAbsolute(bin) || path.win32.basename(bin).toLowerCase() !== 'bin')
+      throw new Error('The registered task folders could not be read. The tasks were left unchanged.')
+    const folder = path.win32.dirname(bin)
+    if (!folders.some((other) => sameWindowsFolder(other, folder))) folders.push(folder)
+  }
+  return folders
+}
+/** This folder's registration when present, otherwise the account's preferred task, or none. */
 export function windowsRegisteredFor(ask: (script: string) => { ok: boolean; out: string } = powershellAsked): string | null {
-  const asked = ask(
-    `[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction Stop).Actions[0].WorkingDirectory))`,
-  )
-  const said = asked.ok ? (asked.out.split(/\r?\n/)[0]?.trim() ?? '') : ''
-  // Only what is base64 from end to end is the folder's name. Anything else is PowerShell saying something of its own
-  const bin = said.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(said) ? Buffer.from(said, 'base64').toString('utf8') : ''
-  return bin ? path.win32.dirname(bin.replace(/[\\/]+$/, '')) : null
+  try {
+    const folders = windowsRegisteredFolders(ask)
+    return folders.find((folder) => sameWindowsFolder(folder, home())) ?? folders[0] ?? null
+  } catch {
+    return null
+  }
 }
 /** Whether two addresses name the same folder on Windows, where the case of a letter and which way a slash leans make no difference. */
 export const sameWindowsFolder = (a: string, b: string): boolean => {
@@ -315,12 +435,25 @@ const unitPath = () => {
 const plistPath = () => path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`)
 const launchdDomain = () => `gui/${process.getuid?.() ?? 501}`
 
+/** A failed question is not proof of absence. launchctl returns 113 when the job is gone. */
+export function waitForLaunchdUnload(forMs = STOP_MS): void {
+  const until = Date.now() + forMs
+  for (;;) {
+    const left = until - Date.now()
+    if (left <= 0) throw new Error('The earlier agent is still unloading. Its definition was kept. Run `it service install` once it has stopped.')
+    const seen = run('launchctl', ['print', `${launchdDomain()}/${LABEL}`], Math.min(ASKED_MS, left))
+    if (!seen.ok && seen.status === 113) return
+    if (!seen.ok) throw new Error('launchd could not confirm that the earlier agent has unloaded. Its definition was kept. Run `it service install` again.')
+    sleep(Math.min(200, Math.max(0, until - Date.now())))
+  }
+}
+
 // A machine has one background service, and it belongs to the It folder it was set up from:
 // taking It out of another folder (a second one kept elsewhere, a test) never takes the service
 // away from the one that owns it. What is registered names its folder's log file, which is how
 // it is told whose it is. The name is looked for as the definition's writer wrote it, as one
-// whole word: a percent sign or an ampersand in it is not written there as itself, and another
-// folder's name may end in this one's. On Windows the task is asked for its own action, which
+// whole word, or resolved to the same real folder when setup used a symlink. A percent sign or
+// an ampersand in it is not written there as itself. On Windows the task is asked for its own action, which
 // names the folder it is started in: a launcher left in a folder says only that the folder once
 // registered the task, and another folder may have registered it since.
 export function installedHere(): boolean {
@@ -336,11 +469,74 @@ export function installedHere(): boolean {
         : [null, '']
   if (!registered) return false
   try {
-    return readFileSync(registered, 'utf8').includes(named)
+    const definition = readFileSync(registered, 'utf8')
+    if (definition.includes(named)) return true
+    let log: string
+    if (process.platform === 'linux') {
+      const token = /^ExecStart=.* "--log" ("(?:\\.|[^"\\])*")\s*$/m.exec(definition)?.[1]
+      if (!token) return false
+      log = (JSON.parse(token) as string).replaceAll('%%', '%').replaceAll('$$', '$')
+      if (systemdQuote(log, true) !== token) return false
+    } else {
+      const args = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(definition)?.[1]
+      const token = args && /<string>--log<\/string>\s*<string>([^<]*)<\/string>\s*$/.exec(args)?.[1]
+      if (!token) return false
+      log = token.replace(/&(amp|lt|gt);/g, (_, name: string) => ({ amp: '&', lt: '<', gt: '>' })[name]!)
+      if (xml(log) !== token) return false
+    }
+    if (!path.isAbsolute(log) || path.basename(log) !== 'it.log' || path.basename(path.dirname(log)) !== 'logs') return false
+    return realpathSync(path.dirname(path.dirname(log))) === realpathSync(home())
   } catch {
     return false
   }
 }
+
+/**
+ * The settings a definition gives the service, read back out of it as its writer put them in.
+ * Each of the three writes some characters as more than themselves, and what each did is undone
+ * here. Nothing for a system It registers no service with.
+ */
+export function given(definition: string, platform: NodeJS.Platform = process.platform): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (platform === 'linux')
+    for (const [, said] of definition.matchAll(/^Environment="(.*)"$/gm)) {
+      const setting = said!.replace(/%%/g, '%').replace(/\\(.)/g, '$1')
+      if (setting.indexOf('=') > 0) out[setting.slice(0, setting.indexOf('='))] = setting.slice(setting.indexOf('=') + 1)
+    }
+  else if (platform === 'darwin') {
+    const plain = (v: string) => v.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    const settings = /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/.exec(definition)?.[1] ?? ''
+    for (const [, name, value] of settings.matchAll(/^\s*<key>(.+?)<\/key><string>(.*)<\/string>$/gm)) out[plain(name!)] = plain(value!)
+  } else if (platform === 'win32')
+    for (const [, name, value] of definition.matchAll(/^set ([^=\r\n]+)=(.*?)\r?$/gm)) out[name!] = value!.replace(/%%/g, '%').replace(/\^(.)/g, '$1')
+  return out
+}
+
+/**
+ * What the service that is registered for this folder was given when it was registered, less
+ * its PATH, which is each shell's own to give. Nothing where no service is registered for this
+ * folder, or its definition cannot be read.
+ */
+export function kept(): Record<string, string> {
+  const file =
+    process.platform === 'linux' ? unitPath() : process.platform === 'darwin' ? plistPath() : process.platform === 'win32' ? windowsLauncherFile() : null
+  if (!file || !installedHere()) return {}
+  try {
+    const { PATH: _path, ...rest } = given(readFileSync(file, 'utf8'))
+    return rest
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * The environment for a setup that registers this folder's service again without a person
+ * having asked for it to be set up anew, as the one an upgrade runs does. A setting that only
+ * the shell of the day it was first registered named, such as another port, is in the
+ * definition and nowhere else: left out here, the definition written next would lack it, and
+ * the service would come back at another address. What this shell names itself is what it says.
+ */
+export const againWith = (own: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({ ...kept(), ...own })
 
 /**
  * Whose the service is that this machine has a definition of: this folder's, another folder's,
@@ -413,6 +609,49 @@ let registeredOnWindows: boolean | undefined
 /** A note that It is what made this account stay after logout, kept in It's folder. */
 const lingerNote = () => path.join(home(), 'linger-by-it')
 
+/** The note It writes is an empty regular file. A changed file or a link is the person's. */
+function ownsLingerNote(folder: string): boolean {
+  const stat = lstatSync(path.join(folder, 'linger-by-it'), { throwIfNoEntry: false })
+  return !!stat?.isFile() && stat.size === 0
+}
+
+/** The folder named by the exact log argument the systemd definition writer emits. */
+function systemdHome(definition: string): string | undefined {
+  const token = /^ExecStart=.* "--log" ("(?:\\.|[^"\\])*")\s*$/m.exec(definition)?.[1]
+  if (!token) return undefined
+  try {
+    const log = (JSON.parse(token) as string).replaceAll('%%', '%').replaceAll('$$', '$')
+    if (systemdQuote(log, true) !== token || !path.isAbsolute(log) || path.basename(log) !== 'it.log' || path.basename(path.dirname(log)) !== 'logs')
+      return undefined
+    return path.dirname(path.dirname(log))
+  } catch {
+    return undefined
+  }
+}
+
+/** Keep the evidence of who enabled lingering with the service, without changing the account setting. */
+function moveLingerNote(from: string, to: string): void {
+  try {
+    const source = realpathSync(from)
+    const destination = realpathSync(to)
+    if (source === destination || !ownsLingerNote(source)) return
+    const target = path.join(destination, 'linger-by-it')
+    if (!lstatSync(target, { throwIfNoEntry: false })) writeFileSync(target, '', { flag: 'wx', mode: 0o600 })
+    if (ownsLingerNote(destination)) rmSync(path.join(source, 'linger-by-it'))
+  } catch {
+    // A failed transfer keeps the original note for another attempt.
+  }
+}
+
+/** Older versions could move the service without its linger note. Removing the earlier home repairs that handover. */
+export function passLingerToRegisteredService(): void {
+  if (process.platform !== 'linux') return
+  try {
+    const registered = systemdHome(readFileSync(unitPath(), 'utf8'))
+    if (registered) moveLingerNote(home(), registered)
+  } catch {}
+}
+
 export function reachable(): boolean {
   if (process.platform !== 'linux') return true
   const asked = run('systemctl', ['--user', 'show-environment'], ASKED_MS)
@@ -447,6 +686,12 @@ export function install(): ServiceStatus {
   mkdirSync(path.dirname(logFile()), { recursive: true, mode: 0o700 })
   const cmd = command()
   const env = environment()
+  // Registration is an explicit request to retry, including after an unchanged failed start.
+  resetStartup()
+  // The service is started by the system, with nothing of this shell: a shell that says It is
+  // not to look for a newer version says so to the service by the file `it updates off` makes,
+  // which `it updates on` takes away again
+  if (watched().because === 'IT_UPDATE_CHECK') watch(false)
   if (process.platform === 'linux') {
     // Where systemd keeps no services for this person (a container, some remote logins), that
     // is said in words, before anything is written: nothing It could put on the disk would
@@ -473,30 +718,59 @@ export function install(): ServiceStatus {
       throw err
     }
     // Without this the service stops when the person logs out, which on a server is always.
-    // Whether the account already stayed after logout is noted first: where It is what
+    // Whether the account already stayed after logout is asked first: where It is what
     // turned that on, taking It off the machine turns it off again, and where the person
-    // had it so for reasons of their own, it is left as they had it.
-    const stayed = /^Linger=yes$/m.test(run('loginctl', ['show-user', os.userInfo().username, '--property=Linger'], ASKED_MS).out ?? '')
-    try {
-      if (!stayed && !existsSync(lingerNote())) writeFileSync(lingerNote(), '', { mode: 0o600 })
-    } catch {}
+    // had it so for reasons of their own, it is left as they had it. It is It's doing only
+    // where the system said that the account did not stay, and then let It turn that on. A
+    // system that would not say may have had it on for the person's other services, and one
+    // that refused It has it on, if ever, by someone else's hand.
+    const asked = run('loginctl', ['show-user', os.userInfo().username, '--property=Linger'], ASKED_MS)
+    const stayedNot = asked.ok && /^Linger=no$/m.test(asked.out)
     if (!run('loginctl', ['enable-linger', os.userInfo().username]).ok)
       return {
         ...status(),
         note: 'It will stop when you log out of this machine: `loginctl enable-linger` was refused. Ask whoever runs the machine to allow it.',
       }
+    try {
+      if (stayedNot && !existsSync(lingerNote())) writeFileSync(lingerNote(), '', { mode: 0o600 })
+      const previous = before === null ? undefined : systemdHome(before)
+      if (previous) moveLingerNote(previous, home())
+    } catch {}
   } else if (process.platform === 'darwin') {
+    const before = existsSync(plistPath()) ? readFileSync(plistPath(), 'utf8') : null
     mkdirSync(path.dirname(plistPath()), { recursive: true })
-    run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`])
+    // The definition is written before the service that is running is taken out of launchd.
+    // launchd reads a definition only when it is given one, so writing it changes nothing of
+    // what runs, and where it cannot be written, as on a disk that is full, the service that
+    // was running goes on running under the definition that is still there
     writeDefinition(plistPath(), launchdPlist(cmd, env))
-    must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'loading the agent')
+    const unloaded = run('launchctl', ['bootout', `${launchdDomain()}/${LABEL}`]).ok
+    let absent = false
+    try {
+      waitForLaunchdUnload()
+      absent = true
+      must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'loading the agent')
+    } catch (err) {
+      // A failed replacement gives the earlier definition back to launchd. Where no agent
+      // was loaded, as over SSH, the definition is only kept for the next login.
+      if (before !== null) {
+        try {
+          writeDefinition(plistPath(), before)
+          if (unloaded && absent) must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'restoring the earlier agent')
+        } catch (recovery) {
+          throw new Error(`${(err as Error).message}; ${(recovery as Error).message}`)
+        }
+      }
+      throw err
+    }
   } else if (process.platform === 'win32') {
     // Windows ends a task's programs outright, with no word to the service that it is to
     // close its door and stop its backend program in its turn. So the service that is running
-    // is asked to stop, and waited for, before its task is touched: this folder's, and the
-    // one the task was registered for when that is another.
-    const registered = windowsRegisteredFor()
-    for (const folder of registered && !sameWindowsFolder(registered, home()) ? [registered, home()] : [home()]) askToStop(folder)
+    // is asked to stop, and waited for, before either task is touched: this folder's, the
+    // account task's, and the owned legacy task's, which may each name a different folder.
+    const folders = windowsRegisteredFolders()
+    if (!folders.some((folder) => sameWindowsFolder(folder, home()))) folders.push(home())
+    for (const folder of folders) askToStop(folder)
     mkdirSync(path.dirname(windowsLauncherFile()), { recursive: true })
     writeDefinition(windowsLauncherFile(), windowsLauncher(cmd, env))
     const r = powershell(windowsScript(path.dirname(windowsLauncherFile()), path.basename(windowsLauncherFile())))
@@ -528,7 +802,7 @@ export function uninstall(patience = STOP_MS): void {
     rmSync(unitPath(), { force: true })
     run('systemctl', ['--user', 'daemon-reload'])
     // The account stays after logout only because It asked for that: it stops doing so
-    if (existsSync(lingerNote())) {
+    if (ownsLingerNote(home())) {
       run('loginctl', ['disable-linger', os.userInfo().username])
       rmSync(lingerNote(), { force: true })
     }
@@ -541,12 +815,11 @@ export function uninstall(patience = STOP_MS): void {
   } else if (process.platform === 'win32') {
     // The service is asked to stop and waited for first, as before its task is replaced
     askToStop(home(), patience)
-    // A task that is not there is none to take away, and says nothing. One that is still there
-    // after it was asked to go, which is what a refusal leaves, is said as that: and so is a
-    // Windows that could not be asked at all
-    const out = powershell(
-      `Stop-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName ${ps(NAME)} -Confirm:$false -ErrorAction SilentlyContinue; if (Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction SilentlyContinue) { 'Windows still has the task'; exit 3 }`,
-    )
+    // A task that is not there is none to take away, and says nothing, and neither does one
+    // that is not this folder's, which is left alone. One that is still there after it was
+    // asked to go, which is what a refusal leaves, is said as that: and so is a Windows that
+    // could not be asked at all
+    const out = powershell(windowsRemoval(path.dirname(windowsLauncherFile())))
     // What it starts stays where it is then: taken away, the task that is still there would start nothing at the next sign-in, with no word of why
     if (!out.ok)
       throw new Error(`the background task could not be taken away${out.out ? ` (${out.out.split('\n')[0]})` : ''}, so what it starts was left where it is`)
@@ -562,6 +835,12 @@ export function uninstall(patience = STOP_MS): void {
  * when the person next logs in, whatever it says of it now.
  */
 export function status(): ServiceStatus {
+  const system = systemStatus()
+  const startup = startupStatus()
+  return startup ? { ...system, startup } : system
+}
+
+function systemStatus(): ServiceStatus {
   // A machine has one definition. Where it is another folder's, the service it speaks of runs
   // that folder's It: of this one, nothing is registered, however that other stands
   if (process.platform !== 'win32' && definedFor() === 'another folder')
@@ -575,9 +854,14 @@ export function status(): ServiceStatus {
     return { registered: existsSync(plistPath()), state: r.ok ? (/state = (\w+)/.exec(r.out)?.[1] ?? 'loaded') : 'not loaded', where: plistPath() }
   }
   if (process.platform === 'win32') {
-    const r = powershellAsked(`(Get-ScheduledTask -TaskName ${ps(NAME)} -ErrorAction Stop).State`)
-    // The state is one word, on the first line of what was printed. Anything PowerShell said after it is not the state
-    return { registered: r.ok, state: r.ok ? (r.out.split(/\r?\n/)[0]?.trim() ?? '') || 'unknown' : 'not registered', where: `Scheduled Task "${NAME}"` }
+    const r = powershellAsked(`${windowsTask()}
+if ($task) { $task.TaskName; $task.State }`)
+    const [name, state] = r.ok ? r.out.split(/\r?\n/) : []
+    return {
+      registered: Boolean(name),
+      state: name ? state || 'unknown' : 'not registered',
+      where: name ? `Scheduled Task "${name}"` : 'Scheduled Task for this Windows account',
+    }
   }
   return { registered: false, state: 'unsupported', where: home() }
 }

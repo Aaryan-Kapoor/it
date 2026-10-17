@@ -7,12 +7,13 @@
 // check they arrived) are asked directly. Things that must happen even if the content service
 // cannot be reached at that moment (ending a display's showings, deleting stored bytes) are
 // kept as jobs and tried again until it confirms, because a scheduled action runs at most once.
-import { AUDIENCE } from '@it/protocol'
+import { AUDIENCE, PUBLICATION } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { type ActionCtx, internalAction, internalMutation, internalQuery, type MutationCtx } from './_generated/server'
 import { door } from './config'
+import { confirmed } from './deletions'
 import { overClashes } from './lib/clash'
 import { kind, log } from './lib/log'
 import { mint } from './lib/signing'
@@ -70,7 +71,7 @@ async function enqueue(
   /** Whose display or files it is about. */
   userId: Id<'users'>,
   body: unknown,
-  opts: { thenDeleteUser?: Id<'users'>; inMs?: number } = {},
+  opts: { thenDeleteUser?: Id<'users'>; inMs?: number; deletionId?: Id<'deletions'> } = {},
 ): Promise<Id<'contentJobs'>> {
   const now = Date.now()
   const wait = opts.inMs ?? 0
@@ -82,6 +83,7 @@ async function enqueue(
     createdAt: now,
     userId,
     thenDeleteUser: opts.thenDeleteUser,
+    deletionId: opts.deletionId,
   })
   await ctx.scheduler.runAfter(wait, internal.content.run, { jobId })
   return jobId
@@ -89,17 +91,21 @@ async function enqueue(
 /** Showings opened for a display before `epoch` are over, and tickets made for it before then open nothing. Answers with the job, for a caller that wants to know when the content service has confirmed. */
 export const revokeLater = (ctx: MutationCtx, args: { userId: Id<'users'>; displayId: string; epoch: number }) => enqueue(ctx, 'revoke', args.userId, args)
 /** How long after something is deleted an upload that was already under way could still land. */
-const GRANT_TAIL_MS = 20 * 60_000
+const GRANT_TAIL_MS = PUBLICATION.grantTailMs
 /**
  * Deletes stored bytes under a prefix, which begins with whose they are (`u/<person>/`): a
  * retired version, a deleted page, or everything one person has. Where a grant to upload there
  * may still be good, the deletion is done a second time once that grant has run out, so that
  * an upload which was already on its way leaves nothing behind.
  */
-export async function removeLater(ctx: MutationCtx, prefix: string, opts: { thenDeleteUser?: Id<'users'>; grantMayBeLive?: boolean } = {}): Promise<void> {
+export async function removeLater(
+  ctx: MutationCtx,
+  prefix: string,
+  opts: { thenDeleteUser?: Id<'users'>; grantMayBeLive?: boolean; deletionId?: Id<'deletions'> } = {},
+): Promise<void> {
   const person = ctx.db.normalizeId('users', prefix.split('/')[1] ?? '')
   if (!person) throw new Error('a prefix to delete under names nobody')
-  await enqueue(ctx, 'delete', person, { prefix }, { thenDeleteUser: opts.thenDeleteUser })
+  await enqueue(ctx, 'delete', person, { prefix }, { thenDeleteUser: opts.thenDeleteUser, deletionId: opts.deletionId })
   if (opts.grantMayBeLive) await enqueue(ctx, 'delete', person, { prefix }, { inMs: GRANT_TAIL_MS })
 }
 
@@ -111,6 +117,7 @@ export const _settle = internalMutation({
     const job = await ctx.db.get(jobId)
     if (!job) return null
     if (outcome === 'done') {
+      if (job.deletionId) await confirmed(ctx, job.deletionId, 'contentAt')
       const person = job.thenDeleteUser
       if (person) {
         // Everything the content service had of the person's is gone, so whatever else was still
@@ -149,7 +156,12 @@ export const _settle = internalMutation({
     }
     if (attempts > MAX_ATTEMPTS && attempts % 24 === 0) log('content_job.still_failing', { jobId, op: job.op, tries: attempts }, 'error')
     const wait = outcome === 'more' ? 0 : backoff(Math.min(job.attempts, MAX_ATTEMPTS))
-    await ctx.db.patch(jobId, { attempts, nextAt: Date.now() + wait })
+    const nextAt = Date.now() + wait
+    await ctx.db.patch(jobId, { attempts, nextAt })
+    if (job.deletionId) {
+      const d = await ctx.db.get(job.deletionId)
+      if (d && d.contentAt === undefined) await ctx.db.patch(d._id, { attempts, nextAt, failedAt: outcome === 'failed' ? Date.now() : undefined })
+    }
     await ctx.scheduler.runAfter(wait, internal.content.run, { jobId })
     return null
   },
@@ -167,11 +179,19 @@ export const run = internalAction({
       if (r.ok) {
         // Only a proper answer counts. One that cannot be read, or does not say what was asked,
         // is a failure, and the job is tried again.
-        const said = (await r.json().catch(() => null)) as { more?: unknown; epoch?: unknown } | null
-        if (job.op === 'delete' && typeof said?.more === 'boolean') outcome = said.more ? 'more' : 'done'
+        const said = (await r.json().catch(() => null)) as { more?: unknown; removed?: unknown; epoch?: unknown } | null
+        // A deletion that says there is more and that it removed nothing got nowhere. It is no
+        // step on the way, to be followed by the next at once: it waits as a failure does, so
+        // that what cannot be removed is not asked for without end and without a pause.
+        const stuck = job.op === 'delete' && said?.more === true && said.removed === 0
+        if (job.op === 'delete' && typeof said?.more === 'boolean' && !stuck) outcome = said.more ? 'more' : 'done'
         if (job.op === 'revoke' && typeof said?.epoch === 'number') outcome = 'done'
         if (outcome === 'failed')
-          log('content_job.failed', { jobId, op: job.op, try: job.attempts + 1, status: r.status, reason: 'unreadable_answer' }, 'error')
+          log(
+            'content_job.failed',
+            { jobId, op: job.op, try: job.attempts + 1, status: r.status, reason: stuck ? 'nothing_removed' : 'unreadable_answer' },
+            'error',
+          )
       }
     } catch (err) {
       // The content service could not be reached: tried again later

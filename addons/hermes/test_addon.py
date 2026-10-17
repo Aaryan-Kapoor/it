@@ -132,6 +132,7 @@ class Connector:
         self.offers = {}  # session -> clicks, offered on every asking until the add-on reports them
         self.seals_with = None  # set to another token, it stands for some other program that took the port
         self.padding = 0  # above zero, each click offered is padded by this many characters, past what any real answer holds
+        self.asking = None  # set to a function, it is called with the conversation each time clicks are asked for, before the answer is given
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -171,6 +172,8 @@ class Connector:
                     return self.answer(404, {"error": "no such thing"})
                 harness, session = query.get("harness", [""])[0], query.get("session", [""])[0]
                 outer.log.append(("clicks", harness, session))
+                if outer.asking:
+                    outer.asking(session)
                 offered = list(outer.offers.get(session, []))
                 self.answer(200, {"clicks": [{**c, "title": "x" * outer.padding} for c in offered] if outer.padding else offered})
 
@@ -180,6 +183,18 @@ class Connector:
                     outer.refused += 1
                     return self.answer(401, {"error": "not for you"})
                 body = json.loads(sent or b"{}")
+                if self.path.startswith("/clicks?"):
+                    url = urlsplit(self.path)
+                    query = parse_qs(url.query)
+                    harness, session = query.get("harness", [""])[0], query.get("session", [""])[0]
+                    outer.log.append(("clicks", harness, session))
+                    if outer.asking:
+                        outer.asking(session)
+                    offered = list(outer.offers.get(session, []))
+                    return self.answer(200, {"clicks": [{**c, "title": "x" * outer.padding} for c in offered] if outer.padding else offered})
+                if self.path == "/addon":
+                    outer.runtime = body
+                    return self.answer(200, {"ok": True})
                 if self.path == "/ack":
                     outer.log.append(("ack", tuple(body["ids"])))
                     for session in outer.offers:
@@ -385,6 +400,20 @@ class Case(unittest.TestCase):
 
 
 class InTheTerminal(Case):
+    def test_an_idle_loaded_host_reports_the_missing_discovery_hook_without_guessing_a_session(self):
+        self.terminal()
+        self.assertTrue(until(lambda: hasattr(self.connector, "runtime")))
+        self.assertEqual(self.connector.runtime["harness"], "hermes")
+        self.assertEqual(self.connector.runtime["addon"]["api"], 1)
+        self.assertFalse(self.connector.runtime["addon"]["idle"])
+        self.assertEqual(self.connector.asked(), [])
+
+    def test_a_missing_message_api_is_reported_without_taking_clicks(self):
+        hermes = self.terminal()
+        hermes.inject_message = None
+        self.assertTrue(until(lambda: hasattr(self.connector, "runtime") and not self.connector.runtime["addon"]["delivery"]))
+        self.assertEqual(self.connector.asked(), [])
+
     def test_it_asks_for_the_conversation_its_shell_commands_report(self):
         hermes = self.terminal()
         self.assertEqual(self.connector.log, [], "nothing is asked before a conversation has a turn")
@@ -745,6 +774,74 @@ class InTheTuiAndTheGateway(Case):
         hermes.turn("20261002_120000_cd56ef", running=False)
         self.assertTrue(until(lambda: ("session", "hermes", "20261002_120000_cd56ef", B) in self.connector.log))
 
+    def test_a_click_asked_for_before_the_chat_went_to_another_conversation_is_not_given_to_that_one(self):
+        hermes = self.named()
+        bound["HERMES_SESSION_KEY"] = self.KEY
+        went = []
+
+        def goes_elsewhere(session):
+            # /new in the same chat while the connector is answering for A: B has its first turn under the same name
+            if session == A and not went:
+                went.append(B)
+                hermes.turn(B, running=False)
+
+        self.connector.asking = goes_elsewhere
+        self.connector.offer(A, click("k1"))
+        hermes.turn(A, running=False)
+        self.assertTrue(until(lambda: ("hermes", B) in self.connector.asked()))
+        self.a_while()
+        self.assertEqual(hermes.messages, [], "a message goes by the chat's name, which is B's now")
+        self.assertEqual(self.connector.acks(), [], "the click is still A's to have")
+
+    def test_a_chat_switch_during_the_last_host_check_leaves_the_click_for_its_original_conversation(self):
+        hermes = self.named()
+        bound["HERMES_SESSION_KEY"] = self.KEY
+        checking = threading.Event()
+        carry_on = threading.Event()
+
+        def allowed():
+            # Hermes reads its configuration here. Hold that read after the connector has
+            # answered, while the host's other thread starts a conversation under the same key.
+            if ("hermes", A) in self.connector.asked() and not checking.is_set():
+                checking.set()
+                return carry_on.wait(5)
+            return True
+
+        hermes._gateway_injection_allowed = allowed
+        self.connector.offer(A, click("k1"))
+        hermes.turn(A, running=False)
+        try:
+            self.assertTrue(checking.wait(5), "the last host check runs after the connector answered")
+            hermes.turn(B, running=False)
+        finally:
+            carry_on.set()
+        self.assertTrue(until(lambda: ("hermes", B) in self.connector.asked()))
+        self.assertEqual(hermes.messages, [], "the chat belongs to B before the host check finishes")
+        self.assertEqual(self.connector.acks(), [], "A's click was not handed over")
+
+        hermes.turn(A, running=False)
+        self.assertTrue(until(lambda: self.connector.acks()))
+        self.assertEqual(hermes.messages, [(TEXT, "user", self.KEY)])
+        self.assertEqual(self.connector.acks(), [("k1",)], "the same click reaches A when it returns")
+
+    def test_as_many_conversations_are_asked_about_as_the_connector_listens_for_and_past_that_the_one_heard_from_longest_ago_gives_way(self):
+        # The number is the connector's own, read from where It keeps it
+        protocol = (HERE.parent.parent / "packages" / "protocol" / "src" / "index.ts").read_text(encoding="utf-8")
+        most = int(re.search(r"^export const LISTENING_MOST = (\d+)$", protocol, re.MULTILINE).group(1))
+        hermes = self.named()
+        ids = ["20261002_10%04d_ab12cd" % i for i in range(most + 1)]
+        for i, session in enumerate(ids[:most]):
+            bound["HERMES_SESSION_KEY"] = "chat-%d" % i
+            hermes.turn(session, running=False)
+        self.assertTrue(until(lambda: set(self.connector.asked()) == {("hermes", session) for session in ids[:most]}))
+        # One more than the connector listens for: the first, which has had no turn since, is the one not asked about
+        bound["HERMES_SESSION_KEY"] = "chat-%d" % most
+        hermes.turn(ids[most], running=False)
+        self.assertTrue(until(lambda: ("hermes", ids[most]) in self.connector.asked()))
+        del self.connector.log[:]
+        self.a_while()
+        self.assertEqual(set(self.connector.asked()), {("hermes", session) for session in ids[1:]})
+
     def test_nothing_is_asked_until_the_person_has_allowed_messages(self):
         hermes = self.named(allowed=False)
         bound["HERMES_SESSION_KEY"] = self.KEY
@@ -786,6 +883,34 @@ class OverAPort(Case):
         self.assertIn(("session", "hermes", B, A), self.connector.log)
         self.assertEqual(self.connector.refused, 0, "the connector believed every request")
         self.assertEqual(self.connector.token_shown, 0)
+
+    def test_a_proxy_named_in_the_environment_is_sent_nothing_of_what_is_asked_of_the_connector(self):
+        # Something that takes whatever is sent to it as a proxy would, and notes the first line of each thing asked
+        seen = []
+
+        class Proxy(socketserver.StreamRequestHandler):
+            def handle(self):
+                seen.append(self.rfile.readline().decode("latin-1").strip())
+                self.wfile.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+
+        proxy = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Proxy)
+        proxy.daemon_threads = True
+        threading.Thread(target=proxy.serve_forever, daemon=True).start()
+        self.addCleanup(lambda: (proxy.shutdown(), proxy.server_close()))
+        # Named in every variable Python reads one from, with nothing left out of its reach.
+        # Python looks them up when something is asked, so named now is named from the start.
+        names = ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy")
+        before = {name: os.environ.get(name) for name in names}
+        self.addCleanup(lambda: [os.environ.pop(name, None) if value is None else os.environ.__setitem__(name, value) for name, value in before.items()])
+        for name in names:
+            os.environ[name] = "" if name.lower() == "no_proxy" else "http://127.0.0.1:%d" % proxy.server_address[1]
+        hermes = self.terminal()
+        hermes.turn(A, running=False)
+        self.connector.offer(A, click("k1"))
+        self.assertTrue(until(lambda: self.connector.acks() or seen))
+        self.assertEqual(seen, [], "the connector is on this machine, and is asked on a connection of the add-on's own")
+        self.assertEqual(hermes.messages, [(TEXT, "user", None)])
+        self.assertEqual(self.connector.acks(), [("k1",)])
 
     def test_an_answer_from_something_else_on_the_port_is_not_believed(self):
         self.connector.seals_with = "f" * 48

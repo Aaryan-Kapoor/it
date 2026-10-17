@@ -2,26 +2,34 @@
 // backend. What it must get right: it speaks of the click just made the moment it is made, and
 // never goes on saying what became of the one before.
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { Sent } from './outbox'
 
-const NOW = Date.now()
+const NOW = Date.UTC(2026, 9, 15, 12)
 const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, agent: 'claude-code', machine: 'the laptop', machineSeenAt: NOW }
 /** What the backend last said of the page's clicks, newest first. */
 let recent: { at: number; delivery: string; outcome?: string | null; route?: string | null; handedAt?: number | null }[]
+/** The person's machines as the backend gives them to the owner's browser, with the agent apps chosen on each. */
+let machines: { id: string; name?: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[] | undefined
+const inventoryAsked = vi.fn()
 /** Whether there is a connection to the backend, and what was asked to be told when that changes. */
 let connected: boolean
+let functions: 'current' | 'retained' | undefined
+const pageQueries: unknown[] = []
+vi.mock('./session', () => ({ useSession: () => ({ service: functions ? { functions } : undefined }) }))
 const told = new Set<() => void>()
 /** What the backend answers each click with, in the order they were sent: nothing, until the test lets it. */
 const answers: ((said: { actionId: string }) => void)[] = []
 const client = {
-  mutation: vi.fn(
-    () =>
-      new Promise<{ actionId: string }>((resolve) => {
-        answers.push(resolve)
-      }),
+  mutation: vi.fn((fn: unknown) =>
+    getFunctionName(fn as never) === 'actions:replayGrant'
+      ? Promise.resolve({ until: Date.now() + 6 * 86400_000 })
+      : new Promise<{ actionId: string }>((resolve) => {
+          answers.push(resolve)
+        }),
   ),
   connectionState: () => ({ isWebSocketConnected: connected }),
   subscribeToConnectionState: (fn: () => void) => {
@@ -30,12 +38,24 @@ const client = {
   },
 }
 /** What the backend is to answer each stop with, in the order they were asked: nothing, until the test lets it. */
-const stopsAsked: { answer: (said: { stopping: boolean }) => void; refuse: (why: unknown) => void }[] = []
-const askedToStop = () => new Promise<{ stopping: boolean }>((answer, refuse) => void stopsAsked.push({ answer, refuse }))
+const stopsAsked: {
+  input: { expectedRun?: string; expectedSession?: string }
+  answer: (said: { stopping: boolean }) => void
+  refuse: (why: unknown) => void
+}[] = []
+const askedToStop = (input: { expectedRun?: string; expectedSession?: string }) =>
+  new Promise<{ stopping: boolean }>((answer, refuse) => void stopsAsked.push({ input, answer, refuse }))
+const queries: { name: string; args: unknown }[] = []
 vi.mock('convex/react', () => ({
   useConvex: () => client,
   useMutation: (fn: unknown) => (getFunctionName(fn as never) === 'artifacts:stop' ? askedToStop : async () => null),
-  useQuery: (fn: unknown) => ({ 'artifacts:get': PAGE, 'actions:forArtifact': recent })[getFunctionName(fn as never)],
+  useQuery: (fn: unknown, args: unknown) => {
+    const name = getFunctionName(fn as never)
+    if (name === 'artifacts:get') pageQueries.push(args)
+    queries.push({ name, args })
+    if (name === 'machines:list' && args !== 'skip') inventoryAsked()
+    return args === 'skip' ? undefined : { 'artifacts:get': PAGE, 'actions:forArtifact': recent, 'machines:list': machines }[name]
+  },
 }))
 // The frame a page is shown in has tests of its own
 vi.mock('./mount', () => ({ Mount: () => null }))
@@ -52,36 +72,53 @@ const envelope = (id: string): Sent => ({ v: 1, clientActionId: id, name: 'appro
 const tick = () => act(async () => new Promise<void>((r) => setTimeout(r, 0)))
 /** Longer than a stop is on its way before the bar says so. */
 const aWhile = () => act(async () => new Promise<void>((r) => setTimeout(r, 800)))
-async function shown() {
+async function shown(owner = true) {
   const { PageView } = await import('./pages')
   const outbox = await import('./outbox')
   outbox.outboxBelongsTo('user-1', 'session-1')
   host = document.body.appendChild(document.createElement('div'))
   root = createRoot(host)
-  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: true })))
+  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner })))
   return outbox
 }
 /** Draws the page again where it is, as it is drawn when the backend has something new to say of it. */
-async function drawnAgain() {
+async function drawnAgain(owner = true) {
   const { PageView } = await import('./pages')
-  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: true })))
+  await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner })))
 }
 
 beforeEach(() => {
+  vi.spyOn(Date, 'now').mockReturnValue(NOW)
   vi.resetModules()
   localStorage.clear()
   localStorage.setItem('it.display', 'a-display-key-000001')
   recent = [{ at: NOW - 5000, delivery: 'handed_off', outcome: 'succeeded' }]
+  machines = [
+    {
+      id: 'machine-1',
+      name: PAGE.machine,
+      wanted: ['claude-code', 'pi'],
+      harnesses: [
+        { id: 'claude-code', addon: 'connected' },
+        { id: 'pi', addon: 'connected' },
+      ],
+    },
+  ]
   connected = true
+  functions = undefined
+  pageQueries.length = 0
   told.clear()
   answers.length = 0
   stopsAsked.length = 0
+  queries.length = 0
   client.mutation.mockClear()
+  inventoryAsked.mockClear()
 })
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 /** Lets so much time pass, on a clock the test holds. */
 const pass = (ms: number) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)))
@@ -93,8 +130,21 @@ const connection = (up: boolean) =>
   })
 
 describe('what the page’s bar says of the last thing the person did', () => {
+  test.each([true, false])('the live page omits version history from its subscription when owner is %s', async (owner) => {
+    functions = 'current'
+    await shown(owner)
+    const pageQueries = () => queries.filter((q) => q.name === 'artifacts:get').map((q) => q.args)
+    expect(pageQueries()).toEqual([{ slug: 'plan', history: false }])
+    queries.length = 0
+    recent = [{ at: NOW - 2000, delivery: 'pending', outcome: null }]
+    await drawnAgain(owner)
+    expect(pageQueries()).toEqual([{ slug: 'plan', history: false }])
+    expect(said()).toBe('Sent. Waiting for your agent')
+  })
+
   test('when It has not been reachable for a few seconds the bar says so, whatever was last done, and stops saying so when It is back', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(NOW)
     await shown()
     expect(said()).toBe('Done')
     await connection(false)
@@ -138,7 +188,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null }]
     await shown()
     // Nothing on its machine took it: nobody was listening
-    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
     await act(async () => root.unmount())
     host.remove()
     // A machine has it in hand and cannot give it to the agent yet: the agent is at work
@@ -153,6 +203,22 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { wakeFailed: null })
   })
 
+  test('a waiting page gives the loaded add-on’s repair advice instead of diagnosing a closed conversation', async () => {
+    Object.assign(PAGE, {
+      machineSeenAt: NOW,
+      agent: 'opencode',
+      addonRuntime: { state: 'active', idle: false, detail: 'Open the saved conversation and send a message to start listening.' },
+    })
+    recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null }]
+    await shown()
+    expect(said()).toBe('Sent. Open the saved conversation and send a message to start listening.')
+    expect(host.textContent).not.toContain('Wake it')
+    Object.assign(PAGE, { addonRuntime: { state: 'incompatible', detail: 'Restart the app to load its updated add-on.' } })
+    await drawnAgain()
+    expect(said()).toBe('Sent. Restart the app to load its updated add-on.')
+    Object.assign(PAGE, { addonRuntime: null, agent: 'pi' })
+  })
+
   test('what was settled is said for ten minutes and then no more, and what is still waiting is said for as long as it waits', async () => {
     Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi' })
     // Done eleven minutes ago: nothing more to say of it
@@ -164,7 +230,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     // Waiting for eleven minutes, with nobody listening: still said, since nothing has come of it
     recent = [{ at: NOW - 11 * 60_000, delivery: 'pending', outcome: null }]
     await shown()
-    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
     Object.assign(PAGE, { agent: 'claude-code' })
   })
 
@@ -173,7 +239,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { machineSeenAt: NOW - 60_000, agent: 'pi' })
     recent = [{ at: NOW - 8000, delivery: 'pending', outcome: null }]
     await shown()
-    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
     await act(async () => root.unmount())
     host.remove()
     // Quiet for longer than three of them: a laptop whose lid was closed
@@ -227,6 +293,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
 
   test('a click that has not been taken a few seconds after it was made is said to be saved in this browser and not sent, whatever the connection claims, until it is taken', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(NOW)
     // The page's machine goes on saying it is there for the three minutes this takes
     Object.assign(PAGE, { machineSeenAt: NOW + 180_000 })
     const outbox = await shown()
@@ -256,6 +323,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
 
   test('a new click made while an older one is still waiting is not said to be on its way: the older one has not been sent', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(NOW)
     const outbox = await shown()
     await act(async () => void outbox.submit(client as never, 'user-1', 'page-1', envelope('click-0007')))
     await pass(10_000)
@@ -303,6 +371,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
 
   test('a click this browser would not store, and that has not been taken a few seconds on, is said not to have been sent', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(NOW)
     const outbox = await shown()
     const full = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new DOMException('full', 'QuotaExceededError')
@@ -329,7 +398,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     ]
     Object.assign(PAGE, { pending: 1, wake: null })
     await shown()
-    expect(said()).toBe('Sent. Claude Code is not listening: its conversation looks closed')
+    expect(said()).toBe('Sent. Claude Code is not listening. Open its conversation and check the add-on under Machines')
     await act(async () => root.unmount())
     host.remove()
     // And where what still waits is older than the last things done that the bar is told of, It’s own count says so
@@ -352,6 +421,182 @@ describe('what the page’s bar says of the last thing the person did', () => {
     expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
     expect(said()).toBe('Sent more than a day ago. Claude Code gets it when its conversation is next open')
     Object.assign(PAGE, { wake: null, pending: 0 })
+  })
+
+  test('a paired screen says of a click not yet taken what the owner’s browser says, with Auto-wake on or off, and is not offered the switch', async () => {
+    const { PageView } = await import('./pages')
+    const outbox = await import('./outbox')
+    outbox.outboxBelongsTo('user-1', 'session-1')
+    /** What the bar says to the owner and to a screen, and whether each is offered to wake the agent. */
+    const each = async () => {
+      const seen: [string | null, boolean][] = []
+      for (const owner of [true, false]) {
+        host = document.body.appendChild(document.createElement('div'))
+        root = createRoot(host)
+        await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner })))
+        seen.push([said(), [...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')])
+        if (owner) {
+          await act(async () => root.unmount())
+          host.remove()
+        }
+      }
+      return seen
+    }
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    // On: It is reopening the conversation, or it waits its turn among those being reopened
+    Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: true }, pending: 1 })
+    expect(await each()).toEqual([
+      ['Sent. Waiting for your agent', false],
+      ['Sent. Waiting for your agent', false],
+    ])
+    await act(async () => root.unmount())
+    host.remove()
+    Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: false } })
+    expect(await each()).toEqual([
+      ['Sent. Claude Code is not listening. Open its conversation and check the add-on under Machines', true],
+      ['Sent. Claude Code is not listening. Open its conversation and check the add-on under Machines', false],
+    ])
+    Object.assign(PAGE, { wake: null, pending: 0 })
+  })
+
+  test('a click for an agent app that is not connected on its machine is said to wait for that, and to wake it is not offered: reopening its conversation would not hand the click over', async () => {
+    Object.assign(PAGE, { agent: 'pi', wake: { machineId: 'machine-1', harness: 'pi', on: false }, pending: 1 })
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    machines = [{ id: 'machine-1', wanted: ['claude-code'] }]
+    try {
+      await shown()
+      expect(said()).toBe('Sent. Pi is not connected on the laptop, and gets it once it is connected there, under Machines')
+      expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+      // The same with Auto-wake left on from when the app was connected: nothing is reopened for an app that is not
+      Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'pi', on: true } })
+      await drawnAgain()
+      expect(said()).toBe('Sent. Pi is not connected on the laptop, and gets it once it is connected there, under Machines')
+      // Connected again, it is as any click nobody has taken
+      machines = [
+        {
+          id: 'machine-1',
+          wanted: ['claude-code', 'pi'],
+          harnesses: [
+            { id: 'claude-code', addon: 'connected' },
+            { id: 'pi', addon: 'connected' },
+          ],
+        },
+      ]
+      Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'pi', on: false } })
+      await drawnAgain()
+      expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
+      expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(true)
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', wake: null, pending: 0 })
+    }
+  })
+
+  test.each([true, false])('page readiness explains disconnected and transitional apps to owner=%s, including apps without wake support', async (owner) => {
+    const { PageView } = await import('./pages')
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    Object.assign(PAGE, { agent: 'openclaw', wake: null, pending: 1, connection: { harness: 'openclaw', state: 'disconnected', queue: false } })
+    await shown()
+    const expectations = {
+      disconnected: 'is not connected',
+      connecting: 'is still connecting',
+      needs_approval: 'needs approval',
+      error: 'could not connect',
+      too_old: 'needs an update',
+      unavailable: 'is unavailable',
+      unknown: 'has not confirmed',
+    }
+    try {
+      for (const [state, message] of Object.entries(expectations)) {
+        Object.assign(PAGE, { connection: { harness: 'openclaw', state, queue: false } })
+        await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner })))
+        expect(said()).toContain(message)
+        expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+        expect(said()).not.toContain('conversation looks closed')
+      }
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', pending: 0, connection: undefined })
+    }
+  })
+
+  test('Codex awaiting hook approval still describes its supported queue, without treating it as disconnected', async () => {
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    Object.assign(PAGE, {
+      agent: 'codex',
+      wake: { machineId: 'machine-1', harness: 'codex', on: false },
+      connection: { harness: 'codex', state: 'needs_approval', queue: true },
+    })
+    try {
+      await shown()
+      expect(said()).toContain('open conversation can still receive queued clicks')
+      expect(said()).not.toContain('not connected')
+      expect(said()).not.toContain('looks closed')
+      expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', wake: null, connection: undefined })
+    }
+  })
+
+  test('an older backend owner fallback uses the reported add-on state, not just the desired selection', async () => {
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: false } })
+    machines = [{ id: 'machine-1', wanted: ['claude-code'], harnesses: [{ id: 'claude-code', addon: 'error' }] }]
+    try {
+      await shown()
+      expect(said()).toContain('could not connect')
+      expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+    } finally {
+      Object.assign(PAGE, { wake: null })
+    }
+  })
+
+  test.each(['openclaw', 'pi'])('an older backend reports %s readiness when waking is unavailable', async (harness) => {
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    Object.assign(PAGE, { agent: harness, session: { harness, id: 'conversation-1' }, wake: null, connection: undefined })
+    const app = { id: harness, addon: 'not_connected' }
+    machines = [
+      { id: 'another-machine', name: 'the desktop', wanted: [harness], harnesses: [{ id: harness, addon: 'connected' }] },
+      { id: 'machine-1', name: PAGE.machine, wanted: [harness], harnesses: [app] },
+    ]
+    try {
+      await shown()
+      for (const [addon, message] of [
+        ['not_connected', 'is still connecting'],
+        ['needs_approval', 'needs approval'],
+        ['error', 'could not connect'],
+      ] as const) {
+        app.addon = addon
+        await drawnAgain()
+        expect(said()).toContain(message)
+        expect(said()).not.toContain('conversation looks closed')
+        expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(false)
+      }
+      // Older backends do not give paired screens permission to read the inventory.
+      inventoryAsked.mockClear()
+      const { PageView } = await import('./pages')
+      await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: false })))
+      expect(inventoryAsked).not.toHaveBeenCalled()
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', session: null })
+    }
+  })
+
+  test('an older backend does not guess which of two machines with the same name owns a page', async () => {
+    recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+    Object.assign(PAGE, { agent: 'openclaw', session: { harness: 'openclaw', id: 'conversation-1' }, wake: null, connection: undefined })
+    machines = ['machine-1', 'machine-2'].map((id) => ({
+      id,
+      name: PAGE.machine,
+      wanted: ['openclaw'],
+      harnesses: [{ id: 'openclaw', addon: id === 'machine-1' ? 'connected' : 'error' }],
+    }))
+    try {
+      await shown()
+      expect(said()).toContain("has not confirmed OpenClaw's connection")
+      expect(said()).not.toContain('conversation looks closed')
+      expect(said()).not.toContain('could not connect')
+    } finally {
+      Object.assign(PAGE, { agent: 'claude-code', session: null })
+    }
   })
 
   test('what the agent had already done is not said to have been stopped by a stop that came after it', async () => {
@@ -406,7 +651,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
 
   test('something waiting for a machine that is there and hands nothing over for now is said as that, and nothing is offered that would not help', async () => {
     recent = [{ at: NOW - 20_000, delivery: 'pending' }]
-    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi', pending: 1, wake: { machineId: 'm1', harness: 'pi', on: false }, machinePaused: 'unfit' })
+    Object.assign(PAGE, { machineSeenAt: NOW, agent: 'pi', pending: 1, wake: { machineId: 'machine-1', harness: 'pi', on: false }, machinePaused: 'unfit' })
     await shown()
     expect(said()).toBe(
       'Sent. the laptop and It are of versions that do not work together, so Pi gets it once the one that is behind is updated. The Machines page says more',
@@ -422,7 +667,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     // Fitting again, it is said as anything else that waits
     Object.assign(PAGE, { machinePaused: null, pending: 1 })
     await shown()
-    expect(said()).toBe('Sent. Pi is not listening: its conversation looks closed')
+    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
     Object.assign(PAGE, { wake: null, pending: 0, agent: 'claude-code' })
   })
 
@@ -510,13 +755,17 @@ describe('what the page’s bar says of the last thing the person did', () => {
   })
 
   test('a stop that was asked of one run of the conversation is not said of the next, which can be stopped in its turn', async () => {
-    Object.assign(PAGE, { run: { since: NOW - 60_000, stopping: false }, machineSeenAt: NOW })
+    Object.assign(PAGE, { run: { identity: 'original-run', since: NOW - 60_000, stopping: false }, machineSeenAt: NOW })
     await shown()
+    const { hasPending } = await import('./pending')
     await act(async () => stops()[0]!.click())
+    expect(hasPending()).toBe(true)
+    expect(stopsAsked[0]!.input).toMatchObject({ expectedRun: 'original-run', expectedSession: 'session-1' })
     await act(async () => stopsAsked[0]!.answer({ stopping: true }))
+    expect(hasPending()).toBe(false)
     expect(host.querySelector('.working')?.textContent).toBe('Stopping')
     // The machine reopens the conversation for something done since, before the page has heard that the first run ended
-    Object.assign(PAGE, { run: { since: NOW, stopping: false } })
+    Object.assign(PAGE, { run: { identity: 'next-run', since: NOW - 60_000, stopping: false } })
     await drawnAgain()
     expect(host.querySelector('.working')?.textContent).toContain('Working')
     expect(stops().length).toBe(1)
@@ -568,4 +817,53 @@ describe('the line that moves under a page’s bar', () => {
     await drawnAgain()
     expect(host.querySelector('.page-progress')).toBeNull()
   })
+})
+
+test.each([undefined, 'retained', 'current'] as const)('the page uses only arguments supported by %s functions', async (state) => {
+  functions = state
+  await shown()
+  expect(pageQueries.at(-1)).toEqual(state === 'current' ? { slug: 'plan', history: false } : { slug: 'plan' })
+})
+
+describe('Escape on a page', () => {
+  const pressed = () => act(async () => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
+  afterEach(() => history.replaceState(null, '', '/'))
+
+  test('closes the notifications where they are open and stays on the page, and goes back to the pages only when nothing is open over it', async () => {
+    history.replaceState(null, '', '/p/plan')
+    await shown()
+    await act(async () => host.querySelector<HTMLButtonElement>('.notif-btn')!.click())
+    expect(host.querySelector('.notif-panel')).not.toBeNull()
+    await pressed()
+    expect(host.querySelector('.notif-panel')).toBeNull()
+    expect(location.pathname).toBe('/p/plan')
+    await pressed()
+    expect(location.pathname).toBe('/')
+  })
+})
+
+test('a refused pre-upgrade request stays visible after reopening without being sent again', async () => {
+  const outbox = await shown()
+  const key = 'it.outbox.user-1.page-1.legacy-request'
+  const message = 'Reload It before sending new requests. This saved request has no replay deadline. Check what your agent received before sending it again.'
+  localStorage.setItem(key, JSON.stringify({ user: 'user-1', artifactId: 'page-1', envelope: envelope('legacy-request'), at: NOW - 60_000 }))
+  const mutation = vi.fn(async () => {
+    throw new ConvexError({ code: 'conflict', message })
+  })
+  const backend = { mutation, connectionState: () => ({ isWebSocketConnected: true }) } as never
+  await act(async () => outbox.drain(backend, 'user-1'))
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(message)
+  expect(outbox.unsent('user-1', 'page-1')).toBe(0)
+  await act(async () => root.unmount())
+  host.remove()
+  await shown()
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain(message)
+  await act(async () => outbox.drain(backend, 'user-1'))
+  expect(mutation).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    vi.mocked(Date.now).mockReturnValue(NOW + 7 * 86400_000)
+    await outbox.drain(backend, 'user-1')
+  })
+  expect(localStorage.getItem(key)).toBeNull()
+  expect(host.querySelector('[role="alert"]')).toBeNull()
 })

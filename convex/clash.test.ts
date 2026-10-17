@@ -7,12 +7,18 @@
 // (lib/clash.ts). So every caller is to be answered: with what it asked for, or with a refusal
 // that says why. The stand-in backend the other tests here run on never gives up on a write,
 // which is why these start the program itself, in a folder and on ports of their own.
+// The 120 calls run in bursts of 40 because the backend program admits 64 concurrent actions
+// and answers with an uncoded error beyond that limit. Each burst still exceeds the largest
+// allowance of 30, so callers contend for the same record without exhausting action capacity.
 import { type ChildProcess, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
+import { createServer } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { backendLeftOn, isBackendOn } from '../e2e/lib.mjs'
+import { backendAt } from '../packages/cli/src/lib'
 import { RELEASE } from '../packages/cli/src/serve/config'
 import { bases } from '../packages/cli/test-ports'
 
@@ -78,20 +84,79 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
     // Where it does not start, what it wrote down says why
     expect([await until(() => /^\S+ connector \S+ started/m.test(log()), 90_000), log()]).toEqual([true, expect.any(String)])
   }, 120_000)
-  afterAll(async () => {
-    /** What the service wrote down last, which says how far a stop that did not finish had come. */
-    let stuck: string | undefined
-    if (service && service.exitCode === null && service.signalCode === null) {
-      const gone = new Promise<true>((resolve) => service!.once('exit', () => resolve(true)))
-      service.kill('SIGTERM')
-      if (!(await Promise.race([gone, new Promise<false>((resolve) => setTimeout(() => resolve(false), 45_000))]))) {
-        stuck = readFileSync(path.join(folder, 'service.log'), 'utf8').trimEnd().split('\n').slice(-12).join('\n')
-        service.kill('SIGKILL')
-        await gone
-      }
+  /** Sign-outs also start background work that calls back through the door. */
+  const workFinished = async () => {
+    const { adminKey } = JSON.parse(readFileSync(path.join(folder, 'it/service.json'), 'utf8')) as { adminKey: string }
+    const { api } = backendAt(Number(new URL(origin).port))
+    const signal = AbortSignal.timeout(10_000)
+    const rows = async (table: string) => {
+      const response = await fetch(`${api}/api/query`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Convex ${adminKey}` },
+        body: JSON.stringify({
+          path: '_system/cli/tableData',
+          args: { table, order: 'desc', paginationOpts: { numItems: 100, cursor: null } },
+          format: 'json',
+        }),
+        signal,
+      })
+      const result = (await response.json()) as { status: string; value: { isDone: boolean; page: { state?: { kind: string } }[] } }
+      if (result.status !== 'success' || !result.value.isDone) throw new Error('the background work could not be read in full')
+      return result.value.page
     }
-    await ports.release()
-    rmSync(folder, { recursive: true, force: true })
+    // Seeing an empty job table alone is not enough: the action deleting its job can still
+    // be running. Wait for both while the door and backend can still answer each other.
+    return await until(async () => {
+      if ((await rows('contentJobs')).length) return false
+      return (await rows('_scheduled_functions')).every((row) => row.state?.kind !== 'pending' && row.state?.kind !== 'inProgress')
+    }, 10_000)
+  }
+  afterAll(async () => {
+    let drained = true
+    let left: number | undefined
+    let stuck: string | undefined
+    try {
+      if (service && service.exitCode === null && service.signalCode === null) {
+        try {
+          drained = await workFinished()
+        } finally {
+          const gone = new Promise<true>((resolve) => service!.once('exit', () => resolve(true)))
+          service.kill('SIGTERM')
+          let timer: ReturnType<typeof setTimeout> | undefined
+          try {
+            if (
+              !(await Promise.race([
+                gone,
+                new Promise<false>((resolve) => {
+                  timer = setTimeout(() => resolve(false), 45_000)
+                }),
+              ]))
+            ) {
+              stuck = readFileSync(path.join(folder, 'service.log'), 'utf8').trimEnd().split('\n').slice(-12).join('\n')
+              service.kill('SIGKILL')
+              await gone
+            }
+          } finally {
+            clearTimeout(timer)
+          }
+        }
+      }
+    } finally {
+      if (folder) {
+        const home = path.join(folder, 'it')
+        left = backendLeftOn(home)
+        // A failed stop must not leave this test's detached backend running, or remove its
+        // database while it is still using it. Check the folder as well as the process number.
+        if (left !== undefined) {
+          process.kill(left, 'SIGKILL')
+          await until(() => !isBackendOn(home, left), 2000)
+        }
+        if (backendLeftOn(home) === undefined) rmSync(folder, { recursive: true, force: true })
+      }
+      await ports.release()
+    }
+    expect(left, 'the service left its backend running').toBeUndefined()
+    expect(drained, 'the sign-out work had not finished before the service was stopped').toBe(true)
     expect(stuck, 'the service had not stopped 45 seconds after it was asked to').toBeUndefined()
   }, 60_000)
 
@@ -125,10 +190,16 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
     return { cookie, session: told.session, key, asks }
   }
   const outcome = (said: { value: unknown } | { refused: string }) => ('refused' in said ? said.refused : 'answered')
+  /** Forty callers exceed the largest allowance of thirty, but fit within the backend's 64-action limit. Every call is made once. */
+  const bursts = async <T>(count: number, call: () => Promise<T>): Promise<T[]> => {
+    const answers: T[] = []
+    while (answers.length < count) answers.push(...(await Promise.all(Array.from({ length: Math.min(40, count - answers.length) }, call))))
+    return answers
+  }
 
   test('every tab that fetches the token its display signs out with is given one, or told it has asked too often', async () => {
     const browser = await paired()
-    const answers = await Promise.all(Array.from({ length: 120 }, () => browser.asks('action', 'displays:signOutToken', { key: browser.key }).then(outcome)))
+    const answers = await bursts(120, () => browser.asks('action', 'displays:signOutToken', { key: browser.key }).then(outcome))
     const { answered, rate_limited, ...other } = tally(answers)
     expect(other).toEqual({})
     // As many as the limit lets through at once, and no fewer for having asked together
@@ -137,7 +208,7 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
 
   test('every tab that asks for the key notifications are subscribed with is given it, or told it has asked too often', async () => {
     const browser = await paired()
-    const answers = await Promise.all(Array.from({ length: 120 }, () => browser.asks('action', 'push:publicKey', {}).then(outcome)))
+    const answers = await bursts(120, () => browser.asks('action', 'push:publicKey', {}).then(outcome))
     const { answered, rate_limited, ...other } = tally(answers)
     expect(other).toEqual({})
     expect([answered! >= 10, answered! + rate_limited!]).toEqual([true, 120])
@@ -160,7 +231,10 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ token: presented }),
-        }).then((r) => r.status),
+        }).then(async (r) => {
+          await r.arrayBuffer()
+          return r.status
+        }),
       ),
     )
     expect(tally(answers)).toEqual({ 200: 60 })
@@ -181,10 +255,79 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
           method: 'POST',
           headers: { ...site(), cookie: browser.cookie },
           body: JSON.stringify({ session: browser.session }),
-        }).then((r) => r.status),
+        }).then(async (r) => {
+          await r.arrayBuffer()
+          return r.status
+        }),
       ),
     )
     expect(tally(answers)).toEqual({ 200: 1, 401: 59 })
+  }, 120_000)
+
+  test('a committed publication whose replies are lost is recovered without uploading or replacing a newer version', async () => {
+    let lost = 3
+    let uploads = 0
+    const calls: string[] = []
+    const proxy = createServer(async (req, res) => {
+      try {
+        const pieces: Buffer[] = []
+        for await (const piece of req) pieces.push(Buffer.from(piece))
+        const body = Buffer.concat(pieces)
+        const fn = req.url === '/api/action' ? (JSON.parse(body.toString()) as { path: string }).path : ''
+        if (fn) calls.push(fn)
+        if (req.url?.startsWith('/upload/')) uploads++
+        const answer = await fetch(`${origin}${req.url}`, {
+          method: req.method,
+          headers: {
+            ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
+            ...(req.headers['content-type'] ? { 'content-type': req.headers['content-type'] } : {}),
+            ...(req.headers['x-it-sha256'] ? { 'x-it-sha256': String(req.headers['x-it-sha256']) } : {}),
+          },
+          ...(body.length ? { body } : {}),
+        })
+        let data = Buffer.from(await answer.arrayBuffer())
+        if (fn === 'publish:begin' || fn === 'publish:resume') {
+          const said = JSON.parse(data.toString())
+          if (said.status === 'success') {
+            said.value.upload.url = `${address}/upload/`
+            data = Buffer.from(JSON.stringify(said))
+          }
+        }
+        // The real backend has answered after committing. Only the caller's reply is lost.
+        if (fn === 'publish:finish' && lost-- > 0) return res.destroy()
+        res.writeHead(answer.status, { 'content-type': answer.headers.get('content-type') ?? 'application/json' })
+        res.end(data)
+      } catch {
+        res.destroy()
+      }
+    })
+    await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve))
+    const address = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`
+    const command = (args: string[]) =>
+      new Promise<{ code: number | null; out: string }>((resolve) => {
+        const child = spawn(process.execPath, [it, ...args], {
+          cwd: folder,
+          env: { ...env(), IT_URL: address, IT_SITE_URL: backendAt(Number(new URL(origin).port)).site },
+          stdio: ['ignore', 'pipe', 'ignore'],
+        })
+        let out = ''
+        child.stdout!.on('data', (piece: Buffer) => (out += piece))
+        child.once('exit', (code) => resolve({ code, out }))
+      })
+    try {
+      const args = ['create', 'Lost completion', '--id', 'lost-completion', '--html', '<p>Original</p>']
+      expect((await command(args)).code).toBe(1)
+      expect([calls.filter((p) => p === 'publish:begin').length, calls.filter((p) => p === 'publish:finish').length, uploads]).toEqual([1, 3, 1])
+      expect(JSON.parse(await ran(['update', 'lost-completion', '--html', '<p>Newer</p>'])).version).toBe(2)
+      const recovered = await command(args)
+      expect(recovered.code).toBe(0)
+      expect(JSON.parse(recovered.out).version).toBe(1)
+      expect([calls.filter((p) => p === 'publish:begin').length, calls.filter((p) => p === 'publish:resume').length, uploads]).toEqual([1, 1, 1])
+      expect(JSON.parse(await ran(['read', 'lost-completion'])).version).toBe(2)
+    } finally {
+      proxy.closeAllConnections()
+      await new Promise<void>((resolve, reject) => proxy.close((err) => (err ? reject(err) : resolve())))
+    }
   }, 120_000)
 
   /** A token for the session a cookie is. */

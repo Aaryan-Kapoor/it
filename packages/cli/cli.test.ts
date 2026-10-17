@@ -30,10 +30,12 @@ import { loose, nested, parse } from './src/args'
 import { codexCommand, codexQueue, local, mac } from './src/connector'
 import {
   backend,
+  changeWhole,
   clashed,
   currentSession,
   forgetMachine,
   harnessEnv,
+  home as installationFolder,
   joinLine,
   notReached,
   overClashes,
@@ -43,6 +45,7 @@ import {
   siteAddress,
   textOf,
   throughDoor,
+  wasAt,
   windowsPathCommand,
   windowsPathRemoval,
   withoutTables,
@@ -564,6 +567,105 @@ describe('gathering a folder to publish', () => {
     }
   })
 
+  test('a file that has grown since it was listed is counted by what was read of it, and is read no further than is left of what a page may hold', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'it-grown-'))
+    try {
+      // Listed when it held one byte, and two megabytes by the time it is opened
+      const grown = path.join(root, 'grown.bin')
+      writeFileSync(grown, Buffer.alloc(2 * 1024 * 1024))
+      const small = { bytes: 0 }
+      expect(read(grown, 'grown.bin', 1, small).data.length).toBe(2 * 1024 * 1024)
+      expect(small.bytes).toBe(2 * 1024 * 1024)
+      // With ten bytes left of what a page may hold, it is refused, having been read no further than that
+      const real = { readSync: fs.readSync, readFileSync: fs.readFileSync }
+      let taken = 0
+      fs.readSync = ((...args: Parameters<typeof fs.readSync>) => {
+        const n = real.readSync(...args)
+        taken += n
+        return n
+      }) as typeof fs.readSync
+      fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+        const all = real.readFileSync(...args)
+        if (typeof args[0] === 'number') taken += all.length
+        return all
+      }) as typeof fs.readFileSync
+      syncBuiltinESMExports()
+      try {
+        const nearlyFull = { bytes: 100 * 1024 * 1024 - 10 }
+        expect(() => read(grown, 'grown.bin', 1, nearlyFull)).toThrow(/at most 100 MB/)
+        expect(taken).toBeLessThanOrEqual(11)
+      } finally {
+        Object.assign(fs, real)
+        syncBuiltinESMExports()
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a file that grows after it was opened and looked at is read no further than a file may be large', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'it-growing-'))
+    const growing = path.join(root, 'growing.bin')
+    writeFileSync(growing, 'small')
+    const real = { fstatSync: fs.fstatSync, readSync: fs.readSync, readFileSync: fs.readFileSync }
+    let taken = 0
+    // Just after the open file was looked at and found small, whatever is writing it makes it forty megabytes
+    fs.fstatSync = ((...args: Parameters<typeof fs.fstatSync>) => {
+      const stat = real.fstatSync(...args)
+      const fd = openSync(growing, 'r+')
+      ftruncateSync(fd, 40 * 1024 * 1024)
+      closeSync(fd)
+      return stat
+    }) as typeof fs.fstatSync
+    fs.readSync = ((...args: Parameters<typeof fs.readSync>) => {
+      const n = real.readSync(...args)
+      taken += n
+      return n
+    }) as typeof fs.readSync
+    fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+      const all = real.readFileSync(...args)
+      if (typeof args[0] === 'number') taken += all.length
+      return all
+    }) as typeof fs.readFileSync
+    syncBuiltinESMExports()
+    try {
+      expect(() => read(growing, 'growing.bin', 5, { bytes: 0 })).toThrow(/larger than 25 MB/)
+      expect(taken).toBeLessThanOrEqual(25 * 1024 * 1024 + 1)
+    } finally {
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test.skipIf(process.platform === 'win32')(
+    'a file swapped for a pipe after it was listed is refused, and does not hold the command until something writes to the pipe',
+    () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), 'it-pipe-'))
+      const file = path.join(root, 'app.js')
+      writeFileSync(file, 'x')
+      const real = { openSync: fs.openSync }
+      // Just as the file is about to be opened, after it was listed as an ordinary file, it is made a pipe that nothing writes to
+      fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+        if (args[0] === file) {
+          // Opened as it was before, this would never come back: said here, where a test can still say anything
+          if (typeof args[1] !== 'number' || !(args[1] & fs.constants.O_NONBLOCK)) throw new Error('opened in a way that waits for a pipe to be written to')
+          rmSync(file)
+          execFileSync('mkfifo', [file])
+        }
+        return real.openSync(...args)
+      }) as typeof fs.openSync
+      syncBuiltinESMExports()
+      try {
+        expect(() => read(file, 'app.js', 1, { bytes: 0 })).toThrow('app.js is not an ordinary file.')
+      } finally {
+        Object.assign(fs, real)
+        syncBuiltinESMExports()
+        rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
+
   test('a file that is too large is refused before it is read', () => {
     const big = path.join(dir, 'big.bin')
     // A sparse file: its size is what counts, and nothing this large is ever loaded
@@ -636,6 +738,46 @@ describe('a machine that leaves', () => {
       forgetMachine()
       expect(readdirSync(folder)).toEqual([])
     } finally {
+      if (before === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps its identity where it could not write down which machine it was at the It it joined, and says so', () => {
+    const before = process.env.IT_HOME
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-left-'))
+    process.env.IT_HOME = folder
+    const real = { openSync: fs.openSync }
+    try {
+      const joined = { id: 'machine-7', name: 'laptop', key: { d: 'private' }, at: 'http://192.168.1.20:4700' }
+      writeFileSync(path.join(folder, 'machine.json'), JSON.stringify(joined))
+      writeFileSync(path.join(folder, 'token.json'), '{}')
+      // A disk with no room left for the note
+      fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+        if (String(args[0]).includes('was.json')) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+        return real.openSync(...args)
+      }) as typeof fs.openSync
+      syncBuiltinESMExports()
+      let said: unknown
+      try {
+        forgetMachine()
+      } catch (err) {
+        said = err
+      }
+      expect(said).toBeInstanceOf(Problem)
+      expect((said as Problem).message).toContain('could not be written down')
+      expect((said as Problem).hint).toContain('`it logout` again')
+      expect(readdirSync(folder).sort()).toEqual(['machine.json', 'token.json'])
+      // Once it can be written, the machine leaves, and what it was there is kept for joining again
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
+      forgetMachine()
+      expect(readdirSync(folder)).toEqual(['was.json'])
+      expect(wasAt(joined.at)).toBe('machine-7')
+    } finally {
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
       if (before === undefined) delete process.env.IT_HOME
       else process.env.IT_HOME = before
       rmSync(folder, { recursive: true, force: true })
@@ -751,6 +893,43 @@ describe('a file It keeps for this person alone', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ id: 'machine-1', key: { d: 'the key it had' } })
     expect(readdirSync(path.dirname(file))).toEqual(['machine.json'])
   })
+
+  test.skipIf(process.platform === 'win32')(
+    'is not said to be kept when the disk fails as its folder is flushed, and is when the system only has no way to flush a folder',
+    () => {
+      const dir = path.join(folder, 'lasting')
+      const file = path.join(dir, 'machine.json')
+      writePrivate(file, { id: 'machine-1' })
+      /** Writes the file with the flushing of its folder ending as the system would end it. */
+      const flushedAs = (code: string): unknown => {
+        const real = { openSync: fs.openSync, fsyncSync: fs.fsyncSync }
+        const folders = new Set<number>()
+        fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+          const fd = real.openSync(...args)
+          if (args[0] === dir) folders.add(fd)
+          return fd
+        }) as typeof fs.openSync
+        fs.fsyncSync = (fd: number) => {
+          if (folders.has(fd)) throw Object.assign(new Error(`${code}: fsync`), { code })
+          real.fsyncSync(fd)
+        }
+        syncBuiltinESMExports()
+        try {
+          writePrivate(file, { id: 'machine-2' })
+          return undefined
+        } catch (err) {
+          return err
+        } finally {
+          Object.assign(fs, real)
+          syncBuiltinESMExports()
+        }
+      }
+      // The disk failing: whoever asked is told, and goes on with nothing that rests on the file
+      expect(flushedAs('EIO')).toMatchObject({ code: 'EIO' })
+      // A system or a disk that keeps the names in a folder in its own way says so in a few words, which is no failure
+      for (const code of ['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM']) expect([code, flushedAs(code)]).toEqual([code, undefined])
+    },
+  )
 })
 
 describe('which conversation a command is run in', () => {
@@ -997,6 +1176,67 @@ describe('the agent apps a command was started from', () => {
     // Only words that are themselves a launcher before the space are taken for an app
     psWords(table, '  701 node /opt/tools/bin/pi tools/run.js')
     expect(agentApp(table.get(701)!)).toBe('pi')
+  })
+
+  test('a runtime whose script cannot be read from the joined words of `ps` leaves the conversation unsettled, even when an outer app is known', () => {
+    const table = psTable([' 101 1 /opt/homebrew/bin/node', ' 102 101 /bin/zsh', ' 103 102 /opt/homebrew/bin/node', ' 104 103 /bin/sh'].join('\n'))
+    psWords(table, ['101 /opt/homebrew/bin/node /opt/homebrew/bin/claude', '103 /opt/homebrew/bin/node /Volumes/Work Drive/npm/bin/pi --print'].join('\n'))
+    const environment = { IT_HARNESS: 'claude-code', IT_SESSION: 'outer-claude', CLAUDE_CODE_SESSION_ID: 'outer-claude', PI_SESSION_ID: 'inner-pi' }
+    expect(sessionAsked(environment, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({
+      session: { harness: 'claude-code', id: 'outer-claude' },
+      unsettled: ['pi'],
+    })
+    expect(appsFrom(104, (pid) => table.get(pid))).toEqual([])
+    // With the script's actual boundary preserved, the inner app is known.
+    table.set(103, { parent: 102, argv: ['/opt/homebrew/bin/node', '/Volumes/Work Drive/npm/bin/pi', '--print'] })
+    expect(sessionAsked(environment, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({
+      session: { harness: 'pi', id: 'inner-pi' },
+      unsettled: [],
+    })
+  })
+
+  test('a launcher-shaped prefix of a joined script path leaves the conversation unsettled', () => {
+    const table = psTable(['101 1 /opt/node', '102 101 /bin/zsh', '103 102 /opt/node', '104 103 /bin/sh'].join('\n'))
+    psWords(table, '101 /opt/node /opt/bin/pi\n103 /opt/node /Volumes/bin/pi tools/node_modules/@anthropic-ai/claude-code/cli.js')
+    const env = { IT_HARNESS: 'claude-code', IT_SESSION: 'inner-claude', PI_SESSION_ID: 'outer-pi', CLAUDE_CODE_SESSION_ID: 'inner-claude' }
+    expect(sessionAsked(env, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({
+      session: { harness: 'claude-code', id: 'inner-claude' },
+      unsettled: ['pi'],
+    })
+    expect(appsFrom(104, (pid) => table.get(pid))).toEqual([])
+    table.set(103, { parent: 102, argv: ['/opt/node', '/Volumes/bin/pi tools/node_modules/@anthropic-ai/claude-code/cli.js'] })
+    expect(sessionAsked(env, () => appsFrom(104, (pid) => table.get(pid)))).toEqual({ session: { harness: 'claude-code', id: 'inner-claude' }, unsettled: [] })
+  })
+
+  test('paths in launcher arguments keep the page in the inner conversation', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-launcher-arguments-'))
+    const launcher = path.join(folder, 'bin', 'pi').replace(/\\/g, '/')
+    const env = { IT_HARNESS: 'claude-code', IT_SESSION: 'outer-claude', CLAUDE_CODE_SESSION_ID: 'outer-claude', PI_SESSION_ID: 'inner-pi' }
+    const table = () => psTable('101 1 /opt/bin/claude\n102 101 /bin/zsh\n103 102 /opt/node\n104 103 /bin/sh')
+    try {
+      mkdirSync(path.dirname(launcher), { recursive: true })
+      writeFileSync(launcher, 'the installed launcher')
+      for (const args of ['--cwd /tmp/project', '--print inspect /tmp/project', 'inspect /tmp/project', '/tmp/project', 'project/file.ts']) {
+        const processes = table()
+        psWords(processes, `103 /opt/node ${launcher} ${args}`)
+        expect(
+          sessionAsked(env, () => appsFrom(104, (pid) => processes.get(pid))),
+          args,
+        ).toEqual({
+          session: { harness: 'pi', id: 'inner-pi' },
+          unsettled: [],
+        })
+      }
+      // An existing launcher alone cannot settle two file paths that ps prints identically.
+      const split = `${launcher} tools/node_modules/@anthropic-ai/claude-code/cli.js`
+      mkdirSync(path.dirname(split), { recursive: true })
+      writeFileSync(split, 'a different script in a folder whose name contains spaces')
+      const ambiguous = table()
+      psWords(ambiguous, `103 /opt/node ${split}`)
+      expect(appsFrom(104, (pid) => ambiguous.get(pid))).toEqual([])
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
   })
 
   test.skipIf(process.platform === 'win32' || !existsSync('/bin/ps'))(
@@ -1321,7 +1561,7 @@ describe('background service definitions', () => {
     try {
       process.env.IT_HOME = 'it-here'
       expect(logFile()).toBe(path.resolve('it-here', 'logs', 'it.log'))
-      expect(command().slice(-3)).toEqual(['serve', '--log', path.resolve('it-here', 'logs', 'it.log')])
+      expect(command().slice(-4)).toEqual(['serve', '--supervised', '--log', path.resolve('it-here', 'logs', 'it.log')])
     } finally {
       if (before === undefined) delete process.env.IT_HOME
       else process.env.IT_HOME = before
@@ -1337,7 +1577,7 @@ describe('background service definitions', () => {
       IT_SITE_URL: '',
       IT_HARNESSES: 'pi\r\ncalc.exe',
     })
-    expect(launcher.split('\r\n')).toEqual([
+    expect(launcher.split('\r\n').filter((line) => !line.startsWith('if not exist '))).toEqual([
       '@echo off',
       'setlocal DisableDelayedExpansion',
       'chcp 65001 >nul 2>&1',
@@ -1424,6 +1664,15 @@ describe('background service definitions', () => {
           say('disabled')
           expect([system, definedFor()]).toEqual([system, 'another folder'])
           say('enabled')
+          const alias = path.join(user, `linked-${system}`)
+          symlinkSync(mine, alias, 'dir')
+          process.env.IT_HOME = alias
+          write()
+          process.env.IT_HOME = mine
+          expect([installedHere(), definedFor()]).toEqual([true, 'this folder'])
+          rmSync(alias)
+          symlinkSync(other, alias, 'dir')
+          expect([installedHere(), definedFor()]).toEqual([false, 'another folder'])
         }
       })
     } finally {
@@ -1508,9 +1757,9 @@ describe('background service definitions', () => {
     // The task is started in the folder's `bin`, where its launcher is
     expect(windowsRegisteredFor(task(printed('C:\\Users\\Ada\\.it\\bin')))).toBe('C:\\Users\\Ada\\.it')
     expect(windowsRegisteredFor(task(printed('C:\\Users\\Ada\\.it\\bin\\')))).toBe('C:\\Users\\Ada\\.it')
-    expect(asked[0]).toBe(
-      "[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((Get-ScheduledTask -TaskName 'it' -ErrorAction Stop).Actions[0].WorkingDirectory))",
-    )
+    expect(asked[0]).toContain("$name = 'it-' + $sid")
+    expect(asked[0]).toContain('Test-ItTask $legacy')
+    expect(asked[0]).toContain('[System.Text.Encoding]::UTF8.GetBytes($owned.Actions[0].WorkingDirectory)')
     // A folder whose name has letters that no one code page holds is read as itself, whichever code page PowerShell prints in
     expect(windowsRegisteredFor(task(printed('C:\\Users\\René 漢字\\.it\\bin')))).toBe('C:\\Users\\René 漢字\\.it')
     expect(sameWindowsFolder(windowsRegisteredFor(task(printed('C:\\Users\\René 漢字\\.it\\bin')))!, 'c:/users/rené 漢字/.it')).toBe(true)
@@ -1605,9 +1854,10 @@ describe('background service definitions', () => {
         const runs = readFileSync(asked, 'utf8').trim().split('\n')
         expect(runs.map((line) => line.split(' ')[0])).toEqual(['stopped'])
         const script = Buffer.from(runs[0]!.split(' ')[1]!, 'base64').toString('utf16le')
-        expect(script).toMatch(
-          /Stop-ScheduledTask -TaskName 'it' .*; Unregister-ScheduledTask -TaskName 'it' .*; if \(Get-ScheduledTask -TaskName 'it' .*\) \{ .*exit 3 \}/,
-        )
+        expect(script).toContain('Stop-ScheduledTask -InputObject $owned -ErrorAction Stop')
+        expect(script).toContain('Unregister-ScheduledTask -InputObject $owned -Confirm:$false -ErrorAction Stop')
+        expect(script).toContain("throw 'Windows still has the task'")
+        expect(script).toMatch(/; exit 0$/)
         expect([existsSync(launcher), runningFor(folder)]).toEqual([false, false])
         // Where Windows still has the task afterwards, or could not be asked, that is said and what the task starts is left where it is
         writeFileSync(launcher, '@echo off\r\n')
@@ -1669,9 +1919,9 @@ describe('background service definitions', () => {
   test('windows: a service the task is already running is stopped before the task is registered again, so that the new one starts with the new settings', () => {
     const lines = windowsScript('C:\\it\\bin', 'it-service.cmd').split('\n')
     const at = (start: string) => lines.findIndex((line) => line.startsWith(start))
-    expect(lines[at('Stop-ScheduledTask')]).toBe("Stop-ScheduledTask -TaskName 'it' -ErrorAction SilentlyContinue")
-    expect(at('Stop-ScheduledTask')).toBeGreaterThanOrEqual(0)
-    expect(at('Stop-ScheduledTask')).toBeLessThan(at('Register-ScheduledTask'))
+    expect(lines[at('if ($task)')]).toBe('if ($task) { Stop-ScheduledTask -InputObject $task -ErrorAction Stop }')
+    expect(at('if ($task)')).toBeGreaterThanOrEqual(0)
+    expect(at('if ($task)')).toBeLessThan(at('Register-ScheduledTask'))
     expect(at('Register-ScheduledTask')).toBeLessThan(at('Start-ScheduledTask'))
   })
 })
@@ -1876,6 +2126,44 @@ describe('add-ons carried by the CLI', () => {
     // In the usual place nothing is written
     expect(itHomeWritten(js, null)).toBe(js)
   })
+  test.each([false, true])('generated add-ons retain a custom installation discovered without IT_HOME, through an alias: %s', async (alias) => {
+    const { itHomeWritten, unpack } = await import('./src/setup')
+    const { markInstallation } = await import('./src/installation')
+    const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-discovered-addons-'))
+    const before = { home: process.env.IT_HOME, argv: [...process.argv], program: process.execPath }
+    try {
+      const installation = alias ? path.join(scratch, 'alias') : scratch
+      if (alias) {
+        const physical = path.join(scratch, 'physical')
+        mkdirSync(physical)
+        symlinkSync(physical, installation, 'junction')
+      }
+      markInstallation(installation)
+      const program = path.join(installation, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
+      mkdirSync(path.dirname(program), { recursive: true })
+      writeFileSync(program, 'installed program')
+      // Each fixture starts from an explicit home before testing discovery without it.
+      process.env.IT_HOME = installation
+      expect(installationFolder()).toBe(installation)
+      delete process.env.IT_HOME
+      process.execPath = program
+      process.argv.splice(0, process.argv.length, program)
+      expect(itHomeWritten('const IT_HOME_AT_SETUP = null')).toBe(`const IT_HOME_AT_SETUP = ${JSON.stringify(installation)}`)
+      for (const id of ['pi', 'claude-code', 'hermes', 'opencode', 'openclaw'] as const) {
+        const dir = unpack(id)
+        const sources = readdirSync(dir, { recursive: true }).filter((file) => /\.(?:js|mjs|py)$/.test(String(file)))
+        const embedded = sources.map((file) => readFileSync(path.join(dir, String(file)), 'utf8')).filter((text) => text.includes('IT_HOME_AT_SETUP'))
+        expect(embedded.length).toBeGreaterThan(0)
+        expect(embedded.every((text) => text.includes(`IT_HOME_AT_SETUP = ${JSON.stringify(installation)}`))).toBe(true)
+      }
+    } finally {
+      if (before.home === undefined) delete process.env.IT_HOME
+      else process.env.IT_HOME = before.home
+      process.execPath = before.program
+      process.argv.splice(0, process.argv.length, ...before.argv)
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
   test('an add-on counts as removed only when its harness says it is gone', async () => {
     const { disconnect, stampFile } = await import('./src/setup')
     const said: string[] = []
@@ -2012,6 +2300,177 @@ describe('what It wrote into another program’s TOML file', () => {
     expect(withoutTables(between.replaceAll('\n', '\r\n'), owned)).toBe(left.replaceAll('\n', '\r\n'))
     // Nothing of It's in it: not a byte is changed
     expect(withoutTables(`${theirs}# end`, owned)).toBe(`${theirs}# end`)
+  })
+})
+
+describe('a file that is not It’s alone, changed while another program may save it', () => {
+  const HOOKS = /^\[hooks\.state\."it-bridge@it:[^"]*"\]/
+  const without = (text: string) => withoutTables(text, (header) => HOOKS.test(header))
+  const BEFORE = 'model = "gpt-6"\n\n[hooks.state."it-bridge@it:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:aa"\n'
+  // What Codex saves when the person trusts a project and the hooks of another plugin, with It's table still in it
+  const SAVED = `${BEFORE}\n[projects."/work"]\ntrust_level = "trusted"\n\n[hooks.state."other@market:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:bb"\n`
+  /** Runs something with another program saving the file each time It has its own copy written and on the disk, which is while It is at work. */
+  function withASave(file: string, saves: () => string | undefined, run: () => void): void {
+    const real = { fsyncSync: fs.fsyncSync }
+    fs.fsyncSync = (fd: number) => {
+      real.fsyncSync(fd)
+      const text = saves()
+      if (text !== undefined) writeFileSync(file, text)
+    }
+    syncBuiltinESMExports()
+    try {
+      run()
+    } finally {
+      Object.assign(fs, real)
+      syncBuiltinESMExports()
+    }
+  }
+
+  test('is changed from what it holds when it is replaced: what was saved while It was at work stays, and It’s change is made to that', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, 'config.toml')
+    try {
+      writeFileSync(file, BEFORE)
+      const saves = [SAVED]
+      withASave(
+        file,
+        () => saves.shift(),
+        () => expect(changeWhole(file, without)).toBe(true),
+      )
+      const after = readFileSync(file, 'utf8')
+      expect(after).toContain('[projects."/work"]\ntrust_level = "trusted"')
+      expect(after).toContain('[hooks.state."other@market:hooks/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:bb"')
+      expect(after).not.toContain('it-bridge@it')
+      expect(readdirSync(folder)).toEqual(['config.toml'])
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test.skipIf(process.platform === 'win32')('follows a profile symlink repointed while its replacement is being written', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-link-'))
+    const file = path.join(folder, 'profile')
+    const first = path.join(folder, 'first')
+    const second = path.join(folder, 'second')
+    try {
+      writeFileSync(first, BEFORE)
+      writeFileSync(second, SAVED)
+      symlinkSync(first, file)
+      let moved = false
+      withASave(
+        file,
+        () => {
+          if (!moved) {
+            moved = true
+            rmSync(file)
+            symlinkSync(second, file)
+          }
+          return undefined
+        },
+        () => expect(changeWhole(file, without)).toBe(true),
+      )
+      expect(readFileSync(first, 'utf8')).toBe(BEFORE)
+      expect(readFileSync(second, 'utf8')).toBe(without(SAVED))
+      expect(realpathSync(file)).toBe(realpathSync(second))
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('reads the original and its final comparison once each when no other program saves it', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(realpathSync(folder), 'config.toml')
+    writeFileSync(file, BEFORE)
+    const read = vi.spyOn(fs, 'readFileSync')
+    syncBuiltinESMExports()
+    try {
+      expect(changeWhole(file, without)).toBe(true)
+      expect(read.mock.calls.filter(([name]) => name === file)).toHaveLength(2)
+    } finally {
+      read.mockRestore()
+      syncBuiltinESMExports()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps a same-size save made after the metadata check, before the final content comparison', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(realpathSync(folder), 'config.toml')
+    const stat = fs.statSync
+    const before = `${BEFORE}#${' '.repeat(SAVED.length - BEFORE.length - 2)}\n`
+    try {
+      for (const removing of [false, true]) {
+        writeFileSync(file, before)
+        let checked = 0
+        const check = vi.spyOn(fs, 'statSync').mockImplementation((name, options) => {
+          const seen = stat(name, options)
+          if (name === file && options?.bigint && ++checked === 2) writeFileSync(file, SAVED)
+          return seen
+        })
+        syncBuiltinESMExports()
+        expect(Buffer.byteLength(before)).toBe(Buffer.byteLength(SAVED))
+        expect(changeWhole(file, removing ? (text) => (text === before ? null : undefined) : without)).toBe(!removing)
+        expect(readFileSync(file, 'utf8')).toContain('[projects."/work"]')
+        check.mockRestore()
+        syncBuiltinESMExports()
+      }
+    } finally {
+      vi.restoreAllMocks()
+      syncBuiltinESMExports()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('is left as the last save made it where it is saved every time It is about to replace it, and that is said', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, 'config.toml')
+    try {
+      writeFileSync(file, BEFORE)
+      let saves = 0
+      withASave(
+        file,
+        () => `${SAVED}# saved ${++saves} times\n`,
+        () => expect(() => changeWhole(file, without)).toThrow(/was saved by another program each time/),
+      )
+      expect(readFileSync(file, 'utf8')).toBe(`${SAVED}# saved ${saves} times\n`)
+      expect(readdirSync(folder)).toEqual(['config.toml'])
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test.skipIf(process.platform === 'win32')('keeps a symlinked profile and its target when removing every installer line', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, '.profile')
+    const target = path.join(folder, 'dotfile')
+    try {
+      writeFileSync(target, '# It\nexport PATH=it:$PATH\n', { mode: 0o640 })
+      symlinkSync(target, file)
+      expect(changeWhole(file, () => null)).toBe(true)
+      expect(fs.lstatSync(file).isSymbolicLink()).toBe(true)
+      expect(readFileSync(target, 'utf8')).toBe('')
+      expect(statSync(target).mode & 0o777).toBe(0o640)
+      expect(changeWhole(file, () => null)).toBe(false)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('is not written where nothing is to change, and is taken away only where it still holds what it was read to hold', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-change-'))
+    const file = path.join(folder, '.profile')
+    try {
+      writeFileSync(file, 'export EDITOR=vi\n')
+      const before = statSync(file, { bigint: true }).ino
+      expect(changeWhole(file, (text) => text)).toBe(false)
+      expect(changeWhole(file, () => undefined)).toBe(false)
+      expect(statSync(file, { bigint: true }).ino).toBe(before)
+      // Taken away, where the change says that nothing of it is left
+      expect(changeWhole(file, () => null)).toBe(true)
+      expect(existsSync(file)).toBe(false)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
   })
 })
 

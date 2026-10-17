@@ -6,13 +6,16 @@ import net from 'node:net'
 import path from 'node:path'
 import { contentPort } from '@it/protocol'
 import { runConnector } from '../connector'
-import { elsewhere, type Machine, machine, machineFile, notSetUp, Problem, readJson, why } from '../lib'
-import { startsByItself, stopFile } from '../service'
+import { eraseDeliveryRecovery } from '../delivery-recovery'
+import { elsewhere, inHome, type Machine, machine, machineFile, notSetUp, Problem, readJson, why, writePrivate } from '../lib'
+import { conversationsFile } from '../publish'
+import { startsByItself, stopFile, supervised } from '../service'
 import { ageBand, begin, countBand, counting, failureOf, record, recordNoted, sinceBegun } from '../usage'
 import { asAdmin, type Backend, endOf, removeCopies, startBackend } from './backend'
 import { backendFolder, noteNetwork, readConfig, type ServiceConfig } from './config'
 import { makeContent, startDoor } from './door'
 import { onTheInternet, reachable } from './network'
+import { recoverStartup } from './startup'
 import { tailnetAddresses } from './tailnet'
 
 /**
@@ -21,9 +24,6 @@ import { tailnetAddresses } from './tailnet'
  * it again. On a machine whose backend is elsewhere, the connector is all of It there is to run.
  */
 export async function serve(say: (line: string) => void = (line) => void process.stderr.write(`${line}\n`)): Promise<void> {
-  const config = elsewhere() ? null : readConfig()
-  if (!config && !elsewhere()) throw notSetUp()
-  if (!config) machine()
   const asked = new AbortController()
   /** The signal that asked, which the connector is told in its turn. */
   let heard: NodeJS.Signals | undefined
@@ -48,7 +48,19 @@ export async function serve(say: (line: string) => void = (line) => void process
   // cannot start is counted as one that could not
   begin()
   try {
-    failed = config ? await here(config, say, asked, told) : await connector(say, asked.signal, told)
+    failed = await recoverStartup(
+      async (ready) => {
+        const config = elsewhere() ? null : readConfig()
+        if (!config && !elsewhere()) throw notSetUp()
+        if (!config) {
+          machine()
+          ready()
+          return connector(say, asked.signal, told)
+        }
+        return here(config, say, asked, told, ready)
+      },
+      { supervised: supervised(), signal: asked.signal, say },
+    )
   } catch (err) {
     // Asked to stop while it was still starting, it has stopped, which is no failure
     if (!(err instanceof Problem && err.code === 'stopped')) {
@@ -110,7 +122,13 @@ async function portsFree(config: ServiceConfig): Promise<void> {
 }
 
 /** The backend, then the door, then the connector, and when the connector has stopped, the door and then the backend. Whether it ended as a failure. */
-async function here(config: ServiceConfig, say: (line: string) => void, asked: AbortController, told: () => NodeJS.Signals): Promise<boolean> {
+async function here(
+  config: ServiceConfig,
+  say: (line: string) => void,
+  asked: AbortController,
+  told: () => NodeJS.Signals,
+  ready: () => void,
+): Promise<boolean> {
   let failed = false
   await portsFree(config)
   const backend = await startBackend(config, say, asked.signal)
@@ -126,13 +144,16 @@ async function here(config: ServiceConfig, say: (line: string) => void, asked: A
     })
     const door = asked.signal.aborted
       ? null
-      : await keptDoor(config, backend, say, () => {
+      : await keptDoor(config, backend, say, asked.signal, () => {
           record('service.failed', { what: 'door' })
           failed = true
           asked.abort()
         })
     try {
-      if (door) say(`service started (pid ${process.pid}); the site is on port ${config.port}`)
+      if (door) {
+        ready()
+        say(`service started (pid ${process.pid}); the site is on port ${config.port}`)
+      }
       if (await connector(say, asked.signal, told)) failed = true
     } finally {
       await door?.stop()
@@ -200,9 +221,16 @@ const SHORT_MS = 600_000
  * because this version's could not be put onto the data, takes only how the door stands. It is
  * told that much, so that the site and `it network` go on working, and the rest is left unsaid.
  * So is a backend that refuses everything said and then takes that much: it is told everything
- * again a while later, and whenever what there is to say has changed.
+ * again a while later, and whenever what there is to say has changed. Once the door is being
+ * stopped, which `over` says, a telling that failed is not followed by the shorter one: the
+ * backend is about to be asked to stop, and is asked nothing more first.
  */
-export function teller(tell: (said: Partial<Stands>) => Promise<unknown>, behind: boolean, clock: () => number = Date.now): (stands: Stands) => Promise<void> {
+export function teller(
+  tell: (said: Partial<Stands>) => Promise<unknown>,
+  behind: boolean,
+  clock: () => number = Date.now,
+  over: () => boolean = () => false,
+): (stands: Stands) => Promise<void> {
   let told = ''
   let shortUntil = behind ? Number.POSITIVE_INFINITY : 0
   const short = ({ on, wanted, addresses }: Stands) => ({ on, wanted, addresses })
@@ -213,7 +241,7 @@ export function teller(tell: (said: Partial<Stands>) => Promise<unknown>, behind
       await tell(said)
       told = JSON.stringify(said)
     } catch (err) {
-      if (said !== stands) throw err
+      if (said !== stands || over()) throw err
       // Whatever it was that failed is what is said of it, should the shorter word fail as well
       await tell(short(stands)).catch(() => {
         throw err
@@ -225,16 +253,62 @@ export function teller(tell: (said: Partial<Stands>) => Promise<unknown>, behind
 }
 
 /**
- * What the service does when it is told that a person has erased everything: the copies of
- * the database from before an update go too, since each holds what was erased as it was when
- * the copy was made. Where they cannot be removed, that is said with the code of what stopped
- * it, and the telling fails: the backend's deleting is then not done, and it asks again.
+ * What It notes in its folder of the person's conversations on this machine, beside the
+ * database: the folder each was held in when it published a page, which of them an add-on has
+ * been heard from in and which carried on under another id, the clicks handed to each, and
+ * which are owed the word that a turn of theirs was cut off or stopped. The first is written
+ * by the command that publishes, and the rest by the connector.
+ *
+ * The note of the turns It has reopened that are running now (`runs.json`) is not among them.
+ * It is what keeps a conversation from being reopened a second time while a process of its
+ * last turn may still live, and it empties by itself as those turns end.
+ */
+const NOTES = [conversationsFile, ...['heard.json', 'aliases.json', 'cut-off.json', 'stopped.json', 'journal.jsonl'].map((name) => () => inHome(name))]
+/** Removes those notes. Whether there was any of them to remove. */
+function removeNotes(): boolean {
+  let any = false
+  for (const file of NOTES) {
+    any ||= existsSync(file())
+    rmSync(file(), { force: true })
+  }
+  const publications = inHome('publication-pending')
+  any ||= existsSync(publications)
+  rmSync(publications, { recursive: true, force: true })
+  return any
+}
+/** Its presence means conversation notes still need removing after the connector has stopped. It names nobody. */
+const pendingNotes = () => inHome('conversation-notes-erasing')
+/** Completes a pending erasure only while no connector can write its old notes back. A failure leaves the mark for the next try or service start. */
+function finishErasingNotes(): void {
+  if (!existsSync(pendingNotes())) return
+  removeNotes()
+  rmSync(pendingNotes())
+}
+
+/**
+ * What the service does when it is told that a person has erased everything. What It had noted
+ * on this machine of that person's conversations goes, a folder's name among it. And the copies
+ * of the database from before an update go too, since each holds what was erased as it was
+ * when the copy was made. Where either cannot be removed, that is said with the code of what
+ * stopped it, and the telling fails: the backend's deleting is then not done, and it asks again.
  */
 export function erasing(say: (line: string) => void): (person: string) => void {
   return (person) => {
+    try {
+      // Keep the retry on disk before removing anything. The running connector may write its
+      // old notes again as it stops, even after the backend has accepted this answer.
+      writePrivate(pendingNotes(), '')
+      if (removeNotes()) say('backend: everything was erased, and what It had noted here of conversations went with it')
+    } catch (err) {
+      say(
+        `backend: everything was erased, and what It had noted here of conversations could not be removed (${why(err)}); it will be tried when the backend asks again`,
+      )
+      throw err
+    }
     let copies: number
     try {
       copies = removeCopies(person)
+      eraseDeliveryRecovery(person)
     } catch (err) {
       say(
         `backend: everything was erased, and the copies of the database from before an update could not be removed (${why(err)}); it will be tried when the backend asks again`,
@@ -242,6 +316,51 @@ export function erasing(say: (line: string) => void): (person: string) => void {
       throw err
     }
     if (copies) say(`backend: everything was erased, and the copies of the database from before an update went with it (${copies})`)
+  }
+}
+
+/** Something the backend noted for the counts of how It is used: a name, and its properties as JSON text. */
+type Noted = { name: string; properties: string }
+/**
+ * Something that takes from the backend what it noted for the counts, a few askings at a time,
+ * and hands on what is to be counted. The backend removes what it gives, and with `keep` false
+ * removes it and gives nothing.
+ *
+ * A note is counted under the id that reporting has when the note is taken, and turning
+ * reporting off and on again gives another id, so that nothing from before is sent after. What
+ * the backend noted before that is from before too, and it does not know: so nothing is kept
+ * that waited there when this service started, since reporting may have been turned off and on
+ * while it was stopped, and nothing that waited when the id was found to be another than at
+ * the last taking. Such notes are asked to be thrown away, and are not counted if the backend
+ * gives them all the same, as one would that did not know `keep`.
+ */
+export function taker(
+  take: (keep: boolean) => Promise<{ notes?: Noted[]; more?: boolean }>,
+  sentAs: () => unknown,
+  counted: (note: Noted) => void,
+): (on: boolean) => Promise<void> {
+  /** The id under which what waits at the backend was noted. Nothing until all that waited at the start has been thrown away, and while reporting is off. */
+  let notedAs: unknown
+  return async (on) => {
+    for (let pass = 0; pass < 5; pass++) {
+      const as = on ? sentAs() : undefined
+      const keep = as !== undefined && as === notedAs
+      const got = await take(keep)
+      if ((on ? sentAs() : undefined) !== as) {
+        // The reply was made before the reset. Even its word that nothing more waited is
+        // from before, so another taking must drain what arrived while it was on its way.
+        notedAs = undefined
+        continue
+      }
+      // Recording is synchronous, so the sender cannot refresh its identity between this
+      // check and the notes being given to it.
+      if (keep) for (const note of got.notes ?? []) counted(note)
+      // Only once nothing more waits is what is noted next known to be this id's
+      if (got.more !== true) {
+        notedAs = as
+        return
+      }
+    }
   }
 }
 
@@ -264,7 +383,13 @@ export function erasing(say: (line: string) => void): (person: string) => void {
  * it has, when the door is closed and opened anew. It is closed when the service ends: after
  * the last door, through which it was asked, and before the backend program is stopped.
  */
-async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: string) => void, lost: () => void): Promise<{ stop(): Promise<void> }> {
+async function keptDoor(
+  config: ServiceConfig,
+  backend: Backend,
+  say: (line: string) => void,
+  signal: AbortSignal,
+  lost: () => void,
+): Promise<{ stop(): Promise<void> } | null> {
   const erased = erasing(say)
   const content = makeContent(config, backend, say, erased)
   const open = async (network: boolean, tailnet: boolean) => {
@@ -291,7 +416,12 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   /** What the settings last said, which is what was last tried. */
   let wanted = config.network
   let wantedTailnet = config.network && config.tailnet === true
-  const report = teller((said) => asAdmin(backend, 'network:report', said), backend.behind !== undefined)
+  const report = teller(
+    (said) => asAdmin(backend, 'network:report', said),
+    backend.behind !== undefined,
+    Date.now,
+    () => stopped,
+  )
   const tell = () => report(standsAs(now, wanted, config.port))
   /** Whether it has been said that the backend could not be told. Said once, until it has been told again. */
   let untold = false
@@ -301,6 +431,8 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
         untold = false
       },
       (err) => {
+        // A door that is being stopped tries nothing again, and says nothing of what it gave up
+        if (stopped) return
         // Tried again at the next look. Until it works, the site and `it network` go by what was said last
         if (!untold) say(`door: the backend could not be told how the door stands (${why(err)}); trying again`)
         untold = true
@@ -318,6 +450,12 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   const halted = new Promise<undefined>((resolve) => {
     halt = () => resolve(undefined)
   })
+  const askedToStop = () => {
+    stopped = true
+    halt()
+  }
+  signal.addEventListener('abort', askedToStop, { once: true })
+  if (signal.aborted) askedToStop()
   /** What the backend answers, or nothing where it has not answered by the time the door is stopped, or cannot be asked. */
   const fromBackend = (name: string, args: Record<string, unknown>): Promise<unknown> => unless(asAdmin(backend, name, args, ASKED_MS), halted)
   /** The asking last written into the log, by its name: one that is gone on with at a later look is written there once. */
@@ -390,7 +528,10 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
         // Where the backend cannot be told, the asking stays with it as taken, and the next look goes on with it and says this again
         await fromBackend('network:answer', { asked: taken.at, to: taken.to, ok: stands, ...(stands ? {} : { why: 'cannot_listen' }) })
       }
-      await telling()
+      // Waited for only until the door is stopped, as everything else a look asks of the
+      // backend is: a telling may take a minute to be given up, and the shorter one after it
+      // another, and the door would stay open for all of that
+      await unless(telling(), halted)
     } catch (err) {
       say(`door: could not be opened again (${why(err)}); stopping`)
       stopped = true
@@ -399,7 +540,14 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
       looking = false
     }
   }
-  await telling()
+  // The service may be asked to stop before startup has returned this door's stop method.
+  if (!stopped) await unless(telling(), halted)
+  if (stopped) {
+    signal.removeEventListener('abort', askedToStop)
+    await now.door.stop().catch(() => {})
+    await content.close().catch(() => {})
+    return null
+  }
   const timer = setInterval(() => void look(), LOOK_MS)
   // What happened between a screen and the backend is noted there, and taken from it here a few
   // times a minute, where what is sent is sent from (see `convex/lib/counted.ts`). Once a day
@@ -408,16 +556,18 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   // wrong in this stops nothing, and is tried again at the next pass.
   let collecting = false
   let picturedAt = 0
+  const take = taker(
+    (keep) => asAdmin(backend, 'counted:take', { keep }) as Promise<{ notes?: Noted[]; more?: boolean }>,
+    // The id counts are sent under, as usage reporting keeps it in It's folder
+    () => (counting() ? readJson<{ installation?: unknown }>(inHome('telemetry.json'))?.installation : undefined),
+    (note) => recordNoted(note.name, note.properties),
+  )
   const collect = async () => {
     if (collecting || stopped || backend.behind !== undefined) return
     collecting = true
     try {
       const on = counting()
-      for (let pass = 0, more = true; more && pass < 5; pass++) {
-        const got = (await asAdmin(backend, 'counted:take', { keep: on })) as { notes?: { name: string; properties: string }[]; more?: boolean }
-        for (const note of got.notes ?? []) recordNoted(note.name, note.properties)
-        more = got.more === true
-      }
+      await take(on)
       if (on && Date.now() - picturedAt > 86_400_000) {
         const holds = (await asAdmin(backend, 'counted:picture', {})) as {
           pages: number
@@ -448,8 +598,8 @@ async function keptDoor(config: ServiceConfig, backend: Backend, say: (line: str
   void collect()
   return {
     async stop() {
-      stopped = true
-      halt()
+      signal.removeEventListener('abort', askedToStop)
+      askedToStop()
       clearInterval(timer)
       clearInterval(collector)
       // A door that is being opened anew at this moment is waited for, and then closed
@@ -482,6 +632,15 @@ async function connector(say: (line: string) => void, asked: AbortSignal, heard:
   /** The identity the connector last ran as, and stopped by itself as. */
   let ended: string | undefined
   while (!asked.aborted) {
+    try {
+      // A previous connector or service may have stopped with cleanup still pending. Do this
+      // before checking the machine too: erasure may have removed that identity already.
+      finishErasingNotes()
+    } catch (err) {
+      say(`connector: erased conversation notes could not be removed (${why(err)}); trying again`)
+      await pause(30_000)
+      continue
+    }
     const id = readJson<Machine>(machineFile())?.id
     if (!id || id === ended) {
       await pause(1000)
@@ -494,7 +653,13 @@ async function connector(say: (line: string) => void, asked: AbortSignal, heard:
       if (asked.aborted && running) process.emit(heard())
     }, 250)
     try {
-      await runConnector(say)
+      try {
+        await runConnector(say)
+      } finally {
+        // A connector can write its old notes as it stops, whether it returns or throws.
+        // Keep cleanup pending until every note is gone, before another connector starts.
+        finishErasingNotes()
+      }
     } catch (err) {
       say(`connector: could not start: ${why(err)}`)
       await pause(30_000)

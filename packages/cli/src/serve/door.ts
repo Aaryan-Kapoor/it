@@ -29,10 +29,11 @@ import net from 'node:net'
 import os from 'node:os'
 import type { Duplex } from 'node:stream'
 import { createContent, pagePolicy } from '@it/content'
-import { contentPort, LIMITS, onThisMachine } from '@it/protocol'
+import { contentPort, LIMITS, onThisMachine, uploadBudgetMs } from '@it/protocol'
 import { direct, inHome, Problem } from '../lib'
 import type { Backend } from './backend'
 import { doorKey, type ServiceConfig } from './config'
+import { recordExports } from './export'
 import { createPush, type Push } from './push'
 import { answerSite, BUILT, hostOf, type Site, spelled } from './site'
 import { inTailnet, isLoopback, tailnetName } from './tailnet'
@@ -73,6 +74,7 @@ export interface Arrival {
   port: number
   /** The caller's own address, from the connection and never from a header. */
   address: string
+  signal?: AbortSignal
 }
 /**
  * Whether a WebSocket may be passed on to the backend: at which path and with which key, or the
@@ -226,7 +228,10 @@ function placeOf(address: string): { name: string; port: number; rest: string } 
  * address it has on its networks, its host name, and that name as a home network looks it up.
  * A machine's addresses change as it moves between networks, so they are read again when the
  * last reading is a few seconds old. Kept to the tailnet, the names are the machine's addresses
- * there, its host name, and its name on the tailnet.
+ * there, its host name, and its name on the tailnet. That name is one of the machine's with
+ * the network on for everyone too, where the machine is on a tailnet: it is the address a
+ * screen was given while the door was kept to the tailnet, and a door opened wider since still
+ * answers to it. Who may ask is another matter, held to by the caller's address.
  */
 function knownNames(network: boolean, tailnet = false): (name: string) => boolean {
   const own = new Set(['localhost', '127.0.0.1', '[::1]'])
@@ -247,8 +252,9 @@ function knownNames(network: boolean, tailnet = false): (name: string) => boolea
       const host = os.hostname().toLowerCase()
       if (host) others.add(host)
       if (host && !host.includes('.') && !tailnet) others.add(`${host}.local`)
-      // And to the name it has on the tailnet, where Tailscale says what that is
-      const there = tailnet ? tailnetName() : undefined
+      // And to the name it has on the tailnet, where Tailscale says what that is. A machine that
+      // has no address on one has no name there, and Tailscale is not asked for one
+      const there = tailnet || [...others].some(inTailnet) ? tailnetName() : undefined
       if (there) others.add(there)
     }
     return others.has(name)
@@ -278,8 +284,15 @@ function declared(headers: Headers): number | null {
 /** Whether a request says that it carries a body: a length that is not nothing, or that it comes in pieces. */
 const carries = (headers: Headers): boolean => headers.has('transfer-encoding') || !['0', null].includes(headers.get('content-length'))
 
-/** A body as it arrives, cut off once it is longer than it may be or has taken longer than it may. Whoever reads it is told by an error. */
-function held(body: ReadableStream<Uint8Array>, most: number, ms: number): ReadableStream<Uint8Array> {
+/**
+ * A body as it arrives, cut off once it is longer than it may be or has taken longer than it
+ * may. Whoever reads it is told by an error. `over` is for whoever handed it on, once what it
+ * was handed to has answered: a body that was refused with none of it read is never read to
+ * its end, and the waiting for it would otherwise go on, with the body kept, for all the time
+ * it was given. What was not read is then the listener's to take off the connection, as it
+ * does for any request.
+ */
+function held(body: ReadableStream<Uint8Array>, most: number, ms: number): { stream: ReadableStream<Uint8Array>; over(): void } {
   const reader = body.getReader()
   let size = 0
   let late = false
@@ -288,7 +301,11 @@ function held(body: ReadableStream<Uint8Array>, most: number, ms: number): Reada
     void reader.cancel().catch(() => {})
   }, ms)
   timer.unref?.()
-  return new ReadableStream<Uint8Array>({
+  const over = () => {
+    clearTimeout(timer)
+    void reader.cancel().catch(() => {})
+  }
+  const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const { done, value } = await reader.read()
@@ -312,6 +329,7 @@ function held(body: ReadableStream<Uint8Array>, most: number, ms: number): Reada
       return reader.cancel(reason)
     },
   })
+  return { stream, over }
 }
 
 /** Says a thing about the door seldom: once, and then not again for ten minutes, however often it happens. */
@@ -367,6 +385,7 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
   // machine itself: a device on another network this machine is on gets nothing, whatever name it asks for
   const answered = (address: string) => !config.tailnet || isLoopback(address) || inTailnet(address)
   const now = parts.now ?? Date.now
+  const exports = recordExports(site, api, itself, now)
 
   // Codes that were refused, counted for each address that sent them by itself. An address that
   // has had ten refused in a minute is answered here for the rest of that minute, and the
@@ -508,6 +527,17 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       return refuse(502, 'backend_unreachable')
     }
     const says = passedOn(answered.headers, NOT_RETURNED)
+    // Only a token that the backend granted to a paired browser carries this word. Retained
+    // functions need no new route or argument, and no database or administrator details leave.
+    if (url.pathname === '/session/token' && answered.status === 200 && !answered.headers.has('content-encoding')) {
+      try {
+        const token = JSON.parse(new TextDecoder().decode(bytes))
+        if (token && typeof token.token === 'string' && (token.role === 'owner' || token.role === 'screen')) {
+          bytes = new TextEncoder().encode(JSON.stringify({ ...token, service: { functions: backend.behind ? 'retained' : 'current' } })).buffer
+          says.set('cache-control', 'no-store')
+        }
+      } catch {}
+    }
     const empty = a.method === 'HEAD' || [204, 205, 304].includes(answered.status)
     if (!empty) says.set('content-length', String(bytes.byteLength))
     return new Response(empty ? null : bytes, { status: answered.status, headers: says })
@@ -594,8 +624,8 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
     }
   }
 
-  /** A request for the content package, with the caller's address beside it. */
-  async function toContent(which: 'showing' | 'upload' | 'control', a: Arrival, url: URL, body: BodyInit | null): Promise<Response> {
+  /** A request for the content package, with the caller's address beside it. `over` is called once it has been answered, however that went. */
+  async function toContent(which: 'showing' | 'upload' | 'control', a: Arrival, url: URL, body: BodyInit | null, over?: () => void): Promise<Response> {
     const request = new Request(url, {
       method: a.method,
       headers: a.headers,
@@ -606,6 +636,8 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       return await content[which](request, { port: a.port, address: a.address })
     } catch {
       return refuse(500, 'content_failed')
+    } finally {
+      over?.()
     }
   }
 
@@ -637,6 +669,28 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       if (CALLS.has(path)) return toCall(a, path)
       return refuse(404, 'api_path')
     }
+    if (path.startsWith('/session/export/')) {
+      if (path === '/session/export/start') {
+        if (a.method !== 'POST') return refuse(405, 'session_method', { allow: 'POST' })
+        if (!fromHere(a) || a.headers.get('x-it-site') !== '1') return refuse(403, 'foreign_origin')
+        const body = await whole(a, SMALL)
+        if (typeof body === 'string') return unread(body)
+        let session: unknown
+        try {
+          session = JSON.parse(new TextDecoder().decode(body)).session
+        } catch {}
+        if (typeof session !== 'string' || !session || session.length > 64) return refuse(400, 'bad_request')
+        return exports.prepare(a.headers.get('cookie') ?? '', session, a.signal)
+      }
+      if (a.method !== 'GET') return refuse(405, 'session_method', { allow: 'GET' })
+      // Native downloads cannot set a header. This one-use link was made by a same-origin
+      // POST and still needs the original session's cookie. No bearer alone opens it.
+      const origin = a.headers.get('sec-fetch-site')
+      if (fromElsewhere(a) || (origin !== null && origin !== 'same-origin')) return refuse(403, 'foreign_origin')
+      const id = path.slice('/session/export/'.length)
+      if (!/^[a-f0-9]{48}$/.test(id) || url.search) return refuse(404, 'no_such_thing')
+      return exports.download(id, a.headers.get('cookie') ?? '', a.signal)
+    }
     if (path.startsWith('/session/')) {
       // A session is a cookie, and a browser sends a cookie whichever page asks. Only the site's
       // own pages may: a page an agent wrote is shown from another port, and so has another origin.
@@ -657,7 +711,8 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       if (length === null) return refuse(411, 'length_required')
       if (length > LIMITS.fileBytes) return unread('too_large')
       // A file is passed on as it arrives, for as many bytes as it said and no more
-      return toContent('upload', a, url, a.body ? held(a.body, length, patience * 20) : null)
+      const file = a.body ? held(a.body, length, (uploadBudgetMs(length) * patience) / PATIENCE_MS) : null
+      return toContent('upload', a, url, file?.stream ?? null, file?.over)
     }
     if (path.startsWith('/control/')) {
       if (a.method !== 'POST') return refuse(405, 'control_method', { allow: 'POST' })
@@ -727,6 +782,7 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
     turned: (why) => noted(why),
     // Only a content package the door made for itself is the door's to close
     close: async () => {
+      exports.close()
       if (!parts.content) await content.close()
     },
   }
@@ -992,7 +1048,7 @@ const listenNode: Listen = (address, port, door, api, patience) => {
     requireHostHeader: false,
     // Headers that do not arrive, and a request that never ends, are given up on
     headersTimeout: 15_000,
-    requestTimeout: patience * 20 + 60_000,
+    requestTimeout: (uploadBudgetMs(LIMITS.fileBytes) * patience) / PATIENCE_MS + 60_000,
   })
   // Inside the standalone program a connection on which nothing moves is closed, as it is on the site's port there
   if (standalone) server.setTimeout(IDLE_S * 1000)
@@ -1018,9 +1074,11 @@ const listenNode: Listen = (address, port, door, api, patience) => {
     const asks = req.method === 'GET' || req.method === 'HEAD'
     const said = !headers || carries(headers)
     let whole = false
+    const disconnected = new AbortController()
+    res.once('close', () => disconnected.abort())
     void (
       headers
-        ? door.answer(arrivalOf(req, headers, asks || unsent ? null : body.stream))
+        ? door.answer({ ...arrivalOf(req, headers, asks || unsent ? null : body.stream), signal: disconnected.signal })
         : Promise.resolve(new Response(null, { status: 400, headers: door.carried(port) }))
     )
       .then(async (response) => {
@@ -1060,7 +1118,17 @@ const listenNode: Listen = (address, port, door, api, patience) => {
       .catch(() => res.destroy())
       // Inside the standalone program nothing tells for certain whether a body has arrived, so
       // there the connection of any request that says it carries one is closed once it is answered.
-      .finally(() => (!whole || (said && standalone)) && req.socket.destroy())
+      .finally(() => {
+        if (whole && !(said && standalone)) return
+        // `finish` means the runtime accepted the answer, not that the socket flushed it.
+        // Ending the writable side lets those bytes go before FIN. Destroying it here can
+        // discard them on Windows under Bun. A caller that keeps sending still has a limit.
+        const socket = req.socket
+        if (socket.destroyed) return
+        const late = setTimeout(() => socket.destroy(), UNREAD_MS)
+        socket.once('close', () => clearTimeout(late))
+        socket.end()
+      })
   }
   // A request that expects something other than to be told to go on is answered as the request it is
   server.on('request', (req, res) => answer(req, res)).on('checkExpectation', (req, res) => answer(req, res))
@@ -1337,6 +1405,34 @@ declare const Bun:
 const fromOpener = (code: number) => code === 1000 || (code >= 3000 && code <= 4999)
 const fromAsked = (code: number) => fromOpener(code) || (code >= 1001 && code <= 1014 && ![1004, 1005, 1006].includes(code))
 
+/**
+ * Bun ends an errored response stream as a complete HTTP response. For a download that
+ * would mark a partial file as saved. Leave it unfinished instead and cut its connection
+ * with the request's idle timeout. Cancellation still releases the source at once.
+ */
+function unfinishedOnFailure(response: Response, cut: () => void): Response {
+  const reader = response.body!.getReader()
+  return new Response(
+    new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          try {
+            const next = await reader.read()
+            if (next.done) controller.close()
+            else controller.enqueue(next.value)
+          } catch {
+            cut()
+            await new Promise<void>(() => {})
+          }
+        },
+        cancel: () => reader.cancel().catch(() => {}),
+      },
+      { highWaterMark: 0 },
+    ),
+    { status: response.status, headers: response.headers },
+  )
+}
+
 /** Inside the standalone program, the site's port: Bun's own server, and a WebSocket passed on a message at a time. */
 const listenBun: Listen = async (address, port, door, api, patience) => {
   /** The WebSockets the backend has not yet agreed to: for each, what gives up on it. */
@@ -1369,6 +1465,7 @@ const listenBun: Listen = async (address, port, door, api, patience) => {
         body: body?.stream ?? null,
         port,
         address: addressOf(server.requestIP(request)?.address),
+        signal: request.signal,
       }
       // Once an answer has been handed over, nothing more can be done about the connection it
       // goes out on. So what the caller is still sending is taken off the connection first, for
@@ -1384,8 +1481,12 @@ const listenBun: Listen = async (address, port, door, api, patience) => {
         return hurried(response)
       }
       // Only a WebSocket is carried on. Any other request that offers to change protocol is answered as the plain request it also is.
-      if (!/^websocket$/i.test(request.headers.get('upgrade') ?? '') || !namesIn(request.headers.get('connection')).includes('upgrade'))
-        return answered(await door.answer(arrival))
+      if (!/^websocket$/i.test(request.headers.get('upgrade') ?? '') || !namesIn(request.headers.get('connection')).includes('upgrade')) {
+        let response = await door.answer(arrival)
+        if (response.ok && response.body && request.method === 'GET' && new URL(request.url).pathname.startsWith('/session/export/'))
+          response = unfinishedOnFailure(response, () => server.timeout(request, 1))
+        return answered(response)
+      }
       const live = door.live({ ...arrival, body: null })
       if ('refuse' in live) return answered(new Response(null, { status: live.refuse, headers: live.says }))
       // The backend is asked first, on a connection of the door's own, and the browser is

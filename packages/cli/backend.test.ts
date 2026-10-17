@@ -35,6 +35,7 @@ import { build, type Plugin } from 'esbuild'
 import { zipSync } from 'fflate'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { FUNCTIONS, FUNCTIONS_HASH } from './src/functions.generated'
+import { markInstallation } from './src/installation'
 import { api, backendAt, call, type Machine, machineFile, type Problem, readJson, VERSION } from './src/lib'
 import { login } from './src/login'
 import {
@@ -42,6 +43,7 @@ import {
   asAdmin,
   program as fetched,
   fetchProgram,
+  nothingLeft,
   programsHere,
   type Running,
   removeCopies,
@@ -54,6 +56,7 @@ import {
 import { doorKey, instanceName, makeConfig, programFile, RELEASE, readConfig, type ServiceConfig } from './src/serve/config'
 import { startDoor } from './src/serve/door'
 import { begin } from './src/serve/firstrun'
+import { runningFor } from './src/service'
 import { bases } from './test-ports'
 
 const windows = process.platform === 'win32'
@@ -1018,6 +1021,55 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     expect(programsOn(folder)).toEqual([lock()!.program])
   }, 300_000)
 
+  test('a backend program that outlived its service is asked to stop before its folder is taken away, and one whose service still runs is left to that service', async () => {
+    makeConfig()
+    const left = await orphan()
+    // Nothing that looks only for a service finds anything here: the service is gone, and its program is not
+    expect([runningFor(folder), programsOn(folder)]).toEqual([false, [left]])
+    const heard: string[] = []
+    await nothingLeft((line) => heard.push(line))
+    expect(heard).toEqual([`backend: one left running by a service that is gone is asked to stop (pid ${left})`])
+    expect([startOf(left), programsOn(folder), existsSync(inBackend('lock'))]).toEqual([null, [], false])
+    // With nothing left there is nothing to ask, and nothing is said
+    await nothingLeft((line) => heard.push(line))
+    expect(heard.length).toBe(1)
+    // A service that runs has the folder, and its program is its own to stop
+    const backend = await start(readConfig()!)
+    expect(await refusal(nothingLeft(() => {}))).toBe('already_running')
+    expect(programsOn(folder)).toEqual([lock()!.program])
+    await backend.stop()
+    // Settings that cannot be read cannot establish that no backend program has the folder.
+    writeFileSync(path.join(folder, 'service.json'), JSON.stringify({ port: 1 }))
+    expect(await refusal(nothingLeft(() => {}))).toBe('settings')
+  }, 300_000)
+
+  test('`it uninstall` stops an orphaned backend before removing its database and storage', async () => {
+    markInstallation(folder)
+    makeConfig()
+    const left = await orphan()
+    const storage = within(inBackend('storage'))
+    expect(storage.length).toBeGreaterThan(0)
+    // The whole program, run as a person runs it, with a home of its own that holds nothing
+    await bundled('it.mjs', "import './src/main'")
+    const person = mkdtempSync(path.join(scratch, 'person-'))
+    try {
+      const ran = spawnSync(process.execPath, [path.join(scratch, 'it.mjs'), 'uninstall', '--yes'], {
+        env: { PATH: person, HOME: person, IT_HOME: folder, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage' },
+        encoding: 'utf8',
+        timeout: 120_000,
+      })
+      expect(ran.status, ran.stderr || String(ran.error ?? '')).toBe(0)
+      const told: { removed: boolean; said: string[]; left?: string[] } = JSON.parse(ran.stdout)
+      expect([told.removed, told.said]).toEqual([true, ['The backend program that an It which had died left running here is stopped.']])
+      expect(told.left).toBeUndefined()
+      expect([startOf(left), existsSync(database()), existsSync(inBackend('lock'))]).toEqual([null, false, false])
+      expect(existsSync(inBackend('storage'))).toBe(false)
+      expect(existsSync(folder)).toBe(false)
+    } finally {
+      if (startOf(left) !== null) process.kill(left, 'SIGKILL')
+    }
+  }, 300_000)
+
   test('a backend program on the folder is found in the system’s own list of what runs, whatever the lock says of it and where there is no lock at all, and is asked to stop before another is started', async () => {
     const config = makeConfig()
     const asked = (pid: number) => `backend: one left running by a service that is gone is asked to stop (pid ${pid})`
@@ -1621,7 +1673,10 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     const first = serve(Number(process.env.IT_PORT), undefined, 'no-links', { MAKE: '1' })
     expect(await first.ended).toBe(1)
     expect(first.lines()).toEqual(['ERROR home_unfit'])
-    expect(readdirSync(folder)).toEqual([])
+    // Key generation uses an empty backend folder even when saving the settings fails.
+    expect(readdirSync(folder)).toEqual(['backend'])
+    expect(readdirSync(inBackend())).toEqual([])
+    expect(programsOn(folder)).toEqual([])
     // And the lock, in a folder whose settings were made where a file can be given one
     const config = makeConfig()
     const second = serve(config.port, undefined, 'no-links')
@@ -1730,7 +1785,7 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
       process.env.IT_PORT = String(await ports.next())
       const other = makeConfig()
       expect(other.instanceSecret).not.toBe(config.instanceSecret)
-      mkdirSync(path.join(first, 'backend'))
+      expect(readdirSync(path.join(first, 'backend'))).toEqual([])
       for (const name of [instanceName(other.instanceSecret), instanceName(config.instanceSecret)]) expect(programsHere(name, 'linux')).toEqual([])
       // It is started, and the program of the folder that was moved is asked nothing
       const backend = await start(other)
@@ -2092,7 +2147,7 @@ describe.skipIf(!program || windows)('enrolling this machine', () => {
     }
     const refused = async () => (await begin({ background: false, say: () => {}, name: 'the desk' }).catch((err) => err)) as Problem
     const HINT =
-      /^Nothing was set up\. Give this It ports of its own by naming another first port: `IT_PORT=(\d+) it setup`\. The port is written into its settings, so it is named this once\.$/
+      /^Nothing was set up\. To run a second It by hand, keep IT_HOME set to this folder and use `IT_PORT=(\d+) it setup --none --no-service`, then `it serve`\. The port is written into its settings, so it is named this once\. There is only one background service per account: setup without --no-service replaces its registration with this folder\.$/
     // Another program has one of the backend program's two
     let close = await listening(port + PORTS.backendApi, '{}')
     try {

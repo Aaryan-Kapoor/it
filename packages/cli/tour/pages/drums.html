@@ -125,7 +125,7 @@
     var padsEl = $("pads"), playBtn = $("play"), clearBtn = $("clear"), hint = $("hint"), key = $("key");
     var blank = () => ROWS.map(() => { var row = []; for (var c = 0; c < STEPS; c++) row.push(false); return row; });
     var count = (g) => g.reduce((n, row) => n + row.filter(Boolean).length, 0);
-    var mine = blank(), theirs = blank();
+    var mine = blank(), theirs = blank(), ignoreReplies = false, request = null;
     var taken = null, noteWas = "", asked = false, waiting = false, sentAt = 0, sentKey = null, sendTimer = 0, quietTimer = 0;
     // How many times the state has been set, where It says
     var turn = () => (typeof It.revision === "number" ? It.revision : 0);
@@ -317,11 +317,13 @@
     function tap(r, c) {
       var a = audio();
       mine[r][c] = !mine[r][c];
+      // Replies to the previous beat stop applying as soon as a pad changes.
+      ignoreReplies = true; request = null;
       if (mine[r][c] && a) VOICE[r](a.currentTime, out);
       paint();
-      // The beat goes to the agent once the person has left it alone for a moment
+      // The beat goes to the agent once the person has left it alone for a moment, however few hits are in it
       clearTimeout(sendTimer);
-      if (count(mine) >= 2) sendTimer = setTimeout(send, 1500);
+      sendTimer = setTimeout(send, 1500);
     }
     padsEl.addEventListener("click", (e) => {
       var b = e.target.closest(".pad");
@@ -344,7 +346,7 @@
       clearTimeout(sendTimer);
       clearTimeout(quietTimer);
       // The agent's hits go from the pads with the person's own, and stay gone until it plays others
-      mine = blank(); theirs = blank();
+      mine = blank(); theirs = blank(); ignoreReplies = true; request = null;
       sentKey = null; asked = false; waiting = false;
       stop();
       paint();
@@ -356,15 +358,33 @@
     // ── What goes to the agent, and what comes back ──
     function send() {
       var n = count(mine), pattern = mine.map((row) => row.map((on) => (on ? "x" : ".")).join("")), k = pattern.join("/");
-      if (n < 2 || k === sentKey) return;
-      sentKey = k; asked = true; waiting = true; sentAt = turn();
-      Tour.say("you", "put down " + n + " hits");
+      // An edit that restores the same beat still needs a fresh request for its answer.
+      if (k === sentKey && (!n || request)) return;
+      // With the last hit taken off there is no beat to play between. An agent that was told of
+      // one is told that the pads are empty, as the button that empties them tells it
+      if (!n) {
+        if (sentKey === null) return;
+        sentKey = k; waiting = false; asked = false; ignoreReplies = true; request = null;
+        clearTimeout(quietTimer);
+        theirs = blank();
+        stop();
+        paint();
+        Tour.say("you", "took the last hit off");
+        Tour.say("did", "");
+        Tour.act("cleared", {}).then(() => Tour.plate("", false), () => { if (sentKey === k) sentKey = null; });
+        return;
+      }
+      sentKey = k; asked = true; waiting = true; ignoreReplies = false; sentAt = turn();
+      request = Array.from(crypto.getRandomValues(new Uint8Array(16)), (n) => n.toString(16).padStart(2, "0")).join("");
+      var sentRequest = request;
+      Tour.say("you", "put down " + n + (n === 1 ? " hit" : " hits"));
       clearTimeout(quietTimer);
       // An agent that never answers is not left looking busy
       quietTimer = setTimeout(() => Tour.plate(count(theirs) ? "played between yours" : "", false), 60000);
-      Tour.act("beat", { bpm: BPM, rows: ROWS.slice(), pattern: pattern }).catch(() => {
+      Tour.act("beat", { request: sentRequest, bpm: BPM, rows: ROWS.slice(), pattern: pattern }).catch(() => {
+        if (request !== sentRequest) return;
         clearTimeout(quietTimer);
-        if (sentKey === k) sentKey = null;
+        sentKey = null; request = null;
       });
     }
     // The agent's hits: four rows of eight, an `x` where it plays. None at all is no hits, and anything else is not taken.
@@ -382,20 +402,27 @@
     function hear() {
       var st = It.state || {}, k = taken, fresh = false;
       try { k = JSON.stringify(st.theirs === undefined ? null : st.theirs); } catch (e) {}
+      // A reply to a beat that was edited or cleared cannot put its hits or note back.
+      if (ignoreReplies) { taken = k; return; }
+      // Pattern and note arrive together with the id of the beat they answer.
+      var reply = st.theirs;
+      if (request && (!reply || reply.request !== request)) return;
+      var pattern = request ? reply.pattern : reply;
       if (k !== taken) {
-        var got = read(st.theirs);
+        var got = read(pattern);
         if (got) {
           taken = k; theirs = got; fresh = count(got) > 0;
           // They land in the order they are played
           for (var c = 0, i = 0; c < STEPS; c++) for (var r = 0; r < ROWS.length; r++) if (got[r][c]) pad[r][c].style.setProperty("--d", i++ * 70 + "ms");
         }
       }
-      // Whatever the agent sets once a beat has been sent is its answer, the same hits as before among them
+      // A matching reply may repeat the same hits as the previous beat.
       else if (waiting && turn() > sentAt) {
-        var same = read(st.theirs);
+        var same = read(pattern);
         if (same && count(same) > 0) { theirs = same; fresh = true; }
       }
-      var note = typeof st.note === "string" ? st.note.trim().slice(0, 160) : "";
+      var text = request ? reply.note : st.note;
+      var note = typeof text === "string" ? text.trim().slice(0, 160) : "";
       var said = !!note && note !== noteWas;
       noteWas = note;
       paint();

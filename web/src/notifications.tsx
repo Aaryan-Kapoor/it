@@ -1,10 +1,12 @@
 // Notifications: an agent speaking to the person outside any one page. They are stored, so
 // they survive a reload; a new one shows as a toast; all of them wait in the tray. The site's
 // own short words ("Link copied") are shown in the same place, and are kept nowhere.
-import { useMutation, useQuery } from 'convex/react'
+import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { IconBell } from './brand'
 import { ago, api, displayKey, type Id, navigate, refusal, useNow } from './lib'
+import { answerNotification, outboxChanges, pendingAnswer, watchOutbox } from './outbox'
+import { useDialogKeys } from './overlay'
 import { NOT_SECURE, notSecure } from './push'
 
 interface Note {
@@ -51,11 +53,14 @@ const watchSaid = (fn: () => void) => {
 }
 
 function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast' | 'notif-item' }) {
-  const answer = useMutation(api.notifications.answer)
+  const convex = useConvex()
+  useSyncExternalStore(watchOutbox, outboxChanges)
   const [error, setError] = useState('')
-  // The answer that was pressed and that It has not said it has yet: no other is taken
-  // meanwhile, and it is said to be on its way, since it is kept nowhere but in this tab
-  const [sending, setSending] = useState<string | null>(null)
+  // The saved answer remains visible across tray remounts. An unstored request is kept in
+  // this component until its promise settles, and the recovery gate protects that interval.
+  const [inFlight, setSending] = useState<string | null>(null)
+  const saved = pendingAnswer(n.id)
+  const sending = saved ?? inFlight
   return (
     <>
       <p className={`note-text ${kind}-text`}>{n.text}</p>
@@ -72,7 +77,7 @@ function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast'
                 e.stopPropagation()
                 setError('')
                 setSending(b.action)
-                answer({ id: n.id as Id<'notifications'>, action: b.action, displayKey: displayKey() }).then(
+                answerNotification(convex, n.id, b.action).then(
                   () => {
                     setSending(null)
                     onDone?.()
@@ -89,16 +94,26 @@ function Body({ n, onDone, kind }: { n: Note; onDone?: () => void; kind: 'toast'
           ))}
         </div>
       )}
-      {/* Answered: said in words, since a dimmed button alone does not say that the answer went */}
-      {n.answer !== null && n.buttons.length > 0 && (
-        <span className="note-answered">Sent to your agent: {n.buttons.find((b) => b.action === n.answer)?.label ?? n.answer}</span>
-      )}
-      {sending !== null && n.answer === null && (
-        <span className="note-answered" role="status">
-          Sending “{n.buttons.find((b) => b.action === sending)?.label ?? sending}”… Keep this tab open until it says it was sent
+      {/* What became of an answer is said aloud as well, to whoever cannot see it change. Where
+          it is said is there before there is anything to say: what is put in place with its
+          words already in it is not always said */}
+      <span className="note-said" role="status">
+        {/* Answered: said in words, since a dimmed button alone does not say that the answer went */}
+        {n.answer !== null && n.buttons.length > 0 && (
+          <span className="note-answered">Sent to your agent: {n.buttons.find((b) => b.action === n.answer)?.label ?? n.answer}</span>
+        )}
+        {sending !== null && n.answer === null && (
+          <span className="note-answered">
+            “{n.buttons.find((b) => b.action === sending)?.label ?? sending}” is not confirmed yet.{' '}
+            {saved ? 'Saved on this browser and retried when It is back' : 'Keep this tab open until it is sent'}
+          </span>
+        )}
+      </span>
+      {error && (
+        <span className="error" role="alert">
+          {error}
         </span>
       )}
-      {error && <span className="error">{error}</span>}
     </>
   )
 }
@@ -181,22 +196,24 @@ export function Bell({ compact = false }: { compact?: boolean }) {
   useEffect(() => {
     if (open && unseenIds) void seen({ key: displayKey(), ids: unseenIds.split(',') as Id<'notifications'>[] }).catch(() => {})
   }, [open, unseenIds, seen])
-  // A click anywhere else closes it, and so does Escape
+  // A click anywhere else closes it, and so does Escape. Closed with the keyboard in it, the
+  // keyboard goes to the bell: what it was on is gone, and it would otherwise be left nowhere
   const box = useRef<HTMLDivElement>(null)
+  const opener = useRef<HTMLButtonElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  useDialogKeys(panel, () => setOpen(false), open, opener)
   useEffect(() => {
     if (!open) return
     const away = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false)
-    const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
     document.addEventListener('mousedown', away)
-    document.addEventListener('keydown', key)
     return () => {
       document.removeEventListener('mousedown', away)
-      document.removeEventListener('keydown', key)
     }
   }, [open])
   return (
     <div className="menu" ref={box}>
       <button
+        ref={opener}
         type="button"
         className={`icon bell notif-btn ${compact ? 'nav-action' : 'grid-icon-btn'}`}
         aria-haspopup="dialog"
@@ -209,7 +226,14 @@ export function Bell({ compact = false }: { compact?: boolean }) {
         {unseen > 0 && <span className="count notif-badge">{unseen > 9 ? '9+' : unseen}</span>}
       </button>
       {open && (
-        <div className={`tray-panel notif-panel${compact ? ' notif-panel--low' : ''}`} role="dialog" aria-label="Notifications">
+        <div
+          ref={panel}
+          tabIndex={-1}
+          className={`tray-panel notif-panel${compact ? ' notif-panel--low' : ''}`}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Notifications"
+        >
           <div className="tray-head notif-head">
             <span className="notif-head-title">Notifications</span>
             {(notes?.length ?? 0) > 0 && (

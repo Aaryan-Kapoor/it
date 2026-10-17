@@ -2,9 +2,11 @@
 // for the connector. Nothing here touches a real OpenClaw. What it must get right: commands are
 // told which conversation they are in, each click reaches the conversation that made the page
 // exactly once and no other, and it is reported as given only when it really was.
+import { spawn } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -28,6 +30,7 @@ let hosts: ReturnType<typeof fakeOpenClaw>[]
 let homeBefore: string | undefined
 /** Everything the stand-in connector was sent, word for word: the first line, the headers and the body of each request. */
 let received: string[]
+let runtimes: any[]
 /** How the stand-in connector seals its answers over a port: as the real one does, with another token, or not at all. */
 let sealing: 'right' | 'wrong' | 'none'
 /** Other stand-ins a test started, which are closed when it ends. */
@@ -55,7 +58,8 @@ function fakeConnector(listenOn: string | number): Promise<http.Server> {
         }
         const body = text ? JSON.parse(text) : null
         const url = new URL(req.url ?? '/', 'http://it')
-        asked.push({ path: req.url ?? '', body })
+        if (url.pathname === '/addon') runtimes.push(body)
+        else asked.push({ path: req.url ?? '', body })
         if (url.pathname === '/ack') for (const k of Object.keys(offered)) offered[k] = offered[k]!.filter((c) => !body.ids.includes(c.id))
         const answer = JSON.stringify(url.pathname === '/clicks' ? { clicks: offered[url.searchParams.get('session') ?? ''] ?? [] } : { ok: true })
         const seal = overPort && sealing !== 'none' ? { 'x-it-mac': sealed(sealing === 'right' ? TOKEN : 'b'.repeat(48), `200\n${answer}`) } : {}
@@ -162,17 +166,18 @@ async function until(what: () => boolean, name: string) {
  * acted on every answer.
  */
 let questions = { waiting: 0 }
-const request = http.request
+const connect = net.connect
 function watchQuestions() {
   // Each test counts for itself: a question an earlier test left unanswered ends in that test's count
   const seen = { waiting: 0 }
   questions = seen
-  http.request = ((...given: unknown[]) => {
+  // The plugin opens a connection of its own for each question, and closes it with the answer
+  net.connect = ((...given: unknown[]) => {
     seen.waiting++
-    const req = (request as (...given: unknown[]) => http.ClientRequest)(...given)
-    req.once('close', () => seen.waiting--)
-    return req
-  }) as typeof http.request
+    const socket = (connect as (...given: unknown[]) => net.Socket)(...given)
+    socket.once('close', () => seen.waiting--)
+    return socket
+  }) as typeof net.connect
 }
 /**
  * The plugin waits on nothing outside itself: every question it had put to the connector is
@@ -204,6 +209,7 @@ beforeEach(async () => {
   asked = []
   hosts = []
   received = []
+  runtimes = []
   sealing = 'right'
   others = []
   server = await fakeConnector(path.join(home, 'connector.sock'))
@@ -212,7 +218,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   for (const host of hosts) for (const s of host.services) s.stop()
-  http.request = request
+  net.connect = connect
   vi.useRealTimers()
   if (homeBefore === undefined) delete process.env.IT_HOME
   else process.env.IT_HOME = homeBefore
@@ -547,8 +553,9 @@ describe('the OpenClaw add-on', () => {
     await settle()
     expect(host.warnings.length).toBe(3)
     expect(acks()).toEqual([])
-    // Asking would keep the click set aside for this add-on, so nothing is asked while it is left alone
+    // Only host reports are sent while the conversation is left alone, so its click stays available.
     asked = []
+    runtimes = []
     await tick(3)
     // A turn that is still running goes on running commands. They are told which conversation
     // they are in, and the click is not sent three more times because of them.
@@ -559,6 +566,8 @@ describe('the OpenClaw add-on', () => {
     await tick(3)
     expect(asked).toEqual([])
     expect(host.turns.length).toBe(3)
+    expect(runtimes).toHaveLength(9)
+    expect(runtimes[0]).toMatchObject({ harness: 'openclaw', addon: { api: 1, delivery: true } })
     // It is not forgotten: a gateway that was restarting takes work again a moment later, and the
     // click must not wait for the agent to happen to run a command in that conversation
     expect(Object.keys(JSON.parse(readFileSync(path.join(home, 'openclaw-sessions.json'), 'utf8')))).toEqual([MAIN])
@@ -577,9 +586,11 @@ describe('the OpenClaw add-on', () => {
     host.turns[5]!.refuse()
     await settle()
     asked = []
+    runtimes = []
     vi.setSystemTime(Date.now() + 9 * 60 * 1000)
     await tick(3)
     expect(asked).toEqual([])
+    expect(runtimes).toHaveLength(3)
     vi.setSystemTime(Date.now() + 2 * 60 * 1000)
     await tick()
     expect(host.turns.length).toBe(7)
@@ -612,6 +623,53 @@ describe('the OpenClaw add-on', () => {
     host.turns[0]!.begin()
     await settle()
     expect(acks()).toEqual(['click-1'])
+  })
+
+  test('a click OpenClaw took in line behind a turn that goes on running commands for longer than ten minutes is not sent a second time', async () => {
+    const host = await start()
+    host.runsCommand(MAIN)
+    offered[MAIN] = [{ id: 'click-1', text: 'one' }]
+    await tick()
+    // As a real gateway answers for a conversation busy with a turn that something else began
+    host.turns[0]!.finish({ dispatched: true, admission: { kind: 'dispatch' }, dispatchResult: { queuedFinal: false, deferredToActiveRun: 'followup' } })
+    await settle()
+    // The turn in front of it runs for twenty-five minutes more, and its agent runs a command every five
+    for (let i = 0; i < 5; i++) {
+      vi.setSystemTime(Date.now() + 5 * 60 * 1000)
+      host.runsCommand(MAIN)
+      await tick(2)
+    }
+    expect(host.turns.length).toBe(1)
+    expect(host.warnings).toEqual([])
+    expect(acks()).toEqual([])
+    // It ends, and OpenClaw starts the turn that carries the click, which is the only message there has been for it
+    host.turns[0]!.begin()
+    await settle()
+    expect(acks()).toEqual(['click-1'])
+    await tick(8)
+    expect(host.turns.length).toBe(1)
+  })
+
+  test('and one whose conversation then runs no command for ten minutes, with no turn started for it, is tried again as a hand-over with no word is', async () => {
+    const host = await start()
+    host.runsCommand(MAIN)
+    offered[MAIN] = [{ id: 'click-1', text: 'one' }]
+    await tick()
+    host.turns[0]!.finish({ dispatched: true, admission: { kind: 'dispatch' }, dispatchResult: { queuedFinal: false, deferredToActiveRun: 'followup' } })
+    await settle()
+    vi.setSystemTime(Date.now() + 6 * 60 * 1000)
+    host.runsCommand(MAIN)
+    await tick()
+    // Ten minutes from the last command, and not from the hand-over
+    vi.setSystemTime(Date.now() + 9 * 60 * 1000)
+    await tick(2)
+    expect(host.warnings).toEqual([])
+    vi.setSystemTime(Date.now() + 60 * 1000)
+    await tick()
+    expect(host.warnings.length).toBe(1)
+    expect(host.warnings[0]).toMatch(/ and will be tried again: no_word$/)
+    await tick(6)
+    expect(host.turns.length).toBe(2)
   })
 
   test('and after those ten minutes it does not keep a conversation that has been quiet for a month from being forgotten', async () => {
@@ -766,6 +824,66 @@ describe('the OpenClaw add-on', () => {
     }
   })
 
+  test('an answer is read whichever way the connector says where it ends: by its length, as the standalone program does, or in pieces, and one that stops short of its end is no answer', async () => {
+    // What answers on the port writes each answer out byte for byte, so that how it is framed is the test's to say
+    let framed: 'length' | 'pieces' | 'short' = 'length'
+    const answering = net.createServer((socket) => {
+      let got = ''
+      socket.on('error', () => {})
+      socket.on('data', (piece) => {
+        got += piece
+        if (!got.includes('\r\n\r\n')) return
+        const nonce = /^x-it-nonce: (.*)$/im.exec(got)?.[1] ?? ''
+        const answer = JSON.stringify({ clicks: [{ id: `click-${framed}`, text: `sent by ${framed} — línea` }] })
+        const bytes = Buffer.from(answer)
+        const seal = createHmac('sha256', TOKEN).update(`${nonce}\n200\n${answer}`).digest('hex')
+        const head = `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-It-Mac: ${seal}\r\n`
+        if (framed === 'length') socket.end(Buffer.concat([Buffer.from(`${head}Content-Length: ${bytes.length}\r\n\r\n`), bytes]))
+        else if (framed === 'short') socket.end(Buffer.concat([Buffer.from(`${head}Content-Length: ${bytes.length + 1}\r\n\r\n`), bytes]))
+        else
+          socket.end(
+            Buffer.concat([
+              Buffer.from(`${head}Transfer-Encoding: chunked\r\n\r\n${(10).toString(16)}\r\n`),
+              bytes.subarray(0, 10),
+              Buffer.from(`\r\n${(bytes.length - 10).toString(16)}\r\n`),
+              bytes.subarray(10),
+              Buffer.from('\r\n0\r\n\r\n'),
+            ]),
+          )
+      })
+    })
+    await new Promise<void>((resolve) => answering.listen(0, '127.0.0.1', resolve))
+    writeFileSync(path.join(home, 'connector.json'), JSON.stringify({ port: (answering.address() as net.AddressInfo).port, token: TOKEN }))
+    try {
+      const host = await start()
+      host.runsCommand(MAIN)
+      framed = 'short'
+      await tick(2)
+      expect(host.turns).toEqual([])
+      framed = 'length'
+      await tick()
+      expect(host.turns.map((t) => t.plan.ctxPayload.Body)).toEqual(['sent by length — línea'])
+      host.turns[0]!.begin()
+      framed = 'pieces'
+      await tick()
+      expect(host.turns.map((t) => t.plan.ctxPayload.Body)).toEqual(['sent by length — línea', 'sent by pieces — línea'])
+    } finally {
+      await new Promise((resolve) => answering.close(resolve))
+    }
+  })
+
+  test('the three add-ons that run under Node or Bun reach the connector by the very same lines', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url))
+    const own = readFileSync(path.join(here, 'index.js'), 'utf8')
+    const lines = own.slice(own.indexOf('/**\n * The answer in what the connector sent'), own.indexOf('/**\n * Asks the connector one thing.'))
+    expect(lines).toContain('function answerIn(raw) {')
+    expect(lines).toContain('function exchange(c, method, route, headers, text) {')
+    for (const other of ['../opencode/plugins/it-bridge.js', '../pi/extensions/it.js']) expect(readFileSync(path.join(here, other), 'utf8')).toContain(lines)
+    // And none of them asks through what a proxy named in the environment can stand in
+    for (const file of ['index.js', 'home.js', '../opencode/plugins/it-bridge.js', '../pi/extensions/it.js'])
+      expect(readFileSync(path.join(here, file), 'utf8')).not.toMatch(/node:https?['"]|\bfetch\(/)
+  })
+
   test('an answer too long to be the connector’s counts as no answer, and the next one is read as usual', async () => {
     const host = await start()
     host.runsCommand(MAIN)
@@ -882,4 +1000,99 @@ describe('the OpenClaw add-on', () => {
     expect(pkg.openclaw.extensions).toEqual(['./index.js'])
     expect(existsSync(path.join(dir, 'index.js'))).toBe(true)
   })
+})
+
+// The connector is on this machine, and what is asked of it names a conversation and brings
+// back what a person did on a page. A proxy named in the environment is for the internet, and
+// must be shown none of it. Each runtime reads what names a proxy when it starts, so the
+// plugin is run in a process of its own that was started with a proxy named.
+describe.skipIf(process.platform === 'win32')('the OpenClaw add-on, in a gateway started with a proxy named in its environment', () => {
+  /** Something that takes whatever is sent to it as a proxy would, notes the first line of each thing asked, and passes nothing on. */
+  async function collecting() {
+    const seen: string[] = []
+    const server = net.createServer((socket) => {
+      socket.on('error', () => {})
+      let got = ''
+      socket.on('data', (piece: Buffer) => {
+        const first = !got.includes('\r\n')
+        got += piece.toString('latin1')
+        if (!first || !got.includes('\r\n')) return
+        seen.push(got.split('\r\n')[0]!)
+        socket.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+      })
+    })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    const at = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`
+    return {
+      seen,
+      // Named in every variable either runtime reads, with nothing left out of its reach
+      env: { HTTP_PROXY: at, http_proxy: at, HTTPS_PROXY: at, https_proxy: at, ALL_PROXY: at, all_proxy: at, NO_PROXY: '', no_proxy: '' },
+      close: () => new Promise<void>((r) => void server.close(() => r())),
+    }
+  }
+  const bun = (process.env.PATH ?? '')
+    .split(path.delimiter)
+    .map((dir) => path.join(dir, 'bun'))
+    .find((file) => existsSync(file))
+  // A key as OpenClaw makes one for a chat, which holds a telephone number
+  const CHAT = 'agent:main:whatsapp:dm:+15551234567'
+  /** A gateway cut down to what the plugin asks of one: it runs a command in the chat, and says what it was handed for it. */
+  const GATEWAY = `
+    import plugin from ${JSON.stringify(pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.js')).href)}
+    const hooks = {}
+    const services = []
+    plugin.register({
+      registrationMode: 'full',
+      logger: { warn() {} },
+      on: (name, fn) => void (hooks[name] = fn),
+      registerService: (service) => void services.push(service),
+      runtime: {
+        config: { current: () => ({}) },
+        agent: { session: { getSessionEntry: () => ({ sessionId: 's-1', delivery: { kind: 'internal' } }) } },
+        channel: {
+          inbound: {
+            dispatch: async (plan) => {
+              console.log(plan.ctxPayload.Body)
+              plan.replyOptions.onAgentRunStart('run-1')
+              return { dispatched: true }
+            },
+          },
+        },
+      },
+    })
+    hooks.resolve_exec_env({ sessionKey: ${JSON.stringify(CHAT)} }, { sessionKey: ${JSON.stringify(CHAT)}, agentId: 'main' })
+    for (const service of services) service.start()
+    setTimeout(() => process.exit(0), 20000)
+  `
+
+  for (const [name, runtime, told] of [
+    ['Node told to use the environment’s proxy', process.execPath, { NODE_USE_ENV_PROXY: '1' }],
+    ['Bun', bun, {}],
+  ] as const)
+    test.skipIf(!runtime)(
+      `under ${name}, a click is asked for, taken and reported over the connector’s port on this machine, and the proxy is sent nothing`,
+      async () => {
+        const proxy = await collecting()
+        await onPort(fakeConnector(0))
+        offered[CHAT] = [{ id: 'click-1', text: 'what the person wrote on the page' }]
+        const gateway = path.join(home, 'gateway.mjs')
+        writeFileSync(gateway, GATEWAY)
+        const child = spawn(runtime!, [gateway], { env: { PATH: process.env.PATH, IT_HOME: home, ...proxy.env, ...told }, stdio: ['ignore', 'pipe', 'ignore'] })
+        let handed = ''
+        child.stdout.on('data', (piece) => (handed += piece))
+        try {
+          // Either the connector hears that the agent has the click, or the proxy was asked something
+          const end = performance.now() + 15_000
+          while (!acks().length && !proxy.seen.length && performance.now() < end) await new Promise((r) => really(r, 20))
+          expect(proxy.seen).toEqual([])
+          expect(asked.map((a) => a.path)).toContain(clicksPath(CHAT))
+          expect(handed.trim()).toBe('what the person wrote on the page')
+          expect(acks()).toEqual(['click-1'])
+        } finally {
+          child.kill('SIGKILL')
+          await proxy.close()
+        }
+      },
+      30_000,
+    )
 })

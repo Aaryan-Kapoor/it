@@ -141,6 +141,45 @@ describe('the addresses another device can open the site at', () => {
     expect(listed).toEqual(['http://192.168.0.14:4700', 'http://100.90.1.2:4700'])
   })
 
+  test('on Windows a switch that joins its virtual machines to the network itself carries the machine’s own address there, and is given: after any other adapter’s, and seen where it is a public one', () => {
+    // An external switch takes the wire's address for its own, and the wire is left with none. Its name is whatever the person called it
+    const behindASwitch = {
+      Ethernet: [],
+      'vEthernet (External Switch)': [six('fe80::91c2:4d10:7a3e:55b1'), four('192.168.1.50'), six('fd12:3456:789a:1::50')],
+      'vEthernet (Default Switch)': [four('172.20.32.1')],
+      'vEthernet (WSL (Hyper-V firewall))': [four('172.29.112.1')],
+      'vEthernet (nat)': [four('172.24.64.1')],
+      'vEthernet (DockerNAT)': [four('10.0.75.1')],
+    }
+    expect(reachable(4700, behindASwitch)).toEqual(['http://192.168.1.50:4700', 'http://[fd12:3456:789a:1::50]:4700'])
+    // Beside an adapter that is no switch, that adapter's address is the likelier, and comes first
+    expect(reachable(4700, { 'vEthernet (LAN bridge)': [four('192.168.1.50')], 'Wi-Fi': [four('192.168.0.14')] })).toEqual([
+      'http://192.168.0.14:4700',
+      'http://192.168.1.50:4700',
+    ])
+    // A public address on such a switch is the machine's own, and whoever turns the network on is told of it
+    expect(publicAddress({ 'vEthernet (External Switch)': [four('203.0.113.9')] })).toBe('203.0.113.9')
+    expect(publicAddress6({ 'vEthernet (External Switch)': [six('2001:db8::9')] })).toBe('2001:db8::9')
+    expect(publicAddress({ 'vEthernet (Default Switch)': [four('203.0.113.9')] })).toBeUndefined()
+  })
+
+  test('every address is written with its port, port 80 too, which is how the backend takes an address and keeps it for the pairing screen', () => {
+    // The backend keeps only what is written as it expects an address to be, and drops the rest without a word
+    const written = /^const ADDRESS = \/(.+)\/$/m.exec(readFileSync(path.join(__dirname, '../../convex/network.ts'), 'utf8'))?.[1]
+    expect(written).toEqual(expect.any(String))
+    const kept = new RegExp(written!)
+    const here = { en0: [four('192.168.1.20'), six('fd00::20'), six('FD00:0:0:0:0:0:0:21')] }
+    for (const port of [80, 81, 4700]) {
+      const listed = reachable(port, here)
+      expect(listed).toEqual([`http://192.168.1.20:${port}`, `http://[fd00::20]:${port}`, `http://[fd00::21]:${port}`])
+      expect(listed.filter((address) => kept.test(address))).toEqual(listed)
+    }
+    expect(reachable(80, { tailscale0: [four('100.101.42.17')] }, true, () => 'studio.tail1234.ts.net').filter((address) => kept.test(address))).toEqual([
+      'http://studio.tail1234.ts.net:80',
+      'http://100.101.42.17:80',
+    ])
+  })
+
   test('an address a machine gave itself comes after every other under IPv4, a public one after the home network’s, and each address is given once', () => {
     const listed = reachable(39500, {
       eth0: [four('169.254.10.20'), four('203.0.113.9'), four('192.168.1.20'), four('192.168.1.20')],
@@ -306,7 +345,11 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
       .map((line) => line.replace(/^\S+ /, ''))
   /** How the running service last told the backend its door stands. */
   const told = () =>
-    asAdmin({ api: backendAt(port).api, adminKey: settings().adminKey }, 'network:current', {}) as Promise<{ on: boolean; addresses: string[] }>
+    asAdmin({ api: backendAt(port).api, adminKey: settings().adminKey }, 'network:current', {}) as Promise<{
+      on: boolean
+      addresses: string[]
+      tailnet?: boolean
+    }>
   /** Sets It up, starts its service by hand as `it serve`, and waits until it is all there. */
   async function serving() {
     expect(await run(['setup', '--none', '--no-service']).ended).toBe(0)
@@ -435,6 +478,21 @@ describe.skipIf(!program || process.platform === 'win32')('`it network`, run as 
       expect(service.child.exitCode).toBeNull()
       // What the service wrote down names none of this machine's addresses
       for (const at of reachable(port)) expect(log()).not.toContain(new URL(at).hostname)
+    },
+    120_000,
+  )
+
+  turningItOn(
+    'the real service reports the policy it applied before the command confirms a change',
+    async () => {
+      await serving()
+      writeFileSync(path.join(folder, 'service.json'), JSON.stringify({ ...settings(), network: true, tailnet: true }))
+      expect(await until(async () => (await told()).tailnet === true)).toBe(true)
+      expect(await told()).toMatchObject({ on: true, tailnet: true })
+      expect((await said(['network', 'on'])).answer.network).toBe(true)
+      expect(await told()).toMatchObject({ on: true, tailnet: false })
+      expect((await said(['network', 'off'])).answer.network).toBe(false)
+      expect(await told()).toMatchObject({ on: false, tailnet: false })
     },
     120_000,
   )

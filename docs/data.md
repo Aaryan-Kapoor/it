@@ -1,17 +1,21 @@
 # What It keeps
 
-Everything It keeps is in one folder, `~/.it`, which only your user can look inside. `IT_HOME` names another folder for it. That folder is the only copy of your pages and of the record of what was done on them, and nothing of them is kept off the machine. The one other place It keeps anything is the browsers you pair, and [What a paired browser keeps](#what-a-paired-browser-keeps) says what.
+Your pages and It's own records are in one folder, `~/.it`, which only your user can look inside. `IT_HOME` names another folder for it. Without that variable, an installed standalone command finds its home above its real `bin` directory; a source or package command uses `~/.it`. That folder is the only copy of your pages and of the record of what was done on them, and nothing of them is kept off the machine. Add-ons and recovery originals also live beside your agent apps and shell files, as described below. The browsers you pair keep their own share, and [What a paired browser keeps](#what-a-paired-browser-keeps) says what.
 
 ## Where everything is kept
 
 | In `~/.it` | What it is |
 |---|---|
+| `installation.json` | The record that identifies an installation and its custom home. An unreadable record is kept as `installation.json.unreadable` and cannot authorise removal |
 | `service.json` | It's settings: the port, whether the network is on, and the secrets It runs its backend with. Whoever can read this file can do anything to what It holds |
 | `backend/` | The backend's database and the files it stores, the backend program as it was fetched, in `bin/`, and the copies of the database that It keeps before a newer version changes it, in folders whose names begin with `before-` |
 | `content/`, `content-data/` | The files of every version of every page, and the small database of the part of It that serves them |
 | `machine.json`, `token.json` | This machine's identity and its key, and the short-lived token the key last earned |
 | `push.json` | The keys It signs notifications with, made the first time one is needed |
 | `connector.json`, `journal.jsonl` and the files beside them | How the add-ons reach It on this machine, and its record of each click it handed to an agent, by ids alone |
+| `conversations.json`, `heard.json`, `aliases.json` | What It notes of your conversations on this machine: the folder each was held in when it published a page, which is where a closed one is reopened; which of them an add-on has been heard from in; and which carried on under another id after it was cleared. They are sent nowhere |
+| `conversation-notes-erasing` | A mark that conversation notes still need removing after erasure. It names nobody and stays until cleanup succeeds, including across service restarts |
+| `delivery-recovery.json`, `delivery-recovery.json.unreadable` | Click contents, mark texts and delivery receipts kept in a private file so delivery can resume after a restart. Erasing everything removes them |
 | `runs.json`, `cut-off.json`, `stopped.json` | Auto-wake's own notes: which conversations It has reopened and that are running now, each with its process's number, when it started and which start of the machine that was, so that a service that starts again can find and end them; and which conversations are owed the word, the next time they are reopened, that a turn of theirs was cut off or stopped. `runs.json.unreadable` is such a note that could not be read, kept as it was: It then reopens nothing until `it runs clear` is run |
 | `releases.json`, `updates-off` | Where this It looks for a newer version, where it was installed from another place than the usual one, and whether you have told it not to look |
 | `was.json` | On a machine that joined an It and left with `it logout`: which machine it was, so that its pages come along if it joins again |
@@ -24,11 +28,25 @@ Everything It keeps is in one folder, `~/.it`, which only your user can look ins
 
 A machine that joined an It on another computer runs no backend and holds no pages, so its folder has no `service.json`, no `backend/`, no `content/` and no `push.json`.
 
+When you confirm `it uninstall`, It deletes its own subfolders whole, including all databases, copies, page files and logs. Only the top level uses a list of recognised files, to leave unrelated files alone if `IT_HOME` named the wrong folder. [Stopping and removing It](install.md#stopping-and-removing-it) describes the ownership checks and what stays when removal cannot finish.
+
 Three things about the folder are worth knowing.
 
-- **It never moves, replaces or deletes a database.** One that the backend program cannot open is left exactly where it is: It stops, and says what it found. Under `backend/` it removes, renames and writes over nothing that it did not make, whatever it is called. [When something does not work](troubleshooting.md) says what each such stop means.
+- **While running or updating, It never moves, replaces or deletes a database it cannot identify.** One that the backend program cannot open is left exactly where it is: It stops, and says what it found. While running or updating, It removes, renames and writes over nothing under `backend/` that it did not make, whatever it is called. [When something does not work](troubleshooting.md) says what each such stop means.
 - **The folder has to be on a disk of the computer's own.** A memory stick or a network share may not let It make its settings and its locks in the way it needs, and there It stops with `home_unfit`: name a folder on the computer's own disk with `IT_HOME`.
 - **On Linux and macOS the folder's path can be at most 85 bytes long.** In a folder with a longer one the connector, which hands clicks to your agents, does not start, and says `home_too_long`.
+
+## Recovery originals
+
+Before It replaces or removes a settings file, shell profile or file it previously copied into an agent app, it moves that original into `<file>.it-recovery/<number>/original` beside it. For a linked shell profile this folder is beside its target, and the symlink stays in place. It deletes the saved original and its empty recovery folders once a settings or profile change is confirmed, while failed or interrupted changes keep their originals for recovery. If another program saves into the original during the change, It keeps that save and reports the change as unfinished. The terminal reports retained originals by path, while service logs report only their number.
+
+Copied add-on files whose bytes still match It's installation record need no lasting recovery copy, so It deletes those originals and their empty recovery folders after a successful replacement or removal. Uninstall also clears matching originals left by interrupted changes, while keeping originals that contain personal edits. Existing user files kept under `.set-aside-by-it` names stay until you remove them too.
+
+Each file has 20 numbered recovery slots for changes that still need review, and the originals in them stay until you remove them. Erasing pages leaves them alone, and uninstall leaves personal originals beside the external files they came from. If you deliberately keep an app's settings or a profile target inside `IT_HOME`, uninstall deletes that folder and the originals inside it too. A change that needs a twenty-first slot stops until you review the originals and remove numbered folders you no longer need. An interrupted change can leave an empty numbered folder that still uses a slot, while a change that leaves the file identical uses none and successful ordinary updates free theirs immediately.
+
+To recover a change, close the app or editor that writes the file, compare the reported original with the current file, and copy back the parts you need. If an interrupted operation left the file absent, copy the original back to its former name. Review it first: restoring the whole original also restores It's entries. After checking the result, remove only the numbered folders you no longer need, leaving `owner.json` in the recovery folder.
+
+Before moving an installed file, It checks that the filesystem supports hard links; if it does not, the file stays in place and the change stops. The original keeps its permissions. The recovery directory is private to your account on macOS and Linux; on Windows it inherits the parent folder's access rules. Retained originals can hold private settings and remain readable to anyone who can read those files. They are on the same disk and are not a backup against disk failure. There is a brief gap between moving the original and placing the new file. If another program creates a file at that name in the gap, It leaves that save in place and reports the replacement or removal as unfinished. An editor that keeps an old file handle open must reopen the current file after a successful change; It no longer keeps the old copy once the change is confirmed. Apps that install or remove their own plugins handle their own files; this recovery policy covers the files It edits or copies itself.
 
 ## Backing it up
 
@@ -36,7 +54,9 @@ A copy of the whole folder, made while It is stopped, is a backup of everything:
 
 The copies It keeps under `backend/`, in folders whose names begin with `before-`, are not a backup. They are on the same disk as what they copy, they hold the database and not the files of your pages, only the two made last are kept, the ones there are when you erase everything go with it, and one made soon after an erasing is removed a few hours later. They are there for one thing, which the next section describes.
 
-The site's settings can download the records It holds. That download is a record and not a backup: it has each page's state and history and the names and checksums of its files, it does not have the files, and nothing of It reads it back in. With each page It also keeps the name of the folder the page was published from, and of that folder's repository where it has one. Nothing shows that name and the download does not hold it; it goes when the page's owner erases everything. The same settings say what It keeps and for how long, and what is so of the computer It runs on: whether It starts by itself there, which ports it uses, and whether usage counts are sent.
+The site's settings can download the records It holds, including retained page deletion receipts and their cleanup timestamps. That download is a record and not a backup: it has each page's state and history and the names and checksums of its files, it does not have the files, and nothing of It reads it back in. With each page It also keeps the name of the folder the page was published from, and of that folder's repository where it has one. Nothing shows that name and the download does not hold it; it goes when the page's owner erases everything. The same settings say what It keeps and for how long, and what is so of the computer It runs on: whether It starts by itself there, which ports it uses, and whether usage counts are sent.
+
+The records download as they are read, and work in Firefox and over plain HTTP. Use Downloads in your browser to watch progress or cancel. If a download fails or is cancelled, discard any partial file and start again. A complete JSON file ends with `"complete": true`. Signing out or ending that browser's pairing stops further batches.
 
 ## A newer It on the same data
 
@@ -55,12 +75,14 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 | What | How long |
 |---|---|
 | A page, with its state | Until you delete it, with `it delete <id>` or on the site |
-| Earlier versions of a page | The ten newest. An older one goes when a newer one is published |
+| Earlier versions of a page | The nine newest, which with the one that is shown makes ten versions kept. An older one goes when a newer one is published |
 | What was done on a page | A week after an agent was given it. A month if no agent ever took it |
 | A notification | A month |
-| A publish that was begun and never finished | An hour |
+| A publish that was begun and never finished | An hour. Completing it is allowed for thirty minutes |
+| The outcome of a publication | Thirty days from when publishing began, or until its page is deleted. A repeated completion returns that outcome even after the content version has gone |
+| A page deletion receipt, with its title and id | Until seven days after completion, or until you erase everything. Unfinished deletions are kept and retried |
 | A browser's pairing | For as long as the browser is used, and a year after it was last used, unless you end it sooner |
-| A showing of a page | Until nothing has asked under it for ten minutes, and a day at most. The site then shows the page again by itself. It ends at once when the page is deleted, when its display is signed out, and when It stops |
+| A showing of a page | Until nothing has asked under it for ten minutes, and a day at most. The site then shows the page again by itself. It ends at once when It stops, and a moment after the page is deleted or its display is signed out, as the second paragraph under this table says |
 | A machine you revoked | Its record for a month, and for as long after that as a page it made is still there |
 | The key of a display you forgot | Refused for 90 days, so that the browser that held it has to be paired again to be a display |
 | The background service's log | Its newest few megabytes |
@@ -68,6 +90,14 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 | The backend program's note of a task it ran in the background | About an hour after the task ran, and then, as with anything removed, about an hour more inside the database's file |
 
 Removing something takes it out of what It shows and answers with at once. Inside the database's own file it takes longer to go: what was removed can still be read there for about an hour, counted while the backend program runs, by whoever can read the file, and traces of it can stay in the file's unused space after that. The copies kept from before an update are copies of the whole file, and hold all of it for as long as they are kept. [What It protects, and what it does not](what-it-protects.md#what-is-removed-can-be-read-in-the-databases-file-for-a-while) says all of this in full.
+
+One thing follows a moment later, and not at once: the address of a showing that was already open. Deleting a page, erasing everything and signing a display out are recorded in the backend, and from that moment the page is in no list, nothing can be done on it and no display is let open it anew. The part of It that serves a page's files is then told, in a step of its own that starts as soon as the deletion or the sign-out is recorded, and until it has heard, the address still answers with the files to whoever holds it. Measured on one computer, over forty deletions, it went on answering for between three and six hundredths of a second after the deletion was asked for. Where the telling fails it is tried again after five seconds, then after ten, then twenty, and so on, with an hour at most between two tries, and where the backend stopped before it could try at all, within about seven minutes of running again. However long that takes, the address stops answering as the table says: ten minutes after anything was last asked under it, and a day after the showing began at the latest.
+
+A browser that signs itself out waits a few seconds to hear that it was told, and says so where it was not. The Pages screen shows pending deletions and failed attempts, and says completion is confirmed only when the page's records are removed and the content service confirms its files are gone.
+
+`it delete <id>` waits up to five seconds for that confirmation after the request is accepted, including time waiting for replies. Its JSON contains `deleted` only when confirmed; otherwise it reports `pending` or `retrying`. `it delete <id> --status` checks the latest deletion of that id without deleting anything. Receipts remain available after a restart, and an unknown or expired receipt is never treated as success.
+
+A defensive cleanup runs again after twenty minutes for uploads that were under way. Uploads cannot restore a deleted page after the first cleanup is confirmed.
 
 ## How much It takes
 
@@ -88,7 +118,7 @@ Whatever goes past one of these is refused, in a sentence that says which, and w
 | Displays | 25 |
 | Paired browsers | 50 |
 
-Where there are 25 displays already, another is let in only if room can be made for it by letting one go. The one to go is the one longest unopened among those that were never named, take no notifications and have not been open for ten minutes. Failing that, it is the one that has gone longest unopened of all, if that is a month or more. Where there is neither, the new display is refused, and you forget one on the Displays page first. For a fifty-first paired browser room is always made, by ending the one that has gone longest unused.
+Where there are 25 displays already, another is let in only if room can be made for it by letting one go. The one to go is the one longest unopened among those that were never named, take no notifications and have not been open for ten minutes. Failing that, it is the one that has gone longest unopened, if that is a month or more. Where there is neither, the new display is refused, and you forget one on the Displays page first. Letting a display go also ends what its earlier pairings let in, while the browser asking stays paired. A paired screen makes room only by letting go of a display of its own, and is refused where it has none to let go. For a fifty-first paired browser room is always made, by ending the one that has gone longest unused.
 
 It also counts how fast things come, so that one page or one command that has gone wrong cannot use up what the rest need. What comes too fast is refused with `rate_limited`, and is taken when it is sent again a moment later.
 
@@ -96,6 +126,7 @@ It also counts how fast things come, so that one page or one command that has go
 - It takes 30 actions from one page before it slows that page to one a second, and 60 from all pages together before it slows them to two a second. What pages store for themselves is counted in the same way, apart from their actions. What actions carry is counted too: 4 MB at once, and then 512 KB a minute.
 - Your agents together may publish 30 times at once and then once a second, and ask the displays to show a page as often. They may send 15 notifications at once and then one every two seconds.
 - A showing's files may be asked for 3,000 times in a minute, and all of your showings together 30,000 times. A page of the most files loads several times over within that. Past either, the pages' port answers 429 until that minute is over.
+- A publication has thirty minutes for its files and completion, including retries. Each file gets a minute plus its size at 20,000 bytes per second. If a completion answer is lost, the command asks for the same outcome again. If It remains unreachable, running the identical command again resumes the saved publication. The local note holds only a digest of the request, an operation id and its time, under `publication-pending/` in It's folder. It goes when the result is known, or when everything is erased on the host. On a joined machine it stays until the command is tried again or It is uninstalled. After thirty days, the command asks you to check the page before removing the note and trying again.
 - The files of one version may be uploaded 1,500 times in a minute, and all uploads together 6,000 times, which is three times and more what a version of the most files takes. Past either, an upload is answered 429, and the `it` command waits and sends the file again, up to five times more, before it gives the publish up as `rate_limited`.
 - State may be changed 200 times at once and then ten times a second. Every change stores the whole state again and sends it to every display that shows the page, so a change is counted by the size of the whole state as well: for one page, 8 MB at once and then 2 MB a minute, and twice that for all pages together.
 
@@ -105,8 +136,9 @@ A paired browser keeps a little in its own storage, under the address it opened 
 
 - It keeps the cookie that is its pairing.
 - It keeps a key that says which display it is, a token with which that display can sign itself out, and the ids It has for you and for the browser's pairing, which say nothing of who you are.
-- It keeps what you did on a page that has not reached It yet, exactly as it is to be sent: at most a hundred such actions, and thirty for one page. One that could not be sent is tried again when the site is next open in that browser. One that is more than a week old is dropped when the site next starts there, whoever it was kept for and whether or not the browser is still paired.
+- It keeps page clicks, typed messages you have sent, and notification answers until It confirms them, under the browser's current pairing. It keeps at most a hundred requests, and thirty for one page or notification. They are tried again when the site is next open in that browser. Signing out, ending the pairing or pairing again clears its pending requests. A browser discards requests it considers more than a week old. For page clicks and typed messages, the backend also limits retries to a deadline it issued before the first dispatch, at most seven days later, regardless of the browser's clock. A request saved without such a deadline can confirm an existing receipt, but is refused if It no longer has one. A notification accepts only one answer; a removed notification cannot be answered again. A typed message refused during recovery stays in the composer with the reason until you send a new message or its week expires.
 - Where you turned notifications on, it keeps the site's script that shows them while the site is closed.
+- It keeps a value that lets every tab see when notifications were turned off, so that automatic repairs leave that choice alone. It clears that value only when you turn notifications on again successfully.
 - When a pairing of that browser ends, it keeps the name of the cookie it held for a day more, in a list of at most twenty such names. A name is no secret and opens nothing: with it the browser asks again for that cookie to be cleared, should an answer that was on its way have put it back.
 
 Erasing everything, in the site's settings, makes each browser let go of all of that, in every tab the site is open in: the cookie that is its pairing, everything in its storage but the names of the cookies it held, and, where notifications were on, the script that shows them, with any notification of It's that is still showing. The names are kept for a day more, as the list above says, and so they are after a sign-out. The browser that asked does so at once. Every other does so the next time the site is opened in it, and one that was offline does so when it comes back: it asks whether It still holds anything for you, is told that it does not, and names the pairing it had, so that its cookie is cleared. Nothing that was under way in a tab at that moment writes any of it back. What a browser keeps for itself of your having used the site, such as its history and whether it lets the site notify you, stays until you clear it there. Clearing the site's data in a browser removes what the site kept at any time.
@@ -115,10 +147,12 @@ Erasing everything, in the site's settings, makes each browser let go of all of 
 
 The site's settings can erase everything It holds and leave It installed. Afterwards It is as it was before it was first set up: every browser is unpaired and every machine forgotten, and `it setup` followed by `it site` begins again.
 
-Erasing ends what every display and machine can do at once, and then removes every page, its files and every record of them, with the copies of the database that It had kept from before an update when it was told of the erasing. Each paired browser lets go of what it kept, as [What a paired browser keeps](#what-a-paired-browser-keeps) says. Some things stay:
+Erasing ends what every display and machine can do at once, and then removes every page, its files and every record of them, with the copies of the database that It had kept from before an update when it was told of the erasing. On the computer It runs on, what It had noted of your conversations goes as well: `conversations.json`, which has the folder each was held in, `heard.json`, `aliases.json`, `journal.jsonl`, `cut-off.json` and `stopped.json`. The service removes these notes again once its connector has stopped, since the connector may write them from memory as it ends. If removal fails, the service keeps it pending on disk and retries before starting another connector, even after a service restart. Each paired browser lets go of what it kept, as [What a paired browser keeps](#what-a-paired-browser-keeps) says. Some things stay:
 
-- What was removed stays inside the database's file for about an hour more, and traces of it can stay in the file's unused space after that, as [How long things are kept](#how-long-things-are-kept) says. For about an hour after a task has run, the backend program also keeps its note of it, which holds the id of a record of It's own and no person's.
+- What was removed stays inside the database's file for about an hour more, and traces of it can stay in the file's unused space after that, as [How long things are kept](#how-long-things-are-kept) says. For about an hour after a task has run, the backend program also keeps its note of it, which holds ids of records of It's own, for some tasks the id an agent app gave a conversation, and no person's.
 - A copy of the database that It makes before the backend program has run for about two and a half hours since everything was erased still holds what was erased, as the database's own file does for that long. It removes such a copy once that time is over, whether or not a later copy exists, so the way back that copy gave lasts only until then.
 - The content service keeps two notes, by ids alone, so that nothing from before can be used: that every display was signed out, which it clears away the next time a page is shown more than a day later, and that the files were deleted, which it clears away the next time something is deleted more than an hour later.
 - The program stays, with its settings, its keys and its log, which holds ids and counts and nothing that was on a page.
+- `runs.json` stays for as long as a turn that It reopened may still be running: it names that conversation and its process, which is what keeps It from reopening the conversation a second time beside it, and it goes when the turn has ended.
+- A computer that had joined keeps its own notes of its conversations, the folders in `conversations.json` among them. It is told that It no longer knows it, and not why. `it uninstall` there removes them with everything else, and so does deleting those files.
 - A copy of the folder that you made yourself, and the records you downloaded, are yours to remove.

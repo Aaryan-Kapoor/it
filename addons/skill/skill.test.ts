@@ -2,7 +2,9 @@
 // it to the program it describes: a command, a flag or a field that the skill names is one the
 // `it` command and the in-page script really have.
 import { readdirSync, readFileSync } from 'node:fs'
-import { describe, expect, test } from 'vitest'
+import { JSDOM } from 'jsdom'
+import { describe, expect, onTestFinished, test } from 'vitest'
+import { RUNTIME } from '../../packages/content/src/runtime.generated'
 import { LIMITS, QUOTA } from '../../packages/protocol/src/index'
 
 const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8')
@@ -20,6 +22,58 @@ const help = /const HELP = `([\s\S]*?)`\n/.exec(main)![1]!
 const code = [...skill.matchAll(/```[a-z]*\n([\s\S]*?)```|`([^`\n]+)`/g)].flatMap((m) => (m[1] ?? m[2]!).split('\n'))
 /** The `it` commands among it, each as its words. */
 const commands = code.filter((line) => /^it [a-z]/.test(line)).map((line) => line.split(/\s+/))
+
+/** Run the documented draft example with the served runtime and control the site's answers. */
+const draftPage = () => {
+  const example = /```html\n([\s\S]*?)```/.exec(more.page!)![1]!
+  const script = /<script>([\s\S]*?)<\/script>/.exec(example)![1]!
+  const w = new JSDOM(`<!doctype html><body>${example.replace(/<script>[\s\S]*?<\/script>/, '')}</body>`, {
+    url: 'http://content.test/s/a-token/v/1/index.html',
+    runScripts: 'outside-only',
+  }).window as any
+  onTestFinished(() => w.close())
+  const later = new Map<number, { fn: () => void; ms: number }>()
+  let timer = 0
+  w.setTimeout = (fn: () => void, ms: number) => {
+    later.set(++timer, { fn, ms })
+    return timer
+  }
+  w.clearTimeout = (n: number) => later.delete(n)
+  w.setInterval = () => 0
+  w.__IT__ = { app: 'http://app.test', id: 'notes', version: 1, keep: '/s/a-token/__it/keep' }
+  w.parent.postMessage = () => {}
+  w.eval(RUNTIME)
+  w.eval(script)
+  const sent: any[] = []
+  const port = { postMessage: (m: unknown) => sent.push(m), onmessage: null as ((e: { data: unknown }) => void) | null }
+  w.dispatchEvent(Object.assign(new w.Event('message'), { origin: 'http://app.test', source: w.parent, data: { type: 'it:port' }, ports: [port] }))
+  const box = w.document.getElementById('draft')
+  const stores = () => sent.filter((m) => m.type === 'it:store')
+  return {
+    box,
+    retry: w.document.getElementById('draft-retry'),
+    said: () => w.document.getElementById('draft-status')?.textContent,
+    types(text: string) {
+      box.value = text
+      box.dispatchEvent(new w.Event('input'))
+    },
+    arrives: (state: unknown, revision: number) => port.onmessage!({ data: { type: 'it:state', state, revision } }),
+    /** Run only the documented debounce, not the runtime's connection retry. */
+    aMomentLater() {
+      for (const [id, { fn, ms }] of [...later]) {
+        if (ms !== 800) continue
+        later.delete(id)
+        fn()
+      }
+    },
+    stored: () => stores().map((m) => m.value),
+    async answer(index: number, ok: boolean) {
+      const requestId = stores()[index].requestId
+      port.onmessage!({ data: { type: 'it:result', requestId, ok, ...(ok ? {} : { error: 'The save was refused.' }) } })
+      await new Promise(setImmediate)
+    },
+  }
+}
 
 describe('the agent skill', () => {
   test('is short, and names each part it leaves out where an agent would want it, by the command that prints it', () => {
@@ -60,7 +114,7 @@ describe('the agent skill', () => {
         const flag = /^[[(]?(--[a-z-]+)/.exec(word)?.[1]
         if (flag) flags.set(words[1]!, (flags.get(words[1]!) ?? new Set()).add(flag))
       }
-    expect([...flags.keys()].sort()).toEqual(['ack', 'action', 'actions', 'create', 'notify', 'open', 'patch', 'update', 'wait'])
+    expect([...flags.keys()].sort()).toEqual(['ack', 'action', 'actions', 'create', 'delete', 'notify', 'open', 'patch', 'update', 'wait'])
     for (const [command, taken] of flags) {
       // What the program's own help says of that command
       const said = help
@@ -74,6 +128,7 @@ describe('the agent skill', () => {
   })
 
   test('names only fields that the commands print', () => {
+    const commands = main + source('../../packages/cli/src/wait.ts')
     for (const field of [
       'url',
       'shownOn',
@@ -90,7 +145,7 @@ describe('the agent skill', () => {
       'connector',
     ]) {
       expect(skill, field).toContain(field)
-      expect(main, field).toMatch(new RegExp(`\\b${field}\\b`))
+      expect(commands, field).toMatch(new RegExp(`\\b${field}\\b`))
     }
     // What `it status` says of an add-on and of the connector
     const setup = source('../../packages/cli/src/setup.ts')
@@ -244,7 +299,10 @@ describe('the agent skill', () => {
         .join(', ')} and \`${nine.at(-1)}\`, speak in sentences to a person at a terminal.`,
     )
     expect(skill).toContain('What you run is known to be an agent’s, so you get JSON from those too, and `--json` asks for it')
-    expect(main).toMatch(/const forPerson = \(a: Args\): boolean => process\.stdout\.isTTY === true && a\.flags\.json !== true/)
+    expect(main).toContain("import { failure, forPerson } from './output'")
+    expect(source('../../packages/cli/src/output.ts')).toMatch(
+      /const forPerson = \(a: Args\): boolean => process\.stdout\.isTTY === true && a\.flags\.json !== true && sessionAsked\(\) === undefined/,
+    )
   })
 
   test('tells an agent what a display that is not paired means, and how to change state only while it is as it was read', () => {
@@ -276,10 +334,131 @@ describe('the agent skill', () => {
     expect(runtime).toMatch(/if \(message\.type === 'it:state'\) \{[\s\S]{0,160}emit\(\)/)
     expect(skill).toContain("It is not there yet when the page's scripts first run")
     expect(skill).toContain('so as the page starts it returns `undefined` even for something that was saved')
-    // The example reads what was saved where the state arrives, once, and saves no faster than a page may send
-    const example = /```html\n<textarea id="draft">[\s\S]*?```/.exec(skill)![0]
-    expect(example).toMatch(/It\.onState\(\(\) => \{\s+if \(restored\) return\s+restored = true\s+box\.value = It\.store\.get\('draft'\) \?\? ''/)
-    expect(example).toMatch(/setTimeout\(\(\) => It\.store\.set\('draft', box\.value\)/)
+    // The example reads what was saved where the state arrives, and saves no faster than a page may send
+    const example = /```html\n[\s\S]*?```/.exec(more.page!)![0]
+    expect(example).toMatch(/It\.onState\(\(\) => \{[\s\S]{0,80}box\.value = It\.store\.get\('draft'\) \?\? ''/)
+    expect(example).toContain('setTimeout(save, 800)')
+  })
+
+  test('its example of a draft, run as it is written, puts back what was saved once and never over what was typed, before the state came or after', () => {
+    // Opened with nothing typed: what was saved is put back, and what is typed after it stays through every later change of the state
+    const opened = draftPage()
+    opened.arrives({ _page: { draft: 'what was saved' } }, 3)
+    expect(opened.box.value).toBe('what was saved')
+    opened.types('what was saved, and more')
+    opened.arrives({ _page: { draft: 'what was saved' }, status: 'Working' }, 4)
+    expect(opened.box.value).toBe('what was saved, and more')
+    opened.aMomentLater()
+    expect(opened.stored()).toEqual(['what was saved, and more'])
+    // Typed into before the state came, which takes a moment: what was typed stays, and it is what is saved
+    const early = draftPage()
+    early.types('typed before the state came')
+    early.arrives({ _page: { draft: 'what was saved' } }, 3)
+    expect(early.box.value).toBe('typed before the state came')
+    early.aMomentLater()
+    expect(early.stored()).toEqual(['typed before the state came'])
+  })
+
+  test('the draft example reports a failed save, preserves its text and retries without another edit', async () => {
+    const p = draftPage()
+    p.arrives({}, 0)
+    expect(p.said()).toBe('No unsaved changes.')
+    p.types('first letter')
+    p.types('the whole draft')
+    expect(p.said()).toBe('Changes not saved yet.')
+    expect(p.stored()).toEqual([])
+    p.aMomentLater()
+    expect(p.stored()).toEqual(['the whole draft'])
+    expect(p.said()).toBe('Saving...')
+    await p.answer(0, false)
+    expect(p.box.value).toBe('the whole draft')
+    expect(p.said()).toMatch(/^Not saved\. Keep this page open and try again\./)
+    expect(p.retry.hidden).toBe(false)
+    // A failure does not start an endless retry loop.
+    p.aMomentLater()
+    expect(p.stored()).toHaveLength(1)
+    p.retry.click()
+    p.retry.click()
+    expect(p.stored()).toEqual(['the whole draft', 'the whole draft'])
+    expect(p.said()).toBe('Saving...')
+    expect(p.retry.hidden).toBe(true)
+    await p.answer(1, true)
+    expect(p.said()).toBe('Saved.')
+    expect(p.box.value).toBe('the whole draft')
+    expect(p.retry.hidden).toBe(true)
+  })
+
+  test.each([true, false])('the draft example keeps newer text unsaved when an older request finishes with ok=%s', async (ok) => {
+    const p = draftPage()
+    p.types('older draft')
+    p.aMomentLater()
+    // Typing and its debounce both happen before the older request is answered.
+    p.types('newest draft')
+    p.aMomentLater()
+    expect(p.stored()).toEqual(['older draft'])
+    await p.answer(0, ok)
+    expect(p.box.value).toBe('newest draft')
+    expect(p.said()).toBe('Changes not saved yet.')
+    expect(p.retry.hidden).toBe(true)
+    p.aMomentLater()
+    expect(p.stored()).toEqual(['older draft', 'newest draft'])
+    await p.answer(1, false)
+    expect(p.said()).toMatch(/^Not saved\./)
+    // Even a repeated answer for the old request cannot clear this revision's failure.
+    await p.answer(0, true)
+    expect(p.said()).toMatch(/^Not saved\./)
+    expect(p.retry.hidden).toBe(false)
+    p.retry.click()
+    await p.answer(2, true)
+    expect(p.said()).toBe('Saved.')
+    expect(p.box.value).toBe('newest draft')
+  })
+
+  test('the draft example saves an edit made during a retry before saying it is saved', async () => {
+    const p = draftPage()
+    p.types('a draft')
+    p.aMomentLater()
+    await p.answer(0, false)
+    p.retry.click()
+    p.types('a draft with another sentence')
+    // The retry finishes before the new edit's debounce.
+    await p.answer(1, true)
+    expect(p.said()).toBe('Changes not saved yet.')
+    p.aMomentLater()
+    expect(p.stored()).toEqual(['a draft', 'a draft', 'a draft with another sentence'])
+    await p.answer(2, true)
+    expect(p.said()).toBe('Saved.')
+  })
+
+  test('says how much of what is waiting one `it wait` or one `it actions` prints, in the number the program keeps, and to run it again past that', () => {
+    // Each of the three lists a command reads from is cut at the same number
+    const read = source('../../convex/delivery.ts')
+    for (const list of ['waiting', 'waitingFor', 'allWaiting']) {
+      // The query's own text, from where it begins to where the next one does, however it comes to its answer
+      const from = read.indexOf(`export const ${list} = query({`)
+      const body = read.slice(from, read.indexOf('\nexport const ', from + 1))
+      expect([list, from >= 0 && body.includes('.take(50)')]).toEqual([list, true])
+    }
+    expect(more.waiting).toContain('at most 50 at once: read every line, and where 50 came, run it again, since more may be waiting.')
+    expect(more.actions).toContain('only lists what is waiting, 50 at most: where it lists 50, run it again once you have run `it ack` for those')
+    expect(skill).not.toContain('they are all printed')
+  })
+
+  test('says that a page is a conversation’s to keep or to take only where the harness names the conversation, and what to do where it does not', () => {
+    // With no conversation named, the command does not ask for the page as its own, nothing is taken by opening it, and taking it is refused
+    expect(source('../../packages/cli/src/publish.ts')).toContain('...(input.own && !input.take && session ? { own: true } : {})')
+    expect(main).toMatch(
+      /const mine = asked\?\.session[\s\S]{0,900}api\.displays\.show[\s\S]{0,300}\.\.\.\(mine \? \{ session: mine, agent: mine\.harness \} : \{\}\)/,
+    )
+    expect(source('../../convex/displays.ts')).toMatch(
+      /const took = mine && shown\.length \? \(await takePage\(ctx, artifact, machine, mine, agent\)\)\.took : false/,
+    )
+    expect(source('../../convex/publish.ts')).toMatch(/if \(args\.take && !args\.session\) fail\('invalid'/)
+    expect(short).toContain('None of that holds where your harness does not tell `it` which conversation this is: read `it help actions`')
+    expect(more.actions).toContain('publishes over its page and answers no `conflict`, `it open` brings a page up without making it yours, `--take` is refused')
+    // What it is told to do instead is there to be done: a page that is not there is said so
+    expect(source('../../convex/artifacts.ts')).toMatch(/artifactBySlug\(ctx, userId, ref\.slug\)\) \?\? fail\('not_found'/)
+    expect(more.actions).toContain('use the id only if that answers `not_found`')
   })
 
   test('its first lines are read the same by every app, the strictest of them included', () => {

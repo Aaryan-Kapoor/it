@@ -1,4 +1,5 @@
 // The site: pairing, this display's registration, and the frame around everything else.
+
 import { NOUN } from '@it/protocol'
 import { useConvex, useConvexAuth, useMutation, useQuery } from 'convex/react'
 import { Component, type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -32,9 +33,11 @@ import {
 } from './lib'
 import { Machines } from './machines'
 import { Bell, Toasts } from './notifications'
-import { anyUnsaved, drain, outboxBelongsTo, pairedForSomeone, stillPairedFor, thisPairing, watchOutbox } from './outbox'
+import { abandonOutbox, anyUnsaved, drain, outboxBelongsTo, pairedForSomeone, stillPairedFor, thisPairing, watchOutbox } from './outbox'
 import { Grid, PageView, wasShown } from './pages'
+import { hasPending, watchPending } from './pending'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
+import { ServiceNotice } from './service'
 import { codeSeen, current, signOut as endSession, pair, pairAsScreen, recheck, useSession } from './session'
 import { Displays, Settings } from './settings'
 import { TourDialog } from './welcome'
@@ -44,7 +47,7 @@ export function App() {
   const { isLoading, isAuthenticated } = useConvexAuth()
   // Whose clicks may be sent from this browser right now: the person it is paired for, and
   // nobody else's. Which session of theirs it is goes with it, for whatever is begun under one
-  outboxBelongsTo(paired ? user : null, paired ? session : null)
+  outboxBelongsTo(paired ? user : null, paired ? session : null, loaded)
   // Leaving is one session's doing. When the browser turns out to be under another (it was
   // paired again in another tab meanwhile), whoever is here now did not ask to leave
   const under = useRef(session)
@@ -404,7 +407,6 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const key = displayKey()
   const display = useQuery(api.displays.mine, { key })
   const pages = useQuery(api.artifacts.list, {})
-  const heartbeat = useMutation(api.displays.heartbeat)
   const [leaving, setLeaving] = useState(false)
   const [stillIn, setStillIn] = useState(false)
   // What is typed into the search, the finder and the tour's dialog, which the bar opens and the shell shows
@@ -413,10 +415,15 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const [tour, setTour] = useState(false)
   const closeFinder = useCallback(() => setFinding(false), [])
   const closeTour = useCallback(() => setTour(false), [])
-  // The finder opens on its key from anywhere on the site
+  // The finder opens on its key from anywhere on the site but a dialog
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+      // Not over a dialog, which keeps the keyboard to itself: Tab in the finder would go to the dialog under it
+      if (document.querySelector('[role="dialog"]')) {
+        e.preventDefault()
+        return
+      }
       e.preventDefault()
       setFinding(true)
     }
@@ -427,21 +434,37 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   // Presence, so a notification knows whether this display is open. The answer carries the
   // backend's clock, which is what "recent" is judged by everywhere on the site.
   useEffect(() => {
+    let live = true
+    let asking = false
     const beat = () => {
-      if (document.visibilityState !== 'visible') return
-      heartbeat({ key }).then(
-        (r) => learnClock(r.now),
-        () => {},
+      // One at a time: a tab that is hidden and shown again while the backend is slow to answer does not ask once more each time
+      if (asking || document.visibilityState !== 'visible') return
+      asking = true
+      // Trouble the backend had for a moment is got past by asking once more, a second or two
+      // on, and is then written nowhere. Left to the next beat, a minute later, the display
+      // would be taken for closed and the backend's clock go unlearned for that minute
+      askTwice(
+        convex,
+        (calls) => calls.mutation(api.displays.heartbeat, { key }),
+        () => live,
       )
+        .then(
+          (r) => learnClock(r.now),
+          () => {},
+        )
+        .finally(() => {
+          asking = false
+        })
     }
     beat()
     const t = setInterval(beat, 60_000)
     document.addEventListener('visibilitychange', beat)
     return () => {
+      live = false
       clearInterval(t)
       document.removeEventListener('visibilitychange', beat)
     }
-  }, [heartbeat, key])
+  }, [convex, key])
 
   // Clicks that were waiting to be sent go when the connection comes back: when the browser
   // says it is online again, and when the connection to the backend itself is made again,
@@ -553,6 +576,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
             return again(0)
           }
           startLeaving()
+          abandonOutbox(user)
           // If signing out does not work, the site starts again: registering is then refused, and
           // that screen says what happened and offers to try again
           void Promise.race([endSession(), new Promise<boolean>((r) => setTimeout(() => r(false), 15_000))]).then(
@@ -582,6 +606,9 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     if (!showing || showing.at <= shownAt.current) return
     shownAt.current = showing.at
     sessionStorage.setItem(shownKey, String(showing.at))
+    // The tour's dialog is the way to ask an agent for the tour, and what an agent brings up
+    // after it is most often that tour: left open, it would lie over the page it asked for
+    setTour(false)
     navigate(`/p/${encodeURIComponent(showing.slug)}`)
   }, [display, shownKey])
 
@@ -719,6 +746,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   )
   const notices = (
     <>
+      <ServiceNotice />
       {code === 'owner' && <CodeForAnotherScreen />}
       {code === 'screen' && <ScreenOffered onDecline={codeSeen} />}
     </>
@@ -728,7 +756,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
       {slug ? (
         <>
           {notices}
-          {view}
+          <div className="page-container">{view}</div>
         </>
       ) : (
         <Site>
@@ -1120,10 +1148,51 @@ class Root extends Component<{ children: ReactNode; onRefused: () => Promise<voi
 }
 
 /** Catches a refusal thrown while showing a view, such as a page that does not exist. */
-class Guard extends Component<{ children: ReactNode; shown?: string }, { error: unknown }> {
+export class Guard extends Component<{ children: ReactNode; shown?: string }, { error: unknown }> {
   override state = { error: null as unknown }
   static getDerivedStateFromError(error: unknown) {
     return { error }
+  }
+  private retries = 0
+  private reconnectedAt = 0
+  private reconnected = () => {
+    if (!this.state.error || Date.now() - this.reconnectedAt < 60_000) return
+    if (['not_found', 'unauthenticated', 'forbidden', 'invalid', 'conflict'].includes(refusal(this.state.error).code)) return
+    this.reconnectedAt = Date.now()
+    clearTimeout(this.timer)
+    this.retries = 0
+    this.due = true
+    this.retry()
+  }
+  private timer: ReturnType<typeof setTimeout> | undefined
+  private unwatch: (() => void) | undefined
+  private due = false
+  private retry = () => {
+    if (!this.due || hasPending()) return
+    this.due = false
+    this.setState({ error: null })
+  }
+  override componentDidMount() {
+    this.unwatch = watchPending(() => {
+      if (this.state.error) this.forceUpdate()
+      this.retry()
+    })
+    window.addEventListener('online', this.reconnected)
+  }
+  override componentWillUnmount() {
+    clearTimeout(this.timer)
+    this.unwatch?.()
+    window.removeEventListener('online', this.reconnected)
+  }
+  override componentDidCatch(error: unknown) {
+    const code = refusal(error).code
+    if (['not_found', 'unauthenticated', 'forbidden', 'invalid', 'conflict'].includes(code)) return
+    const wait = [1000, 5000, 15_000, 60_000][this.retries++]
+    if (wait === undefined) return
+    this.timer = setTimeout(() => {
+      this.due = true
+      this.retry()
+    }, wait)
   }
   /** A page that was on this screen and is there no more was taken away: the screen goes back to the person's pages. */
   private gone(): boolean {
@@ -1131,6 +1200,7 @@ class Guard extends Component<{ children: ReactNode; shown?: string }, { error: 
     return shown !== undefined && wasShown.has(shown) && refusal(this.state.error).code === 'not_found'
   }
   override componentDidUpdate() {
+    if (!this.state.error) this.retries = 0
     if (this.state.error && this.gone()) {
       wasShown.delete(this.props.shown!)
       navigate('/')
@@ -1142,16 +1212,20 @@ class Guard extends Component<{ children: ReactNode; shown?: string }, { error: 
     const r = refusal(this.state.error)
     // Being refused as nobody is not this view's to explain: it goes up, where the site asks whether this browser is still paired
     if (r.code === 'unauthenticated') throw this.state.error
-    // What was caught is let go of, and the view is drawn again. Nothing does that by itself:
-    // the view that failed is no longer there to hear that the backend answers again
-    const again = () => this.setState({ error: null })
+    const again = () => {
+      clearTimeout(this.timer)
+      this.retries = 0
+      this.due = true
+      this.retry()
+    }
     return (
       <main className="empty" role="alert">
         <h2>{r.code === 'not_found' ? `No such ${NOUN.one}` : 'That did not work'}</h2>
         <p className="muted">{r.code === 'not_found' ? 'It may have been deleted, or the address is wrong.' : r.message}</p>
+        {hasPending() && <p>Waiting for your pending request before trying this view again.</p>}
         {/* A page that is not there is not there the next time either: only what may have passed is offered again */}
         {r.code !== 'not_found' && (
-          <button type="button" className="primary" onClick={again}>
+          <button type="button" className="primary" onClick={again} disabled={hasPending()}>
             Try again
           </button>
         )}

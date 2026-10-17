@@ -1,6 +1,12 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 
+export const addonRuntime = v.object({
+  state: v.union(v.literal('active'), v.literal('inactive'), v.literal('unverified'), v.literal('incompatible')),
+  version: v.optional(v.string()),
+  idle: v.optional(v.boolean()),
+  detail: v.string(),
+})
 export const session = v.object({ harness: v.string(), id: v.string() })
 export const fileEntry = v.object({ path: v.string(), size: v.number(), sha256: v.string() })
 export const button = v.object({ label: v.string(), action: v.string() })
@@ -14,6 +20,19 @@ export const button = v.object({ label: v.string(), action: v.string() })
  * Only the machine the service enrols for itself names nothing: nobody invited it.
  */
 const invitedBy = { byMachine: v.optional(v.id('machines')), bySession: v.optional(v.id('sessions')) }
+
+export const expectedOwner = v.object({ machineId: v.id('machines'), session })
+export const publicationResult = v.object({
+  slug: v.string(),
+  version: v.number(),
+  url: v.string(),
+  superseded: v.boolean(),
+  anothers: v.optional(v.boolean()),
+  ownerChanged: v.optional(v.boolean()),
+  tourConflict: v.optional(v.boolean()),
+  elsewhere: v.optional(v.boolean()),
+  took: v.optional(v.boolean()),
+})
 
 export default defineSchema({
   // A person. There is one, whose subject is `owner`, made when the first machine is enrolled.
@@ -43,6 +62,8 @@ export default defineSchema({
   tours: defineTable({
     userId: v.id('users'),
     waitingUntil: v.optional(v.number()),
+    waitingId: v.optional(v.string()),
+    waitingCancelled: v.optional(v.boolean()),
     by: v.optional(v.string()),
     askedAt: v.optional(v.number()),
     takenAt: v.optional(v.number()),
@@ -61,6 +82,8 @@ export default defineSchema({
     lastSeenAt: v.number(),
     /** When the browser was last given its cookie, which lasts a year from then: at pairing, and again whenever it asks for a token with one more than a day old. */
     cookieAt: v.number(),
+    /** Server-issued replay deadlines. One per UTC day, at most seven active deadlines. */
+    replayUntil: v.optional(v.array(v.number())),
     /** Set when the session ends, however it ends. From then on the session is nobody. */
     endedAt: v.optional(v.number()),
     ...invitedBy,
@@ -105,6 +128,8 @@ export default defineSchema({
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
+    /** Earlier pairings of this display, whose invitations are ended when it is forgotten. */
+    previousSessions: v.optional(v.array(v.id('sessions'))),
     /** What kind of screen it is, as its browser's own name for itself said when it registered, whether it reached It at this machine's own address, and when it last said that it had the site open. For the counts of how It is used, and nothing else. */
     screen: v.optional(v.union(v.literal('phone'), v.literal('tablet'), v.literal('computer'), v.literal('tv'))),
     local: v.optional(v.boolean()),
@@ -154,7 +179,11 @@ export default defineSchema({
     /** When its connector said it was stopping, if it has and has not been heard from since: the machine is off from then, and not only once it has been quiet for a while. */
     offAt: v.optional(v.number()),
     /** What the connector found installed, and what the person asked to be connected. */
-    harnesses: v.optional(v.array(v.object({ id: v.string(), version: v.optional(v.string()), addon: v.string(), detail: v.optional(v.string()) }))),
+    harnesses: v.optional(
+      v.array(
+        v.object({ id: v.string(), version: v.optional(v.string()), addon: v.string(), detail: v.optional(v.string()), runtime: v.optional(addonRuntime) }),
+      ),
+    ),
     wanted: v.optional(v.array(v.string())),
     /** The agent apps whose closed conversations may be reopened on this machine for a click, and since when. The person's alone to say, from a browser of their own. */
     wakes: v.optional(v.array(v.object({ harness: v.string(), since: v.number() }))),
@@ -190,6 +219,8 @@ export default defineSchema({
 
   // A page. Its bytes are kept by the content service; this is everything else.
   artifacts: defineTable({
+    /** A tour's mark, null after ordinary publication, taking or rollback, and absent on unchecked legacy pages. */
+    tour: v.optional(v.union(v.null(), v.object({ name: v.string(), identity: v.string() }))),
     userId: v.id('users'),
     slug: v.string(),
     title: v.string(),
@@ -217,10 +248,28 @@ export default defineSchema({
   })
     .index('by_user_slug', ['userId', 'slug'])
     .index('by_user_updated', ['userId', 'updatedAt'])
+    .index('by_user_conversation', ['userId', 'session.harness', 'session.id'])
     // Whether any page still names a machine, which is what keeps a revoked machine's record
     .index('by_machine', ['machineId']),
 
+  publications: defineTable({
+    userId: v.id('users'),
+    machineId: v.id('machines'),
+    key: v.string(),
+    requestHash: v.optional(v.string()),
+    artifactId: v.id('artifacts'),
+    version: v.number(),
+    createdAt: v.number(),
+    result: v.optional(publicationResult),
+    abandoned: v.optional(v.boolean()),
+  })
+    .index('by_user_key', ['userId', 'key'])
+    .index('by_artifact_n', ['artifactId', 'version'])
+    .index('by_created', ['createdAt']),
+
   versions: defineTable({
+    /** The tour page and state this upload may replace, checked again when it goes live. */
+    tour: v.optional(v.object({ name: v.string(), identity: v.string(), version: v.optional(v.number()), revision: v.number() })),
     artifactId: v.id('artifacts'),
     userId: v.id('users'),
     n: v.number(),
@@ -228,6 +277,7 @@ export default defineSchema({
     bytes: v.number(),
     status: v.union(v.literal('staging'), v.literal('live'), v.literal('retired')),
     createdAt: v.number(),
+    publicationId: v.optional(v.id('publications')),
     /** The title this version was published with. It becomes the page's title when the version goes live. */
     title: v.optional(v.string()),
     /** Who published it, and whether they said they were taking the page over. Acted on when the version goes live. */
@@ -237,6 +287,8 @@ export default defineSchema({
         session: v.optional(session),
         agent: v.optional(v.string()),
         take: v.boolean(),
+        agentExplicit: v.optional(v.boolean()),
+        expectedOwner: v.optional(expectedOwner),
         /** Published as a page of that conversation's own making: not shown where the id is by then another conversation's page. */
         own: v.optional(v.boolean()),
       }),
@@ -262,8 +314,10 @@ export default defineSchema({
     .index('by_artifact', ['artifactId']),
 
   // Which revision each page's state is at, by itself: a state can be half a megabyte, and
-  // whoever only needs to know whether it has changed should not have to read it.
-  revisions: defineTable({ artifactId: v.id('artifacts'), revision: v.number() }).index('by_artifact', ['artifactId']),
+  // whoever only needs to know whether it has changed should not have to read it. With it,
+  // when the page's agent last changed the state, which is nothing where it never did. A
+  // record from before that was kept here does not say, and the state is read for it.
+  revisions: defineTable({ artifactId: v.id('artifacts'), revision: v.number(), agentAt: v.optional(v.number()) }).index('by_artifact', ['artifactId']),
 
   // Something a person did on a page. Stored before anything tries to deliver it.
   actions: defineTable({
@@ -302,6 +356,7 @@ export default defineSchema({
     .index('by_artifact_client', ['artifactId', 'clientActionId'])
     .index('by_route', ['machineId', 'delivery', 'harness', 'sessionId', 'createdAt'])
     .index('by_harness', ['machineId', 'delivery', 'harness', 'createdAt'])
+    .index('by_attended_route', ['machineId', 'delivery', 'harness', 'sessionId', 'attended', 'createdAt'])
     .index('by_artifact', ['artifactId', 'createdAt'])
     .index('by_artifact_delivery', ['artifactId', 'delivery', 'createdAt'])
     .index('by_user_delivery', ['userId', 'delivery', 'createdAt'])
@@ -311,7 +366,8 @@ export default defineSchema({
     .index('by_user_route', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'createdAt'])
     .index('by_delivery_created', ['delivery', 'createdAt'])
     .index('by_delivery_handed', ['delivery', 'handedAt'])
-    .index('by_delivery_lease', ['delivery', 'leaseExpiresAt']),
+    .index('by_delivery_lease', ['delivery', 'leaseExpiresAt'])
+    .index('by_lease_machine', ['leaseMachineId', 'delivery', 'createdAt']),
 
   // One showing of a page on a display. Each gets one ticket.
   mounts: defineTable({
@@ -350,9 +406,29 @@ export default defineSchema({
     pushedTo: v.optional(v.array(v.id('displays'))),
   })
     .index('by_user', ['userId', 'createdAt'])
+    .index('by_artifact', ['artifactId'])
     // What one display's tray holds: what is addressed to it (or to every display) and not dismissed
     .index('by_user_target', ['userId', 'displayId', 'dismissedAt', 'createdAt'])
     .index('by_created', ['createdAt']),
+
+  // A page's deletion receipt stays until seven days after confirmed completion.
+  deletions: defineTable({
+    userId: v.id('users'),
+    artifactId: v.id('artifacts'),
+    slug: v.string(),
+    title: v.string(),
+    requestedAt: v.number(),
+    attempts: v.number(),
+    contentAt: v.optional(v.number()),
+    recordsAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    failedAt: v.optional(v.number()),
+    nextAt: v.optional(v.number()),
+  })
+    .index('by_user', ['userId'])
+    .index('by_user_slug', ['userId', 'slug'])
+    .index('by_user_completed', ['userId', 'completedAt'])
+    .index('by_completed', ['completedAt']),
 
   // Things the content service has been asked to do and has not yet confirmed: ending a
   // display's sessions, deleting stored bytes. Kept until it says done, and tried again until then.
@@ -366,6 +442,8 @@ export default defineSchema({
     userId: v.id('users'),
     /** For the last step of erasing everything: the person's record, to remove once their bytes are gone. */
     thenDeleteUser: v.optional(v.id('users')),
+    /** The receipt confirmed by the first complete deletion of this page's files. */
+    deletionId: v.optional(v.id('deletions')),
   })
     .index('by_next', ['nextAt'])
     .index('by_user', ['userId'])
@@ -403,6 +481,8 @@ export default defineSchema({
     addresses: v.array(v.string()),
     background: v.optional(v.boolean()),
     usage: v.optional(v.boolean()),
+    /** Raised when reporting stops, so earlier notes cannot be collected while their deletion waits. */
+    usageGeneration: v.optional(v.number()),
     /** Whether the door, being open to the network, answers the person's tailnet and nothing else. */
     tailnet: v.optional(v.boolean()),
     /** Whether the machine It runs on is on a tailnet, so that It can be kept to one. */
@@ -432,5 +512,7 @@ export default defineSchema({
   // used and kept only until the service takes them (see lib/counted.ts): a name, properties
   // that are each one of a fixed set of words, as JSON text, and when. Nothing of a page, a
   // display's name or the person is in one, and none is made while counts are not being sent.
-  counted: defineTable({ name: v.string(), properties: v.string(), at: v.number() }).index('by_at', ['at']),
+  counted: defineTable({ name: v.string(), properties: v.string(), at: v.number(), generation: v.optional(v.number()) })
+    .index('by_at', ['at'])
+    .index('by_generation', ['generation']),
 })

@@ -151,11 +151,14 @@ jobs:
         run: echo "::warning::The first run left no backend program on this system, so the tests that start it are skipped in what follows, and the job fails for the first run all the same"
       - if: ${{ !cancelled() }}
         run: npm test
-      # Two steps, so that a system where the door's tests fail under Bun still says whether the
-      # content service's pass there
+      # Separate processes, so that a failure in one suite does not prevent the others from
+      # running, and each reports its own result.
       - name: The door, its notifications and what It asks of itself, under Bun
         if: ${{ !cancelled() }}
         run: bun test ./packages/cli/door.test.ts ./packages/cli/push.test.ts ./packages/cli/direct.test.ts
+      - name: Streamed record downloads, under Bun
+        if: ${{ !cancelled() }}
+        run: bun test ./packages/cli/export.test.ts
       # On Linux alone: on macOS Bun's own test runner ends with a fault of Bun's in the middle
       # of these, and the standalone program's first run, which is what they stand for, is run
       # there by the job that starts the programs
@@ -229,7 +232,7 @@ jobs:
   programs-smoke:
     name: Program starts (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 25
     needs: programs
     strategy:
       fail-fast: false
@@ -281,6 +284,10 @@ jobs:
       # install.sh on macOS and install.ps1 on Windows, neither of which the build machine can run
       - name: The install script for this system installs it
         run: node e2e/install.mjs "$RUNNER_TEMP/it-programs"
+      - name: The native service recovers and waits for a slow stop
+        env:
+          PROGRAM: ${{ matrix.program }}
+        run: IT_BIN="$RUNNER_TEMP/it-programs/$PROGRAM" node e2e/service.mjs
 
   # Everything together on the runner, as a person has it: It running as one
   # service, which starts the backend program, opens the door and runs the

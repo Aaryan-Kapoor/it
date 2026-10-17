@@ -1,13 +1,12 @@
 // The person's displays, and what It holds for them: adding a display, taking the records out,
 // and erasing everything.
-import { parseJson } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import qrcode from 'qrcode-generator'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { version } from '../package.json'
 import { About } from './about'
 import { Dialog } from './dialog'
-import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow } from './lib'
+import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow, useOpener } from './lib'
 import { NetworkSwitch, NoAddress, OtherAddresses, useNetwork, useWhere } from './network'
 import { thisPairing } from './outbox'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
@@ -48,6 +47,7 @@ function DisplayItem({
   const rename = useMutation(api.displays.rename)
   const forget = useMutation(api.displays.forget)
   const [name, setName] = useState<string | null>(null)
+  const renaming = useOpener<HTMLButtonElement>(name !== null)
   const support = pushSupport()
   return (
     <li className="row">
@@ -114,7 +114,7 @@ function DisplayItem({
           </label>
         )}
         {(owner || here) && name === null && (
-          <button type="button" className="link" onClick={() => setName(d.named ? d.name : '')}>
+          <button ref={renaming} type="button" className="link" onClick={() => setName(d.named ? d.name : '')}>
             Rename
           </button>
         )}
@@ -160,12 +160,16 @@ export function Displays({ thisDisplay }: { thisDisplay?: string }) {
   // Forgetting a display ends the pairing of the browser that is that display, and with it what that browser let in
   const paired = useQuery(api.sessions.list, {}) as Paired[] | undefined
   const me = paired?.find((s) => s.mine)?.id
-  const alongWith = (display: string) => goesAlong(paired?.find((s) => s.displays.some((d) => d.id === display))?.along, me)
+  // And so does forgetting one whose browser signed itself out: what that browser let in stayed then, and goes now
+  const left = useQuery(api.sessions.leftBehind, {}) as { display: string; along: Paired['along'] }[] | undefined
+  const alongWith = (display: string) =>
+    goesAlong(paired?.find((s) => s.displays.some((d) => d.id === display))?.along ?? left?.find((l) => l.display === display)?.along, me)
   const now = useNow()
   const [error, act] = useAct()
   const [adding, setAdding] = useState(false)
   const done = useCallback(() => setAdding(false), [])
-  if (displays === undefined) return <main className="list-view" role="status" />
+  // Forget also ends descendants. Their counts must be known before its confirmation is offered.
+  if (displays === undefined || paired === undefined || left === undefined) return <main className="list-view" role="status" />
   return (
     <main className="list-view">
       <header className="list-head">
@@ -329,7 +333,6 @@ function Qr({ text }: { text: string }) {
 const PHRASE = 'erase everything'
 
 export function Settings({ user, owner, display, onSignOut }: { user: string; owner: boolean; display: DisplayRow | null; onSignOut: () => void }) {
-  const convex = useConvex()
   const requestDeletion = useMutation(api.account.requestDeletion)
   const now = useNow()
   const [rowError, act] = useAct()
@@ -337,86 +340,40 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
   const [error, setError] = useState('')
   const [typed, setTyped] = useState('')
 
-  // Read a piece at a time and put together here, so that records of any size can be taken
-  // away. The pieces are kept as separate pieces of text and handed to the browser as they are:
-  // the whole history never has to fit in one string.
-  const alive = useRef(true)
-  useEffect(() => {
-    alive.current = true
-    return () => {
-      alive.current = false
-    }
-  }, [])
+  const [downloadNote, setDownloadNote] = useState('')
+  const preparing = useRef<AbortController | null>(null)
+  useEffect(() => () => preparing.current?.abort(), [])
   const download = async () => {
+    const stop = new AbortController()
+    preparing.current = stop
+    const began = current().session
     setBusy(true)
+    setDownloadNote('')
+    setError('')
     try {
-      const start = await convex.mutation(api.account.exportStart, {})
-      // Whose export this is. The backend refuses the rest to anyone else, so nothing is
-      // downloaded that began as one person's and ended as another's.
-      const owner = start.owner
-      const still = () => {
-        if (!alive.current) throw new Error('The export was stopped.')
-      }
-      const parts: string[] = [`{\n"exportedAt": ${start.exportedAt},\n"displays": ${JSON.stringify(start.displays)},\n"machines": [`]
-      const list = async <T,>(fetchBatch: (cursor: string | null) => Promise<{ items: T[]; next: string | null }>, shape: (item: T) => unknown) => {
-        let first = true
-        for (let cursor: string | null = null; ; ) {
-          const batch = await fetchBatch(cursor)
-          still()
-          for (const item of batch.items) {
-            parts.push(`${first ? '' : ','}\n${JSON.stringify(shape(item))}`)
-            first = false
-          }
-          if (batch.next === null) break
-          cursor = batch.next
-        }
-      }
-      await list(
-        async (cursor) => {
-          const b = await convex.query(api.account.exportMachines, { owner, cursor })
-          return { items: b.machines, next: b.next }
-        },
-        (m) => m,
-      )
-      parts.push('\n],\n"pages": [')
-      let firstPage = true
-      for (const artifactId of start.pages) {
-        const page = await convex.query(api.account.exportPage, { artifactId })
-        still()
-        // The page's own record, left open so that its history can follow a batch at a time
-        parts.push(`${firstPage ? '' : ','}\n${JSON.stringify({ ...page, state: parseJson(page.state) ?? {} }).slice(0, -1)},"actions": [`)
-        firstPage = false
-        await list(
-          async (cursor) => {
-            const b: { actions: { payload: string }[]; next: string | null } = await convex.query(api.account.exportActions, { artifactId, cursor })
-            return { items: b.actions, next: b.next }
-          },
-          (a) => ({ ...a, payload: parseJson(a.payload) ?? null }),
-        )
-        parts.push('\n]}')
-      }
-      parts.push('\n],\n"notifications": [')
-      await list(
-        async (cursor) => {
-          const b: { notifications: unknown[]; next: string | null } = await convex.query(api.account.exportNotifications, { owner, cursor })
-          return { items: b.notifications, next: b.next }
-        },
-        (n) => n,
-      )
-      // Said last, and only when every piece was read
-      parts.push('\n],\n"complete": true\n}\n')
-      const url = URL.createObjectURL(new Blob(parts, { type: 'application/json' }))
-      const a = Object.assign(document.createElement('a'), { href: url, download: `it-export-${new Date().toISOString().slice(0, 10)}.json` })
-      document.body.append(a)
-      a.click()
-      a.remove()
-      // Left a while before it is released: some browsers have not started the download yet
-      setTimeout(() => URL.revokeObjectURL(url), 60_000)
-      if (alive.current) setError('')
+      const response = await fetch('/session/export/start', {
+        method: 'POST',
+        headers: { 'x-it-site': '1', 'content-type': 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        body: JSON.stringify({ session: began }),
+        signal: stop.signal,
+      })
+      const answer = await response.json()
+      stop.signal.throwIfAborted()
+      if (current().session !== began) return
+      if (!response.ok) throw new Error(answer.error || 'The download could not start. Try again shortly.')
+      if (typeof answer.download !== 'string' || !/^\/session\/export\/[a-f0-9]{48}$/.test(answer.download)) throw new Error('The download could not start.')
+      const link = Object.assign(document.createElement('a'), { href: answer.download, download: '' })
+      document.body.append(link)
+      link.click()
+      link.remove()
+      setDownloadNote('Check Downloads in your browser for progress or to cancel. If the download fails, discard any partial file and try again.')
     } catch (err) {
-      if (alive.current) setError(err instanceof Error && !('data' in err) && err.message === 'The export was stopped.' ? '' : refusal(err).message)
+      if (!stop.signal.aborted) setError(err instanceof Error ? err.message : 'The download could not start. Try again shortly.')
     } finally {
-      if (alive.current) setBusy(false)
+      if (!stop.signal.aborted) setBusy(false)
+      if (preparing.current === stop) preparing.current = null
     }
   }
   const erase = async () => {
@@ -513,6 +470,7 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
                 </span>
               </li>
             </ul>
+            {downloadNote && <p role="status">{downloadNote}</p>}
           </section>
           <About />
         </>

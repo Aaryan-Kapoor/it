@@ -33,7 +33,8 @@ function load(html = '', before: (w: any) => void = () => {}) {
   w.__IT__ = { app: APP, id: 'plan', version: 3, keep: KEEP }
   w.parent.postMessage = (m: unknown, origin: string) => origin === APP && hellos.push(m)
   w.fetch = async (url: string, init: unknown) => {
-    fetched.push({ url, init })
+    // Written down as the address a browser would ask at: what it is given, read against what the page says its addresses begin with
+    fetched.push({ url: new w.URL(url, w.document.baseURI).href, init })
     return { status: page.keepStatus }
   }
   before(w)
@@ -60,7 +61,8 @@ function load(html = '', before: (w: any) => void = () => {}) {
     },
     /** The site answers the hello, as mount.tsx does: from the window that framed the page. */
     answer(origin = APP, source: unknown = w.parent) {
-      const port: Port = { sent: [], postMessage: (m) => port.sent.push(m), onmessage: null, close: () => {} }
+      // A port sends a copy of what it is given, and refuses what cannot be copied: the stand-in does as a real one does
+      const port: Port = { sent: [], postMessage: (m) => port.sent.push(structuredClone(m)), onmessage: null, close: () => {} }
       page.port = port
       w.dispatchEvent(Object.assign(new w.Event('message'), { origin, source, data: { type: 'it:port' }, ports: [port] }))
       return port
@@ -110,6 +112,26 @@ describe('the script inside a page', () => {
     p.fromSite({ type: 'it:result', requestId: port.sent[1].requestId, ok: false, error: 'Too many requests.' })
     await expect(refused).rejects.toThrow('Too many requests.')
     await expect(p.It.action('')).rejects.toThrow()
+  })
+
+  test('something that cannot be sent is refused by itself, and what was asked beside it is still sent', async () => {
+    const p = load()
+    // Asked before the site has answered, and so held: one that holds a function, which no port can send, between two that can be sent
+    const first = p.It.action('first', { n: 1 })
+    const bad = p.It.action('bad', { fn() {} })
+    const stored = p.It.store.set('draft', 'kept')
+    const port = p.answer()
+    expect(port.sent.map((m) => m.envelope?.name ?? m.key)).toEqual(['first', 'draft'])
+    await expect(bad).rejects.toThrow(/could not be sent/)
+    // The two that were sent are answered as any are
+    p.fromSite({ type: 'it:result', requestId: port.sent[0].requestId, ok: true, actionId: 'a1' })
+    p.fromSite({ type: 'it:result', requestId: port.sent[1].requestId, ok: true })
+    await expect(first).resolves.toEqual({ ok: true, id: 'a1' })
+    await expect(stored).resolves.toMatchObject({ ok: true })
+    // Asked once the port is there, it is refused in the same way, and the next thing asked goes
+    await expect(p.It.action('bad again', { fn() {} })).rejects.toThrow(/could not be sent/)
+    void p.It.action('after', {})
+    expect(port.sent.map((m) => m.envelope?.name ?? m.key)).toEqual(['first', 'draft', 'after'])
   })
 
   test('a commit sends what was staged, and clears only that: choices made while it was on its way stay', async () => {
@@ -162,6 +184,27 @@ describe('the script inside a page', () => {
     expect(p.It.revision).toBe(4)
   })
 
+  test('a listener given after the state has arrived is called with it, an empty state that nothing has changed yet included', async () => {
+    const p = load()
+    p.answer()
+    const heard: unknown[] = []
+    // Before anything has arrived there is nothing to call it with
+    p.It.onState((s: unknown) => heard.push(['early', s]))
+    await new Promise((r) => setTimeout(r, 5))
+    expect(heard).toEqual([])
+    // A page made with no state is sent an empty one, at revision zero, and that is its state having arrived
+    p.fromSite({ type: 'it:state', state: {}, revision: 0 })
+    expect(heard).toEqual([['early', {}]])
+    // A script that loads later, or one that waits for something first, gives its listener only now
+    p.It.onState((s: unknown) => heard.push(['late', s]))
+    await new Promise((r) => setTimeout(r, 5))
+    expect(heard).toEqual([
+      ['early', {}],
+      ['late', {}],
+    ])
+    expect(p.It.revision).toBe(0)
+  })
+
   test('a bound element shows a value no longer once it has been taken out of the state, and what the page wrote in one itself stays until a value comes', async () => {
     const p = load(
       '<b id="s" data-it-bind="status">as the page wrote it</b><input id="i" data-it-bind="answer"><input id="c" type="checkbox" data-it-bind="agreed"><img id="p" data-it-bind="picture"><progress id="g" max="10" data-it-bind="done"></progress><em id="w" data-it-bind="never">placeholder</em>',
@@ -188,6 +231,80 @@ describe('the script inside a page', () => {
     expect([el('s').textContent, el('i').value, el('c').checked, el('p').getAttribute('src'), el('g').value]).toEqual(['', '', false, null, 0])
     // And what was never given a value is as the page wrote it still
     expect(el('w').textContent).toBe('placeholder')
+  })
+
+  test('a bound dropdown keeps its options, and an unedited text box and dropdown follow changes to their values', async () => {
+    const p = load(
+      '<select id="r" data-it-bind="region"><option value="">Choose</option><option value="us">United States</option><option value="eu">Europe</option></select><textarea id="t" data-it-bind="reply">as the page wrote it</textarea>',
+    )
+    p.answer()
+    const el = (id: string) => p.w.document.getElementById(id)
+    const shown = () => [el('r').options.length, el('r').value, el('t').value]
+    p.fromSite({ type: 'it:state', state: { region: 'eu', reply: 'first answer' }, revision: 1 })
+    expect(shown()).toEqual([3, 'eu', 'first answer'])
+    p.fromSite({ type: 'it:state', state: { region: 'us', reply: 'second answer' }, revision: 2 })
+    expect(shown()).toEqual([3, 'us', 'second answer'])
+    // Taken out of the state, an unedited field is cleared.
+    p.fromSite({ type: 'it:state', state: {}, revision: 3 })
+    expect(shown()).toEqual([3, '', ''])
+  })
+
+  describe.each([
+    ['text area', '<textarea data-it-bind="reply"></textarea>'],
+    ['text input', '<input data-it-bind="reply">'],
+    ['dropdown', '<select data-it-bind="reply"><option value=""></option><option>first</option><option>edited</option><option>second</option></select>'],
+  ])('a bound %s', (_name, markup) => {
+    test.each([false, true])('follows later state after a matching snapshot confirms an edit made before first state: %s', (early) => {
+      const p = load(markup)
+      p.answer()
+      const field = p.w.document.querySelector('[data-it-bind]')
+      if (!early) p.fromSite({ type: 'it:state', state: { reply: 'first' }, revision: 1 })
+      field.value = 'edited'
+      field.dispatchEvent(new p.w.Event('input', { bubbles: true }))
+      p.fromSite({ type: 'it:state', state: { reply: 'edited' }, revision: 2 })
+      expect(field.value).toBe('edited')
+      p.fromSite({ type: 'it:state', state: { reply: 'second' }, revision: 3 })
+      expect(field.value).toBe('second')
+      p.fromSite({ type: 'it:state', state: {}, revision: 4 })
+      expect(field.value).toBe('')
+    })
+
+    test('keeps an unsent edit when another key changes, its own key changes, or its value is removed', () => {
+      const p = load(markup)
+      p.answer()
+      const field = p.w.document.querySelector('[data-it-bind]')
+      const send = (state: unknown) => p.fromSite({ type: 'it:state', state, revision: 1 })
+      send({ reply: 'first', status: 'Ready' })
+      expect(field.value).toBe('first')
+      field.value = 'edited'
+      field.dispatchEvent(new p.w.Event('input', { bubbles: true }))
+      send({ reply: 'first', status: 'Working' })
+      expect(field.value).toBe('edited')
+      send({ reply: 'first', status: 'Working', _page: { draft: 'stored' } })
+      expect(field.value).toBe('edited')
+      send({ reply: 'second' })
+      expect(field.value).toBe('edited')
+      send({})
+      expect(field.value).toBe('edited')
+      // Returning to what the binding wrote lets a later change fill the field again.
+      field.value = 'first'
+      send({ reply: 'second' })
+      expect(field.value).toBe('second')
+      send({})
+      expect(field.value).toBe('')
+    })
+
+    test('keeps an edit made before the first state arrives', () => {
+      const p = load(markup)
+      p.answer()
+      const field = p.w.document.querySelector('[data-it-bind]')
+      field.value = 'edited'
+      field.dispatchEvent(new p.w.Event('change', { bubbles: true }))
+      p.fromSite({ type: 'it:state', state: { reply: 'first' }, revision: 1 })
+      expect(field.value).toBe('edited')
+      p.fromSite({ type: 'it:state', state: { reply: 'second' }, revision: 2 })
+      expect(field.value).toBe('edited')
+    })
   })
 
   test('what the page stores for itself is read back by its exact name', async () => {
@@ -218,12 +335,76 @@ describe('the script inside a page', () => {
     Object.defineProperty(p.w.document, 'visibilityState', { configurable: true, get: () => 'hidden' })
     await p.advance(180_000)
     // At the address it was told, which holds its showing's token, and with nothing of the browser's sent along
-    expect(p.fetched).toEqual([{ url: KEEP, init: { cache: 'no-store' } }])
+    expect(p.fetched).toEqual([{ url: `http://content.test${KEEP}`, init: { cache: 'no-store' } }])
     expect(port.sent).toEqual([])
     p.page.keepStatus = 401
     await p.advance(180_000)
     await p.advance(180_000)
     expect(port.sent).toEqual([{ type: 'it:lapsed' }])
+  })
+
+  test('a page that names another site as where its addresses begin still asks at its own, where its showing is', async () => {
+    // The address it asks at holds the showing's token, which is for the service that showed the page and for nobody else
+    const p = load('<base href="https://elsewhere.invalid/assets/">')
+    expect(p.w.document.baseURI).toBe('https://elsewhere.invalid/assets/')
+    p.w.document.dispatchEvent(new p.w.Event('visibilitychange'))
+    p.w.dispatchEvent(new p.w.Event('online'))
+    await p.advance(180_000)
+    expect(p.fetched.map((f) => f.url)).toEqual(Array(3).fill(`http://content.test${KEEP}`))
+  })
+
+  test('a link has its auditing attribute removed, whether it is already there, added later, or changed later', async () => {
+    const p = load('<a ping="https://elsewhere.invalid/ping" href="#end">go</a><map><area ping="https://elsewhere.invalid/ping" href="#end"></map>')
+    const doc = p.w.document
+    expect(doc.querySelectorAll('[ping]').length).toBe(0)
+    doc.body.insertAdjacentHTML('beforeend', '<div><a ping="https://elsewhere.invalid/ping" href="#end">later</a></div>')
+    await new Promise((r) => setTimeout(r, 5))
+    expect(doc.querySelectorAll('[ping]').length).toBe(0)
+    for (const link of doc.querySelectorAll('a, area')) link.setAttribute('ping', 'https://elsewhere.invalid/ping')
+    await new Promise((r) => setTimeout(r, 5))
+    expect(doc.querySelectorAll('[ping]').length).toBe(0)
+    expect([...doc.querySelectorAll('a, area')].map((link: any) => link.getAttribute('href'))).toEqual(['#end', '#end', '#end'])
+  })
+
+  test('what a page says of telling other sites its address is put back to telling nothing, when it is said and again before a window is opened', async () => {
+    // What the page had said at the moment its script opened a window
+    const saidWhenOpened: unknown[] = []
+    const p = load('', (w) => {
+      w.open = (url: string) => {
+        saidWhenOpened.push([url, w.document.querySelector('meta[name="Referrer"]')?.getAttribute('content')])
+        return null
+      }
+    })
+    const doc = p.w.document
+    const settled = () => new Promise((r) => setTimeout(r, 5))
+    // As the page's markup is read, which is after this script has run
+    doc.head.insertAdjacentHTML('beforeend', '<meta name="Referrer" content="unsafe-url"><meta name="viewport" content="width=device-width">')
+    doc.body.insertAdjacentHTML(
+      'beforeend',
+      '<p><a id="a" referrerpolicy="unsafe-url" href="https://elsewhere.invalid/">out</a></p><img id="i" referrerpolicy="origin"><a id="b">plain</a>',
+    )
+    await settled()
+    const said = () => [
+      doc.querySelector('meta[name="Referrer"]').getAttribute('content'),
+      doc.getElementById('a').getAttribute('referrerpolicy'),
+      doc.getElementById('i').getAttribute('referrerpolicy'),
+    ]
+    expect(said()).toEqual(['no-referrer', 'no-referrer', 'no-referrer'])
+    // Nothing else of the page's is touched
+    expect([doc.querySelector('meta[name="viewport"]').getAttribute('content'), doc.getElementById('b').hasAttribute('referrerpolicy')]).toEqual([
+      'width=device-width',
+      false,
+    ])
+    // Said again later by the page's script, on what is already there
+    doc.querySelector('meta[name="Referrer"]').setAttribute('content', 'no-referrer-when-downgrade')
+    doc.getElementById('a').setAttribute('referrerpolicy', 'unsafe-url')
+    doc.getElementById('b').setAttribute('referrerpolicy', 'unsafe-url')
+    await settled()
+    expect([...said(), doc.getElementById('b').getAttribute('referrerpolicy')]).toEqual(Array(4).fill('no-referrer'))
+    // And said in the very moment before a window is opened: it is put back before the window is
+    doc.querySelector('meta[name="Referrer"]').setAttribute('content', 'unsafe-url')
+    p.w.open('https://elsewhere.invalid/next')
+    expect(saidWhenOpened).toEqual([['https://elsewhere.invalid/next', 'no-referrer']])
   })
 
   test('what the page’s own script fails with is said to the site, the first few times, and a picture that did not load is not', async () => {

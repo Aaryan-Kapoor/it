@@ -2,12 +2,16 @@
 // The backend's own tests: who may do what, and that what is stored is what was meant.
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
-import { ALIVE, describeClick, LEASE_MS, LIMITS, QUOTA, STORE_KEY } from '@it/protocol'
+import { ALIVE, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORE_KEY } from '@it/protocol'
+import { type FunctionReturnType, getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
+import { get as pageQuery, takePage } from './artifacts'
+import { inboxPage as inboxPageQuery, inbox as inboxQuery } from './delivery'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -44,6 +48,8 @@ let content: {
   stageOk: boolean
   failNext: number
   moreNext: number
+  /** How many deletions it is next to answer as one that got nowhere: there is more, and nothing was removed. */
+  stuckNext: number
   garbleNext: number
 }
 /**
@@ -61,7 +67,7 @@ let sender: {
 
 beforeEach(() => {
   vi.useFakeTimers()
-  content = { calls: [], verifyOk: true, stageOk: true, failNext: 0, moreNext: 0, garbleNext: 0 }
+  content = { calls: [], verifyOk: true, stageOk: true, failNext: 0, moreNext: 0, stuckNext: 0, garbleNext: 0 }
   sender = { asked: [], keyAsked: [], answers: () => undefined, down: false }
   vi.stubGlobal(
     'fetch',
@@ -93,6 +99,10 @@ beforeEach(() => {
         return new Response('{"removed": 10, "mo', { status: 200 })
       }
       if (op === 'verify') return new Response(JSON.stringify({ ok: content.verifyOk, missing: content.verifyOk ? [] : ['index.html'] }))
+      if (op === 'delete' && content.stuckNext > 0) {
+        content.stuckNext--
+        return new Response(JSON.stringify({ removed: 0, more: true }))
+      }
       if (op === 'delete' && content.moreNext > 0) {
         content.moreNext--
         return new Response(JSON.stringify({ removed: 1000, more: true }))
@@ -109,6 +119,38 @@ afterEach(async () => {
   vi.useRealTimers()
   process.env.IT_PORT = '39000'
 })
+
+/**
+ * A database that notes every record read through it, for a function run by hand on it: the
+ * stand-in backend counts nothing, and the real one refuses a function that reads too much.
+ */
+function watched(real: any): { db: any; read: any[] } {
+  const read: any[] = []
+  const noted = (got: unknown) => {
+    for (const row of Array.isArray(got) ? got : [got]) if (row && typeof row === 'object') read.push(row)
+    return got
+  }
+  const watching = (query: any): any =>
+    new Proxy(query, {
+      get(target, name) {
+        const value = target[name]
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          const out = value.apply(target, args)
+          return ['take', 'first', 'unique', 'collect'].includes(String(name)) ? Promise.resolve(out).then(noted) : watching(out)
+        }
+      },
+    })
+  const db = new Proxy(real, {
+    get(target: any, name) {
+      if (name === 'get') return async (id: never) => noted(await target.get(id))
+      if (name === 'query') return (table: never) => watching(target.query(table))
+      const value = target[name]
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+  return { db, read }
+}
 
 const subjectOf = (who: string) => `user_${who}`
 /**
@@ -136,7 +178,22 @@ async function browserOf(t: T, who: string, role: 'owner' | 'screen') {
     }
   })
   // What the backend is told about a caller is what its own token for a session says (see the tests of pairing)
-  return { browser: t.withIdentity({ issuer: SITE, subject: user, kind: 'browser', sid: session, role }), session }
+  const browser = t.withIdentity({ issuer: SITE, subject: user, kind: 'browser', sid: session, role })
+  const mutation = browser.mutation
+  // The browser saves the server's deadline before dispatching each new click.
+  browser.mutation = (async (fn, args) => {
+    if (['actions:submit', 'actions:message'].includes(getFunctionName(fn))) {
+      const { until } = await mutation(api.actions.replayGrant, {})
+      return mutation(fn, { ...args, replayUntil: until })
+    }
+    if (getFunctionName(fn) === 'notifications:answer') return mutation(fn, { ...args, expectedSession: session })
+    if (getFunctionName(fn) === 'artifacts:stop') {
+      const shown = await browser.query(api.artifacts.get, args as { artifactId: Id<'artifacts'> })
+      return mutation(fn, { ...args, expectedRun: shown.run?.identity, expectedSession: session })
+    }
+    return mutation(fn, args)
+  }) as typeof mutation
+  return { browser, session }
 }
 /** The same, once it has registered itself as a display. */
 async function paired(t: T, who: string, role: 'owner' | 'screen', key: string, userAgent = 'Mozilla/5.0 (X11; Linux x86_64) Chrome/144.0') {
@@ -278,6 +335,7 @@ describe('who a caller is', () => {
       () => t.query(api.displays.list, {}),
       () => t.query(api.machines.list, {}),
       () => t.query(api.delivery.inbox, { listening: [] }),
+      () => t.query(api.delivery.inboxPage, { listening: [], after: [] }),
       () => t.query(api.delivery.get, { id: 'x' }),
       () => t.query(api.state.get, { slug: 'x' }),
       () => t.query(api.notifications.list, { key: displayKey('a') }),
@@ -332,6 +390,7 @@ describe('who a caller is', () => {
       () => alice.browser.action(api.publish.begin, { title: 'x', files: page }),
       () => alice.browser.mutation(api.state.patch, { slug: 'plan', patch: '{}' }),
       () => alice.browser.query(api.delivery.inbox, { listening: [] }),
+      () => alice.browser.query(api.delivery.inboxPage, { listening: [], after: [] }),
       () => alice.browser.query(api.delivery.get, { id: 'x' }),
       () => alice.browser.mutation(api.notifications.send, { text: 'hi' }),
       () => alice.browser.mutation(api.displays.show, { slug: 'plan' }),
@@ -738,6 +797,34 @@ describe('what a paired screen may do, and what it may not', () => {
     expect(await s.query(api.displays.signOutConfirmed, { job })).toBe(false)
   })
 
+  test('a screen that registers where there are as many displays as there may be makes room only by letting go of a display of its own', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    await vi.advanceTimersByTimeAsync(7000)
+    const screen = await paired(t, 'alice', 'screen', key)
+    for (let i = 3; i <= QUOTA.displays; i++) {
+      await vi.advanceTimersByTimeAsync(7000)
+      await alice.browser.mutation(api.displays.register, { key: `alice-extra-key-${String(i).padStart(4, '0')}`, userAgent: 'x' })
+    }
+    // None of them has been open for ten minutes, and nobody named any or turned notifications on for it: each is one that would be let go
+    await vi.advanceTimersByTimeAsync(11 * 60_000)
+    const displays = async () => (await alice.browser.query(api.displays.list, {})).map((d) => d.id)
+    const before = await displays()
+    expect(before.length).toBe(QUOTA.displays)
+    // A screen with no display of its own has none to let go, and is refused as it would be were every display in use
+    const another = await browserOf(t, 'alice', 'screen')
+    expect(await code(another.browser.mutation(api.displays.register, { key: 'alice-screen-key-002', userAgent: 'x' }))).toBe('limit')
+    await settle(t)
+    expect(await displays()).toEqual(before)
+    expect(content.calls.filter((c) => c.op === 'revoke')).toEqual([])
+    // One that has a display lets go of that one, though the owner's own has gone longer unopened
+    expect(await code(screen.browser.mutation(api.displays.register, { key: 'alice-screen-key-003', userAgent: 'x' }))).toBe('ok')
+    await settle(t)
+    const after = await displays()
+    expect([after.length, after.includes(alice.display.id), after.includes(screen.display.id)]).toEqual([QUOTA.displays, true, false])
+    expect(content.calls.filter((c) => c.op === 'revoke').map((c) => c.body.displayId)).toEqual([screen.display.id])
+  })
+
   test('a screen is refused whatever changes what the person has, or says what else they have, and nothing comes of its asking', async () => {
     const { t, alice, m, p, screen, s } = await household()
     const before = await t.run(async (ctx) =>
@@ -963,7 +1050,7 @@ describe('publishing', () => {
     content.verifyOk = true
     expect((await m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: 2 })).version).toBe(2)
     expect(await alice.browser.query(api.artifacts.get, { slug: 'plan' })).toMatchObject({ version: 2, title: 'Plan, revised' })
-    expect(await code(m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: 2 }))).toBe('conflict')
+    expect(await code(m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: 2 }))).toBe('ok')
     const verify = content.calls.filter((c) => c.op === 'verify').at(-1)!
     expect(verify.body.prefix).toMatch(/^u\/[^/]+\/[^/]+\/2\/$/)
   })
@@ -978,7 +1065,7 @@ describe('publishing', () => {
     const jwks = createLocalJWKSet(await (await t.fetch('/.well-known/jwks.json')).json())
     const { payload } = await jwtVerify(begun.upload.grant, jwks, { issuer: SITE, audience: 'it-upload' })
     expect(payload.p).toBe(stage.body.prefix)
-    expect(payload.exp! - payload.iat!).toBe(900)
+    expect(payload.exp! - payload.iat!).toBe(PUBLICATION.grantSeconds)
     await expect(jwtVerify(begun.upload.grant, jwks, { issuer: SITE, audience: 'it-content' })).rejects.toThrow()
   })
 
@@ -1081,7 +1168,7 @@ describe('publishing', () => {
     }
     expect(await code(m.as.action(api.publish.begin, { slug: 'one-more', title: 'x', files: page }))).toBe('limit')
     // The grant for p0 ran out long ago, so beginning p0 again replaces its abandoned attempt
-    await vi.advanceTimersByTimeAsync(20 * 60_000)
+    await vi.advanceTimersByTimeAsync(PUBLICATION.grantTailMs)
     expect(await code(m.as.action(api.publish.begin, { slug: 'p0', title: 'x', files: page }))).toBe('ok')
     expect((await totals(t)).stagingCount).toBe(QUOTA.staging)
   })
@@ -1119,6 +1206,43 @@ describe('publishing', () => {
     const kept = published.map((x) => x.n).sort((a, b) => a - b)
     expect((await m.as.mutation(api.artifacts.rollback, { slug: 'plan', version: kept[2]! })).version).toBe(kept[2])
     expect(await code(m.as.mutation(api.artifacts.rollback, { slug: 'plan', version: 1 }))).toBe('not_found')
+  })
+
+  test('every version that can still be gone back to is listed, however many publishes were begun since and never finished', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    for (let i = 0; i < LIMITS.versionsKept; i++) {
+      await publish(m, 'plan')
+      await vi.advanceTimersByTimeAsync(5000)
+    }
+    // Twelve more are begun and left, which is as many as the list once held of every kind together
+    for (let i = 0; i < 12; i++) {
+      await m.as.action(api.publish.begin, { slug: 'plan', title: 'abandoned', files: page })
+      await vi.advanceTimersByTimeAsync(5000)
+    }
+    const listed = (await alice.browser.query(api.artifacts.get, { slug: 'plan' })).versions
+    const finished = listed.filter((x) => x.status !== 'staging').map((x) => x.n)
+    expect(finished).toEqual([10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
+    // Newest first, with the newest few of the unfinished ones among them
+    expect(listed.map((x) => x.n)).toEqual([...listed.map((x) => x.n)].sort((a, b) => b - a))
+    expect(listed.filter((x) => x.status === 'staging').length).toBeLessThanOrEqual(2)
+    // And each of them can be gone back to
+    expect((await m.as.mutation(api.artifacts.rollback, { slug: 'plan', version: 1 })).version).toBe(1)
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).versions.filter((x) => x.status !== 'staging').map((x) => [x.n, x.status])).toEqual(
+      [
+        [10, 'retired'],
+        [9, 'retired'],
+        [8, 'retired'],
+        [7, 'retired'],
+        [6, 'retired'],
+        [5, 'retired'],
+        [4, 'retired'],
+        [3, 'retired'],
+        [2, 'retired'],
+        [1, 'live'],
+      ],
+    )
   })
 
   test('the conversation that made a page keeps it, unless its machine is revoked or another says it is taking the page', async () => {
@@ -1232,6 +1356,23 @@ describe('publishing', () => {
     expect(await code(theirs.as.mutation(api.artifacts.take, { slug: 'board', session: today }))).toBe('not_found')
   })
 
+  test('a page is not taken for a conversation whose name is longer than one that publishes may have, and stays with the one it had', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice', 'laptop')
+    const p = await publish(laptop, 'board', { session: SESSION })
+    const take = (session: { harness: string; id: string }) => code(laptop.as.mutation(api.artifacts.take, { slug: 'board', session }))
+    expect(await take({ harness: 'claude-code', id: 's'.repeat(201) })).toBe('invalid')
+    expect(await take({ harness: 'h'.repeat(41), id: 'sess-2' })).toBe('invalid')
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'board' })).session).toEqual(SESSION)
+    // One as long as publishing takes is taken
+    expect(await take({ harness: 'h'.repeat(40), id: 's'.repeat(200) })).toBe('ok')
+    // A run of that conversation is the page's run, so the page says it is running and can be stopped
+    await laptop.as.mutation(api.machines.runBegan, { for: { harness: 'h'.repeat(40), id: 's'.repeat(200) } })
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'board' })).run).not.toBeNull()
+    expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+  })
+
   test('a publish that cannot be prepared leaves nothing behind, and says it may be tried again', async () => {
     const t = backend()
     await person(t, 'alice')
@@ -1313,6 +1454,304 @@ describe('publishing', () => {
   })
 })
 
+describe('tour page ownership', () => {
+  const start = (m: Awaited<ReturnType<typeof machineOf>>, name: string, state = '{}') =>
+    m.as.action(api.publish.begin, { slug: `tour-${name}`, title: 'A checklist', files: page, state, tour: name })
+  const finish = (m: Awaited<ReturnType<typeof machineOf>>, begun: { artifactId: any; version: number }) =>
+    m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })
+  const make = async (m: Awaited<ReturnType<typeof machineOf>>, name: string, state = '{}') => {
+    const begun = await start(m, name, state)
+    await finish(m, begun)
+    return begun
+  }
+
+  test('a legacy page with the same id, title and state keys is adopted once and keeps its mark on later showings', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-match')
+    const old = await publish(m, 'tour-checklist', { title: 'A checklist', state: '{"note":"the rain","added":[{"text":"Umbrella"}]}' })
+    // Earlier programs wrote no ownership field. A current ordinary publication is not a legacy page.
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    const adopted = await make(m, 'checklist', '{"added":[],"note":""}')
+    const mark = (await t.run((ctx) => ctx.db.get(old.artifactId)))!.tour
+    expect(mark).toEqual({ name: 'checklist', identity: expect.any(String) })
+    expect(adopted.artifactId).toBe(old.artifactId)
+    await m.as.mutation(api.state.patch, { slug: 'tour-checklist', patch: '{"note":"an answer"}' })
+    await make(m, 'checklist', '{"added":[],"note":""}')
+    expect((await t.run((ctx) => ctx.db.get(old.artifactId)))!.tour).toEqual(mark)
+    const cleared = await m.as.mutation(api.tour.clear, {})
+    expect(cleared).toEqual({
+      requested: ['tour-checklist'].map((slug) => ({ slug, job: expect.any(String) })),
+      kept: [],
+      seen: 0,
+    })
+    const receipt = await m.as.query(api.deletions.get, { job: cleared.requested[0]!.job })
+    expect(receipt).toMatchObject({ slug: 'tour-checklist', state: 'pending' })
+  })
+
+  test('an old tour menu with progress is adopted once and keeps the steps already seen', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-progress')
+    const title = 'The It tour'
+    const old = await publish(m, 'tour-menu', { title, state: '{"status":"done","picked":"chess","seen":["chess"]}' })
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    const begun = await m.as.action(api.publish.begin, {
+      slug: 'tour-menu',
+      title,
+      files: page,
+      state: '{"seen":[],"picked":"","status":"open"}',
+      tour: 'menu',
+    })
+    await finish(m, begun)
+    expect(begun.artifactId).toBe(old.artifactId)
+    expect(await m.as.query(api.tour.seen, {})).toEqual({ seen: ['chess'] })
+    expect(JSON.parse((await m.as.query(api.state.get, { slug: 'tour-menu' })).json)).toEqual({ status: 'open', picked: '', seen: ['chess'] })
+  })
+
+  test.each([
+    { difference: 'id', slug: 'tour-menu', title: 'A checklist', state: '{"added":[],"note":""}' },
+    { difference: 'title', slug: 'tour-checklist', title: 'My checklist', state: '{"added":[],"note":""}' },
+    { difference: 'missing state key', slug: 'tour-checklist', title: 'A checklist', state: '{"added":[]}' },
+    { difference: 'state key', slug: 'tour-checklist', title: 'A checklist', state: '{"added":[],"note":"","extra":true}' },
+  ])('a legacy page with a different $difference is reported and left untouched', async ({ slug, title, state }) => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-different')
+    const old = await publish(m, slug, { title, state })
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    const before = await m.as.query(api.artifacts.get, { slug })
+    const beforeState = await m.as.query(api.state.get, { slug })
+    await expect(
+      m.as.action(api.publish.begin, { slug, title: 'A checklist', state: '{"added":[],"note":""}', files: page, tour: 'checklist' }),
+    ).rejects.toThrow(slug === 'tour-checklist' ? 'tour does not own' : 'known tour page id')
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({ requested: [], kept: [slug], seen: 0 })
+    expect(await m.as.query(api.artifacts.get, { slug })).toEqual(before)
+    expect(await m.as.query(api.state.get, { slug })).toEqual(beforeState)
+    expect((await t.run((ctx) => ctx.db.get(old.artifactId)))!.tour).toBeUndefined()
+  })
+
+  test.each(['publish', 'take', 'rollback'])('a legacy page adopted once cannot be adopted again after an ordinary %s', async (how) => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-once')
+    const initial = { title: 'A checklist', state: '{"added":[],"note":""}' }
+    const old = await publish(m, 'tour-checklist', initial)
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    await make(m, 'checklist', initial.state)
+    if (how === 'publish') await publish(m, 'tour-checklist', initial)
+    else if (how === 'take') await m.as.mutation(api.artifacts.take, { slug: 'tour-checklist', session: SESSION })
+    else await m.as.mutation(api.artifacts.rollback, { slug: 'tour-checklist', version: old.version })
+    await expect(start(m, 'checklist', initial.state)).rejects.toThrow('tour does not own')
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({
+      requested: [],
+      kept: ['tour-checklist'],
+      seen: 0,
+    })
+  })
+
+  test('a state change while an adopted legacy page uploads refuses its stale reset', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy-race')
+    const old = await publish(m, 'tour-checklist', { title: 'A checklist', state: '{"added":[],"note":""}' })
+    await t.run((ctx) => ctx.db.patch(old.artifactId, { tour: undefined }))
+    const pending = await start(m, 'checklist', '{"added":[],"note":""}')
+    await m.as.mutation(api.state.patch, { slug: 'tour-checklist', patch: '{"note":"keep this answer"}' })
+    const state = await m.as.query(api.state.get, { slug: 'tour-checklist' })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect((await m.as.query(api.artifacts.get, { slug: 'tour-checklist' })).version).toBe(old.version)
+    expect(await m.as.query(api.state.get, { slug: 'tour-checklist' })).toEqual(state)
+  })
+
+  test('matching titles and state keys never adopt personal or unfinished pages', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-legacy')
+    const initial = { added: [{ text: 'Umbrella' }], note: 'the rain', extra: true }
+    await publish(m, 'tour-checklist', { title: 'A checklist', state: JSON.stringify(initial) })
+    await publish(m, 'tour-menu', { title: 'The It tour', state: '{"status":"open","picked":"","seen":["chess"]}' })
+    await m.as.action(api.publish.begin, { slug: 'tour-chess', title: 'A chessboard', files: page })
+    const before = await m.as.query(api.artifacts.get, { slug: 'tour-checklist' })
+    for (const name of ['checklist', 'menu', 'chess']) await expect(start(m, name)).rejects.toThrow('tour does not own')
+    expect(await m.as.query(api.tour.seen, {})).toEqual({ seen: [] })
+    const cleared = await m.as.mutation(api.tour.clear, {})
+    expect(cleared.requested.map((r) => r.slug)).toEqual([])
+    expect(cleared.kept).toEqual(['tour-menu', 'tour-chess', 'tour-checklist'])
+    expect(await m.as.query(api.artifacts.get, { slug: 'tour-checklist' })).toEqual(before)
+    expect(JSON.parse((await m.as.query(api.state.get, { slug: 'tour-checklist' })).json)).toEqual(initial)
+    expect((await m.as.query(api.tour.get, {})).doneAt).toBeNull()
+  })
+
+  test('publication resets the step and merges the current marked menu progress in its transaction', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-progress')
+    await make(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    const chess = await start(m, 'chess', '{"reply":"","note":""}')
+    const drums = await start(m, 'drums', '{"theirs":[],"note":""}')
+    await finish(m, drums)
+    await finish(m, chess)
+    expect(await m.as.query(api.tour.seen, {})).toEqual({ seen: ['drums', 'chess'] })
+    await m.as.mutation(api.state.patch, { slug: 'tour-chess', patch: '{"reply":"e7e5","note":"answer"}' })
+    await make(m, 'chess', '{"reply":"","note":""}')
+    expect(JSON.parse((await m.as.query(api.state.get, { slug: 'tour-chess' })).json)).toEqual({ reply: '', note: '' })
+    await m.as.mutation(api.state.patch, { slug: 'tour-menu', patch: '{"picked":"chess","status":"done"}' })
+    await make(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    expect(JSON.parse((await m.as.query(api.state.get, { slug: 'tour-menu' })).json)).toEqual({ status: 'open', picked: '', seen: ['drums', 'chess'] })
+    expect((await m.as.mutation(api.tour.clear, {})).requested.map((r) => r.slug)).toEqual(['tour-menu', 'tour-chess', 'tour-drums'])
+  })
+
+  test('a personal publication committed after tour inspection survives both finish and cleanup', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-reauthored')
+    await make(m, 'checklist', '{"added":[],"note":""}')
+    // The personal publish starts first, but commits after the tour checked the mark.
+    const personal = await m.as.action(api.publish.begin, { slug: 'tour-checklist', title: 'A checklist', files: page })
+    const tour = await start(m, 'checklist', '{"added":[],"note":""}')
+    await finish(m, personal)
+    await m.as.mutation(api.state.patch, { slug: 'tour-checklist', patch: '{"added":["Umbrella"],"note":"keep","extra":true}', replace: true })
+    const before = await m.as.query(api.artifacts.get, { slug: 'tour-checklist' })
+    const state = await m.as.query(api.state.get, { slug: 'tour-checklist' })
+    await expect(finish(m, tour)).rejects.toThrow('Nothing was replaced')
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({
+      requested: [],
+      kept: ['tour-checklist'],
+      seen: 0,
+    })
+    expect(await m.as.query(api.artifacts.get, { slug: 'tour-checklist' })).toEqual({
+      ...before,
+      versions: before.versions.filter((v) => v.n !== tour.version),
+    })
+    expect(await m.as.query(api.state.get, { slug: 'tour-checklist' })).toEqual(state)
+    expect(await t.run((ctx) => ctx.db.query('starts').collect())).toEqual([])
+    expect((await t.run((ctx) => ctx.db.query('tallies').first()))?.stagingCount).toBe(0)
+  })
+
+  test('a newer state revision refuses a stale reset and commits neither its content nor menu progress', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-state-race')
+    await make(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    const page = await make(m, 'chess', '{"reply":"","note":""}')
+    const pending = await start(m, 'chess', '{"reply":"","note":""}')
+    await m.as.mutation(api.state.patch, { slug: 'tour-chess', patch: '{"reply":"e7e5","note":"keep this answer"}' })
+    const state = await m.as.query(api.state.get, { slug: 'tour-chess' })
+    const menu = await m.as.query(api.state.get, { slug: 'tour-menu' })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect((await m.as.query(api.artifacts.get, { slug: 'tour-chess' })).version).toBe(page.version)
+    expect(await m.as.query(api.state.get, { slug: 'tour-chess' })).toEqual(state)
+    expect(await m.as.query(api.state.get, { slug: 'tour-menu' })).toEqual(menu)
+  })
+
+  test.each(['menu', 'chess', 'done'])('a saved navigation attempt on %s survives a stale tour reset', async (name) => {
+    const t = backend()
+    const m = await machineOf(t, `tour-navigation-${name}`)
+    const p = await person(t, `tour-navigation-${name}`)
+    const showing = await make(m, name)
+    const pending = await start(m, name)
+    const attempt = { version: showing.version, attempt: 2, attempt_display: 'page-load-b' }
+    await p.browser.mutation(api.state.storeSet, { artifactId: showing.artifactId, key: 'tour-navigation', value: JSON.stringify(attempt) })
+    const state = await m.as.query(api.state.get, { slug: `tour-${name}` })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect(await m.as.query(api.state.get, { slug: `tour-${name}` })).toEqual(state)
+    expect(JSON.parse(state.json)[STORE_KEY]['tour-navigation']).toEqual(attempt)
+    expect((await m.as.query(api.artifacts.get, { slug: `tour-${name}` })).version).toBe(showing.version)
+    if (name === 'menu') {
+      await make(m, 'drums')
+      const progressed = JSON.parse((await m.as.query(api.state.get, { slug: 'tour-menu' })).json)
+      expect(progressed[STORE_KEY]['tour-navigation']).toEqual(attempt)
+      expect(progressed.seen).toEqual(['drums'])
+    }
+    // A fresh showing has its own version, so its counter may start again.
+    const next = await make(m, name)
+    expect(next.version).toBeGreaterThan(showing.version)
+    expect(JSON.parse((await m.as.query(api.state.get, { slug: `tour-${name}` })).json)[STORE_KEY]).toBeUndefined()
+  })
+
+  test('progress added during a menu upload survives a stale menu reset', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-menu-progress-race')
+    await make(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    const pending = await start(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    await make(m, 'chess', '{"reply":"","note":""}')
+    const state = await m.as.query(api.state.get, { slug: 'tour-menu' })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect(await m.as.query(api.state.get, { slug: 'tour-menu' })).toEqual(state)
+    expect(await m.as.query(api.tour.seen, {})).toEqual({ seen: ['chess'] })
+  })
+
+  test('clearing every marked page preserves an identified tour waiter and personal pages', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-clear-all')
+    await m.as.mutation(api.tour.wait, { waitId: 'waiting-command', first: true })
+    const waiting = await m.as.query(api.tour.get, {})
+    for (const name of ['menu', 'whiteboard', 'chess', 'checklist', 'drums', 'button', 'done']) await make(m, name)
+    await publish(m, 'tour-of-my-project')
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({
+      requested: ['tour-menu', 'tour-whiteboard', 'tour-chess', 'tour-checklist', 'tour-drums', 'tour-button', 'tour-done'].map((slug) => ({
+        slug,
+        job: expect.any(String),
+      })),
+      kept: [],
+      seen: 5,
+    })
+    expect((await m.as.query(api.artifacts.list, {})).map((p) => p.slug)).toEqual(['tour-of-my-project'])
+    expect((await m.as.query(api.tour.get, {})).waitingUntil).toBe(waiting.waitingUntil)
+    expect(await m.as.mutation(api.tour.wait, { waitId: 'waiting-command' })).toEqual({ asked: false })
+    expect((await m.as.query(api.tour.get, {})).doneAt).not.toBeNull()
+  })
+
+  test('a menu replaced during a step upload keeps all its personal state and supplies no progress', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-menu-race')
+    await make(m, 'menu', '{"status":"open","picked":"","seen":[]}')
+    const pending = await start(m, 'chess', '{"reply":"","note":""}')
+    await publish(m, 'tour-menu', { title: 'The It tour' })
+    await m.as.mutation(api.state.patch, { slug: 'tour-menu', patch: '{"status":"open","picked":"","seen":["Kyoto","Lima"]}', replace: true })
+    const state = await m.as.query(api.state.get, { slug: 'tour-menu' })
+    await finish(m, pending)
+    expect(await m.as.query(api.state.get, { slug: 'tour-menu' })).toEqual(state)
+    expect(await m.as.query(api.tour.seen, {})).toEqual({ seen: [] })
+    expect(await m.as.mutation(api.tour.clear, {})).toEqual({
+      requested: ['tour-chess'].map((slug) => ({ slug, job: expect.any(String) })),
+      kept: ['tour-menu'],
+      seen: 0,
+    })
+  })
+
+  test.each(['take', 'shared take', 'shared transfer', 'rollback'] as const)('%s revokes tour ownership and a pending tour cannot restore it', async (how) => {
+    const t = backend()
+    const m = await machineOf(t, `tour-${how}`)
+    const mine = { harness: 'pi', id: 'conversation-1' }
+    await publish(m, 'tour-chess', { tour: 'chess', state: '{"reply":"","note":""}', session: mine })
+    const pending = await start(m, 'chess')
+    if (how === 'take') expect(await m.as.mutation(api.artifacts.take, { slug: 'tour-chess', session: mine })).toEqual({ took: false })
+    else if (how === 'rollback') await m.as.mutation(api.artifacts.rollback, { slug: 'tour-chess', version: 1 })
+    else
+      expect(
+        await t.run(async (ctx) => takePage(ctx, (await ctx.db.get(pending.artifactId))!, (await ctx.db.get(m.id))!, how === 'shared take' ? mine : SESSION)),
+      ).toEqual({ took: how === 'shared transfer' })
+    await expect(finish(m, pending)).rejects.toThrow('Nothing was replaced')
+    expect((await m.as.mutation(api.tour.clear, {})).kept).toEqual(['tour-chess'])
+    await expect(start(m, 'chess')).rejects.toThrow('tour does not own')
+  })
+
+  test('reusing an id after deletion never gives the replacement an old tour mark', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-reused')
+    const pending = await start(m, 'chess')
+    await m.as.mutation(api.artifacts.remove, { slug: 'tour-chess' })
+    await publish(m, 'tour-chess', { title: 'A chessboard', state: '{"reply":"","note":""}' })
+    const before = await m.as.query(api.artifacts.get, { slug: 'tour-chess' })
+    await expect(finish(m, pending)).rejects.toThrow('No such page')
+    expect((await m.as.mutation(api.tour.clear, {})).kept).toEqual(['tour-chess'])
+    expect(await m.as.query(api.artifacts.get, { slug: 'tour-chess' })).toEqual(before)
+  })
+
+  test('tour ownership rejects unknown names and callers without machine authority', async () => {
+    const t = backend()
+    const m = await machineOf(t, 'tour-authority')
+    const p = await person(t, 'tour-authority')
+    await expect(start(m, 'personal')).rejects.toThrow('known tour page')
+    await expect(m.as.action(api.publish.begin, { slug: 'personal', title: 'Page', files: page, tour: 'menu', state: '{}' })).rejects.toThrow('known tour page')
+    await expect(p.browser.mutation(api.tour.clear, {})).rejects.toThrow('Only an enrolled machine')
+    await expect(p.browser.query(api.tour.seen, {})).rejects.toThrow('Only an enrolled machine')
+  })
+})
+
 describe('state', () => {
   test('a patch merges, null deletes, replace replaces, and a stale base is refused', async () => {
     const t = backend()
@@ -1367,6 +1806,29 @@ describe('state', () => {
     expect(await shown()).toEqual([other.id, none.id].sort())
   })
 
+  test('and so it does however much has been sent to the bell since', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    await publish(m, 'other')
+    const key = displayKey('alice')
+    const about = await m.as.mutation(api.notifications.send, { text: 'Deploy?', slug: 'plan', buttons: [{ label: 'Approve', action: 'approve' }] })
+    const kept = await m.as.mutation(api.notifications.send, { text: 'Read this.', slug: 'other', buttons: [{ label: 'Read', action: 'read' }] })
+    // Three hundred more since, each of them put away by now
+    await t.run(async (ctx) => {
+      const now = Date.now()
+      for (let i = 1; i <= 300; i++)
+        await ctx.db.insert('notifications', { userId: alice.user as never, text: `Note ${i}`, sticky: false, createdAt: now + i, dismissedAt: now + i })
+    })
+    const shown = async () => (await alice.browser.query(api.notifications.list, { key })).map((n) => n.id).sort()
+    expect(await shown()).toEqual([about.id, kept.id].sort())
+    await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    // Left there, it would offer a button that can only answer that the page is gone
+    expect(await shown()).toEqual([kept.id])
+    expect(await code(alice.browser.mutation(api.notifications.answer, { id: about.id, action: 'approve', displayKey: key }))).toBe('not_found')
+  })
+
   test('when the page’s agent last changed the page is said, and what the page stores for itself does not count as that', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
@@ -1387,6 +1849,47 @@ describe('state', () => {
     vi.setSystemTime(Date.now() + 5000)
     await publish(m, 'plan')
     expect(await answered()).toBe(Date.now())
+  })
+
+  test('a page asked for without its history, as a screen that shows it asks, is told how its state stands without the state or any version’s list of files being read', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan', { state: '{"count":0}' })
+    await publish(m, 'plan')
+    vi.setSystemTime(Date.now() + 5000)
+    await m.as.mutation(api.state.patch, { slug: 'plan', patch: '{"count":1}' })
+    const changed = Date.now()
+    vi.setSystemTime(Date.now() + 5000)
+    // The page keeps something for itself afterwards, which is no answer of its agent's
+    const p = await alice.browser.query(api.artifacts.get, { slug: 'plan' })
+    await alice.browser.mutation(api.state.storeSet, { artifactId: p.id, key: 'draft', value: '"kept"' })
+    const asked = (args: Record<string, unknown>) =>
+      t.run(async (ctx) => {
+        const { db, read } = watched(ctx.db)
+        const identity = { issuer: SITE, subject: alice.user, kind: 'browser', sid: alice.session }
+        const got = await (pageQuery as any)._handler({ ...ctx, db, auth: { getUserIdentity: async () => identity } }, args)
+        return { got, states: read.filter((row) => typeof row.json === 'string').length, lists: read.filter((row) => Array.isArray(row.files)).length }
+      })
+    const light = await asked({ slug: 'plan', history: false })
+    expect([light.states, light.lists]).toEqual([0, 0])
+    expect(light.got).toMatchObject({ version: 2, stateRevision: 3, answeredAt: changed, versions: [] })
+    // Asked for whole, as `it read` asks, it comes with its versions, and says the same of its state
+    const whole = await asked({ slug: 'plan' })
+    expect(whole.got.versions.map((x: { n: number }) => x.n)).toEqual([2, 1])
+    expect(whole.got).toMatchObject({ stateRevision: 3, answeredAt: changed })
+    expect(whole.states).toBe(0)
+    // A page whose state was last written before that time was kept beside its revision has it read from the state, until it is written again
+    await t.run(async (ctx) => {
+      for (const r of await ctx.db.query('revisions').collect()) await ctx.db.replace(r._id, { artifactId: r.artifactId, revision: r.revision })
+    })
+    const older = await asked({ slug: 'plan', history: false })
+    expect(older.got).toMatchObject({ stateRevision: 3, answeredAt: changed })
+    expect(older.states).toBe(1)
+    await m.as.mutation(api.state.patch, { slug: 'plan', patch: '{"count":2}' })
+    const again = await asked({ slug: 'plan', history: false })
+    expect(again.got).toMatchObject({ stateRevision: 4, answeredAt: Date.now() })
+    expect(again.states).toBe(0)
   })
 
   test('a page can only write under its own key, and what it stores under a name replaces what was there', async () => {
@@ -1434,6 +1937,10 @@ describe('clicks and their delivery', () => {
     const t = backend()
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
+    // These delivery fixtures have connected apps whose reopening has not been switched on.
+    await t.run((ctx) =>
+      ctx.db.patch(m.id, { wanted: ['claude-code', 'codex'], harnesses: ['claude-code', 'codex'].map((id) => ({ id, addon: 'connected' })) }),
+    )
     const p = await publish(m, 'plan', { session: SESSION })
     const click = (id: string, over = {}) =>
       alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id, over) })
@@ -1523,6 +2030,133 @@ describe('clicks and their delivery', () => {
     expect(await inbox(other)).toEqual([])
     expect((await other.as.query(api.delivery.waiting, { slug: 'plan' })).length).toBe(1)
     expect(await m.as.mutation(api.delivery.claim, { ids: [actionId] })).toEqual([actionId])
+  })
+
+  test('a connector that starts is given back what its machine still holds, at once and in the order it was made, and nothing another machine holds', async () => {
+    const { t, m, click } = await setup()
+    const other = await machineOf(t, 'alice', 'server')
+    const first = (await click('click-0001')).actionId
+    const second = (await click('click-0002')).actionId
+    const borrowed = (await click('click-0003')).actionId
+    // The connector claimed the first and ended before it had handed it over. Another machine holds one of its own
+    expect(await m.as.mutation(api.delivery.claim, { ids: [first] })).toEqual([first])
+    expect(await other.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([borrowed])
+    // Until the lease runs out, the one made after it is all that is offered
+    expect((await inbox(m)).map((c) => c.id)).toEqual([second])
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [first], done: true })
+    expect((await inbox(m)).map((c) => c.id)).toEqual([first, second])
+    // The other machine's is still its own, and a second asking gives back nothing more
+    expect(await m.as.mutation(api.delivery.claim, { ids: [borrowed] })).toEqual([])
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [], done: true })
+    // It is a machine's to ask, and nobody else's
+    const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
+    expect(await code(browser.mutation(api.delivery.giveBackBatch, {}))).not.toBe('ok')
+  })
+
+  test('recovery reads returned clicks directly and resolves stopped, deleted and reassigned actions', async () => {
+    const { t, m, click } = await setup()
+    const other = await machineOf(t, 'alice', 'other')
+    const first = (await click('recover-first')).actionId
+    const gone = (await click('recover-gone')).actionId
+    const moved = (await click('recover-moved')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [first, gone, moved] })
+    const batch = await m.as.mutation(api.delivery.giveBackBatch, {})
+    expect(batch.routes).toHaveLength(3)
+    await t.run(async (ctx) => {
+      await ctx.db.delete(gone)
+      const row = (await ctx.db.get(moved))!
+      await ctx.db.patch(row.artifactId, { machineId: other.id })
+    })
+    // All actions share this page, so its reassignment resolves every remaining hold.
+    expect(await m.as.query(api.delivery.recover, { ids: [first, gone, moved] })).toEqual([
+      { id: first, click: null },
+      { id: gone, click: null },
+      { id: moved, click: null },
+    ])
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.get(first))!
+      await ctx.db.patch(row.artifactId, { machineId: m.id })
+    })
+    expect((await m.as.query(api.delivery.recover, { ids: [first] }))[0]?.click?.id).toBe(first)
+    await m.as.mutation(api.delivery.claim, { ids: [first] })
+    await m.as.mutation(api.delivery.handedOff, { id: first, route: 'queue' })
+    expect(await m.as.query(api.delivery.recover, { ids: [first] })).toEqual([{ id: first, click: null }])
+    const stranger = await machineOf(t, 'bob', 'stranger')
+    expect(await stranger.as.query(api.delivery.recover, { ids: [moved] })).toEqual([{ id: moved, click: null }])
+    expect(await m.as.query(api.delivery.recover, { ids: Array(40).fill('invalid') })).toHaveLength(32)
+  })
+
+  test('more than four thousand leases held by another machine cannot hide this machine’s lease when it starts', async () => {
+    const { t, m, click } = await setup()
+    const other = await machineOf(t, 'alice', 'server')
+    const first = (await click('click-0001')).actionId
+    expect(await m.as.mutation(api.delivery.claim, { ids: [first] })).toEqual([first])
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
+      for (let i = 0; i < 4001; i++)
+        await ctx.db.insert('actions', { ...base, clientActionId: `foreign-${i}`, leaseMachineId: other.id, leaseExpiresAt: Date.now() })
+    })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [first], done: true })
+    expect((await inbox(m)).map((c) => c.id)).toEqual([first])
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query('actions')
+          .filter((q) => q.eq(q.field('delivery'), 'leased'))
+          .collect(),
+      ),
+    ).toHaveLength(4001)
+  })
+
+  test('recovery visits more than five hundred maximum-size leases in bounded batches, oldest first', async () => {
+    const { t, m, click } = await setup()
+    const first = (await click('click-0001')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [first] })
+    const ids = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
+      const payload = JSON.stringify('x'.repeat(LIMITS.actionPayloadBytes - 2))
+      const createdAt = Date.now() - 10_000
+      await ctx.db.patch(first, { payload, createdAt })
+      const ids = [first]
+      for (let i = 1; i < 513; i++)
+        ids.push(
+          await ctx.db.insert('actions', {
+            ...base,
+            clientActionId: `recover-${i}`,
+            payload,
+            createdAt: createdAt + i,
+            // Lease expiry is unrelated to when the person acted.
+            leaseExpiresAt: Date.now() + 1000 - i,
+          }),
+        )
+      return ids
+    })
+    const back = []
+    for (let i = 0; i < 9; i++) {
+      const batch = await m.as.mutation(api.delivery.giveBackBatch, {})
+      expect(batch.back.length).toBeLessThanOrEqual(64)
+      expect(batch.done).toBe(i === 8)
+      back.push(...batch.back)
+    }
+    expect(back).toEqual(ids)
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [], done: true })
+    const browser = t.withIdentity({ issuer: 'x', subject: 'nobody', kind: 'browser' })
+    expect(await code(browser.mutation(api.delivery.giveBackBatch, {}))).not.toBe('ok')
+  })
+
+  test('a full recovery batch of stopped clicks does not hide a later lease or revive a stopped click', async () => {
+    const { t, m, click } = await setup()
+    const first = (await click('click-0001')).actionId
+    await m.as.mutation(api.delivery.claim, { ids: [first] })
+    const later = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
+      await ctx.db.patch(base.artifactId, { stoppedThrough: Date.now() })
+      for (let i = 1; i < 64; i++) await ctx.db.insert('actions', { ...base, clientActionId: `stopped-${i}` })
+      return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', createdAt: Date.now() + 1 })
+    })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [], done: false })
+    expect(await t.run((ctx) => ctx.db.get(first))).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+    expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [later], done: true })
   })
 
   test('a connector keeps a click it is still delivering by renewing, and cannot renew what it has lost', async () => {
@@ -1843,8 +2477,8 @@ describe('clicks and their delivery', () => {
     // come to is given to nobody meanwhile, by any way: asked for, it is not given, and one
     // that a machine had in hand and says it handed over counts as stopped all the same
     const yetToDrop = await t.run(async (ctx) => (await ctx.db.query('actions').collect()).filter((x) => x.route !== 'stopped'))
-    // One step drops a hundred of each kind by where they are addressed, and a hundred of each kind more by the page
-    expect(yetToDrop.length).toBe(120)
+    // One step drops a hundred, of every way a click can be waiting taken together
+    expect(yetToDrop.length).toBe(420)
     const waitingStill = yetToDrop.find((x) => x.delivery === 'pending')!
     const inHand = yetToDrop.find((x) => x.delivery === 'leased')!
     expect(await m.as.mutation(api.delivery.claim, { ids: [waitingStill._id], for: SESSION })).toEqual([])
@@ -1877,6 +2511,197 @@ describe('clicks and their delivery', () => {
     expect((await t.run((ctx) => ctx.db.get(p.artifactId)))?.waiting).toBe(1)
   })
 
+  test('a stop takes a hundred of what is waiting in its own step, however it is waiting and on however many pages, and the rest in steps that follow', async () => {
+    const { t, alice, m, p } = await setup()
+    // Two earlier pages of the same conversation, and on each of the three as much as one step may take of each way a click can be waiting
+    const oldest = await publish(m, 'oldest', { session: SESSION })
+    const older = await publish(m, 'older', { session: SESSION })
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    const made = Date.now()
+    // Each carries as much as an action may
+    const payload = JSON.stringify({ text: 'x'.repeat(LIMITS.actionPayloadBytes - 11) })
+    expect(new TextEncoder().encode(payload).length).toBe(LIMITS.actionPayloadBytes)
+    await t.run(async (ctx) => {
+      const put = async (artifactId: string, from: number, setAside: boolean) => {
+        const a = (await ctx.db.get(artifactId as never)) as { _id: never; userId: never; title: string }
+        for (let i = 0; i < 200; i++)
+          await ctx.db.insert('actions', {
+            userId: a.userId,
+            title: a.title,
+            artifactId: a._id,
+            clientActionId: `waiting-${from}-${String(i).padStart(4, '0')}`,
+            name: 'press',
+            payload,
+            contentVersion: 1,
+            createdAt: made + from + i,
+            delivery: i % 2 ? 'leased' : 'pending',
+            ...(i % 2 ? { leaseMachineId: m.id as never, leaseExpiresAt: made + 600_000 } : {}),
+            ...(setAside ? { parkedBy: m.id as never } : { machineId: m.id as never }),
+            harness: SESSION.harness,
+            sessionId: SESSION.id,
+          })
+        await ctx.db.patch(a._id, { waiting: 200 })
+      }
+      await put(oldest.artifactId, 0, true)
+      await put(older.artifactId, 1000, false)
+      await put(p.artifactId, 2000, false)
+    })
+    await vi.advanceTimersByTimeAsync(5000)
+    const stopped = async () => (await t.run((ctx) => ctx.db.query('actions').collect())).filter((x) => x.route === 'stopped').length
+    expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+    // The step that tells the machine to stop is the one that must be kept: it reads and writes
+    // a hundred actions and no more, where six hundred of this size are more than the backend
+    // lets one step read, and it would have been refused with the stop in it
+    expect(await stopped()).toBe(100)
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).run).toMatchObject({ stopping: true })
+    await settle(t)
+    expect(await stopped()).toBe(600)
+    expect((await alice.browser.query(api.artifacts.list, {})).map((x) => x.pending)).toEqual([0, 0, 0])
+  })
+
+  test('a page deleted while a stop is still dropping what waited on it gives back what was waiting on it once, and what waits on another page goes on being counted', async () => {
+    const { t, alice, m, p } = await setup()
+    const another = { harness: 'claude-code', id: 'sess-2' }
+    const other = await publish(m, 'other', { session: another })
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    await m.as.mutation(api.machines.runBegan, { for: SESSION })
+    const made = Date.now()
+    await t.run(async (ctx) => {
+      const put = async (artifactId: string, of: { harness: string; id: string }, n: number) => {
+        const a = (await ctx.db.get(artifactId as never)) as { _id: never; userId: never; title: string }
+        for (let i = 0; i < n; i++)
+          await ctx.db.insert('actions', {
+            userId: a.userId,
+            title: a.title,
+            artifactId: a._id,
+            clientActionId: `waiting-${of.id}-${String(i).padStart(4, '0')}`,
+            name: 'press',
+            payload: '{}',
+            contentVersion: 1,
+            createdAt: made + i,
+            delivery: 'pending',
+            machineId: m.id as never,
+            harness: of.harness,
+            sessionId: of.id,
+          })
+        await ctx.db.patch(a._id, { waiting: n })
+      }
+      await put(p.artifactId, SESSION, 300)
+      await put(other.artifactId, another, 40)
+      const [tally] = await ctx.db.query('tallies').collect()
+      await ctx.db.patch(tally!._id, { waiting: 340 })
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+    const at = Date.now()
+    expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+    // The stop has dropped its first hundred, and two hundred of the page's are still to be dropped
+    expect((await totals(t)).waiting).toBe(240)
+    await alice.browser.mutation(api.artifacts.remove, { artifactId: p.artifactId })
+    // Deleting the page gave back all that still counted as waiting on it
+    expect((await totals(t)).waiting).toBe(40)
+    // The stop's next step comes before the page's records have been cleared away, and finds them: it gives back none of them again
+    await t.mutation(internal.artifacts.dropRest, { userId: alice.user as never, machineId: m.id, session: SESSION, at, artifactId: p.artifactId })
+    expect((await totals(t)).waiting).toBe(40)
+    await settle(t)
+    expect((await totals(t)).waiting).toBe(40)
+    expect((await alice.browser.query(api.artifacts.list, {})).map((x) => [x.slug, x.pending])).toEqual([['other', 40]])
+  })
+
+  test.each([false, true])(
+    'the inbox stays within its byte and response limits with forty listeners and five queues of maximum payloads, paged: %s',
+    async (paged) => {
+      const t = backend()
+      await person(t, 'alice')
+      const m = await machineOf(t, 'alice')
+      const queues = ['codex', 'claude-code', 'pi', 'opencode', 'hermes']
+      const listening = Array.from({ length: 40 }, (_, i) => ({ harness: 'claude-code', id: `z-listener-${String(i).padStart(2, '0')}` }))
+      const now = Date.now()
+      // Each carries as much as an action may
+      const payload = JSON.stringify({ text: 'x'.repeat(LIMITS.actionPayloadBytes - 11) })
+      await t.run(async (ctx) => {
+        const machine = (await ctx.db.get(m.id as never)) as { _id: never; userId: never }
+        await ctx.db.patch(machine._id, { wakes: queues.map((harness) => ({ harness, since: now - 10_000 })) })
+        let pages = 0
+        const put = async (of: { harness: string; id: string }, n: number, at: number, addressed = true) => {
+          const artifactId = await ctx.db.insert('artifacts', {
+            userId: machine.userId,
+            slug: `page-${++pages}`,
+            title: 'Page',
+            currentVersion: 1,
+            lastVersion: 1,
+            bytes: 1,
+            createdAt: now,
+            updatedAt: now,
+            machineId: machine._id,
+            session: of,
+            waiting: n,
+          })
+          // The paged case must also pay for both attended-index reads beyond timer clicks.
+          const attendedLookups = paged && addressed && !of.id.startsWith('z-listener')
+          const count = attendedLookups ? Math.max(n, 10) : n
+          for (let i = 0; i < count; i++)
+            await ctx.db.insert('actions', {
+              userId: machine.userId,
+              title: 'Page',
+              artifactId,
+              clientActionId: `click-${pages}-${String(i).padStart(3, '0')}`,
+              name: 'press',
+              payload,
+              ...(attendedLookups ? { attended: i === count - 1 ? undefined : i === count - 2 } : {}),
+              contentVersion: 1,
+              createdAt: at + i,
+              delivery: 'pending',
+              ...(addressed ? { machineId: machine._id } : {}),
+              harness: of.harness,
+              sessionId: of.id,
+            })
+        }
+        for (const s of listening) {
+          await put(s, 2, now - 500)
+          // And two that are addressed to no machine, as a click is whose page was made on a machine that is gone
+          await put(s, 2, now - 400, false)
+        }
+        for (const harness of queues) {
+          // One conversation that has waited longest, one that was used last, and twelve more by their names
+          await put({ harness, id: 'b-old' }, 40, now - 3000)
+          await put({ harness, id: 'c-new' }, 20, now - 100)
+          for (let n = 0; n < 12; n++) await put({ harness, id: `a-head${String(n).padStart(2, '0')}` }, 1, now - 1500)
+        }
+      })
+      // The query itself, asked as the machine asks it, with everything it reads of a click counted: also what it reads twice
+      const asked = await t.run(async (ctx) => {
+        const { db, read } = watched(ctx.db)
+        const identity = { issuer: SITE, subject: m.id, kind: 'machine' }
+        const answer = await ((paged ? inboxPageQuery : inboxQuery) as any)._handler(
+          { ...ctx, db, auth: { getUserIdentity: async () => identity } },
+          { listening, queues, ...(paged ? { after: [{ harness: 'codex', id: 'a-head05' }] } : {}) },
+        )
+        const clicks: { id: string; at: number; attended: boolean | null; session: { harness: string; id: string } }[] = paged ? answer.clicks : answer
+        const carried = read.filter((row) => typeof row.payload === 'string').map((row) => new TextEncoder().encode(row.payload).length)
+        return { read: carried.reduce((sum, n) => sum + n + 2048, 0), clicks }
+      })
+      // The backend refuses a query that reads over 16 MB. Include every repeated read and
+      // the allowance for each action's fields beside its maximum payload.
+      expect(asked.read).toBeLessThanOrEqual(12 * 1024 * 1024)
+      const of = (harness: string, id: string) => asked.clicks.filter((c) => c.session.harness === harness && c.session.id === id)
+      // Listeners keep their oldest two. Each queue has room for a conversation's oldest
+      // work and, in the paged case, its attended click beyond the timer backlog.
+      for (const s of listening) expect(of(s.harness, s.id).map((c) => c.at)).toEqual([now - 500, now - 499])
+      for (const harness of queues) {
+        const id = paged ? (harness === 'codex' ? 'a-head06' : 'a-head00') : 'b-old'
+        const oldest = of(harness, id).map((c) => c.at)
+        expect(oldest.length).toBeGreaterThan(0)
+        if (paged) {
+          expect(oldest).toEqual([now - 1500, now - 1500 + 8])
+          expect(of(harness, id).at(-1)?.attended).toBe(true)
+        } else expect(oldest).toEqual(oldest.map((_, i) => now - 3000 + i))
+      }
+      expect(asked.clicks.length).toBeLessThanOrEqual(150)
+      expect(new Set(asked.clicks.map((c) => c.id)).size).toBe(asked.clicks.length)
+    },
+  )
+
   test('a reopened conversation is said to be running for as long as its machine says so, and anyone who can use the page can stop it: what was waiting by then goes with the stop', async () => {
     const { t, alice, m, p, click } = await setup()
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
@@ -1889,7 +2714,7 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.delivery.claim, { ids: [first as never], for: SESSION })
     const began = Date.now()
     await m.as.mutation(api.machines.runBegan, { for: SESSION })
-    expect(await onPage()).toEqual({ since: began, stopping: false })
+    expect(await onPage()).toMatchObject({ since: began, stopping: false })
     expect((await m.as.query(api.machines.me, {})).runs).toEqual([{ harness: 'claude-code', sessionId: 'sess-1', since: began }])
     // Said twice, it is one run
     await m.as.mutation(api.machines.runBegan, { for: SESSION })
@@ -2090,7 +2915,9 @@ describe('clicks and their delivery', () => {
     // Its conversation is open on the machine that joined again, which takes the click for it: the page is that machine's now
     expect(await again.as.mutation(api.delivery.claim, { ids: [first as never], for: SESSION })).toEqual([first])
     await settle(t)
-    expect(await page()).toMatchObject({ machine: 'laptop again', machineGone: false, wake: { machineId: again.id, harness: 'claude-code', on: false } })
+    expect(await page()).toMatchObject({ machine: 'laptop again', machineGone: false, wake: null })
+    await t.run((ctx) => ctx.db.patch(again.id, { wanted: ['claude-code'] }))
+    expect((await page()).wake).toEqual({ machineId: again.id, harness: 'claude-code', on: false })
     expect((await page()).machineSeenAt).toBeGreaterThan(0)
     // The next click is that machine's with nobody listening, and no other machine is offered it
     const second = await press('click-second')
@@ -2270,6 +3097,24 @@ describe('clicks and their delivery', () => {
     expect(await code(click('click-0002'))).toBe('ok')
   })
 
+  test.each([0, 3, 59_999, 60_000])('a retry delay includes a refill time that is %i milliseconds ahead', async (ahead) => {
+    const { t, click } = await setup()
+    const countedAt = Date.now()
+    for (let i = 0; i < 30; i++) await click(`click-${String(i).padStart(4, '0')}`)
+    await runWhatIsDue(t)
+    vi.setSystemTime(countedAt - ahead)
+    await expect(click('click-refused')).rejects.toThrow(`"retryAfterMs":${ahead + 1000}`)
+
+    // Waiting for the future baseline earns nothing. The next token needs another second.
+    vi.setSystemTime(countedAt)
+    await expect(click('click-at-baseline')).rejects.toThrow('"retryAfterMs":1000')
+    vi.setSystemTime(countedAt + 999)
+    await expect(click('click-before-ready')).rejects.toThrow('"retryAfterMs":1')
+    vi.setSystemTime(countedAt + 1000)
+    expect(await code(click('click-ready'))).toBe('ok')
+    expect(await code(click('click-no-second-token'))).toBe('rate_limited')
+  })
+
   test('callers that come a moment out of order are not given the limit afresh', async () => {
     const { click } = await setup()
     // As many small clicks as the limit lets through at once, each a few milliseconds "before" the one that came ahead of it,
@@ -2281,7 +3126,8 @@ describe('clicks and their delivery', () => {
       if (results.at(-1) !== 'ok') dropWhatAFailedCallScheduled()
     }
     // The limit is met all the same: counted afresh for each that came out of order, none would ever be refused
-    expect(results.filter((r) => r === 'rate_limited').length).toBeGreaterThan(100)
+    expect(results.filter((r) => r === 'ok')).toHaveLength(30)
+    expect(results.filter((r) => r === 'rate_limited')).toHaveLength(370)
   })
 
   test('only so many clicks may wait: on one page, and for one person', async () => {
@@ -2830,6 +3676,7 @@ describe('displays and machines', () => {
     const t = backend()
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
+    await m.as.mutation(api.machines.inventory, { harnesses: ['claude-code', 'codex'].map((id) => ({ id, addon: 'connected' })) })
     const wakes = async () => (await m.as.query(api.machines.me, {})).wakes.map((w) => w.harness).sort()
     expect(await wakes()).toEqual([])
     // Connected by the person, on the Machines page
@@ -2877,10 +3724,42 @@ describe('displays and machines', () => {
     expect((await unknown.as.query(api.machines.me, {})).wakes.map((w) => w.harness)).toEqual(['claude-code'])
   })
 
+  test('a computer that is enrolled again keeps reopening switched off for the apps the person switched it off for there, and setup connecting them does not switch it on', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const first = await machineOf(t, 'alice')
+    expect(await first.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex'], system: 'linux' })).toEqual({ wakes: ['claude-code', 'codex'] })
+    await alice.browser.mutation(api.machines.wake, { machineId: first.id, harness: 'claude-code', on: false })
+    // The person revokes the machine and sets it up again, which is how the computer It runs on is brought back
+    await alice.browser.mutation(api.machines.revoke, { machineId: first.id })
+    await settle(t)
+    const again = await machineOf(t, 'alice', 'laptop', first.id)
+    // Setup finds both apps there and connects them: what was switched off stays off, and setup is told so
+    expect(await again.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex'], system: 'linux' })).toEqual({ wakes: ['codex'] })
+    expect((await again.as.query(api.machines.me, {})).wakes.map((w) => w.harness)).toEqual(['codex'])
+    // And so it does for the identity that takes that one's place in its turn
+    await alice.browser.mutation(api.machines.revoke, { machineId: again.id })
+    await settle(t)
+    const third = await machineOf(t, 'alice', 'laptop', again.id)
+    await third.as.mutation(api.machines.inventory, { harnesses: [{ id: 'claude-code', addon: 'connected' }] })
+    expect(await third.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex'], system: 'linux' })).toEqual({ wakes: ['codex'] })
+    // Only the person switches it on again
+    await alice.browser.mutation(api.machines.wake, { machineId: third.id, harness: 'claude-code', on: true })
+    expect((await third.as.query(api.machines.me, {})).wakes.map((w) => w.harness).sort()).toEqual(['claude-code', 'codex'])
+    // A machine that names an identity that is not given up takes nothing from it
+    const other = await machineOf(t, 'alice', 'desk')
+    await other.as.mutation(api.machines.choose, { harnesses: ['claude-code'], system: 'linux' })
+    await alice.browser.mutation(api.machines.wake, { machineId: other.id, harness: 'claude-code', on: false })
+    const stranger = await machineOf(t, 'alice', 'server', other.id)
+    expect(await stranger.as.mutation(api.machines.choose, { harnesses: ['claude-code'], system: 'linux' })).toEqual({ wakes: ['claude-code'] })
+  })
+
   test('reopening a closed conversation is switched by the owner alone, for one agent app on one machine, and what a machine is told to connect leaves their switches as they set them', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
+    await m.as.mutation(api.machines.inventory, { harnesses: ['claude-code', 'codex'].map((id) => ({ id, addon: 'connected' })) })
+    await t.run((ctx) => ctx.db.patch(m.id, { wanted: ['claude-code'] }))
     const other = await machineOf(t, 'alice', 'desktop')
     await publish(m, 'plan', { session: { harness: 'claude-code', id: 'c-1' } })
     await publish(m, 'sketch', { session: { harness: 'openclaw', id: 'x-1' } })
@@ -2914,6 +3793,7 @@ describe('displays and machines', () => {
     ])
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: false })
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([{ harness: 'claude-code', since: at }])
+    await alice.browser.mutation(api.machines.toggle, { machineId: m.id, harness: 'claude-code', on: true })
     // On a machine that runs Windows, or that has not said what it runs, reopening is not to be had:
     // the switch is refused with why, what was switched on before says nothing, and nothing is offered for reopening
     for (const [system, why] of [
@@ -2934,7 +3814,7 @@ describe('displays and machines', () => {
     expect(((await t.run((ctx) => ctx.db.get(m.id as never))) as { system?: string }).system).toBe('darwin')
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: false })
     expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
-    expect(await onPage('plan')).toEqual({ machineId: m.id, harness: 'claude-code', on: false })
+    expect(await onPage('plan')).toBeNull()
     // A connector that hands nothing over for now says so with its report, and why. The site is told beside
     // the machine and on its pages, until a report says it no more
     const paused = async () => [
@@ -2956,6 +3836,140 @@ describe('displays and machines', () => {
     // A connector of another version that does not say, as an earlier one does not, is not paused
     await m.as.mutation(api.machines.report, { connectorVersion: '0.0.9', harnesses: [] })
     expect(await paused()).toEqual([null, null])
+  })
+
+  test.each([
+    ['codex', false, 'connected', '0.160.0', 'disconnected', false],
+    ['codex', true, 'connected', '0.160.0', 'connected', true],
+    ['codex', true, 'needs_approval', '0.160.0', 'needs_approval', true],
+    ['codex', true, 'needs_approval', '0.161.0', 'needs_approval', true],
+    ['codex', true, 'needs_approval', 'v0.160.0', 'needs_approval', true],
+    ['codex', true, 'needs_approval', '0.159.0', 'needs_approval', false],
+    ['codex', true, 'connected', '0.159.0', 'connected', false],
+    ['codex', true, 'needs_approval', undefined, 'needs_approval', false],
+    ['codex', true, 'needs_approval', 'invalid', 'needs_approval', false],
+    ['codex', true, 'needs_approval', '1000000.0.0', 'needs_approval', false],
+    ['codex', true, 'needs_approval', '0.160.0-beta', 'needs_approval', false],
+    ['codex', true, 'needs_approval', ' 0.160.0 ', 'needs_approval', false],
+    ['codex', true, 'not_connected', '0.160.0', 'connecting', false],
+    ['codex', true, undefined, undefined, 'unknown', false],
+    ['codex', true, 'error', '0.160.0', 'error', false],
+    ['codex', true, 'too_old', '0.160.0', 'too_old', false],
+    ['codex', true, 'unavailable', '0.160.0', 'unavailable', false],
+    ['codex', true, 'future-state', '0.160.0', 'unknown', false],
+    ['claude-code', true, 'connected', '2.1.287', 'connected', false],
+    ['openclaw', true, 'connected', '2026.9.6', 'connected', false],
+    ['openclaw', false, 'connected', '2026.9.6', 'disconnected', false],
+  ] as const)(
+    'owners and screens read only the page app readiness for %s selected=%s report=%s version=%s',
+    async (harness, wanted, addon, version, state, queue) => {
+      const t = backend()
+      const alice = await person(t, 'alice')
+      const screen = await paired(t, 'alice', 'screen', 'readiness-screen-0001')
+      const m = await machineOf(t, 'alice')
+      const p = await publish(m, 'plan', { session: { harness, id: 'page-conversation' } })
+      await t.run((ctx) =>
+        ctx.db.patch(m.id, {
+          wanted: wanted ? [harness] : [],
+          harnesses: [
+            ...(addon ? [{ id: harness, addon, ...(version ? { version } : {}), detail: 'private installation detail' }] : []),
+            { id: 'unrelated-app', addon: 'error', detail: 'private unrelated detail' },
+          ],
+        }),
+      )
+      for (const reader of [alice.browser, screen.browser]) {
+        const got = await reader.query(api.artifacts.get, { artifactId: p.artifactId, history: false })
+        expect(got.connection).toEqual({ harness, state, queue })
+        expect(got).not.toHaveProperty('harnesses')
+        expect(got).not.toHaveProperty('wanted')
+        expect(got).not.toHaveProperty('publicKey')
+        expect(JSON.stringify(got)).not.toMatch(/private installation detail|private unrelated detail|unrelated-app/)
+        if (harness === 'openclaw' || !wanted || !['connected', 'needs_approval'].includes(addon ?? '')) expect(got.wake).toBeNull()
+      }
+      expect(await code(screen.browser.query(api.machines.list, {}))).toBe('forbidden')
+    },
+  )
+
+  test('page readiness follows a changed protocol minimum for the queue', async () => {
+    vi.doMock('@it/protocol', async () => ({
+      ...(await vi.importActual<typeof import('@it/protocol')>('@it/protocol')),
+      CODEX_MIN_VERSION: '0.161.0',
+    }))
+    vi.resetModules()
+    try {
+      const t = backend()
+      const alice = await person(t, 'alice')
+      const m = await machineOf(t, 'alice')
+      await publish(m, 'plan', { session: { harness: 'codex', id: 'page-conversation' } })
+      for (const [version, queue] of [
+        ['0.160.0', false],
+        ['0.161.0', true],
+      ] as const) {
+        await t.run((ctx) => ctx.db.patch(m.id, { wanted: ['codex'], harnesses: [{ id: 'codex', addon: 'connected', version }] }))
+        expect((await alice.browser.query(api.artifacts.get, { slug: 'plan', history: false })).connection).toEqual({
+          harness: 'codex',
+          state: 'connected',
+          queue,
+        })
+      }
+    } finally {
+      vi.doUnmock('@it/protocol')
+      vi.resetModules()
+    }
+  })
+
+  test('page readiness accepts old machine records and is absent without an owning session or live machine', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const screen = await paired(t, 'alice', 'screen', 'readiness-screen-0001')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan', { session: SESSION })
+    const expectConnection = async (connection: unknown) => {
+      for (const reader of [alice.browser, screen.browser]) expect((await reader.query(api.artifacts.get, { slug: 'plan' })).connection).toEqual(connection)
+    }
+    await expectConnection({ harness: SESSION.harness, state: 'disconnected', queue: false })
+    await t.run((ctx) => ctx.db.patch(m.id, { wanted: [SESSION.harness] }))
+    await expectConnection({ harness: SESSION.harness, state: 'unknown', queue: false })
+    await t.run((ctx) => ctx.db.patch(p.artifactId, { session: undefined }))
+    await expectConnection(null)
+    await t.run((ctx) => ctx.db.patch(p.artifactId, { session: SESSION, machineId: undefined }))
+    await expectConnection(null)
+    await t.run(async (ctx) => {
+      await ctx.db.patch(p.artifactId, { machineId: m.id })
+      await ctx.db.patch(m.id, { revoked: true })
+    })
+    await expectConnection(null)
+    await t.run((ctx) => ctx.db.delete(m.id))
+    await expectConnection(null)
+  })
+
+  test('only an owner can enable wake for a selected app, while turning it off preserves consent for an unselected app', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const screen = await paired(t, 'alice', 'screen', 'readiness-screen-0001')
+    const m = await machineOf(t, 'alice')
+    const args = { machineId: m.id, harness: 'codex', on: true }
+    await t.run((ctx) => ctx.db.patch(m.id, { harnesses: [{ id: 'codex', addon: 'connected', version: '0.160.0' }] }))
+    expect(await code(alice.browser.mutation(api.machines.wake, args))).toBe('invalid')
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+    await alice.browser.mutation(api.machines.wake, { ...args, on: false })
+    expect((await t.run((ctx) => ctx.db.get(m.id)))?.wakesOff).toEqual(['codex'])
+    await m.as.mutation(api.machines.choose, { harnesses: ['codex'], system: 'linux' })
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+    for (const addon of [undefined, 'not_connected', 'error', 'too_old', 'unavailable']) {
+      await m.as.mutation(api.machines.inventory, { harnesses: addon ? [{ id: 'codex', addon, version: '0.160.0' }] : [] })
+      expect(await code(alice.browser.mutation(api.machines.wake, args))).toBe('invalid')
+      expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+    }
+    await m.as.mutation(api.machines.inventory, { harnesses: [{ id: 'codex', addon: 'needs_approval', version: '0.160.0' }] })
+    for (const reader of [screen.browser, m.as]) expect(await code(reader.mutation(api.machines.wake, args))).toBe('forbidden')
+    await alice.browser.mutation(api.machines.wake, args)
+    expect((await m.as.query(api.machines.me, {})).wakes).toMatchObject([{ harness: 'codex' }])
+    await alice.browser.mutation(api.machines.toggle, { ...args, on: false })
+    expect(await code(alice.browser.mutation(api.machines.wake, args))).toBe('invalid')
+    await alice.browser.mutation(api.machines.wake, { ...args, on: false })
+    expect((await m.as.query(api.machines.me, {})).wakes).toEqual([])
+    expect((await t.run((ctx) => ctx.db.get(m.id)))?.wakesOff).toEqual(['codex'])
   })
 
   test('a machine cannot switch reopening on, so no agent switches it on for itself, and it is only for an agent app It can reopen', async () => {
@@ -2998,6 +4012,18 @@ describe('displays and machines', () => {
     expect(await onSite()).toMatchObject({ harnesses: [{ id: 'codex', version: '0.160.0' }], connectorVersion: '0.1.0', lastSeenAt: heardAt })
     // It is the machine's own to say, and nobody else's
     expect(await code(alice.browser.mutation(api.machines.inventory, { harnesses: [] }))).toBe('forbidden')
+  })
+
+  test('a joined machine cannot request a cached release below its host version', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const host = await machineOf(t, 'alice', 'the desk')
+    const laptop = await machineOf(t, 'alice', 'the laptop')
+    await t.run((ctx) => ctx.db.patch(laptop.id as never, { byMachine: host.id } as never))
+    await host.as.mutation(api.machines.report, { connectorVersion: '0.10.0', harnesses: [] })
+    await laptop.as.mutation(api.machines.report, { connectorVersion: '0.9.0', latest: '0.9.5', harnesses: [] })
+    expect(await code(alice.browser.mutation(api.machines.upgrade, { machineId: laptop.id as never }))).toBe('conflict')
+    expect((await laptop.as.query(api.machines.me, {})).upgrade).toBeNull()
   })
 
   test('a machine says which newer version of It it has learned is out, and only the owner’s own browser can have it brought to it, the machine It runs on first', async () => {
@@ -3131,6 +4157,19 @@ describe('notifications', () => {
     expect(first.actionId).toBeTruthy()
     expect(second.actionId).toBeNull()
     expect((await inbox(m)).map((c) => [c.name, c.attended])).toEqual([['yes', true]])
+  })
+
+  test('a notification is not sent with a button named as what a person types above a page is, which pressing it could never send', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan', { session: SESSION })
+    const send = (action: string) => code(m.as.mutation(api.notifications.send, { text: 'Reply?', slug: 'plan', buttons: [{ label: 'Reply', action }] }))
+    expect(await send('it:message')).toBe('invalid')
+    expect(await alice.browser.query(api.notifications.list, { key: displayKey('alice') })).toEqual([])
+    expect(await t.run((ctx) => ctx.db.query('notifications').collect())).toEqual([])
+    // A name that only begins as that one does is a page's own
+    expect(await send('it:message.read')).toBe('ok')
   })
 
   test('opening or clearing the tray on one display leaves alone what is addressed to another', async () => {
@@ -3301,6 +4340,66 @@ describe('notifications', () => {
 })
 
 describe('leaving', () => {
+  test('an export includes every retained deletion receipt, with cleanup timestamps, only for its owner', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const bob = await person(t, 'bob')
+    const screen = await paired(t, 'alice', 'screen', 'export-screen-key-001')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan')
+    const { job } = await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    const start = await alice.browser.mutation(api.account.exportStart, {})
+    expect(start.pages).toEqual([])
+    const original = (await t.run((ctx) => ctx.db.get(job)))!
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 230; i++) {
+        await ctx.db.insert('deletions', {
+          userId: alice.user,
+          artifactId: p.artifactId,
+          slug: `gone-${i}`,
+          title: `Gone ${i}`,
+          requestedAt: 1000 + i,
+          attempts: i % 3,
+          ...(i % 3 === 1 ? { failedAt: 2000 + i, nextAt: 3000 + i } : {}),
+          ...(i % 3 === 2 ? { contentAt: 2000 + i, recordsAt: 3000 + i, completedAt: 3000 + i } : {}),
+        })
+      }
+      await ctx.db.insert('deletions', { userId: bob.user, artifactId: p.artifactId, slug: 'private', title: 'Another person', requestedAt: 1000, attempts: 0 })
+    })
+    const all = []
+    let cursor: string | null = null
+    for (let i = 0; i < 10; i++) {
+      const batch: FunctionReturnType<typeof api.account.exportDeletions> = await alice.browser.query(api.account.exportDeletions, {
+        owner: start.owner,
+        cursor,
+      })
+      all.push(...batch.deletions)
+      if (batch.next === null) break
+      cursor = batch.next
+    }
+    expect(all).toHaveLength(231)
+    expect(all[0]).toEqual({
+      job,
+      artifactId: p.artifactId,
+      slug: 'plan',
+      title: original.title,
+      requestedAt: original.requestedAt,
+      state: 'pending',
+      attempts: 0,
+      contentAt: null,
+      recordsAt: null,
+      completedAt: null,
+      failedAt: null,
+      nextAt: null,
+    })
+    expect(all.find((d) => d.slug === 'gone-1')).toMatchObject({ state: 'retrying', failedAt: 2001, nextAt: 3001 })
+    expect(all.find((d) => d.slug === 'gone-2')).toMatchObject({ state: 'completed', contentAt: 2002, recordsAt: 3002, completedAt: 3002 })
+    expect(all.some((d) => d.slug === 'private')).toBe(false)
+    expect(await code(bob.browser.query(api.account.exportDeletions, { owner: start.owner, cursor: null }))).toBe('not_found')
+    expect(await code(screen.browser.query(api.account.exportDeletions, { owner: start.owner, cursor: null }))).toBe('forbidden')
+    expect(await code(m.as.query(api.account.exportDeletions, { owner: start.owner, cursor: null }))).toBe('forbidden')
+  })
+
   test("an export holds the person's pages, state and history in pieces, and is rate limited", async () => {
     const t = backend()
     const alice = await person(t, 'alice')
@@ -3634,6 +4733,81 @@ describe('leaving', () => {
     ).toEqual([0, 0, 0])
   })
 
+  test('deletion receipts distinguish requested, failed and confirmed cleanup without treating a missing receipt as success', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const bob = await person(t, 'bob')
+    const screen = await browserOf(t, 'alice', 'screen')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    content.failNext = 1
+    const { job } = await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'pending', completedAt: null })
+    expect(await code(screen.browser.query(api.deletions.get, { job }))).toBe('forbidden')
+    expect(await code(screen.browser.query(api.deletions.list, {}))).toBe('forbidden')
+    expect(await code(bob.browser.query(api.deletions.get, { job }))).toBe('not_found')
+    for (let i = 0; i < 4; i++) await runWhatIsDue(t)
+    expect(await alice.browser.query(api.deletions.get, { job })).toMatchObject({
+      state: 'retrying',
+      attempts: 1,
+      nextAt: Date.now() + 5000,
+      completedAt: null,
+    })
+    // A restart loses an action in progress. Its durable job is restarted by the periodic sweep.
+    vi.clearAllTimers()
+    vi.setSystemTime(Date.now() + 3 * 60_000)
+    expect(await t.mutation(internal.content.kick, {})).toBe(1)
+    for (let i = 0; i < 4; i++) await runWhatIsDue(t)
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'completed', completedAt: Date.now() })
+    expect(await alice.browser.query(api.deletions.list, {})).toHaveLength(1)
+    // Reusing a page name neither completes nor deletes a new incarnation of that page.
+    await publish(m, 'plan')
+    expect(await m.as.query(api.deletions.get, { slug: 'plan' })).toMatchObject({ job, state: 'completed' })
+    expect(await m.as.query(api.artifacts.get, { slug: 'plan' })).toMatchObject({ slug: 'plan' })
+    await t.run((ctx) => ctx.db.delete(job))
+    expect(await code(m.as.query(api.deletions.get, { job }))).toBe('not_found')
+  })
+
+  test('content confirmation alone does not complete a deletion whose records remain', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    const { job } = await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    vi.clearAllTimers()
+    const contentJob = await t.run((ctx) =>
+      ctx.db
+        .query('contentJobs')
+        .filter((q) => q.eq(q.field('deletionId'), job))
+        .first(),
+    )
+    await t.action(internal.content.run, { jobId: contentJob!._id })
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'pending', completedAt: null })
+    const receipt = await t.run((ctx) => ctx.db.get(job))
+    await t.mutation(internal.retention.purgeArtifact, { artifactId: receipt!.artifactId, deletionId: job })
+    expect(await m.as.query(api.deletions.get, { job })).toMatchObject({ state: 'completed' })
+  })
+
+  test('completed deletion receipts expire after a week, while unfinished ones stay until erasure', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'finished')
+    const done = await m.as.mutation(api.artifacts.remove, { slug: 'finished' })
+    await settle(t)
+    await publish(m, 'waiting')
+    const pending = await m.as.mutation(api.artifacts.remove, { slug: 'waiting' })
+    vi.clearAllTimers()
+    vi.setSystemTime(Date.now() + 8 * 86_400_000)
+    await t.mutation(internal.retention.sweepRecords, {})
+    expect(await t.run((ctx) => ctx.db.get(done.job))).toBeNull()
+    expect(await t.run((ctx) => ctx.db.get(pending.job))).not.toBeNull()
+    await t.run((ctx) => ctx.db.patch(alice.user as never, { deletedAt: Date.now() }))
+    await t.mutation(internal.retention.purgeErased, {})
+    await settle(t)
+    expect(await t.run((ctx) => ctx.db.query('deletions').collect())).toEqual([])
+  })
+
   test('an answer from the content service that cannot be read is not taken for "done"', async () => {
     const t = backend()
     await person(t, 'alice')
@@ -3657,6 +4831,24 @@ describe('leaving', () => {
     await settle(t)
     // Three times told there was more, a fourth that finished it, and the look twenty minutes
     // later that catches anything an upload already under way wrote meanwhile
+    expect(content.calls.filter((c) => c.op === 'delete').length).toBe(5)
+    expect(await t.run((ctx) => ctx.db.query('contentJobs').collect())).toEqual([])
+  })
+
+  test('a deletion that is told there is more, and that nothing was removed, is not asked for again at once: it waits as one that failed does', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    content.stuckNext = 3
+    await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    for (let i = 0; i < 4; i++) await runWhatIsDue(t)
+    // Asked once. Carried on at once, as a deletion that removed something is, it would be asked without end and without a pause where a folder cannot be removed
+    expect(content.calls.filter((c) => c.op === 'delete').length).toBe(1)
+    const [job] = (await t.run((ctx) => ctx.db.query('contentJobs').collect())).sort((a, b) => a.nextAt - b.nextAt)
+    expect([job!.attempts, job!.nextAt - Date.now()]).toEqual([1, 5000])
+    await settle(t)
+    // Three times that got nowhere, each after a longer wait, the one that finished it, and the look twenty minutes later
     expect(content.calls.filter((c) => c.op === 'delete').length).toBe(5)
     expect(await t.run((ctx) => ctx.db.query('contentJobs').collect())).toEqual([])
   })
@@ -3707,6 +4899,120 @@ describe('cases at the edges', () => {
         )
       return ids
     })
+
+  test('inbox discovery reaches a middle conversation while twelve earlier names stay pending', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const now = Date.now()
+    for (let i = 0; i < 12; i++) {
+      const p = await publish(m, `busy-${i}`, { session: { harness: 'codex', id: `a-${String(i).padStart(2, '0')}` } })
+      await insertClicks(t, p.artifactId, 4, {}, now - 1000)
+      await insertClicks(t, p.artifactId, 2, {}, now + 1000)
+    }
+    const p = await publish(m, 'middle', { session: { harness: 'codex', id: 'z-middle' } })
+    const [wanted] = await insertClicks(t, p.artifactId, 1, {}, now)
+    const found = new Map<string, number>()
+    let after: { harness: string; id: string }[] = []
+    for (let cycle = 0; cycle < 4; cycle++) {
+      const page = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['codex'], after })
+      after = page.after
+      for (const c of page.clicks) found.set(c.id, (found.get(c.id) ?? 0) + 1)
+      if (cycle === 0) expect(after).toEqual([{ harness: 'codex', id: 'a-11' }])
+    }
+    expect(found.get(wanted!)).toBe(2)
+    expect(after).toEqual([{ harness: 'codex', id: '' }])
+  })
+
+  test('an attended click behind eight timer clicks has a place in the first reopening batch', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan', { session: SESSION })
+    await t.run((ctx) => ctx.db.patch(m.id, { wanted: ['claude-code'], harnesses: [{ id: 'claude-code', addon: 'connected' }] }))
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+    const timers = await insertClicks(t, p.artifactId, 8, { attended: false }, Date.now() - 1000)
+    const [attended] = await insertClicks(t, p.artifactId, 1, { attended: true })
+    const { clicks } = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['claude-code'], after: [] })
+    expect(clicks.map((c) => c.id)).toEqual([...timers.slice(0, 7), attended])
+    expect(await m.as.mutation(api.delivery.claim, { ids: clicks.map((c) => c.id), for: SESSION })).toEqual(clicks.map((c) => c.id))
+    expect((await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['claude-code'], after: [] })).clicks.map((c) => c.id)).toEqual([timers[7]])
+  })
+
+  test('a deleted cursor and new earlier conversations do not reset discovery before it rolls over', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const made: { harness: string; id: string }[] = []
+    for (let n = 0; n < 26; n++) {
+      const of = { harness: 'codex', id: `thread-${String(n).padStart(2, '0')}` }
+      const p = await publish(m, `page-${n}`, { session: of })
+      await insertClicks(t, p.artifactId, 2)
+      made.push(of)
+    }
+    const first = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['codex'], after: [] })
+    expect(first.after).toEqual([{ harness: 'codex', id: 'thread-11' }])
+    await m.as.mutation(api.artifacts.remove, { slug: 'page-11' })
+    const early = await publish(m, 'new-early', { session: { harness: 'codex', id: 'a-new' } })
+    await insertClicks(t, early.artifactId, 1)
+    const second = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['codex'], after: first.after })
+    expect(second.clicks.map((c) => c.session)).toEqual(made.slice(12, 24).flatMap((s) => [s, s]))
+    const third = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['codex'], after: second.after })
+    expect(third.clicks.map((c) => c.session)).toEqual(made.slice(24).flatMap((s) => [s, s]))
+    expect(third.after).toEqual([{ harness: 'codex', id: '' }])
+    const rolled = await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['codex'], after: third.after })
+    expect(rolled.clicks[0]?.artifact).toBe('new-early')
+  })
+
+  test.each([true, undefined])('attended discovery finds both stored forms beyond timer clicks and respects stops, attended: %s', async (attended) => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const now = Date.now()
+    const p = await publish(m, 'plan', { session: SESSION })
+    await t.run((ctx) =>
+      ctx.db.patch(m.id, { wakes: [{ harness: SESSION.harness, since: now }], stops: [{ harness: SESSION.harness, sessionId: SESSION.id, at: now - 100 }] }),
+    )
+    await insertClicks(t, p.artifactId, 1, { attended }, now - 101)
+    const timers = await insertClicks(t, p.artifactId, 80, { attended: false }, now)
+    const [attendedId] = await insertClicks(t, p.artifactId, 1, { attended }, now + 100)
+    const answer = await m.as.query(api.delivery.inboxPage, { listening: [], queues: [SESSION.harness], after: [] })
+    expect(answer.clicks.map((c) => c.id)).toEqual([...timers.slice(0, 7), attendedId])
+  })
+
+  test('a queue with large old clicks still offers a recent conversation in its original order on every asking', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const queues = ['codex', 'claude-code', 'pi', 'opencode', 'hermes']
+    const now = Date.now()
+    const payload = JSON.stringify({ text: 'x'.repeat(LIMITS.actionPayloadBytes - 11) })
+    expect(new TextEncoder().encode(payload).length).toBe(LIMITS.actionPayloadBytes)
+    await t.run(async (ctx) => {
+      await ctx.db.patch(m.id, { wakes: queues.slice(1).map((harness) => ({ harness, since: now - 10_000 })), wakesOff: ['codex'] })
+    })
+    const put = async (id: string, count: number, at: number) => {
+      const p = await publish(m, id, { session: { harness: 'codex', id } })
+      return insertClicks(t, p.artifactId, count, { payload }, at)
+    }
+    await put('b-closed', 40, now - 3000)
+    const recent = await put('c-deliverable', 20, now - 100)
+    for (let i = 0; i < 12; i++) await put(`a-middle-${i}`, 1, now - 1500)
+    const ask = () => inbox(m, [], queues)
+    const first = await ask()
+    expect(first.filter((c) => c.session?.id === 'c-deliverable').map((c) => c.id)).toEqual(recent.slice(0, 2))
+    expect((await ask()).map((c) => c.id)).toEqual(first.map((c) => c.id))
+    const pending = await t.run((ctx) => ctx.db.query('actions').collect())
+    for (const id of new Set(first.map((c) => c.session?.id))) {
+      const returned = first.filter((c) => c.session?.id === id)
+      expect(returned.map((c) => c.id)).toEqual(
+        pending
+          .filter((c) => c.sessionId === id)
+          .slice(0, returned.length)
+          .map((c) => c._id),
+      )
+    }
+  })
 
   test('every conversation a connector may name is looked at, not only the first twenty', async () => {
     const t = backend()
@@ -3794,6 +5100,29 @@ describe('cases at the edges', () => {
     expect((await m.as.query(api.delivery.waitingFor, { session: SESSION })).map((c) => c.id)).toEqual([actionId])
   })
 
+  test('nor by any number waiting for a conversation of the same name on another of the person’s machines, which are that machine’s to take', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const desk = await machineOf(t, 'alice', 'desk')
+    const laptop = await machineOf(t, 'alice', 'laptop')
+    const theirs = await publish(desk, 'theirs', { session: SESSION })
+    const mine = await publish(laptop, 'mine', { session: SESSION })
+    const now = Date.now()
+    // Fifty that are older, on the desk's page, and the desk is asleep
+    await insertClicks(t, theirs.artifactId, 50, {}, now - 60_000)
+    const [here] = await insertClicks(t, mine.artifactId, 1, {}, now)
+    const waiting = async () => (await laptop.as.query(api.delivery.waitingFor, { session: SESSION })).map((c) => c.id)
+    expect(await waiting()).toEqual([here])
+    expect(await laptop.as.mutation(api.delivery.claim, { ids: [here as never], for: SESSION })).toEqual([here])
+    await laptop.as.mutation(api.delivery.release, { id: here as never })
+    // What this machine set aside waits for it still, and so does what is addressed to no machine: oldest first, whichever of the three it is
+    const [aside] = await insertClicks(t, mine.artifactId, 1, { machineId: undefined, parkedBy: laptop.id }, now - 2000)
+    const [loose] = await insertClicks(t, mine.artifactId, 1, { machineId: undefined }, now - 1000)
+    expect(await waiting()).toEqual([aside, loose, here])
+    // The desk's own waiter has the desk's, and no more than one asking gives
+    expect((await desk.as.query(api.delivery.waitingFor, { session: SESSION })).length).toBe(50)
+  })
+
   test('more than a batch of expired leases is put back in one go', async () => {
     const t = backend()
     await person(t, 'alice')
@@ -3824,6 +5153,102 @@ describe('cases at the edges', () => {
     await vi.advanceTimersByTimeAsync(7 * 86_400_000)
     await t.mutation(internal.retention.sweepActions, {})
     expect((await t.run((ctx) => ctx.db.query('actions').collect())).length).toBe(0)
+  })
+
+  test.each([60, 450])('deleting a page clears its %s notices so an older live notice can be shown and dismissed', async (count) => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const live = await publish(m, 'live')
+    const dead = await publish(m, 'dead')
+    const kept = await m.as.mutation(api.notifications.send, { text: 'Still useful', slug: 'live' })
+    await t.run(async (ctx) => {
+      const page = (await ctx.db.get(dead.artifactId))!
+      for (let i = 0; i < count; i++) {
+        await ctx.db.insert('notifications', { userId: page.userId, artifactId: dead.artifactId, text: 'Gone', sticky: false, createdAt: Date.now() + i + 1 })
+      }
+      for (let i = 0; i < 300; i++) {
+        await ctx.db.insert('notifications', {
+          userId: page.userId,
+          text: 'Dismissed',
+          sticky: false,
+          createdAt: Date.now() + count + i + 1,
+          dismissedAt: Date.now(),
+        })
+      }
+    })
+    await alice.browser.mutation(api.artifacts.remove, { artifactId: dead.artifactId })
+    await settle(t)
+    const listed = await alice.browser.query(api.notifications.list, { key: displayKey('alice') })
+    expect(listed.map((n) => n.id)).toEqual([kept.id])
+    expect(await t.run(async (ctx) => (await ctx.db.query('notifications').collect()).filter((n) => n.artifactId === dead.artifactId))).toEqual([])
+    expect(await t.run((ctx) => ctx.db.get(live.artifactId))).not.toBeNull()
+    await alice.browser.mutation(api.notifications.dismiss, { key: displayKey('alice'), ids: [kept.id] })
+    expect(await alice.browser.query(api.notifications.list, { key: displayKey('alice') })).toEqual([])
+  })
+
+  test('a deleted page cannot be pushed while its old notices wait beyond the immediate cleanup batch', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const dead = await publish(m, 'dead')
+    await alice.browser.mutation(api.push.subscribe, { key: displayKey('alice'), endpoint: PUSH('phone'), p256dh: 'p', auth: 'a' })
+    await vi.advanceTimersByTimeAsync(200_000)
+    const notices = await t.run(async (ctx) => {
+      const p = (await ctx.db.get(dead.artifactId))!
+      const ids = []
+      for (let i = 0; i < 601; i++)
+        ids.push(await ctx.db.insert('notifications', { userId: p.userId, artifactId: p._id, text: 'Gone', sticky: false, createdAt: Date.now() + i }))
+      return ids
+    })
+    const newest = notices.at(-1)!
+    const oldest = notices[0]!
+    const still = (notificationId: typeof oldest) => t.query(internal.push._still, { notificationId, displayId: alice.display.id, endpoint: PUSH('phone') })
+    for (const notificationId of [oldest, newest]) {
+      expect((await t.query(internal.push._targets, { notificationId }))?.url).toBe('/p/dead')
+      expect(await still(notificationId)).toBe(true)
+    }
+    await alice.browser.mutation(api.artifacts.remove, { artifactId: dead.artifactId })
+    // Timers have not advanced. The oldest notice is still stored and was not dismissed by the immediate batch.
+    expect((await t.run((ctx) => ctx.db.get(oldest)))?.dismissedAt).toBeUndefined()
+    expect((await t.run((ctx) => ctx.db.get(newest)))?.dismissedAt).toBe(Date.now())
+    for (const notificationId of [oldest, newest]) {
+      expect(await t.query(internal.push._targets, { notificationId })).toBeNull()
+      expect(await still(notificationId)).toBe(false)
+      expect(await t.action(internal.push.deliver, { notificationId })).toBe(0)
+    }
+    expect(sender.asked).toHaveLength(0)
+    const independent = await m.as.mutation(api.notifications.send, { text: 'Still useful' })
+    expect((await t.query(internal.push._targets, { notificationId: independent.id }))?.url).toBe('/')
+    expect(await still(independent.id)).toBe(true)
+    await settle(t)
+    expect(await t.run((ctx) => ctx.db.get(oldest))).toBeNull()
+  })
+
+  test('a page deleted during push delivery is not sent to the remaining displays before its older notices are purged', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan')
+    const phoneKey = 'alice-phone-key-0001'
+    await alice.browser.mutation(api.displays.register, { key: phoneKey, userAgent: 'Phone' })
+    for (const key of [displayKey('alice'), phoneKey]) await alice.browser.mutation(api.push.subscribe, { key, endpoint: PUSH(key), p256dh: 'p', auth: 'a' })
+    await vi.advanceTimersByTimeAsync(200_000)
+    const notificationId = await t.run(async (ctx) => {
+      const userId = (await ctx.db.get(p.artifactId))!.userId
+      const n = await ctx.db.insert('notifications', { userId, artifactId: p.artifactId, text: 'Old', sticky: false, createdAt: Date.now() })
+      for (let i = 0; i < 301; i++)
+        await ctx.db.insert('notifications', { userId, artifactId: p.artifactId, text: 'Newer', sticky: false, createdAt: Date.now() + i + 1 })
+      return n
+    })
+    expect((await t.query(internal.push._targets, { notificationId }))?.targets).toHaveLength(2)
+    sender.whileSending = async () => {
+      await alice.browser.mutation(api.artifacts.remove, { artifactId: p.artifactId })
+    }
+    expect(await t.action(internal.push.deliver, { notificationId })).toBe(1)
+    expect(sender.asked).toHaveLength(1)
+    expect((await t.run((ctx) => ctx.db.get(notificationId)))?.dismissedAt).toBeUndefined()
+    await settle(t)
   })
 
   test('a tray holds what is for its display, however much is addressed elsewhere or was dismissed since', async () => {
@@ -4292,6 +5717,59 @@ describe('cases at the edges', () => {
     expect((await t.run((ctx) => ctx.db.get(p.artifactId)))?.machineId).toBe(again.id)
     void bobs
     void other
+  })
+
+  test('a computer that enrols again as an identity that has already been replaced takes nothing from the identity that stands in its place, until the person revokes that one', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const first = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-1' }
+    const p = await publish(first, 'plan', { session: thread })
+    const submit = (id: string) =>
+      alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope(id) })
+    const machine = (id: string) => t.run((ctx) => ctx.db.get(id as never) as Promise<{ replaces?: string; replacedBy?: string; revoked: boolean } | null>)
+    const pageIsWith = async () => (await t.run((ctx) => ctx.db.get(p.artifactId)))?.machineId
+    // It left and joined again, and its pages went to the identity it has now
+    await first.as.mutation(api.machines.leave, {})
+    const second = await machineOf(t, 'alice', 'laptop', first.id)
+    await second.as.mutation(api.machines.choose, { harnesses: ['codex'], system: 'linux' })
+    await alice.browser.mutation(api.machines.wake, { machineId: second.id, harness: 'codex', on: false })
+    await settle(t)
+    expect(await pageIsWith()).toBe(second.id)
+    // A copy of its folder from before then is put back, which holds the first identity and not the key of the second: it joins as the first once more
+    const third = await machineOf(t, 'alice', 'laptop', first.id)
+    await settle(t)
+    // The second is still one of the person's machines, and nothing shows that it is not in use: its pages are its own, and its place is not given away
+    expect(await pageIsWith()).toBe(second.id)
+    expect((await machine(first.id))?.replacedBy).toBe(second.id)
+    expect((await machine(second.id))?.revoked).toBe(false)
+    const early = await submit('click-0001')
+    expect((await inbox(third, [], ['codex'])).map((c) => c.id)).toEqual([])
+    // What the person switched off for that computer is off for this identity of it too
+    expect(await third.as.mutation(api.machines.choose, { harnesses: ['codex'], system: 'linux' })).toEqual({ wakes: [] })
+    // The person revokes the one whose key is lost, and the computer that asked for its place has it, with its pages and what waits on them
+    await alice.browser.mutation(api.machines.revoke, { machineId: second.id })
+    await settle(t)
+    expect(await pageIsWith()).toBe(third.id)
+    expect((await machine(second.id))?.replacedBy).toBe(third.id)
+    const late = await submit('click-0002')
+    expect((await inbox(third, [], ['codex'])).map((c) => c.id)).toEqual([early.actionId, late.actionId])
+    // Whoever enrols a machine that has to wait so is told the name of the machine it waits for, to say so to the person
+    const waiting = await t.mutation(internal.bridge.enroll, {
+      subject: subjectOf('alice'),
+      name: 'laptop',
+      publicKey: { ...KEY, x: 'put-back' },
+      replaces: first.id,
+    })
+    expect(waiting).toMatchObject({ waitsFor: 'laptop' })
+    expect(await pageIsWith()).toBe(third.id)
+    // And where the identity that stands in its place was given up too, the one that names the first has that one's place at once
+    await alice.browser.mutation(api.machines.revoke, { machineId: 'machineId' in waiting ? waiting.machineId : third.id })
+    await third.as.mutation(api.machines.leave, {})
+    const fifth = await machineOf(t, 'alice', 'laptop', first.id)
+    await settle(t)
+    expect(await pageIsWith()).toBe(fifth.id)
+    expect((await machine(third.id))?.replacedBy).toBe(fifth.id)
   })
 
   test('clicks waiting for a machine that was revoked can be taken by a conversation listening on another of the person’s machines', async () => {
@@ -4953,6 +6431,55 @@ describe('what is written down', () => {
     }
   })
 
+  test.each([
+    { correction: 'no clock change', setBack: 0, recovered: false },
+    { correction: 'a one-hour clock correction', setBack: 3_600_000, recovered: false },
+    { correction: 'a clock correction handled by a previous version', setBack: 3_600_000, recovered: true },
+    { correction: 'a previous correction with its old warning now only three milliseconds ahead', setBack: 3, recovered: true },
+  ])('limit warnings remain one minute apart after $correction', async ({ setBack, recovered }) => {
+    const out = written()
+    try {
+      const t = backend()
+      const alice = await person(t, 'alice')
+      const ask = () => alice.browser.mutation(api.account.exportStart, {})
+      await ask()
+      await ask()
+      await runWhatIsDue(t)
+      expect(out.of('limit.reached')).toMatchObject([{ rule: 'export', level: 'warn' }])
+      expect(out.of('limit.reached')).toHaveLength(1)
+
+      const correctedAt = Date.now() - setBack
+      vi.setSystemTime(correctedAt)
+      if (setBack) {
+        if (recovered) {
+          // An older version restarted the count thirty seconds ago but kept the warning's old time.
+          await t.run(async (ctx) => {
+            const row = (await ctx.db.query('rateLimits').collect()).find((row) => row.key === `export:${alice.user}`)!
+            await ctx.db.patch(row._id, { tokens: 1, updatedAt: correctedAt - 30_000 })
+          })
+        }
+        // The bucket has two tokens after reset or refill. This call leaves one and writes no warning.
+        await ask()
+        const count = await t.run(async (ctx) => (await ctx.db.query('rateLimits').collect()).find((row) => row.key === `export:${alice.user}`))
+        expect(count).toMatchObject({ tokens: 1, updatedAt: correctedAt, saidAt: correctedAt })
+        await ask()
+        await runWhatIsDue(t)
+        expect(out.of('limit.reached')).toHaveLength(1)
+      }
+
+      for (const elapsed of [0, 15_000, 30_000, 45_000, 59_999, 60_000, 75_000, 90_000, 105_000, 119_999, 120_000]) {
+        vi.setSystemTime(correctedAt + elapsed)
+        // This bucket earns one token every thirty seconds. Refusals never add a log line.
+        expect(await code(ask())).toBe(elapsed > 0 && elapsed % 30_000 === 0 ? 'ok' : 'rate_limited')
+        for (let i = 0; i < 5; i++) expect(await code(ask())).toBe('rate_limited')
+        await runWhatIsDue(t)
+        expect(out.of('limit.reached')).toHaveLength(1 + Math.floor(elapsed / 60_000))
+      }
+    } finally {
+      out.stop()
+    }
+  })
+
   test('a call that reaches a limit and then fails gives back what it took, and writes nothing, however often it is made', async () => {
     const out = written()
     try {
@@ -4984,7 +6511,7 @@ describe('what is written down', () => {
       const t = backend()
       await person(t, 'alice')
       const m = await machineOf(t, 'alice')
-      await publish(m, 'plan')
+      const p = await publish(m, 'plan')
       // Each write stores about 480 KB, and the page may store 8192 KB at once
       const big = JSON.stringify({ text: 'x'.repeat(480 * 1024) })
       let wrote = 0
@@ -4994,6 +6521,13 @@ describe('what is written down', () => {
       expect(wrote).toBeLessThan(30)
       // It was said before the first refusal, by the last write that was taken, though plenty was left by the count of one
       expect(out.of('limit.reached').map((e) => e.rule)).toContain('stateKilobytesPage')
+      const count = () => t.run(async (ctx) => (await ctx.db.query('rateLimits').collect()).find((row) => row.key === `stateKilobytesPage:${p.artifactId}`))
+      const warned = (await count())!
+      expect(warned.saidAt).toBe(warned.updatedAt)
+      // A smaller write that arrived out of order can still fit, but must not move the warning backwards.
+      vi.setSystemTime(warned.updatedAt - 3)
+      await m.as.mutation(api.state.patch, { slug: 'plan', patch: '{"text":"small"}', replace: true })
+      expect(await count()).toMatchObject({ updatedAt: warned.updatedAt, saidAt: warned.saidAt })
     } finally {
       out.stop()
     }
@@ -5063,5 +6597,189 @@ describe('what is written down', () => {
     } finally {
       out.stop()
     }
+  })
+})
+
+describe('publication transactions', () => {
+  test('opening validates the display before ownership and showing commit together', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const first = await machineOf(t, 'alice')
+    const next = await machineOf(t, 'alice', 'next')
+    const p = await publish(first, 'atomic', { session: SESSION })
+    const mine = { harness: 'pi', id: 'new-conversation' }
+    expect(await code(next.as.mutation(api.displays.show, { slug: 'atomic', display: 'missing', session: mine }))).toBe('not_found')
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ machineId: first.id, session: SESSION })
+    const screen = await paired(t, 'alice', 'screen', displayKey('atomic'))
+    const shown = await next.as.mutation(api.displays.show, { slug: 'atomic', display: screen.display.name, session: mine })
+    expect(shown).toMatchObject({ took: true, displays: [screen.display.name] })
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ machineId: next.id, session: mine })
+    expect(await t.run((ctx) => ctx.db.get(screen.display.id))).toMatchObject({ showing: { artifactId: p.artifactId } })
+    const before = await t.run((ctx) => ctx.db.get(screen.display.id))
+    // Validation reached after display writes still rolls back both parts of the mutation.
+    expect(await code(first.as.mutation(api.displays.show, { slug: 'atomic', session: { harness: 'x'.repeat(41), id: 'bad' } }))).toBe('invalid')
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ machineId: next.id, session: mine })
+    expect(await t.run((ctx) => ctx.db.get(screen.display.id))).toEqual(before)
+  })
+
+  test('only an explicit label from the owning conversation changes its label', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const owner = await machineOf(t, 'alice')
+    const other = await machineOf(t, 'alice', 'other')
+    const p = await publish(owner, 'label', { session: SESSION, agent: 'Original' })
+    await publish(owner, 'label', { session: SESSION, agent: 'Renamed', agentExplicit: true })
+    await publish(owner, 'label', { session: SESSION, agent: SESSION.harness })
+    await publish(other, 'label', { session: SESSION, agent: 'Foreign', agentExplicit: true })
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ agent: 'Renamed', machineId: owner.id, session: SESSION })
+  })
+
+  test('an automatic alias takeover refuses an owner changed before begin or during upload', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const owner = await machineOf(t, 'alice')
+    const other = await machineOf(t, 'alice', 'other')
+    const p = await publish(owner, 'alias', { session: SESSION })
+    const next = { harness: SESSION.harness, id: 'continued' }
+    const expectedOwner = { machineId: owner.id, session: SESSION }
+    const request = { slug: 'alias', title: 'continued', files: page, session: next, take: true, expectedOwner }
+    const begun = await owner.as.action(api.publish.begin, request)
+    await other.as.mutation(api.artifacts.take, { slug: 'alias', session: next })
+    expect(await code(owner.as.action(api.publish.finish, { artifactId: p.artifactId, version: begun.version }))).toBe('conflict')
+    expect(await code(owner.as.action(api.publish.begin, request))).toBe('conflict')
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ machineId: other.id, currentVersion: 1 })
+    await publish(owner, 'alias', { session: next, take: true })
+    expect(await t.run((ctx) => ctx.db.get(p.artifactId))).toMatchObject({ machineId: owner.id, session: next })
+  })
+
+  test('a lost completion is recovered after newer publications prune its content version', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const request = { slug: 'receipt', title: 'Original', files: page, operation: 'stable-publication-identity' }
+    const begun = await m.as.action(api.publish.begin, request)
+    const original = await m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })
+    const checked = content.calls.filter((c) => c.op === 'verify').length
+    expect(await m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })).toEqual(original)
+    expect(content.calls.filter((c) => c.op === 'verify')).toHaveLength(checked)
+    for (let n = 0; n < LIMITS.versionsKept + 1; n++) await publish(m, 'receipt')
+    expect((await t.run((ctx) => ctx.db.query('versions').collect())).some((v) => v.artifactId === begun.artifactId && v.n === 1)).toBe(false)
+    const live = await t.run((ctx) => ctx.db.get(begun.artifactId))
+    const again = await m.as.action(api.publish.begin, request)
+    expect(again).toMatchObject({ artifactId: begun.artifactId, version: 1, upload: { grant: '' } })
+    expect(await m.as.action(api.publish.resume, { operation: request.operation })).toEqual(again)
+    const other = await machineOf(t, 'alice', 'other')
+    expect(await code(other.as.action(api.publish.resume, { operation: request.operation }))).toBe('not_found')
+    expect(await m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: 1 })).toEqual(original)
+    expect(await t.run((ctx) => ctx.db.get(begun.artifactId))).toEqual(live)
+    expect(await code(m.as.action(api.publish.begin, { ...request, title: 'Different request' }))).toBe('conflict')
+  })
+
+  test('a failed preparation keeps a named publication available to recover', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const operation = 'preparation-can-be-retried'
+    content.stageOk = false
+    expect(await code(m.as.action(api.publish.begin, { slug: 'prepared', title: 'Prepared', files: page, operation }))).toBe('unavailable')
+    content.stageOk = true
+    const resumed = await m.as.action(api.publish.resume, { operation })
+    expect(resumed.version).toBe(1)
+    expect(await m.as.action(api.publish.finish, { artifactId: resumed.artifactId, version: resumed.version })).toMatchObject({ version: 1 })
+    expect(await totals(t)).toMatchObject({ stagingCount: 0, stagingBytes: 0 })
+  })
+
+  test('a delayed preparation failure cannot abandon a resumed publication', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    let reached!: () => void
+    let release!: () => void
+    const preparing = new Promise<void>((resolve) => (reached = resolve))
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const fetchContent = vi.mocked(fetch).getMockImplementation()!
+    let first = true
+    vi.mocked(fetch).mockImplementation(async (...args) => {
+      if (String(args[0]).endsWith('/control/stage') && first) {
+        first = false
+        reached()
+        await held
+        return new Response(null, { status: 503 })
+      }
+      return fetchContent(...args)
+    })
+    const operation = 'concurrent-preparation-failure'
+    const beginning = code(m.as.action(api.publish.begin, { slug: 'shared', title: 'Shared', files: page, operation }))
+    try {
+      await preparing
+      const resumed = await m.as.action(api.publish.resume, { operation })
+      release()
+      expect(await beginning).toBe('unavailable')
+      expect(await m.as.action(api.publish.finish, { artifactId: resumed.artifactId, version: resumed.version })).toMatchObject({ version: 1 })
+      expect(await totals(t)).toMatchObject({ stagingCount: 0, stagingBytes: 0 })
+    } finally {
+      release()
+      await beginning
+    }
+  })
+
+  test('a recorded completion is recovered when new finishes have exhausted their rate limit', async () => {
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const request = { slug: 'limited-receipt', title: 'Original', files: page, operation: 'limited-publication-identity' }
+    const begun = await m.as.action(api.publish.begin, request)
+    const args = { artifactId: begun.artifactId, version: begun.version }
+    const original = await m.as.action(api.publish.finish, args)
+    const next = await m.as.action(api.publish.begin, { ...request, operation: 'another-publication-identity' })
+    const waiting = { artifactId: next.artifactId, version: next.version }
+    for (let n = 0; n < 29; n++) await m.as.mutation(internal.publish._gate, waiting)
+    expect(await code(m.as.action(api.publish.finish, waiting))).toBe('rate_limited')
+    const checked = content.calls.filter((c) => c.op === 'verify').length
+    expect(await m.as.action(api.publish.resume, { operation: request.operation })).toMatchObject({ version: 1, upload: { grant: '' } })
+    for (let n = 0; n < 3; n++) expect(await m.as.action(api.publish.finish, args)).toEqual(original)
+    expect(content.calls.filter((c) => c.op === 'verify')).toHaveLength(checked)
+    expect(await code(m.as.action(api.publish.finish, waiting))).toBe('rate_limited')
+    expect(await t.run((ctx) => ctx.db.get(begun.artifactId))).toMatchObject({ currentVersion: 1, lastVersion: 2 })
+    vi.setSystemTime(Date.now() + 1000)
+    expect(await m.as.action(api.publish.finish, waiting)).toMatchObject({ version: 2 })
+  })
+
+  test('publication outcomes leave with the page and expire after thirty days', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'removed-receipt')
+    expect(await t.run((ctx) => ctx.db.query('publications').collect())).toHaveLength(1)
+    await alice.browser.mutation(api.artifacts.remove, { artifactId: p.artifactId })
+    await settle(t)
+    expect(await t.run((ctx) => ctx.db.query('publications').collect())).toEqual([])
+    await publish(m, 'old-receipt')
+    vi.setSystemTime(Date.now() + PUBLICATION.receiptDays * 86_400_000 + 1)
+    await t.mutation(internal.retention.sweepRecords, {})
+    expect(await t.run((ctx) => ctx.db.query('publications').collect())).toEqual([])
+  })
+
+  test('the fixed publication budget covers a slow full version and cannot be renewed', async () => {
+    const { PUBLICATION, uploadBudgetMs } = await import('@it/protocol')
+    const t = backend()
+    await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const files = Array.from({ length: 100 }, (_, n) => ({ path: n ? `${n}.bin` : 'index.html', size: 1024 * 1024, sha256: sha }))
+    const request = { slug: 'slow', title: 'Slow', files, operation: 'fixed-publication-budget' }
+    const begun = await m.as.action(api.publish.begin, request)
+    const time = Math.ceil((LIMITS.versionBytes / 100_000) * 1000)
+    expect(uploadBudgetMs(LIMITS.fileBytes)).toBeGreaterThan((LIMITS.fileBytes / 35_000) * 1000)
+    expect(PUBLICATION.budgetMs).toBeGreaterThan(time)
+    expect(PUBLICATION.deletedSeconds * 1000).toBeGreaterThan(PUBLICATION.grantTailMs)
+    vi.setSystemTime(Date.now() + time)
+    expect((await m.as.action(api.publish.begin, request)).deadline).toBe(begun.deadline)
+    expect((await m.as.action(api.publish.finish, { artifactId: begun.artifactId, version: begun.version })).version).toBe(1)
+    const late = await m.as.action(api.publish.begin, { slug: 'slow', title: 'Too late', files: page })
+    vi.setSystemTime(Date.now() + PUBLICATION.budgetMs)
+    expect(await code(m.as.action(api.publish.finish, { artifactId: late.artifactId, version: late.version }))).toBe('conflict')
+    await m.as.mutation(api.publish.abandon, { artifactId: late.artifactId, version: late.version })
+    await m.as.mutation(api.publish.abandon, { artifactId: late.artifactId, version: late.version })
+    expect(await totals(t)).toMatchObject({ stagingCount: 0, stagingBytes: 0 })
   })
 })

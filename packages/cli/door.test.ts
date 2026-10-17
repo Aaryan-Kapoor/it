@@ -17,11 +17,12 @@ import { fileURLToPath } from 'node:url'
 import { AUDIENCE, contentPort, LIMITS, SANDBOX } from '@it/protocol'
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { Problem } from './src/lib'
 import { doorKey } from './src/serve/config'
 import { type Arrival, type DoorParts, makeContent, makeDoor, startDoor } from './src/serve/door'
 import { answerSite, type Site } from './src/serve/site'
+import { forgetTailnetName, tailnetName } from './src/serve/tailnet'
 
 type ServiceConfig = Parameters<typeof startDoor>[0]
 type Backend = Parameters<typeof startDoor>[1]
@@ -159,6 +160,10 @@ const site = {
       } else if (req.url === '/session/redeem' || req.url === '/session/end') {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'set-cookie': SET })
         res.end('{"ok":true}')
+      } else if (req.url === '/session/token' && /it_session_good=(owner|screen)/.test(req.headers.cookie ?? '')) {
+        const role = /it_session_good=(owner|screen)/.exec(req.headers.cookie ?? '')![1]
+        res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': SET })
+        res.end(JSON.stringify({ token: 'stub', role, expiresIn: 300, user: 'person', session: 'session' }))
       } else if (req.url === '/session/token') {
         // A session that is over: its cookie is cleared with the refusal
         res.writeHead(401, { 'content-type': 'application/json', 'set-cookie': SET.slice(1) })
@@ -912,6 +917,36 @@ describe('The names the door answers to', () => {
 })
 
 describe('What the door passes on to the backend', () => {
+  test.each(['owner', 'screen'])('the door tells a paired %s about retained functions without asking older functions for anything new', async (role) => {
+    const behind = await open(false, {}, { ...backend, behind: { functions: 'private-function-hash', why: 'refused', at: 1 } })
+    try {
+      const headers: [string, string][] = [
+        ['Origin', `http://127.0.0.1:${behind.base}`],
+        ['x-it-site', '1'],
+        ['Cookie', `it_session_good=${role}`],
+      ]
+      const got = await ask(behind.base, { method: 'POST', path: '/session/token', headers })
+      expect(got.status).toBe(200)
+      expect(JSON.parse(got.body)).toMatchObject({ role, service: { functions: 'retained' } })
+      expect(got.body).not.toContain('private-function-hash')
+      expect(got.headers['content-length']).toBe(String(Buffer.byteLength(got.body)))
+      expect(got.headers['cache-control']).toBe('no-store')
+      expect(got.cookies).toEqual(SET)
+      const current = await ask(door.base, { method: 'POST', path: '/session/token', headers: [own(), ['Cookie', `it_session_good=${role}`]] })
+      expect(JSON.parse(current.body).service).toEqual({ functions: 'current' })
+      const refused = await ask(behind.base, { method: 'POST', path: '/session/token', headers: headers.slice(0, 2) })
+      expect(refused.status).toBe(401)
+      expect(JSON.parse(refused.body)).not.toHaveProperty('service')
+      for (const origin of ['null', `http://127.0.0.1:${behind.base + 1}`, 'https://foreign.example']) {
+        const refused = await ask(behind.base, { method: 'POST', path: '/session/token', headers: [['Origin', origin], ...headers.slice(1)] })
+        expect(refused.status).toBe(403)
+        expect(JSON.parse(refused.body)).not.toHaveProperty('service')
+      }
+    } finally {
+      await behind.stop()
+    }
+  })
+
   test('The session’s routes, the machines’ routes, the public keys and the rest of the named routes reach the backend’s HTTP port and are answered as it answers', async () => {
     const redeemed = await ask(door.base, {
       method: 'POST',
@@ -1704,6 +1739,10 @@ describe('What the door passes on to the backend', () => {
       await nothingMoreFor(hasty)
       hasty.end()
       expect(hasty.text()).not.toContain(' 200 ')
+      // The door may have begun to ask the backend before what followed had arrived. That
+      // connection is another than the caller's, and the door closes it in its own time, so its
+      // closing is waited for, and what the backend was sent is looked at only then
+      await until(() => lone.ended() === lone.heard().length)
       expect(lone.heard().join('')).not.toMatch(/POST|update_environment_variables/)
       expect(lone.heard().filter((asked) => !asked.startsWith('GET /api/1.46.0/sync HTTP/1.1\r\n'))).toEqual([])
       expect(other.said.join('\n')).toMatch(/door refused a request \(websocket_version\)/)
@@ -2107,6 +2146,41 @@ describe('With a proxy named in the environment', () => {
 })
 
 describe('What the door will wait for', () => {
+  test('An upload that is refused with none of it read is let go of once it is answered: nothing is kept waiting on it for the time an upload is given', async () => {
+    // A content service that refuses an upload as it does one with no grant: at once, and without reading it
+    const refuses: Content = { ...contentStandIn, upload: async () => new Response('{"error":"grant"}', { status: 401 }) }
+    let letGo = false
+    const arriving = () =>
+      new ReadableStream<Uint8Array>(
+        {
+          pull: (controller) => controller.enqueue(new Uint8Array(1024)),
+          cancel: () => {
+            letGo = true
+          },
+        },
+        { highWaterMark: 0 },
+      )
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const made = makeDoor(config(door.base), backend, () => {}, parts({ content: refuses }))
+      const waiting = vi.getTimerCount()
+      for (let n = 0; n < 20; n++) {
+        const answer = await made.answer({
+          method: 'PUT',
+          target: '/upload/a.bin',
+          headers: new Headers({ host: `localhost:${door.base}`, 'content-length': '65536' }),
+          body: arriving(),
+          port: door.base,
+          address: '127.0.0.1',
+        } satisfies Arrival)
+        expect(answer.status).toBe(401)
+      }
+      expect([vi.getTimerCount() - waiting, letGo]).toEqual([0, true])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test('A body longer than the door allows is refused, whether or not it says how long it is', async () => {
     const long = 'x'.repeat(70_000)
     expect((await ask(door.base, { method: 'POST', path: '/bridge/token', body: long })).status).toBe(413)
@@ -2298,6 +2372,43 @@ describe('What the door will wait for', () => {
       await new Promise((resolve) => generous.close(resolve))
     }
   }, 60_000)
+
+  test('the upload deadline allows a slow maximum-size file and ends a stalled one', async () => {
+    const reader = {
+      ...contentStandIn,
+      upload: async (request: Request) => {
+        await request.arrayBuffer()
+        return new Response('{}')
+      },
+    }
+    // Time is scaled by 1,000. A 25 MiB file at 35,000 bytes per second takes 749 seconds.
+    // The former 600-second door limit would close it before these bytes arrive.
+    const opened = await open(false, { patience: 30, content: reader })
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          { host: '127.0.0.1', port: opened.base, method: 'PUT', path: '/upload/index.html', headers: { 'content-length': LIMITS.fileBytes } },
+          (res) => {
+            res.resume()
+            res.on('end', () => resolve(res.statusCode!))
+          },
+        )
+        req.on('error', reject)
+        req.flushHeaders()
+        setTimeout(() => req.end(Buffer.alloc(LIMITS.fileBytes)), 750)
+      })
+      expect(status).toBe(200)
+      const began = Date.now()
+      const stalled = await ask(opened.base, { method: 'PUT', path: '/upload/index.html', length: LIMITS.fileBytes, body: 'five!' })
+      expect(stalled.status).toBe(500)
+      expect(Date.now() - began).toBeLessThan(5000)
+      expect(
+        (await ask(opened.base, { method: 'PUT', path: '/upload/index.html', length: LIMITS.fileBytes + 1, body: 'x'.repeat(LIMITS.fileBytes + 1) })).status,
+      ).toBe(413)
+    } finally {
+      await opened.stop()
+    }
+  }, 15_000)
 
   test('A request whose body stops arriving is given up on', async () => {
     const impatient = await open(false, { patience: 300 })
@@ -3031,7 +3142,12 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
       window.heard = []
       window.stopped = []
       window.live = 'waiting'
-      addEventListener('securitypolicyviolation', (e) => window.stopped.push(e.effectiveDirective + ' ' + e.blockedURI))
+      const report = () => fetch('/api/mutation', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'test:seen', args: { heard: window.heard, stopped: window.stopped, live: window.live }, format: 'json' })
+      }).catch(() => {})
+      addEventListener('securitypolicyviolation', (e) => { window.stopped.push(e.effectiveDirective + ' ' + e.blockedURI); report() })
       const frame = document.createElement('iframe')
       frame.setAttribute('sandbox', ${JSON.stringify(SANDBOX)})
       frame.referrerPolicy = 'no-referrer'
@@ -3041,13 +3157,13 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
         if (e.source !== frame.contentWindow || !e.data || e.data.type !== 'it:hello' || answered) return
         answered = true
         const channel = new MessageChannel()
-        channel.port1.onmessage = (m) => window.heard.push(m.data)
+        channel.port1.onmessage = (m) => { window.heard.push(m.data); report() }
         frame.contentWindow.postMessage({ type: 'it:port' }, '*', [channel.port2])
       })
       document.body.append(frame)
       const socket = new WebSocket('ws://' + location.host + '/api/1.46.0/sync')
-      socket.onmessage = () => { window.live = 'open' }
-      socket.onerror = () => { window.live = 'refused' }
+      socket.onmessage = () => { window.live = 'open'; report() }
+      socket.onerror = () => { window.live = 'refused'; report() }
       `,
     ),
   }
@@ -3086,12 +3202,6 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
   /** Whether Playwright has a browser of a kind on this machine. */
   const has = async (kind: Kind) => existsSync((await import('playwright'))[kind].executablePath())
   /**
-   * A wait that ran out. It is the one failure a case is tried again for: a browser on a machine
-   * that is busy may be slower than any wait a test can give it. What a case saw, and did not
-   * expect, is never this, and is never tried again.
-   */
-  class Late extends Error {}
-  /**
    * Does one thing a case has to wait for. When it is not done in its time, the case fails
    * there and says which thing it was and what was last seen of it, and not that the whole
    * case ran out of time.
@@ -3101,7 +3211,7 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
     const late = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         const last = seen()
-        reject(new Late(`${what} did not happen in ${ms / 1000} seconds${last === undefined ? '' : `. Last seen: ${JSON.stringify(last)}`}`))
+        reject(new Error(`${what} did not happen in ${ms / 1000} seconds${last === undefined ? '' : `. Last seen: ${JSON.stringify(last)}`}`))
       }, ms)
     })
     try {
@@ -3180,15 +3290,18 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
           page.on('requestfailed', (request) =>
             said.push(`not fetched: ${request.method()} ${new URL(request.url()).origin} ${request.failure()?.errorText ?? ''}`),
           )
-          const look = async () => {
-            last = await page
-              .evaluate(() => {
-                const w = window as unknown as Partial<Seen>
-                return w.heard && w.stopped && w.live ? { heard: w.heard, stopped: w.stopped, live: w.live } : null
-              })
-              .catch(() => null)
-            return last
-          }
+          // Firefox can leave an evaluation pending after navigation even when the page's
+          // scripts have run. Observe the fixture's reports through network events, which
+          // need no evaluation in that context. Each page has its own listener and result.
+          const heard = new Promise<Seen>((resolve) => {
+            page.on('request', (request) => {
+              if (new URL(request.url()).pathname !== '/api/mutation' || request.method() !== 'POST') return
+              const report = request.postDataJSON() as { path?: string; args: Seen }
+              if (report.path !== 'test:seen') return
+              last = report.args
+              if (last.heard.length > 0 && last.live !== 'waiting') resolve(last)
+            })
+          })
           await stage(
             `the site loading at ${name}`,
             patience,
@@ -3197,24 +3310,18 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
             },
             () => said,
           )
-          // Waited for by what it is waiting for: the site's own script, then the page in its frame saying what it shows, and the live connection answering
-          await stage(
+          // The site reports the page's message and the answer on its live connection.
+          const seen = await stage(
             `the page being heard from and the live connection answering at ${name}`,
             patience,
-            async () => {
-              for (;;) {
-                const seen = await look()
-                if (seen && seen.heard.length > 0 && seen.live !== 'waiting') return
-                await pause(50)
-              }
-            },
+            () => heard,
             () => ({ site: last, said }),
           )
+          kept.push([name, seen])
         } finally {
-          // A window of a browser that has stopped answering is not waited for: the browser is closed whole when the try is given up
+          // Bound the cleanup of a window whose browser has stopped answering
           await Promise.race([context.close().catch(() => {}), pause(15_000)])
         }
-        kept.push([name, last])
       }
     } finally {
       await opened.stop()
@@ -3236,12 +3343,7 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
             )
             return skip()
           }
-          // A try that ran out of time, and only that, is made once more, in a browser of its own: the one it had is closed first
-          const kept = await shown(kind, under, runtime!).catch(async (failed) => {
-            if (!(failed instanceof Late)) throw failed
-            await discard(kind)
-            return shown(kind, under, runtime!)
-          })
+          const kept = await shown(kind, under, runtime!)
           for (const [name, seen] of kept) {
             // The page ran with It in it, as a document with an origin of its own, and reached the site that framed it
             expect([name, seen?.stopped, seen?.live]).toEqual([name, [], 'open'])
@@ -3256,7 +3358,7 @@ describe.skipIf(underBun)('A page shown in a browser', () => {
             ])
           }
         },
-        // Longer than every stage of two tries together, so that a stage that stands still is what fails, by its name
+        // Each stage has its own deadline, so a wait that stands still fails by its name
         1_500_000,
       )
 })
@@ -3290,6 +3392,47 @@ describe('Kept to the tailnet', () => {
   test('Open to every network, the same callers are answered', async () => {
     const open = config(door.base, true)
     for (const anyone of ['192.168.1.50', '100.101.42.17', '2001:db8:100:c690::4f1a']) expect(await asked(open, anyone), anyone).not.toBe(421)
+  })
+
+  test('Opened to every network after it was kept to the tailnet, the door still answers to the name the machine has there, which is the address its screens were given', async () => {
+    // A machine that is on a tailnet, where Tailscale says its name
+    const interfaces = vi.spyOn(os, 'networkInterfaces').mockReturnValue({
+      eth0: [{ address: '192.168.1.20', family: 'IPv4', internal: false, netmask: '255.255.255.0', mac: '00:00:00:00:00:01', cidr: '192.168.1.20/24' }],
+      tailscale0: [
+        { address: '100.101.42.17', family: 'IPv4', internal: false, netmask: '255.255.255.255', mac: '00:00:00:00:00:00', cidr: '100.101.42.17/32' },
+      ],
+    })
+    forgetTailnetName()
+    tailnetName(() => JSON.stringify({ Self: { DNSName: 'studio.tail1234.ts.net.' } }))
+    try {
+      /** What a door answers a screen on the tailnet that asks by a name, on the site's port and on the pages'. */
+      const byName = async (kept: ServiceConfig, name: string) => {
+        const answers: number[] = []
+        for (const port of [door.base, contentPort(door.base)])
+          answers.push(
+            (
+              await makeDoor(kept, backend, () => {}, parts()).answer({
+                method: 'GET',
+                target: '/',
+                headers: new Headers({ host: `${name}:${port}` }),
+                body: null,
+                port,
+                address: '100.101.42.17',
+              } satisfies Arrival)
+            ).status,
+          )
+        return answers.map((status) => status === 421)
+      }
+      const [tailnet, open] = [{ ...config(door.base, true), tailnet: true }, config(door.base, true)]
+      expect(await byName(tailnet, 'studio.tail1234.ts.net')).toEqual([false, false])
+      expect(await byName(open, 'studio.tail1234.ts.net')).toEqual([false, false])
+      // Still no name but the machine's own, and with the network off not that one either
+      expect(await byName(open, 'other.tail1234.ts.net')).toEqual([true, true])
+      expect(await byName(config(door.base, false), 'studio.tail1234.ts.net')).toEqual([true, true])
+    } finally {
+      interfaces.mockRestore()
+      forgetTailnetName()
+    }
   })
 })
 

@@ -1,8 +1,8 @@
 // Reopening a conversation that was closed: the command Claude Code is run with, where it is
 // run, how the click is given to it, and the note of each conversation's folder that says where.
 
-import { spawn } from 'node:child_process'
-import {
+import childProcess, { spawn } from 'node:child_process'
+import fs, {
   chmodSync,
   closeSync,
   existsSync,
@@ -16,9 +16,10 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { conversationFolder, conversationsFile, noteConversation } from './src/publish'
 import {
   Budget,
@@ -42,6 +43,68 @@ import {
   WAS_STOPPED,
   WOKEN,
 } from './src/wake'
+
+test('macOS reads the run marks once and checks all identities together on each Stop tick', async () => {
+  const platform = process.platform
+  const spawnSync = childProcess.spawnSync
+  const since = 'Fri Oct 16 09:00:00 2026'
+  const leader = 900_001
+  const reused = leader + 20
+  const live = new Set(Array.from({ length: 13 }, (_, n) => leader + n))
+  const checked: number[] = []
+  let listings = 0
+  const killed: number[] = []
+  const kill = vi.spyOn(process, 'kill').mockImplementation((pid) => {
+    killed.push(pid)
+    live.delete(Math.abs(pid))
+    return true
+  })
+  try {
+    Object.defineProperty(process, 'platform', { value: 'darwin' })
+    childProcess.spawnSync = new Proxy(spawnSync, {
+      apply(_target, _self, [file, args]) {
+        expect(file).toBe('/bin/ps')
+        let stdout = ''
+        if (args.includes('-E')) {
+          expect(args).toEqual(['-A', '-E', '-ww', '-o', 'pid=', '-o', 'lstart=', '-o', 'command='])
+          listings++
+          checked.push(0)
+          stdout = [...live, reused].map((pid) => `${pid} ${since} tool IT_RUN=batch-test`).join('\n')
+        } else if (args.includes('lstart=')) {
+          if (listings) checked[listings - 1]!++
+          const pids = String(args[args.indexOf('-p') + 1])
+            .split(',')
+            .map(Number)
+          stdout = pids
+            .filter((pid) => live.has(pid) || pid === reused)
+            .map((pid) => `${pid} ${pid === reused ? 'Fri Oct 16 09:00:01 2026' : since}`)
+            .join('\n')
+        } else if (args.includes('ppid=')) {
+          stdout = [...live]
+            .filter((pid) => pid !== leader)
+            .map((pid) => `${pid} ${leader}`)
+            .join('\n')
+        } else {
+          expect(args).toEqual(['-A', '-o', 'pid=', '-o', 'pgid='])
+          stdout = [...live].map((pid) => `${pid} ${leader}`).join('\n')
+        }
+        return { pid: 1, status: 0, signal: null, stdout, stderr: '', output: [null, stdout, ''] }
+      },
+    })
+    syncBuiltinESMExports()
+    expect(await endTree(leader, since, { harness: 'pi', session: 'batch', run: 'batch-test', told: SINCE_TOLD })).toBe('ended')
+    expect(live.size).toBe(0)
+    expect(killed).not.toContain(reused)
+    expect(killed).toContain(-leader)
+    expect(checked.length).toBeGreaterThanOrEqual(3)
+    expect(checked.every((count) => count === 1)).toBe(true)
+  } finally {
+    Object.defineProperty(process, 'platform', { value: platform })
+    childProcess.spawnSync = spawnSync
+    syncBuiltinESMExports()
+    kill.mockRestore()
+  }
+})
 
 let scratch: string
 let was: string | undefined
@@ -293,6 +356,154 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     expect(overtime).toBe(1)
   }, 40_000)
 
+  test.each(['Stop', 'timeout'])(
+    'a detached tool started by the termination handler is found and ended on %s',
+    async (cause) => {
+      const ready = path.join(scratch, 'ready')
+      const childPid = path.join(scratch, 'late.pid')
+      const tool = `require('node:fs').writeFileSync(${JSON.stringify(childPid)}, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)`
+      const script = `
+      process.stdin.resume()
+      process.stdin.on('end', () => require('node:fs').writeFileSync(${JSON.stringify(ready)}, ''))
+      process.on('SIGTERM', () => {
+        require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(tool)}], { detached: true, stdio: 'ignore' }).unref()
+        process.exit(0)
+      })
+      setInterval(() => {}, 1000)
+    `
+      const stop = new AbortController()
+      const ran = carryOn(
+        { argv: [process.execPath, '-e', script], input: 'a click', app: 'Pi' },
+        scratch,
+        { harness: 'pi', session: 'late-tool', run: `late-tool-${process.pid}-${cause}` },
+        {
+          signal: stop.signal,
+          patience: cause === 'timeout' ? 1000 : 30_000,
+        },
+      )
+      try {
+        for (let n = 0; n < 100 && !existsSync(ready); n++) await new Promise((r) => setTimeout(r, 20))
+        expect(existsSync(ready)).toBe(true)
+        if (cause === 'Stop') stop.abort()
+        expect(await ran).toBe(cause === 'Stop' ? STOPPED : 'Pi had not finished in fifteen minutes')
+        expect(existsSync(childPid)).toBe(true)
+        const pid = Number(readFileSync(childPid, 'utf8'))
+        expect(identity([pid]).has(pid)).toBe(false)
+        // Unreadable unrelated processes can conservatively hold the run. The connector's
+        // persistence tests cover that hold; this regression proves its own late tool ended.
+      } finally {
+        stop.abort()
+        await ran
+        if (existsSync(childPid)) {
+          const pid = Number(readFileSync(childPid, 'utf8'))
+          if (identity([pid]).has(pid)) {
+            process.kill(pid, 'SIGKILL')
+            for (let n = 0; n < 100 && identity([pid]).has(pid); n++) await new Promise((r) => setTimeout(r, 20))
+          }
+        }
+      }
+    },
+    20_000,
+  )
+
+  test.skipIf(process.platform !== 'linux')('Stop ends its known leader when discovering other processes fails, and keeps uncertainty', async () => {
+    const ready = path.join(scratch, 'ready')
+    const stop = new AbortController()
+    let pid = 0
+    let unsure = false
+    const list = fs.readdirSync
+    const ran = carryOn(
+      {
+        argv: [
+          process.execPath,
+          '-e',
+          `process.stdin.resume(); process.stdin.on('end', () => require('node:fs').writeFileSync(${JSON.stringify(ready)}, '')); setInterval(() => {}, 1000)`,
+        ],
+        input: 'a click',
+        app: 'Pi',
+      },
+      scratch,
+      { harness: 'pi', session: 'failed-scan', run: 'failed-scan' },
+      {
+        signal: stop.signal,
+        began: (started) => {
+          pid = started
+        },
+        unsure: () => {
+          unsure = true
+        },
+      },
+    )
+    try {
+      for (let n = 0; n < 100 && !existsSync(ready); n++) await new Promise((r) => setTimeout(r, 20))
+      expect(existsSync(ready)).toBe(true)
+      fs.readdirSync = ((where: unknown, ...args: unknown[]) => {
+        if (where === '/proc') throw Object.assign(new Error('process inspection failed'), { code: 'EACCES' })
+        return (list as any)(where, ...args)
+      }) as typeof fs.readdirSync
+      syncBuiltinESMExports()
+      stop.abort()
+      expect(await ran).toBe(STOPPED)
+      expect(unsure).toBe(true)
+      expect(identity([pid]).has(pid)).toBe(false)
+    } finally {
+      fs.readdirSync = list
+      syncBuiltinESMExports()
+      stop.abort()
+      await ran
+      if (pid && identity([pid]).has(pid)) {
+        process.kill(pid, 'SIGKILL')
+        for (let n = 0; n < 100 && identity([pid]).has(pid); n++) await new Promise((r) => setTimeout(r, 20))
+      }
+    }
+  })
+
+  test.skipIf(process.platform !== 'linux')('a newly found marked process is not signalled after its number is reused', async () => {
+    const leader = spawn('sleep', ['300'], { detached: true, stdio: 'ignore' })
+    const exited = new Promise((resolve) => leader.once('exit', resolve))
+    const since = identity([leader.pid!]).get(leader.pid!)!
+    const ticks = Number(since.slice(5))
+    const candidate = 999_999_998
+    const read = fs.readFileSync
+    const list = fs.readdirSync
+    const kill = process.kill.bind(process)
+    let environments = 0
+    let stats = 0
+    const signalled: number[] = []
+    const signal = vi.spyOn(process, 'kill').mockImplementation((pid, how) => {
+      if (pid === candidate) {
+        signalled.push(pid)
+        return true
+      }
+      return kill(pid, how)
+    })
+    try {
+      fs.readdirSync = ((where: unknown, ...args: unknown[]) =>
+        where === '/proc' ? [String(candidate)] : (list as any)(where, ...args)) as typeof fs.readdirSync
+      fs.readFileSync = ((where: unknown, ...args: unknown[]) => {
+        if (where === `/proc/${candidate}/stat`) {
+          // The first discovery sees one identity. Before a signal, the number names another.
+          const fields = ['S', ...Array(18).fill('0'), String(ticks + (++stats >= 4 ? 2 : 1))]
+          return `${candidate} (tool) ${fields.join(' ')}`
+        }
+        if (where === `/proc/${candidate}/environ`) return ++environments === 2 ? 'IT_RUN=late-reused\0' : ''
+        return (read as any)(where, ...args)
+      }) as typeof fs.readFileSync
+      syncBuiltinESMExports()
+      expect(await endTree(leader.pid!, since, { harness: 'pi', session: 'reuse', run: 'late-reused', told: SINCE_TOLD })).toBe('ended')
+      expect(environments).toBeGreaterThanOrEqual(2)
+      expect(stats).toBeGreaterThanOrEqual(4)
+      expect(signalled).toEqual([])
+    } finally {
+      fs.readFileSync = read
+      fs.readdirSync = list
+      syncBuiltinESMExports()
+      signal.mockRestore()
+      if (identity([leader.pid!]).has(leader.pid!)) leader.kill('SIGKILL')
+      await exited
+    }
+  })
+
   test('the app is told the folder it is in, and not the one this program was started in', async () => {
     // OpenCode believes PWD over the folder it is started in. Left with this program's own, it
     // held the conversation in one folder, waited for it in another, and never ended.
@@ -360,22 +571,22 @@ describe('whether some Codex has a conversation open', () => {
     writeFileSync(lock('thread-open'), '')
     const held = openSync(lock('thread-open'), 'r')
     try {
-      expect(codexHeld('thread-open', codexHome)).toBe(true)
+      expect(codexHeld('thread-open', codexHome)).toBe(process.platform === 'win32' ? null : true)
     } finally {
       closeSync(held)
     }
     // Left behind by a Codex that was ended without warning: where the system says who has a file
     // open, that is not taken for an open conversation. Elsewhere the file is all there is to go by.
     writeFileSync(lock('thread-left'), '')
-    expect(codexHeld('thread-left', codexHome)).toBe(process.platform !== 'linux' && process.platform !== 'darwin')
+    expect(codexHeld('thread-left', codexHome)).toBe(process.platform === 'linux' || process.platform === 'darwin' ? false : null)
     // What was found is good for a moment only: closed a moment later, it is found closed
     const t = Date.now()
     writeFileSync(lock('thread-then'), '')
     const then = openSync(lock('thread-then'), 'r')
-    expect(codexHeld('thread-then', codexHome, t)).toBe(true)
+    expect(codexHeld('thread-then', codexHome, t)).toBe(process.platform === 'win32' ? null : true)
     closeSync(then)
     rmSync(lock('thread-then'))
-    expect(codexHeld('thread-then', codexHome, t + 500)).toBe(true)
+    expect(codexHeld('thread-then', codexHome, t + 500)).toBe(process.platform === 'win32' ? null : true)
     expect(codexHeld('thread-then', codexHome, t + 2000)).toBe(false)
     // An id that is not one Codex makes names no file at all
     expect(codexHeld('../thread-open', codexHome)).toBe(false)
@@ -540,9 +751,16 @@ describe('the folder a conversation was held in', () => {
   test('only so many are remembered, the ones noted last', () => {
     const folder = path.join(scratch, 'held here')
     mkdirSync(folder)
-    for (let n = 0; n < 305; n++) noteConversation({ harness: 'claude-code', id: `session-${n}` }, folder)
+    // Start at the boundary, then write past it. Building the fixture through 300
+    // flushed writes makes this a disk-speed test on Windows.
+    writeFileSync(
+      conversationsFile(),
+      JSON.stringify(Object.fromEntries(Array.from({ length: 300 }, (_, n) => [`claude-code:session-${n}`, { cwd: folder, at: n }]))),
+    )
+    for (let n = 300; n < 305; n++) noteConversation({ harness: 'claude-code', id: `session-${n}` }, folder)
     const kept = Object.keys(JSON.parse(readFileSync(conversationsFile(), 'utf8')))
     expect(kept.length).toBe(300)
+    expect(new Set(kept)).toEqual(new Set(Array.from({ length: 300 }, (_, n) => `claude-code:session-${n + 5}`)))
     expect(conversationFolder({ harness: 'claude-code', id: 'session-304' })).toBe(folder)
   })
 
@@ -631,7 +849,21 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-endtree-'))
     const of = { harness: 'pi', session: 'conversation-7' }
     const left: number[] = []
+    const list = fs.readdirSync
     try {
+      // This test proves what happens to these real children. A whole-machine Linux scan
+      // can also find an unrelated, unreadable process of the same user and correctly say
+      // unknown. That made the expected ended/gone outcomes depend on other work running
+      // on the test machine. Keep the real stat and environment reads for our children;
+      // the separate unreadable-process test covers the uncertainty from that other case.
+      if (process.platform === 'linux') {
+        fs.readdirSync = new Proxy(list, {
+          apply(target, self, args) {
+            return args[0] === '/proc' ? left.map(String) : Reflect.apply(target, self, args)
+          },
+        })
+        syncBuiltinESMExports()
+      }
       // The run starts a command, and then ends by itself while the command goes on
       const orphan = async (env: Record<string, string>) => {
         const mark = path.join(folder, `its-command-${left.length}.pid`)
@@ -682,6 +914,18 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       // By its own name it is found and ended
       expect(await endTree(leader.pid!, leaderSince, { ...of, told: SINCE_TOLD, run: 'a-run-of-its-own' })).toBe('ended')
       await until(() => !alive(stray))
+      // Nor is such a command lost sight of where another process has the run's number by now.
+      // That process is not the run, and neither it nor its group is touched: here it is this
+      // very test. What carries the run's name is ended all the same.
+      const later = spawn('sleep', ['300'], { detached: true, stdio: 'ignore', env: { ...process.env, IT_RUN: 'a-run-whose-number-was-reused' } })
+      later.unref()
+      left.push(later.pid!)
+      await until(() => alive(later.pid!))
+      const reused = { ...of, told: SINCE_TOLD }
+      expect(await endTree(process.pid, identity([later.pid!]).get(later.pid!)!, { ...reused, run: 'another-run' })).toBe('gone')
+      expect(alive(later.pid!)).toBe(true)
+      expect(await endTree(process.pid, identity([later.pid!]).get(later.pid!)!, { ...reused, run: 'a-run-whose-number-was-reused' })).toBe('ended')
+      await until(() => !alive(later.pid!))
       // Started as a reopened run is, with the two marks, which what it starts carries on
       const ours = await orphan({ IT_HARNESS: of.harness, IT_SESSION: of.session })
       expect(alive(ours.its)).toBe(true)
@@ -713,6 +957,8 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       expect(await endTree(anothers.pid, anothers.since, { ...of, session: 'conversation-8', boot: '00000000-0000-4000-8000-000000000000' })).toBe('gone')
       expect(alive(anothers.its)).toBe(true)
     } finally {
+      fs.readdirSync = list
+      syncBuiltinESMExports()
       for (const pid of left)
         try {
           process.kill(pid, 'SIGKILL')
@@ -720,4 +966,42 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       rmSync(folder, { recursive: true, force: true })
     }
   }, 60_000)
+
+  test.skipIf(process.platform !== 'linux')(
+    'an unrelated process whose environment cannot be read keeps a run uncertain until inspection succeeds',
+    async () => {
+      const candidate = process.pid
+      const list = fs.readdirSync
+      const read = fs.readFileSync
+      let readable = false
+      try {
+        fs.readdirSync = new Proxy(list, {
+          apply(target, self, args) {
+            return args[0] === '/proc' ? [String(candidate)] : Reflect.apply(target, self, args)
+          },
+        })
+        fs.readFileSync = new Proxy(read, {
+          apply(target, self, args) {
+            if (args[0] === `/proc/${candidate}/stat`) return `${candidate} (tool) ${['S', ...Array(18).fill('0'), '1'].join(' ')}`
+            if (args[0] === `/proc/${candidate}/environ`) {
+              if (!readable) throw Object.assign(new Error('the environment cannot be read'), { code: 'EACCES' })
+              return 'IT_RUN=another-run\0'
+            }
+            return Reflect.apply(target, self, args)
+          },
+        })
+        // This process's directory belongs to this user. Only its environment is unreadable, as with
+        // a process that has disabled inspection; it cannot be dismissed as another user's.
+        syncBuiltinESMExports()
+        const of = { harness: 'pi', session: 'unreadable', run: 'finished-run', told: SINCE_TOLD }
+        expect(await endTree(process.pid, 'tick 0', of)).toBe('unknown')
+        readable = true
+        expect(await endTree(process.pid, 'tick 0', of)).toBe('gone')
+      } finally {
+        fs.readdirSync = list
+        fs.readFileSync = read
+        syncBuiltinESMExports()
+      }
+    },
+  )
 })

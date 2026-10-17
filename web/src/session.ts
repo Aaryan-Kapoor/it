@@ -21,6 +21,8 @@ export type Role = 'owner' | 'screen'
 export interface Session {
   /** Whether the question has been answered yet. Until it has, nothing else here says anything. */
   loaded: boolean
+  /** The door says whether this program's functions loaded. Earlier doors leave this unsaid. */
+  service?: { functions: 'current' | 'retained' }
   paired: boolean
   /** The person's id, this browser's session, and what the session may do. All null when not paired. */
   user: string | null
@@ -49,7 +51,7 @@ const subscribe = (fn: () => void) => {
   return () => void listeners.delete(fn)
 }
 function set(next: Session): void {
-  const same = (Object.keys(next) as (keyof Session)[]).every((k) => next[k] === state[k])
+  const same = next.service === state.service && (Object.keys(next) as (keyof Session)[]).every((k) => next[k] === state[k])
   if (same) return
   state = next
   for (const fn of listeners) fn()
@@ -67,6 +69,14 @@ export const useSession = (): Session => useSyncExternalStore(subscribe, current
  * a connection that hangs would otherwise leave it so for as long as the connection did.
  */
 const ANSWER_MS = 20_000
+/**
+ * How long a code that was put to the backend is waited for. A connection lost on the way would
+ * otherwise leave the browser pairing for as long as it hung, with the code already gone from
+ * its address. Longer than the thirty seconds the door gives the backend, and so longer than
+ * any answer of the door's takes: a code is good once, and one given up on while the backend
+ * was still taking it would be put again and refused as used.
+ */
+const REDEEM_MS = 35_000
 
 /**
  * Every request about the session says that it comes from the site, in a header that a page on
@@ -254,7 +264,7 @@ function askOnce(): Promise<Said> {
         return 'unpaired'
       }
       if (!r.ok) return 'trouble'
-      const a = (await r.json()) as { token?: unknown; expiresIn?: unknown; user?: unknown; session?: unknown; role?: unknown } | null
+      const a = (await r.json()) as { token?: unknown; expiresIn?: unknown; user?: unknown; session?: unknown; role?: unknown; service?: unknown } | null
       if (began !== era) return 'overtaken'
       if (!a || !text(a.token) || !text(a.user) || !text(a.session) || typeof a.expiresIn !== 'number' || !(a.expiresIn > 0)) return 'trouble'
       // Counted from when it was asked for: the token was made after that, so it lasts at least this long
@@ -269,7 +279,17 @@ function askOnce(): Promise<Said> {
       }
       const code = stillToSay(role)
       // What was said of waiting was said of a code that is still offered, or is said no more
-      set({ loaded: true, paired: true, user: a.user, session: a.session, role, code, wait: code === 'screen' ? state.wait : null })
+      const functions = a.service && typeof a.service === 'object' && 'functions' in a.service ? a.service.functions : undefined
+      set({
+        loaded: true,
+        paired: true,
+        user: a.user,
+        session: a.session,
+        role,
+        code,
+        wait: code === 'screen' ? state.wait : null,
+        ...(functions === 'current' || functions === 'retained' ? { service: { functions } } : {}),
+      })
       return 'paired'
     } catch {
       return began === era ? 'trouble' : 'overtaken'
@@ -478,7 +498,7 @@ export async function pairAsScreen(): Promise<void> {
  */
 async function redeem(code: string): Promise<'paired' | 'refused' | 'trouble' | 'owner' | Wait> {
   try {
-    const r = await post('/session/redeem', { code })
+    const r = await post('/session/redeem', { code }, REDEEM_MS)
     if (r.ok) return 'paired'
     if (r.status === 409) {
       const said = (await r.json().catch(() => null)) as { code?: unknown } | null

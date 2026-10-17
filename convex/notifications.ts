@@ -1,7 +1,7 @@
 // A notification is the agent speaking to the person outside any one page. It is stored, so it
 // survives a reload; it shows as a toast and in a tray; and when the display it is meant for
 // does not have the site open, it goes out as a web push (push.ts).
-import { LIMITS } from '@it/protocol'
+import { LIMITS, MESSAGE } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
@@ -36,9 +36,13 @@ export const send = mutation({
       // A button's press comes back as a click on a page, so it needs a page to belong to
       if (!artifact) fail('invalid', 'Buttons need a page for the answer to come back on. Pass its id.')
       if (buttons.length > LIMITS.notificationButtons) fail('limit', `At most ${LIMITS.notificationButtons} buttons.`)
-      for (const b of buttons)
+      for (const b of buttons) {
         if (!b.label.trim() || b.label.length > 40 || !/^[A-Za-z0-9_.:-]{1,64}$/.test(b.action))
           fail('invalid', 'A button is a short label and an action name.')
+        // Pressing a button records an action of its name, and this name is kept for what a
+        // person types above a page: a press would be refused, with the button still offered
+        if (b.action === MESSAGE) fail('invalid', `A button may not send an action named ${MESSAGE}, which is what a person types above a page.`)
+      }
     }
     let displayId: Id<'displays'> | undefined
     if (display) {
@@ -92,6 +96,10 @@ export const list = query({
     for (const n of recent) {
       if (out.length >= TRAY) break
       if (n.artifactId && !slugs.has(n.artifactId)) slugs.set(n.artifactId, (await ctx.db.get(n.artifactId))?.slug ?? null)
+      // What was sent about a page that has since been deleted is shown no more. Deleting the
+      // page puts away its notices in bounded steps. Until those finish, none offers a
+      // button that can answer nothing.
+      if (n.artifactId && slugs.get(n.artifactId) === null) continue
       out.push({
         id: n._id,
         text: n.text,
@@ -145,9 +153,9 @@ export const dismiss = mutation({
 
 /** Pressing a notification's button records an ordinary click on its page: one inbox, one set of rules. */
 export const answer = mutation({
-  args: { id: v.id('notifications'), action: v.string(), displayKey: v.string() },
-  handler: async (ctx, { id, action, displayKey }) => {
-    const c = await requireBrowser(ctx)
+  args: { id: v.id('notifications'), action: v.string(), displayKey: v.string(), expectedSession: v.optional(v.string()) },
+  handler: async (ctx, { id, action, displayKey, expectedSession }) => {
+    const c = await requireBrowser(ctx, expectedSession)
     const { user } = c
     const n = await ctx.db.get(id)
     if (!n || n.userId !== user._id) fail('not_found', 'No such notification.')
@@ -157,6 +165,8 @@ export const answer = mutation({
     // is, to this one, no notification, whatever has become of it.
     if (n.displayId && n.displayId !== display._id) fail('not_found', 'No such notification.')
     if (n.answeredAt) return { actionId: null }
+    if (expectedSession === undefined)
+      fail('conflict', 'Reload It before answering this notification, so the request belongs to your current pairing.', { reload: true })
     // A notification has buttons only where it was sent about a page, and it then says which version and state of the page it was sent about
     if (!n.artifactId || n.contentVersion === undefined || n.stateRevision === undefined || !n.buttons?.some((b) => b.action === action))
       fail('invalid', 'That is not one of its buttons.')

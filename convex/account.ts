@@ -2,12 +2,13 @@
 // owner's browser's to do, and no screen's.
 //
 // An export is read a piece at a time (the person's lists, then each page, then each page's
-// history a batch at a time) and put together in the browser, so that no single read has to hold
-// everything at once.
+// history a batch at a time) and streamed to a download by the door, so that no single read
+// has to hold everything at once.
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { mutation, query } from './_generated/server'
 import { revokeLater } from './content'
+import { receipt } from './deletions'
 import { ownArtifact, requireOwner } from './lib/authz'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
@@ -123,6 +124,23 @@ export const exportNotifications = query({
       .paginate({ cursor, numItems: 200 })
     return {
       notifications: batch.page.map((n) => ({ text: n.text, at: n.createdAt, answer: n.answer ?? null })),
+      next: batch.isDone ? null : batch.continueCursor,
+    }
+  },
+})
+
+/** Every retained deletion receipt, including unfinished cleanup, a batch at a time. */
+export const exportDeletions = query({
+  args: { owner: v.string(), cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { owner, cursor }) => {
+    const { user } = await requireOwner(ctx)
+    if (user._id !== owner) fail('not_found', 'That export cannot be carried on from here. Start it again.')
+    const batch = await ctx.db
+      .query('deletions')
+      .withIndex('by_user', (q) => q.eq('userId', user._id))
+      .paginate({ cursor, numItems: 200 })
+    return {
+      deletions: batch.page.map((d) => ({ ...receipt(d), artifactId: d.artifactId, contentAt: d.contentAt ?? null, recordsAt: d.recordsAt ?? null })),
       next: batch.isDone ? null : batch.continueCursor,
     }
   },

@@ -15,6 +15,19 @@
 // Claude Code 2.1.287, a call left open when a turn ends delays the host's next message until
 // it returns. Ownership, retries and receipts live in the connector.
 const HARNESS = 'claude-code'
+const ADDON_VERSION = 'IT_ADDON_BUILD'
+const INSTANCE = Math.random().toString(36).slice(2)
+const addon = ($) => ({
+  api: 1,
+  version: ADDON_VERSION,
+  delivery: typeof $?.session?.id === 'function' && typeof $?.prompt?.submit === 'function' && typeof $?.clock?.every === 'function',
+  idle: true,
+  missing: [
+    ...(typeof $?.session?.id === 'function' ? [] : ['session']),
+    ...(typeof $?.prompt?.submit === 'function' ? [] : ['submit']),
+    ...(typeof $?.clock?.every === 'function' ? [] : ['clock']),
+  ],
+})
 // What Claude is told of It as a part of its own instructions, which this add-on adds: when a
 // page is the answer. The skill says how, and Claude reads it only once it has decided to use
 // It. The same words as every add-on that says them, kept in It's protocol as `WHEN`.
@@ -30,6 +43,7 @@ const behindMark = (texts) =>
 const IT_HOME_AT_SETUP = null
 let connector = null // { socket | port, token }, read from the connector's own file
 let lookedAt = 0
+let throughProxy = null // whether Claude Code would send what is asked of a port on this machine through a proxy, once that has been looked at
 let running = false // a turn is in progress
 let session = null // this conversation's id, which /clear changes
 const pending = [] // clicks taken from the connector, not yet handed to Claude
@@ -117,11 +131,42 @@ function within($, ms, promise) {
   })
 }
 
+/**
+ * Whether Claude Code would send what is asked of a port on this machine through a proxy. A
+ * module has no connection of its own: all it asks goes through Claude Code, which over a
+ * socket uses no proxy, and over a port uses the one the environment names, in any of the six
+ * variables below, unless the environment also says that this machine's own address, or every
+ * address, is asked directly. So Claude Code 2.1.296 was seen to do. The connector is on this
+ * machine. A proxy would be shown which conversation is asked about, once a second, and could
+ * give no answer for it, so where there is one, nothing is asked over a port at all: a click
+ * waits where the person sees it, and `it wait` takes it. The environment is the one Claude
+ * Code was started with, and is looked at once.
+ */
+async function proxied($) {
+  if (throughProxy !== null) return throughProxy
+  // Each name is written out where it is asked for: Claude Code loads a module only if every
+  // variable it reads is named plainly, and refuses the whole module otherwise
+  const named =
+    (await $.env.get('HTTP_PROXY')) ||
+    (await $.env.get('http_proxy')) ||
+    (await $.env.get('HTTPS_PROXY')) ||
+    (await $.env.get('https_proxy')) ||
+    (await $.env.get('ALL_PROXY')) ||
+    (await $.env.get('all_proxy'))
+  // Where both lists are there, both must say so: which of the two is believed is Claude Code's own business
+  const direct = [await $.env.get('NO_PROXY'), await $.env.get('no_proxy')].filter(Boolean)
+  const spared = direct.length > 0 && direct.every((list) => list.split(',').some((entry) => ['127.0.0.1', '*'].includes(entry.trim())))
+  throughProxy = Boolean(named) && !spared
+  return throughProxy
+}
+
 const ask = ($, path, body) => within($, 3000, asking($, path, body))
 async function asking($, path, body) {
+  if (path === '/session' || path.startsWith('/clicks?')) body = { ...body, instance: INSTANCE, addon: addon($) }
   const c = await find($)
   if (!c) return null
   try {
+    if (!c.socket && (await proxied($))) return null
     const method = body ? 'POST' : 'GET'
     const text = body ? JSON.stringify(body) : undefined
     // Over the socket, which only this user can open, the token is shown. Over a port it never
@@ -223,6 +268,10 @@ async function check($) {
 }
 
 async function checkOnce($) {
+  if (!addon($).delivery) {
+    await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon($) })
+    return
+  }
   const began = generation
   const id = await $.session.id()
   // The same conversation after /clear carries on under a new id, and pages made under the old
@@ -329,12 +378,16 @@ export function register(on) {
     return entered
   })
   on('session.start', async ($, e, next) => {
-    running = false
-    // One timer, however often a session starts in this process
-    if (!ticking) {
+    // Keep reporting a missing delivery API for as long as this process stays open.
+    if (!ticking && typeof $.clock?.every === 'function') {
       ticking = true
       $.clock.every(1000, () => check($).catch(() => {}))
     }
+    if (!addon($).delivery) {
+      await ask($, '/addon', { harness: HARNESS, instance: INSTANCE, addon: addon($) })
+      return next(e)
+    }
+    running = false
     return next(e)
   })
   on('session.end', async (_$, e, next) => {

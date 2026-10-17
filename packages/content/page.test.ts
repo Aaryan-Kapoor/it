@@ -5,15 +5,19 @@
 // ran, once, before anything of the page's own, and the page's own scripts ran as they would
 // have without It.
 import { existsSync } from 'node:fs'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { JSDOM, VirtualConsole } from 'jsdom'
-import { type Browser, type BrowserType, chromium, firefox } from 'playwright'
-import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { type Browser, type BrowserContext, type BrowserType, chromium, firefox } from 'playwright'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import { withTags } from './src/page'
 
 /** What stands for It, and for a script of the page's own: each writes down that it ran. */
 const IT = '<script>(window.order = window.order || []).push("it")</script>'
 const OWN = '<script>(window.order = window.order || []).push("page")</script>'
 const TAGS = new TextEncoder().encode(IT)
+/** A script of the page's own that writes down what the page's head carries, as a page that reads its settings from there does. */
+const HEAD = '<script>(window.order = window.order || []).push("head " + document.head.id + " " + document.head.dataset.theme)</script>'
 
 /** A page as bytes, cut into pieces of a size, as a file is read. */
 function pieces(page: Uint8Array, size: number): ReadableStream<Uint8Array> {
@@ -45,6 +49,12 @@ const PAGES: Record<string, string | Buffer> = {
   'begins with a script': `${OWN}<p>words</p>${OWN}`,
   'begins with words, then <html>': `words <html lang="en">${OWN}`,
   'has <html> and then a <head> with attributes': `<html><head data-x="1">${OWN}</head></html>`,
+  'has a <head> whose attributes the page reads': `<html lang="en"><head id="top" data-theme="dark">${HEAD}</head><body>${OWN}</body></html>`,
+  'has a comment and a line between <html> and such a <head>': `<!doctype html><html>\n<!-- c -->\n<head id="top" data-theme="dark">${HEAD}</head></html>`,
+  'has <html> twice before such a <head>': `<html><html lang="en"><head id="top" data-theme="dark">${HEAD}</head></html>`,
+  'has a closing tag between <html> and such a <head>': `<html></p><head id="top" data-theme="dark">${HEAD}</head></html>`,
+  'has a closing tag that ends the head before such a <head>': `<html></br><head id="top" data-theme="dark">${HEAD}</head></html>`,
+  'has words between <html> and such a <head>': `<html>words<head id="top" data-theme="dark">${HEAD}</head></html>`,
   'has ">" in the attributes of <html>': `<html a=">" b='>' c=d/e>f>${OWN}`,
   'has a quote in an attribute’s name': `<div a"b='>${OWN}'>${OWN}`,
   'has a quote where an attribute would begin': `<div "a">${OWN}">${OWN}`,
@@ -254,11 +264,16 @@ describe('where It is put', () => {
     expect((await placed(unmarked)).equals(Buffer.concat([unmarked, TAGS]))).toBe(true)
   })
 
-  test('where the bytes go: inside <html> or <head>, before any other first element, and at the end of a page with none', async () => {
+  test('where the bytes go: inside a <head> that is the first element, after <html> or without it, before any other first element, and at the end of a page with none', async () => {
     const at = async (page: string) => (await placed(page)).toString().replace(IT, '@')
     expect(await at('<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en"><head></head></html>')).toBe(
-      '<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en">@<head></head></html>',
+      '<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en"><head>@</head></html>',
     )
+    // The page's own <html> is passed over, as often as it is written, and what follows it is looked at as if it came first
+    expect(await at('<html>\n<!-- c -->\n<head id="top"><title>t</title></head>')).toBe('<html>\n<!-- c -->\n<head id="top">@<title>t</title></head>')
+    expect(await at('<html><HTML lang="en"><body class="b">')).toBe('<html><HTML lang="en">@<body class="b">')
+    expect(await at('<html>')).toBe('<html>@')
+    expect(await at('<html><head')).toBe('<html>@<head')
     expect(await at('<!---><!----><!--a--!><HEAD ><title>t</title></HEAD>')).toBe('<!---><!----><!--a--!><HEAD >@<title>t</title></HEAD>')
     expect(await at('<html/><p>x</p>')).toBe('<html/>@<p>x</p>')
     expect(await at('</p>< 1 <? pi ?><!x>text <main id="m"></main>')).toBe('</p>< 1 <? pi ?><!x>text @<main id="m"></main>')
@@ -366,28 +381,62 @@ for (const [name, type] of BROWSERS) {
 }
 describe.each(BROWSERS)('what %s makes of it', (_name, type) => {
   let browser: Browser
+  let context: BrowserContext | undefined
+  let server: http.Server
+  let origin: string
+  let next = 0
+  const pages = new Map<string, Buffer>()
   /** What ran, in order, when the browser is sent these bytes as the content service sends them. */
   let ran: (page: Buffer) => Promise<string[]>
-  // A browser is slow to start on a machine that is busy, and slow to load its first page: it
-  // is given minutes for the one, before any case begins, and each page it is sent as long
   beforeAll(async () => {
     if (!here(type)) return
+    // Serve real responses on a port the system gives us. Repeated intercepted navigations
+    // to the same URL can stall in Firefox, and share whichever body the last caller set.
+    server = http.createServer((req, res) => {
+      const bytes = pages.get(req.url ?? '')
+      res.writeHead(bytes ? 200 : 404, {
+        'content-type': 'text/html; charset=utf-8',
+        'x-content-type-options': 'nosniff',
+        'cache-control': 'no-store',
+      })
+      res.end(bytes)
+    })
+    await new Promise<void>((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve))
+    origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
     browser = await type.launch({ timeout: 0 })
-    const tab = await (await browser.newContext()).newPage()
+  }, 300_000)
+  beforeEach(async () => {
+    if (!here(type)) return
+    context = await browser.newContext()
+    const tab = await context.newPage()
     tab.setDefaultNavigationTimeout(120_000)
-    let sent = Buffer.alloc(0)
-    await tab.route('**/*', (route) =>
-      new URL(route.request().url()).pathname === '/page'
-        ? route.fulfill({ status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff' }, body: sent })
-        : route.fulfill({ status: 404, body: '' }),
-    )
     ran = async (page) => {
-      sent = page
-      await tab.goto('http://page.invalid/page', { waitUntil: 'load' })
-      return tab.evaluate(() => [...((window as unknown as { order?: string[] }).order ?? [])])
+      const at = `/page/${next++}`
+      pages.set(at, page)
+      try {
+        await tab.goto(`${origin}${at}`, { waitUntil: 'load' })
+        return await tab.evaluate(() => [...((window as unknown as { order?: string[] }).order ?? [])])
+      } finally {
+        pages.delete(at)
+      }
     }
   }, 300_000)
-  afterAll(() => browser?.close())
+  // A timed-out test's navigation must end before the next test starts. Closing its context
+  // also drains the pages before the browser itself is asked to stop.
+  afterEach(async () => {
+    await context?.close()
+    context = undefined
+  })
+  afterAll(async () => {
+    try {
+      await browser?.close()
+    } finally {
+      if (server) {
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
+    }
+  })
 
   // Both are left out where the browser is not there to run them: see `here`, and the line written above when it is not
   test.skipIf(!here(type))(

@@ -1,6 +1,22 @@
 // What every command shares: where things are kept on this machine, how the machine proves who
 // it is, and how to reach the backend.
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fchmodSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeSync,
+} from 'node:fs'
+import { mkdir, open, rm } from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -11,6 +27,8 @@ import { ConvexError } from 'convex/values'
 import { importJWK, type JWK, SignJWT } from 'jose'
 import { agentAppsAbove } from './ancestry'
 import { CODEX_SHUT_SAID } from './codex-settings'
+import { installationHome } from './installation'
+import { keepOriginal, putAbsent, removeOriginal, restoreAbsent } from './preserve'
 import { added, shellEnv } from './shell-env'
 
 export const VERSION = '0.1.22'
@@ -33,7 +51,13 @@ export class Problem extends Error {
 // from where the shell stands is read from there once and for all: a file's address made from
 // it is then the same file when it is written into a service or a launcher, which start from
 // somewhere else.
-export const home = () => (process.env.IT_HOME ? path.resolve(process.env.IT_HOME) : path.join(os.homedir(), '.it'))
+let resolvedHome: { setting: string | undefined; folder: string } | undefined
+export const home = () => {
+  const setting = process.env.IT_HOME
+  if (!resolvedHome || resolvedHome.setting !== setting)
+    resolvedHome = { setting, folder: setting ? path.resolve(setting) : (installationHome() ?? path.join(os.homedir(), '.it')) }
+  return resolvedHome.folder
+}
 export const inHome = (...parts: string[]) => path.join(home(), ...parts)
 
 /**
@@ -42,6 +66,16 @@ export const inHome = (...parts: string[]) => path.join(home(), ...parts)
  * marks and a low one as that apostrophe, so they are written twice too.
  */
 export const psQuote = (v: string) => `'${v.replace(/['\u2018\u2019\u201a\u201b]/g, '$&$&')}'`
+
+/** The private queue of literal paths Windows removes after uninstall has ended. */
+export const WINDOWS_CLEANUP = 'HKCU\\Software\\It\\PendingRemoval'
+/** The RunOnce command carries only the queue entry's name, never the executable's path. */
+export function windowsDeletionCommand(entry: string): string | undefined {
+  if (!/^ItRemoved[0-9]+[a-z0-9-]*$/.test(entry)) return undefined
+  const script = `$k='HKCU:\\Software\\It\\PendingRemoval';$n='${entry}';try{[IO.File]::Delete((gpv -LiteralPath $k -Name $n));rp -LiteralPath $k -Name $n}catch{exit 1}`
+  const line = `powershell.exe -NoProfile -NonInteractive -Command "${script}"`
+  return line.length <= 260 ? line : undefined
+}
 
 /**
  * The line that puts a folder first on the PATH Windows keeps for this account, for a person
@@ -175,6 +209,98 @@ export function writeFlushed(file: string, text: string): void {
 }
 
 /**
+ * Changes a file that is not It's alone: Codex's settings, which Codex saves itself, or a
+ * shell's profile, which the person may have open in an editor. `change` is given what the
+ * file holds and gives what it is to hold: nothing where it is to stay as it is, and null where
+ * nothing of it is left. An ordinary file is then removed; a symlink and its empty target
+ * remain. True where the file was changed.
+ *
+ * The new text is written and flushed first, under the original permissions. Changes noticed
+ * before replacement are retried. The original is then moved to a recovery folder, and the
+ * new file is published only if nobody has recreated its name. This is not a transaction with
+ * other programs: the file is briefly absent, and an interrupted change leaves the original
+ * in recovery. A confirmed change drops its original. A symlink is kept, and its target is
+ * handled this way instead.
+ */
+export function changeWhole(file: string, change: (text: string) => string | null | undefined, kept: (original: string) => void = () => {}): boolean {
+  for (let tries = 1; ; tries++) {
+    const named = lstatSync(file, { bigint: true })
+    const linked = named.isSymbolicLink()
+    const target = realpathSync(file)
+    const part = `${target}.it-${crypto.randomUUID()}.part`
+    const stillNamed = () => {
+      const now = lstatSync(file, { bigint: true })
+      return now.dev === named.dev && now.ino === named.ino && realpathSync(file) === target
+    }
+    const before = statSync(target, { bigint: true })
+    const text = readFileSync(target, 'utf8')
+    const changed = change(text)
+    const after = changed === null && linked ? '' : changed
+    if (after === undefined || after === text) {
+      if (stillNamed()) return false
+      if (tries >= 5) throw new Error(`${file} was saved by another program each time It was about to change it, and was left as it is`)
+      continue
+    }
+    const mode = statSync(target).mode & 0o777
+    try {
+      if (after !== null) {
+        const out = openSync(part, 'wx', mode)
+        try {
+          // Every byte, or an error: a disk that is nearly full takes a part of what it is given
+          // and says so without failing, and a part is not what is given the file's name
+          writeAll(out, Buffer.from(after))
+          // The permissions the file had, whatever this program's own mask would have left of them
+          fchmodSync(out, mode)
+          fsyncSync(out)
+        } finally {
+          closeSync(out)
+        }
+      }
+      const now = statSync(target, { bigint: true })
+      // Same-size writes can share identity and times, so compare the content once more
+      // before replacement rather than trusting the precision of those times.
+      if (
+        now.dev === before.dev &&
+        now.ino === before.ino &&
+        now.size === before.size &&
+        now.mtimeNs === before.mtimeNs &&
+        now.ctimeNs === before.ctimeNs &&
+        readFileSync(target, 'utf8') === text &&
+        stillNamed()
+      ) {
+        const original = keepOriginal(target)
+        try {
+          // A save caught by the move was not part of the text we changed. Leave it for
+          // recovery and report the change unfinished instead of deleting that save later.
+          if (readFileSync(original, 'utf8') !== text) throw new Error('Another program saved the original')
+          if (after !== null) putAbsent(part, target)
+          else {
+            try {
+              lstatSync(target)
+              throw new Error('Another program recreated the file')
+            } catch (err) {
+              if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+            }
+          }
+          if (readFileSync(original, 'utf8') !== text) throw new Error('Another program saved the original')
+        } catch (err) {
+          restoreAbsent(original, target)
+          kept(original)
+          throw new Error(`${file} could not be ${after === null ? 'removed' : 'replaced'}. Its original is kept at ${original}`, { cause: err })
+        }
+        removeOriginal(original)
+        return true
+      }
+    } finally {
+      try {
+        rmSync(part, { force: true })
+      } catch {}
+    }
+    if (tries >= 5) throw new Error(`${file} was saved by another program each time It was about to change it, and was left as it is`)
+  }
+}
+
+/**
  * Keeps something in a file of It's folder: written whole and on the disk first, and then
  * given its name in one step, in the place of what the file held before. Whoever reads the
  * file finds what it held before or what it holds now, and never a part of it, also where the
@@ -198,12 +324,55 @@ export function writePrivate(file: string, data: unknown): void {
     throw err
   }
   chmodSync(file, 0o600)
+  // A system that does not let a folder be opened or flushed (Windows, and some disks that are
+  // shared over a network) keeps its names in its own way, and says so in one of a few ways
+  // that mean exactly that. Anything else is the disk failing as the name was made to last,
+  // and is not passed over: whoever asked would go on as though the record were kept, and
+  // throw away what it could have fallen back on.
   try {
     const folder = openSync(path.dirname(file), 'r')
     try {
       fsyncSync(folder)
     } finally {
       closeSync(folder)
+    }
+  } catch (err) {
+    if (!['EISDIR', 'EPERM', 'EACCES', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'EBADF'].includes((err as NodeJS.ErrnoException)?.code ?? '')) throw err
+  }
+}
+
+/**
+ * The connector keeps receipts while it also answers add-ons. Writing and flushing their
+ * contents must let those requests run. As with writePrivate, publication is one rename;
+ * the caller can cancel it if erasure or shutdown happened while the disk was being written.
+ */
+export async function writePrivateAsync(file: string, pieces: Iterable<string>, current: () => boolean): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+  const whole = `${file}.${process.pid}.tmp`
+  try {
+    const out = await open(whole, 'w', 0o600)
+    try {
+      await out.writeFile(pieces)
+      await out.chmod(0o600)
+      await out.sync()
+    } finally {
+      await out.close()
+    }
+    if (!current()) throw new Error('the record was closed before it was saved')
+    // There is no await between the last erasure check and publication. Unlike rename(),
+    // a busy Windows file is retried by the connector's next pass, without blocking it.
+    renameSync(whole, file)
+  } catch (err) {
+    await rm(whole, { force: true })
+    throw err
+  }
+  // Some filesystems cannot flush a directory. This has the same guarantee as writePrivate.
+  try {
+    const folder = await open(path.dirname(file), 'r')
+    try {
+      await folder.sync()
+    } finally {
+      await folder.close()
     }
   } catch {}
 }
@@ -240,6 +409,23 @@ export function written(stream: NodeJS.WriteStream, text: string): void {
   })
   leaving.add(gone)
   void gone.then(() => leaving.delete(gone))
+}
+/**
+ * Writes as `written` does, and says whether it was written, once it has left the process.
+ * For what nothing may be made of until whoever reads it has it: a hook that tells the
+ * connector an agent has a click does so only after the click's words are out of its hands.
+ */
+export function handed(stream: NodeJS.WriteStream, text: string): Promise<boolean> {
+  let out = true
+  const gone = new Promise<void>((resolve) => {
+    stream.write(text, (err) => {
+      out = !err
+      resolve()
+    })
+  })
+  leaving.add(gone)
+  void gone.then(() => leaving.delete(gone))
+  return gone.then(() => out)
 }
 /**
  * Resolves once everything written so far has left the process. Until then the process is kept
@@ -339,6 +525,24 @@ export const unreachable = (where: string) =>
         `It could not reach the It at ${where}.`,
         'offline',
         'Check that It is running on the machine it runs on, that its network is on, which `it network` says there, and that this machine can reach that address.',
+      )
+
+/**
+ * What is said when It took the connection and then gave no answer in the time it had. That is
+ * not It being stopped: on the machine It runs on, something listens where It does, and a
+ * person told to start It would start a second one beside the first.
+ */
+export const silent = (where: string) =>
+  !process.env.IT_URL && basePort() !== undefined
+    ? new Problem(
+        'It did not answer in time on this machine.',
+        'timeout',
+        'Something took the connection where It listens, so It is most likely running and busy: try again in a moment. If it goes on, `it service logs` says what It met.',
+      )
+    : new Problem(
+        `The It at ${where} did not answer in time.`,
+        'timeout',
+        'Try again in a moment. If it goes on, check that It is running on the machine it runs on, and that this machine can reach that address.',
       )
 
 /**
@@ -1031,13 +1235,28 @@ const wasAll = (): { at: string; id: string }[] => {
   return Array.isArray(kept) ? kept.filter((w): w is { at: string; id: string } => typeof w?.at === 'string' && typeof w?.id === 'string') : []
 }
 export const wasAt = (at: string): string | undefined => wasAll().find((w) => w.at === at)?.id
-export function forgetMachine(): void {
+/**
+ * Writes down which machine this one is at the It it joined, for when it joins that It again.
+ * Leaving begins with this, before It is told and before anything is deleted, so that a machine
+ * that cannot write it down has not left at all and can try again: one that deleted its
+ * identity all the same would join again as a stranger, and the pages its conversations made
+ * would not come along.
+ */
+export function noteWas(): void {
   const m = readJson<Machine>(machineFile())
-  if (typeof m?.at === 'string' && typeof m.id === 'string') {
-    try {
-      writePrivate(wasFile(), [...wasAll().filter((w) => w.at !== m.at), { at: m.at, id: m.id }].slice(-20))
-    } catch {}
+  if (typeof m?.at !== 'string' || typeof m.id !== 'string' || wasAt(m.at) === m.id) return
+  try {
+    writePrivate(wasFile(), [...wasAll().filter((w) => w.at !== m.at), { at: m.at, id: m.id }].slice(-20))
+  } catch (err) {
+    throw new Problem(
+      `Which machine this was at ${m.at} could not be written down in ${home()} (${(err as NodeJS.ErrnoException)?.code ?? 'an error'}), so this machine has not left, and nothing of it was deleted.`,
+      'error',
+      'Make room on the disk, or see that the folder can be written to, and run `it logout` again.',
+    )
   }
+}
+export function forgetMachine(): void {
+  noteWas()
   for (const f of ['machine.json', 'token.json']) rmSync(inHome(f), { force: true })
 }
 /**
@@ -1058,7 +1277,7 @@ export function keepMachine(m: Machine): void {
 /** A time limit for one request, which also ends with whatever the request is part of, when that is given. */
 const within = (ms: number, ending?: AbortSignal) => (ending ? AbortSignal.any([ending, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms))
 /** A wait before something is tried again, which is over at once when whatever it is part of ends. */
-const waited = (ms: number, ending?: AbortSignal) =>
+export const waited = (ms: number, ending?: AbortSignal) =>
   new Promise<void>((resolve) => {
     if (ending?.aborted) return resolve()
     const done = () => {
@@ -1120,6 +1339,8 @@ export async function token(
     signal: within(15_000, ending),
   }).catch(async (err) => {
     ending?.throwIfAborted()
+    // Given up on after waiting, which a connection that was refused never is: something took it and did not answer
+    if ((err as Error)?.name === 'TimeoutError') throw silent(b.site)
     throw (await keptFromIt(err)) ? shutIn() : unreachable(b.site)
   })
   if (r.status === 401) {
@@ -1185,7 +1406,7 @@ export async function token(
 }
 
 /** Turns a refusal from the backend into a Problem with its code. */
-async function translate(err: unknown): Promise<never> {
+export async function translate(err: unknown): Promise<never> {
   if (err instanceof Problem) throw err
   if (err instanceof ConvexError) {
     const data = (typeof err.data === 'string' ? JSON.parse(err.data) : err.data) as {
@@ -1246,18 +1467,20 @@ export async function overClashes<T>(
 }
 
 /** One call to the backend as this machine. A token that has just expired is replaced once. */
-export async function call<T = any>(kind: 'query' | 'mutation' | 'action', fn: unknown, args: Record<string, unknown> = {}): Promise<T> {
+export async function call<T = any>(kind: 'query' | 'mutation' | 'action', fn: unknown, args: Record<string, unknown> = {}, ending?: AbortSignal): Promise<T> {
   const attempt = async (force: boolean): Promise<T> => {
+    ending?.throwIfAborted()
     // No call may hang for ever: a laptop that woke on another network would otherwise wait
     // minutes. An action does more than a query does (checking a whole upload, say) and is given longer.
     const limit = kind === 'action' ? 90_000 : 20_000
     const client = new ConvexHttpClient(backend().api, {
-      fetch: (input, init) => direct(input, { ...init, signal: AbortSignal.timeout(limit) }),
+      fetch: (input, init) => direct(input, { ...init, signal: within(limit, ending) }),
       // What the backend's functions write down is not this program's to print: a backend may
       // send it along with each answer, and printed it would land in what an agent reads
       logger: false,
     })
-    client.setAuth(await token(force))
+    client.setAuth(await token(force, ending))
+    ending?.throwIfAborted()
     return (client as any)[kind](fn, args) as Promise<T>
   }
   // Only what is one transaction is asked again after a clash: nothing of it was done. An action

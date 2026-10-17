@@ -1,11 +1,24 @@
-// The content service's tests, with no browser: what a stranger, a script, or a confused client
-// would send. The service is called as the door calls it, with each request, the port it came
-// in on and the address it came from. The backend is stood in for by a key pair whose public
-// half is served the way the backend serves it.
+// The content service's tests, with no browser but in the last group: what a stranger, a
+// script, or a confused client would send. The service is called as the door calls it, with
+// each request, the port it came in on and the address it came from. The backend is stood in
+// for by a key pair whose public half is served the way the backend serves it.
 
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import http from 'node:http'
 import type net from 'node:net'
@@ -13,6 +26,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pipeline, Readable } from 'node:stream'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
+import { type Browser, type BrowserType, chromium, firefox } from 'playwright'
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { type Asked, type ContentSettings, createContent, pagePolicy } from './src/index'
 import { limit } from './src/limits'
@@ -51,7 +65,7 @@ async function atTheNextFolder(): Promise<{ reached: Promise<void>; goOn(): void
 
 // The port the site would be on. Nothing listens on it or on the one after it: a request is
 // handed to the service with the port it is said to have come in on.
-const BASE = 7300
+const BASE = 27300
 /** The port pages are shown from. */
 const PAGES = BASE + 1
 const SITE = `http://localhost:${BASE}`
@@ -665,8 +679,8 @@ describe('bytes', () => {
     const r = await get(`${at}/v/1/index.html`, DOCUMENT)
     expect(r.status).toBe(200)
     expect(r.text).toContain('<h1>Private page</h1>')
-    // Inside <html>, ahead of everything else, the page's own script included
-    const html = r.text.indexOf('<html>'),
+    // Inside <head>, ahead of everything else, the page's own script included
+    const html = r.text.indexOf('<head>'),
       it = r.text.indexOf('window.__IT__='),
       own = r.text.indexOf('<script src="asset.js">')
     expect(it).toBeGreaterThan(html)
@@ -718,7 +732,7 @@ describe('bytes', () => {
     // Each page as it is sent, with a mark where It is. What a browser does not count as an
     // element (a doctype, comments of every shape, a closing tag, a stray "<") is passed over
     const sent: Record<string, string> = {
-      'doctype.html': '<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en">@<head><script>1</script></head></html>',
+      'doctype.html': '<!DOCTYPE html>\n<!-- a <b>comment</b> --><html lang="en"><head>@<script>1</script></head></html>',
       'quoted.html': `<html data-a="x>y" data-b='<head>' data-c=u/v>@<body><script>1</script></body></html>`,
       'head.html': '<!---><!----><!--a--!><HEAD >@<title>t</title></HEAD>',
       'slash.html': '<html/>@<p>x</p>',
@@ -726,7 +740,7 @@ describe('bytes', () => {
       'closing.html': `</a=b='>@<script>1</script>'><script>2</script>`,
       'named-like.html': '@<htmlx><head></head></htmlx>',
       // A file is read 64 KB at a time: here the first element's tag lies across the end of one piece
-      'across.html': `<!--${'-'.repeat(65_536 - 16)}--><html data-across="${'a>'.repeat(40)}">@<head></head></html>`,
+      'across.html': `<!--${'-'.repeat(65_536 - 16)}--><html data-across="${'a>'.repeat(40)}"><head>@</head></html>`,
       'late.html': `${'words '.repeat(40_000)}@<p>after a quarter of a megabyte</p>`,
       // A tag the page ends in the middle of is thrown away by a browser: It goes before it
       'unclosed-tag.html': 'words @<html lang="en',
@@ -852,6 +866,17 @@ describe('bytes', () => {
     for (const p of ['/v/1/..%2F..%2Fpage2%2F1%2Findex.html', '/v/1/%2e%2e/secret', '/v/1/a//b', '/v/1/%00', '/v/1/%E0%A4%A', '/v/1/docs%5Cread%20me.txt'])
       expect((await get(`${at}${p}`)).status, p).toBe(404)
     expect((await get(`${at}/v/1/missing.txt`)).status).toBe(404)
+  })
+
+  test('a file whose name ends in a word every object has is served as any file of no known kind is', async () => {
+    const prefix = `u/${USER}/named/1/`
+    const names = ['asset.constructor', 'constructor', 'asset.__proto__', '__proto__', 'asset.toString', 'asset.hasOwnProperty']
+    await seedFiles(prefix, { 'index.html': INDEX, ...Object.fromEntries(names.map((name) => [name, `the bytes of ${name}`])) })
+    const named = await open({ p: prefix, a: 'named', s: 'named' })
+    for (const name of names) {
+      const r = await get(`${named.at}/v/1/${name}`)
+      expect([name, r.status, r.headers.get('content-type'), r.text]).toEqual([name, 200, 'application/octet-stream', `the bytes of ${name}`])
+    }
   })
 
   test('a request that asks only what the answer would be is given its headers and no bytes', async () => {
@@ -1404,6 +1429,37 @@ describe('a version that was deleted', () => {
     expect((await stage(`u/${USER}/replayed/2/`, [entry('index.html', data)])).status).toBe(200)
   })
 
+  // What a folder lets its owner do is another thing on Windows, and whoever may do anything is stopped by none of it
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'whose folder cannot be removed is not answered as a deletion that got part of the way: the backend is told it failed, each time, until the folder can be',
+    async () => {
+      const own = make()
+      const on = own.content
+      began = lines.length
+      const prefix = `u/${USER}/stuck/1/`
+      // The folder above the version's, where what was declared is kept, may be read and not written: the version's own folder cannot be taken out of it
+      const above = path.join(own.settings.dir, 'manifest', 'u', USER, 'stuck')
+      try {
+        await seedFiles(prefix, { 'index.html': INDEX }, on)
+        chmodSync(above, 0o500)
+        for (let i = 0; i < 3; i++) {
+          const told = await control('delete', { prefix }, undefined, { on })
+          expect([told.status, told.buf.length]).toEqual([500, 0])
+        }
+        expect(wrote((e) => e.event === 'unexpected' && e.part === 'control')).toMatchObject({ kind: 'EACCES' })
+        // It is deleted all the same to whoever asks for it: nothing of it is shown or taken
+        expect((await redeem(ticket(newMount(), { p: prefix }), { on })).status).toBe(401)
+        expect((await upload('index.html', INDEX, { prefix, on })).status).toBe(403)
+        chmodSync(above, 0o700)
+        expect((await control('delete', { prefix }, undefined, { on })).json()).toEqual({ removed: 1, more: false })
+        expect(filesUnder(path.join(own.settings.dir, 'u', USER, 'stuck'))).toEqual([])
+      } finally {
+        chmodSync(above, 0o700)
+        await on.close()
+      }
+    },
+  )
+
   test('deleted at the very moment its files are being declared: nothing stays declared, and a message that comes after writes nothing at all', async () => {
     const own = make()
     const on = own.content
@@ -1431,6 +1487,112 @@ describe('a version that was deleted', () => {
       await on.close()
     }
   })
+
+  test('deleted with everything of its person’s while one of its files is arriving: at no moment is the file on the disk, for a service that ended just then to leave there for good', async () => {
+    const own = make()
+    const on = own.content
+    began = lines.length
+    const real = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).open
+    try {
+      const person = 'erased-late'
+      const prefix = `u/${person}/arriving/1/`
+      expect((await control('stage', { prefix, files: [entry('index.html', 'hello')] }, undefined, { on })).status).toBe(200)
+      // The upload has read what was declared, and found its file there. Before it writes anything, everything of the person's is deleted,
+      // and the backend is told so: from then it asks for nothing of theirs to be deleted again
+      const held = await atTheNextFolder()
+      const uploading = upload('index.html', 'hello', { prefix, on })
+      await held.reached
+      expect((await control('delete', { prefix: `u/${person}/` }, undefined, { on })).json()).toEqual({ removed: 1, more: false })
+      // Whatever the service opens from here on, it is looked at whether a file of the person's lies under the folder at that moment
+      let lay = false
+      vi.mocked(fsp.open).mockImplementation((async (...given: Parameters<typeof real>) => {
+        if (filesUnder(path.join(own.settings.dir, 'u')).length > 0) lay = true
+        return real(...given)
+      }) as typeof real)
+      held.goOn()
+      const uploaded = await uploading
+      expect([uploaded.status, uploaded.buf.length]).toEqual([403, 0])
+      expect(lay).toBe(false)
+      expect(filesUnder(path.join(own.settings.dir, 'u'))).toEqual([])
+      expect(existsSync(path.join(own.settings.dir, 'u', person))).toBe(false)
+      expect(arrivingUnder(path.join(own.settings.dir, 'tmp'))).toEqual([])
+    } finally {
+      vi.mocked(fsp.open).mockImplementation(real)
+      await on.close()
+    }
+  })
+
+  test.each([0, 3601])(
+    'two uploads arriving while their person is deleted leave no bytes in a recreated folder, even after waiting %i seconds',
+    async (delay) => {
+      clock.start()
+      const own = make()
+      const on = own.content
+      const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+      const pause = () => {
+        let release!: () => void
+        const promise = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return { promise, release }
+      }
+      const [firstWaiting, firstResume, secondWaiting, secondResume, secondMade, secondContinue] = Array.from({ length: 6 }, pause)
+      const uploads: ReturnType<typeof upload>[] = []
+      const found: string[] = []
+      const person = 'erased-two-uploads'
+      const prefix = `u/${person}/arriving/1/`
+      const below = path.join(own.settings.dir, 'u', person)
+      let deleted = false
+      let first = true
+      try {
+        expect((await control('stage', { prefix, files: [entry('index.html', 'private bytes')] }, undefined, { on })).status).toBe(200)
+        vi.mocked(fsp.open).mockImplementation((async (...given: Parameters<typeof real.open>) => {
+          // The first upload has checked its declaration, but has not yet written its temporary file.
+          if (first && String(given[0]).startsWith(path.join(own.settings.dir, 'tmp') + path.sep)) {
+            first = false
+            firstWaiting!.release()
+            await firstResume!.promise
+          }
+          // Opening the version folder follows the rename and precedes the upload handler's cleanup.
+          if (deleted) for (const file of filesUnder(below)) found.push(readFileSync(path.join(below, file), 'utf8'))
+          return real.open(...given)
+        }) as typeof real.open)
+        uploads.push(upload('index.html', 'private bytes', { prefix, on }))
+        await firstWaiting!.promise
+        vi.mocked(fsp.mkdir).mockImplementationOnce((async (...given: Parameters<typeof real.mkdir>) => {
+          secondWaiting!.release()
+          await secondResume!.promise
+          const made = await real.mkdir(...given)
+          secondMade!.release()
+          await secondContinue!.promise
+          return made
+        }) as typeof real.mkdir)
+        uploads.push(upload('index.html', 'private bytes', { prefix, on }))
+        await secondWaiting!.promise
+        expect((await control('delete', { prefix: `u/${person}/` }, undefined, { on })).json()).toEqual({ removed: 1, more: false })
+        deleted = true
+        // The second upload recreates the folder, then the first finishes before the second checks its declaration again.
+        secondResume!.release()
+        await secondMade!.promise
+        clock.pass(delay)
+        firstResume!.release()
+        expect((await uploads[0]!).status).toBe(403)
+        secondContinue!.release()
+        expect((await uploads[1]!).status).toBe(403)
+        expect(found).toEqual([])
+        expect(filesUnder(below)).toEqual([])
+        expect(arrivingUnder(path.join(own.settings.dir, 'tmp'))).toEqual([])
+      } finally {
+        firstResume!.release()
+        secondResume!.release()
+        secondContinue!.release()
+        vi.mocked(fsp.open).mockImplementation(real.open)
+        vi.mocked(fsp.mkdir).mockImplementation(real.mkdir)
+        await Promise.allSettled(uploads)
+        await on.close()
+      }
+    },
+  )
 
   test('deleted at the very moment one of its files is arriving: the file is not kept', async () => {
     const own = make()
@@ -1580,6 +1742,61 @@ describe('uploads', () => {
     expect((await upload('index.html', 'hello', { prefix, grant: await sign('it-upload', 'u/other/x/1/', { p: prefix }) })).status).toBe(401)
     expect((await upload('index.html', 'hello', { prefix, grant: await sign('it-upload', 'u/', { p: 'u/' }) })).status).toBe(401)
     expect((await upload('index.html', 'hello', { prefix, grant: await sign('it-upload', '../../x/1/', { p: '../../x/1/' }) })).status).toBe(401)
+  })
+
+  test('a version declared where files of an earlier publish of that number still lie has the files it declares and no others, and is found whole', async () => {
+    const prefix = `u/${USER}/put-back/2/`
+    await seedFiles(prefix, { 'index.html': 'the page as it was', 'old-asset.js': 'old()', 'kept.css': 'body{}' })
+    // The database was put back from a copy made before that publish, which the files are no part of: the next publish is given the same number
+    const files = [entry('index.html', 'the page as it is now'), entry('kept.css', 'body{}')]
+    expect((await stage(prefix, files)).status).toBe(200)
+    // What is declared again as it was is there still, and what is declared anew is written over what lay under its name
+    expect((await upload('index.html', 'the page as it is now', { prefix })).status).toBe(200)
+    expect((await control('verify', { prefix, files })).json()).toEqual({ ok: true, missing: [] })
+    // That a file was found there and removed is written down, by how many
+    expect(wrote((e) => e.event === 'control.stage' && e.prefix === prefix && e.left === 1)).toBeTruthy()
+    const { at } = await open({ p: prefix, v: '2' })
+    expect((await show(`${at}/v/2/index.html`)).text).toBe('the page as it is now')
+    expect((await show(`${at}/v/2/kept.css`)).text).toBe('body{}')
+    expect((await show(`${at}/v/2/old-asset.js`)).status).toBe(404)
+    expect((await control('delete', { prefix })).json()).toEqual({ removed: 3, more: false })
+  })
+
+  test.each(['old-asset.js', 'index.html'])('a stale upload cannot restore %s after its declaration is replaced', async (file) => {
+    const prefix = `u/${USER}/stale-replacement/2/`
+    const old = 'old bytes'
+    await seedFiles(prefix, { 'index.html': old, 'old-asset.js': old })
+    let send!: ReadableStreamDefaultController<Uint8Array>
+    let reading!: () => void
+    const reached = new Promise<void>((resolve) => {
+      reading = resolve
+    })
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          send = controller
+        },
+        pull() {
+          reading()
+        },
+      },
+      { highWaterMark: 0 },
+    )
+    const request = new Request(`${SITE}/upload/${file}`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${await grantFor(prefix)}`, 'content-length': String(old.length), 'x-it-sha256': sha256(old) },
+      body: stream,
+      duplex: 'half',
+    } as RequestInit)
+    const uploading = content.upload(request, { port: BASE, address: '127.0.0.1' })
+    await reached
+    const files = [entry('index.html', 'replacement')]
+    expect((await stage(prefix, files)).status).toBe(200)
+    expect((await upload('index.html', 'replacement', { prefix })).status).toBe(200)
+    send.enqueue(Buffer.from(old))
+    send.close()
+    expect((await uploading).status).toBe(403)
+    expect((await control('verify', { prefix, files })).json()).toEqual({ ok: true, missing: [] })
   })
 
   test('a grant allows exactly the files that were declared: that path, that size, those bytes', async () => {
@@ -2663,4 +2880,220 @@ describe('behind a real server', () => {
     await dropped.body!.cancel()
     expect((await fetch(`${at}/v/1/film.mp4`, { headers: { range: 'bytes=0-0' } })).status).toBe(206)
   })
+})
+
+// The one group that has a browser in it. What a page is sent is what the service sends, and
+// what the browser asks for in return is handed to the service, or, when it is for anywhere
+// else, written down and answered with nothing: no request leaves the browser. The browsers
+// are run where Playwright has them installed, and under Node, which is what Playwright runs under.
+const installed = (type: BrowserType) => {
+  try {
+    return !('Bun' in globalThis) && existsSync(type.executablePath())
+  } catch {
+    return false
+  }
+}
+const BROWSERS = [
+  ['Chromium', chromium],
+  ['Firefox', firefox],
+] as const
+for (const [name, type] of BROWSERS) {
+  const why = 'Bun' in globalThis ? 'Playwright, which runs the browser, does not run under Bun' : `Playwright has no ${name} installed on this machine`
+  if (!installed(type)) console.log(`  skip  the tests of where a page in ${name} sends its showing’s token: ${why}`)
+}
+describe.each(BROWSERS)('a page as %s shows it', (_name, type) => {
+  ownService()
+  /** The name the pages' port is reached by here, which is no machine's. */
+  const HOST = 'pages.invalid'
+  const OWN = `http://${HOST}:${PAGES}`
+  let browser: Browser
+  // A browser is slow to start on a machine that is busy
+  beforeAll(async () => {
+    if (installed(type)) browser = await type.launch({ timeout: 0 })
+  }, 300_000)
+  afterAll(() => browser?.close())
+
+  test.skipIf(!installed(type))(
+    'a page that takes its addresses from another site still keeps its showing at its own, and that site is asked for nothing that holds the showing’s token',
+    async () => {
+      const prefix = `u/${USER}/based/1/`
+      // A page that takes what it is made of from another site, as a page may: every address in
+      // it is read from there, and what it links to is opened in a window of its own
+      await seedFiles(prefix, {
+        'index.html':
+          '<!doctype html><html><head><base href="http://elsewhere.invalid/assets/" target="_blank"><script src="app.js"></script></head>' +
+          '<body><img src="logo.png"><a id="out" href="next.html">next</a><form id="ask"><input name="q" value="x"></form></body></html>',
+      })
+      const { at, token } = await open({ p: prefix, a: 'based', s: 'based' })
+      const context = await browser.newContext()
+      /** Everything the browser asked for: where, and what it said with it. */
+      const asked: { url: string; said: Record<string, string> }[] = []
+      await context.route('**/*', async (route) => {
+        const url = new URL(route.request().url())
+        asked.push({ url: url.href, said: route.request().headers() })
+        if (url.origin !== OWN) return route.fulfill({ status: 404, body: '' })
+        const r = await show(`${url.pathname}${url.search}`, { host: HOST, headers: route.request().headers() })
+        await route.fulfill({ status: r.status, headers: Object.fromEntries(r.headers), body: r.buf })
+      })
+      const tab = await context.newPage()
+      tab.setDefaultTimeout(120_000)
+      await tab.goto(`${OWN}${at}/v/1/index.html`, { waitUntil: 'load' })
+      const urls = () => asked.map((a) => a.url)
+      // The page's own addresses are read from the other site, as it said
+      expect(urls()).toEqual(expect.arrayContaining(['http://elsewhere.invalid/assets/app.js', 'http://elsewhere.invalid/assets/logo.png']))
+      // It asks to keep its showing where it was shown from, which is the one place the token is for
+      await tab.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+      await expect.poll(() => urls().filter((url) => url.endsWith('/__it/keep')), { timeout: 60_000 }).toEqual([`${OWN}${at}/__it/keep`])
+      // A link, which opens in a window of its own, and a form that names nowhere to go, which goes to the page's own address
+      await Promise.all([context.waitForEvent('page'), tab.click('#out')])
+      await expect.poll(urls, { timeout: 60_000 }).toContain('http://elsewhere.invalid/assets/next.html')
+      await Promise.all([context.waitForEvent('page'), tab.evaluate(() => (document.getElementById('ask') as HTMLFormElement).submit())])
+      await expect.poll(urls, { timeout: 60_000 }).toContain(`${OWN}${at}/v/1/index.html?q=x`)
+      // Of everything asked of anywhere else, nothing holds the token: not the address, and not what was said with it
+      const elsewhere = asked.filter((a) => !a.url.startsWith(`${OWN}/`))
+      expect(elsewhere.length).toBeGreaterThanOrEqual(3)
+      expect(elsewhere.filter((a) => JSON.stringify(a).includes(token))).toEqual([])
+      await context.close()
+    },
+    300_000,
+  )
+
+  test.skipIf(!installed(type))(
+    'a link still leads where it names without auditing the click or telling another site the showing address',
+    async () => {
+      const prefix = `u/${USER}/auditing/1/`
+      const ELSEWHERE = 'http://elsewhere.invalid:27302'
+      const link = `<a id="go" href="${ELSEWHERE}/target" target="_blank" rel="noreferrer" referrerpolicy="no-referrer" ping="${ELSEWHERE}/ping"><span>go</span></a>`
+      const pages: Record<string, string> = {
+        'external.html': link,
+        'fragment.html': `${link.replace(`${ELSEWHERE}/target`, '#end').replace('target="_blank"', '')}<p id="end">end</p>`,
+        'area.html': `<img width="40" height="40" usemap="#map" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"><map name="map"><area id="go" shape="rect" coords="0,0,40,40" href="${ELSEWHERE}/target" target="_blank" ping="${ELSEWHERE}/ping"></map>`,
+        'later.html': `<script>addEventListener('load', () => document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(`<div>${link}</div>`)}))</script>`,
+        'at-once.html': link,
+        'middle.html': link,
+        'plain.html': link.replace(` ping="${ELSEWHERE}/ping"`, ''),
+      }
+      await seedFiles(
+        prefix,
+        Object.fromEntries(
+          Object.entries(pages).map(([file, body]) => [file, `<html><head><meta name="referrer" content="no-referrer"></head><body>${body}</body></html>`]),
+        ),
+      )
+      const { at, token } = await open({ p: prefix, a: 'auditing', s: 'auditing' })
+      const results: unknown[] = []
+      for (const framed of [false, true])
+        for (const file of Object.keys(pages)) {
+          const context = await browser.newContext()
+          try {
+            const asked: { url: string; method: string; said: Record<string, string> }[] = []
+            await context.route('**/*', async (route) => {
+              const request = route.request()
+              const url = new URL(request.url())
+              const headers = await request.allHeaders()
+              if (url.origin === ELSEWHERE) {
+                asked.push({ url: url.href, method: request.method(), said: headers })
+                return route.fulfill({ status: 200, contentType: 'text/html', body: 'elsewhere' })
+              }
+              if (url.origin === `http://${HOST}:${BASE}`)
+                return route.fulfill({
+                  status: 200,
+                  contentType: 'text/html',
+                  body: `<iframe id="page" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" referrerpolicy="no-referrer" src="${OWN}${at}/v/1/${file}"></iframe>`,
+                })
+              if (url.origin !== OWN) return route.fulfill({ status: 404, body: '' })
+              const r = await show(`${url.pathname}${url.search}`, { host: HOST, headers })
+              await route.fulfill({ status: r.status, headers: Object.fromEntries(r.headers), body: r.buf })
+            })
+            const tab = await context.newPage()
+            tab.setDefaultTimeout(120_000)
+            await tab.goto(framed ? `http://${HOST}:${BASE}/` : `${OWN}${at}/v/1/${file}`, { waitUntil: 'load' })
+            const page = framed ? tab.frames().find((frame) => frame.url().startsWith(OWN))! : tab.mainFrame()
+            if (file === 'at-once.html')
+              await page.evaluate((ping) => {
+                const link = document.getElementById('go') as HTMLAnchorElement
+                link.ping = ping
+                link.onclick = () => {
+                  link.ping = ping
+                }
+                ;(link.firstElementChild as HTMLElement).click()
+              }, `${ELSEWHERE}/ping`)
+            else if (file === 'area.html') await page.locator('img').click({ position: { x: 10, y: 10 } })
+            else await page.locator('#go').click({ button: file === 'middle.html' ? 'middle' : 'left', noWaitAfter: true })
+            if (file === 'fragment.html') await expect.poll(() => page.url(), { timeout: 60_000 }).toContain('#end')
+            else await expect.poll(() => asked.some((r) => r.url.endsWith('/target') && r.method === 'GET'), { timeout: 60_000 }).toBe(true)
+            // An audit is sent separately from the navigation. Give either request time to reach the route.
+            await tab.waitForTimeout(100)
+            results.push([
+              file,
+              framed,
+              asked.some((r) => r.method === 'POST' || 'ping-from' in r.said || 'ping-to' in r.said),
+              JSON.stringify(asked).includes(token),
+            ])
+          } finally {
+            await context.close()
+          }
+        }
+      expect(results).toEqual([false, true].flatMap((framed) => Object.keys(pages).map((file) => [file, framed, false, false])))
+    },
+    300_000,
+  )
+
+  test.skipIf(!installed(type))(
+    'a page that says its address may be told to the sites it leads to is held to telling none of it, since its address holds its showing’s token',
+    async () => {
+      const prefix = `u/${USER}/telling/1/`
+      const ELSEWHERE = 'http://elsewhere.invalid'
+      const telling = (policy: string) => `<meta name="referrer" content="${policy}">`
+      // Each page says it in a way of its own, and then leads to another site: in a window of
+      // its own or in its own place, by a link, a form, a script, or by itself after a moment
+      const pages: Record<string, string> = {
+        'meta.html': `<html><head>${telling('unsafe-url')}</head><body><a id="go" target="_blank" href="${ELSEWHERE}/meta">go</a></body></html>`,
+        'old.html': `<html><head>${telling('no-referrer-when-downgrade')}</head><body><a id="go" href="${ELSEWHERE}/old">go</a></body></html>`,
+        'link.html': `<html><body><a id="go" target="_blank" referrerpolicy="unsafe-url" href="${ELSEWHERE}/link">go</a></body></html>`,
+        'form.html': `<html><head>${telling('unsafe-url')}</head><body><form action="${ELSEWHERE}/form"><button id="go">go</button></form></body></html>`,
+        'opened.html': `<html><head>${telling('unsafe-url')}</head><body><a id="go" onclick="window.open('${ELSEWHERE}/opened')">go</a></body></html>`,
+        // Said by the page's script, after the page was read: on the link, and then in the very moment before a window is opened
+        'later.html': `<html><body><a id="go" target="_blank" href="${ELSEWHERE}/later">go</a><script>document.getElementById('go').referrerPolicy = 'unsafe-url'</script></body></html>`,
+        'at-once.html': `<html><body><a id="go">go</a><script>document.getElementById('go').onclick = () => { document.head.insertAdjacentHTML('beforeend', '${telling('unsafe-url')}'); window.open('${ELSEWHERE}/at-once') }</script></body></html>`,
+        'refresh.html': `<html><head>${telling('unsafe-url')}<meta http-equiv="refresh" content="0;url=${ELSEWHERE}/refresh"></head><body></body></html>`,
+      }
+      await seedFiles(prefix, { 'index.html': 'nothing', ...pages })
+      const { at, token } = await open({ p: prefix, a: 'telling', s: 'telling' })
+      /** What each page said to the other site, by itself in a tab and then framed, as the site frames a page. */
+      const told: Record<string, unknown> = {}
+      for (const framed of [false, true])
+        for (const file of Object.keys(pages)) {
+          const context = await browser.newContext()
+          const asked: { url: string; said: Record<string, string> }[] = []
+          await context.route('**/*', async (route) => {
+            const url = new URL(route.request().url())
+            if (url.origin === ELSEWHERE) {
+              asked.push({ url: url.href, said: route.request().headers() })
+              return route.fulfill({ status: 200, contentType: 'text/html', body: 'elsewhere' })
+            }
+            // What stands for the site: a page on the site's port that frames the page
+            if (url.origin === `http://${HOST}:${BASE}`)
+              return route.fulfill({
+                status: 200,
+                contentType: 'text/html',
+                body: `<iframe id="page" sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" referrerpolicy="no-referrer" src="${OWN}${at}/v/1/${file}"></iframe>`,
+              })
+            if (url.origin !== OWN) return route.fulfill({ status: 404, body: '' })
+            const r = await show(`${url.pathname}${url.search}`, { host: HOST, headers: route.request().headers() })
+            await route.fulfill({ status: r.status, headers: Object.fromEntries(r.headers), body: r.buf })
+          })
+          const tab = await context.newPage()
+          tab.setDefaultTimeout(120_000)
+          // A page that leaves by itself may have left before it is seen to have loaded
+          await tab.goto(framed ? `http://${HOST}:${BASE}/` : `${OWN}${at}/v/1/${file}`, { waitUntil: 'commit' })
+          if (file !== 'refresh.html') await (framed ? tab.frameLocator('#page').locator('#go') : tab.locator('#go')).click({ noWaitAfter: true })
+          const name = `${file}, ${framed ? 'framed' : 'by itself'}`
+          await expect.poll(() => [name, asked.length], { timeout: 60_000 }).toEqual([name, 1])
+          told[name] = JSON.stringify(asked).includes(token) ? 'its address, token and all' : 'nothing of its token'
+          await context.close()
+        }
+      expect(told).toEqual(Object.fromEntries(Object.keys(told).map((name) => [name, 'nothing of its token'])))
+    },
+    600_000,
+  )
 })

@@ -5,7 +5,7 @@ import { ALIVE, HARNESSES, INSTALL, newer, noWakeHere, UPGRADE_MS, WAKES, wakesO
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
-import { ago, api, type Id, refusal, serverNow, useNow } from './lib'
+import { ago, api, type Id, refusal, serverNow, useNow, useOpener } from './lib'
 import { NoAddress, OtherAddresses, useWhere } from './network'
 import { RevokeMachine } from './paired'
 
@@ -23,6 +23,7 @@ interface Harness {
   version?: string
   addon: string
   detail?: string
+  runtime?: { state: string; version?: string; idle?: boolean; detail: string }
 }
 interface Machine {
   id: string
@@ -61,7 +62,15 @@ function standing(h: Harness, wanted: boolean, online: boolean): { word: string;
   if (wanted && h.addon !== 'connected') return { word: online ? 'Connecting…' : 'Connects when online', tone: 'wait' }
   if (!wanted && h.addon === 'connected') return { word: online ? 'Disconnecting…' : 'Disconnects when online', tone: 'wait' }
   if (h.addon !== 'connected') return { word: 'Off' }
-  return online ? { word: 'Connected', tone: 'ok' } : { word: 'Connected, offline', tone: 'wait' }
+  if (!online) return { word: 'Installed, offline', tone: 'wait' }
+  if (h.runtime?.state === 'incompatible') return { word: 'Add-on needs attention', tone: 'bad', detail: h.runtime.detail }
+  if (h.runtime?.state === 'active' && h.runtime.idle === false) return { word: 'Open a conversation', tone: 'wait', detail: h.runtime.detail }
+  if (h.runtime?.state === 'active') return { word: 'Add-on loaded', tone: 'ok', detail: h.runtime.detail }
+  return {
+    word: 'Installed, not verified',
+    tone: 'wait',
+    detail: h.runtime?.detail ?? 'No loaded add-on has reported its delivery APIs yet. Open the app and its conversation.',
+  }
 }
 
 export function Machines() {
@@ -203,7 +212,14 @@ function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; o
         )}
       </p>
     )
-  if (!out) return null
+  const behind = !m.runsIt && newer(host, m.connectorVersion)
+  const mismatch = behind ? `This machine runs It ${m.connectorVersion}. The machine It runs on uses ${host}. ` : ''
+  if (!out || (behind && newer(host, out)))
+    return behind ? (
+      <p className="panel-note newer" data-tone="wait">
+        {mismatch}A matching release has not been confirmed here. Run <code>it upgrade --check</code> on this machine to check for updates.
+      </p>
+    ) : null
   const first = !m.runsIt && newer(out, host)
   // At work for as long as an upgrade takes, and no longer: one that has said nothing since
   // was cut short, and is said to have been, with the way to ask for it again
@@ -255,6 +271,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
   const rename = useMutation(api.machines.rename)
   const [error, setError] = useState('')
   const [name, setName] = useState<string | null>(null)
+  const renaming = useOpener<HTMLButtonElement>(name !== null)
   const online = !m.off && now - m.lastSeenAt < ALIVE.onlineMs && m.connectorVersion !== null
   const act = (p: Promise<unknown>) =>
     p.then(
@@ -301,7 +318,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
         {m.runsIt && <span className="status">It runs on this machine</span>}
         <span className="grow" />
         {name === null && (
-          <button type="button" className="link" onClick={() => setName(m.name)}>
+          <button ref={renaming} type="button" className="link" onClick={() => setName(m.name)}>
             Rename
           </button>
         )}
@@ -320,7 +337,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
             const wanted = m.wanted.includes(h.id)
             const fixed = h.addon === 'unavailable' || h.addon === 'too_old'
             const is = standing(h, wanted, online)
-            // Only for an app It can reopen a closed conversation of, and only while it is connected
+            // Only for a selected app It can reopen a closed conversation of
             const couldWake = wanted && !fixed && (WAKES as readonly string[]).includes(h.id)
             // And only on a machine of a system It reopens conversations on
             const wakeable = couldWake && wakesOn(m.system)
@@ -358,14 +375,20 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                       aria-checked={wakes}
                       aria-label={`Auto-wake ${LABEL[h.id] ?? h.id}`}
                       checked={wakes}
+                      // A connection failure must not stop the owner from turning existing permission off.
+                      disabled={!wakes && h.addon !== 'connected' && h.addon !== 'needs_approval'}
                       onChange={(e) => act(wake({ machineId, harness: h.id, on: e.target.checked }))}
                     />
                     <span className="wake-name">Auto-wake</span>
                     {/* Said where it can be read, and not only where a pointer rests: it is on from the start, and it runs an agent with nobody there */}
                     <span className="row-sub">
-                      {wakes
-                        ? 'On. When you use a page whose conversation is closed, It reopens it and runs this agent here with nobody watching'
-                        : 'Off. A click waits until you open its conversation again'}
+                      {wakes && h.runtime?.state === 'incompatible'
+                        ? 'On, waiting for the add-on to be repaired'
+                        : wakes && h.runtime?.idle === false
+                          ? 'On, waiting while this app is open'
+                          : wakes
+                            ? 'On. When you use a page whose conversation is closed, It reopens it and runs this agent here with nobody watching'
+                            : 'Off. A click waits until you open its conversation again'}
                     </span>
                   </label>
                 )}

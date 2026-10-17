@@ -2,6 +2,7 @@
 // Pairing and what comes of it, against an in-memory copy of the backend: a code and the wrong
 // codes anyone sends, whose a display is, what ending a session ends, who a session and a
 // machine were invited by, and what a screen is told about another display.
+import { QUOTA } from '@it/protocol'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
@@ -380,18 +381,20 @@ describe('a display whose browser’s pairing has ended', () => {
     expect(await machine.mutation(api.displays.show, { slug: 'plan', display: 'Kitchen' })).toEqual({
       displays: [],
       notShown: [{ display: 'Kitchen', reason: 'not_paired' }],
+      took: false,
     })
     // Asked onto every display: it is shown on the ones that are paired, and that one is named as left out
     expect(await machine.mutation(api.displays.show, { slug: 'plan' })).toEqual({
       displays: ['Laptop'],
       notShown: [{ display: 'Kitchen', reason: 'not_paired' }],
+      took: false,
     })
     expect([await asked(t, 'the-laptop-display-key-01'), await asked(t, KEY)]).toEqual([true, false])
     // A name no display has is still refused as that
     expect(await code(machine.mutation(api.displays.show, { slug: 'plan', display: 'Garage' }))).toBe('not_found')
     // Paired again, it is asked onto as any display is
     await register(await screenOf(t, owner), KEY)
-    expect(await machine.mutation(api.displays.show, { slug: 'plan', display: 'kitchen' })).toEqual({ displays: ['Kitchen'], notShown: [] })
+    expect(await machine.mutation(api.displays.show, { slug: 'plan', display: 'kitchen' })).toEqual({ displays: ['Kitchen'], notShown: [], took: false })
     // The time of a showing, by which a display tells a new asking from one it has seen, never goes back, though the clock does
     const shownAt = async () => (await t.run((ctx) => ctx.db.query('displays').collect())).find((d) => d.name === 'Kitchen')?.showing?.at ?? 0
     const first = await shownAt()
@@ -474,7 +477,8 @@ describe('what a screen is told about a display that is not its own', () => {
       display: 'laptop',
       buttons: [{ label: 'Yes', action: 'yes' }],
     })
-    const answer = (as: typeof screen, displayKey: string) => as.browser.mutation(api.notifications.answer, { id: note.id, action: 'yes', displayKey })
+    const answer = (as: typeof screen, displayKey: string) =>
+      as.browser.mutation(api.notifications.answer, { id: note.id, action: 'yes', displayKey, expectedSession: as.session })
     const refused = () =>
       answer(screen, MINE).then(
         () => ({ code: 'ok' }),
@@ -809,6 +813,50 @@ describe('what ending a paired browser takes with it', () => {
   const alongOf = async (as: { browser: Asks }) =>
     Object.fromEntries((await as.browser.query(api.sessions.list, {})).map((x) => [x.id, [x.along.browsers.length, x.along.machines.length]]))
 
+  test.each([false, true])(
+    'a waiting replacement needs a code independent of the machine it replaces, including through another machine: %s',
+    async (indirect) => {
+      const { t, machine } = await installed()
+      const owner = await ownerOf(t, machine)
+      const first = await joined(t, owner.browser, 'laptop')
+      await first.as.mutation(api.machines.leave, {})
+      let previousRequest: { code: string; name: string; publicKey: Awaited<ReturnType<typeof aPublicKey>>; replaces: string }
+      const retry = () => t.fetch('/bridge/enroll', { method: 'POST', body: JSON.stringify(previousRequest) })
+      const enrollAgain = async (by: Asks) => {
+        const invite = await by.mutation(api.sessions.inviteMachine, {})
+        previousRequest = { code: invite.code, name: 'laptop', publicKey: await aPublicKey(), replaces: first.id }
+        return retry()
+      }
+      const secondReply = await enrollAgain(owner.browser)
+      expect(secondReply.status).toBe(200)
+      const second = (await secondReply.json()) as { machine: string }
+      const secondAs = t.withIdentity({ issuer: SITE, subject: second.machine, kind: 'machine' })
+      const source = indirect ? (await joined(t, secondAs, 'another machine')).as : secondAs
+      const retained = await ownerOf(t, source)
+      const before = await t.run((ctx) => ctx.db.query('machines').collect())
+      const refused = await enrollAgain(retained.browser)
+      expect(refused.status).toBe(409)
+      expect((await refused.json()).error).toContain('independent')
+      expect(await t.run((ctx) => ctx.db.query('machines').collect())).toEqual(before)
+      await vi.advanceTimersByTimeAsync(60_000)
+      const accepted = await enrollAgain(owner.browser)
+      expect(accepted.status).toBe(200)
+      const heir = (await accepted.json()) as { machine: string; waitsFor: string }
+      expect(heir.waitsFor).toBe('laptop')
+      expect(await (await retry()).json()).toEqual(heir)
+      // A second invite for the same key reaches the normal enrollment path.
+      previousRequest!.code = (await owner.browser.mutation(api.sessions.inviteMachine, {})).code
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(await (await retry()).json()).toEqual(heir)
+      await owner.browser.mutation(api.machines.revoke, { machineId: second.machine as never })
+      await settle(t)
+      expect(await (await retry()).json()).toEqual({ machine: heir.machine })
+      expect(await alive(t.withIdentity({ issuer: SITE, subject: heir.machine, kind: 'machine' }))).toBe(true)
+      expect(await alive(retained)).toBe(false)
+      expect(await alive(owner)).toBe(true)
+    },
+  )
+
   test('the owner ending a browser ends the screens it paired, the machines it added, what came from those in their turn, and every code of theirs still waiting', async () => {
     const h = await household()
     const lines: string[] = []
@@ -908,6 +956,179 @@ describe('what ending a paired browser takes with it', () => {
     await h.desk.browser.mutation(api.displays.forget, { displayId: laptops.id })
     expect(await living(h)).toEqual(['desk', 'hall'])
     expect(await waitingStill(h)).toEqual([401, 401])
+  })
+
+  test('forgetting the display of a browser that signed itself out ends what that browser let in, which the owner is told before', async () => {
+    const h = await household()
+    const laptops = await register(h.laptop, 'the-laptop-display-key-01')
+    expect(await h.desk.browser.query(api.sessions.leftBehind, {})).toEqual([])
+    await endOf(h.t, h.laptop)
+    // Signing out ended only the laptop: the display it was is still listed, as not paired
+    expect(await living(h)).toEqual(['kitchen', 'second', 'agent', 'agentsScreen', 'third', 'desk', 'hall'])
+    const left = await h.desk.browser.query(api.sessions.leftBehind, {})
+    expect(left.map((l) => [l.display, [...l.along.browsers].sort(), [...l.along.machines].sort()])).toEqual([
+      [laptops.id, [h.kitchen.session, h.agent.session, h.agentsScreen.session].sort(), [h.second.id, h.third.id].sort()],
+    ])
+    // It is the owner's to be told, as the paired browsers are
+    expect(await code(h.hall.browser.query(api.sessions.leftBehind, {}))).toBe('forbidden')
+    expect(await code(h.machine.query(api.sessions.leftBehind, {}))).toBe('forbidden')
+    await h.desk.browser.mutation(api.displays.forget, { displayId: laptops.id })
+    expect(await living(h)).toEqual(['desk', 'hall'])
+    expect(await waitingStill(h)).toEqual([401, 401])
+    expect(await h.desk.browser.query(api.sessions.leftBehind, {})).toEqual([])
+  })
+
+  test.each(['owner', 'screen'] as const)('a display paired again as a %s keeps what every earlier pairing let in', async (role) => {
+    const h = await household()
+    const key = 'the-laptop-display-key-01'
+    const display = await register(h.laptop, key)
+    await endOf(h.t, h.laptop)
+    const back = role === 'owner' ? await ownerOf(h.t, h.machine) : h.kitchen
+    expect((await register(back, key)).id).toBe(display.id)
+    const listed = (await h.desk.browser.query(api.sessions.list, {})).find((s) => s.id === back.session)!
+    expect([...listed.along.machines].sort()).toEqual([h.second.id, h.third.id].sort())
+    expect(listed.along.browsers).not.toContain(back.session)
+    await endOf(h.t, back)
+    const left = (await h.desk.browser.query(api.sessions.leftBehind, {})).find((d) => d.display === display.id)!
+    expect([...left.along.machines].sort()).toEqual([h.second.id, h.third.id].sort())
+    const again = await ownerOf(h.t, h.machine)
+    await register(again, key)
+    const added = await joined(h.t, again.browser, 'new machine')
+    const before = (await h.desk.browser.query(api.sessions.list, {})).find((s) => s.id === again.session)!
+    expect([...before.along.machines].sort()).toEqual([h.second.id, h.third.id, added.id].sort())
+    await h.desk.browser.mutation(api.displays.forget, { displayId: display.id })
+    await settle(h.t)
+    expect(await living(h)).toEqual(['desk', 'hall'])
+    expect(await alive(again)).toBe(false)
+    expect(await alive(added.as)).toBe(false)
+    expect(await alive(h.machine)).toBe(true)
+  })
+
+  test.each([false, true].flatMap((named) => ['owner', 'screen'].map((role) => ({ named, role }))))(
+    'a $role registers a new display at the quota of re-paired displays when named is $named',
+    async ({ named, role }) => {
+      const h = await household()
+      const key = 'the-reclaimed-display-key'
+      const display = await register(h.laptop, key)
+      await endOf(h.t, h.laptop)
+      const back = role === 'screen' ? h.kitchen : await ownerOf(h.t, h.machine)
+      await register(back, key)
+      const age = named ? 31 * 86_400_000 : 11 * 60_000
+      await h.t.run(async (ctx) => {
+        const current = (await ctx.db.get(display.id))!
+        await ctx.db.patch(display.id, { name: named ? 'Reclaimed' : undefined, lastSeenAt: Date.now() - age })
+        await ctx.db.patch(h.display.id, { name: 'In use', lastSeenAt: Date.now(), previousSessions: current.previousSessions })
+        for (let i = 2; i < QUOTA.displays; i++)
+          await ctx.db.insert('displays', {
+            userId: current.userId,
+            sessionId: current.sessionId,
+            previousSessions: current.previousSessions,
+            key: `quota-filler-display-${i}`,
+            generatedName: 'Browser',
+            name: `Kept ${i}`,
+            createdAt: Date.now(),
+            lastSeenAt: Date.now(),
+            epoch: 0,
+          })
+      })
+      expect(await code(register(role === 'screen' ? back : h.desk, 'the-next-display-key-01'))).toBe('ok')
+      expect(await displayOf(h.t, key)).toBeNull()
+      expect(await h.desk.browser.query(api.displays.list, {})).toHaveLength(QUOTA.displays)
+      expect(await living(h)).toEqual(role === 'screen' ? ['kitchen', 'desk', 'hall'] : ['desk', 'hall'])
+      expect(await waitingStill(h)).toEqual([401, 401])
+      expect(await alive(back)).toBe(true)
+      expect(await alive(h.machine)).toBe(true)
+      await settle(h.t)
+      expect(content.some((c) => c.op === 'revoke' && c.body.displayId === display.id)).toBe(true)
+      // Making room does not ban the key: a browser that is still paired can come back.
+      await h.t.run((ctx) => ctx.db.patch(h.display.id, { name: undefined, lastSeenAt: Date.now() - age }))
+      expect((await register(back, key)).id).not.toBe(display.id)
+    },
+  )
+
+  test.each(['owner', 'screen'] as const)(
+    'eight earlier pairings are kept and older invited access ends when the display is paired again with role %s',
+    async (role) => {
+      const h = await household()
+      const key = 'the-often-paired-display-key'
+      const display = await register(h.laptop, key)
+      let current = h.laptop
+      const previous: string[] = []
+      for (let n = 0; n < 9; n++) {
+        previous.push(current.session)
+        await endOf(h.t, current)
+        current = n === 8 && role === 'screen' ? h.kitchen : await ownerOf(h.t, h.machine)
+        expect((await register(current, key)).id).toBe(display.id)
+        expect(await alive(current)).toBe(true)
+        expect((await displayOf(h.t, key))?.previousSessions).toEqual(previous.slice(-8))
+        if (n < 8) expect(await alive(h.second.as)).toBe(true)
+      }
+      expect(await alive(h.second.as)).toBe(false)
+      expect(await alive(h.third.as)).toBe(false)
+      expect(await alive(h.agent)).toBe(false)
+      expect(await alive(h.agentsScreen)).toBe(false)
+      expect(await alive(h.desk)).toBe(true)
+      expect(await alive(h.machine)).toBe(true)
+    },
+  )
+
+  test('removal counts follow the earlier pairings of a descendant display', async () => {
+    const h = await household()
+    const key = 'nested-reclaimed-display-key'
+    await register(h.desk, key)
+    const extra = await joined(h.t, h.desk.browser, 'the earlier pairing added this')
+    await endOf(h.t, h.desk)
+    await register(h.kitchen, key)
+    const viewer = await ownerOf(h.t, h.machine)
+    const display = await register(h.laptop, 'the-laptop-display-key-01')
+    const expected = {
+      browsers: [h.kitchen.session, h.agent.session, h.agentsScreen.session, h.hall.session].sort(),
+      machines: [h.second.id, h.third.id, extra.id].sort(),
+    }
+    const listed = (await viewer.browser.query(api.sessions.list, {})).find((s) => s.id === h.laptop.session)!.along
+    expect({ browsers: listed.browsers.sort(), machines: listed.machines.sort() }).toEqual(expected)
+    await endOf(h.t, h.laptop)
+    const left = (await viewer.browser.query(api.sessions.leftBehind, {})).find((d) => d.display === display.id)!.along
+    expect({ browsers: left.browsers.sort(), machines: left.machines.sort() }).toEqual(expected)
+    await viewer.browser.mutation(api.displays.forget, { displayId: display.id })
+    expect(await living(h)).toEqual([])
+    expect(await alive(extra.as)).toBe(false)
+    expect(await alive(viewer)).toBe(true)
+    expect(await alive(h.machine)).toBe(true)
+  })
+
+  test("ending a screen that reclaimed its inviter's display ends each pairing once", async () => {
+    const h = await household()
+    const key = 'the-laptop-display-key-01'
+    await register(h.laptop, key)
+    await endOf(h.t, h.laptop)
+    await register(h.kitchen, key)
+    await h.desk.browser.mutation(api.sessions.end, { session: h.kitchen.session as never })
+    expect(await living(h)).toEqual(['desk', 'hall'])
+    expect(await alive(h.machine)).toBe(true)
+  })
+
+  test('and so it does a day later, when the record of that browser has been cleaned away', async () => {
+    const h = await household()
+    const laptops = await register(h.laptop, 'the-laptop-display-key-01')
+    await endOf(h.t, h.laptop)
+    await vi.advanceTimersByTimeAsync(25 * 3_600_000)
+    await h.t.mutation(internal.retention.sweepRecords, {})
+    expect(await h.t.run((ctx) => ctx.db.get(h.laptop.session as never))).toBeNull()
+    expect((await h.desk.browser.query(api.sessions.leftBehind, {})).map((l) => [l.display, l.along.browsers.length, l.along.machines.length])).toEqual([
+      [laptops.id, 3, 2],
+    ])
+    await h.desk.browser.mutation(api.displays.forget, { displayId: laptops.id })
+    expect(await living(h)).toEqual(['desk', 'hall'])
+  })
+
+  test('a display whose browser signed out having let nothing in is forgotten alone', async () => {
+    const h = await household()
+    const halls = await register(h.hall, 'the-hall-display-key-0001')
+    await endOf(h.t, h.hall)
+    expect(await h.desk.browser.query(api.sessions.leftBehind, {})).toEqual([])
+    await h.desk.browser.mutation(api.displays.forget, { displayId: halls.id })
+    expect(await living(h)).toEqual(['laptop', 'kitchen', 'second', 'agent', 'agentsScreen', 'third', 'desk'])
   })
 
   test('what a browser let in is ended with it though a browser between them signed out and its record was cleaned away', async () => {
@@ -1459,5 +1680,22 @@ describe('whom the backend believes', () => {
     }
     // And it believes nobody else: one audience for each kind of caller, and no other
     expect(config.providers.map((p) => p.applicationID).sort()).toEqual(['it-browser', 'it-machine'])
+  })
+})
+
+describe('the allowance for session tokens', () => {
+  test('thirty tokens exhaust one session until the clock refills its allowance', async () => {
+    const { t, machine } = await installed()
+    const owner = await ownerOf(t, machine)
+    const hash = await t.run(async (ctx) => (await ctx.db.query('sessions').first())!.secretHash)
+    const issue = () => code(t.mutation(internal.sessions._present, { presented: [{ name: nameOf(owner.session), hash }] }))
+    // Pairing has already issued the first token. The frozen clock gives no refill.
+    for (let n = 1; n < 30; n++) expect(await issue()).toBe('ok')
+    expect(await issue()).toBe('rate_limited')
+    vi.advanceTimersByTime(999)
+    expect(await issue()).toBe('rate_limited')
+    vi.advanceTimersByTime(1)
+    expect(await issue()).toBe('ok')
+    expect(await issue()).toBe('rate_limited')
   })
 })

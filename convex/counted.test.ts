@@ -146,6 +146,62 @@ describe('what the service takes', () => {
     expect(await t.run((ctx) => ctx.db.query('counted').collect())).toEqual([])
   })
 
+  test('what was noted before the service said counts are off is removed then, and is not given once they are on again', async () => {
+    const { browser, counting, notes, t } = await household()
+    await counting(true)
+    const phone = await browser('phone')
+    await phone.mutation(api.displays.register, { key: key('phone'), userAgent: PHONE })
+    await phone.mutation(api.displays.reached, { key: key('phone'), local: false })
+    expect((await notes()).map((n) => n.name)).toEqual(['display.paired', 'screen.connected'])
+    // The person turns the counts off and on again between two of the service's comings: it has said each, and has taken nothing
+    await counting(false)
+    expect(await notes()).toEqual([])
+    await counting(true)
+    vi.advanceTimersByTime(15 * 60_000)
+    await phone.mutation(api.displays.reached, { key: key('phone'), local: false })
+    // What it is given is what happened since they were turned on
+    expect((await t.mutation(internal.counted.take, {})).notes.map((n) => n.name)).toEqual(['screen.connected'])
+  })
+
+  test('and so are more notes than one step removes, none of what was noted since among them', async () => {
+    const { browser, counting, notes, t } = await household()
+    await counting(true)
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1100; i++) await ctx.db.insert('counted', { name: 'page.shown', properties: '{"screen":"phone","by":"person"}', at: Date.now() })
+    })
+    vi.advanceTimersByTime(1000)
+    await counting(false)
+    // Turned on again, and something noted, before the later steps have run
+    await counting(true)
+    vi.advanceTimersByTime(1000)
+    const phone = await browser('phone')
+    await phone.mutation(api.displays.register, { key: key('phone'), userAgent: PHONE })
+    await phone.mutation(api.displays.reached, { key: key('phone'), local: false })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect((await notes()).map((n) => n.name)).toEqual(['display.paired', 'screen.connected'])
+  })
+
+  test.each([0, -300_000])('old notes cannot be collected before the purge finishes, even with a clock change of %s milliseconds', async (clockChange) => {
+    const { browser, counting, t } = await household()
+    await counting(true)
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1100; i++) await ctx.db.insert('counted', { name: 'page.shown', properties: '{}', at: Date.now() })
+    })
+    vi.setSystemTime(Date.now() + clockChange)
+    await counting(false)
+    await counting(true)
+    try {
+      expect((await t.mutation(internal.counted.take, { keep: true })).notes).toEqual([])
+      const phone = await browser('phone')
+      await phone.mutation(api.displays.register, { key: key('phone'), userAgent: PHONE })
+      await phone.mutation(api.displays.reached, { key: key('phone'), local: false })
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect((await t.mutation(internal.counted.take, { keep: true })).notes.map((n) => n.name)).toEqual(['display.paired', 'screen.connected'])
+    } finally {
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+    }
+  })
+
   test('a note nobody came for is removed after a week', async () => {
     const { browser, counting, t } = await household()
     await counting(true)
@@ -167,5 +223,47 @@ describe('what the service takes', () => {
     const laptop = await browser('laptop')
     await laptop.mutation(api.displays.register, { key: key('laptop'), userAgent: LAPTOP })
     expect(await t.query(internal.counted.picture, {})).toEqual({ pages: 0, displays: 2, machines: 1, conversations: 0, push: false })
+  })
+
+  test('conversations beyond hundreds of pages in one conversation are counted without sending their identities', async () => {
+    const { t } = await household()
+    await t.run(async (ctx) => {
+      const userId = (await ctx.db.query('users').first())!._id
+      const page = { userId, title: 'A private page title', lastVersion: 1, bytes: 0, createdAt: 1, updatedAt: 1 }
+      for (let i = 0; i < 1200; i++) {
+        await ctx.db.insert('artifacts', { ...page, slug: `same-${i}`, session: { harness: 'claude-code', id: 'private-conversation' } })
+      }
+      for (const [harness, id] of [
+        ['claude-code', 'another-private-conversation'],
+        ['codex', 'private-conversation'],
+        ['pi', 'private-conversation'],
+      ]) {
+        await ctx.db.insert('artifacts', { ...page, slug: `${harness}-${id}`, session: { harness: harness!, id: id! } })
+      }
+      await ctx.db.insert('artifacts', { ...page, slug: 'without-a-conversation' })
+      const other = await ctx.db.insert('users', { subject: 'another-person', createdAt: 1 })
+      await ctx.db.insert('artifacts', { ...page, userId: other, slug: 'another-person', session: { harness: 'codex', id: 'another-person' } })
+    })
+    expect(await t.query(internal.counted.picture, {})).toEqual({ pages: 101, displays: 0, machines: 1, conversations: 4, push: false })
+  })
+
+  test('conversation counting stops once the highest band is known', async () => {
+    const { t } = await household()
+    await t.run(async (ctx) => {
+      const userId = (await ctx.db.query('users').first())!._id
+      for (let i = 0; i < 130; i++) {
+        await ctx.db.insert('artifacts', {
+          userId,
+          slug: `page-${i}`,
+          title: 'Private',
+          lastVersion: 1,
+          bytes: 0,
+          createdAt: 1,
+          updatedAt: 1,
+          session: { harness: i % 2 ? 'codex' : 'claude-code', id: `private-${i}` },
+        })
+      }
+    })
+    expect(await t.query(internal.counted.picture, {})).toEqual({ pages: 101, displays: 0, machines: 1, conversations: 101, push: false })
   })
 })

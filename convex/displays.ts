@@ -3,6 +3,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { action, internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
+import { takePage } from './artifacts'
 import { revokeLater } from './content'
 import {
   artifactBySlug,
@@ -21,11 +22,18 @@ import { fail } from './lib/errors'
 import { quota, rateLimit } from './lib/limits'
 import { log } from './lib/log'
 import { mint } from './lib/signing'
+import { session } from './schema'
 import { endSession, signOutDisplay } from './sessions'
 
 const KEY = /^[A-Za-z0-9_-]{16,128}$/
 /** A display that has not been seen for this long has closed the site, and opens it anew when it comes back. */
 const AWAY_MS = 600_000
+/**
+ * Eight earlier pairings per display keep removal counts to at most 200 historical roots
+ * across the 25 displays. Before an older pairing leaves this list, what it let in is ended,
+ * so the bound never leaves invited access that forgetting the display cannot reach.
+ */
+const PREVIOUS_PAIRINGS = 8
 
 /** "Chrome on Linux", from what the browser says about itself. */
 function generatedName(ua: string): string {
@@ -57,7 +65,8 @@ const view = (d: Doc<'displays'>) => ({
 export const register = mutation({
   args: { key: v.string(), userAgent: v.string() },
   handler: async (ctx, { key, userAgent }) => {
-    const { user, session } = await requireBrowser(ctx)
+    const c = await requireBrowser(ctx)
+    const { user, session } = c
     if (!KEY.test(key)) fail('invalid', 'That is not a display key.')
     const existing = await ctx.db
       .query('displays')
@@ -68,11 +77,15 @@ export const register = mutation({
         // The key only selects. While the session the display is with has not ended, the display
         // is that browser's, and to anyone else who names its key there is no such display. Once
         // that session has ended, the display goes with the session its browser has now, which
-        // is the caller's own and never one the browser names: that is the session forgetting
-        // the display will end.
+        // is the caller's own and never one the browser names. Earlier pairings stay with the
+        // display so that forgetting it also ends what those pairings let in.
         const holder = await ctx.db.get(existing.sessionId)
         if (holder && holder.endedAt === undefined) fail('not_found', 'This display is not registered.')
-        await ctx.db.patch(existing._id, { sessionId: session._id })
+        const previous = [...(existing.previousSessions ?? []), existing.sessionId]
+        await ctx.db.patch(existing._id, { sessionId: session._id, previousSessions: previous.slice(-PREVIOUS_PAIRINGS) })
+        // The browser registering now may descend from an earlier pairing. It stays paired,
+        // just as the browser asking to end every other session does.
+        for (const id of previous.slice(0, -PREVIOUS_PAIRINGS)) await endSession(ctx, id, 'forgotten', session._id)
       }
       return view(existing)
     }
@@ -104,15 +117,21 @@ export const register = mutation({
       // they still use, and be unable to add one. Room is made by letting one go: first one that nobody
       // gave a name or turned notifications on for and that is not open now (it has not been
       // for ten minutes), and failing that any display that has not been open for a month.
-      // Such a browser loses nothing: if it comes back still paired, it is simply registered again.
+      // A browser that comes back still paired is simply registered again. What its earlier
+      // pairings let in ends now, since deleting the display would lose the way to end it later.
+      // The one to go is one the caller may act for, which for a screen is a display of its own
+      // and no other: letting a display go signs it out, and a screen that could make room among
+      // all of them would sign out the owner's by registering itself anew.
       const leastRecent = (of: typeof mine) => of.reduce((a, b) => (a.lastSeenAt <= b.lastSeenAt ? a : b))
-      const passing = mine.filter((d) => !d.name && !d.push && now - d.lastSeenAt > 600_000)
-      const oldest = leastRecent(mine)
-      const going = passing.length ? leastRecent(passing) : now - oldest.lastSeenAt >= 30 * 86_400_000 ? oldest : null
+      const itsOwn = mine.filter((d) => speaksFor(c, d))
+      const passing = itsOwn.filter((d) => !d.name && !d.push && now - d.lastSeenAt > 600_000)
+      const oldest = itsOwn.length ? leastRecent(itsOwn) : null
+      const going = passing.length ? leastRecent(passing) : oldest && now - oldest.lastSeenAt >= 30 * 86_400_000 ? oldest : null
       if (!going) quota(mine.length, QUOTA.displays, 'displays', user._id)
       else {
         await signOutDisplay(ctx, going)
         await ctx.db.delete(going._id)
+        for (const id of going.previousSessions ?? []) await endSession(ctx, id, 'forgotten', session._id)
         letGo = going._id
         log('display.let_go', { userId: user._id, displayId: going._id, idleMs: now - going.lastSeenAt })
       }
@@ -351,7 +370,7 @@ export const forget = mutation({
     await ctx.db.insert('forgotten', { userId: user._id, key: d.key, at: Date.now() })
     await ctx.db.delete(d._id)
     // Whatever else that same browser had registered as is signed out as its session ends
-    await endSession(ctx, d.sessionId, 'forgotten')
+    for (const id of [d.sessionId, ...(d.previousSessions ?? [])]) await endSession(ctx, id, 'forgotten')
     log('display.forgotten', { userId: user._id, displayId: d._id, sessionId: d.sessionId })
     return null
   },
@@ -364,9 +383,9 @@ export const forget = mutation({
  * which shows nothing until that browser is paired again.
  */
 export const show = mutation({
-  args: { slug: v.string(), display: v.optional(v.string()) },
-  handler: async (ctx, { slug, display }) => {
-    const { user } = await requireMachine(ctx)
+  args: { slug: v.string(), display: v.optional(v.string()), session: v.optional(session), agent: v.optional(v.string()) },
+  handler: async (ctx, { slug, display, session: mine, agent }) => {
+    const { user, machine } = await requireMachine(ctx)
     await rateLimit(ctx, 'show', user._id)
     const artifact = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
     const all = await ctx.db
@@ -391,6 +410,9 @@ export const show = mutation({
         shown.push(name)
       } else notShown.push({ display: name, reason: 'not_paired' })
     }
-    return { displays: shown, notShown }
+    // A page changes owner only if at least one requested display can show it. All display
+    // changes and ownership changes commit together, including the rate-limit checks.
+    const took = mine && shown.length ? (await takePage(ctx, artifact, machine, mine, agent)).took : false
+    return { displays: shown, notShown, took }
   },
 })

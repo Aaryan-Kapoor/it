@@ -41,6 +41,7 @@ import {
   noteLoaded,
   programFile,
   RELEASE,
+  readConfig,
   rename,
   type ServiceConfig,
   unread,
@@ -560,6 +561,19 @@ async function fateOf(file: string, seen: Seen, opts: { watching?: () => void; s
 }
 
 /**
+ * Whether the process a lock names is running on this machine at this moment: the very one, by
+ * its number and when it was started, for whoever only has to know and takes no lock. On Linux
+ * a lock from before the machine was last started names nothing that runs now. On the other
+ * systems a lock that says another place is gone by its number alone, since what stands for
+ * the place there is the machine's name, which may have been changed while its holder ran.
+ */
+export function holderRuns(lock: Pick<Lock, 'pid' | 'started' | 'where'>): boolean {
+  if (lock.where !== where()) return process.platform !== 'linux' && alive(lock.pid)
+  const started = startOf(lock.pid)
+  return started === undefined || started === lock.started || (started !== null && lock.started === '')
+}
+
+/**
  * Takes a lock: a file only one program can make. Where there is none, making it is all there
  * is to it. One whose holder is gone is never removed, since two programs that both found it
  * left would each remove what the other had just put there. It is replaced, and only by the
@@ -620,7 +634,11 @@ async function takeLock(
       throw err
     }
     if (!still()) {
-      rmSync(after, { force: true })
+      // Another holder already replaced this lock. Its cleanup may still have the stale
+      // claim open on Windows; that claim cannot authorise replacing the new lock.
+      try {
+        rmSync(after, { force: true })
+      } catch {}
       continue
     }
     put(file, me)
@@ -680,12 +698,17 @@ async function takeLock(
  * and taken as the backend's is.
  */
 export async function alone<T>(what: string, run: () => Promise<T>, forMs = 120_000): Promise<T> {
+  return aloneAt(inHome(`${what}.lock`), run, forMs)
+}
+
+/** Does one thing at a time under a lock whose location follows what is being changed. */
+export async function aloneAt<T>(file: string, run: () => Promise<T>, forMs = 120_000): Promise<T> {
   const until = Date.now() + forMs
   let held: Held
   for (;;) {
     try {
-      held = await takeLock(inHome(`${what}.lock`), {
-        taken: () => new Problem('Another `it` command is doing the same thing for this folder, and has not finished.', 'busy', 'Try again in a moment.'),
+      held = await takeLock(file, {
+        taken: () => new Problem('Another `it` command is doing the same thing, and has not finished.', 'busy', 'Try again in a moment.'),
       })
       break
     } catch (err) {
@@ -1195,6 +1218,41 @@ async function noneLeft(config: ServiceConfig, say: (line: string) => void, sign
         'still_running',
         'End it with an interrupt, as Ctrl-C at a terminal would, then start It again. It is the program named convex-local-backend that was started with this folder’s database.',
       )
+  }
+}
+
+/**
+ * Makes sure that no backend program is left on this folder, for whoever is about to take the
+ * folder away. A service that died leaves its backend program running, and whoever looks only
+ * for a service finds none: the program would go on with its database deleted from under it.
+ * It is asked to stop as the service that starts next would ask it, with the folder taken for
+ * as long as that lasts and through `remove`. A refusal stops removal too, whether a service
+ * has the folder after all or an orphan could not be stopped or identified. Without settings
+ * or a backend folder there is nothing to look for. Where that folder exists, readable
+ * settings are needed to say which backend program is this folder's.
+ */
+export async function nothingLeft(say: (line: string) => void, remove: () => Promise<void> = async () => {}): Promise<void> {
+  let config: ServiceConfig | null
+  try {
+    config = readConfig()
+  } catch (err) {
+    if (existsSync(backendFolder())) throw err
+    return await remove()
+  }
+  if (!config) {
+    if (existsSync(backendFolder()))
+      throw new Problem('The backend folder is still here, but its settings are missing.', 'settings', 'Put service.json back before removing It.')
+    return await remove()
+  }
+  const lock = await takeLock(lockFile(), {
+    taken: (by) => new Problem(`It is already running for this folder${by ? ` (pid ${by.pid})` : ''}.`, 'already_running'),
+    left: (left) => noneLeft(config, say, undefined, left),
+  })
+  try {
+    await noneLeft(config, say)
+    await remove()
+  } finally {
+    lock.release()
   }
 }
 
@@ -2219,7 +2277,6 @@ async function loaded(site: string): Promise<boolean> {
  * version of It those came with, which may be run on it again.
  */
 export async function startBackend(config: ServiceConfig, say: (line: string) => void, signal?: AbortSignal): Promise<Running> {
-  const file = await program(say, signal)
   const lock = await takeLock(lockFile(), {
     taken: (by) => new Problem(`It is already running for this folder${by ? ` (pid ${by.pid})` : ''}.`, 'already_running'),
     left: (left) => noneLeft(config, say, signal, left),
@@ -2231,6 +2288,10 @@ export async function startBackend(config: ServiceConfig, say: (line: string) =>
   let child: Child | undefined
   let behind: Behind | undefined
   try {
+    // Uninstall removes the settings before the lock's folder. A start that had read them
+    // earlier must not recreate a backend once removal has reached that lock.
+    if (!readConfig()) throw new Problem('It’s settings were removed before the service could start.', 'settings')
+    const file = await program(say, signal)
     await noneLeft(config, say, signal)
     // A copy that holds what was erased goes first where its time is over, and whether a copy
     // made now would hold such is what is kept of the erasings to say

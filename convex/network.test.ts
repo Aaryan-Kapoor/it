@@ -62,6 +62,20 @@ describe('what the service says of its door', () => {
     expect(await t.query(internal.network.current, {})).toEqual({ on: false, wanted: false, addresses: [] })
   })
 
+  test('the command reads only the applied policy, including its absence in an older service report', async () => {
+    const { t, owner } = await household()
+    await t.mutation(internal.network.report, { on: true, wanted: true, addresses: [LAN], tailnet: false, canTailnet: true })
+    expect(await t.query(internal.network.current, {})).toMatchObject({ on: true, tailnet: false })
+    await owner.mutation(api.network.ask, { to: 'tailscale' })
+    expect(await t.query(internal.network.current, {})).toMatchObject({ tailnet: false })
+    await t.mutation(internal.network.report, { on: true, wanted: true, addresses: [LAN], tailnet: true })
+    expect(await t.query(internal.network.current, {})).toMatchObject({ on: true, tailnet: true })
+    await t.mutation(internal.network.report, { on: false, wanted: false, addresses: [], tailnet: true })
+    expect(await t.query(internal.network.current, {})).toMatchObject({ on: false, tailnet: false })
+    await t.mutation(internal.network.report, { on: true, wanted: true, addresses: [LAN] })
+    expect(await t.query(internal.network.current, {})).not.toHaveProperty('tailnet')
+  })
+
   test('is what the owner’s browser and the command are told, in the order it was said, and there is one record of it however often it is said', async () => {
     const { t, owner } = await household()
     await t.mutation(internal.network.report, { on: true, wanted: true, addresses: [LAN, SIX] })

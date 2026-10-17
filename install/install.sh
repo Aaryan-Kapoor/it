@@ -11,9 +11,10 @@
 # What it installs goes in ~/.it, or in the folder IT_HOME names instead, and that folder is set
 # so that only you can look inside it. Outside that folder it changes one thing: the file your
 # shell reads when it starts, so that the program's folder is on your PATH. For zsh that is
-# .zshrc, in the folder ZDOTDIR names if it names one. For bash it is .bashrc and whichever of
-# .bash_profile, .bash_login and .profile a login shell reads. For any other shell it is
-# .profile. Each of those is given a blank line, a comment and one line, once, and is made if
+# .zshrc, in the folder zsh reports after reading .zshenv. For bash it is .bashrc and whichever of
+# .bash_profile, .bash_login and .profile a login shell reads. For fish it is
+# $XDG_CONFIG_HOME/fish/conf.d/it.fish, or ~/.config/fish/conf.d/it.fish. For another shell
+# it is .profile. Each of those is given a blank line, a comment and one line, once, and is made if
 # it is not there.
 #
 # To join an It that runs on another computer, give it the command that It's site shows under
@@ -153,9 +154,27 @@ case "${BASE}" in
 esac
 command -v curl >/dev/null 2>&1 || { say "Install curl first." >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || { say "Install sha256sum or shasum first." >&2; exit 1; }
+# Where CI is set, every download says so, and itcan.do counts it apart from a person's. CI is
+# read as the program reads it: without the spaces or quotes around it, and set to anything but
+# nothing, 0, false, no or off. Given nothing after the colon, curl sends no such header at all.
+case "$(printf '%s' "${CI:-}" | tr 'A-Z' 'a-z' | sed -e "s/^[[:space:]\"']*//" -e "s/[[:space:]\"']*\$//")" in
+  '' | 0 | false | no | off) ci= ;;
+  *) ci=1 ;;
+esac
+# A download is given up when it cannot be begun within half a minute, and when nothing of it
+# has come for a whole minute: left to itself curl waits for either without end, and says
+# nothing while it does. One that is slow and still coming is waited for, however long it
+# takes. Given `shown` at a terminal, a download draws curl's own bar as it comes, which is for
+# the program, the one file of the three that is large.
+unfetched() {
+  say "$1 could not be downloaded. Nothing was installed. Run the install line again to try it once more." >&2
+  exit "$2"
+}
 fetch() {
-  if [ "${plain}" = 1 ]; then curl -fsS --noproxy '*' --max-redirs 0 "$1" -o "$2"
-  else curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 "$1" -o "$2"
+  meter=--silent
+  if [ "${led}" = 1 ] && [ "${3:-}" = shown ]; then meter=--progress-bar; fi
+  if [ "${plain}" = 1 ]; then curl -fS "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --noproxy '*' --max-redirs 0 -H "X-It-CI:${ci}" "$1" -o "$2" || unfetched "$1" "$?"
+  else curl -fSL "${meter}" --connect-timeout 30 --speed-limit 1 --speed-time 60 --proto '=https' --proto-redir '=https' --tlsv1.2 -H "X-It-CI:${ci}" "$1" -o "$2" || unfetched "$1" "$?"
   fi
   # What curl leaves is an ordinary file. Anything else there is not a download, and is not read
   if [ ! -f "$2" ] || [ -L "$2" ]; then
@@ -234,12 +253,12 @@ unlock() {
   fi
   locked=0
 }
-# The three files are put in place together or not at all. What was at each place is kept
-# aside, in the folder made for this run, until all three are in. Stopped
+# The program, terms and installation record are put in place together or not at all.
+# What was at each place is kept aside until every file is in. Stopped
 # before then, what was there is put back: the old file where one was kept, and nothing where
 # the new file went in over nothing.
 replacing=0
-# Which of the three this run has begun to put in place, and whether something that was moved
+# Which files this run has begun to put in place, and whether something that was moved
 # aside could not be put back
 begun=""
 kept=0
@@ -290,6 +309,7 @@ cleanup() {
   # Once it is clearing up, a further signal does not stop it half way
   trap ':' HUP INT QUIT PIPE TERM
   if [ "${replacing}" = 1 ]; then
+    put_back installation "${HOME_DIR}/installation.json"
     put_back notices "${HOME_DIR}/THIRD_PARTY_NOTICES.md"
     put_back license "${HOME_DIR}/LICENSE.md"
     put_back program "${DIR}/it"
@@ -304,6 +324,46 @@ trap cleanup EXIT
 # Stopped by a signal, it still clears up after itself, and says by its exit how it ended. So
 # it does when what it prints cannot be written, as when the program it is piped to has
 # ended: some shells would otherwise end there and clear nothing up.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 131' QUIT
+trap 'exit 141' PIPE
+trap 'exit 143' TERM
+
+# Take the lock before making a staging folder or downloading anything. Uninstall uses
+# this same lock and must see an install that is still waiting for its first download.
+# Taking it and recording that it is ours are two steps, so a signal waits until both are
+# done. Downloads remain interruptible, and cleanup gives the lock back if one stops.
+trap ':' HUP INT QUIT PIPE TERM
+# A lock is taken from the install that holds it only when that install has stopped running:
+# when the lock names a process on this machine, and no such process is there. However old a
+# lock is, one whose process is running is left alone, and so is one held on another machine,
+# and one that names nobody, which was made this moment or by an install that was killed as it
+# made it. Only one install at a time may take a lock over, and it reads who holds the lock
+# once it is that one, so that a lock just taken over by one install is never taken from it by
+# the next.
+if ! mkdir "${lock}" 2>/dev/null; then
+  if mkdir "${lock}.taking" 2>/dev/null; then
+    holder
+    if [ -n "${by}" ] && [ "${on}" = "${here}" ] && ! running "${by}"; then
+      rm -f -- "${lock}/owner" 2>/dev/null || true
+      if rmdir "${lock}" 2>/dev/null && mkdir "${lock}" 2>/dev/null; then took=1; fi
+    fi
+    rmdir "${lock}.taking" 2>/dev/null || true
+  fi
+  if [ "${took}" = 0 ]; then
+    holder
+    if [ -n "${by}" ]; then who=", process ${by} on ${on},"; else who=""; fi
+    say "Another install of It${who} is putting its files in ${HOME_DIR}. Run this again when it has finished. A lock is taken over by itself only once the process it names is gone from this machine. If no install of It is running, remove the folder ${lock} and, if it is there, the folder ${lock}.taking first." >&2
+    exit 1
+  fi
+fi
+if ! say "${me}" 2>/dev/null > "${lock}/owner"; then
+  rmdir "${lock}" 2>/dev/null || true
+  say "The lock ${lock} could not be written. Nothing was installed." >&2
+  exit 1
+fi
+locked=1
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 131' QUIT
@@ -345,11 +405,13 @@ checked() {
     exit 1
   fi
 }
-if [ "${led}" = 1 ]; then printf '\n  \033[1mit\033[0m\033[32m.\033[0m  \033[2minstall\033[0m\n\n'
+if [ "${led}" = 1 ]; then
+  printf '\n  \033[1mit\033[0m\033[32m.\033[0m  \033[2minstall\033[0m\n\n'
+  quietly "Downloading for ${os} ${arch} ..."
 else say "It is being downloaded for ${os} ${arch}."
 fi
 fetch "${FROM}/SHA256SUMS" "${stage}/sums"
-fetch "${FROM}/${name}" "${stage}/program"
+fetch "${FROM}/${name}" "${stage}/program" shown
 checked "${name}" "${stage}/program"
 fetch "${FROM}/LICENSE.md" "${stage}/license"
 checked LICENSE.md "${stage}/license"
@@ -377,44 +439,19 @@ if [ "${tried}" != 0 ]; then
 fi
 if [ "${led}" = 1 ]; then did "Downloaded for ${os} ${arch}, and checked"; fi
 
-# From here until the lock is given up, a signal does not stop this. Taking the lock and
-# noting that it was taken are two steps, and stopped between them it would leave a lock that
-# nothing removes; and once the replacing has begun, the only way to leave one release's files
-# together is to finish it, or to put back what was there, and neither is to be cut short. The
-# signal is taken and nothing is done about it, which is not the same as being deaf to it: a
-# command started by a shell that is deaf to a signal is deaf to it too, and one that was
-# moving a file and had stuck could then not be stopped. As it is, a signal sent to everything
-# this started stops that command, and what was there is put back.
+# Once replacing begins, a signal must not leave files from different releases together.
+# A command moving a file still receives the signal, and cleanup puts back what was there
+# if that command stops. The shell itself stays to finish the replacement or its cleanup.
 trap ':' HUP INT QUIT PIPE TERM
-# A lock is taken from the install that holds it only when that install has stopped running:
-# when the lock names a process on this machine, and no such process is there. However old a
-# lock is, one whose process is running is left alone, and so is one held on another machine,
-# and one that names nobody, which was made this moment or by an install that was killed as it
-# made it. Only one install at a time may take a lock over, and it reads who holds the lock
-# once it is that one, so that a lock just taken over by one install is never taken from it by
-# the next.
-if ! mkdir "${lock}" 2>/dev/null; then
-  if mkdir "${lock}.taking" 2>/dev/null; then
-    holder
-    if [ -n "${by}" ] && [ "${on}" = "${here}" ] && ! running "${by}"; then
-      rm -f -- "${lock}/owner" 2>/dev/null || true
-      if rmdir "${lock}" 2>/dev/null && mkdir "${lock}" 2>/dev/null; then took=1; fi
-    fi
-    rmdir "${lock}.taking" 2>/dev/null || true
-  fi
-  if [ "${took}" = 0 ]; then
-    holder
-    if [ -n "${by}" ]; then who=", process ${by} on ${on},"; else who=""; fi
-    say "Another install of It${who} is putting its files in ${HOME_DIR}. Run this again when it has finished. A lock is taken over by itself only once the process it names is gone from this machine. If no install of It is running, remove the folder ${lock} and, if it is there, the folder ${lock}.taking first." >&2
+# A damaged or linked ownership record is never silently replaced.
+installation='{"product":"It","format":1,"about":"This folder holds an installation of It."}'
+if [ -e "${HOME_DIR}/installation.json" ] || [ -L "${HOME_DIR}/installation.json" ]; then
+  if [ -L "${HOME_DIR}/installation.json" ] || [ ! -f "${HOME_DIR}/installation.json" ] || [ "$(cat "${HOME_DIR}/installation.json")" != "${installation}" ]; then
+    say "The installation record in ${HOME_DIR} is not the one It wrote. Inspect it before installing again. Nothing was installed." >&2
     exit 1
   fi
 fi
-if ! say "${me}" 2>/dev/null > "${lock}/owner"; then
-  rmdir "${lock}" 2>/dev/null || true
-  say "The lock ${lock} could not be written. Nothing was installed." >&2
-  exit 1
-fi
-locked=1
+(umask 077; printf '%s\n' "${installation}" > "${stage}/installation")
 # A link where a file is to go is moved aside like anything else and the file put in its place:
 # nothing is written through a link to wherever it leads, and a link to a folder is not a way
 # into that folder.
@@ -422,6 +459,7 @@ replacing=1
 replace program "${DIR}/it"
 replace license "${HOME_DIR}/LICENSE.md"
 replace notices "${HOME_DIR}/THIRD_PARTY_NOTICES.md"
+replace installation "${HOME_DIR}/installation.json"
 replacing=0
 unlock
 trap 'exit 129' HUP
@@ -466,15 +504,26 @@ add_line() {
   # said once, below, and not also in the shell's own words
   if printf '\n# It\n%s\n' "${line}" 2>/dev/null >> "$1"; then changed="${changed} $2"; else refused="${refused} $2"; fi
 }
+# The installed program bounds this asking on macOS too, without timeout(1). A failed asking
+# must not turn the unused default .zshrc into proof that a new terminal can find It.
+zsh_dir=""
+if [ "$(basename -- "${SHELL:-sh}")" = zsh ] && [ -z "${IT_INSTALL_NO_PATH:-}" ]; then
+  if zsh_dir=$("${DIR}/it" shell-profile 2>/dev/null); then
+    case "${zsh_dir}" in /*) : ;; *) zsh_dir="" ;; esac
+  fi
+  if [ -z "${zsh_dir}" ]; then
+    say "Zsh did not report its startup folder within five seconds. Its PATH file was left alone. Add ${DIR} to the PATH in the .zshrc your zsh reads." >&2
+    zsh_dir=""
+  fi
+fi
 # Calls $1 with each file this person's shell reads when it starts, and with what the file is
 # called when saying what was done
 each_profile() {
   case "$(basename -- "${SHELL:-sh}")" in
-    # zsh keeps its files in the folder ZDOTDIR names, and in the home folder when it names none
+    # A nonexported ZDOTDIR in .zshenv is part of this answer too.
     zsh)
-      if [ -n "${ZDOTDIR:-}" ]; then "$1" "${ZDOTDIR}/.zshrc" "${ZDOTDIR}/.zshrc"
-      else "$1" "${HOME}/.zshrc" "~/.zshrc"
-      fi
+      if [ -n "${zsh_dir}" ]; then "$1" "${zsh_dir}/.zshrc" "${zsh_dir}/.zshrc"
+      else refused=" zsh startup folder"; fi
       ;;
     # bash reads .bashrc, except when it is started as a login shell: then it reads the first
     # of these three that is there, and no other

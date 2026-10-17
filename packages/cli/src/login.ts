@@ -116,6 +116,10 @@ export const runsItsOwn = (): Problem =>
     'To use the It that is here, run `it setup`. To join the other one instead, take this one off the machine first with `it uninstall`, which deletes its pages, and then do again what the other It’s site says under Machines, Add a machine. The invite was not used.',
   )
 
+/** An earlier machine must be revoked before the pages it still holds come to this computer. */
+export const joinedBefore = (name: string): string =>
+  `This computer joined before as ${JSON.stringify(name)}, which is still among your machines, and the pages it made then stay with that one. Revoke ${JSON.stringify(name)} on the site's Machines page and they come to this computer.`
+
 /**
  * Joins the It at an address, with an invite made on its site.
  *
@@ -133,7 +137,7 @@ export const runsItsOwn = (): Problem =>
  * settled. Joining another It, or enrolling on this machine, makes and keeps a key of its own
  * and leaves that one where it is.
  */
-export async function login(opts: { url: string; code: string; name?: string }): Promise<{ machine: string; name: string }> {
+export async function login(opts: { url: string; code: string; name?: string }): Promise<{ machine: string; name: string; waitsFor?: string }> {
   const at = doorAddress(opts.url)
   if (!at) throw new Problem(`The address to join is where It’s site is opened, such as http://192.168.1.20:${PORTS.base}.`, 'invalid')
   // It answers over plain http and nothing else, and this machine asks it on a connection of its own, which speaks nothing else either
@@ -180,9 +184,9 @@ export async function login(opts: { url: string; code: string; name?: string }):
       throw unreachable(at)
     })
     const answered = await r.text().catch(() => '')
-    let body: { machine?: unknown } = {}
+    let body: { machine?: unknown; waitsFor?: unknown } = {}
     try {
-      body = (JSON.parse(answered) as { machine?: unknown } | null) ?? {}
+      body = (JSON.parse(answered) as { machine?: unknown; waitsFor?: unknown } | null) ?? {}
     } catch {}
     // Whatever is refused here, the key stays where it is kept: an earlier asking with it may have gone through
     if (r.status === 401)
@@ -191,6 +195,6 @@ export async function login(opts: { url: string; code: string; name?: string }):
       throw doorRefusal(answered, at) ?? new Problem(`This machine could not join (${r.status}).`, r.status === 429 ? 'limit' : 'error')
     keepMachine({ id: body.machine, name: pending.name, key: pending.key, at, issuer: config.issuer })
     settlePending(at, pending.replaces)
-    return { machine: body.machine, name: pending.name }
+    return { machine: body.machine, name: pending.name, ...(typeof body.waitsFor === 'string' ? { waitsFor: body.waitsFor } : {}) }
   })
 }

@@ -15,10 +15,11 @@
 // matches its checksum, that starts on this system, and that says of itself that it is newer.
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeSync } from 'node:fs'
 import path from 'node:path'
 import { INSTALL, newer } from '@it/protocol'
 import { ask, home, inHome, Problem, readJson, rename, VERSION, writePrivate } from './lib'
+import { aloneAt, startOf } from './serve/backend'
 
 /** No program is anywhere near this large, and nothing else of a release is near the second. */
 const PROGRAM_MOST = 400 * 1024 * 1024
@@ -210,12 +211,33 @@ function saysItIs(program: string): Promise<string | null> {
     execFile(program, ['--version'], { timeout: 30_000, killSignal: 'SIGKILL', env: { ...process.env, IT_HOME: home() }, windowsHide: true }, (err, out) => {
       if (err) return resolve(null)
       try {
-        const version = (JSON.parse(String(out)) as { version?: unknown } | null)?.version
-        resolve(typeof version === 'string' ? version : null)
+        const said = (JSON.parse(String(out)) as { version?: unknown } | null)?.version
+        const version = typeof said === 'string' ? said.trim().replace(/^v/, '') : ''
+        resolve(/^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(version) ? version : null)
       } catch {
         resolve(null)
       }
     })
+  })
+}
+
+/**
+ * A standalone setup or login owns the program lock itself, since restarting the service may end
+ * the updater that started it. No update can replace the program while setup writes its
+ * service definition and add-ons, or login saves its machine record. A command overtaken before it takes the lock refuses to
+ * write with stale code. Script builds are updated outside this mechanism.
+ */
+export async function withCurrentProgram<T>(run: () => Promise<T>, command: 'setup' | 'login' = 'setup'): Promise<T> {
+  const program = standalone()
+  if (!program) return run()
+  return aloneAt(`${realpathSync(program)}.upgrade.lock`, async () => {
+    if ((await saysItIs(program)) !== VERSION)
+      throw new Problem(
+        `This ${command} cannot confirm that it is running the installed version of It.`,
+        'upgrade_program',
+        `Run \`it ${command}\` again with the installed program.`,
+      )
+    return run()
   })
 }
 
@@ -232,14 +254,16 @@ export interface Upgraded {
  * it. Nothing is started or stopped here: the program that is running runs on as it was until
  * it is started again, and `started` is for whoever calls to see to.
  *
- * Every step that can fail comes before the one that replaces the program, so a failure leaves
- * the installation exactly as it was.
+ * The download and program checks finish before replacement. A legal file that cannot be
+ * written is reported separately, since the program may already have been installed.
  */
 export async function fetchNewer(
   opts: {
     say?: (line: string) => void
     progress?: (got: number, of: number | undefined) => void
     signal?: AbortSignal
+    /** The version the host approved for a site update. A changed latest release requires another approval. */
+    expectedVersion?: string
     /** The file to replace, where it is not the program this is: for a test, which is no standalone program. */
     program?: string
     /** How long the fetching may take, where it is not the usual: for a test, which does not wait so long. */
@@ -254,10 +278,20 @@ export async function fetchNewer(
       'invalid',
       'Update it the way it was put here: from its source, or with the package it came in.',
     )
+  // The lock follows the program itself, even through a linked folder and when commands
+  // with different data folders share this installation. What is reported keeps the path
+  // the caller named, as the program to run from now on.
+  const lock = `${realpathSync(program)}.upgrade.lock`
   const name = programName()
   if (!name) throw new Problem(`There is no program of It for this system (${process.platform} ${process.arch}).`, 'invalid')
   const to = await latest(opts.signal)
   if (!to) throw new Problem('The newest version of It could not be learned.', 'offline', 'Check that this machine is online, then try again.')
+  if (opts.expectedVersion !== undefined && to !== opts.expectedVersion)
+    throw new Problem(
+      'The newest release changed after this update was requested, so nothing was changed.',
+      'upgrade_program',
+      'Refresh the Machines page and request the update again.',
+    )
   if (!newer(to, VERSION)) return null
   say(`It ${to} is out, and this is ${VERSION}.`)
   // Everything that is fetched from here on has so long between it, and is given up when the
@@ -305,45 +339,80 @@ export async function fetchNewer(
   try {
     put(fresh, fetched, 0o755)
     const is = await saysItIs(fresh)
-    if (!is || !newer(is, VERSION))
+    if (!is || is !== to)
       throw new Problem(
         is
-          ? `The program that was fetched says it is version ${is}, which is not newer than this one, so nothing was changed.`
+          ? `The program that was fetched says it is version ${is}, but the release advertises ${to}, so nothing was changed.`
           : 'The program that was fetched does not start on this system, so the one that is here stays.',
         'upgrade_program',
       )
-    // Windows does not let a program that is running be written over, and does let it be given
-    // another name: the one that is running goes on under that name until it ends
-    if (process.platform === 'win32') {
-      // One that is still running cannot be removed, and is left for the next time
-      for (const old of readdirSync(dir).filter((f) => /^it\.old\.\d+\.exe$/.test(f)))
+    const putLegal = () => {
+      // The terms it comes under and the notices of what it includes are this version's too
+      for (const [as, bytes] of [
+        ['LICENSE.md', license],
+        ['THIRD_PARTY_NOTICES.md', notices],
+      ] as const) {
         try {
-          rmSync(path.join(dir, old), { force: true })
-        } catch {}
-      const aside = path.join(dir, `it.old.${Date.now()}.exe`)
-      renameSync(program, aside)
-      try {
-        renameSync(fresh, program)
-      } catch (err) {
-        // Put back under its own name, so that a failure leaves the program that was there
-        renameSync(aside, program)
-        throw err
-      }
-    } else renameSync(fresh, program)
-    // The terms it comes under and the notices of what it includes are this version's too
-    for (const [as, bytes] of [
-      ['LICENSE.md', license],
-      ['THIRD_PARTY_NOTICES.md', notices],
-    ] as const) {
-      try {
-        put(inHome(as), bytes, 0o644)
-      } catch {
-        // The program is in place, and is what matters: this is said, and is no reason to call the upgrade failed
-        say(`${as} could not be written beside it, and is still the one of the version before.`)
+          put(inHome(as), bytes, 0o644)
+        } catch {
+          // The program is in place, and is what matters: this is said, and is no reason to call the upgrade failed
+          say(`${as} could not be written beside it, and is still the one of the version before.`)
+        }
       }
     }
-    say(`Installed in ${dir}.`)
-    return { from: VERSION, to: is, program }
+    // One update at a time puts its program in place, of however many were asked for at once,
+    // at a terminal and on the site. Each took what it fetched to be newer than the version it
+    // runs as itself, and by now another may have put a newer one still where this one goes.
+    // So the program that is there is asked what it is, once no other update can change it,
+    // and is left as it is unless what was fetched is newer than that too.
+    return await aloneAt(lock, async () => {
+      const there = await saysItIs(program)
+      if (!there)
+        throw new Problem(
+          'The installed program was removed or could not be read before this update could replace it. The update was cancelled.',
+          'upgrade_program',
+        )
+      if (!newer(is, there)) {
+        // Another home may have installed this program. This home still needs its matching
+        // legal files, but a newer program must never receive this older release's files.
+        if (there === is) putLegal()
+        say(`It ${there} was put in place by another update meanwhile, and is left as it is.`)
+        return { from: VERSION, to: there, program }
+      }
+      // Windows does not let a program that is running be written over, and does let it be given
+      // another name: the one that is running goes on under that name until it ends
+      if (process.platform === 'win32') {
+        const started = startOf(process.pid)
+        if (!started || !/^[0-9]+$/.test(started))
+          throw new Problem('The process start time could not be read, so the installed program was left unchanged.', 'upgrade_program')
+        // One that is still running cannot be removed, and is left for the next time
+        for (const old of readdirSync(dir).filter((f) => /^it\.old\.\d+\.exe$/.test(f)))
+          try {
+            rmSync(path.join(dir, old), { force: true })
+          } catch {}
+        const aside = path.join(dir, `it.old.${Date.now()}.exe`)
+        const recovery = `${program}.recovery.json`
+        put(
+          recovery,
+          Buffer.from(
+            JSON.stringify({ file: path.basename(aside), sha256: createHash('sha256').update(readFileSync(program)).digest('hex'), pid: process.pid, started }),
+          ),
+          0o600,
+        )
+        renameSync(program, aside)
+        try {
+          renameSync(fresh, program)
+        } catch (err) {
+          // Put back under its own name, so that a failure leaves the program that was there
+          renameSync(aside, program)
+          throw err
+        }
+        rmSync(recovery, { force: true })
+      } else renameSync(fresh, program)
+      putLegal()
+      say(`Installed in ${dir}.`)
+      return { from: VERSION, to: is, program }
+    })
   } finally {
     rmSync(fresh, { force: true })
   }

@@ -175,10 +175,14 @@ describe('what the jobs are held to running', () => {
 
   test('the door’s tests, the service’s, the content service’s, and the test that It asks its own backend and door directly are run under Bun as well as under Node', () => {
     const door = steps('test').find((step) => step.includes('bun test ./packages/cli/door.test.ts'))
+    const exports = steps('test').find((step) => step.includes('bun test ./packages/cli/export.test.ts'))
     const service = steps('test').find((step) => step.includes('bun test ./packages/cli/serve.test.ts'))
     const content = steps('test').find((step) => step.includes('test:bun'))
     expect(door).toBeDefined()
     expect(door).toMatch(/run: bun test \.\/packages\/cli\/door\.test\.ts \.\/packages\/cli\/push\.test\.ts \.\/packages\/cli\/direct\.test\.ts$/m)
+    expect(exports).toMatch(/run: bun test \.\/packages\/cli\/export\.test\.ts$/m)
+    expect(exports).toMatch(/if: \$\{\{ !cancelled\(\) \}\}/)
+    expect(exports).not.toMatch(/runner\.os|matrix\.os/)
     // The service's are a step of their own, run on Linux, and not allowed to fail either
     expect(service).toMatch(/if: \$\{\{ !cancelled\(\) && runner\.os == 'Linux' \}\}/)
     expect(service).not.toMatch(/continue-on-error/)
@@ -188,7 +192,7 @@ describe('what the jobs are held to running', () => {
     expect(door).toMatch(/if: \$\{\{ !cancelled\(\) \}\}/)
     // The content service's are left out on Windows, where vitest cannot load its files under Bun and the step ran none of them
     expect(content).toMatch(/if: \$\{\{ !cancelled\(\) && runner\.os != 'Windows' \}\}/)
-    for (const step of [door, content]) expect(step).not.toMatch(/continue-on-error/)
+    for (const step of [door, exports, content]) expect(step).not.toMatch(/continue-on-error/)
     expect(stepWith('test', 'uses: oven-sh/setup-bun@')).toBeGreaterThan(-1)
   })
 
@@ -519,10 +523,10 @@ describe('what docs/troubleshooting.md says the door refused', () => {
 
 describe('what docs/add-ons.md says of the agent apps', () => {
   const page = readFileSync(path.join(root, 'docs', 'add-ons.md'), 'utf8')
-  const setup = readFileSync(path.join(root, 'packages/cli/src/setup.ts'), 'utf8')
 
-  test('names for each the oldest version that setup installs an add-on into, as setup has it', () => {
-    const known = [...setup.matchAll(/^ {2}(?:'[a-z-]+'|[a-z]+): \{ label: '([^']+)', bin: '[^']+', min: '([^']+)' \},$/gm)].map((m) => `| ${m[1]} | ${m[2]} |`)
+  test('names for each the oldest version that setup installs an add-on into, as setup has it', async () => {
+    const { KNOWN } = await import('../packages/cli/src/setup.ts')
+    const known = Object.values(KNOWN).map(({ label, min }) => `| ${label} | ${min} |`)
     expect(known.length).toBe(6)
     const from = page.indexOf('| Agent app | The oldest version `it setup` installs into |')
     expect(from).toBeGreaterThan(-1)

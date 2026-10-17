@@ -20,6 +20,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -40,6 +41,7 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? '  ok  ' : '  FAIL'} ${name}${ok || !detail ? '' : `\n         ${redact(String(detail)).slice(0, 600)}`}`)
 }
 const windows = process.platform === 'win32'
+const zshBinary = [process.env.IT_TEST_ZSH, '/bin/zsh', '/usr/bin/zsh'].find((file) => file && existsSync(file))
 const program = windows ? 'it-windows-x64.exe' : `it-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
 if (!existsSync(path.join(built, program)) || !existsSync(path.join(built, 'SHA256SUMS'))) {
   console.error(`no ${program} in ${built}: build the programs first with node packages/cli/release.mjs`)
@@ -106,10 +108,13 @@ writeFileSync(
 const saysOfUsage = (r) => /reports usage|telemetry/i.test(r.said)
 /** Everything asked of this machine's stand-in servers, by the host that was asked and the path. */
 const asked = []
+/** And of those, what said it was asked for where CI is set. */
+const askedFromCi = []
 const serve = (handler) =>
   new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       asked.push(`${req.headers.host}${req.url}`)
+      if (req.headers['x-it-ci'] === '1') askedFromCi.push(`${req.headers.host}${req.url}`)
       handler(req, res)
     })
     server.listen(0, '127.0.0.1', () => resolve(server))
@@ -180,10 +185,15 @@ sys.exit(child.returncode if child.returncode >= 0 else 128 - child.returncode)
  * test has, except anything It-specific, anything that marks an agent's conversation, and the
  * two variables that turn usage reporting off. The program writes it down in its folder when
  * it finds one of those two, and a test that then lists the folder would depend on the shell
- * it was run from.
+ * it was run from. What the program reports goes to an address on this machine where nothing
+ * listens, as in the unit tests: an It that this test installs and takes away again is nobody's
+ * installation, and `it uninstall` reports the removal itself. Where CI is set, that address is
+ * also what keeps reporting from being turned off.
  */
-const plainEnv = () =>
-  Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(IT_|DO_NOT_TRACK$|CLAUDE|CODEX_|OPENCLAW_|HERMES_|OPENCODE_|PI_SESSION_ID$)/.test(k)))
+const plainEnv = () => ({
+  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(IT_|DO_NOT_TRACK$|CLAUDE|CODEX_|OPENCLAW_|HERMES_|OPENCODE_|PI_SESSION_ID$)/.test(k))),
+  IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage',
+})
 
 /**
  * Runs this system's install script as a person with a home of their own. `terminal` gives the
@@ -224,11 +234,13 @@ async function install(
   // `irm ... | iex` does, and then asks what running it left behind in the session
   const pipedIn = [
     '$itTestTls = [Net.ServicePointManager]::SecurityProtocol',
-    `Get-Content -Raw -LiteralPath '${ps1.replaceAll("'", "''")}' | Invoke-Expression`,
+    args.length
+      ? `& ([scriptblock]::Create([IO.File]::ReadAllText('${ps1.replaceAll("'", "''")}'))) ${args.map((word) => `'${word.replaceAll("'", "''")}'`).join(' ')}`
+      : `Get-Content -Raw -LiteralPath '${ps1.replaceAll("'", "''")}' | Invoke-Expression`,
     "if ((Test-Path variable:root) -or (Test-Path function:Get-File) -or $ErrorActionPreference -ne 'Continue' -or [Net.ServicePointManager]::SecurityProtocol -ne $itTestTls) { Write-Output 'something was left behind in the session'; exit 9 }",
   ].join('\n')
   const r = windows
-    ? await run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...(piped ? encoded(pipedIn) : ['-File', ps1])], env, home, started)
+    ? await run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...(piped ? encoded(pipedIn) : ['-File', ps1, ...args])], env, home, started)
     : // `first` is a line of shell run in the very process that then becomes the install, so
       // that it can do something under the number that process is known by
       await run(
@@ -385,6 +397,26 @@ try {
     asked.join(' '),
   )
 
+  // ---------- a download made where CI is set says so ----------
+  for (const [name, ci, marked] of [
+    ['ci-set', 'true', true],
+    ['ci-false', 'false', false],
+    // Read as the program reads it, without the spaces and quotes around it
+    ['ci-quoted', ` "False" `, false],
+    ['ci-unset', undefined, false],
+  ]) {
+    asked.length = 0
+    askedFromCi.length = 0
+    const r = await install(name, { CI: ci })
+    check(
+      marked
+        ? 'where CI is set, every download says that it was asked for there, so that the site can count it apart from a person’s'
+        : `where CI is ${ci === undefined ? 'not set' : `set to ${ci}`}, no download says that it was asked for there`,
+      r.code === 0 && asked.length === 4 && askedFromCi.length === (marked ? 4 : 0),
+      `${r.said}\nasked: ${asked.join(' ')}\nsaid it came from CI: ${askedFromCi.join(' ')}`,
+    )
+  }
+
   if (!windows) {
     // ---------- the PATH, in the file the person's own shell reads ----------
     const line = `export PATH='${path.join(one.home, '.it', 'bin')}':"$PATH"`
@@ -465,7 +497,7 @@ try {
     check('nothing is left behind in the folder but the program', readdirSync(path.join(one.folder, 'bin')).join() === 'it')
     check(
       'and beside it only the terms, the notices, and the note of where it was downloaded from, since that was not the usual place',
-      readdirSync(one.folder).sort().join() === 'LICENSE.md,THIRD_PARTY_NOTICES.md,bin,releases.json',
+      readdirSync(one.folder).sort().join() === 'LICENSE.md,THIRD_PARTY_NOTICES.md,bin,installation.json,releases.json',
       readdirSync(one.folder).join(' '),
     )
     check(
@@ -515,12 +547,14 @@ try {
       noteSaysOff.code === 0 && existsSync(noteSaysOff.it) && !saysOfUsage(noteSaysOff) && read(path.join(noteSaysOff.folder, 'telemetry.json')) === saysOff,
       noteSaysOff.said,
     )
-    const zsh = await install('zsh', {}, { shell: '/bin/zsh' })
-    check(
-      'someone whose shell is zsh gets the line in the file zsh reads, made if it was not there, and in no other',
-      zsh.code === 0 && read(path.join(zsh.home, '.zshrc'))?.includes('export PATH=') && read(path.join(zsh.home, '.profile')) === null,
-      zsh.said,
-    )
+    if (zshBinary) {
+      const zsh = await install('zsh', {}, { shell: zshBinary })
+      check(
+        'someone whose shell is zsh gets the line in the file zsh reads, made if it was not there, and in no other',
+        zsh.code === 0 && read(path.join(zsh.home, '.zshrc'))?.includes('export PATH=') && read(path.join(zsh.home, '.profile')) === null,
+        zsh.said,
+      )
+    } else console.log('  skip  zsh is not installed; real zsh profile checks need it')
     // fish reads none of those files, and is given one of It's own, in fish's own words
     // Where fish keeps its files is said by a variable where one is set, and the machine this runs on may set one: it is
     // set here to a folder of this install's own, so that nothing is written into the home of whoever runs the suite
@@ -579,16 +613,42 @@ try {
         (await loginShell(bashNeither)) === path.join(bashNeither.folder, 'bin'),
       `${bashNeither.said}\nfirst on a login shell's PATH: ${await loginShell(bashNeither)}`,
     )
-    mkdirSync(path.join(tmp, 'zdotdir', 'kept for zsh'), { recursive: true })
-    const zdotdir = await install('zdotdir', { ZDOTDIR: path.join(tmp, 'zdotdir', 'kept for zsh') }, { shell: '/bin/zsh' })
-    check(
-      'someone whose zsh keeps its files in another folder gets the line in the file there, and none is made in their home',
-      zdotdir.code === 0 &&
-        read(path.join(tmp, 'zdotdir', 'kept for zsh', '.zshrc'))?.includes('export PATH=') &&
-        read(path.join(zdotdir.home, '.zshrc')) === null &&
-        zdotdir.said.includes(path.join(tmp, 'zdotdir', 'kept for zsh', '.zshrc')),
-      zdotdir.said,
-    )
+    if (zshBinary) {
+      mkdirSync(path.join(tmp, 'zdotdir', 'kept for zsh'), { recursive: true })
+      const zdotdir = await install('zdotdir', { ZDOTDIR: path.join(tmp, 'zdotdir', 'kept for zsh') }, { shell: zshBinary })
+      check(
+        'someone whose zsh keeps its files in another folder gets the line in the file there, and none is made in their home',
+        zdotdir.code === 0 &&
+          read(path.join(tmp, 'zdotdir', 'kept for zsh', '.zshrc'))?.includes('export PATH=') &&
+          read(path.join(zdotdir.home, '.zshrc')) === null &&
+          zdotdir.said.includes(path.join(tmp, 'zdotdir', 'kept for zsh', '.zshrc')),
+        zdotdir.said,
+      )
+
+      const customHome = path.join(tmp, 'zdotdir-local')
+      const customDir = path.join(customHome, 'shell-files')
+      mkdirSync(customDir, { recursive: true })
+      writeFileSync(path.join(customHome, '.zshenv'), 'ZDOTDIR="$HOME/shell-files"\n')
+      const local = await install('zdotdir-local', {}, { shell: zshBinary })
+      check(
+        'a nonexported ZDOTDIR is used by the installer and a fresh zsh finds It there',
+        local.code === 0 &&
+          read(path.join(customDir, '.zshrc'))?.includes('export PATH=') &&
+          read(path.join(customHome, '.zshrc')) === null &&
+          spawnSync(zshBinary, ['-i', '-c', 'command -v it'], { env: { HOME: customHome, PATH: '/usr/bin:/bin' }, encoding: 'utf8' }).stdout.trim() ===
+            local.it,
+        local.said,
+      )
+      mkdirSync(path.join(tmp, 'zsh-hung'), { recursive: true })
+      writeFileSync(path.join(tmp, 'zsh-hung', '.zshenv'), 'sleep 60\n')
+      const began = Date.now()
+      const hung = await install('zsh-hung', {}, { shell: zshBinary })
+      check(
+        'hung zsh startup is bounded without timeout(1) and no unused profile is claimed to work',
+        hung.code === 0 && Date.now() - began < 15_000 && read(path.join(hung.home, '.zshrc')) === null && /PATH file was left alone/.test(hung.said),
+        hung.said,
+      )
+    }
     mkdirSync(path.join(tmp, 'mentioned'), { recursive: true })
     writeFileSync(path.join(tmp, 'mentioned', '.profile'), `# I once had ${path.join(tmp, 'mentioned', '.it', 'bin')} on my PATH\n`)
     const mentioned = await install('mentioned')
@@ -1213,6 +1273,56 @@ try {
   }
 
   if (windows) {
+    // A native Windows install forwards each login argument through either invocation form.
+    const enrolled = []
+    let refuseJoin = false
+    const host = await serve((req, res) => {
+      const chunks = []
+      req
+        .on('data', (chunk) => chunks.push(chunk))
+        .on('end', () => {
+          const answer = (value, status = 200) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+          if (req.url === '/cli/config') return answer({ protocol: 1, issuer: 'http://127.0.0.1:1' })
+          if (req.url === '/bridge/enroll') {
+            if (refuseJoin) return answer({ error: 'invalid' }, 400)
+            enrolled.push(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+            return answer({ machine: 'machine-windows' })
+          }
+          res.writeHead(404).end()
+        })
+    })
+    try {
+      const name = `Laptop "quoted" %USERNAME% $(throw) trailing${String.fromCharCode(92)}`
+      const args = ['login', '--url', `http://127.0.0.1:${host.address().port}`, '--code', 'Ab3dEf6hIj9kLm2nOp5q', '--name', name, '--no-setup']
+      for (const piped of [false, true]) {
+        const joined = await install(`windows-join-${piped}`, {}, { args, piped })
+        check(
+          `Windows joins from ${piped ? 'downloaded text' : 'a script file'} with quoted arguments unchanged and no local setup`,
+          joined.code === 0 &&
+            enrolled.at(-1)?.name === name &&
+            existsSync(path.join(joined.folder, 'machine.json')) &&
+            !existsSync(path.join(joined.folder, 'service.json')) &&
+            !existsSync(path.join(joined.folder, 'backend')) &&
+            !/ setup$/m.test(joined.said),
+          joined.said,
+        )
+      }
+      refuseJoin = true
+      const refused = await install('windows-join-refused', {}, { args, piped: true })
+      check(
+        'Windows reports a refused join separately from a completed installation',
+        refused.code !== 0 &&
+          existsSync(refused.it) &&
+          /installed, but joining failed/.test(refused.flat) &&
+          !existsSync(path.join(refused.folder, 'service.json')),
+        refused.said,
+      )
+      const invalid = await install('windows-command-refused', {}, { args: ['setup', '--none'] })
+      check('Windows refuses a command other than login before installing anything', invalid.code !== 0 && !existsSync(invalid.folder), invalid.said)
+    } finally {
+      await new Promise((resolve) => host.close(resolve))
+    }
+
     // ---------- a folder whose name PowerShell would read as more than a name ----------
     // Run as printed, the name would write a file where the command was run
     const odd = await install('odd', { IT_HOME: path.join(tmp, 'odd', "it's $(Set-Content RAN 1) `here") })
@@ -1245,21 +1355,33 @@ try {
     const RUN_ONCE = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'
     // What Windows was left to run: each of its lines that is one of these, by its name and what it runs
     const leftToRun = () =>
-      [...spawnSync('reg.exe', ['query', RUN_ONCE], { encoding: 'utf8' }).stdout.matchAll(/^\s+(ItRemoved\d+)\s+REG_SZ\s+(.*?)\s*$/gm)].map(
+      [...spawnSync('reg.exe', ['query', RUN_ONCE], { encoding: 'utf8' }).stdout.matchAll(/^\s+(ItRemoved[0-9a-z-]+)\s+REG_SZ\s+(.*?)\s*$/gm)].map(
         ([, name, line]) => ({ name, line }),
       )
-    const mine = leftToRun().filter(({ line }) => aside.length === 1 && line.includes(aside[0]))
+    const queue = 'HKCU\\Software\\It\\PendingRemoval'
+    const mine = leftToRun().filter(({ name }) => {
+      const value = spawnSync('reg.exe', ['query', queue, '/v', name], { encoding: 'utf8' }).stdout
+      return aside.length === 1 && value.includes(path.join(os.tmpdir(), aside[0]))
+    })
     check(
       'the program it moved out of the folder to do that is where it said, and Windows is left one line that deletes it the next time the person signs in',
       aside.length === 1 &&
         mine.length === 1 &&
-        mine[0].line === `cmd.exe /d /c del /f /q "${path.join(os.tmpdir(), aside[0])}"` &&
+        mine[0].line.startsWith('powershell.exe ') &&
+        mine[0].line.length <= 260 &&
+        !mine[0].line.includes(aside[0]) &&
         said?.said?.some((line) => line.includes(path.join(os.tmpdir(), aside[0])) && /next time you sign in/.test(line)),
       `${aside.join(' ')}\n${JSON.stringify(leftToRun())}\n${off.said}`,
     )
     // The line, run as Windows will run it. The runner is never signed in to again, so it is run here, and taken out of what Windows is to run
-    if (mine.length === 1) spawnSync(mine[0].line, { shell: true, windowsHide: true })
-    for (const { name } of mine) spawnSync('reg.exe', ['delete', RUN_ONCE, '/v', name, '/f'])
+    if (mine.length === 1) {
+      const args = mine[0].line.slice('powershell.exe '.length).replaceAll("'", "''")
+      await inPowerShell(`$p = [Diagnostics.Process]::Start('powershell.exe', '${args}'); $p.WaitForExit(); exit $p.ExitCode`, gone)
+    }
+    for (const { name } of mine) {
+      spawnSync('reg.exe', ['delete', RUN_ONCE, '/v', name, '/f'])
+      spawnSync('reg.exe', ['delete', queue, '/v', name, '/f'])
+    }
     check('and that line, run as it is written, deletes it', aside.length === 1 && !existsSync(path.join(os.tmpdir(), aside[0])), asideIn().join(' '))
   }
 
@@ -1407,6 +1529,84 @@ try {
     elsewhere.code === 0 && existsSync(elsewhere.it) && elsewhere.it.includes('kept here'),
     elsewhere.said,
   )
+  const freshEnv = { ...plainEnv(), HOME: elsewhere.home, USERPROFILE: elsewhere.home }
+  const discovered = await run(elsewhere.it, ['updates', 'off'], freshEnv, elsewhere.home)
+  check(
+    'a new terminal without IT_HOME finds the custom installation from its executable',
+    discovered.status === 0 && existsSync(path.join(elsewhere.folder, 'updates-off')) && !existsSync(path.join(elsewhere.home, '.it', 'updates-off')),
+    discovered.said,
+  )
+  const override = path.join(elsewhere.home, 'explicit')
+  const explicit = await run(elsewhere.it, ['updates', 'off'], { ...freshEnv, IT_HOME: override }, elsewhere.home)
+  check('an explicit IT_HOME wins over the installed executable', explicit.status === 0 && existsSync(path.join(override, 'updates-off')), explicit.said)
+  if (!windows) {
+    const alias = path.join(elsewhere.home, 'alias')
+    symlinkSync(elsewhere.it, alias)
+    const linked = await run(alias, ['updates', 'on'], freshEnv, elsewhere.home)
+    check(
+      'a symlink to the command still uses its real installation',
+      linked.status === 0 && !existsSync(path.join(elsewhere.folder, 'updates-off')),
+      linked.said,
+    )
+  }
+  rmSync(path.join(elsewhere.folder, 'installation.json'))
+  const legacy = await run(elsewhere.it, ['updates', 'off'], freshEnv, elsewhere.home)
+  check(
+    'a legacy standalone installation also finds its custom home after an upgrade',
+    legacy.status === 0 && existsSync(path.join(elsewhere.folder, 'updates-off')),
+    legacy.said,
+  )
+  const beforeMarkerFailure = readFileSync(elsewhere.it)
+  writeFileSync(path.join(elsewhere.folder, 'installation.json'), '{broken')
+  const damagedMarker = await install('elsewhere', { IT_HOME: elsewhere.folder, IT_VERSION: 'other' })
+  check(
+    'an unreadable installation record prevents replacement of the installed program',
+    damagedMarker.code !== 0 &&
+      readFileSync(elsewhere.it).equals(beforeMarkerFailure) &&
+      readFileSync(path.join(elsewhere.folder, 'installation.json'), 'utf8') === '{broken',
+    damagedMarker.said,
+  )
+  if (!windows) {
+    // The service commands are stand-ins, so this never asks the user's service manager to change anything.
+    const commands = path.join(tmp, 'uninstall-commands')
+    mkdirSync(commands)
+    for (const name of ['systemctl', 'loginctl', 'launchctl']) writeFileSync(path.join(commands, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    for (const legacy of [false, true]) {
+      const name = legacy ? 'legacy-removal' : 'custom-removal'
+      const installed = await install(name, { IT_HOME: path.join(tmp, name, 'custom') })
+      if (legacy) rmSync(path.join(installed.folder, 'installation.json'))
+      writeFileSync(
+        path.join(installed.folder, 'service.json'),
+        JSON.stringify({ port: 21000, network: false, instanceSecret: 'a'.repeat(64), adminKey: 'test-admin', sessionSecret: 'test-session' }),
+      )
+      mkdirSync(path.join(installed.folder, 'backend'))
+      writeFileSync(path.join(installed.folder, 'backend', 'db.sqlite3'), 'pages')
+      writeFileSync(path.join(installed.folder, 'keep.txt'), 'mine')
+      mkdirSync(path.join(installed.home, '.it'))
+      writeFileSync(path.join(installed.home, '.it', 'keep.txt'), 'default home')
+      const off = await run(
+        installed.it,
+        ['uninstall', '--yes'],
+        { ...plainEnv(), HOME: installed.home, PATH: `${commands}:${process.env.PATH}` },
+        installed.home,
+      )
+      let result
+      try {
+        result = JSON.parse(off.said)
+      } catch {}
+      check(
+        `${legacy ? 'a legacy' : 'a marked'} custom installation uninstalls from a fresh terminal and keeps unknown files and the default home`,
+        off.status === 0 &&
+          typeof result?.folder === 'string' &&
+          realpathSync(result.folder) === realpathSync(installed.folder) &&
+          result?.removed === false &&
+          !existsSync(path.join(installed.folder, 'backend', 'db.sqlite3')) &&
+          readFileSync(path.join(installed.folder, 'keep.txt'), 'utf8') === 'mine' &&
+          readFileSync(path.join(installed.home, '.it', 'keep.txt'), 'utf8') === 'default home',
+        off.said,
+      )
+    }
+  }
   const sums = await install('crlf', { IT_VERSION: 'crlf' })
   check('checksums written with Windows line endings are read all the same', sums.code === 0 && existsSync(sums.it), sums.said)
 

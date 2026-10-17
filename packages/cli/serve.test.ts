@@ -20,7 +20,7 @@ import { ask, backendAt, Problem, VERSION } from './src/lib'
 import { asAdmin, endOf, fetchProgram, type Running, startBackend } from './src/serve/backend'
 import { cannotRunHere, doorKey, instanceName, makeConfig, noteLoaded, programFile, RELEASE, readConfig, type ServiceConfig } from './src/serve/config'
 import { startDoor } from './src/serve/door'
-import { erasing, opensAnew, standsAs, teller, unless } from './src/serve/index'
+import { erasing, opensAnew, standsAs, taker, teller, unless } from './src/serve/index'
 import { environment, launchdPlist, logFile, systemdUnit } from './src/service'
 import * as usage from './src/usage'
 import { bases } from './test-ports'
@@ -48,9 +48,9 @@ const closed = (server: net.Server | http.Server) => new Promise<void>((resolve)
  * the system hands out by itself to whatever asks for one, and each held from when a test takes
  * it until the test is over, so that no other run of the tests on this machine has the same one.
  */
-const ports = bases(14_000, 40)
+const ports = bases(24_000, 40)
 
-const KEPT = ['IT_HOME', 'IT_PORT', 'IT_BACKEND_BIN', 'IT_URL', 'IT_SITE_URL'] as const
+const KEPT = ['IT_HOME', 'IT_PORT', 'IT_BACKEND_BIN', 'IT_URL', 'IT_SITE_URL', 'IT_TELEMETRY_URL'] as const
 let before: Record<string, string | undefined>
 let folder: string
 /** Each test has an It folder of its own and a base port of its own, and nothing of whoever runs the tests. */
@@ -59,6 +59,9 @@ beforeEach(async () => {
   folder = mkdtempSync(path.join(os.tmpdir(), 'it-serve-'))
   process.env.IT_HOME = folder
   process.env.IT_PORT = String(await ports.next())
+  // Bun does not read vitest's reporting address. These tests use the same local destination,
+  // which also lets the reporting-reset cases run when CI disables ordinary usage reporting.
+  process.env.IT_TELEMETRY_URL = 'http://127.0.0.1:9/usage'
   if (program) process.env.IT_BACKEND_BIN = program
   delete process.env.IT_URL
   delete process.env.IT_SITE_URL
@@ -215,16 +218,18 @@ describe('what the service tells the backend of how it stands', () => {
     'whether It starts by itself and whether usage counts are sent are each said as they are at that moment, and differently as soon as they are different',
     () => {
       const user = mkdtempSync(path.join(os.tmpdir(), 'it-stands-'))
-      const kept = { PATH: process.env.PATH, off: process.env.IT_TELEMETRY_ENABLED, track: process.env.DO_NOT_TRACK }
+      const kept = { PATH: process.env.PATH, off: process.env.IT_TELEMETRY_ENABLED, track: process.env.DO_NOT_TRACK, ci: process.env.CI }
       const homedir = vi.spyOn(os, 'homedir').mockReturnValue(user)
       const said = () => {
         const { background, usage } = standsAs({ network: false }, false, 21000)
         return { background, usage }
       }
       try {
-        // Nothing where this runs turns usage reporting off, and systemd, asked, says that the service is enabled
+        // Nothing where this runs turns usage reporting off, and systemd, asked, says that the service is enabled. CI is
+        // among what would, where nothing names an address to report to, as under Bun, which does not read vitest's settings
         delete process.env.IT_TELEMETRY_ENABLED
         delete process.env.DO_NOT_TRACK
+        delete process.env.CI
         mkdirSync(path.join(user, 'commands'))
         writeFileSync(path.join(user, 'commands', 'systemctl'), '#!/bin/sh\ncase " $* " in *" is-enabled "*) echo enabled ;; esac\nexit 0\n', { mode: 0o755 })
         process.env.PATH = path.join(user, 'commands')
@@ -251,6 +256,7 @@ describe('what the service tells the backend of how it stands', () => {
         process.env.PATH = kept.PATH
         if (kept.off !== undefined) process.env.IT_TELEMETRY_ENABLED = kept.off
         if (kept.track !== undefined) process.env.DO_NOT_TRACK = kept.track
+        if (kept.ci !== undefined) process.env.CI = kept.ci
         rmSync(user, { recursive: true, force: true })
       }
     },
@@ -371,7 +377,7 @@ describe.skipIf(!program)('It’s settings file', () => {
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(made)
     if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
     // Nothing is left beside it of how it was written
-    expect(readdirSync(folder)).toEqual(['service.json'])
+    expect(readdirSync(folder).sort()).toEqual(['backend', 'service.json'])
     expect(readConfig()).toEqual(made)
     expect(makeConfig()).toEqual(made)
     // Another folder has other secrets
@@ -423,7 +429,7 @@ describe.skipIf(!program)('It’s settings file', () => {
 
   test('cannot be made before the backend program is on the machine, since the program makes the key', () => {
     process.env.IT_BACKEND_BIN = path.join(folder, 'no-such-program')
-    expect(() => makeConfig()).toThrow(/could not make the key/)
+    expect(() => makeConfig()).toThrow(/could not be started to make its key/)
     expect(existsSync(path.join(folder, 'service.json'))).toBe(false)
     expect(programFile()).toBe(path.join(folder, 'no-such-program'))
   })
@@ -446,6 +452,196 @@ describe('what the service does when it is told that a person has erased everyth
     // Neither the file's name nor a word of what went wrong is in the line
     expect(lines.join('\n')).not.toContain(folder)
     expect(lines.join('\n')).not.toContain('erased.json')
+  })
+})
+
+describe('what the service takes of the notes the backend made for the counts of how It is used', () => {
+  const note = (name: string) => ({ name, properties: '{}' })
+  /** A backend that holds notes and gives the oldest two at an asking, removing them, as the real one gives two hundred. One that does not know `keep` gives them whatever it is asked. */
+  const backendWith = (held: string[], knowsKeep = true) => {
+    const asked: boolean[] = []
+    return {
+      asked,
+      held,
+      take: async (keep: boolean) => {
+        asked.push(keep)
+        const given = held.splice(0, 2)
+        return { notes: keep || !knowsKeep ? given.map(note) : [], more: given.length === 2 }
+      },
+    }
+  }
+
+  test('a reply delayed past a reporting reset is discarded before the sender can count it under the new identity', async () => {
+    usage.begin()
+    const id = () => (usage.counting() ? JSON.parse(readFileSync(path.join(folder, 'telemetry.json'), 'utf8')).installation : undefined)
+    const first = id()
+    const posts: string[] = []
+    let now = 0
+    const sender = usage.startSender({
+      everyMs: 0,
+      now: () => now,
+      post: async (_url, body) => {
+        posts.push(body)
+        return true
+      },
+    })
+    const page = { name: 'page.shown', properties: JSON.stringify({ screen: 'computer', by: 'person' }) }
+    const asked: boolean[] = []
+    const empty = { notes: [] as (typeof page)[], more: false }
+    let reply: () => Promise<typeof empty> = async () => empty
+    const take = taker(
+      async (keep) => {
+        asked.push(keep)
+        return reply()
+      },
+      id,
+      (note) => usage.recordNoted(note.name, note.properties),
+    )
+    try {
+      await take(true)
+      let release: (answer: typeof empty) => void = () => {}
+      const delayed = new Promise<typeof empty>((resolve) => {
+        release = resolve
+      })
+      reply = () => delayed
+      const taking = take(true)
+      usage.set(false)
+      usage.set(true)
+      expect(id()).not.toBe(first)
+      await sender.tick()
+      // More notes may arrive after the backend made its delayed reply, even though that reply said it was empty.
+      reply = async () => ({ notes: [page], more: false })
+      release({ notes: [page], more: false })
+      await taking
+      await sender.tick()
+      now = 31_000
+      await sender.tick()
+      expect(posts).toEqual([])
+      expect(asked).toEqual([false, true, false])
+      // Once a stable drain is complete, only newly collected notes are sent.
+      await take(true)
+      await sender.tick()
+      now += 31_000
+      await sender.tick()
+      expect(posts).toHaveLength(1)
+      expect(JSON.parse(posts[0]!).events).toHaveLength(1)
+    } finally {
+      sender.stop()
+    }
+  })
+
+  test('reporting turned off during a reply discards it and drains the remaining old notes across later collections', async () => {
+    const backend = backendWith([] as string[], false)
+    let id: string | undefined = 'first'
+    const counted: string[] = []
+    let delayed = false
+    const take = taker(
+      async (keep) => {
+        const answer = await backend.take(keep)
+        if (delayed) {
+          id = undefined
+          delayed = false
+        }
+        return answer
+      },
+      () => id,
+      (note) => counted.push(note.name),
+    )
+    await take(true)
+    backend.held.push(...Array.from({ length: 15 }, (_, i) => `old-${i}`))
+    delayed = true
+    await take(true)
+    expect(counted).toEqual([])
+    id = 'second'
+    await take(true)
+    expect(counted).toEqual([])
+    expect(backend.held).toEqual([])
+    expect(backend.asked.slice(2).every((keep) => !keep)).toBe(true)
+  })
+
+  test('nothing that was noted before this service started is counted, since reporting may have been turned off and on again while it was stopped', async () => {
+    for (const knowsKeep of [true, false]) {
+      const backend = backendWith(['a', 'b', 'c', 'd', 'e'], knowsKeep)
+      const counted: string[] = []
+      const take = taker(
+        backend.take,
+        () => 'one-id',
+        (noted) => counted.push(noted.name),
+      )
+      // The first taking throws away everything there is, however many askings that is, and counts none of it
+      await take(true)
+      expect([backend.asked, backend.held, counted]).toEqual([[false, false, false], [], []])
+      // What is noted from then on is counted
+      backend.held.push('f', 'g', 'h')
+      await take(true)
+      expect([backend.asked.slice(3), counted]).toEqual([
+        [true, true],
+        ['f', 'g', 'h'],
+      ])
+    }
+  })
+
+  test('nor is what was noted under another id, as it was where reporting was turned off and on again between two takings, nor anything while it is off', async () => {
+    const backend = backendWith([])
+    const counted: string[] = []
+    let id: string | undefined = 'one-id'
+    const take = taker(
+      backend.take,
+      () => id,
+      (noted) => counted.push(noted.name),
+    )
+    await take(true)
+    // Off and on again before the service looked: the id is another, and what waits was noted under the one before
+    backend.held.push('before-off')
+    id = 'another-id'
+    await take(true)
+    expect([backend.asked.at(-1), counted]).toEqual([false, []])
+    backend.held.push('after-on')
+    await take(true)
+    expect([backend.asked.at(-1), counted]).toEqual([true, ['after-on']])
+    // Off: thrown away, as it always was. And on again: what waits then is from before, whatever the id
+    backend.held.push('while-off')
+    await take(false)
+    backend.held.push('noted-as-it-was-turned-on')
+    await take(true)
+    expect([backend.asked.slice(-2), counted]).toEqual([[false, false], ['after-on']])
+    // A taking that fails changes nothing of this: the next one goes on from where it was
+    const failing = taker(
+      async () => {
+        throw new Error('busy')
+      },
+      () => 'one-id',
+      () => {},
+    )
+    await expect(failing(true)).rejects.toThrow('busy')
+  })
+})
+
+describe('what It had noted on this machine of a person’s conversations, when that person erases everything', () => {
+  test('goes with it: the folder each conversation was held in, which conversations had been heard from and which carried on as which, the clicks handed over, and who was owed a word', () => {
+    const notes = {
+      'conversations.json': JSON.stringify({ 'pi:a-conversation': { cwd: '/home/a person/clients/a client of theirs', at: 1 } }),
+      'heard.json': JSON.stringify({ 'pi:a-conversation': 1 }),
+      'aliases.json': JSON.stringify({ 'pi:a-conversation': 'pi:the-one-it-carried-on-as' }),
+      'cut-off.json': JSON.stringify(['pi:a-conversation']),
+      'stopped.json': JSON.stringify(['pi:a-conversation']),
+      'journal.jsonl': `${JSON.stringify({ t: 1, event: 'queued', id: 'a-click' })}\n`,
+    }
+    // What stays: the turns It reopened that may still be running, which is what keeps a second from being started beside one, and the settings
+    const stays = { 'runs.json': JSON.stringify({ 'pi:a-conversation': { pid: 4242 } }), 'service.json': '{}' }
+    for (const [name, holds] of Object.entries({ ...notes, ...stays })) writeFileSync(path.join(folder, name), holds)
+    const pending = path.join(folder, 'publication-pending')
+    mkdirSync(pending)
+    writeFileSync(path.join(pending, 'request.json'), JSON.stringify({ operation: 'an-operation', at: 1 }))
+    const lines: string[] = []
+    erasing((line) => lines.push(line))('the person who erased everything')
+    expect(existsSync(pending)).toBe(false)
+    expect(Object.keys(notes).filter((name) => existsSync(path.join(folder, name)))).toEqual([])
+    expect(Object.keys(stays).filter((name) => existsSync(path.join(folder, name)))).toEqual(Object.keys(stays))
+    expect(lines).toEqual(['backend: everything was erased, and what It had noted here of conversations went with it'])
+    // With none of it there, there is nothing to remove and nothing to say
+    erasing((line) => lines.push(line))('the person who erased everything')
+    expect(lines.length).toBe(1)
   })
 })
 
@@ -718,7 +914,8 @@ describe.skipIf(!program)('the backend program, started by the service', () => {
       mkdirSync(path.dirname(database), { recursive: true })
       const broken = Buffer.from('this is not a database\n'.repeat(1000))
       writeFileSync(database, broken)
-      expect(await refusal(startBackend(config, say))).toBe('backend_exited')
+      // Each start here is one the test's end stops, should the program start where it is expected to be refused
+      expect(await refusal(start(config))).toBe('backend_exited')
       expect(readFileSync(database).equals(broken)).toBe(true)
       // Nothing was known of it, so a copy of it was kept before the program was started on it
       expect(said).toEqual([
@@ -727,10 +924,16 @@ describe.skipIf(!program)('the backend program, started by the service', () => {
       ])
       rmSync(path.dirname(database), { recursive: true })
       await (await start(config)).stop()
-      // Now functions have been loaded, and what the database holds is the person's
+      // Now functions have been loaded, and what the database holds is the person's. A program
+      // that was ended in the middle of a write, as one may be on Windows when it is stopped,
+      // leaves the journal of that write beside the database, and the next to open it writes the
+      // database back out of the journal. That is a database that opens, and this is about one
+      // that does not: so whatever the program left beside it is taken away with it
+      for (const beside of readdirSync(path.dirname(database)))
+        if (beside.startsWith(`${path.basename(database)}-`)) rmSync(path.join(path.dirname(database), beside))
       writeFileSync(database, broken)
       said = []
-      expect(await refusal(startBackend(readConfig()!, say))).toBe('backend_exited')
+      expect(await refusal(start(readConfig()!))).toBe('backend_exited')
       expect(readFileSync(database).equals(broken)).toBe(true)
       expect(said).toEqual(['backend: the program ended as soon as it was started (code 1)'])
       // What the program said is for a person at a terminal, and is in no line that is written down
@@ -921,20 +1124,25 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     // nothing of where It is, which port it counts from or which backend program it runs
     const child = spawn(runtime, [it, ...args], {
       cwd: elsewhere ?? folder,
-      env: elsewhere
-        ? { PATH: commands, HOME: elsewhere, IT_HOME: elsewhere, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', IT_SHELL_ENV: 'off', ...env }
-        : {
-            PATH: commands,
-            HOME: folder,
-            IT_HOME: folder,
-            IT_PORT: process.env.IT_PORT!,
-            IT_BACKEND_BIN: program!,
-            IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage',
-            IT_HARNESSES: 'none',
-            // The shell of whoever runs these tests is not asked what it would give a program
-            IT_SHELL_ENV: 'off',
-            ...env,
-          },
+      env: {
+        // These fixtures use the same folder for HOME and IT_HOME. Bun must keep its
+        // compilation cache elsewhere so the first setup still receives an empty folder.
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.join(scratch, 'bun-cache'),
+        ...(elsewhere
+          ? { PATH: commands, HOME: elsewhere, IT_HOME: elsewhere, IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage', IT_SHELL_ENV: 'off', ...env }
+          : {
+              PATH: commands,
+              HOME: folder,
+              IT_HOME: folder,
+              IT_PORT: process.env.IT_PORT!,
+              IT_BACKEND_BIN: program!,
+              IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage',
+              IT_HARNESSES: 'none',
+              // The shell of whoever runs these tests is not asked what it would give a program
+              IT_SHELL_ENV: 'off',
+              ...env,
+            }),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     children.push(child)
@@ -988,6 +1196,28 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     })
     expect(existsSync(path.join(folder, 'backend'))).toBe(false)
   })
+
+  test('a supervised start stops for broken settings, then starts after they are repaired and clears its failure', async () => {
+    expect(await well(run(['setup', '--none', '--no-service']))).toBe(0)
+    const settings = path.join(folder, 'service.json')
+    const before = readFileSync(settings)
+    writeFileSync(settings, '{not settings')
+    const args = ['serve', '--supervised', '--log', path.join(folder, 'service.log')]
+    expect(await well(run(args))).toBe(0)
+    expect(kept('startup.json')).toMatchObject({ failures: 1, code: 'settings', retryAt: null })
+    expect(log()).toContain('automatic startup stopped')
+    const reported = run(['service', 'status', '--json'])
+    expect(await well(reported)).toBe(0)
+    expect(JSON.parse(reported.out())).toMatchObject({ running: false, startup: { paused: true, code: 'settings' } })
+    writeFileSync(settings, before)
+    const recovered = run(args)
+    expect(await until(health, 60_000)).toBe(true)
+    expect(await until(() => log().includes('service started'), 30_000)).toBe(true)
+    expect(existsSync(path.join(folder, 'startup.json'))).toBe(false)
+    recovered.child.kill('SIGTERM')
+    expect(await recovered.ended).toBe(0)
+    expect(existsSync(path.join(folder, 'backend', 'lock'))).toBe(false)
+  }, 120_000)
 
   test('the first `it setup` makes the settings and enrols this machine, and with `--no-service` runs the backend only for as long as that takes', async () => {
     const ran = run(['setup', '--yes', '--no-service', '--name', 'the desk'])
@@ -1250,7 +1480,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     const commands = mkdtempSync(path.join(scratch, 'manager-'))
     symlinkSync(process.execPath, path.join(commands, 'node'))
     // It notes each thing it was asked, so that what a later setup asked of the system can be read
-    const manager = `#!/bin/sh\necho "$*" >> "$IT_HOME/system-was-asked"\ncase " $* " in\n*" restart "*|*" bootstrap "*) "$IT_TEST_NODE" "$IT_TEST_IT" serve --log "$IT_HOME/logs/it.log" >/dev/null 2>&1 & ;;\n*" is-active "*) echo active ;;\n*" is-enabled "*) echo enabled ;;\nesac\nexit 0\n`
+    const manager = `#!/bin/sh\necho "$*" >> "$IT_HOME/system-was-asked"\ncase " $* " in\n*" bootout "*) printf off > "$0.state" ;;\n*" print "*) state=on; [ ! -f "$0.state" ] || read -r state < "$0.state"; [ "$state" != off ] || exit 113; echo "state = running" ;;\n*" restart "*|*" bootstrap "*) printf on > "$0.state"; "$IT_TEST_NODE" "$IT_TEST_IT" serve --supervised --log "$IT_HOME/logs/it.log" >/dev/null 2>&1 & ;;\n*" is-active "*) echo active ;;\n*" is-enabled "*) echo enabled ;;\nesac\nexit 0\n`
     for (const name of ['systemctl', 'launchctl', 'loginctl']) writeFileSync(path.join(commands, name), manager, { mode: 0o755 })
     // Where a backend program would be fetched from, were this shell's not there: an address on this machine that nothing is asked at
     const releases = `http://127.0.0.1:${Number(process.env.IT_PORT) + 30}/releases`
@@ -1393,7 +1623,9 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     await browser.mutation(fn('displays:register'), { key: displayKey, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/144.0' })
     const press = async (slug: string, id: string) => {
       const page = (await browser.query(makeFunctionReference<'query'>('artifacts:get'), { slug })) as { id: string }
+      const { until } = (await browser.mutation(fn('actions:replayGrant'), {})) as { until: number }
       return browser.mutation(fn('actions:submit'), {
+        replayUntil: until,
         artifactId: page.id,
         displayKey,
         envelope: { v: 1, clientActionId: id, name: 'approve', payload: '{"n":1}', contentVersion: 1 },
@@ -1511,7 +1743,7 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
       expect(await ran.ended).toBe(1)
       expect(lines()).toEqual(['could not start: port_taken'])
       // Nothing of the backend was begun: no program was started on the folder, and nothing was loaded
-      expect(existsSync(path.join(folder, 'backend'))).toBe(false)
+      expect(readdirSync(path.join(folder, 'backend'))).toEqual([])
       expect(readConfig()!.functions).toBeUndefined()
     } finally {
       await closed(taken)

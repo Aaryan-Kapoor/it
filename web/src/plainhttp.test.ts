@@ -15,6 +15,7 @@ const calls: string[] = []
 const answers: Record<string, () => unknown> = {}
 const ask = async (fn: unknown, _args?: unknown) => {
   const name = getFunctionName(fn as never)
+  if (name === 'actions:replayGrant') return { until: Date.now() + 6 * 86400_000 }
   calls.push(name)
   return answers[name]?.() ?? null
 }
@@ -106,6 +107,42 @@ describe('this display, on plain http', () => {
     accept({ actionId: 'action-1' })
     expect(await sending).toEqual({ actionId: 'action-1' })
     expect(unsent('user-1', 'page-1')).toBe(0)
+  })
+})
+
+describe('copying, on plain http', () => {
+  test('is done the older way, from a field that holds the text, and the keyboard is left on the button that was pressed', async () => {
+    plainHttp()
+    const { copy } = await import('./brand')
+    // As a browser does it: choosing what is in a field takes the keyboard to that field
+    const select = HTMLTextAreaElement.prototype.select
+    vi.spyOn(HTMLTextAreaElement.prototype, 'select').mockImplementation(function (this: HTMLTextAreaElement) {
+      this.focus()
+      select.call(this)
+    })
+    const copied: string[] = []
+    Object.assign(document, { execCommand: () => copied.push((document.activeElement as HTMLTextAreaElement).value) > 0 })
+    const pressed = document.body.appendChild(document.createElement('button'))
+    try {
+      pressed.focus()
+      expect(await copy('it network on')).toBe(true)
+      expect(copied).toEqual(['it network on'])
+      expect(document.activeElement).toBe(pressed)
+      expect(document.querySelector('textarea')).toBeNull()
+      // And when the browser will not copy that way either
+      Object.assign(document, {
+        execCommand: () => {
+          throw new Error('NotAllowedError')
+        },
+      })
+      expect(await copy('it network on')).toBe(false)
+      expect(document.activeElement).toBe(pressed)
+      expect(document.querySelector('textarea')).toBeNull()
+    } finally {
+      pressed.remove()
+      Reflect.deleteProperty(document, 'execCommand')
+      vi.restoreAllMocks()
+    }
   })
 })
 

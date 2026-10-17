@@ -8,12 +8,9 @@ import { execFile, spawn, spawnSync } from 'node:child_process'
 import {
   appendFileSync,
   chmodSync,
-  closeSync,
   existsSync,
-  fchmodSync,
-  fsyncSync,
+  lstatSync,
   mkdirSync,
-  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -26,25 +23,15 @@ import {
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
-import {
-  describeClick,
-  firstFile,
-  HARNESSES,
-  type Harness,
-  isSlug,
-  LIMITS,
-  MESSAGE,
-  NOUN,
-  newer,
-  PROTOCOL_VERSION,
-  parseJson,
-  withoutFiles,
-} from '@it/protocol'
+import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
-import { type Args, json, loose, need, nested, parse, text } from './args'
+import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
 import { local } from './connector'
+import { deletePage, deletionStatus } from './delete'
 import * as flow from './flow'
 import { hook } from './hooks'
+import { checkInstallationFolder, checkInstallationRecord, legacyInstallation, markedInstallation, markInstallation } from './installation'
+import { withInstallerLock } from './installer-lock'
 import {
   api,
   askConnectorWith,
@@ -53,6 +40,7 @@ import {
   backendAt,
   basePort,
   call,
+  changeWhole,
   direct,
   doorRefusal,
   elsewhere,
@@ -65,10 +53,10 @@ import {
   joinLine,
   keptFromIt,
   left,
-  live,
   machine,
   NOT_RUNNING,
   noteLeft,
+  noteWas,
   notKnown,
   notSetUp,
   Problem,
@@ -81,18 +69,21 @@ import {
   siteAddress,
   textOf,
   VERSION,
+  WINDOWS_CLEANUP,
   why,
+  windowsDeletionCommand,
   windowsPathCommand,
   windowsPathHas,
   windowsPathRemoval,
   withoutTables,
-  writeAll,
+  writePrivate,
   written,
 } from './lib'
-import { login, runsItsOwn } from './login'
+import { joinedBefore, login, runsItsOwn } from './login'
 import { lenientAboutServiceMarks, nodeTooOld, quietAboutItsDatabase } from './node'
+import { failure, forPerson } from './output'
 import { gather, noteConversation, publish } from './publish'
-import { alone, asAdmin, standing, startBackend } from './serve/backend'
+import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { noteNetwork, readConfig } from './serve/config'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
@@ -117,23 +108,18 @@ import {
   whyHeldBack,
 } from './setup'
 import { printEnv } from './shell-env'
-import { GUIDE, NAMES, END as TOUR_END, MENU as TOUR_MENU, TOUR_PREFIX, STEPS as TOUR_STEPS, tourPage } from './tour'
-import { fetchNewer, keepBase, latest, watch, watched } from './upgrade'
+import { zshDirectory } from './shell-profile'
+import { GUIDE, NAMES, END as TOUR_END, STEPS as TOUR_STEPS, tourPage } from './tour'
+import { finishInstallationRemoval, installationFile, removeInstallationFiles, withInstallationLock } from './uninstall-files'
+import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import * as usage from './usage'
+import { type Listed, printed, wait } from './wait'
 
 // Everything is written through `written`, which follows each write until it has left the
 // process, and nothing here ends the process before all of it has: see `end` and `left`.
 const say = (line: string): void => written(process.stderr, `${line}\n`)
 const out = (value: unknown): void => written(process.stdout, `${JSON.stringify(value, null, 2)}\n`)
 
-/**
- * Whether what a command prints is read by a person: standard output is a terminal, and JSON was
- * not asked for. A person is then told what they need in a few sentences, the most important
- * first. An agent, a script and a test read the JSON, which is what is printed everywhere else:
- * also an agent whose app gives its commands a terminal, which is told apart by the mark the
- * app puts on the commands its agent runs.
- */
-const forPerson = (a: Args): boolean => process.stdout.isTTY === true && a.flags.json !== true && sessionAsked() === undefined
 /** Says something to a person, a sentence or a paragraph to the line, on standard output. */
 const tell = (lines: (string | undefined)[]): void => written(process.stdout, `${lines.filter((line) => line !== undefined).join('\n')}\n`)
 
@@ -156,6 +142,25 @@ async function chosen(wanted: string[]): Promise<string[]> {
   return said?.wakes ?? []
 }
 /**
+ * The apps It reopens closed conversations of on this machine as things stand, asked before a
+ * setup chooses anything. Null where It cannot be asked.
+ */
+const wokenNow = (): Promise<Set<string> | null> =>
+  call<{ wakes?: { harness: string }[] } | null>('query', api.machines.me).then(
+    (me) => new Set((me?.wakes ?? []).map((w) => w.harness)),
+    () => null,
+  )
+/**
+ * Of the apps that It reopens closed conversations of once a setup has chosen, those it does
+ * so for because of this setup: it did not before, by It's own word. That is what the person
+ * is told of, and not whether the app's add-on was installed already: a machine that was
+ * enrolled anew in the place of the one it was has its add-ons as they were, and reopening
+ * comes on for it with the choice all the same. Where It could not be asked how things stood,
+ * it is taken to have come on for the apps that were not connected before.
+ */
+const cameOn = (woken: string[], before: Set<string> | null, connected: Set<Harness>): string[] =>
+  woken.filter((id) => (before ? !before.has(id) : !connected.has(id as Harness)))
+/**
  * What setup says, once, of the apps it has just connected that It reopens closed
  * conversations of: reopening is on from the start, and it runs an agent with nobody
  * watching, so the person is told that it is, what it does and where to turn it off.
@@ -171,7 +176,7 @@ function appsSaid(found: HarnessStatus[], advise = true, withCodex = true): stri
   if (!found.length) return ['No agent app was found on this machine.']
   const lines = found.map((h) => {
     const app = KNOWN[h.id].label
-    if (h.addon === 'connected') return `${app} is connected.`
+    if (h.addon === 'connected') return h.runtime ? `${app}: ${h.runtime.detail}` : `${app}'s add-on is installed. Its loaded code has not been verified.`
     if (h.addon === 'needs_approval') return `${app} is connected, and one thing is left for you to do: ${h.detail}`
     return `${app} is not connected${h.detail && h.addon !== 'not_connected' ? `: ${h.detail}` : '.'}`
   })
@@ -182,8 +187,19 @@ function appsSaid(found: HarnessStatus[], advise = true, withCodex = true): stri
   return lines
 }
 /** What a person is told of the background service, and of whether what is done on a page is being handed to the conversations on this machine, which is the connector's doing. */
-function serviceSaid(background: { registered: boolean; state: string }, connector: Record<string, unknown>, running: boolean): string[] {
+function serviceSaid(
+  background: { registered: boolean; state: string; startup?: service.ServiceStatus['startup'] },
+  connector: Record<string, unknown>,
+  running: boolean,
+): string[] {
   return [
+    ...(background.startup
+      ? [
+          background.startup.paused
+            ? `Automatic startup stopped after ${background.startup.failures} failed starts (${background.startup.code}). ${background.startup.hint}`
+            : `Startup is waiting to retry after ${background.startup.code}. ${background.startup.hint}`,
+        ]
+      : []),
     background.registered
       ? `It is registered with the system to start by itself (${background.state}).`
       : service.reachable()
@@ -222,6 +238,16 @@ async function piped(): Promise<string | undefined> {
 // ---------- pages ----------
 
 async function source(a: Args) {
+  // The three say where one page is, and a command given two of them would have to choose which
+  // it meant: an agent that changed `--html` for `--file` and left the first in would publish
+  // the page it had meant to replace. So nothing is read and nothing published
+  const given = ['file', 'dir', 'html'].filter((name) => text(a, name) !== undefined).map((name) => `--${name}`)
+  if (given.length > 1)
+    throw new Problem(
+      `A ${NOUN.one} is published from one source, and this command was given ${given.slice(0, -1).join(', ')} and ${given.at(-1)}.`,
+      'invalid',
+      'Give one of --file, --dir and --html, or pipe HTML in with none of them.',
+    )
   const html = text(a, 'html') ?? (text(a, 'file') || text(a, 'dir') ? undefined : await piped())
   return gather({ html, file: text(a, 'file'), dir: text(a, 'dir') })
 }
@@ -302,7 +328,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   update: [1, 'update <id> (--file f | --dir d | --html "<…>" | pipe)'],
   list: [0, 'list'],
   read: [1, 'read <id>'],
-  delete: [1, 'delete <id>'],
+  delete: [1, 'delete <id> [--status]'],
   rollback: [2, 'rollback <id> <version>'],
   patch: [2, "patch <id> '<json>' [--replace] [--if-revision <n>]"],
   state: [1, 'state <id>'],
@@ -351,22 +377,37 @@ async function create(a: Args) {
     if (!(err instanceof Problem) || err.code !== 'anothers' || slug === undefined) throw err
     const theirs = await call<Made>('query', api.artifacts.get, { slug }).catch(() => null)
     // The same conversation, under the id its app gave it before it was cleared or carried on: the page is its own
-    if (theirs?.session && carriedOn(theirs.session)) done = await publish({ ...page, take: true })
+    if (theirs?.session && carriedOn(theirs.session, theirs.machineId))
+      done = await publish({ ...page, take: true, expectedOwner: { machineId: theirs.machineId!, session: theirs.session } })
     else throw anothers(slug, theirs)
   }
   await published(done, a, done.version === 1)
 }
 
 /** What is known of a page that a conversation meant to make and that is another's. */
-type Made = { title?: string; agent?: string | null; machine?: string | null; updatedAt?: number; session?: { harness: string; id: string } | null }
+type Made = {
+  title?: string
+  agent?: string | null
+  machine?: string | null
+  machineId?: string | null
+  updatedAt?: number
+  session?: { harness: string; id: string } | null
+}
 /**
  * Whether a conversation is the one this command runs in, under an id it had before: an agent
  * app that clears a conversation, or carries it on, gives it a new id, and the connector on
  * this machine keeps which id became which.
+ *
+ * It is asked of a page the backend has just said is another conversation's. One under the very
+ * id this conversation has is therefore on another machine, where a conversation that was
+ * copied there has the same id: it is another's, and so is any page the backend says is on
+ * another machine than this, whatever became of its id here. Taking a page from another machine
+ * is for whoever says so, with --take or `it open`.
  */
-function carriedOn(was: { harness: string; id: string }): boolean {
+function carriedOn(was: { harness: string; id: string }, onMachine?: string | null): boolean {
   const now = sessionAsked()?.session
-  if (!now || now.harness !== was.harness) return false
+  if (!now || now.harness !== was.harness || now.id === was.id) return false
+  if (typeof onMachine !== 'string' || onMachine !== readJson<{ id?: string }>(inHome('machine.json'))?.id) return false
   const became = readJson<Record<string, string>>(inHome('aliases.json')) ?? {}
   let key = `${was.harness}:${was.id}`
   for (let hops = 0; hops < 10 && typeof became[key] === 'string'; hops++) key = became[key]!
@@ -471,9 +512,26 @@ async function tourWhenAsked(a: Args) {
   const seconds = text(a, 'timeout') === undefined ? 100 : Number(text(a, 'timeout'))
   if (!Number.isFinite(seconds) || seconds <= 0) throw new Problem('--timeout is a number of seconds.', 'invalid')
   const harness = sessionAsked()?.session.harness
-  const until = Date.now() + seconds * 1000
+  const until = performance.now() + seconds * 1000
+  const waitId = crypto.randomUUID()
+  let first = true
   for (;;) {
-    const { asked } = await call<{ asked: boolean }>('mutation', api.tour.wait, harness ? { harness } : {})
+    const answer = await call<{ asked: boolean }>('mutation', api.tour.wait, {
+      waitId,
+      ...(first ? { first: true } : {}),
+      ...(harness ? { harness } : {}),
+    }).catch((err) => {
+      if (
+        err instanceof Problem &&
+        err.code === 'conflict' &&
+        err.message === 'The person said on the site that they want no tour, so there is nothing to wait for. Give the tour when they ask you for it.'
+      )
+        return null
+      throw err
+    })
+    first = false
+    if (answer === null) return out({ skipped: true, hint: 'The person skipped the tour.' })
+    const { asked } = answer
     if (asked) {
       // What the person does on the tour's first page may come before this agent's first wait
       // for it. The connector is told now that this conversation waits for each thing in turn,
@@ -486,11 +544,11 @@ async function tourWhenAsked(a: Args) {
       }
       return written(process.stdout, tourForOneThatWaited(GUIDE))
     }
-    const left = until - Date.now()
+    const left = until - performance.now()
     if (left <= 0) break
     await new Promise((r) => setTimeout(r, Math.min(TOUR_ASK_EVERY_MS, left)))
   }
-  await call('mutation', api.tour.leave, {}).catch(() => {})
+  await call('mutation', api.tour.leave, { waitId }).catch(() => {})
   return out({
     timedOut: true,
     hint: 'Nobody has pressed "Take the tour" on the site yet. Run this again to go on waiting. If the person has not opened the pairing link yet, that comes first.',
@@ -512,35 +570,25 @@ async function tour(a: Args) {
   const what = a._[0]
   if (a.flags.wait === true && what === undefined) return tourWhenAsked(a)
   if (what === undefined) return written(process.stdout, GUIDE)
-  const menu = `${TOUR_PREFIX}${TOUR_MENU}`
-  // What the menu holds of what has been seen. Nothing where there is no menu yet, or it says nothing of it
-  const seenSoFar = (): Promise<string[]> =>
-    call<{ json: string }>('query', api.state.get, { slug: menu })
-      .then((s) => {
-        const said = (JSON.parse(s.json) as { seen?: unknown }).seen
-        return Array.isArray(said) ? [...new Set(said.filter((name): name is string => typeof name === 'string' && TOUR_STEPS.includes(name)))] : []
-      })
-      .catch(() => [])
   if (what === 'clear') {
-    const pages = await call<{ slug: string }[]>('query', api.artifacts.list)
-    const gone: string[] = []
-    // The tour's own pages, each by its whole id, and no other page whose id only begins as theirs do
-    const its = new Set(NAMES.map((name) => `${TOUR_PREFIX}${name}`))
-    const had = pages.some((p) => its.has(p.slug)) ? await seenSoFar() : undefined
-    for (const { slug } of pages.filter((p) => its.has(p.slug))) {
-      await call('mutation', api.artifacts.remove, { slug })
-      gone.push(slug)
-    }
-    // Counted where there was a tour to end: how many of its things had been looked at, and never which
-    if (had) usage.record('tour.ended', { seen: String(Math.min(had.length, 5)) as '0' | '1' | '2' | '3' | '4' | '5' })
-    // And It is told that a tour is over, so that the site no longer leads someone with no pages
-    // into one. An It from before it kept that refuses this, which changes nothing
-    if (had) await call('mutation', api.tour.done, {}).catch(() => {})
-    return out({ deleted: gone })
+    const cleared = await call<{ requested: { slug: string; job: string }[]; kept: string[]; seen: number }>('mutation', api.tour.clear, {})
+    if (cleared.requested.length) usage.record('tour.ended', { seen: String(Math.min(cleared.seen, 5)) as '0' | '1' | '2' | '3' | '4' | '5' })
+    const results = await Promise.all(cleared.requested.map(({ slug, job }) => deletionStatus(slug, job)))
+    const pending = results.filter((r) => r.state !== 'completed')
+    return out({
+      deleted: results.filter((r) => r.state === 'completed').map((r) => r.requested),
+      ...(pending.length ? { pending } : {}),
+      ...(cleared.kept.length
+        ? {
+            kept: cleared.kept,
+            hint: 'These pages have tour ids but no tour ownership mark, so they were preserved. Older tour pages are preserved too. Ask the person before deleting any of them with it delete.',
+          }
+        : {}),
+    })
   }
   if (what !== 'show') throw new Problem(`It does not know what to do with "${what}".`, 'invalid', `Usage: it ${USAGE}`)
   const asked = need(a._[1], `which page of the tour (${NAMES.join(', ')}, or next)`, USAGE)
-  const seen = await seenSoFar()
+  const { seen } = asked === 'next' ? await call<{ seen: string[] }>('query', api.tour.seen, {}) : { seen: [] }
   const name = asked === 'next' ? (TOUR_STEPS.find((step) => !seen.includes(step)) ?? TOUR_END) : asked
   const given: Record<string, unknown> = {}
   for (const param of a.many.param ?? []) {
@@ -551,26 +599,21 @@ async function tour(a: Args) {
   // The agent's plate on the page carries the name of the agent app that is giving the tour, where that is known
   const by = sessionAsked()?.session.harness
   const made = tourPage(name, given, text(a, 'agent') ?? (by && Object.hasOwn(KNOWN, by) ? KNOWN[by as Harness].label : undefined))
-  // The page is this conversation's from now on, whoever showed it last
+  // The page is this conversation's from now on, whoever showed it last. An agent app that does
+  // not say which conversation it is in has none to take the page for: it publishes the page all
+  // the same, and waits for what is done on it by the page's id, as the tour tells it to
   const done = await publish({
     slug: made.slug,
     title: made.title,
     files: gather({ html: made.html }),
     agent: text(a, 'agent'),
     state: made.state,
-    take: true,
+    take: by !== undefined,
     itsOwn: true,
+    tour: name,
   })
   // Counted as a page of the tour that was shown, by its name, which is It's own
   usage.record('tour.shown', { page: name as usage.TourPage, agent: usage.agentOf(by) })
-  // And it starts as it was first made, whatever a tour before this one left in it. The menu
-  // alone keeps something: which things have been seen
-  const fresh = JSON.parse(made.state) as Record<string, unknown>
-  await call('mutation', api.state.patch, { slug: made.slug, patch: JSON.stringify(name === TOUR_MENU ? { ...fresh, seen } : fresh), replace: true })
-  // A thing that is shown has been seen from now on, which the menu is told where there is one:
-  // it is there unless the agent began somewhere else, and then nothing is kept
-  if (TOUR_STEPS.includes(name) && !seen.includes(name))
-    await call('mutation', api.state.patch, { slug: menu, patch: JSON.stringify({ seen: [...seen, name] }) }).catch(() => {})
   a.flags.open = true
   await published(done, a)
 }
@@ -619,326 +662,6 @@ const appName = (id: unknown): string => (typeof id === 'string' && Object.hasOw
 function page(p: Record<string, unknown>): Record<string, unknown> {
   const { id: _internal, slug, ...rest } = p
   return { id: slug, ...rest }
-}
-
-// ---------- waiting for the person ----------
-
-/** A click as the backend lists it: what it carried is JSON text. */
-interface Listed {
-  id: string
-  artifact: string
-  title: string
-  name: string
-  payload: string
-  at: number
-  attended: boolean | null
-  session: { harness: string; id: string } | null
-  version?: number
-  stateRevision?: number
-  nowVersion?: number
-  nowStateRevision?: number
-}
-/** A click as this program prints it for an agent. */
-const printed = (c: Listed) => ({
-  id: c.id,
-  page: c.artifact,
-  title: c.title,
-  action: c.name,
-  data: parseJson(c.payload) ?? null,
-  at: c.at,
-  // Said only when the site saw no sign that anyone had just used the page, which an agent should know
-  ...(c.attended === false ? { sentByThePageItself: true } : {}),
-  // What the person typed in the box above the page is told as that, with where to answer it: an
-  // agent that only ever reads this, and not the words an add-on is given, would otherwise take
-  // it for one more thing the page sent, and answer it in a chat the person is not looking at
-  ...(c.name === MESSAGE
-    ? {
-        typedByTheUser: true,
-        answer: `They typed this in the box above the ${NOUN.one} and are looking at that ${NOUN.one}, not at the chat: answer there, by changing the ${NOUN.one} or with \`it say ${c.artifact} "…"\`.`,
-      }
-    : {}),
-  // Which version of the page, and which revision of its state, the person was looking at
-  ...(c.version === undefined ? {} : { version: c.version }),
-  ...(c.stateRevision === undefined ? {} : { stateRevision: c.stateRevision }),
-  // Said only when what they acted on has been replaced since, which an agent must know before it acts on it
-  ...(c.nowVersion === undefined ? {} : { pageIsNowAtVersion: c.nowVersion }),
-  ...(c.nowStateRevision === undefined ? {} : { stateIsNowAtRevision: c.nowStateRevision }),
-})
-/** Writes a line and resolves once it has really left this process. */
-const emit = (value: unknown) => {
-  written(process.stdout, `${JSON.stringify(value)}\n`)
-  return left()
-}
-
-/**
- * Blocks until the person acts, then prints what they did. While this runs, the connector on
- * this machine leaves matching clicks alone: an agent that is waiting gets the click here.
- */
-async function wait(a: Args) {
-  const slug = text(a, 'id')
-  const follow = a.flags.follow === true
-  const seconds = text(a, 'timeout') === undefined ? 0 : Number(text(a, 'timeout'))
-  if (!Number.isFinite(seconds) || seconds < 0) throw new Problem('--timeout is a number of seconds.', 'invalid')
-  if (slug) await call('query', api.artifacts.get, { slug })
-  // Without a page named, an agent waits for clicks on its own pages. Every click that is
-  // waiting would include other conversations' clicks, which are theirs to hear.
-  const asked = sessionAsked()
-  const me = asked?.session
-  if (!slug && !me) throw new Problem('Say which page to wait on.', 'invalid', 'it wait --id <id>')
-  // Whose pages are waited on was a choice among the apps that had marked this command. It is said apart from what is printed, which is the person's actions only.
-  const unsure = slug ? undefined : sessionNote(asked, 'This waits for actions on the pages of', 'name the page with --id.')
-  if (unsure) say(JSON.stringify({ note: unsure }))
-  // It is asked once before anything is waited for, as a wait on a named page asks for its page:
-  // where It cannot be reached at all, that is said now, and not taken for a wait in which nothing happened
-  /** Asks It what is waiting for this, as it stands now. Throws where It cannot be asked. */
-  const waitingNow = () => (slug ? call<Listed[]>('query', api.delivery.waiting, { slug }) : call<Listed[]>('query', api.delivery.waitingFor, { session: me! }))
-  if (!slug) await waitingNow()
-  const who = crypto.randomUUID()
-  // The connector is told what this waits for: one page, or, with none named, this
-  // conversation's clicks only. Everyone else's go on being delivered as usual.
-  const announce = () =>
-    local<{ sessions?: { harness: string; id: string }[]; clicks?: Listed[] }>('/waiting', {
-      method: 'POST',
-      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }) },
-    })
-  // The connector knows the ids this conversation had before it was last cleared: pages made
-  // then are still recorded under them
-  const first = await announce()
-  const known = first?.sessions
-  const sessions = !slug && me ? (known?.length ? known : [me]) : []
-  const mine = (c: Listed) => slug !== undefined || sessions.some((s) => c.session?.harness === s.harness && c.session?.id === s.id)
-  // An add-on in this conversation may already have been given a click it can only hand over
-  // with the result of a command, and the command now running is this one. The connector
-  // passes such a click on here, already held for this machine, and it is printed like any other.
-  let handedBack: Listed[] = first?.clicks ?? []
-  /** The asking of the connector that is on its way now, if one is. What it brings is waited for before the wait says its last word. */
-  let announcing: Promise<void> | null = null
-  /** The wait is choosing its last word: the connector is asked for nothing more, which it would hand over once and this could then not print. */
-  let deciding = false
-  const beat = setInterval(() => {
-    if (deciding || announcing) return
-    announcing = announce()
-      .then((r) => {
-        if (r?.clicks?.length) {
-          handedBack = [...handedBack, ...r.clicks]
-          void onHandedBack()
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        announcing = null
-      })
-  }, 2000)
-  const client = live()
-  /** Printed already. Never printed twice, whatever happens to the report of it. */
-  const printedIds = new Set<string>()
-  /** Printed, and It has not yet been told so. Told again until it has. */
-  const unreported = new Set<string>()
-  /**
-   * For usage reporting: when each click this printed was made, for which harness, and whether
-   * it was already waiting when this began. That last is known from what the backend first
-   * offered, and not by comparing this machine's clock with the backend's.
-   */
-  const made = new Map<string, { at: number; harness: string | undefined; wasWaiting: boolean }>()
-  /** Whether the first list of what is waiting has been looked at. What is in it was made before this began. */
-  let looked = false
-  let busy = false
-  let ending = false
-  /** The wait has said its last word (that its time ran out): nothing is printed after it. */
-  let over = false
-  const finish = async (code: number) => {
-    if (ending) return
-    ending = true
-    clearInterval(beat)
-    // Whatever the connector has handed over, or is handing over this moment, is printed
-    // before this ends, however it ends: the connector gives a click to a waiter once, and a
-    // wait that ended without printing it would have lost it. Only not after the wait has
-    // said that its time ran out, which is its last word.
-    deciding = true
-    await announcing
-    // What is being printed this moment is printed whole, and It told of it, before anything
-    // more is done: a signal or an error that came in the middle of three clicks ended the
-    // wait after the first, with the other two taken from the connector and never said
-    while (busy) await new Promise((resolve) => setTimeout(resolve, 20))
-    if (!over) await printHandedBack().catch(() => {})
-    await local('/waiting', { method: 'POST', body: { id: who, done: true } })
-    await client.close().catch(() => {})
-    // A wait that was given something has its answer, whatever went wrong beside it
-    await end(code === 1 && printedIds.size > 0 && !follow ? 0 : code)
-  }
-  const report = async () => {
-    for (const id of unreported) {
-      const ok = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route: 'waiter' }).then(
-        (done) => {
-          const c = made.get(id)
-          // Counted or not, it is finished with: a wait that goes on for days keeps nothing of it
-          made.delete(id)
-          // A click made while the agent was already waiting was heard at once. One made before
-          // had been waiting for the agent to come and ask.
-          if (c && done && !done.already)
-            usage.record('answer.delivered', {
-              path: c.wasWaiting ? 'waited' : 'heard',
-              after: usage.timeBand(Date.now() - c.at),
-              agent: usage.agentOf(c.harness),
-            })
-          return true
-        },
-        (err) => /conflict|not_found/.test(String((err as Problem).code)),
-      )
-      if (ok) unreported.delete(id)
-    }
-  }
-  /** Prints what the connector handed back and has not been printed yet, and tells It of it. */
-  const printHandedBack = async () => {
-    for (const c of handedBack.splice(0)) {
-      if (printedIds.has(c.id)) continue
-      await emit(printed(c))
-      printedIds.add(c.id)
-      if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
-      unreported.add(c.id)
-      made.set(c.id, { at: c.at, harness: c.session?.harness, wasWaiting: false })
-    }
-    await report()
-  }
-  const onHandedBack = async () => {
-    if (busy || ending || over || !handedBack.length) return
-    busy = true
-    try {
-      await printHandedBack()
-    } finally {
-      busy = false
-    }
-    // Ended only once this is no longer in the middle of anything: the ending waits for that
-    if (printedIds.size > 0 && !follow) await finish(0)
-  }
-  const onClicks = async (clicks: Listed[]): Promise<'printed' | 'nothing' | 'failed'> => {
-    if (busy || ending || over) return 'nothing'
-    busy = true
-    let came: 'printed' | 'nothing' | 'failed' = 'nothing'
-    try {
-      await report()
-      const fresh = clicks.filter((c) => !printedIds.has(c.id) && mine(c))
-      if (fresh.length) {
-        const got = new Set<string>()
-        if (slug) for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: fresh.map((c) => c.id) })) got.add(id)
-        // Waiting for its own conversation's clicks, each is claimed for the conversation it
-        // was offered for: a page that has changed hands meanwhile keeps its click for its new owner
-        else for (const c of fresh) for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: [c.id], for: c.session! })) got.add(id)
-        for (const c of fresh.filter((x) => got.has(x.id))) {
-          // The wait ended while this was being asked for: it is given back, and not printed after the last word
-          if (ending || over) {
-            await call('mutation', api.delivery.release, { id: c.id }).catch(() => {})
-            continue
-          }
-          came = 'printed'
-          // Out of this process first, and only then reported as handed over
-          await emit(printed(c))
-          printedIds.add(c.id)
-          if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
-          unreported.add(c.id)
-          made.set(c.id, { at: c.at, harness: c.session?.harness, wasWaiting: !looked })
-        }
-        await report()
-      }
-      looked = true
-    } catch (err) {
-      say(`wait: ${(err as Error).message}`)
-      if (came !== 'printed') came = 'failed'
-    } finally {
-      busy = false
-    }
-    // Having printed something, this ends even if It could not be told: the lease runs out
-    // and the click is offered again, which an agent can tell by its id. Ended only now that
-    // this is no longer in the middle of anything, which the ending waits for.
-    if (printedIds.size > 0 && !follow) await finish(0)
-    return came
-  }
-  // Read by the page, or by the conversation: never everything that is waiting, where other
-  // conversations' clicks could stand in front of this one's
-  const watched = new Map<string, Listed[]>()
-  let latest: Listed[] = []
-  const watch = (name: string, fn: unknown, args: Record<string, unknown>) =>
-    client.onUpdate(
-      fn as never,
-      args as never,
-      (clicks: Listed[]) => {
-        watched.set(name, clicks)
-        latest = [...watched.values()].flat().sort((x, y) => x.at - y.at)
-        void onClicks(latest)
-      },
-      (err) => {
-        say(`wait: ${err.message}`)
-        void finish(1)
-      },
-    )
-  if (slug) watch('page', api.delivery.waiting, { slug })
-  else for (const s of sessions) watch(`${s.harness}:${s.id}`, api.delivery.waitingFor, { session: s })
-  // A click that arrived while another was being handled is picked up here
-  const again = setInterval(() => void onHandedBack().then(() => onClicks(latest)), 1000)
-  void onHandedBack()
-  if (seconds > 0) {
-    const timeUp = async (): Promise<void> => {
-      const printedOne = () => printedIds.size > 0 && !follow
-      // Something was printed, and this is ending with it: that was no wait in which nothing happened
-      if (ending || printedOne()) return
-      // Something is being printed or reported this moment: looked at again when that is done
-      if (busy) return void setTimeout(() => void timeUp(), 250)
-      const failed = async (p: Problem, what: string) => {
-        // What the connector handed over meanwhile is the answer, where there is any: a wait
-        // is said to have failed only where it got nothing
-        deciding = true
-        await announcing
-        while (busy) await new Promise((resolve) => setTimeout(resolve, 50))
-        await onHandedBack()
-        if (ending || printedOne()) return
-        say(JSON.stringify({ error: { code: p.code, message: `${what}: ${p.message}`, ...(p.hint ? { hint: p.hint } : {}) } }))
-        clearInterval(again)
-        void finish(1)
-      }
-      // "Nothing happened" is said only on It's own word, asked now: a wait that could not
-      // reach It all the while has heard nothing, which is not the same. Nothing else is taken
-      // or printed while that is asked, so that the last word and an action do not cross.
-      busy = true
-      let there: Listed[]
-      try {
-        there = (await waitingNow()).filter((c) => !printedIds.has(c.id) && mine(c))
-      } catch (err) {
-        busy = false
-        if (ending || printedOne()) return
-        return failed(
-          err instanceof Problem ? err : new Problem(String((err as Error)?.message ?? err)),
-          'The wait ran out of time, and It could not be asked then whether anything was waiting',
-        )
-      }
-      busy = false
-      // Something is waiting after all, and has only not been taken yet: it is taken now
-      if (there.length) {
-        const came = await onClicks(there)
-        if (ending || printedOne()) return
-        if (came === 'failed')
-          return failed(
-            new Problem('It could not be reached to take it.', 'offline'),
-            'The wait ran out of time with something waiting that could not be taken',
-          )
-      }
-      // What the connector handed back meanwhile, or is handing back this moment, is printed
-      // like anything else: the connector gives a click to a waiter once, and a wait that then
-      // said nothing had happened would have lost it. Nothing more is asked of it from here.
-      deciding = true
-      await announcing
-      while (busy) await new Promise((resolve) => setTimeout(resolve, 50))
-      await onHandedBack()
-      if (ending || printedOne()) return
-      // The last word, and nothing after it
-      over = true
-      clearInterval(again)
-      await emit({ timedOut: true })
-      void finish(0)
-    }
-    setTimeout(() => void timeUp(), seconds * 1000)
-  }
-  for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => void finish(130))
-  await new Promise(() => {})
 }
 
 // ---------- this machine ----------
@@ -1072,7 +795,7 @@ async function answering(forMs = 10_000): Promise<boolean> {
  * else has only this to say so. Nothing when the folder is on the PATH already; otherwise what
  * to do about it, with the line to add.
  */
-function pathLine(): string | undefined {
+async function pathLine(): Promise<string | undefined> {
   // The launcher is put there now if it is not there yet, so that what the line points at exists
   try {
     shim()
@@ -1084,7 +807,7 @@ function pathLine(): string | undefined {
   // Put there by the install script for every terminal opened from now on, it is only not on
   // the PATH this program was started with, as when an agent installs It and sets it up in
   // one conversation. Nothing is left for the person to do, and nothing is said.
-  if (onPathLater(bin)) return undefined
+  if (await onPathLater(bin)) return undefined
   if (process.platform === 'win32') return `Run this in PowerShell, then open a new terminal:\n\n  ${windowsPathCommand(bin)}`
   return `Add this line to the file your shell reads when it starts, then open a new terminal:\n\n  export PATH='${bin.replace(/'/g, `'\\''`)}':"$PATH"`
 }
@@ -1169,16 +892,23 @@ function stepOutOf(folder: string): { at: string; deletedLater: boolean } | unde
     }
     let deletedLater = false
     try {
-      // A file's name on Windows has no quotation mark in it, so the name between two is the name
-      const line = `cmd.exe /d /c del /f /q "${at}"`
-      deletedLater =
-        spawnSync('reg.exe', ['add', RUN_ONCE, '/v', `ItRemoved${process.pid}`, '/t', 'REG_SZ', '/d', line, '/f'], { windowsHide: true, timeout: 15_000 })
-          .status === 0
+      const entry = `ItRemoved${process.pid}-${Date.now().toString(36)}`
+      const line = windowsDeletionCommand(entry)
+      if (line !== undefined) {
+        const reg = (args: string[]) => spawnSync('reg.exe', args, { windowsHide: true, timeout: 15_000 }).status === 0
+        if (reg(['add', WINDOWS_CLEANUP, '/v', entry, '/t', 'REG_SZ', '/d', at, '/f'])) {
+          deletedLater = reg(['add', RUN_ONCE, '/v', entry, '/t', 'REG_SZ', '/d', line, '/f'])
+          if (!deletedLater) reg(['delete', WINDOWS_CLEANUP, '/v', entry, '/f'])
+        }
+      }
     } catch {}
     return { at, deletedLater }
   }
   return undefined
 }
+
+/** Whether this command has taken It off the machine. Nothing is counted after that: the folder a count is kept in is gone, or holds only what taking an add-on out later needs. */
+let takenOff = false
 
 async function uninstall(a: Args) {
   const folder = home()
@@ -1188,10 +918,6 @@ async function uninstall(a: Args) {
     if (forPerson(a)) tell([line])
   }
   // Only a folder that is It's is ever removed: one a variable names by mistake is left alone
-  const its = ['service.json', 'machine.json', 'addons', path.join('bin', process.platform === 'win32' ? 'it.exe' : 'it')].some((name) =>
-    existsSync(path.join(folder, name)),
-  )
-  if (!its) throw new Problem(`${folder} does not hold It, so there is nothing here to take off this machine.`, 'invalid')
   // Never the person's own folder, and never the whole disk, however the path to either is
   // spelled: asked of the folders themselves, since a link somewhere along the way makes the
   // same folder read as another. Where that cannot be asked, nothing is removed.
@@ -1205,14 +931,20 @@ async function uninstall(a: Args) {
   }
   if (real === own || real === path.parse(real).root || path.resolve(folder) === path.resolve(os.homedir()) || path.resolve(folder) === path.parse(folder).root)
     throw new Problem(`${folder} is not a folder It may remove.`, 'invalid')
+  if (!markedInstallation(folder) && !legacyInstallation(folder))
+    throw new Problem(
+      `${folder} does not hold It with a recognised installation record or its running installed program. Nothing was removed.`,
+      'invalid',
+      'For an older installation with its original license and notices, run its own bin/it with IT_HOME set to that folder, or install It there again first. Inspect an ambiguous folder and remove its files by hand.',
+    )
   if (!a.flags.yes) {
     if (!flow.live())
       throw new Problem(
-        'This takes It off this machine with everything it holds, the pages among them, and is not done without being asked for twice.',
+        'This removes It and deletes its data folders whole, and is not done without being asked for twice. Unknown top-level files remain.',
         'invalid',
         'Run `it uninstall` at a terminal, where it asks first, or `it uninstall --yes`.',
       )
-    const go = await flow.pick(`Take It off this machine? Every page it holds here goes with it, and its folder (${folder}) is deleted.`, [
+    const go = await flow.pick(`Take It off this machine? Its data folders in ${folder} are deleted whole. Unknown top-level files stay.`, [
       { value: false, label: 'No, leave it' },
       { value: true, label: 'Yes, remove It' },
     ])
@@ -1222,70 +954,132 @@ async function uninstall(a: Args) {
   const since = usage.sinceBegun()
   if (since !== undefined) await usage.sendNow('installation.removed', { age: usage.ageBand(since) })
   const left: string[] = []
-  // First of all the background service, since it is the one thing that may refuse: where it
-  // could not be stopped, nothing else is taken away, so that It is still whole and this can
-  // be run again. With the program and its folder gone and the service left, there would be
-  // nothing left to run.
-  // The one service a machine has belongs to the It folder its definition names. One that runs
-  // It from another folder is another It's, and is left as it is.
-  if (service.definedFor() !== 'another folder') {
-    const was = service.definedFor() === 'this folder'
-    try {
-      service.uninstall()
-      if (was) say('The background service is stopped, and no longer starts by itself.')
-    } catch (err) {
+  const program = path.join(folder, 'bin', process.platform === 'win32' ? 'it.exe' : 'it')
+  let kept = false
+  const heard: string[] = []
+  let removing = false
+  await withInstallationLock(real, async () => {
+    // First of all the background service, since stopping it may be refused: where it
+    // could not be stopped, nothing else is taken away, so that It is still whole and this can
+    // be run again. With the program and its folder gone and the service left, there would be
+    // nothing left to run.
+    // The one service a machine has belongs to the It folder its definition names. One that runs
+    // It from another folder is another It's, and is left as it is.
+    if (service.definedFor() === 'another folder') service.passLingerToRegisteredService()
+    else {
+      const was = service.definedFor() === 'this folder'
+      try {
+        service.uninstall()
+        if (was) say('The background service is stopped, and no longer starts by itself.')
+      } catch (err) {
+        throw new Problem(
+          `It was not taken off this machine: ${err instanceof Error && err.message.trim() ? err.message.replace(/\.$/, '') : 'the background service could not be stopped or removed'}.`,
+          'error',
+          'Nothing else was changed, and It is as it was. Run `it uninstall` again once the service can be stopped.',
+        )
+      }
+    }
+    // 2. An `it serve` someone started by hand in this folder
+    service.askToStop(folder, 30_000)
+    if (service.runningFor(folder))
       throw new Problem(
-        `It was not taken off this machine: ${why(err)}.`,
-        'error',
-        'Nothing else was changed, and It is as it was. Run `it uninstall` again once the service can be stopped.',
+        'It is still running, and no data was removed.',
+        'still_running',
+        'End the `it serve` you started in its terminal, then run `it uninstall` again.',
+      )
+    try {
+      await nothingLeft(
+        (line) => heard.push(line),
+        async () => {
+          removing = true
+          if (heard.length) say('The backend program that an It which had died left running here is stopped.')
+          // 1. The add-ons, each from where this folder put it. One that could not be taken out is
+          // taken out by running this again, which needs the note It keeps of where it put the add-on,
+          // and the program: so those are kept, and said, with how it is run once its PATH is gone
+          for (const id of HARNESSES) {
+            if (!installationFile(real, `addons/${id}.json`)) continue
+            const gone = await disconnect(id, say, { keepLocalFiles: true }).catch(() => false)
+            if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
+            else {
+              kept = true
+              left.push(
+                `${KNOWN[id].label} still has It’s add-on, which could not be taken out. What It noted of where it put the add-on is kept in ${path.join(folder, 'addons')}, with the program: once ${KNOWN[id].label} can be run from here, run \`${program} uninstall\`${process.env.IT_HOME ? `, with IT_HOME set to ${folder} as it is now` : ''}, which takes the add-on out and removes It’s folders and recognised top-level files. Inspect any remaining files before deleting them yourself.`,
+              )
+            }
+          }
+          // 3. Its line in the shell's profile, with the comment above it
+          const bin = path.join(folder, 'bin')
+          const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : await unlisted(bin, say)
+          for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
+          for (const { file, why: reason } of profiles.failed)
+            left.push(
+              `${file} still has the line that puts It on your PATH, and could not be changed (${reason}). Check the file and any recovery original named above, then take the It line out yourself.`,
+            )
+          // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
+          if (process.platform === 'win32') {
+            const taken = offWindowsPath(bin)
+            if (taken === 'off') say(`${bin} is off your PATH.`)
+            else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
+          }
+          // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
+          crumbs(folder, say)
+          // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
+          // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
+          if (codexRuleLetsItOut())
+            say(
+              `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
+            )
+          // 5. Whole owned folders and recognised top-level files. Windows moves the running executable out first. An add-on
+          // that remains keeps the program and its ownership record so removal can be retried.
+          const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
+          if (stepped?.deletedLater)
+            say(
+              `The program moved itself to ${stepped.at} to do this, and Windows was asked to delete it from there the next time you sign in. If it remains, delete it yourself.`,
+            )
+          else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+          takenOff = true
+          const settingsAt = path.join(real, 'service.json')
+          const settings = existsSync(settingsAt) ? readFileSync(settingsAt, 'utf8') : undefined
+          try {
+            removeInstallationFiles(real, kept)
+          } catch (err) {
+            left.push(`${folder} could not be fully cleaned (${why(err)}). Inspect the remaining files before removing them yourself.`)
+            // A partial removal can leave the backend behind. Keep the settings needed to
+            // identify it when uninstall is tried again, while the shutdown lock is still held.
+            if (settings !== undefined && existsSync(real) && !existsSync(settingsAt)) {
+              try {
+                writePrivate(settingsAt, settings)
+              } catch (restore) {
+                left.push(`The service settings could not be restored (${why(restore)}). Put service.json back before retrying uninstall.`)
+              }
+            }
+          }
+        },
+      )
+    } catch (err) {
+      if (removing) throw err
+      throw new Problem(
+        `It could not make sure that no backend program is left running on this folder’s database: ${err instanceof Problem ? err.message : why(err)}.`,
+        'still_running',
+        'The folder and add-ons were kept. Resolve the running program or unreadable settings, then run `it uninstall` again.',
       )
     }
-  }
-  // 1. The add-ons, each from where this folder put it
-  for (const id of HARNESSES) {
-    if (!existsSync(stampFile(id))) continue
-    const gone = await disconnect(id, say).catch(() => false)
-    if (gone) say(`${KNOWN[id].label}: It’s add-on is out.`)
-    else left.push(`${KNOWN[id].label} still has It’s add-on, which could not be taken out. Its own command for add-ons removes it.`)
-  }
-  // 2. An `it serve` someone started by hand in this folder
-  service.askToStop(folder, 30_000)
-  if (service.runningFor(folder)) left.push('It is still running, and was asked to stop: end the `it serve` you started, in its terminal.')
-  // 3. Its line in the shell's profile, with the comment above it
-  const bin = path.join(folder, 'bin')
-  const profiles = process.platform === 'win32' ? { changed: [], failed: [] } : unlisted(bin)
-  for (const file of profiles.changed) say(`${file}: the line that put It on your PATH is out.`)
-  for (const { file, why: reason } of profiles.failed)
-    left.push(`${file} still has the line that puts It on your PATH, and could not be changed (${reason}). It is as it was: take the line out yourself.`)
-  // On Windows the folder is on the PATH the system keeps for this account, and is taken off there
-  if (process.platform === 'win32') {
-    const taken = offWindowsPath(bin)
-    if (taken === 'off') say(`${bin} is off your PATH.`)
-    else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
-  }
-  // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
-  crumbs(folder)
-  // The rule the person wrote for Codex on It's word is theirs, and is not taken out. It is said
-  // to be there, since it lets whatever is named `it` out of Codex's sandbox from now on.
-  if (codexRuleLetsItOut())
-    say(
-      `Codex: the rule that lets \`it\` run outside Codex’s sandbox is still in Codex’s rules folder (\`${CODEX_RULE_FILE}\` is where It said to keep it). Delete it now that It is gone.`,
-    )
-  // 5. Its folder, the program in it included. A program that is running may delete its own
-  // file on every system but Windows, where it steps out of the folder first. What the service
-  // held open there a moment ago may be held a moment longer, and is tried again.
-  const stepped = process.platform === 'win32' ? stepOutOf(folder) : undefined
-  if (stepped?.deletedLater) say(`The program moved itself to ${stepped.at} to do this, and is deleted from there the next time you sign in to Windows.`)
-  else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+  })
+  // The program and shutdown locks are released before the last empty directories are removed.
   try {
-    rmSync(folder, { recursive: true, force: true, ...(process.platform === 'win32' ? { maxRetries: 20, retryDelay: 250 } : {}) })
+    const retained = finishInstallationRemoval(real)
+    if (!retained.length && lstatSync(folder, { throwIfNoEntry: false })?.isSymbolicLink()) rmSync(folder)
+    const unknown = retained.filter((name) => !kept || !['addons', 'bin', 'installation.json'].includes(name))
+    if (unknown.length)
+      left.push(
+        `${real} still holds files It could not safely remove: ${unknown.join(', ')}. These may include page data or backups. Inspect them and remove only what you intend to erase. The folder and any link to it were kept.`,
+      )
   } catch (err) {
-    left.push(`${folder} could not be deleted (${why(err)}). Delete it to finish.`)
+    left.push(`${folder} could not be fully cleaned (${why(err)}). Inspect the remaining files before removing them yourself.`)
   }
-  if (existsSync(folder) && !left.some((line) => line.startsWith(folder))) left.push(`${folder} could not be deleted whole. Delete it to finish.`)
   if (!forPerson(a)) return out({ removed: left.length === 0, folder, ...(left.length ? { left } : {}), said })
   tell([
-    left.length ? 'It is off this machine, but for this:' : 'It is off this machine.',
+    left.length ? 'Removal is incomplete:' : 'It is off this machine.',
     ...left.map((line) => `  ${line}`),
     left.some((line) => /PATH/.test(line))
       ? 'Once the PATH is as you want it, a new terminal has it: one that is open keeps the old PATH.'
@@ -1293,54 +1087,36 @@ async function uninstall(a: Args) {
   ])
 }
 
-/**
- * Takes the installer's line out of every shell profile it may have put it in, with the comment
- * and the blank line it wrote above it, and says which files it was in. A profile that held
- * nothing else was made by the installer, and goes too.
- */
-/**
- * Puts new text in the place of a file's, whole or not at all: written beside the file with
- * every byte on the disk, under the file's own permissions, and only then given its name. A
- * file that is a link is written where the link leads. These are the person's own files, with
- * their own settings in them beside It's line, and a disk that fills or a program that is ended
- * half way must leave them as they were.
- */
-function replaceWhole(file: string, text: string): void {
-  const target = realpathSync(file)
-  const part = `${target}.it-${process.pid}.part`
-  const mode = statSync(target).mode & 0o777
-  try {
-    const out = openSync(part, 'w', mode)
-    try {
-      // Every byte, or an error: a disk that is nearly full takes a part of what it is given
-      // and says so without failing, and a part is not what is given the file's name
-      writeAll(out, Buffer.from(text))
-      // The permissions the file had, whatever this program's own mask would have left of them
-      fchmodSync(out, mode)
-      fsyncSync(out)
-    } finally {
-      closeSync(out)
-    }
-    renameSync(part, target)
-  } finally {
-    rmSync(part, { force: true })
-  }
+/** The line the installer writes for a folder, without asking a shell to discover its profiles again. */
+function profileLine(bin: string, fish: boolean): string {
+  const posix = `export PATH='${bin.replaceAll("'", `'\\''`)}':"$PATH"`
+  const fishWord = `'${bin.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`
+  const fishLine = `contains -- ${fishWord} $PATH; or set -gx PATH ${fishWord} $PATH`
+  return fish ? fishLine : posix
 }
 
 /** The files a shell reads when it starts, each with the line the install script writes into it to put a folder on the PATH. */
-function profileLines(bin: string): Map<string, string> {
-  const dirs = [process.env.ZDOTDIR, os.homedir()].filter((d): d is string => typeof d === 'string' && d !== '')
-  // The line as the installer writes it for each shell: fish has a file of It's own, and words of its own
-  const posix = `export PATH='${bin.replaceAll("'", `'\\''`)}':"$PATH"`
-  const fishWord = `'${bin.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`
-  const fish = `contains -- ${fishWord} $PATH; or set -gx PATH ${fishWord} $PATH`
-  const files = new Map<string, string>(
-    [...new Set(dirs.flatMap((d) => ['.zshrc', '.bashrc', '.bash_profile', '.bash_login', '.profile'].map((name) => path.join(d, name))))].map((file) => [
-      file,
-      posix,
-    ]),
-  )
-  files.set(path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'fish', 'conf.d', 'it.fish'), fish)
+async function profileLines(bin: string, active = false, unresolved: () => void = () => {}): Promise<Map<string, string>> {
+  const shell = path.basename(process.env.SHELL || 'sh')
+  const zdot = shell === 'zsh' ? await zshDirectory() : undefined
+  if (shell === 'zsh' && !zdot) unresolved()
+  const home = os.homedir()
+  const zshFiles = [...new Set([zdot, ...(!active ? [process.env.ZDOTDIR, home] : [])])]
+    .filter((d): d is string => Boolean(d))
+    .map((dir) => path.join(dir, '.zshrc'))
+  const login = ['.bash_profile', '.bash_login', '.profile'].find((name) => existsSync(path.join(home, name))) ?? '.profile'
+  const posixFiles = active
+    ? shell === 'zsh'
+      ? zshFiles
+      : shell === 'bash'
+        ? ['.bashrc', login].map((name) => path.join(home, name))
+        : shell === 'fish'
+          ? []
+          : [path.join(home, '.profile')]
+    : [...zshFiles, ...['.bashrc', '.bash_profile', '.bash_login', '.profile'].map((name) => path.join(home, name))]
+  const files = new Map(posixFiles.map((file) => [file, profileLine(bin, false)]))
+  if (!active || shell === 'fish')
+    files.set(path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'fish', 'conf.d', 'it.fish'), profileLine(bin, true))
   return files
 }
 
@@ -1349,9 +1125,9 @@ function profileLines(bin: string): Map<string, string> {
  * PATH holds: the install script's line for it is in a file the person's shell reads, or the
  * folder is on the PATH Windows keeps for the account.
  */
-function onPathLater(bin: string): boolean {
+async function onPathLater(bin: string): Promise<boolean> {
   if (process.platform === 'win32') return inPowerShell(windowsPathHas(bin))?.trim() === 'on'
-  for (const [file, line] of profileLines(bin)) {
+  for (const [file, line] of await profileLines(bin, true)) {
     try {
       if (readFileSync(file, 'utf8').split('\n').includes(line)) return true
     } catch {}
@@ -1359,38 +1135,58 @@ function onPathLater(bin: string): boolean {
   return false
 }
 
-function unlisted(bin: string): { changed: string[]; failed: { file: string; why: string }[] } {
-  const files = profileLines(bin)
+/**
+ * Takes the installer's line out of every shell profile it may have put it in, with the comment
+ * and the blank line it wrote above it, and says which files it was in. A profile that held
+ * nothing else is removed unless it is a link, whose target is left empty.
+ */
+async function unlisted(bin: string, say: (line: string) => void): Promise<{ changed: string[]; failed: { file: string; why: string }[] }> {
+  const files = await profileLines(bin, false, () =>
+    say('Zsh did not report its startup folder within five seconds. Check the .zshrc it reads and remove the It PATH line there if it remains.'),
+  )
   const changed: string[] = []
   const failed: { file: string; why: string }[] = []
   for (const [file, line] of files) {
-    let text: string
+    /** The profile without the line, nothing where the line is not in it, and null where nothing else is. */
+    const without = (text: string): string | null | undefined => {
+      const kept: string[] = []
+      let found = false
+      for (const l of text.split('\n')) {
+        const sameBin = () => {
+          const posix = /^export PATH='(.*)':"\$PATH"$/.exec(l)
+          const fish = /^contains -- '((?:\\.|[^'])*)' \$PATH; or set -gx PATH /.exec(l)
+          const named = posix ? posix[1]!.replaceAll("'\\''", "'") : fish?.[1]?.replace(/\\([\\'])/g, '$1')
+          if (!named || !path.isAbsolute(named) || profileLine(named, line.startsWith('contains -- ')) !== l) return false
+          try {
+            return realpathSync(named) === realpathSync(bin)
+          } catch {
+            return false
+          }
+        }
+        if (l !== line && !sameBin()) {
+          kept.push(l)
+          continue
+        }
+        found = true
+        // The comment the installer wrote above it, and the blank line above that
+        if (kept.at(-1) === '# It') kept.pop()
+        if (kept.at(-1) === '') kept.pop()
+      }
+      if (!found) return undefined
+      const after = kept.join('\n')
+      return after.trim() === '' ? null : after.endsWith('\n') || !text.endsWith('\n') ? after : `${after}\n`
+    }
+    // A profile that is not there, or cannot be read, is not known to hold the line
     try {
-      text = readFileSync(file, 'utf8')
+      readFileSync(file, 'utf8')
     } catch {
       continue
     }
-    const lines = text.split('\n')
-    const kept: string[] = []
-    let found = false
-    for (const l of lines) {
-      if (l !== line) {
-        kept.push(l)
-        continue
-      }
-      found = true
-      // The comment the installer wrote above it, and the blank line above that
-      if (kept.at(-1) === '# It') kept.pop()
-      if (kept.at(-1) === '') kept.pop()
-    }
-    if (!found) continue
-    const after = kept.join('\n')
     try {
-      if (after.trim() === '') rmSync(file, { force: true })
-      else replaceWhole(file, after.endsWith('\n') || !text.endsWith('\n') ? after : `${after}\n`)
-      changed.push(file)
+      if (changeWhole(file, without, (original) => say(`The original is kept for recovery at ${original}. Review it before removing its numbered folder`)))
+        changed.push(file)
     } catch (err) {
-      failed.push({ file, why: (err as NodeJS.ErrnoException).code ?? 'an error' })
+      failed.push({ file, why: (err as NodeJS.ErrnoException).code ?? (err as Error).message })
     }
   }
   return { changed, failed }
@@ -1400,9 +1196,9 @@ function unlisted(bin: string): { changed: string[]; failed: { file: string; why
  * What the agent apps keep of It's add-ons after their own commands have removed them, and
  * do not clear away: Codex's note that the person trusted the add-on's hooks, and the copies of
  * the add-on that Codex and Claude Code keep. Each is taken out only where it is plainly It's,
- * and nothing here is ever said to have failed: none of it does anything once the add-on is gone.
+ * and a settings file that cannot be changed is left for the person to check.
  */
-function crumbs(folder: string): void {
+function crumbs(folder: string, say: (line: string) => void): void {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
   // What is in the apps' folders is shared by every It folder on the machine. A copy of the
   // add-on says which It folder it was installed from: where one that an app keeps says another
@@ -1443,12 +1239,21 @@ function crumbs(folder: string): void {
     } catch {}
   if (anothers(path.join(codexHome, 'plugins', 'cache', 'it'))) return
   try {
-    const file = path.join(codexHome, 'config.toml')
-    const text = readFileSync(file, 'utf8')
-    // A table of its own for each hook, holding the one line that says it was trusted
-    const without = withoutTables(text, (header) => /^\[hooks\.state\."it-bridge@it:[^"]*"\]/.test(header)).replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
-    if (without !== text) replaceWhole(file, without.replace(/\n{3,}/g, '\n\n'))
-  } catch {}
+    // Codex saves this file itself, when the person trusts a project or a plugin's hooks, and
+    // may do so while this is at work. Only an unfinished change keeps its original for recovery.
+    changeWhole(
+      path.join(codexHome, 'config.toml'),
+      (text) => {
+        // A table of its own for each hook, holding the one line that says it was trusted
+        const without = withoutTables(text, (header) => /^\[hooks\.state\."it-bridge@it:[^"]*"\]/.test(header)).replace(/\n\[hooks\.state\]\n(?=\n|\[|$)/, '\n')
+        return without === text ? undefined : without.replace(/\n{3,}/g, '\n\n')
+      },
+      (original) => say(`Codex: the original settings are kept for recovery at ${original}. Review them before removing the numbered folder`),
+    )
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
+      say(`Codex's settings could not be cleaned up. Check its config.toml and any recovery original named above: ${(err as Error).message}`)
+  }
   try {
     rmSync(path.join(codexHome, 'plugins', 'cache', 'it'), { recursive: true, force: true })
   } catch {}
@@ -1493,39 +1298,55 @@ function setUp(a: Args, was: boolean): void {
 }
 
 async function setup(a: Args, joined = false) {
-  // Where this It was installed from, if that is not the usual place, is where it looks for newer versions
-  keepBase()
+  const only = text(a, 'only')
+  if (only !== undefined && !a.flags.none) appsNamed(only)
+  // Take the folder's setup lock first where one is needed, so concurrent setups keep their
+  // usual waiting message and allowance. Every path checks the program before its writes.
+  const current = <T>(run: () => Promise<T>) =>
+    withCurrentProgram(() => {
+      markInstallation(home())
+      // Where this It was installed from is where it looks for newer versions.
+      keepBase()
+      return run()
+    })
+
   if (a.flags.none && !enrolledHere()) {
     const leftBehind = !existsSync(settingsFile()) && (hasLeft() || holdsAddons())
     if (leftBehind || elsewhere()) {
-      await reconcile([], say)
-      if (leftBehind) {
-        // Noted, so that the folder is still known for what it is once its add-ons are out
-        noteLeft()
-        say(
-          'It is not set up in this folder, which holds only what an earlier use of It left there, so nothing was started. `it setup --none` here takes out the add-ons this folder had put in. To set It up on this machine, run `it setup`.',
-        )
-      }
-      const left = await detectAll()
-      return forPerson(a) ? tell(appsSaid(left, false)) : out({ harnesses: left, wanted: [] })
+      return oneAtATime(() =>
+        current(async () => {
+          await reconcile([], say)
+          if (leftBehind) {
+            // Noted, so that the folder is still known for what it is once its add-ons are out
+            noteLeft()
+            say(
+              'It is not set up in this folder, which holds only what an earlier use of It left there, so nothing was started. `it setup --none` here takes out the add-ons this folder had put in. To set It up on this machine, run `it setup`.',
+            )
+          }
+          const left = await detectAll()
+          return forPerson(a) ? tell(appsSaid(left, false)) : out({ harnesses: left, wanted: [] })
+        }),
+      )
     }
   }
-  if (elsewhere()) return settingUp(a, joined)
+  if (elsewhere()) return oneAtATime(() => current(() => settingUp(a, joined)))
   // Where the backend is this machine's own to run, a setup makes what It needs here and may
   // run the backend for as long as the setup takes: one at a time for a folder, and not while
   // the machine is joining an It on another computer. Whether the folder is to run an It is
   // decided again once the folder is this setup's alone. A machine that has joined an It
   // meanwhile keeps the identity it joined with: nothing is set up here over it.
-  return oneAtATime(() => {
-    const at = readJson<{ at?: string }>(inHome('machine.json'))?.at
-    if (at)
-      throw new Problem(
-        `This machine joined the It at ${at} while this setup was waiting, so no It was set up here.`,
-        'joined',
-        'Run `it setup` again to connect its agent apps to that It. To have It run on this machine instead, run `it logout` first, and then `it setup`.',
-      )
-    return settingUp(a, joined)
-  })
+  return oneAtATime(() =>
+    current(() => {
+      const at = readJson<{ at?: string }>(inHome('machine.json'))?.at
+      if (at)
+        throw new Problem(
+          `This machine joined the It at ${at} while this setup was waiting, so no It was set up here.`,
+          'joined',
+          'Run `it setup` again to connect its agent apps to that It. To have It run on this machine instead, run `it logout` first, and then `it setup`.',
+        )
+      return settingUp(a, joined)
+    }),
+  )
 }
 
 /** How long a setup waits for another that is at work in the same folder, which may itself be waiting for a person's answers. */
@@ -1651,18 +1472,37 @@ async function newDisplay(before: Set<string>, forMs: number, given?: AbortSigna
   return undefined
 }
 
-/**
- * A setup that leads a person through: the same things `settingUp` does, in the same order,
- * said as a few steps, and with two more at the end that the person would otherwise have to
- * know to ask for: how It is to be reached from their other devices, and the pairing of the
- * first screen. It ends by saying the one thing to do next.
- */
+/** Checks app prerequisites before a first backend download, then reuses the result for choosing apps. */
+async function setupApps(a: Args, guided: boolean): Promise<HarnessStatus[]> {
+  const looking = guided ? flow.step('Agent apps', 'looking for them on this machine') : undefined
+  if (!guided) say('Looking for agent apps on this machine…')
+  const found = await detectAll().finally(() => looking?.clear())
+  const old = found.filter((h) => h.addon === 'too_old')
+  if (
+    !a.flags.none &&
+    !elsewhere() &&
+    !existsSync(settingsFile()) &&
+    !enrolledHere() &&
+    old.length &&
+    !found.some((h) => supported(h.id) && h.addon !== 'too_old')
+  ) {
+    throw new Problem(
+      old.map((h) => h.detail).join('\n'),
+      'invalid',
+      'No backend was downloaded or set up. Update an agent app and run `it setup` again, or use `it setup --none` to set It up without connecting an app.',
+    )
+  }
+  return found
+}
+
+/** Leads a person through setup, network access and pairing their first screen. */
 async function settingUpLed(a: Args, begunAlready = false) {
   // What the parts say in sentences is kept, and said at the end where the person has to act on it
   const kept: string[] = []
   const quiet = (line: string) => void kept.push(line)
   // The name is said once: by the install script where that ran, by the question of where It is where that was asked, and else here
   if (!process.env.IT_INSTALL_FLOW && !(begunAlready && !a.flags.all && text(a, 'only') === undefined && !a.flags.yes)) flow.banner('setup')
+  const found = await setupApps(a, true)
   await noneAbandoned()
   const inBackground = !a.flags['no-service']
   let at = flow.step('Backend program')
@@ -1705,22 +1545,11 @@ async function settingUpLed(a: Args, begunAlready = false) {
     flow.step('This machine').done(me.name)
 
     // ---------- the agent apps
-    const found = await detectAll()
     const usable = found.filter((h) => supported(h.id) && h.addon !== 'too_old')
     let wanted: Harness[]
     const only = text(a, 'only')
-    if (only !== undefined) {
-      wanted = only
-        .split(',')
-        .map((part) => part.trim())
-        .filter(Boolean) as Harness[]
-      const bad = wanted.filter((id) => !(HARNESSES as readonly string[]).includes(id))
-      if (bad.length) throw new Problem(`Not an agent app It knows: ${bad.join(', ')}`, 'invalid', `It knows: ${HARNESSES.join(', ')}`)
-      // Asked for by name and held back: refused in words, with nothing changed. Carried on with,
-      // it would connect nothing and take out every app that was not named, the one asked for among them.
-      const held = wanted.map((id) => whyHeldBack(id)).find((why) => why !== undefined)
-      if (held) throw new Problem(held, 'invalid')
-    } else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
+    if (only !== undefined) wanted = appsNamed(only)
+    else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
     // Nothing is asked where there is nothing to choose: no app was found, or none that It can connect
     else if (!usable.length) wanted = []
     else {
@@ -1739,6 +1568,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
     const apps = flow.step('Agent apps', found.length ? 'connecting' : '')
     const connectedBefore = new Set(found.filter((h) => h.addon === 'connected').map((h) => h.id))
     // The backend is told of the choice before anything is changed on this machine, as in `settingUp`
+    // Asked only where an app is chosen: with none, reopening comes on for none
+    const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
     await reconcile(wanted, quiet)
     woken ??= await chosen(wanted)
@@ -1758,14 +1589,18 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // What decides whether Codex's first page appears at all is said by itself, and first
     const shut = codexShut(after)
     if (shut) left.push(shut)
-    // That reopening is on for what was just connected, said once: not again each time setup is run
-    const waking = wakesSaid(woken.filter((id) => !connectedBefore.has(id as Harness) && on.some((h) => h.id === id)))
+    // That reopening came on with this setup, said once: not again each time setup is run
+    const waking = wakesSaid(cameOn(woken, wokenBefore, connectedBefore).filter((id) => on.some((h) => h.id === id)))
     if (waking) left.push(waking)
     for (const h of after) {
       if (h.addon === 'needs_approval' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !connectedBefore.has(h.id)) left.push(`${KNOWN[h.id].label}: ${AFTER[h.id]}`)
       // An app that was found and whose add-on is held back is named, with how to ask for it: left unsaid, its user is told that no app was found
       else if (h.addon === 'unavailable' && h.detail && whyHeldBack(h.id)) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
+      // And one that is too old for It is named with the version It needs and what to do. The
+      // list to choose from says as much of it, and is not shown where no app can be connected:
+      // someone whose only agent app is too old was told that none was found that It can connect, and no more
+      else if (h.addon === 'too_old' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
     }
 
     // Registered is not yet running. The connector itself is asked, and given a little while to answer
@@ -1851,7 +1686,7 @@ async function settingUpLed(a: Args, begunAlready = false) {
       }
     }
 
-    const add = pathLine()
+    const add = await pathLine()
     if (add) left.push(`\`it\` is not on your PATH yet, so an agent that runs it by name will not find it. ${add}`)
     flow.line()
     if (left.length) {
@@ -1934,6 +1769,7 @@ async function joinedInstead(a: Args): Promise<boolean> {
         const done = await login(asked)
         flow.line()
         flow.line(`${flow.green('✓')} ${'Joined'.padEnd(20)} ${flow.dim(`as “${done.name}”`)}`)
+        if (done.waitsFor !== undefined) flow.line(flow.dim(joinedBefore(done.waitsFor)))
         return true
       } catch (err) {
         if (!(err instanceof Problem)) throw err
@@ -1949,8 +1785,31 @@ async function joinedInstead(a: Args): Promise<boolean> {
   }
 }
 
+/**
+ * The agent apps that `--only` names. A name It does not know is refused, and so is an app
+ * whose add-on is held back and that nobody has asked for: in words, with nothing changed.
+ * Carried on with, such a setup would connect nothing and take out every app that was not
+ * named, the one asked for among them.
+ */
+function appsNamed(only: string): Harness[] {
+  const wanted = only
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean) as Harness[]
+  const bad = wanted.filter((id) => !(HARNESSES as readonly string[]).includes(id))
+  if (bad.length) throw new Problem(`Not an agent app It knows: ${bad.join(', ')}`, 'invalid', `It knows: ${HARNESSES.join(', ')}`)
+  const held = wanted.map((id) => whyHeldBack(id)).find((why) => why !== undefined)
+  if (held) throw new Problem(held, 'invalid')
+  return wanted
+}
+
 /** The whole of a setup, once it is known that something is to be set up here: see `setup`. */
 async function settingUp(a: Args, joined: boolean) {
+  // What `--only` names is looked at before anything is begun. A first run fetches the backend
+  // program, makes this machine's settings and starts It, and one that was then refused for
+  // what it was asked to connect would have done all of that and changed what it said it had not.
+  const only = text(a, 'only')
+  if (only !== undefined && !a.flags.none) appsNamed(only)
   // Said already by the question of where It is, where that was asked
   const asked = !joined && led(a) && !existsSync(settingsFile()) && !enrolledHere()
   if (asked && (await joinedInstead(a))) return settingUp(a, true)
@@ -1959,6 +1818,8 @@ async function settingUp(a: Args, joined: boolean) {
   // not. A machine that has only just joined is not set up yet, though it has its identity
   const leaves = a.flags.none === true && !joined && enrolledHere() && (elsewhere() || existsSync(settingsFile()))
   const inBackground = !a.flags['no-service'] && !leaves
+  // --none needs no app prerequisite. Its inventory is read once the backend is ready.
+  const beforeSetup = a.flags.none ? undefined : await setupApps(a, false)
   if (!elsewhere()) await noneAbandoned()
   // Where the backend is not this machine's to run, there is nothing to make here, and the
   // background service is the connector alone
@@ -1970,8 +1831,7 @@ async function settingUp(a: Args, joined: boolean) {
     // its folder's permissions and this program cannot give it others.
     if (begun?.enrolled && process.platform === 'win32' && process.env.IT_HOME)
       say(`This machine's key is kept in ${home()}. Windows lets whoever can open that folder read it, so make sure nobody but you can.`)
-    say('Looking for agent apps on this machine…')
-    const found = await detectAll()
+    const found = beforeSetup ?? (await setupApps(a, false))
     const usable = found.filter((h) => supported(h.id) && h.addon !== 'too_old')
     for (const h of found)
       say(
@@ -1985,20 +1845,9 @@ async function settingUp(a: Args, joined: boolean) {
     let wanted: Harness[]
     /** What is said of the apps that were found and left unconnected because nobody was there to be asked. */
     let unasked: string | undefined
-    const only = text(a, 'only')
     if (a.flags.none) wanted = []
-    else if (only !== undefined) {
-      wanted = only
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean) as Harness[]
-      const bad = wanted.filter((id) => !(HARNESSES as readonly string[]).includes(id))
-      if (bad.length) throw new Problem(`Not an agent app It knows: ${bad.join(', ')}`, 'invalid', `It knows: ${HARNESSES.join(', ')}`)
-      // Asked for by name and held back: refused in words, with nothing changed. Carried on with,
-      // it would connect nothing and take out every app that was not named, the one asked for among them.
-      const held = wanted.map((id) => whyHeldBack(id)).find((why) => why !== undefined)
-      if (held) throw new Problem(held, 'invalid')
-    } else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
+    else if (only !== undefined) wanted = appsNamed(only)
+    else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
     else if (!process.stdin.isTTY) {
       // Nobody is here to be asked. What the person chose before stays chosen, and what is
       // connected stays connected: It is asked first, so that nothing is changed where it cannot be
@@ -2025,6 +1874,8 @@ async function settingUp(a: Args, joined: boolean) {
     // would otherwise take out again, by the choice from before, what is being connected here.
     // Where the backend cannot be reached, what is on this machine is put right all the same,
     // so that an add-on the person chose to remove is removed, and the failure is said after
+    // Asked only where an app is chosen: with none, reopening comes on for none
+    const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
     await reconcile(wanted, say)
     woken ??= await chosen(wanted)
@@ -2067,9 +1918,9 @@ async function settingUp(a: Args, joined: boolean) {
     // What decides whether Codex's first page appears at all is said by itself, and first.
     const shut = codexShut(after)
     if (shut) say(`\n${shut}`)
-    // That reopening is on for what was just connected, said once: not again each time setup is run
+    // That reopening came on with this setup, said once: not again each time setup is run
     const waking = wakesSaid(
-      woken.filter((id) => !before.has(id as Harness) && after.some((h) => h.id === id && (h.addon === 'connected' || h.addon === 'needs_approval'))),
+      cameOn(woken, wokenBefore, before).filter((id) => after.some((h) => h.id === id && (h.addon === 'connected' || h.addon === 'needs_approval'))),
     )
     if (waking) say(`\n${waking}`)
     for (const h of after) {
@@ -2079,7 +1930,7 @@ async function settingUp(a: Args, joined: boolean) {
     // The things left for the person to do, unless everything was just taken out again from
     // an It that was already here
     if (!a.flags.none || begun?.enrolled || joined) {
-      const add = pathLine()
+      const add = await pathLine()
       if (add) say(`\n\`it\` is not on your PATH yet, so an agent that runs it by name will not find it. ${add}`)
       // Run from here only for as long as setup took, It stops with it
       if (begun?.own) say('\nIt is not running in the background. Run `it serve`, in a terminal or under a supervisor of your own, to keep it going.')
@@ -2160,11 +2011,13 @@ async function networkAsItStands(running: boolean): Promise<ReturnType<typeof ne
  * asks as the service itself does, with the key in It's settings, so that it needs nothing of
  * this machine's enrolment.
  */
-async function doorStands(config: { port: number; adminKey: string }): Promise<{ on: boolean; wanted: boolean } | undefined> {
+async function doorStands(config: { port: number; adminKey: string }): Promise<{ on: boolean; wanted: boolean; tailnet?: boolean } | undefined> {
   const said = (await asAdmin({ api: backendAt(config.port).api, adminKey: config.adminKey }, 'network:current', {}).catch(() => undefined)) as
-    | { on?: unknown; wanted?: unknown }
+    | { on?: unknown; wanted?: unknown; tailnet?: unknown }
     | undefined
-  return typeof said?.on === 'boolean' && typeof said.wanted === 'boolean' ? { on: said.on, wanted: said.wanted } : undefined
+  return typeof said?.on === 'boolean' && typeof said.wanted === 'boolean'
+    ? { on: said.on, wanted: said.wanted, ...(typeof said.tailnet === 'boolean' ? { tailnet: said.tailnet } : {}) }
+    : undefined
 }
 
 /**
@@ -2183,11 +2036,17 @@ async function turnNetwork(
    * Waits until the running service has looked at a setting and said so, and gives how its
    * door then stands. Nothing when no service is running to be waited for.
    */
-  const taken = async (setting: boolean) => {
+  const taken = async (setting: boolean, policy?: boolean) => {
     if (!running) return undefined
     const until = Date.now() + TAKEN_MS
     let stands = await doorStands(config)
-    while (stands !== undefined && stands.wanted !== setting && Date.now() < until) {
+    while (
+      stands !== undefined &&
+      (stands.wanted !== setting ||
+        (!setting && stands.on) ||
+        (setting && stands.on && policy !== undefined && stands.tailnet !== undefined && stands.tailnet !== policy)) &&
+      Date.now() < until
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 200))
       stands = await doorStands(config)
     }
@@ -2200,14 +2059,10 @@ async function turnNetwork(
     noteNetwork(false)
     stands = await taken(false)
   }
-  // Whom the door answers changes with nothing else changing when only the tailnet is turned
-  // to or from. The service opens its door anew for that at its next look, which is waited out
-  const onlyWhom = running && on && config.network && (config.tailnet === true) !== tailnet
   noteNetwork(on, tailnet)
   // The service that is running takes it by itself. With none running there is nothing to wait for.
-  stands = await taken(on)
-  if (onlyWhom) await new Promise((resolve) => setTimeout(resolve, 2500))
-  if (stands !== undefined && stands.wanted !== on)
+  stands = await taken(on, tailnet)
+  if (stands !== undefined && (stands.wanted !== on || (!on && stands.on) || (on && stands.on && stands.tailnet !== undefined && stands.tailnet !== tailnet)))
     throw new Problem(
       `The network is turned ${on ? 'on' : 'off'} in It’s settings, and the service that is running has not taken that.`,
       'not_taken',
@@ -2223,6 +2078,14 @@ async function turnNetwork(
       'Another program may have one of the ports It listens on, on one of those addresses. `it service logs` says what the service met.',
     )
   }
+  if (running && (stands === undefined || (on && stands.tailnet === undefined)))
+    throw new Problem(
+      'The network setting was saved, but It could not confirm that the service applied it.',
+      'not_confirmed',
+      stands === undefined
+        ? 'The service could not be asked how its door stands. Check `it service logs` and try again.'
+        : 'The backend functions do not report the applied network policy. Run `it status` on this machine to check whether older functions are still running.',
+    )
 }
 
 /** What is said where the tailnet is asked for on a machine that is on none. */
@@ -2344,6 +2207,8 @@ async function status(a: Args) {
   const blocked = found === 'not let ask'
   const learned = (machine as { latest?: unknown } | null | undefined)?.latest
   const newerOut = typeof learned === 'string' && newer(learned, VERSION) ? learned : null
+  const connector = blocked ? { running: null } : ((await connectorHealth()) ?? { running: false })
+  const runtimes = connector.addons as Record<string, HarnessStatus['runtime']> | undefined
   const stands = {
     ...(blocked ? { blocked: true, hint } : {}),
     running: blocked ? null : running,
@@ -2352,9 +2217,9 @@ async function status(a: Args) {
     site: siteAddress() ?? null,
     network: await networkAsItStands(running && !blocked),
     ...(database ? { database } : {}),
-    connector: blocked ? { running: null } : ((await connectorHealth()) ?? { running: false }),
+    connector,
     background: service.status(),
-    harnesses: await detectAll(),
+    harnesses: (await detectAll()).map((h) => ({ ...h, ...(runtimes?.[h.id] ? { runtime: runtimes[h.id] } : {}) })),
     version: VERSION,
     protocol: PROTOCOL_VERSION,
     // A newer version that this machine has learned is out, where it looks for one
@@ -2405,8 +2270,7 @@ async function keepRunning(a: Args, named: string, command: string, run: (line: 
   const log = text(a, 'log')
   let last = ''
   let repeats = 0
-  // Told where to write its log, it is the background service and was started by the system
-  if (log && command === 'it serve') askShell((l) => line(l))
+  if (service.supervised() && command === 'it serve') askShell((l) => line(l))
   const line = (l: string) => {
     // The same line over and over (the network is down, say) is written once and counted
     if (l === last && ++repeats % 300 !== 0) return
@@ -2528,11 +2392,13 @@ const HELP = `it ${VERSION}: put a live ${NOUN.one} on any display you own, and 
 Pages
   it create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)  [--state '{…}'] [--open] [--on "<display>"]
   it update <id> (--file f | --dir d | --html "<…>" | pipe) [--title "<title>"] [--open] [--on "<display>"]
-                                 Both take [--agent <name>], a label for who made it, and
+                                 Both take [--agent <name>], a label for who made it,
+                                 which its owning conversation can change explicitly, and
                                  [--take], which gives the ${NOUN.one} to this conversation.
-                                 Without it, create makes nothing under an id that is
+                                 Without --take, create makes nothing under an id that is
                                  another conversation's ${NOUN.one}, and says whose it is.
-  it list | it read <id> | it delete <id> | it rollback <id> <version>
+  it list | it read <id> | it rollback <id> <version>
+  it delete <id> [--status]      Delete a page, or check its last deletion.
 
 State
   it set <id> <key> <value>      A key may be dotted, and a value that parses as JSON is JSON.
@@ -2621,14 +2487,26 @@ async function main(argv: string[]): Promise<void> {
     quietAboutItsDatabase()
     lenientAboutServiceMarks()
   }
-  // Usage reporting turned off in this command's environment is written down for the
-  // background service, which has no such environment, before anything else is done
-  usage.heed()
-  if (cmd === 'hook') return hook(rest[0] ?? '')
+  if (cmd === 'hook') {
+    usage.heed()
+    return hook(rest[0] ?? '')
+  }
   // What the background service has the person's shell run, to learn what it gives a program
-  if (cmd === 'shell-env') return printEnv()
+  if (cmd === 'shell-env') {
+    usage.heed()
+    return printEnv()
+  }
+  if (cmd === 'shell-profile') {
+    const dir = await zshDirectory()
+    if (!dir) throw new Problem('Zsh did not report an absolute startup folder within five seconds. Its PATH file was left alone.')
+    process.stdout.write(`${dir}\n`)
+    return
+  }
   const a = parse(rest)
+  optionsFor(cmd, a)
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h' || a.flags.help) {
+    // An explicit opt-out must reach the background service even when this command only prints help.
+    usage.heed()
     // `it help <word>` prints one of the parts the agent skill leaves for when it is needed.
     // Any other word after it, a command's name among them, prints the whole help as before
     const more = cmd === 'help' && a._[0] !== undefined && Object.hasOwn(MORE, a._[0]) ? MORE[a._[0]] : undefined
@@ -2636,6 +2514,9 @@ async function main(argv: string[]): Promise<void> {
     return
   }
   noMore(cmd, a)
+  if (cmd === 'setup' || cmd === 'login') checkInstallationFolder(home())
+  // A rejected command changes no reporting setting either.
+  usage.heed()
   // Counting begins with the first command, whoever runs it, and nothing is said of it here: the
   // first screen of the site says it. Not by a command that only prints what it was asked for,
   // nor by `it telemetry`, which is how a person turns it off before it has begun. The service
@@ -2670,15 +2551,20 @@ async function main(argv: string[]): Promise<void> {
       if (!done) return forPerson(a) ? tell([`This is the newest It there is (${VERSION}).`]) : out({ version: VERSION, upgraded: false })
       // The program is in place. What runs is still the one that was started: the service is
       // started again by the new program, which also writes the service's definition as its
-      // version has it and brings the add-ons in the agent apps up to it. Where nothing starts
-      // It by itself, whoever started it does so again.
+      // version has it and brings the add-ons in the agent apps up to it. It is given what the
+      // definition that is there gives the service, so that a setting this terminal does not
+      // name is in the one written next. Where nothing starts It by itself, whoever started it
+      // does so again.
       let started: 'again' | 'by hand' | 'failed' = 'by hand'
       let why: string | undefined
       if (service.installedHere()) {
         say('Starting It again as the new version…')
         const ran = await new Promise<{ ok: boolean; said: string; failed: string }>((resolve) =>
-          execFile(done.program, ['setup'], { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) =>
-            resolve({ ok: !err, said: String(stdout), failed: String(stderr) }),
+          execFile(
+            done.program,
+            ['setup'],
+            { timeout: 10 * 60_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true, env: service.againWith() },
+            (err, stdout, stderr) => resolve({ ok: !err, said: String(stdout), failed: String(stderr) }),
           ),
         )
         started = ran.ok ? 'again' : 'failed'
@@ -2821,11 +2707,21 @@ async function main(argv: string[]): Promise<void> {
       // The folder is this command's alone while it joins, as it is a setup's while that sets It
       // up here. What the folder is, is looked at again once it is: a setup that was at work in
       // the meantime has made it the folder of an It that runs on this machine
-      const done = await oneAtATime(() => {
-        refused()
-        return login(asked)
-      }).catch(said)
+      // The installer and program locks also keep uninstall out until the network replies
+      // and the joined machine's records have been written.
+      const done = await oneAtATime(() =>
+        withInstallerLock(home(), () =>
+          withCurrentProgram(async () => {
+            refused()
+            checkInstallationRecord(home())
+            const joined = await login(asked)
+            markInstallation(home())
+            return joined
+          }, 'login'),
+        ),
+      ).catch(said)
       say(`\nThis machine has joined as "${done.name}".`)
+      if (done.waitsFor !== undefined) say(joinedBefore(done.waitsFor))
       // The key just made is in It's folder. In a person's own profile that is theirs alone. A
       // folder they named instead is as private as they made it, on Windows, where a file has
       // its folder's permissions and this program cannot give it others.
@@ -2845,6 +2741,9 @@ async function main(argv: string[]): Promise<void> {
       // The machine is taken off the person's machines first. If It cannot be told, the key
       // is kept: a key thrown away here would leave the machine among them with nobody able
       // to use it, and its pages with nowhere to send their clicks.
+      // What this machine was at the It it joined is written down before It is told that it
+      // leaves: where that cannot be written, nothing has been done yet, and this can be run again
+      noteWas()
       if (enrolledHere() && !a.flags.force) {
         try {
           await call('mutation', api.machines.leave)
@@ -2976,9 +2875,8 @@ async function main(argv: string[]): Promise<void> {
       })
     }
     case 'delete': {
-      const slug = need(a._[0], `which ${NOUN.one}`, 'delete <id>')
-      await call('mutation', api.artifacts.remove, { slug })
-      return out({ deleted: slug })
+      const slug = need(a._[0], `which ${NOUN.one}`, 'delete <id> [--status]')
+      return out(await deletePage(slug, a.flags.status === true))
     }
     case 'rollback': {
       const slug = need(a._[0], `which ${NOUN.one}`, 'rollback <id> <version>')
@@ -3037,37 +2935,21 @@ async function main(argv: string[]): Promise<void> {
       const mine = asked?.session
       // Which conversation this is was a choice among the apps that had marked this command: said, so that an agent that is another one knows
       const guessed = sessionNote(asked, `This ${NOUN.one} was shown for`, `run \`it open ${slug}\` again with IT_HARNESS and IT_SESSION set to your own.`)
-      let took = false
-      let notTaken: Problem | undefined
-      if (mine) {
-        noteConversation(mine)
-        // A page that is not there is said by the showing itself, below. Anything else that kept
-        // the page from being taken is said beside what was shown: the page is up, and what is
-        // done on it still goes to the conversation that had it, which the agent has to know
-        // before it asks its person to use it.
-        took = await call<{ took: boolean }>('mutation', api.artifacts.take, { slug, session: mine, agent: mine.harness }).then(
-          (r) => r.took === true,
-          (err) => {
-            if (err instanceof Problem && err.code !== 'not_found') notTaken = err
-            return false
-          },
-        )
-      }
-      const shown = shownAs(await show(slug, a))
-      if (notTaken) {
-        process.exitCode = 1
-        return out({
-          id: slug,
-          ...shown,
-          notTaken: { code: notTaken.code, message: notTaken.message },
-          hint: `The ${NOUN.one} is shown, and it is still another conversation’s: what is done on it does not come here. Run \`it open ${slug}\` again before you ask the person to use it.`,
-          ...(guessed ? { session: guessed } : {}),
-        })
-      }
+      if (mine) await noteConversation(mine)
+      const result = await onDisplay(a, () =>
+        call<Shown & { took?: boolean }>('mutation', api.displays.show, {
+          slug,
+          ...(text(a, 'on') ? { display: text(a, 'on') } : {}),
+          ...(mine ? { session: mine, agent: mine.harness } : {}),
+        }),
+      )
+      const took = result.took === true
+      const shown = shownAs(result)
+      const taken = `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
       return out({
         id: slug,
         ...shown,
-        ...(took ? { note: `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.` } : {}),
+        ...(took ? { note: taken } : {}),
         ...(guessed ? { session: guessed } : {}),
       })
     }
@@ -3110,7 +2992,7 @@ async function main(argv: string[]): Promise<void> {
     }
 
     case 'wait':
-      return wait(a)
+      return wait(a, counted)
     case 'actions': {
       const slug = text(a, 'id')
       const clicks = await call<Listed[]>('query', slug ? api.delivery.waiting : api.delivery.allWaiting, slug ? { slug } : {})
@@ -3196,7 +3078,7 @@ const began = Date.now()
 function counted(code?: string): void {
   try {
     const cmd = process.argv[2]
-    if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'serve') return
+    if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'shell-profile' || cmd === 'serve' || takenOff) return
     const harness = sessionAsked()?.session.harness
     const by = harness
       ? (HARNESSES as readonly string[]).includes(harness)
@@ -3211,7 +3093,9 @@ function counted(code?: string): void {
 main(process.argv.slice(2)).then(
   () => {
     clearInterval(whileItRuns)
-    counted()
+    // A command that did a part of what it was asked, said which part it did not, and set how it
+    // ends has not ended well: it is counted by how it ends, and not by its having come back
+    counted(process.exitCode ? (process.exitCode === 2 ? 'invalid' : 'error') : undefined)
     if (!['wait', 'serve'].includes(process.argv[2] ?? '')) process.exitCode ??= 0
     return left()
   },
@@ -3219,7 +3103,7 @@ main(process.argv.slice(2)).then(
     clearInterval(whileItRuns)
     const p = err instanceof Problem ? err : new Problem(String((err as Error)?.message ?? err))
     counted(p.code)
-    say(JSON.stringify({ error: { code: p.code, message: p.message, ...(p.hint ? { hint: p.hint } : {}) } }))
+    failure(p, outputArgs(process.argv.slice(3)))
     return end(p.code === 'invalid' ? 2 : 1)
   },
 )

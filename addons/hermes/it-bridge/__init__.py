@@ -34,6 +34,7 @@ from urllib.parse import quote
 IT_HOME_AT_SETUP = None
 
 HARNESS = "hermes"
+ADDON_VERSION = "IT_ADDON_BUILD"
 POLL_SECONDS = 1.0  # the connector takes a conversation to be listening if it asked in the last 5 seconds
 ASK_SECONDS = 2.0  # how long the connector may stay silent before it is given up on
 DEADLINE_SECONDS = 3.0  # how long one question may take from start to finish, however its answer arrives
@@ -42,7 +43,7 @@ SETTLE_SECONDS = 1.0  # how long a turn must have been over before a click is ha
 REFUSED_SECONDS = 60.0  # how long a conversation is left alone after Hermes would not take a message for it
 REFUSED_TIMES = 3  # after this many refusals in a row it is forgotten, until it has another turn
 REMEMBERED = 2000  # how many handed-over clicks are remembered
-MOST_TALKS = 20  # how many conversations one Hermes process is asked for at once (a gateway may hold hundreds)
+MOST_TALKS = 40  # how many conversations one Hermes process is asked for at once, which is as many as the connector watches (a gateway may hold hundreds)
 _CANNOT_TELL = object()
 
 
@@ -206,6 +207,7 @@ def _session_key():
 class _Bridge:
     def __init__(self, ctx):
         self._ctx = ctx
+        self._instance = secrets.token_hex(12)
         self._lock = threading.Lock()
         self._talks = {}  # by key
         self._helpers = {}  # ids of agents a conversation started to help it, which are not conversations
@@ -252,6 +254,8 @@ class _Bridge:
         if not found:
             return None
         socket_path, port, token = found
+        if path == "/session" or path.startswith("/clicks?"):
+            body = {**(body or {}), "instance": self._instance, "addon": self._addon()}
         method = "GET" if body is None else "POST"
         sent = b"" if body is None else json.dumps(body).encode("utf-8")
         # Over the socket, which only this user can open, the token is shown. Over a port it never
@@ -487,8 +491,24 @@ class _Bridge:
     def stop(self):
         self._stop.set()
 
+    def _addon(self):
+        delivery = callable(getattr(self._ctx, "inject_message", None))
+        return {
+            "api": 1,
+            "version": ADDON_VERSION,
+            "delivery": delivery,
+            "idle": False,
+            "missing": [] if delivery else ["submit"],
+        }
+
     def _run(self):
         while not self._stop.wait(POLL_SECONDS):
+            try:
+                self._ask("/addon", {"harness": HARNESS, "instance": self._instance, "addon": self._addon()})
+            except Exception:
+                pass
+            if not self._addon()["delivery"]:
+                continue
             with self._lock:
                 talks = list(self._talks.values())
             for talk in talks:
@@ -532,15 +552,20 @@ class _Bridge:
             self._ask("/ack", {"ids": again})
         if not fresh or self._busy(talk):
             return
-        with self._lock:
-            if talk.closed or talk.id != session:
-                return
-        # The person may have gone to another conversation while the connector was answering
+        # This calls into Hermes and may read its configuration. A hook can replace the
+        # conversation while that happens, so check our record after the host has answered.
         if not self._reachable(talk):
             return
+        # The connector's own wording, as it is: it names each click so a repeat can be told apart.
+        text = "\n".join(c["text"] for c in fresh)
+        with self._lock:
+            # A message goes by the chat's name, which /new, /resume or /branch can give to
+            # another conversation. A click for the one it left stays with the connector.
+            if talk.closed or talk.id != session or self._talks.get(talk.key) is not talk:
+                return
         try:
-            # The connector's own wording, as it is: it names each click so a repeat can be told apart
-            text = "\n".join(c["text"] for c in fresh)
+            # The host accepts only a chat key, with no expected conversation id. This check
+            # cannot prevent a switch inside Hermes after we hand the message to it.
             # By name only where there is a name. In the terminal there is none, and an older
             # Hermes does not know the word for it at all.
             taken = (self._ctx.inject_message(text, session_key=talk.key) if talk.key else self._ctx.inject_message(text)) is True
@@ -585,7 +610,9 @@ def register(ctx):
     except Exception:
         pass
     bridge = _Bridge(ctx)
-    # Nothing is asked of the connector, and no thread runs, until a conversation has a turn
+    # Report the loaded host even before a turn. Hermes has no supported saved-session selection hook.
+    bridge._thread = threading.Thread(target=contextvars.Context().run, args=(bridge._run,), name="it-bridge", daemon=True)
+    bridge._thread.start()
     ctx.register_hook("pre_llm_call", bridge.turn_started)
     ctx.register_hook("on_session_end", bridge.turn_ended)
     ctx.register_hook("on_session_finalize", bridge.conversation_closed)

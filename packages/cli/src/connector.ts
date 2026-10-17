@@ -15,6 +15,17 @@ import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renam
 import http from 'node:http'
 import path from 'node:path'
 import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, MARK, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
+import { AddonRuntimes } from './addon-runtime'
+import {
+  DeliveryRecovery,
+  eraseDeliveryRecovery,
+  type Given,
+  MARK_AGAIN_MS,
+  type MarkCopy,
+  type MarkFallback,
+  type Offered,
+  RECEIPTS_MOST,
+} from './delivery-recovery'
 import {
   api,
   ask,
@@ -36,11 +47,12 @@ import {
   writePrivate,
 } from './lib'
 import { incompatible } from './login'
-import { conversationFolder, noteConversation } from './publish'
+import { profileEnvironment, readProfile } from './profiles'
+import { conversationFolder, conversationProfile, noteConversation } from './publish'
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { type T3, t3Send, t3Server, t3ThreadOf } from './t3'
+import { type T3, type T3Search, t3Send, t3Server, t3ThreadOf } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -64,21 +76,6 @@ import {
   WOKEN,
 } from './wake'
 
-/** A click as the backend offers it: its data as JSON text, and the conversation it is for. */
-interface Offered {
-  id: string
-  artifact: string
-  title: string
-  name: string
-  payload: string
-  at: number
-  attended: boolean | null
-  session: { harness: string; id: string } | null
-  version?: number
-  stateRevision?: number
-  nowVersion?: number
-  nowStateRevision?: number
-}
 /** A click as an add-on receives it: its data as a value, the one wording agents read, and the few words a person is shown where an app has another place for the rest. */
 export interface Delivered extends Click {
   text: string
@@ -138,7 +135,7 @@ const SERVE_BYTES = 200_000 // and how large that answer may be: an add-on reads
 const WAITER_BYTES = 700_000 // and how large the clicks in one answer to a waiter may be together: `it wait` reads no more than a megabyte
 const keyOf = (harness: string, id: string) => `${harness}:${id}`
 /** Everything an add-on or a command asks the connector for. */
-const ROUTES = ['/health', '/session', '/clicks', '/waiting', '/ack', '/runs']
+const ROUTES = ['/health', '/addon', '/session', '/clicks', '/waiting', '/ack', '/runs']
 /** What was asked for, as it may be written down: one of the connector's own routes, or one fixed word for anything else. */
 const routeOf = (asked: string | undefined): string => {
   const route = (asked ?? '').split('?')[0]!
@@ -160,27 +157,60 @@ const stoppedFile = () => inHome('stopped.json')
 const a = (word: string) => `${/^[aeiou]/i.test(word) ? 'an' : 'a'} ${word}`
 const lockFile = () => inHome('connector.lock')
 
-function journal(event: string, id: string): void {
+function journalWrite(event: string, id: string): void {
   try {
-    if (existsSync(journalFile()) && statSync(journalFile()).size > 1_000_000)
-      writeFileSync(journalFile(), readFileSync(journalFile(), 'utf8').split('\n').slice(-500).join('\n'))
-    appendFileSync(journalFile(), `${JSON.stringify({ t: Date.now(), event, id })}\n`, { mode: 0o600 })
+    // Cut down to its last records once it is large, into a file beside it that then takes its
+    // place: cut down where it lies, a disk that filled in the middle left it with nothing
+    if (existsSync(journalFile()) && statSync(journalFile()).size > 1_000_000) {
+      const fewer = `${journalFile()}.${process.pid}.tmp`
+      writeFileSync(fewer, `${readFileSync(journalFile(), 'utf8').split('\n').filter(Boolean).slice(-500).join('\n')}\n`, { mode: 0o600 })
+      renameSync(fewer, journalFile())
+    }
+    // Begun on a line of its own, whatever the record before it ended with: one that was cut
+    // short, by a crash or a full disk, would otherwise take this one with it
+    appendFileSync(journalFile(), `\n${JSON.stringify({ t: Date.now(), event, id })}\n`, { mode: 0o600 })
   } catch {}
+}
+/** What the journal holds, in the order it was written. A line that cannot be read, as one cut short is, is passed over and says nothing of the lines after it. */
+function journalled(): { event: string; id: string }[] {
+  let text = ''
+  try {
+    text = readFileSync(journalFile(), 'utf8')
+  } catch {}
+  const out: { event: string; id: string }[] = []
+  for (const line of text.split('\n')) {
+    if (!line) continue
+    try {
+      const e = JSON.parse(line) as { event?: unknown; id?: unknown } | null
+      if (typeof e?.event === 'string' && typeof e.id === 'string') out.push({ event: e.event, id: e.id })
+    } catch {}
+  }
+  return out
 }
 /** Clicks the journal says a harness's queue accepted, but which were never confirmed to It. */
 function queuedButUnconfirmed(): Set<string> {
   const out = new Set<string>()
-  try {
-    for (const line of readFileSync(journalFile(), 'utf8').split('\n')) {
-      if (!line) continue
-      const e = JSON.parse(line) as { event: string; id: string }
-      // "queueing" is only the intent. If nothing follows it, the command may never have run,
-      // so the click is sent again: a repeat can be told apart by its id, a loss cannot be undone.
-      if (e.event === 'queued') out.add(e.id)
-      if (e.event === 'confirmed') out.delete(e.id)
-    }
-  } catch {}
+  for (const e of journalled()) {
+    // "queueing" is only the intent. If nothing follows it, the command may never have run,
+    // so the click is sent again: a repeat can be told apart by its id, a loss cannot be undone.
+    if (e.event === 'queued') out.add(e.id)
+    if (e.event === 'confirmed') out.delete(e.id)
+  }
   return out
+}
+
+/**
+ * Clicks the journal says this machine claimed, with nothing after to say what became of them.
+ * A connector that ended in the middle left them leased, which is to say out of what It offers
+ * until the lease runs out, while what was done after them is offered at once.
+ */
+function claimedAndLeft(): string[] {
+  const out = new Set<string>()
+  for (const e of journalled()) {
+    if (e.event === 'claimed' || e.event === 'queueing' || e.event === 'served') out.add(e.id)
+    else out.delete(e.id)
+  }
+  return [...out]
 }
 
 /**
@@ -237,10 +267,9 @@ export function wayOf(of: { inT3: () => boolean; codexOpen: () => boolean; reope
 }
 
 /** Null when Codex took the message. Otherwise why it did not, for the log: never what Codex printed, which may repeat the message. */
-export function codexQueue(thread: string, text: string): Promise<string | null> {
+export function codexQueue(thread: string, text: string, env: NodeJS.ProcessEnv = harnessEnv()): Promise<string | null> {
   // A thread id is letters, digits and dashes. Anything else is not one, and is never put on a command line.
   if (!/^[A-Za-z0-9_-]{1,200}$/.test(thread)) return Promise.resolve('its conversation id is not one Codex would have made')
-  const env = harnessEnv()
   const codex = codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync)
   if (!codex) return Promise.resolve('Codex was not found')
   // No shell, ever: the text holds a page's title and what a person typed into it
@@ -389,6 +418,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // It has said, no app is taken to be connected.
   let wantedNow: string[] | null = null
   let found: HarnessStatus[] = []
+  const runtimes = new AddonRuntimes()
   // When an add-on's speaking last had the machine looked at again, and what does the looking, once the connector has begun to report
   let lookedAgainAt = 0
   let lookAgain: () => Promise<void> = async () => {}
@@ -445,6 +475,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const held = new Map<string, Held>()
   /** Handed to an agent, and not yet confirmed to It: confirmed again and again until it is. */
   const toConfirm = new Map<string, string>()
+  const confirmed = new Set<string>()
   /**
    * For usage reporting, which counts a delivery once It has confirmed it: when the click was
    * made, which harness it was for, and whether it joined a running turn or started one.
@@ -461,7 +492,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * An agent that begins to wait for such a click is given it as well (see `/waiting`), and
    * that is noted here, so that a refusal by the command is then no failure.
    */
-  const submitting = new Map<string, { click: Offered; toWaiter: boolean }>()
+  const submitting = new Map<string, { click: Offered; toWaiter: boolean; given?: Given; printed?: boolean }>()
   /**
    * Taken by Codex's queue, or by T3 Code for a thread of Codex, while the conversation's turn
    * was running. Either hands such a click over only when that turn is done, so an agent that
@@ -469,10 +500,35 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * turn. It is given the click as well (see `/waiting`). Kept, by the conversation it is for,
    * until the conversation is heard to end the turn or begin another, which is when the click
    * is handed over.
+   *
+   * One that was given to a waiter is kept until that waiter says it has printed it. It has
+   * been reported to It as handed over, so nothing else would bring it back: were it let go of
+   * as it is given, an answer that never reached the waiter would leave the turn waiting for a
+   * message that stands behind it.
    */
-  const behindTurn = new Map<string, { click: Offered; key: string }>()
-  /** How many of them are kept at once. */
-  const BEHIND_MOST = 200
+  const recovery = new DeliveryRecovery(say)
+  // Removing old copies is bookkeeping, so a failed save must not prevent delivery.
+  // The unchanged saved record remains available for the next cleanup to retry.
+  const cleanupFailed = (err: unknown) => seldom('waiter-cleanup', `could not save waiter cleanup (${why(err)}); trying again`)
+  await recovery.pruneWaiters().catch(cleanupFailed)
+  for (const id of recovery.accepted) toConfirm.set(id, 'queue')
+  /**
+   * For how long a click given to one waiter is not given to another. The first is printing it
+   * and says so in a moment. One that has not said so by then never had it, or is gone.
+   */
+  const GIVEN_MS = 10_000
+  /** Outstanding queue acceptance receipts, independent of waiter copies. */
+  const ACCEPTED_MOST = RECEIPTS_MOST
+  const waiterRoom = (key: string) => {
+    const pending = new Map<string, string>()
+    for (const [id, sent] of submitting) {
+      const session = sent.click.session
+      if (session) pending.set(id, keyOf(session.harness, session.id))
+    }
+    // Reserve space even while another queue command is waiting for its claim to answer.
+    for (const [id, target] of queueReceipts) pending.set(id, target)
+    return recovery.waiterRoom(key, pending, follow)
+  }
   const turnRunning = (key: string, now: number) => {
     const s = sessions.get(key)
     if (!(s?.busy === true && now - s.busyAt < TURN_QUIET_MS)) return false
@@ -480,7 +536,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // with no hook to say so. No Codex holds its conversation from then on, so no turn is
     // running there. Taken for running, each click of the next half hour was kept a minute
     // for a hook that could not come, while the page said the agent was busy.
-    if (key.startsWith('codex:') && !codexHeld(threadOf(key))) {
+    if (key.startsWith('codex:') && codexOpen(key) === false) {
       s.busy = false
       return false
     }
@@ -489,25 +545,28 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const queueTries = new Map<string, { n: number; at: number; reopening: boolean }>()
   /**
    * What is known of the thread in T3 Code that a conversation is held in: the thread, that T3
-   * Code has none of it (asked again after a while, since a conversation may be brought into
-   * T3 Code later), or that it is being asked for at this moment. A conversation T3 Code
-   * could not take a message for is not offered to it again for a while: `t3Refused`.
+   * Code has none of it or the search reached its read limit (asked again after a while,
+   * since a conversation may be brought into T3 Code later), or that it is being asked for
+   * at this moment. A conversation T3 Code could not take a message for is not offered to it
+   * again for a while: `t3Refused`.
    */
   const t3Known = new Map<string, { thread: string | null; at: number } | 'asking'>()
   /** When each conversation that is being asked for was first asked for, by the clock that only goes forward. */
   const t3Asked = new Map<string, number>()
+  const t3Searches = new Map<string, T3Search>()
+  const t3Pending = new Map<string, { harness: string; id: string }>()
+  const t3Retries = new Map<string, { at: number; delay: number }>()
   const t3Refused = new Map<string, number>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
-  /** How long a conversation that is in no thread of T3 Code is taken to be in none. */
+  /** How long before another search after none matched or its read limit was reached. */
   const T3_AGAIN_MS = 6 * 3_600_000
-  /** How long a conversation is kept from T3 Code after it could not take a message for it, or could not be asked. */
+  /** How long a conversation is kept from T3 Code after it could not take a message for it. */
   const T3_REFUSED_MS = 10 * 60_000
   /**
    * How long T3 Code is given to say which thread holds a conversation, before a click for it
    * goes the way it would without T3 Code. It says so in a fifth of a second to two seconds
-   * where it is well. One that answers the first question and then stalls would otherwise keep
-   * a click waiting through two dozen threads at twenty seconds each, which some Codex could
-   * have taken at once. What it says in the end is kept, for the clicks that come after.
+   * where it is well. Later batches keep their progress but do not restart this wait.
+   * What it says in the end is kept for the clicks that come after.
    */
   const T3_ASKED_MS = 5_000
   /**
@@ -532,29 +591,48 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (known === 'asking') return steady() - (t3Asked.get(key) ?? 0) < T3_ASKED_MS ? 'asking' : undefined
     if (known?.thread) return { server, thread: known.thread }
     if (known && now - known.at < T3_AGAIN_MS) return undefined
-    if (t3Known.size > 2000) {
+    const waiting = () => steady() - (t3Asked.get(key) ?? steady()) < T3_ASKED_MS
+    if (steady() < (t3Retries.get(key)?.at ?? 0)) return waiting() ? 'asking' : undefined
+    if (t3Known.size + t3Searches.size > 2000) {
       t3Known.clear()
       t3Asked.clear()
+      t3Searches.clear()
+      t3Pending.clear()
+      t3Retries.clear()
     }
     t3Known.set(key, 'asking')
-    t3Asked.set(key, steady())
+    if (!t3Asked.has(key)) t3Asked.set(key, steady())
+    const search = t3Searches.get(key) ?? { pending: [], read: 0, attempted: new Set() }
+    t3Searches.set(key, search)
+    t3Pending.set(key, session)
     // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
     const ids = [...new Set([session.id, threadOf(key)])]
-    void t3ThreadOf(server, { harness: session.harness, ids, cwd: conversationFolder(session) })
-      .catch(() => undefined)
-      .then((thread) => {
-        t3Asked.delete(key)
-        if (thread === undefined) {
-          // T3 Code could not be asked: the conversation is reopened as any other meanwhile, and T3 Code is asked again later
+    void t3ThreadOf(server, { harness: session.harness, ids, cwd: conversationFolder(session) }, search)
+      .catch(() => ({ status: 'incomplete' as const, progressed: false }))
+      .then((result) => {
+        if (t3Searches.get(key) !== search) return
+        let again = 10
+        if (result.status === 'incomplete') {
+          // More candidates, unread answers and expired budgets are not evidence of absence.
+          // Keep the first deadline while continuing through later batches on subsequent passes.
           t3Known.delete(key)
-          t3Refused.set(key, Date.now())
+          // New batches keep moving. Repeated failures wait longer, up to a minute, until
+          // another candidate is reached or read successfully. A later failure starts afresh.
+          const delay = result.progressed ? 0 : Math.min((t3Retries.get(key)?.delay || 150) * 2, 60_000)
+          t3Retries.set(key, { at: steady() + (delay || 300), delay })
+          again = (delay || 300) + 10
         } else {
+          t3Asked.delete(key)
+          t3Searches.delete(key)
+          t3Pending.delete(key)
+          t3Retries.delete(key)
+          const thread = result.status === 'found' ? result.thread : null
           t3Known.set(key, { thread, at: Date.now() })
           if (thread) say(`${a(session.harness)} conversation (${short(session.id)}) is held in a thread of T3 Code`)
         }
-        soon(10)
+        soon(again)
       })
-    return 'asking'
+    return waiting() ? 'asking' : undefined
   }
   /**
    * What each mark that was put into a conversation stands for, by the conversation: the
@@ -562,13 +640,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * them, which it does as the turn begins that the mark started, or at the next moment one
    * of them runs. A mark nobody asks about in time was put where no hook of It's runs.
    */
-  const marked = new Map<string, { id: string; texts: string[]; at: number }[]>()
   /** The conversations a mark went unasked about: they are given the short line from then on, for as long as this connector runs. */
   const unmarked = new Set<string>()
   /** How long a conversation's hooks are given to ask what a mark stands for, and to say that they have it. An agent app that has to be started first takes ten seconds or so. */
   const MARK_ASKED_MS = 20_000
-  /** How long after each try the short line is tried again, where the app did not take it. Past the last, what the mark stood for is kept for the conversation's next hook. */
-  const MARK_AGAIN_MS = [20_000, 60_000, 300_000]
   const markTimers = new Set<ReturnType<typeof setTimeout>>()
   /**
    * The conversations whose add-on has been heard from on this machine, kept across a restart
@@ -581,7 +656,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     heardBefore.add(key)
     while (heardBefore.size > HEARD_MOST) heardBefore.delete(heardBefore.values().next().value!)
     try {
-      writePrivate(heardFile(), Object.fromEntries([...heardBefore].map((k) => [k, 1])))
+      if (!over) writePrivate(heardFile(), Object.fromEntries([...heardBefore].map((k) => [k, 1])))
     } catch {
       // Not kept: it is heard from again soon enough
     }
@@ -608,49 +683,216 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * line either, it is tried again a few times, and the note stays for the conversation's
    * next hook whatever becomes of that.
    */
-  const noteMark = (key: string, harness: string, texts: string[], again: () => Promise<unknown>) => {
-    const entry = { id: randomBytes(8).toString('hex'), texts, at: Date.now() }
-    marked.set(key, [...(marked.get(key) ?? []), entry])
-    const kept = () => (marked.get(key) ?? []).includes(entry)
-    const takeAway = () => {
-      const left = (marked.get(key) ?? []).filter((m) => m !== entry)
-      if (left.length) marked.set(key, left)
-      else marked.delete(key)
+  const markReceipt = (key: string, entry: MarkCopy) => {
+    const harness = key.slice(0, key.indexOf(':'))
+    // Looked for wherever it is kept by now: a conversation that carries on under a new id takes its marks along
+    const where = () => [...recovery.marks].find(([, kept]) => kept.some((m) => m.id === entry.id))?.[0]
+    const kept = () => where() !== undefined
+    // Entries are replaced only after a durable save. Look up the current retry progress.
+    const current = () => recovery.marks.get(where() ?? key)?.find((m) => m.id === entry.id)
+    const takeAway = async () => {
+      if (recovery.erased || over) return
+      const under = where()
+      if (under === undefined) return
+      await recovery.removeMark(entry.id)
     }
     const who = `${a(agentOf(harness))} conversation (${short(threadOf(key))})`
     const after = (ms: number, what: () => void) => {
       const timer = setTimeout(() => {
         markTimers.delete(timer)
-        if (!closing && kept()) what()
+        if (!closing && !recovery.stopped && kept()) what()
       }, ms)
       markTimers.add(timer)
     }
-    const line = (tried: number) => {
-      void again()
+    const line = async () => {
+      const copy = current()
+      if (!copy || copy.retry?.nextAt === null) return
+      // Not into an app the person has disconnected since: what the mark stood for stays as it is, for a hook of the app once it is connected again
+      if (!chosen(harness)) return
+      // Recovery and the current machine settings must have answered before a restored mark can send anything.
+      if (unfitting || givingBack !== 'done' || !connected(harness)) return after(MARK_ASKED_MS, line)
+      const fallback = copy.fallback
+      if (!fallback) return
+      const keyNow = follow(where() ?? key)
+      // A fallback never reopens a closed Codex conversation. Its next hook can still read the note.
+      if (fallback.via === 'codex' && !codexOpen(keyNow)) return
+      const server = fallback.via === 't3' ? t3Server() : undefined
+      const tried = copy.retry?.attempts ?? 0
+      const next = MARK_AGAIN_MS[tried]
+      try {
+        // Reserve the attempt before sending, so even an interrupted send cannot reset its budget.
+        await recovery.retryMark(entry.id, { attempts: tried + 1, nextAt: next === undefined ? null : Date.now() + next })
+      } catch (err) {
+        seldom('mark-receipt', `could not keep the mark retry (${why(err)}); trying again`)
+        return after(MARK_ASKED_MS, line)
+      }
+      // The disk may have taken time. A hook, disconnection or shutdown that arrived
+      // meanwhile takes precedence over sending the fallback whose attempt was reserved.
+      if (closing || unfitting || recovery.stopped || !kept() || !chosen(harness) || !connected(harness)) return
+      if (fallback.via === 'codex' && !codexOpen(follow(where() ?? key))) return
+      void (
+        fallback.via === 't3'
+          ? server
+            ? t3Send(server, fallback.thread, fallback.text)
+            : Promise.resolve('T3 Code could not be reached')
+          : codexPut(threadOf(follow(where() ?? key)), fallback.text)
+      )
         .catch(() => 'it could not be sent')
-        .then((refused) => {
-          if (!kept()) return
+        .then(async (refused) => {
+          if (closing || recovery.stopped || !kept()) return
           // Taken: the agent has it in the line, and the note is done with
           if (refused === null) return takeAway()
-          const next = MARK_AGAIN_MS[tried]
           if (next === undefined) {
             say(`${who} did not take the short line either, ${tried + 1} times; what its mark stood for is kept for the next of its hooks that runs`)
             return
           }
-          after(next, () => line(tried + 1))
+          try {
+            // Measure the next delay from the refusal, including time spent awaiting the app.
+            await recovery.retryMark(entry.id, { attempts: tried + 1, nextAt: Date.now() + next })
+          } catch (err) {
+            seldom('mark-receipt', `could not keep the next mark retry (${why(err)}); the reserved attempt remains`)
+          }
+          after(next, line)
         })
+        .catch((err) => seldom('mark-receipt', `could not keep the mark receipt (${why(err)}); its text remains available`))
     }
-    const wait = () =>
-      after(MARK_ASKED_MS, () => {
-        unmarked.add(key)
+    const wait = (ms = MARK_ASKED_MS): void => {
+      if (current()?.retry?.attempts) unmarked.add(where() ?? key)
+      if (current()?.retry?.nextAt === null) return
+      after(ms, () => {
+        if (!chosen(harness)) return
+        if (unfitting || givingBack !== 'done' || !connected(harness)) return wait()
+        unmarked.add(where() ?? key)
         say(`${who} was given a mark and none of its hooks said it had what the mark stood for; it is given the short line now, and from here on`)
-        line(0)
+        line()
       })
+    }
     return { takeAway, wait }
+  }
+  const noteMark = async (key: string, texts: string[], fallback: MarkFallback) => {
+    // Exhausted marks still belong to their hooks. Keep them and use the normal short line
+    // for this click when no durable slot is free, rather than holding up another conversation.
+    const entry = { id: randomBytes(8).toString('hex'), texts, at: Date.now(), fallback }
+    if (!(await recovery.addMark(key, entry))) return undefined
+    return markReceipt(key, entry)
+  }
+  // Old records without routing data remain available to hooks. Never guess a command line from their full text.
+  const restoredMarks = new Set(
+    [...recovery.marks.values()]
+      .flat()
+      .filter((m) => m.fallback)
+      .map((m) => m.id),
+  )
+  const restoreMarks = () => {
+    for (const [key, entries] of recovery.marks) {
+      if (!chosen(key.slice(0, key.indexOf(':')))) continue
+      for (const entry of entries) {
+        if (!restoredMarks.delete(entry.id)) continue
+        markReceipt(key, entry).wait(Math.max(0, (entry.retry?.nextAt ?? entry.at + MARK_ASKED_MS) - Date.now()))
+      }
+    }
   }
   /** One at a time for each conversation, oldest first, so that clicks arrive in the order they were made. */
   const queues = new Map<string, Promise<void>>()
-  const unconfirmed = queuedButUnconfirmed()
+  /** Room for the durable receipt is reserved before an app is asked to accept a click. */
+  const queueReceipts = new Map<string, string>()
+  const unconfirmed = new Set([...queuedButUnconfirmed(), ...recovery.accepted])
+  /**
+   * What the connector before this one left claimed is given back before anything is taken,
+   * and nothing is taken until It has offered it again: taken first, a click made after one of
+   * those would reach its conversation before it. It is asked for all that this machine holds,
+   * since a claim may have been made that this machine never heard the answer to. An It from
+   * before it could be asked that is asked for each click the journal names instead.
+   */
+  let givingBack: 'due' | 'asked' | 'done' = 'due'
+  /** Returned claims are reconciled by id, independently of subscription visibility. */
+  const comingBack = new Set(recovery.returning)
+  const recoveredClicks = new Map<string, Offered>()
+  let legacyGiveBack = false
+  let legacyRecover = false
+  let legacyLeft: Set<string> | undefined
+  // The backend accepts at most 32 recovery ids. Older backends need one call per id;
+  // use the same batch there so recovery cannot flood the backend with requests.
+  const RECOVERY_BATCH = 32
+  async function recoverBatch(): Promise<{
+    back: string[]
+    done: boolean
+    person?: string
+    routes?: { id: string; session: { harness: string; id: string } | null }[]
+  } | null> {
+    const missing = (err: unknown) => /could not find/i.test(String((err as Error)?.message ?? err))
+    if (!legacyGiveBack) {
+      try {
+        const result = await call<{
+          back: string[]
+          done: boolean
+          person?: string
+          routes?: { id: string; session: { harness: string; id: string } | null }[]
+        }>('mutation', api.delivery.giveBackBatch, {})
+        if (!result || !Array.isArray(result.back) || !result.back.every((id) => typeof id === 'string') || typeof result.done !== 'boolean') return null
+        return result
+      } catch (err) {
+        if (!missing(err)) return null
+        legacyGiveBack = true
+      }
+    }
+    // Older backends are asked about every locally recorded claim, a bounded batch at a time.
+    legacyLeft ??= new Set([...claimedAndLeft(), ...recovery.returning])
+    const gone = await Promise.all(
+      [...legacyLeft].slice(0, RECOVERY_BATCH).map((id) =>
+        call('mutation', api.delivery.release, { id }).then(
+          () => id,
+          (err) => ((err as { code?: string }).code === 'not_found' ? id : null),
+        ),
+      ),
+    )
+    const back = gone.filter((id): id is string => id !== null)
+    for (const id of back) legacyLeft.delete(id)
+    return { back, done: legacyLeft.size === 0 }
+  }
+  // A late answer about a previous hold must not erase the receipt for a newer claim of the same click.
+  const claimAttempts = new Map<string, object>()
+  const retireClaim = async (id: string, attempt: object | undefined) => {
+    if (recovery.stopped || claimAttempts.get(id) !== attempt) return
+    await recovery.retire([id], () => claimAttempts.get(id) === attempt)
+    if (claimAttempts.get(id) === attempt) claimAttempts.delete(id)
+  }
+  /** Confirmed lease losses whose durable cleanup may still need a successful write. */
+  const lostClaims = new Map<string, object | undefined>()
+  const retireLostClaims = async () => {
+    for (const [id, attempt] of lostClaims) {
+      try {
+        await retireClaim(id, attempt)
+        lostClaims.delete(id)
+      } catch (err) {
+        seldom('recovery-lost', `could not retire the lost claim (${why(err)}); trying again`)
+      }
+    }
+  }
+  const release = async (id: string) => {
+    const attempt = claimAttempts.get(id)
+    try {
+      await call('mutation', api.delivery.release, { id })
+    } catch (err) {
+      if ((err as { code?: string }).code !== 'not_found') throw err
+    }
+    await retireClaim(id, attempt)
+  }
+  const claim = async (ids: string[], session: { harness: string; id: string }) => {
+    const attempt = {}
+    await recovery.claim(ids, keyOf(session.harness, session.id))
+    for (const id of ids) claimAttempts.set(id, attempt)
+    const got = await call<string[]>('mutation', api.delivery.claim, { ids, for: session })
+    const refused = ids.filter((id) => !got.includes(id))
+    for (const id of refused) {
+      // A recovered row is only a snapshot. A waiter or another machine may have taken
+      // it since; only a fresh inbox offer can make it eligible for another claim.
+      recoveredClicks.delete(id)
+      lostClaims.set(id, attempt)
+    }
+    if (refused.length) await retireLostClaims()
+    return got
+  }
   let inbox: Offered[] = []
   let routing = false
   let stopping: ((code: number) => void) | null = null
@@ -667,10 +909,18 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   async function confirmEach(): Promise<void> {
     for (const [id, route] of toConfirm) {
+      const attempt = claimAttempts.get(id)
       try {
         const done = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route })
+        if (recovery.accepted.has(id) || recovery.returning.has(id)) await recovery.confirm(id, () => claimAttempts.get(id) === attempt)
+        if (claimAttempts.get(id) === attempt) claimAttempts.delete(id)
+        if (done) {
+          confirmed.add(id)
+          if (confirmed.size > 5000) confirmed.delete(confirmed.values().next().value!)
+        }
         journal('confirmed', id)
         toConfirm.delete(id)
+        hookSeen.delete(id)
         const how = counting.get(id)
         counting.delete(id)
         // Counted once: not when It already had it down as handed over
@@ -678,6 +928,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
       } catch (err) {
         // Another machine took it over, or it is gone: either way it is not this one's to confirm
         if (/conflict|not_found/.test(String((err as { code?: string }).code))) {
+          try {
+            await recovery.confirm(id, () => claimAttempts.get(id) === attempt)
+            if (claimAttempts.get(id) === attempt) claimAttempts.delete(id)
+          } catch (error) {
+            seldom('recovery', `could not keep the delivery receipt (${why(error)}); trying again`)
+            continue
+          }
           toConfirm.delete(id)
           counting.delete(id)
         }
@@ -690,14 +947,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // is about the click for one conversation. If its page changes hands, even to another
   // conversation on this machine, it is a fresh click for the new one.
   const tag = (click: Offered) => `${click.id}|${click.session ? keyOf(click.session.harness, click.session.id) : ''}`
-  const taken = (click: Offered) => held.has(click.id) || toConfirm.has(click.id) || queueing.has(click.id) || toPark.has(click.id) || parked.has(tag(click))
+  const taken = (click: Offered) =>
+    confirmed.has(click.id) || held.has(click.id) || toConfirm.has(click.id) || queueing.has(click.id) || toPark.has(click.id) || parked.has(tag(click))
   /** Tells It to set aside the clicks this machine has given up on, until It has heard. */
   let parking = false
   async function parkAll(): Promise<void> {
     if (parking) return
     parking = true
     try {
-      for (const [id, { for: tried, tag: which }] of toPark) {
+      for (const [id, pending] of toPark) {
+        const { for: tried, tag: which } = pending
+        const attempt = claimAttempts.get(id)
         // The backend says whether it is set aside. While another machine holds the click it is
         // not, and it is asked about again. A conversation that took nothing in all its tries
         // has everything else that is waiting for it set aside with this click.
@@ -710,6 +970,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
           },
         )
         if (!done) continue
+        try {
+          await retireClaim(id, attempt)
+        } catch (err) {
+          seldom('recovery', `could not keep the parked delivery receipt (${why(err)}); trying again`)
+          continue
+        }
+        if (toPark.get(id) !== pending) continue
         toPark.delete(id)
         parked.add(which)
         journal('parked', id)
@@ -771,11 +1038,34 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** When this machine first saw each click that waits for a closed conversation, by the clock that is never set back. */
   const firstSeen = new Map<string, number>()
+  /**
+   * Hook freshness starts when this connector first sees a click for its current conversation.
+   * performance.now() ignores wall-clock corrections, but on Linux and macOS it pauses during
+   * sleep, so that time does not age the click here. These observations live only in memory.
+   * After a connector restart, pending clicks get a new window when they are offered again.
+   */
+  const hookSeen = new Map<string, { tag: string; at: number }>()
   const reopenedNow = new Map<string, AbortController>()
   /** The name each of them has with It, by which It says which run a person stopped. */
   const runNames = new Map<string, string>()
   /** Whether this connector is stopping: what it reopened is then ended with it, and is not taken for something a person stopped. */
   let closing = false
+  /**
+   * Whether this connector has stopped. Something it began may still be on its way then: a
+   * turn it was ending, whose answer comes seconds later. What that then does is written
+   * nowhere, since the notes are no longer this connector's to keep: the service may have
+   * cleared them for an erase, or another connector may have them by now.
+   */
+  let over = false
+  recovery.onErase = () => {
+    lostClaims.clear()
+    closing = true
+    over = true
+    stopping?.(0)
+  }
+  const journal = (event: string, id: string): void => {
+    if (!over) journalWrite(event, id)
+  }
   /**
    * Why this machine and the It it joined do not fit, while they do not: the two speak
    * different versions of how machines talk to It, and what one of them means by a request is
@@ -797,11 +1087,36 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const keepCutOff = () => {
     try {
       while (cutOff.size > 200) cutOff.delete(cutOff.values().next().value!)
+      if (over) return
       if (cutOff.size) writePrivate(cutOffFile(), [...cutOff])
       else rmSync(cutOffFile(), { force: true })
       cutOffKept = true
     } catch {
       cutOffKept = false
+    }
+  }
+  /**
+   * The conversations whose last reopened turn the person stopped from the page. An app that is
+   * ended in the middle of a turn writes nothing of that into the conversation, so the agent
+   * that is next reopened there would read a turn that simply breaks off, and might carry on
+   * with it. It is told once, with what it is next reopened for. That may be after this
+   * connector has been started again, so the list is kept in a file: forgotten with a restart,
+   * the next reopening told the agent nothing, and it did what the person had stopped.
+   */
+  const stoppedByPerson = new Set<string>(readJson<string[]>(stoppedFile()) ?? [])
+  const pendingStops = new Set<string>()
+  const keepStopped = (): boolean => {
+    try {
+      if (over) return false
+      // Keep the latest 200 notices, as before: conversations that are never reopened must
+      // not make this file grow for the lifetime of the installation.
+      while (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)
+      if (stoppedByPerson.size) writePrivate(stoppedFile(), [...stoppedByPerson])
+      else rmSync(stoppedFile(), { force: true })
+      pendingStops.clear()
+      return true
+    } catch {
+      return false
     }
   }
   // A connector that died, where one that is stopped ends what it reopened, left its reopened
@@ -810,14 +1125,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // the process it was is known by its number and by when it began, so that no other process
   // that has since been given the number is touched. Its conversation is told, the next time
   // it is reopened, that its turn was cut off.
-  type Run = { pid: number; since: string; boot?: string; told?: number; unsure?: true; run?: string }
+  type Run = { pid: number; since: string; boot?: string; told?: number; unsure?: true; stopped?: true; run?: string }
   /** The note of runs from before could not be read, as this connector found when it started: it reopens nothing, whatever became of the file since. */
   let unread = false
   /** And it could not be moved aside either, so it is still where the note of runs is written. */
   let unreadWhereItWas = false
   const running = new Map<string, Run>()
-  /** The conversations whose run this connector found noted from before it started. Whether a person had stopped one of them meanwhile is heard from It, a moment later. */
-  const recovered = new Set<string>()
   /**
    * The runs from before this connector started that could not be checked on, or could not be
    * ended: each is still noted, is looked at again when its conversation is next to be
@@ -834,6 +1147,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     try {
       const all = { ...Object.fromEntries(unsettled), ...Object.fromEntries(running) }
+      if (over) {
+        if (must) throw new Error('this connector has stopped')
+        return
+      }
       if (Object.keys(all).length) writePrivate(runsFile(), all)
       else rmSync(runsFile(), { force: true })
     } catch (err) {
@@ -846,8 +1163,32 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * noted and never said to be over did not end as a turn ends, whether it was still there to
    * be ended now or went with the machine being started again.
    */
-  const settleOld = async (key: string, was: Run): Promise<boolean> => {
+  const settling = new Map<string, Promise<boolean>>()
+  const settleOld = (key: string, was: Run): Promise<boolean> => {
+    const pending = settling.get(key)
+    if (pending) return pending
+    const task = settleRun(key, was).finally(() => settling.delete(key))
+    settling.set(key, task)
+    return task
+  }
+  const settleRun = async (key: string, was: Run): Promise<boolean> => {
     const colon = key.indexOf(':')
+    if (was.stopped) {
+      stoppedByPerson.add(key)
+      pendingStops.add(key)
+      keepStopped()
+    }
+    // Older records have no conservative marker. Save one before recovery sends any signal,
+    // or leave the process and its record alone until the disk can keep that evidence.
+    if (!was.unsure) {
+      unsettled.set(key, { ...was, unsure: true })
+      try {
+        keepRuns(true)
+      } catch {
+        unsettled.set(key, was)
+        return false
+      }
+    }
     const became = await endTree(was.pid, was.since, {
       harness: key.slice(0, colon),
       session: key.slice(colon + 1),
@@ -856,19 +1197,29 @@ async function connecting(say: (line: string) => void): Promise<void> {
       run: was.run,
     }).catch(() => 'unknown' as const)
     if (became === 'unknown') return false
-    // Ended once already without the system saying what of it was left: that its own process
-    // is gone now says nothing of what it had started and could not be seen. It stays held
-    // until this machine has been started again, which ends everything, or a person has
-    // looked and said so with `it runs clear`.
-    if (was.unsure && !fromAnotherStart(was.boot)) return false
+    // An older uncertain record may have no run mark. With its leader gone, there is then
+    // nothing by which to find a detached child missed before. Only a known reboot or the
+    // person's explicit clearance can settle that record.
+    if (was.unsure && !was.run && !fromAnotherStart(was.boot)) return false
+    // The saved uncertainty makes recovery inspect the run again. Once that inspection has
+    // accounted for its marked processes, a connector crash alone is no reason to hold it.
+    const { unsure: _unsure, ...settled } = unsettled.get(key) ?? was
+    unsettled.set(key, settled)
+    was = settled
     if (became === 'ended')
       say(`${a(key.slice(0, colon))} conversation (${short(key)}) was still running from before this started, with nothing looking after it, and was ended`)
     // The word that its turn was cut off is written down before the note of the run is let go
     // of. Where it cannot be (a disk that is full), the note of the run stays and the
     // conversation stays held: let go of, nothing would be left to say that a turn was cut off
-    cutOff.add(key)
-    keepCutOff()
-    if (!cutOffKept) return false
+    if (was.stopped) {
+      if (pendingStops.has(key)) return false
+      if (cutOff.delete(key)) keepCutOff()
+    } else {
+      cutOff.add(key)
+      keepCutOff()
+      if (!cutOffKept) return false
+    }
+    if (over) return false
     unsettled.delete(key)
     // What was set aside for it while it was held is tried again
     revive(key.slice(0, colon), key.slice(colon + 1))
@@ -898,6 +1249,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             ...(typeof was.boot === 'string' ? { boot: was.boot } : {}),
             ...(typeof (was as { told?: unknown }).told === 'number' ? { told: (was as { told: number }).told } : {}),
             ...((was as { unsure?: unknown }).unsure === true ? { unsure: true as const } : {}),
+            ...((was as { stopped?: unknown }).stopped === true ? { stopped: true as const } : {}),
             ...(typeof (was as { run?: unknown }).run === 'string' ? { run: (was as { run: string }).run } : {}),
           }
         }
@@ -917,15 +1269,48 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (existsSync(unreadRuns())) unread = true
     if (unread)
       say(`${UNREAD.replace(/^It could/, 'it could')} (the note is kept as ${unreadWhereItWas ? 'runs.json' : 'runs.json.unreadable'} in It’s folder)`)
+    // Every old run must be in the next durable copy before the first one is ended.
+    for (const [key, run] of Object.entries(noted)) unsettled.set(key, run)
     for (const [key, run] of Object.entries(noted)) {
-      unsettled.set(key, run)
-      recovered.add(key)
       if (!(await settleOld(key, run)))
         say(
           `${a(key.slice(0, key.indexOf(':')))} conversation (${short(key)}) may still be running from before this started, and could not be checked on or ended: it is reopened for nothing until it can be, or until \`it runs clear\` says nothing of it is running`,
         )
     }
     keepRuns()
+  }
+  /** Preserve both the local notice and the backend Stop until one durable copy carries it. */
+  const rememberStopped = (key: string) => {
+    stoppedByPerson.add(key)
+    pendingStops.add(key)
+    keepStopped()
+    for (const run of [running.get(key), unsettled.get(key)]) if (run) run.stopped = true
+    keepRuns()
+  }
+  const pendingEnds = new Map<string, { for: { harness: string; id: string }; run?: string; ok?: true }>()
+  let finishing = false
+  const finishRuns = async () => {
+    if (finishing || over) return
+    finishing = true
+    try {
+      if (pendingStops.size) keepStopped()
+      for (const [key, ended] of pendingEnds) {
+        if (over || reopenedNow.has(key) || pendingStops.has(key)) continue
+        const held = unsettled.get(key)
+        // A completed process tree held only for an unsaved notice can be released once the
+        // disk works again. Process uncertainty is checked before the next reopening.
+        if (held && !held.unsure && (await settleOld(key, held))) keepRuns()
+        if (over || unsettled.has(key)) continue
+        await call('mutation', api.machines.runEnded, ended).then(
+          () => {
+            if (pendingEnds.get(key) === ended) pendingEnds.delete(key)
+          },
+          () => {},
+        )
+      }
+    } finally {
+      finishing = false
+    }
   }
   /**
    * The hand-overs whose reopened turn is being ended because this machine's hold on what it
@@ -980,21 +1365,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * was held in, and says so to It for as long as it runs, so that the person sees it and can
    * stop it. Null when it ran, STOPPED when they stopped it, and otherwise why it did not run.
    */
-  /**
-   * The conversations whose last reopened turn the person stopped from the page. An app that is
-   * ended in the middle of a turn writes nothing of that into the conversation, so the agent
-   * that is next reopened there would read a turn that simply breaks off, and might carry on
-   * with it. It is told once, with what it is next reopened for. That may be after this
-   * connector has been started again, so the list is kept in a file: forgotten with a restart,
-   * the next reopening told the agent nothing, and it did what the person had stopped.
-   */
-  const stoppedByPerson = new Set<string>(readJson<string[]>(stoppedFile()) ?? [])
-  const keepStopped = () => {
-    try {
-      if (stoppedByPerson.size) writePrivate(stoppedFile(), [...stoppedByPerson])
-      else rmSync(stoppedFile(), { force: true })
-    } catch {}
-  }
   /** The last line a reopened app printed where it ended badly, by conversation, until its next reopening. */
   const saidLast = new Map<string, string>()
   // What a reopened app printed is kept in a file only while it runs. One that was left by a
@@ -1015,16 +1385,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // A conversation that was cleared carries on under another id, and it is that one which is carried on
     const now = { harness: session.harness, id: key.slice(key.indexOf(':') + 1) }
     const cwd = conversationFolder(now) ?? conversationFolder(session)
+    if (runtimes.blocksWake(now.harness))
+      return 'an open app cannot confirm which idle conversations it holds; send a message in the conversation to start listening'
     if (!cwd) return 'the folder its conversation was held in is not known on this machine, or is gone'
     // With what the person's shell gives a program, where this is the background service: an
     // app that takes its key from there cannot be reopened without it
     await shellLearned()
-    const env = harnessEnv()
+    const env = profileEnvironment(now.harness, conversationProfile(now) ?? conversationProfile(session), harnessEnv())
+    if (typeof env === 'string') return env
     const how = carrying(now.harness, now.id, text, {
       codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync),
       itHome: home(),
       // The mode the person last had the conversation in, and where `it` is installed
-      mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd) ?? claudeModeOf(session.id, cwd)) : null,
+      mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd, env.CLAUDE_CONFIG_DIR) ?? claudeModeOf(session.id, cwd, env.CLAUDE_CONFIG_DIR)) : null,
       itAt: [
         ...new Set([path.join(home(), 'bin', process.platform === 'win32' ? 'it.exe' : 'it'), process.execPath].filter((p) => /[\\/]it(\.exe)?$/.test(p))),
       ],
@@ -1038,7 +1411,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // A run of it from before this connector started may still be there
     // (Seen to once, before this turn's message was written: not again here, where settling
     // it would make a note that the message could no longer carry)
-    if (unsettled.has(key))
+    if (unsettled.has(key) || pendingStops.has(key))
       return `a turn of it from before may still be running on its machine, and could not be checked on or ended. It is reopened again once that machine has been started again, or once you have looked that nothing of it is running there and run \`it runs clear\`${listsProcesses() ? '' : `. ${NO_PS}`}`
     if (closing || unfitting) return NOT_STARTED
     const stop = new AbortController()
@@ -1072,7 +1445,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // And the person opening the conversation themselves: its own add-on is asking by now,
       // and is given the click in the open app, where another turn begun beside it would cross it
       const open = sessions.get(key)
-      if (closing || unfitting || lostBefore.delete(key) || !wanted() || (open !== undefined && Date.now() - open.seen < LIVE_MS)) {
+      if (
+        closing ||
+        unfitting ||
+        runtimes.blocksWake(now.harness) ||
+        lostBefore.delete(key) ||
+        !wanted() ||
+        (open !== undefined && Date.now() - open.seen < LIVE_MS)
+      ) {
         ended = NOT_STARTED
         return ended
       }
@@ -1082,6 +1462,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         cwd,
         { harness: now.harness, session: now.id, run: runId },
         {
+          env,
           signal: stop.signal,
           // Ended without the system saying what of it was left: it stays noted, and is looked at again before its conversation is next reopened
           unsure: () => {
@@ -1102,7 +1483,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
             const since = identity([pid]).get(pid)
             if (since === undefined) throw new Error('which process it is could not be told')
             const boot = bootId()
-            running.set(key, { pid, since, told: SINCE_TOLD, run: runId, ...(boot ? { boot } : {}) })
+            // This conservative copy predates every signal and every possible disk failure.
+            // Only a verified ending removes it. A crash cannot turn missing evidence into
+            // permission to reopen beside a detached command.
+            running.set(key, { pid, since, told: SINCE_TOLD, run: runId, unsure: true, ...(boot ? { boot } : {}) })
             try {
               keepRuns(true)
             } catch (err) {
@@ -1124,9 +1508,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       }
       // Stopped by the person, and not by this connector closing: its next turn is told so
       if (ended === STOPPED && !closing && !lostHold.has(owner)) {
-        if (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)
-        stoppedByPerson.add(key)
-        keepStopped()
+        rememberStopped(key)
         // What this machine was keeping for the run's own add-on went with the stop, in It as
         // here: kept on, it would be handed to the add-on of the next reopening
         for (const [id, h] of held) {
@@ -1145,7 +1527,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // connector starts next, where letting go of it would leave no sign of the turn at all
       // (What is already held for it says more than the note of the run does, and is left as it is)
       const noted = running.get(key)
-      if (noted && cutOff.has(key) && !cutOffKept && !unsettled.has(key)) unsettled.set(key, noted)
+      if (noted && !unsettled.has(key) && ((cutOff.has(key) && !cutOffKept) || pendingStops.has(key))) {
+        // Termination was verified in this process. Only its notice still needs saving.
+        const { unsure: _unsure, ...settled } = noted
+        unsettled.set(key, settled)
+      }
       if (running.delete(key)) keepRuns()
       if (ranUntil.size > 500) ranUntil.delete(ranUntil.keys().next().value!)
       ranUntil.set(key, Date.now())
@@ -1158,16 +1544,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (h.key !== key || h.served) continue
         held.delete(id)
         journal('released', id)
-        void call('mutation', api.delivery.release, { id })
+        void release(id)
           .catch(() => {})
           .then(() => route())
       }
       // That it ran, or was stopped, takes back anything said earlier of why it could not be reopened
-      await call('mutation', api.machines.runEnded, {
+      pendingEnds.set(key, {
         for: session,
         run: runId,
         ...(ended === null || ended === STOPPED || ended === NOT_STARTED ? { ok: true } : {}),
-      }).catch(() => {})
+      })
+      await finishRuns()
     }
   }
   /**
@@ -1181,14 +1568,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
     void call('mutation', api.machines.wakeFailed, { for: session, why: words ? `${why}, and its last words were: ${words}` : why }).catch(() => {})
   }
   /** Whether anybody was at the page for any click that is waiting for a click's conversation. One such, and the conversation is reopened as for a person, whatever else waits in front of it. */
-  const someoneThere = (click: Offered) =>
+  const someoneThere = (click: Offered, offered = inbox) =>
     click.attended !== false ||
-    inbox.some((c) => c.id !== click.id && c.attended !== false && c.session?.harness === click.session?.harness && c.session?.id === click.session?.id)
+    offered.some((c) => c.id !== click.id && c.attended !== false && c.session?.harness === click.session?.harness && c.session?.id === click.session?.id)
   /** Whether a conversation that is not listening is at work all the same, in a window It cannot see into: Claude Code wrote of it a moment ago. */
   const atWork = (session: { harness: string; id: string }, now: number) => {
     if (session.harness !== 'claude-code') return false
     const cwd = conversationFolder(session)
-    const wrote = cwd ? claudeWroteAt(session.id, cwd) : null
+    const env = profileEnvironment(session.harness, conversationProfile(session), harnessEnv())
+    const wrote = cwd && typeof env !== 'string' ? claudeWroteAt(session.id, cwd, env.CLAUDE_CONFIG_DIR) : null
     if (wrote === null || now - wrote >= CLAUDE_QUIET_MS) return false
     // What this machine's own reopening of it wrote is not somebody at work in it
     const ours = ranUntil.get(follow(keyOf(session.harness, session.id)))
@@ -1196,8 +1584,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** The id Codex knows a conversation by now: the one it carries on under, if it was cleared. */
   const threadOf = (key: string) => key.slice(key.indexOf(':') + 1)
-  async function queueNow(click: Offered, reopening: boolean, t3?: { server: T3; thread: string }): Promise<void> {
+  const codexOpen = (key: string) => {
+    const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: threadOf(key) }), harnessEnv())
+    return typeof env === 'string' ? null : codexHeld(threadOf(key), env.CODEX_HOME)
+  }
+  const codexPut = (thread: string, text: string) => {
+    const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: thread }), harnessEnv())
+    return typeof env === 'string' ? Promise.resolve(env) : codexQueue(thread, text, env)
+  }
+  async function queueNow(click: Offered, reopening: boolean, offered: Offered[], t3?: { server: T3; thread: string }): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
+    const receiptSlots: string[] = []
     /** This hand-over is finished: what its renewals are answered from now on is about nothing that is running. */
     let over = false
     /** This hand-over's own mark on a note that its hold was lost, by which it lets go of that note and of no other's. */
@@ -1214,7 +1611,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const giveBack = async () => {
       for (const c of withIt) {
         journal('released', c.id)
-        await call('mutation', api.delivery.release, { id: c.id }).catch(() => {})
+        await release(c.id).catch(() => {})
       }
       withIt = []
     }
@@ -1235,29 +1632,33 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // disconnected it while the click stood in line
       if (!connected(harness)) return
       // Nor is a conversation reopened once the person has switched that off, or more often than it may be
-      if ((reopening && !wakes(harness, click.at)) || (starting && !room(key, someoneThere(click)))) return
+      if ((reopening && !wakes(harness, click.at)) || (starting && !room(key, someoneThere(click, offered)))) return
       // Codex's queue is for a conversation some Codex has open. One that was closed while this
       // click stood in line is not given it: the click is looked at afresh on the next pass.
-      if (!reopening && !t3 && !codexHeld(threadOf(key))) return
+      if (!reopening && !t3 && codexOpen(key) !== true) return
       // Only if it is still for this conversation on this machine: the page may have changed
       // hands while the click stood in line here
       // The hold is counted from before it was asked for: It starts counting when it gives it,
       // which may be long before its answer is here
+      if (!reopening && waiterRoom(key) === 0) return
+      if (recovery.accepted.size + queueReceipts.size >= ACCEPTED_MOST) return
+      queueReceipts.set(click.id, key)
+      receiptSlots.push(click.id)
       const claimedAt = steady()
-      const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session! })
+      const [got] = await claim([click.id], click.session!)
       if (!got) return
       // And looked at once more, now that the claim is answered: a waiter that began while it
       // was being asked for cannot take what this machine holds, so it is given back to it. It
       // is given back as well when Codex was disconnected in that time.
       if (closing || unfitting || awaited(click, Date.now()) || !connected(harness) || (reopening && !wakes(harness, click.at))) {
         journal('released', click.id)
-        await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+        await release(click.id).catch(() => {})
         return
       }
       if (starting) {
         // Everything else that is waiting for the conversation goes with it, in the one
         // message: a conversation reopened for five clicks is reopened once, and reads all five
-        const more = inbox
+        const eligible = offered
           .filter(
             (c) =>
               c.id !== click.id &&
@@ -1265,6 +1666,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
               c.session.id === line &&
               !held.has(c.id) &&
               !toConfirm.has(c.id) &&
+              !confirmed.has(c.id) &&
               !toPark.has(c.id) &&
               !parked.has(tag(c)) &&
               !rode.has(c.id) &&
@@ -1272,9 +1674,31 @@ async function connecting(say: (line: string) => void): Promise<void> {
               !awaited(c, Date.now()),
           )
           .sort((a, b) => a.at - b.at)
-          .slice(0, WAKE_MOST - 1)
+        const most = Math.min(
+          WAKE_MOST - 1,
+          Math.max(0, ACCEPTED_MOST - recovery.accepted.size - queueReceipts.size),
+          reopening ? Infinity : Math.max(0, waiterRoom(follow(key)) - 1),
+        )
+        const more = eligible.slice(0, most)
+        // A person may pass older timer clicks, but must be in the batch that spends the
+        // attended allowance. The remaining timers keep their order and stay pending.
+        if (most > 0 && click.attended === false && more.every((c) => c.attended === false)) {
+          const attended = eligible.find((c) => c.attended !== false)
+          if (attended) {
+            if (more.length === most) more.pop()
+            more.push(attended)
+            more.sort((a, b) => a.at - b.at)
+          }
+        }
         if (more.length) {
-          const got = await call<string[]>('mutation', api.delivery.claim, { ids: more.map((c) => c.id), for: click.session! }).catch(() => [] as string[])
+          for (const c of more) {
+            queueReceipts.set(c.id, key)
+            receiptSlots.push(c.id)
+          }
+          const got = await claim(
+            more.map((c) => c.id),
+            click.session!,
+          ).catch(() => [] as string[])
           withIt = more.filter((c) => got.includes(c.id))
         }
         // Taken now, and only now: several conversations may have been found to have room at the
@@ -1289,7 +1713,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         ) {
           await giveBack()
           journal('released', click.id)
-          await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+          await release(click.id).catch(() => {})
           return
         }
       }
@@ -1305,7 +1729,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           say(`click ${click.id} was not this machine’s any more by the time it could be handed over; it is left where it is`)
           await giveBack()
           journal('released', click.id)
-          await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+          await release(click.id).catch(() => {})
           return
         }
         heldFrom = again
@@ -1315,7 +1739,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (!reopening && awaited(click, Date.now())) {
           await giveBack()
           journal('released', click.id)
-          await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+          await release(click.id).catch(() => {})
           return
         }
       }
@@ -1387,19 +1811,21 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Still not settled, it is reopened for nothing: said below, by `carry`, as why
       /** Whether this turn is told that the one before it was cut off: decided before it begins, since its own ending may make such a note anew. */
       const toldCutOff = cutOff.has(key)
-      const sent = { click, toWaiter: false }
+      const sent: { click: Offered; toWaiter: boolean; given?: Given; printed?: boolean } = { click, toWaiter: false }
       submitting.set(click.id, sent)
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
       // hook of It's hands the agent the rest, and otherwise one short line for each click
       const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
-      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexQueue(threadOf(key), text))
+      const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexPut(threadOf(follow(key)), text))
+      if (!reopening && turnRunning(follow(key), Date.now())) {
+        await recovery.keepWaiters([click, ...withIt], follow(key))
+      }
       const mark =
-        !reopening && marks(key, harness)
-          ? noteMark(
-              key,
-              harness,
+        !reopening && marks(follow(key), harness)
+          ? await noteMark(
+              follow(key),
               [click, ...(t3 ? withIt : [])].map((c) => describeClick(asClick(c))),
-              () => put(lines()),
+              t3 ? { via: 't3', thread: t3.thread, text: lines() } : { via: 'codex', text: lines() },
             )
           : undefined
       // Whose run it will be, where one is started: should every run be ended at once, as when
@@ -1443,7 +1869,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             // command line.
             await put(mark ? MARK : lines())
       // A mark that was not taken stands for nothing. One that was is waited on: a hook asks
-      if (mark && refused !== null) mark.takeAway()
+      if (mark && refused !== null) await mark.takeAway()
       else mark?.wait()
       // A conversation the person stopped had what was done all the same: it is handed over,
       // and nothing is tried again for it
@@ -1454,13 +1880,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
         lostHold.delete(mine)
         await giveBack()
         journal('released', click.id)
-        await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+        await release(click.id).catch(() => {})
         return
       }
       if (refused === STOPPED && (closing || (unfitting && !lostHold.has(mine)))) {
         await giveBack()
         journal('released', click.id)
-        await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+        await release(click.id).catch(() => {})
         return
       }
       // Ended because the hold on it was lost: it is not this machine's to hand over or to give
@@ -1471,15 +1897,33 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // It may be a click that went with this one that was lost, and this one still held
         // here: given back, it is reopened for again, with the note that its turn was cut
         // off. Where it is not this machine's, the giving back does nothing.
-        await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+        await release(click.id).catch(() => {})
         return
       }
       const handed = refused === null || refused === STOPPED
-      if (!handed) await giveBack()
+      if (!handed) {
+        await recovery.dropWaiters([click, ...withIt].map((c) => c.id))
+        await giveBack()
+      }
       // Refused by the command, and given meanwhile to an agent that is waiting for it: the
       // waiter has it and says so to It itself, so there is nothing to try again or set aside
       if (!handed && sent.toWaiter) return
       if (handed) {
+        // The app has already taken these clicks. A failed receipt write must not turn
+        // that handoff into a refusal or release the rest of its batch for redelivery.
+        if (!recovery.stopped) {
+          try {
+            // A turn may have begun while the queue command was running. The click then
+            // waits behind it, so keep its waiter copy with the acceptance receipt as well.
+            await recovery.accept(
+              [click, ...withIt].map((c) => c.id),
+              { id: click.id, printed: sent.printed, given: sent.given },
+              !reopening && turnRunning(follow(key), Date.now()) ? { clicks: [click, ...withIt], key: follow(key) } : undefined,
+            )
+          } catch (err) {
+            seldom('recovery', `could not keep the delivery receipt (${why(err)}); confirming the accepted clicks`)
+          }
+        }
         if (refused === STOPPED) say(`${a(harness)} conversation (${short(line)}) was stopped by the person`)
         for (const c of [click, ...withIt]) {
           journal('queued', c.id)
@@ -1493,13 +1937,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         record('agent.woken', { result: 'resumed', agent: agentOf(harness) })
         if (stalled.get(line) === click.id) stalled.delete(line)
-        // Codex's queue hands a click over behind a turn that is running, and so does T3 Code
-        // for a thread whose turn is running, with every click that went along in the same
-        // message: an agent that waits in that turn for one of those would wait for a message
-        // that stands behind its own turn. A reopening never does: nothing was running
-        if (!reopening && turnRunning(key, Date.now())) {
-          for (const c of [click, ...withIt]) if (c !== click || !sent.toWaiter) behindTurn.set(c.id, { click: c, key })
-        }
         await confirmAll()
       } else {
         const n = (queueTries.get(tag(click))?.n ?? 0) + 1
@@ -1522,7 +1959,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           await parkAll()
         } else {
           say(`click ${click.id} was not taken by ${route} (${refused}); try ${n} of ${QUEUE_WAITS.length}`)
-          await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+          await release(click.id).catch(() => {})
         }
       }
     } catch (err) {
@@ -1542,6 +1979,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       clearInterval(keeping)
       submitting.delete(click.id)
       queueing.delete(click.id)
+      for (const id of receiptSlots) queueReceipts.delete(id)
     }
   }
   // Only a few such commands at a time, however many clicks are waiting. A queue's command is
@@ -1570,16 +2008,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   function queue(click: Offered, reopening: boolean, t3?: { server: T3; thread: string }): boolean {
     if (closing || unfitting) return false
-    // What Codex's queue or T3 Code takes behind a running turn is kept here for a waiter in
-    // that turn, and only so much is kept. Past that a click stays with It, where nothing is
-    // lost, until a turn ends and makes room: letting go of the oldest copy to make room took
-    // it from a turn that may still be waiting for it.
-    if (!reopening && !queueing.has(click.id) && behindTurn.size + submitting.size >= BEHIND_MOST) {
-      // Those whose turn is over are no longer waited for by anyone, and are let go of first:
-      // a Codex that was closed in the middle of a turn says nothing of its ending
-      for (const [id, b] of behindTurn) if (!turnRunning(b.key, Date.now())) behindTurn.delete(id)
-      if (behindTurn.size + submitting.size >= BEHIND_MOST) return false
-    }
+    const key = follow(keyOf(click.session!.harness, click.session!.id))
+    // A conversation's copies can hold back only its own queue. Restored copies expire
+    // independently of session evidence; a missing session does not prove a turn ended.
+    if (recovery.accepted.size >= ACCEPTED_MOST) return false
+    if (!reopening && !queueing.has(click.id) && waiterRoom(key) === 0) return false
     let tried = queueTries.get(tag(click))
     if (queueing.has(click.id)) return true
     // Tried one way and now to go the other: its conversation was closed and is open, or was
@@ -1601,7 +2034,6 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // old one. Two hand-overs of one conversation side by side read and let go of each other's
     // notes of how a run ended, and each of four repairs to that left another way for it to
     // happen. One at a time, there is no other hand-over's note to meet.
-    const key = follow(keyOf(click.session!.harness, click.session!.id))
     // Every line that is this conversation's by now: also one that was begun under an id the
     // conversation has since been found to have had
     const before = [...queues].filter(([line]) => follow(line) === key).map(([, pending]) => pending)
@@ -1610,7 +2042,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // as it asks, and is looked at again when that hand-over is over.
     if (reopening && before.length) return false
     queueing.add(click.id)
-    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening, t3)))
+    // Discovery advances while a command waits for its place. Keep this conversation's
+    // offers with it, especially the attended click that permits this turn. Claims still
+    // check ownership and whether each click is pending when the command gets its place.
+    const offered = inbox.filter((c) => c.session?.harness === click.session!.harness && c.session?.id === click.session!.id)
+    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening, offered, t3)))
     queues.set(key, next)
     void next.then(() => {
       if (queues.get(key) === next) queues.delete(key)
@@ -1620,8 +2056,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
 
   /** Looks at what is waiting again in a moment, and not only at the next second: what is reopened at once is not kept waiting for the clock. */
   let sooner: ReturnType<typeof setTimeout> | undefined
+  let soonerAt = 0
   const soon = (ms: number) => {
-    if (sooner) return
+    const at = steady() + ms
+    if (sooner && soonerAt <= at) return
+    // A discovery retry may be a minute away. A click whose route is ready sooner keeps
+    // its earlier pass, rather than waiting for that retry or the next one-second tick.
+    if (sooner) clearTimeout(sooner)
+    soonerAt = at
     sooner = setTimeout(() => {
       sooner = undefined
       void route()
@@ -1629,9 +2071,87 @@ async function connecting(say: (line: string) => void): Promise<void> {
     sooner.unref?.()
   }
   async function route(): Promise<void> {
-    if (routing || closing || unfitting) return
+    if (routing || closing || unfitting || recovery.erased) return
     routing = true
     try {
+      // Discovery outlives the click that started it, including a completed fallback delivery.
+      for (const [key, session] of t3Pending) if (connected(session.harness)) t3For(key, session)
+      await retireLostClaims()
+      await recovery
+        .pruneWaiters(Date.now(), (key, restored) => (!restored || sessions.has(follow(key))) && !turnRunning(follow(key), Date.now()))
+        .catch(cleanupFailed)
+      if (givingBack === 'due') {
+        const asked = await recoverBatch()
+        if (asked === null) {
+          // An expired lease is still hidden until the backend requeues it. Only a complete
+          // recovery answer proves that older work no longer waits behind a newer click.
+          soon(1000)
+          return
+        } else {
+          await recovery.recover(
+            asked.back,
+            (asked.routes ?? []).flatMap((row) => (row.session ? [[row.id, keyOf(row.session.harness, row.session.id)]] : [])),
+            asked.person,
+          )
+          for (const id of asked.back) comingBack.add(id)
+          for (const id of asked.back) journal('released', id)
+          if (!asked.done) {
+            soon(1000)
+            return
+          }
+          givingBack = 'asked'
+        }
+      }
+      if (givingBack === 'asked') {
+        // A current inbox row is evidence too, including for an older backend.
+        const seen = inbox.filter((c) => comingBack.has(c.id))
+        if (seen.length) {
+          await recovery.retire(seen.map((c) => c.id))
+          for (const c of seen) comingBack.delete(c.id)
+        }
+        if (comingBack.size) {
+          const ids = [...comingBack].slice(0, RECOVERY_BATCH)
+          try {
+            const rows = legacyRecover
+              ? await Promise.all(
+                  ids.map(async (id) => {
+                    try {
+                      const click = await call<Offered & { delivery: string }>('query', api.delivery.get, { id })
+                      if (!click) throw new Error('unanswered')
+                      if (click.delivery === 'pending') {
+                        // Older get answers do not say whether a pending click is parked.
+                        // Keep its ordering hold until the inbox actually offers it, without
+                        // preventing unrelated conversations from receiving their clicks.
+                        if (click.session && !recovery.targets.has(id)) await recovery.recover([], [[id, keyOf(click.session.harness, click.session.id)]])
+                        throw new Error('waiting for the recovered click to be offered')
+                      }
+                      return { id, click: null }
+                    } catch (err) {
+                      if ((err as { code?: string }).code === 'not_found') return { id, click: null }
+                      throw err
+                    }
+                  }),
+                )
+              : await call<{ id: string; click: Offered | null }[]>('query', api.delivery.recover, { ids })
+            if (!Array.isArray(rows) || rows.length !== ids.length || rows.some((r, i) => r.id !== ids[i] || (r.click !== null && r.click?.id !== r.id)))
+              throw new Error('incomplete recovery')
+            await recovery.retire(rows.map((row) => row.id))
+            for (const row of rows) comingBack.delete(row.id)
+            for (const row of rows) if (row.click) recoveredClicks.set(row.id, row.click)
+          } catch (err) {
+            if (/could not find/i.test(String((err as Error)?.message ?? err))) legacyRecover = true
+            for (const id of ids) {
+              comingBack.delete(id)
+              comingBack.add(id)
+            }
+          }
+          if (comingBack.size) {
+            soon(1000)
+            if ([...comingBack].some((id) => !recovery.targets.has(id))) return
+          }
+        }
+        if (!comingBack.size) givingBack = 'done'
+      }
       const now = Date.now()
       // Telling It what was handed over is done beside this, never ahead of it: a slow answer
       // there must not hold up renewing leases or taking new clicks
@@ -1646,7 +2166,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         held.delete(id)
         journal('released', id)
         say(`click ${id} was kept for an agent app that is not connected any more; it goes back to waiting`)
-        await call('mutation', api.delivery.release, { id }).catch(() => {})
+        await release(id).catch(() => {})
         return true
       }
       // How long each has been held is counted by the clock that is never set back
@@ -1662,6 +2182,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // someone else's, so serving it from here stops.
           // Counted from before the request went out: the backend's clock started no later than that
           const asked = steady()
+          const attempt = claimAttempts.get(id)
           const kept = await call<string[]>('mutation', api.delivery.renew, { ids: [id] }).catch(() => null)
           // While that was being asked, the click may have been handed over or given to a waiting
           // agent: it is not held here then, and nothing about it is lost
@@ -1671,6 +2192,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
           if (kept?.includes(id)) h.leaseUntil = asked + LEASE_MS
           else if (kept !== null || at > h.leaseUntil - 2000) {
             held.delete(id)
+            // A refused renewal proves this claim is over. An unanswered renewal does not.
+            // Stop serving it even if saving the cleanup fails, and retry that save separately.
+            if (kept !== null) {
+              lostClaims.set(id, attempt)
+              await retireLostClaims()
+            }
             journal('lost', id)
             say(
               `click ${id} is not this machine's to deliver any more (${kept === null ? 'It could not be reached to keep it' : 'It gave it to another'}); it goes back to waiting`,
@@ -1680,7 +2207,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           held.delete(id)
           journal('released', id)
           say(`click ${id} was kept for ${h.forHook ? 'a Codex turn that ended without taking it' : 'an add-on that stopped asking'}; it goes back to waiting`)
-          await call('mutation', api.delivery.release, { id }).catch(() => {})
+          await release(id).catch(() => {})
         } else if (at > h.leaseUntil - 2000) {
           held.delete(id)
           journal('lost', id)
@@ -1713,8 +2240,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         return Math.max(now - click.at, here - firstSeen.get(click.id)!)
       }
-      for (const click of [...inbox].sort((a, b) => a.at - b.at)) {
-        if (taken(click)) continue
+      for (const click of [...new Map([...inbox, ...recoveredClicks.values()].map((c) => [c.id, c])).values()].sort((a, b) => a.at - b.at)) {
+        if (taken(click)) {
+          recoveredClicks.delete(click.id)
+          continue
+        }
         if (unconfirmed.has(click.id)) {
           // Its harness's queue took it before a restart; all that was missing was telling It
           unconfirmed.delete(click.id)
@@ -1725,7 +2255,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // A click for an app that is not connected is left where it is, for the person and `it wait`
         if (!chosen(click.session.harness)) continue
         const key = follow(keyOf(click.session.harness, click.session.id))
-        if (waitingBehind.has(key)) continue
+        if (waitingBehind.has(key) || [...comingBack].some((id) => follow(recovery.targets.get(id) ?? '') === key)) continue
         // The thread of T3 Code the conversation is held in, asked for only where no step before it has taken the click
         const session = click.session
         let thread: ReturnType<typeof t3For>
@@ -1740,27 +2270,37 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const listening = !codex && s !== undefined && now - s.seen < LIVE_MS
         // A Codex turn that is running will reach a hook: after its next command, or when it stops
         const inTurn = codex && turnRunning(key, now)
-        const forAddOn = listening || (inTurn && now - click.at < FRESH_MS)
+        // Codex's queue may hold an earlier click of the conversation behind this very turn, or
+        // one may have its place in line for the queue, from the moment it was given that place
+        // and before anything was asked for it. Given to the turn's next hook, this one would
+        // be read before it: so it follows the earlier one, and is handed over after it.
+        const queuedBefore =
+          inTurn && ([...queues.keys()].some((line) => follow(line) === key) || [...recovery.waiters.values()].some((b) => follow(b.key) === key))
+        const seen = hookSeen.get(click.id)
+        const fresh = seen?.tag === tag(click) && performance.now() - seen.at < FRESH_MS
+        const forAddOn = listening || (inTurn && fresh && !queuedBefore)
         // Which of the other ways it goes, asked only where the first does not take it
         const way = forAddOn
           ? undefined
           : wayOf({
               inT3: heldInT3,
-              codexOpen: () => codex && connected('codex') && !reopenedNow.has(key) && codexHeld(threadOf(key)),
-              reopens: () => wakes(session.harness, click.at) && connected(session.harness),
+              codexOpen: () => codex && connected('codex') && !reopenedNow.has(key) && codexOpen(key) === true,
+              reopens: () =>
+                wakes(session.harness, click.at) && connected(session.harness) && (!codex || codexOpen(key) === false) && !runtimes.blocksWake(session.harness),
             })
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
           const asked = steady()
-          const [got] = await call<string[]>('mutation', api.delivery.claim, { ids: [click.id], for: click.session })
+          const [got] = await claim([click.id], click.session)
           // An agent may have begun to wait for it while the claim was being asked for. A waiter
           // cannot take what this machine holds, so the click is given back for it to take. It
           // is given back as well when the person disconnected its app in that time.
           if (got && (unfitting || closing || awaited(click, Date.now()) || !chosen(click.session.harness))) {
             journal('released', click.id)
-            await call('mutation', api.delivery.release, { id: click.id }).catch(() => {})
+            await release(click.id).catch(() => {})
           } else if (got) {
-            held.set(click.id, { click, key, claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
+            // Under the id the conversation has by now: it may have carried on under another while the claim was being asked for
+            held.set(click.id, { click, key: follow(key), claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
             journal('claimed', click.id)
           }
         } else if (way === 't3') {
@@ -1807,7 +2347,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // Route 4: nothing to do. The click stays waiting and the site shows it.
       }
     } catch (err) {
-      say(`delivery: ${why(err)}`)
+      if (!closing) seldom('delivery', `delivery: ${why(err)}`)
     } finally {
       routing = false
     }
@@ -1842,6 +2382,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         200,
         {
           ok: true,
+          addons: Object.fromEntries(found.map((h) => [h.id, runtimes.status(h.id)])),
           ...(unfitting && unfitting !== NOT_ASKED ? { unfit: `${unfitting.message} ${unfitting.hint ?? ''}`.trim() } : {}),
           ...(unfitting === NOT_ASKED ? { unchecked: true } : {}),
           ...(unread || unsettled.size ? { heldRuns: (unread ? 1 : 0) + unsettled.size } : {}),
@@ -1866,19 +2407,26 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // Given for as long as no hook has said that it has it, so that an answer lost on its way
     // is asked for again and given again.
     if (req.method === 'POST' && url.pathname === '/marked') {
+      if (recovery.erased) return [200, { ok: true, marks: [], texts: [] }]
       if (!harness || !id) return [400, { error: 'say which harness and session' }]
       const key = follow(keyOf(harness, id))
       // The hook has what it was given, and says which: only then is it let go of
       if (Array.isArray(body.taken)) {
-        const left = (marked.get(key) ?? []).filter((m) => !body.taken.includes(m.id))
-        if (left.length) marked.set(key, left)
-        else marked.delete(key)
+        await recovery.removeMarks(key, body.taken)
         return [200, { ok: true }]
       }
+      // A hook of an app the person has disconnected is handed nothing, as its add-on is given
+      // no clicks, and nor is any hook by a machine that hands nothing over. What the marks
+      // stood for is kept as it is.
+      if (!chosen(harness) || unfitting || closing) return [200, { ok: true, marks: [], texts: [] }]
       // For a turn the person started with a message of their own, only what has waited past
       // its time is handed over: a mark's own turn is still to come, and has first claim
-      const due = (marked.get(key) ?? []).filter((m) => body.own !== true || Date.now() - m.at > MARK_ASKED_MS)
+      const due = (recovery.marks.get(key) ?? []).filter((m) => body.own !== true || Date.now() - m.at > MARK_ASKED_MS)
       return [200, { ok: true, marks: due.map((m) => m.id), texts: due.flatMap((m) => m.texts) }]
+    }
+    if (req.method === 'POST' && url.pathname === '/addon') {
+      const runtime = runtimes.hear(harness, body.instance, body.addon)
+      return runtime ? [200, { ok: runtime.state === 'active', api: 1, runtime }] : [400, { error: 'invalid add-on report' }]
     }
     if (url.pathname === '/session' || url.pathname === '/clicks') {
       if (!harness || !id) return [400, { error: 'say which harness and session' }]
@@ -1892,12 +2440,56 @@ async function connecting(say: (line: string) => void): Promise<void> {
           )
         return [200, url.pathname === '/session' ? { ok: true } : { clicks: [] }]
       }
+      const runtime = body.addon === undefined ? undefined : runtimes.hear(harness, body.instance, body.addon)
+      const blocked = body.addon !== undefined && runtime?.state !== 'active'
+      // The session metadata still uses this API when only the loaded build is stale.
+      if (blocked && (!runtime || body.addon.api !== 1)) return [200, { ok: false, clicks: [], runtime }]
       const key = keyOf(harness, id)
       // An add-on that can see which folder its conversation is held in says so, and it is noted
       // here: where the app runs the agent's commands with It's folder shut to them (Codex does),
       // the `it` that publishes a page cannot note it itself, and without it the conversation
       // could never be reopened.
-      if (typeof body.folder === 'string' && body.folder.length <= 4096 && path.isAbsolute(body.folder)) noteConversation({ harness, id }, body.folder)
+      const previous = typeof body.was === 'string' && body.was && body.was !== id && body.was.length <= 200 ? { harness, id: body.was } : undefined
+      const profile =
+        readProfile(harness, body.profile) ??
+        readProfile(harness, conversationProfile({ harness, id })) ??
+        (previous ? readProfile(harness, conversationProfile(previous)) : undefined)
+      if (typeof body.folder === 'string' && body.folder.length <= 4096 && path.isAbsolute(body.folder))
+        void noteConversation({ harness, id }, body.folder, profile ?? null)
+      else if (previous && !conversationProfile({ harness, id })) {
+        const folder = conversationFolder(previous)
+        if (folder && profile) void noteConversation({ harness, id }, folder, profile)
+      }
+      let changed = false
+      // A conversation that is here under its own id is not somewhere else under another
+      if (aliases.delete(key)) changed = true
+      if (typeof body.was === 'string' && body.was && body.was !== id && body.was.length <= 200) {
+        const was = keyOf(harness, body.was)
+        // Whatever led to the old id leads straight to the new one, so no chain grows
+        for (const [from, to] of aliases) if (to === was) aliases.set(from, key)
+        aliases.set(was, key)
+        // And whatever is kept here for the conversation under its old id is kept for it under
+        // the new one: a click it was given and has not said it has, which it now asks for
+        // by the new id and would not be given again until its hold ran out; and what a mark
+        // put into it stands for
+        for (const h of held.values()) if (h.key === was) h.key = key
+        if (unmarked.delete(was)) unmarked.add(key)
+        while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
+        changed = true
+      }
+      // A turn has ended or a new one has begun: Codex now hands over what its queue held
+      // behind the turn. Clear those copies after moving anything kept under the old id.
+      if ((changed && typeof body.was === 'string') || (url.pathname === '/session' && typeof body.busy === 'boolean'))
+        await recovery.session(
+          key,
+          typeof body.was === 'string' ? keyOf(harness, body.was) : undefined,
+          url.pathname === '/session' && typeof body.busy === 'boolean',
+        )
+      if (changed && !over) writePrivate(aliasFile(), Object.fromEntries(aliases))
+      if (blocked) {
+        if (changed) watch()
+        return [200, { ok: false, clicks: [], runtime }]
+      }
       // An add-on that speaks is one its app lets run. Where the last look found it waiting for
       // the person's yes, as Codex has an add-on's hooks wait, that has been given since: the
       // machine is looked at again now, and not at the next half hour, until when `it status`
@@ -1918,24 +2510,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // is let go, where it would otherwise be told to the agent at some later reopening,
         // of a turn that by then was long over.
         if (body.busy && !reopenedNow.has(follow(key)) && [key, follow(key)].map((k) => stoppedByPerson.delete(k)).some(Boolean)) keepStopped()
-        // A turn has ended or a new one has begun: what Codex's queue held behind the turn is
-        // now handed over by Codex itself, and is not a waiter's to be given
-        if (url.pathname === '/session') for (const [clickId, b] of behindTurn) if (b.key === follow(key)) behindTurn.delete(clickId)
       }
       sessions.set(key, s)
       if (isNew && (harness === 'codex' || harness === 'claude-code')) noteHeard(key)
-      let changed = false
-      // A conversation that is here under its own id is not somewhere else under another
-      if (aliases.delete(key)) changed = true
-      if (typeof body.was === 'string' && body.was && body.was !== id && body.was.length <= 200) {
-        const was = keyOf(harness, body.was)
-        // Whatever led to the old id leads straight to the new one, so no chain grows
-        for (const [from, to] of aliases) if (to === was) aliases.set(from, key)
-        aliases.set(was, key)
-        while (aliases.size > 500) aliases.delete(aliases.keys().next().value!)
-        changed = true
-      }
-      if (changed) writePrivate(aliasFile(), Object.fromEntries(aliases))
       // The harness as It knows it, and never as whoever asked spelled it
       if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
       if (changed && typeof body.was === 'string') say(`${a(agentOf(harness))} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
@@ -1985,10 +2562,20 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const unreadToo = unread && (shown === null || body.unread === true)
         // Each is still owed the word that a turn of its was cut off, and that is written down
         // first: where it cannot be, nothing is let go of, and the person is told so
-        for (const key of keys) cutOff.add(key)
+        for (const key of keys) {
+          if (unsettled.get(key)?.stopped || stoppedByPerson.has(key)) rememberStopped(key)
+          else cutOff.add(key)
+        }
         keepCutOff()
-        if (keys.length && !cutOffKept) return [200, { cleared: 0, unkept: true }]
+        if ((keys.length && !cutOffKept) || keys.some((key) => pendingStops.has(key))) return [200, { cleared: 0, unkept: true }]
+        const clearing = keys.map((key) => [key, unsettled.get(key)!] as const)
         for (const key of keys) unsettled.delete(key)
+        try {
+          if (keys.length) keepRuns(true)
+        } catch {
+          for (const [key, run] of clearing) unsettled.set(key, run)
+          return [200, { cleared: 0, unkept: true }]
+        }
         // What was set aside meanwhile is tried again: for each conversation that was held,
         // and where none was reopened at all, for every conversation this machine had given up on
         const back = new Set(keys)
@@ -2031,8 +2618,19 @@ async function connecting(say: (line: string) => void): Promise<void> {
       ]
     }
     if (req.method === 'POST' && url.pathname === '/waiting') {
+      if (recovery.erased) return [200, { ok: true, clicks: [] }]
+      await recovery
+        .pruneWaiters(Date.now(), (key, restored) => (!restored || sessions.has(follow(key))) && !turnRunning(follow(key), Date.now()))
+        .catch(cleanupFailed)
       const who = String(body.id ?? '')
       if (!who) return [400, { error: 'say who is waiting' }]
+      // What the waiter says it has printed, of what was kept for a turn that waits, is let go of
+      const got: string[] = Array.isArray(body.got) ? body.got.slice(0, 1000).filter((id: unknown): id is string => typeof id === 'string') : []
+      await recovery.printed(who, got).catch(cleanupFailed)
+      for (const id of got) {
+        const sent = submitting.get(id)
+        if (sent?.given?.who === who) sent.printed = true
+      }
       if (body.done) {
         // Kept, as one that has ended: see `waiters`
         const ended = waiters.get(who)
@@ -2083,30 +2681,36 @@ async function connecting(say: (line: string) => void): Promise<void> {
           if (given) handedBack.push(h.click)
           // Anything set aside for an add-on and not yet given to it goes back, so the waiter
           // can have it. Not waited for: the waiter must have its answer at once.
-          else void call('mutation', api.delivery.release, { id: clickId }).catch(() => {})
+          else void release(clickId).catch(() => {})
         }
         // A click that Codex's own command has been started with, and has not yet answered for,
         // cannot be taken back: Codex may have it already, and would hand it over only
         // after the turn that is now waiting. So the waiter is given it too, still held for
         // this machine. Should Codex hand it over as well, its id shows it is the same click.
         for (const sent of submitting.values()) {
-          // Once: an agent that took it, dealt with it and waits again is not given it a second time
-          if (sent.toWaiter || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
+          // Once: an agent that took it, dealt with it and waits again is not given it a second
+          // time. Unless it never had it: the same waiter asking again with no word of it was
+          // sent an answer that did not arrive
+          if (sent.printed || (sent.toWaiter && sent.given?.who !== who) || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
           sent.toWaiter = true
+          if (sent.given?.who !== who) sent.given = { who, at: Date.now() }
           handedBack.push(sent.click)
         }
         // And a click that Codex's queue has taken, and holds until the turn now running is
-        // done: the waiter is that turn, so it is given the click too, and given it once
-        for (const [clickId, b] of behindTurn) {
-          if (!turnRunning(b.key, Date.now())) behindTurn.delete(clickId)
-          // Given in this answer already, as one is that Codex's command has only just answered
-          // for: its second copy is let go of, and is not left to be given to the next waiter
-          else if (handedBack.some((c) => c.id === clickId)) behindTurn.delete(clickId)
-          else if (waitedFor(waiter, b.click) && fits(b.click)) {
-            behindTurn.delete(clickId)
-            handedBack.push(b.click)
-          }
-        }
+        // done: the waiter is that turn, so it is given the click too. Given once to a waiter
+        // that says it has it. One that asks again and has not said so was sent an answer that
+        // never arrived, and is given it again; and one that went quiet without saying so
+        // leaves it for the next waiter of the turn.
+        const now = Date.now()
+        await recovery.giveWaiters(who, now, (b, clickId) => {
+          // Asking again keeps a waiter's hold in memory; it does not rewrite the saved
+          // receipt's timestamp. After a restart its original timestamp is the fallback.
+          if (handedBack.some((c) => c.id === clickId)) return true
+          const seen = b.given ? (waiters.get(b.given.who)?.seen ?? b.given.at) : 0
+          if (!waitedFor(waiter, b.click) || (b.given && b.given.who !== who && now - seen <= GIVEN_MS) || !fits(b.click)) return false
+          handedBack.push(b.click)
+          return true
+        })
         const sessions = watched.map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
         return [200, { ok: true, ...(session ? { sessions } : {}), ...(handedBack.length ? { clicks: handedBack } : {}) }]
       }
@@ -2213,7 +2817,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (info.socket) rmSync(info.socket, { force: true })
     throw lockLost()
   }
-  writePrivate(infoFile(), info)
+  try {
+    writePrivate(infoFile(), info)
+  } catch (err) {
+    // Where the note cannot be written, on a disk that is full say, nothing can find this
+    // connector. What it opened is closed, so that the next try, half a minute on, does not
+    // leave one more listener open behind it each time
+    server.close()
+    if (info.socket) rmSync(info.socket, { force: true })
+    throw err
+  }
   // Where it listens is said by kind: the socket's own address would name the person's home folder
   say(`connector ${VERSION} started (pid ${process.pid}); connector listening on ${info.socket ? 'its socket' : `127.0.0.1:${info.port}`}`)
   // Usage counts are sent from here, in the background, for every command on this machine.
@@ -2250,6 +2863,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (notOurs) return
     say("this machine is not one of It's machines any more; stopping")
     notOurs = true
+    eraseDeliveryRecovery()
     stopping?.(0)
   }
   const client = live(
@@ -2262,9 +2876,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // their own, of the apps the person has connected. When who is here changes, or which apps are
   // connected, so does what is watched.
   let watching = ''
+  let watchingScope = ''
+  let watchGeneration = 0
+  const inboxAfter = new Map<string, string>()
+  let nextInbox: { harness: string; id: string }[] | null = null
   let saidTooMany = false
   let unwatch: (() => void) | null = null
-  function watch(): void {
+  function watch(advance = false): void {
     const now = Date.now()
     // The conversations that are here, the one heard from most recently first
     const here = [...sessions]
@@ -2286,16 +2904,43 @@ async function connecting(say: (line: string) => void): Promise<void> {
       .map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
     // A click is asked for an app's own queue only while that app is connected, and for a
     // conversation that is closed only where it may be reopened
-    const args = { listening, queues: [...new Set<string>([...QUEUES, ...WAKES.filter((h) => wakesNow.has(h))])].filter(connected) }
+    const scope = { listening, queues: [...new Set<string>([...QUEUES, ...WAKES.filter((h) => wakesNow.has(h))])].filter(connected) }
+    const scopeKey = JSON.stringify(scope)
+    // A changed listener set advances an answered page too. Frequent add-on updates cannot
+    // restart discovery at the first names, and an unanswered subscription advances nothing.
+    if (nextInbox && (advance || scopeKey !== watchingScope)) {
+      for (const s of nextInbox) inboxAfter.set(s.harness, s.id)
+      nextInbox = null
+    }
+    watchingScope = scopeKey
+    const args = { ...scope, after: scope.queues.map((harness) => ({ harness, id: inboxAfter.get(harness) ?? '' })) }
     const next = JSON.stringify(args)
     if (next === watching) return
     watching = next
+    const generation = ++watchGeneration
     unwatch?.()
     unwatch = client.onUpdate(
-      api.delivery.inbox,
+      api.delivery.inboxPage,
       args,
-      (clicks: Offered[]) => {
+      (page: { clicks: Offered[]; after: { harness: string; id: string }[] }) => {
+        // Ignore an answer already in flight when that subscription was replaced.
+        if (watchGeneration !== generation) return
+        const clicks = page.clicks
+        nextInbox = page.after
+        const here = performance.now()
+        for (const click of clicks) {
+          // A new owner gets its own window, including when the observation table is full.
+          // Repeated offers to the same conversation keep their age. Old observations are
+          // evicted even when another connector took the click and this one never confirmed it.
+          const seen = hookSeen.get(click.id)
+          const destination = tag(click)
+          if (seen?.tag === destination) continue
+          hookSeen.delete(click.id)
+          hookSeen.set(click.id, { tag: destination, at: here })
+          while (hookSeen.size > 5000) hookSeen.delete(hookSeen.keys().next().value!)
+        }
         inbox = clicks
+        for (const click of clicks) recoveredClicks.delete(click.id)
         void route()
       },
       (err) => say(`inbox: ${why(err)}`),
@@ -2338,20 +2983,26 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // program then writes the service's definition as its version has it and starts the service
   // again, which ends this one. Where a person started It by hand, they are told to do so again.
   let upgradingNow = false
-  const upgradeAsked = async () => {
+  const upgradeAsked = async (version: string | undefined) => {
     if (upgradingNow) return
     upgradingNow = true
     try {
       await call('mutation', api.machines.upgrading, { state: 'working' }).catch(() => {})
+      if (!version || !/^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(version))
+        throw new Problem(
+          'The update request names no valid release, so nothing was changed.',
+          'upgrade_program',
+          'Refresh the Machines page and request the update again.',
+        )
       // Its sentences are a person's, and one of them names the folder the program is in: that one is said here without the folder
-      const done = await fetchNewer({ say: (line) => say(`upgrade: ${line.startsWith('Installed in ') ? 'installed' : line}`) })
+      const done = await fetchNewer({ expectedVersion: version, say: (line) => say(`upgrade: ${line.startsWith('Installed in ') ? 'installed' : line}`) })
       if (!done) return void (await call('mutation', api.machines.upgrading, { state: 'none' }).catch(() => {}))
       // Counted: from which version to which, asked for on the site
       record('upgrade.done', { from: three(done.from), to: three(done.to), by: 'site', result: 'ok' })
       // Not on Windows: there this connector runs inside the very task that starting again
       // stops, and what it starts may be ended with that task before it has started anything.
       // The new program is in place, and the person is told what starts It as it.
-      if (service.installedHere() && process.platform !== 'win32') {
+      if (service.restartsAfterUpgrade()) {
         say(`upgrade: starting again as ${done.to}`)
         // It is started again by the new program's own setup, which ends this connector on its
         // way. Where this connector is still here to see that setup end badly, or not start at
@@ -2411,7 +3062,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     // With the newest version this machine has learned of, where it looks for one and the It it
     // reports to takes that: one that is older than this program does not, and is told the rest
-    const told = { connectorVersion: VERSION, harnesses: found }
+    const told = { connectorVersion: VERSION, harnesses: found.map((h) => ({ ...h, runtime: runtimes.status(h.id) })) }
+    const legacy = { connectorVersion: VERSION, harnesses: found }
     // And with the system it runs on, which an It of the same age takes too
     const fuller = Date.now() >= plainUntil
     await call(
@@ -2425,12 +3077,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
             paused: unfitting ? (unfitting === NOT_ASKED ? 'unchecked' : 'unfit') : '',
             ...(latestKnown !== undefined ? { latest: latestKnown } : {}),
           }
-        : told,
+        : legacy,
     )
       .catch(async (err) => {
         if (fuller && (err as { code?: string }).code !== 'unauthenticated') {
           plainUntil = Date.now() + 10 * 60_000
-          await call('mutation', api.machines.report, told)
+          await call('mutation', api.machines.report, legacy)
           return
         }
         throw err
@@ -2451,9 +3103,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
       wanted: string[]
       wakes?: { harness: string; since: number }[]
       runs?: { harness: string; sessionId: string; stop?: boolean; run?: string }[]
-      upgrade?: { state: string } | null
+      upgrade?: { state: string; version?: string } | null
     }) => {
-      if (me.upgrade?.state === 'asked') void upgradeAsked()
+      if (me.upgrade?.state === 'asked') void upgradeAsked(me.upgrade.version)
       // A conversation the person asked to have stopped is stopped. One that It has down as
       // running and that is not, which a connector that died leaves behind, is said to be over.
       for (const r of me.runs ?? []) {
@@ -2466,11 +3118,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // to end in, and the turn would then be remembered as cut off, which it was not
           if (stoppedRun.size > 200) stoppedRun.delete(stoppedRun.keys().next().value!)
           if (r.run) stoppedRun.set(key, r.run)
-          if (!stoppedByPerson.has(key)) {
-            if (stoppedByPerson.size > 200) stoppedByPerson.delete(stoppedByPerson.values().next().value!)
-            stoppedByPerson.add(key)
-            keepStopped()
-          }
+          rememberStopped(key)
           run.abort()
         }
         // Named as It has it, so that only that run is taken away: one that began since stays
@@ -2478,14 +3126,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // A run this connector found left from before it started, and ended, which a person
           // had stopped while no connector was there to hear: its conversation is told it was
           // stopped, which says to leave the work undone, and not that it was cut off
-          if (r.stop && recovered.delete(key)) {
-            stoppedByPerson.add(key)
-            keepStopped()
-            if (cutOff.delete(key)) keepCutOff()
+          if (r.stop) {
+            rememberStopped(key)
+            if (!pendingStops.has(key) && cutOff.delete(key)) keepCutOff()
           }
-          void call('mutation', api.machines.runEnded, { for: { harness: r.harness, id: r.sessionId }, ...(r.run ? { run: r.run } : {}) }).catch(() => {})
+          pendingEnds.set(key, { for: { harness: r.harness, id: r.sessionId }, ...(r.run ? { run: r.run } : {}) })
         }
       }
+      void finishRuns()
       // Read each time, whatever else changed or did not: it changes nothing that is installed
       const before = [...wakesNow.keys()].sort().join(',')
       wakesNow = new Map((me.wakes ?? []).map((w) => [w.harness, w.since]))
@@ -2497,6 +3145,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (next === wanted) return
       wanted = next
       wantedNow = me.wanted
+      restoreMarks()
       // What is watched and what is held follow at once, before anything is installed or taken out
       watch()
       void route()
@@ -2538,7 +3187,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (h.served) continue
         held.delete(id)
         journal('released', id)
-        void call('mutation', api.delivery.release, { id }).catch(() => {})
+        void release(id).catch(() => {})
       }
       // Said to It at once, so that the site says it beside the machine and on its pages: in
       // full, whatever plainer report this machine had fallen back on for a while
@@ -2556,7 +3205,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // Asked once before anything is handed out, and then every minute
   await fitsNow()
   await report()
-  const tick = setInterval(() => void route(), 1000)
+  const tick = setInterval(() => {
+    void finishRuns()
+    void route()
+    watch(true)
+  }, 1000)
   // Said this often and no less: the site takes a machine that has been quiet for a few of these to be off
   const alive = setInterval(() => void report(), ALIVE.everyMs)
   // Whether this machine still fits the It it joined is asked for as long as this runs: that
@@ -2632,7 +3285,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // And It is told that this machine is going, so that its pages say at once that they wait
       // for the machine, where they would otherwise say for minutes that a conversation was closed
       ...(asked ? [call('mutation', api.machines.stopping, {})] : []),
-      ...givenBack.map((id) => call('mutation', api.delivery.release, { id })),
+      ...givenBack.map((id) => release(id)),
       confirmAll(),
       ...queues.values(),
     ]),
@@ -2646,6 +3299,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     rmSync(infoFile(), { force: true })
     if (info.socket) rmSync(info.socket, { force: true })
   }
+  over = true
+  await recovery.close()
   say('stopped')
   process.exitCode = code
 }

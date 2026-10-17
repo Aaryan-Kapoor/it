@@ -52,7 +52,7 @@ beforeEach(() => {
   calls.length = 0
   for (const name of Object.keys(answers)) delete answers[name]
   answers['sessions:inviteScreen'] = () => ({ code: CODE, expiresAt: Date.now() + 600_000 })
-  watched = { 'displays:list': DISPLAYS }
+  watched = { 'displays:list': DISPLAYS, 'sessions:list': [], 'sessions:leftBehind': [] }
   localStorage.clear()
   sessionStorage.clear()
   // This stand-in browser has no notifications, and cannot say how the site is being shown
@@ -61,6 +61,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
+  vi.restoreAllMocks()
   vi.useRealTimers()
   vi.unstubAllGlobals()
   browser.reconfigure({ url: HOME })
@@ -68,6 +69,23 @@ afterEach(async () => {
 
 describe('what each kind of session is offered', () => {
   const mine = DISPLAYS[0]!
+
+  test.each(['sessions:list', 'sessions:leftBehind'])('does not offer Forget before %s has answered', async (delayed) => {
+    const confirm = vi.fn(() => false)
+    vi.stubGlobal('confirm', confirm)
+    watched[delayed] = undefined
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    expect(button('Forget')).toBeUndefined()
+    expect(confirm).not.toHaveBeenCalled()
+    watched['sessions:list'] = []
+    watched['sessions:leftBehind'] = [{ display: 'display-2', along: { browsers: ['browser-child'], machines: ['machine-child'] } }]
+    await act(async () => root.render(createElement(Displays, { thisDisplay: 'display-1' })))
+    const row = [...host.querySelectorAll('li')].find((li) => li.textContent?.includes('Kitchen TV'))!
+    await act(async () => [...row.querySelectorAll('button')].find((b) => b.textContent === 'Forget')!.click())
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('1 paired browser and 1 machine'))
+    expect(calls).toEqual([])
+  })
 
   test('the owner may name and forget every display', async () => {
     vi.stubGlobal('confirm', () => true)
@@ -80,6 +98,22 @@ describe('what each kind of session is offered', () => {
     ])
     await act(async () => [...host.querySelectorAll('li')][1]!.querySelectorAll('button')[1]!.click())
     expect(calls).toEqual([{ fn: 'displays:forget', args: { displayId: 'display-2' } }])
+  })
+
+  test('however the field for a display’s name is left, by Escape, by Cancel or by saving, the keyboard is back on Rename', async () => {
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    const row = () => [...host.querySelectorAll('li')][1]!
+    const field = () => row().querySelector<HTMLInputElement>('input[aria-label="Display name"]')
+    const inRow = (label: string) => [...row().querySelectorAll('button')].find((b) => b.textContent === label)!
+    for (const leave of ['Escape', 'Cancel', 'Save']) {
+      await act(async () => inRow('Rename').click())
+      expect([leave, document.activeElement === field()]).toEqual([leave, true])
+      if (leave === 'Escape') await act(async () => void field()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+      else await act(async () => inRow(leave).click())
+      expect([leave, field(), document.activeElement === inRow('Rename')]).toEqual([leave, null, true])
+    }
+    expect(calls.map((c) => c.fn)).toEqual(['displays:rename'])
   })
 
   test('a display whose browser’s pairing has ended is said to be not paired, and not when it was last open', async () => {
@@ -128,6 +162,38 @@ describe('what each kind of session is offered', () => {
     expect(asked).toEqual([
       'Forget “Kitchen TV”? It is signed out, and pages open on it stop working, usually at once. It has to be paired again before it can be used. 2 paired browsers and 1 machine came from it, and are ended with it. This browser is one of them.',
       'Forget this display? This browser is signed out, and has to be paired again before it can be used.',
+    ])
+    expect(calls).toEqual([])
+  })
+
+  test('and what a browser that signed itself out let in, which goes when the display it was is forgotten', async () => {
+    const asked: string[] = []
+    vi.stubGlobal('confirm', (text: string) => {
+      asked.push(text)
+      return false
+    })
+    watched['displays:list'] = [
+      { ...DISPLAYS[0]!, paired: true },
+      { ...DISPLAYS[1]!, paired: false, push: false },
+    ]
+    watched['sessions:list'] = [
+      {
+        role: 'owner',
+        pairedAt: 0,
+        lastSeenAt: 0,
+        invitedBy: null,
+        id: 'session-1',
+        mine: true,
+        displays: [{ id: 'display-1', name: 'Chrome on Linux' }],
+        along: { browsers: [], machines: [] },
+      },
+    ]
+    watched['sessions:leftBehind'] = [{ display: 'display-2', along: { browsers: ['session-3'], machines: ['machine-2'] } }]
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    await act(async () => [...host.querySelectorAll('ul.rows')[0]!.querySelectorAll('li')][1]!.querySelectorAll('button')[1]!.click())
+    expect(asked).toEqual([
+      'Forget “Kitchen TV”? It is signed out, and pages open on it stop working, usually at once. It has to be paired again before it can be used. 1 paired browser and 1 machine came from it, and are ended with it.',
     ])
     expect(calls).toEqual([])
   })
@@ -205,5 +271,58 @@ describe('erasing everything', () => {
     expect(door).not.toHaveBeenCalled()
     // The site is not left believing this browser is on its way out
     expect(isLeaving()).toBe(false)
+  })
+})
+
+describe('downloading the records', () => {
+  test('the browser is given a download link and the tab never reads the records', async () => {
+    const href = `/session/export/${'a'.repeat(48)}`
+    const fetch = vi.fn(async () => Response.json({ download: href }))
+    vi.stubGlobal('fetch', fetch)
+    const clicked: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this.getAttribute('href')!)
+    })
+    const { Settings } = await import('./settings')
+    const { current } = await import('./session')
+    await show(createElement(Settings, { user: 'user-1', owner: true, display: DISPLAYS[0]!, onSignOut: () => {} }))
+    await press('Download my data')
+    expect(fetch).toHaveBeenCalledWith(
+      '/session/export/start',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'x-it-site': '1', 'content-type': 'application/json' },
+        body: JSON.stringify({ session: current().session }),
+      }),
+    )
+    expect(clicked).toEqual([href])
+    expect(calls).toEqual([])
+    expect(host.querySelector('[role="status"]')!.textContent).toContain('If the download fails, discard any partial file')
+  })
+
+  test('a refused export is explained and no download begins', async () => {
+    vi.stubGlobal('fetch', async () => Response.json({ error: 'This browser has been paired again.' }, { status: 409 }))
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const { Settings } = await import('./settings')
+    await show(createElement(Settings, { user: 'user-1', owner: true, display: null, onSignOut: () => {} }))
+    await press('Download my data')
+    expect(click).not.toHaveBeenCalled()
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe('This browser has been paired again.')
+    expect(button('Download my data')!.disabled).toBe(false)
+  })
+
+  test('leaving settings cancels a preparation that has not answered', async () => {
+    let signal: AbortSignal | undefined
+    vi.stubGlobal('fetch', (_path: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal
+      return new Promise<Response>((_resolve, reject) => signal!.addEventListener('abort', () => reject(new Error('aborted'))))
+    })
+    const { Settings } = await import('./settings')
+    await show(createElement(Settings, { user: 'user-1', owner: true, display: null, onSignOut: () => {} }))
+    await press('Download my data')
+    await act(async () => root.render(null))
+    expect(signal!.aborted).toBe(true)
   })
 })

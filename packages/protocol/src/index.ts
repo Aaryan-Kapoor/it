@@ -7,6 +7,10 @@ export const PROTOCOL_VERSION = 1
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const
 
+/** The built-in tour's fixed page ids and the order in which its examples are shown. */
+export const TOUR = { prefix: 'tour-', menu: 'menu', end: 'done', steps: ['whiteboard', 'chess', 'checklist', 'drums', 'button'] } as const
+export const TOUR_NAMES: readonly string[] = [TOUR.menu, ...TOUR.steps, TOUR.end]
+
 /** Token audiences. A token made for one is refused everywhere else. */
 export const AUDIENCE = {
   machine: 'it-machine',
@@ -92,6 +96,17 @@ export const LIMITS = {
   versionsKept: 10,
 } as const
 
+/** One file gets a minute plus its size at 20,000 bytes per second. */
+export const uploadBudgetMs = (bytes: number): number => 60_000 + Math.ceil(bytes / 20_000) * 1000
+/** All layers use this finite publication lifetime, including retries. */
+export const PUBLICATION = {
+  budgetMs: 30 * 60_000,
+  grantSeconds: 31 * 60,
+  grantTailMs: 36 * 60_000,
+  deletedSeconds: 60 * 60,
+  receiptDays: 30,
+} as const
+
 /** What one person may hold. */
 export const QUOTA = {
   artifacts: 500,
@@ -160,6 +175,11 @@ export function newer(version: string | null | undefined, than: string | null | 
 
 export const HARNESSES = ['claude-code', 'codex', 'openclaw', 'hermes', 'opencode', 'pi'] as const
 export type Harness = (typeof HARNESSES)[number]
+/**
+ * The first Codex that reports which conversations are open, so a click can tell whether its
+ * queue will take it. Setup and the page's queue capability use this same minimum.
+ */
+export const CODEX_MIN_VERSION = '0.160.0'
 /**
  * The agent apps a closed conversation of which It can reopen for a click: the ones with a
  * command of their own for carrying a conversation on without a window. Each is reopened only
@@ -577,7 +597,10 @@ const TYPES: Record<string, string> = {
   wasm: 'application/wasm',
 }
 export function contentType(path: string): string {
-  return TYPES[path.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream'
+  // Only what the table itself holds. A file may be named for a word every object has, such as
+  // `constructor`, and what an object has by nature under that name is no kind of file.
+  const ending = path.split('.').pop()?.toLowerCase() ?? ''
+  return Object.hasOwn(TYPES, ending) ? TYPES[ending]! : 'application/octet-stream'
 }
 
 /** A file in a version, as the CLI declares it and the backend records it. */

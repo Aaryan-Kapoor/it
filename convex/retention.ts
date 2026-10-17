@@ -2,7 +2,7 @@
 // erased, and what is simply too old to keep.
 // Every step removes a small batch and asks to be run again while a batch came back full, so
 // no run reads more than it should and nothing is left behind because there was a lot of it.
-import { RETENTION } from '@it/protocol'
+import { PUBLICATION, RETENTION } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
@@ -10,6 +10,7 @@ import { internalMutation, type MutationCtx } from './_generated/server'
 import { noLongerWaiting } from './actions'
 import { prefixOf } from './artifacts'
 import { removeLater } from './content'
+import { confirmed } from './deletions'
 import { forgetCounts } from './lib/limits'
 import { log } from './lib/log'
 import { dropStaging, STAGING_MS } from './publish'
@@ -57,16 +58,27 @@ async function removeHangers(ctx: MutationCtx, artifactId: Id<'artifacts'>): Pro
     .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
     .take(HEAVY)
   for (const x of actions) await ctx.db.delete(x._id)
-  const more = versions.length === VERSIONS || actions.length === HEAVY
+  const notifications = await ctx.db
+    .query('notifications')
+    .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
+    .take(LIGHT)
+  for (const n of notifications) await ctx.db.delete(n._id)
+  const publications = await ctx.db
+    .query('publications')
+    .withIndex('by_artifact_n', (q) => q.eq('artifactId', artifactId))
+    .take(LIGHT)
+  for (const p of publications) await ctx.db.delete(p._id)
+  const more = publications.length === LIGHT || versions.length === VERSIONS || actions.length === HEAVY || notifications.length === LIGHT
   if (!more) await forgetCounts(ctx, artifactId)
   return more
 }
 
 /** After a page is deleted: its state, versions and clicks. Its bytes are removed by the content service. */
 export const purgeArtifact = internalMutation({
-  args: { artifactId: v.id('artifacts') },
-  handler: async (ctx, { artifactId }) => {
-    if (await removeHangers(ctx, artifactId)) await ctx.scheduler.runAfter(0, internal.retention.purgeArtifact, { artifactId })
+  args: { artifactId: v.id('artifacts'), deletionId: v.optional(v.id('deletions')) },
+  handler: async (ctx, { artifactId, deletionId }) => {
+    if (await removeHangers(ctx, artifactId)) await ctx.scheduler.runAfter(0, internal.retention.purgeArtifact, { artifactId, deletionId })
+    else if (deletionId) await confirmed(ctx, deletionId, 'recordsAt')
     return null
   },
 })
@@ -94,7 +106,7 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
   // With each record goes what was kept under its id to hold it to a pace, and, for a machine,
   // the proofs it has used: none of it is left for the hourly cleaning to come to. A showing's
   // record is among what goes here, though its display and its page are gone already.
-  for (const table of ['displays', 'machines', 'sessions', 'invites', 'mounts'] as const) {
+  for (const table of ['displays', 'machines', 'sessions', 'invites', 'mounts', 'deletions'] as const) {
     const rows = await ctx.db
       .query(table)
       .withIndex('by_user', (q: any) => q.eq('userId', userId))
@@ -121,7 +133,7 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
     .take(LIGHT)
   for (const n of notifications) await ctx.db.delete(n._id)
   if (notifications.length === LIGHT) return true
-  for (const table of ['projects', 'forgotten'] as const) {
+  for (const table of ['projects', 'forgotten', 'publications'] as const) {
     const rows = await ctx.db
       .query(table)
       .withIndex('by_user_key', (q: any) => q.eq('userId', userId))
@@ -248,6 +260,18 @@ export const sweepRecords = internalMutation({
       if (rows.length === LIGHT) full = true
       removed += rows.length
     }
+    await drop(
+      await ctx.db
+        .query('deletions')
+        .withIndex('by_completed', (q) => q.gt('completedAt', 0).lt('completedAt', now - 7 * DAY))
+        .take(LIGHT),
+    )
+    await drop(
+      await ctx.db
+        .query('publications')
+        .withIndex('by_created', (q) => q.lt('createdAt', now - PUBLICATION.receiptDays * DAY))
+        .take(LIGHT),
+    )
     await drop(
       await ctx.db
         .query('mounts')

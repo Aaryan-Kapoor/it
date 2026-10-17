@@ -46,9 +46,13 @@ export async function caller(ctx: Ctx): Promise<Caller | null> {
 export async function requireCaller(ctx: Ctx): Promise<Caller> {
   return (await caller(ctx)) ?? fail('unauthenticated', 'This browser is not paired with It, or this machine is not enrolled.')
 }
-export async function requireBrowser(ctx: Ctx): Promise<Browser> {
+export async function requireBrowser(ctx: Ctx, expectedSession?: string): Promise<Browser> {
   const c = await requireCaller(ctx)
-  return c.kind === 'browser' ? c : fail('forbidden', 'Only a paired browser can do this.')
+  if (c.kind !== 'browser') fail('forbidden', 'Only a paired browser can do this.')
+  // A queued mutation may reconnect after the browser pairs again. Its original intent must
+  // not execute under that replacement session, even when both belong to the same person.
+  if (expectedSession !== undefined && c.session._id !== expectedSession) fail('conflict', 'This request belongs to a pairing that has ended.')
+  return c
 }
 export async function requireMachine(ctx: Ctx): Promise<Extract<Caller, { kind: 'machine' }>> {
   const c = await requireCaller(ctx)
