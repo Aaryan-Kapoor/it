@@ -2048,6 +2048,45 @@ try {
     JSON.stringify({ cameBack, leftThere }),
   )
   await away.browser.close()
+  // Several clicks with files at once, as from several tabs, are held to the room the browser
+  // keeps for files all the same: each is let in or not in one step that no other comes between
+  const crowded = began(await launch())
+  await pairAsOwner(crowded.page)
+  await crowded.page.goto(`${APP}/p/${fslug}`)
+  const crowdedFrame = await pageIn(crowded.page, { id: fslug })
+  await crowded.context.setOffline(true)
+  const crowdedOffline = during(crowded, [
+    { says: /ERR_INTERNET_DISCONNECTED/, of: exactly(`${APP}/upload/1`), times: 50, may: true, because: 'files were sent with no connection' },
+  ])
+  await crowdedFrame.evaluate(() => {
+    const clip = () => [new File([new Uint8Array(17 * 1024 * 1024)], 'a.mov'), new File([new Uint8Array(17 * 1024 * 1024)], 'b.mov')]
+    window.crowd = []
+    for (let i = 0; i < 3; i++)
+      window.It.action('clips', { clips: clip() }, { original: true }).then(
+        () => window.crowd.push('sent'),
+        (e) => window.crowd.push(String(e?.message ?? e)),
+      )
+  })
+  const crowdSaid = await until(async () => {
+    const said = await crowdedFrame.evaluate(() => window.crowd)
+    return said.length ? said : undefined
+  }, 30_000)
+  await crowded.page.waitForTimeout(1000)
+  const crowdKept = await keptInBrowser(crowded.page)
+  check(
+    'clicks with files sent at once are held to the room the browser keeps for files, 100 MB: the one past it is refused and told why, and the others are kept',
+    JSON.stringify(crowdSaid) ===
+      JSON.stringify(['Too many files are still waiting to be sent from this browser. Check the connection, and send this again once they have gone.']) &&
+      JSON.stringify(crowdKept.files) ===
+        JSON.stringify([
+          [17 * 1024 * 1024, 17 * 1024 * 1024],
+          [17 * 1024 * 1024, 17 * 1024 * 1024],
+        ]) &&
+      crowdKept.clicks === 2,
+    JSON.stringify({ said: crowdSaid, kept: crowdKept }),
+  )
+  crowdedOffline()
+  await crowded.browser.close()
   // The agent may be on another computer: a machine that joined reads the file through the door it joined at
   const onTheOther = savedTo('from-the-other-machine.jpg')
   const fromTheOther = asItWas ? await it(B, ['action', asItWas.id, '--save', onTheOther]).catch((e) => ({ refused: e.code })) : {}

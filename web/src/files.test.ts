@@ -12,6 +12,9 @@ const envelope = (id: string, payload = '{"photo":{"file":1}}'): Sent => ({ v: 1
 const photo = (size = 5000, name = 'receipt.jpg') => new File([new Uint8Array(size).fill(7)], name, { type: 'image/jpeg' })
 const stored = () => Object.keys(localStorage).filter((k) => k.startsWith('it.outbox.'))
 let connected = true
+/** Room enough for anything, where a test only means to put files there. */
+const ANY_ROOM = { under: '', most: Number.POSITIVE_INFINITY }
+const MB = 1024 * 1024
 
 /**
  * Stands in for It: the backend, which takes a click's files and then the click, and the door,
@@ -195,24 +198,34 @@ describe('a click with files', () => {
       ),
     ).toBe('An action carries at most 10 files.')
     expect(await send('click-large-01', [new File([new Uint8Array(25 * 1024 * 1024 + 1)], 'big.mov')])).toBe('A file sent with an action is at most 25 MB.')
-    // What is kept unsent already, of the person's, counts: a browser does not fill with files
-    localStorage.setItem(
-      'it.outbox.alice.page2.click-waiting-1',
-      JSON.stringify({
-        user: 'alice',
-        artifactId: 'page2',
-        envelope: envelope('click-waiting-1'),
-        files: [{ name: 'v.mov', type: 'video/quicktime', size: 99 * 1024 * 1024, sha256: 'b'.repeat(64) }],
-        format: 2,
-        session: null,
-        at: Date.now(),
-        held: Date.now() + 60_000,
-      }),
-    )
+    // What is kept unsent already, of the person's, counts, whichever tab kept it: a browser does not fill with files
+    bytes.held.set('it.outbox.alice.page2.click-waiting-1', { files: [{ size: 99 * MB } as Blob], at: Date.now() })
+    // Another person's files are theirs, and take none of this person's room
+    bytes.held.set('it.outbox.bob.page2.click-bobs-waiting', { files: [{ size: 99 * MB } as Blob], at: Date.now() })
     expect(await send('click-room-001', [photo(2 * 1024 * 1024)])).toMatch(/^Too many files are still waiting to be sent from this browser/)
     expect(b.state.prepared).toEqual([])
     expect(b.state.uploads).toEqual([])
   })
+
+  test('sent several at once, from one tab or many, is held to the room this browser keeps for files all the same: the click past it is refused, and not kept', async () => {
+    const b = it()
+    // Nothing is answered, so that each click that is let in stays kept, as with no connection
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
+    const half = () => [new File([new Uint8Array(17 * MB)], 'a.mov'), new File([new Uint8Array(17 * MB)], 'b.mov')]
+    const sent = await Promise.allSettled(
+      ['click-at-once-1', 'click-at-once-2', 'click-at-once-3'].map((id) =>
+        Promise.race([
+          submit(b.client, 'alice', 'page1', envelope(id), () => true, undefined, half()),
+          new Promise((resolve) => setTimeout(() => resolve('still on its way'), 8000)),
+        ]),
+      ),
+    )
+    const said = sent.map((r) => (r.status === 'fulfilled' ? r.value : (r.reason as Error).message))
+    expect(said.filter((s) => s === 'still on its way')).toHaveLength(2)
+    expect(said.filter((s) => /^Too many files are still waiting to be sent from this browser/.test(String(s)))).toHaveLength(1)
+    expect([...bytes.held.values()].map((v) => v.files.reduce((n, f) => n + f.size, 0))).toEqual([34 * MB, 34 * MB])
+    expect(stored()).toHaveLength(2)
+  }, 30_000)
 
   test('where this browser keeps no files, is sent from this tab while it is open, and said not to be saved meanwhile; with no connection it is refused at once', async () => {
     const b = it()
@@ -239,13 +252,13 @@ describe('a click with files', () => {
 
   test('has its files let go of with everything else when everything is erased, and a file left with no click goes after a while', async () => {
     const key = 'it.outbox.alice.page1.click-erased-1'
-    await bytes.put(key, [photo(10)])
-    await bytes.put('it.outbox.bob.page1.click-bobs-0001', [photo(10)])
+    await bytes.put(key, [photo(10)], ANY_ROOM)
+    await bytes.put('it.outbox.bob.page1.click-bobs-0001', [photo(10)], ANY_ROOM)
     localStorage.setItem(key, JSON.stringify({ user: 'alice', artifactId: 'page1', envelope: envelope('click-erased-1'), at: Date.now() }))
     forgetAll('alice')
     await vi.waitFor(() => expect([...bytes.held.keys()]).toEqual([]))
     // Bytes kept a moment before their click are left, and bytes whose click has gone are cleared once that moment is over
-    await bytes.put('it.outbox.alice.page1.click-alone-01', [photo(10)])
+    await bytes.put('it.outbox.alice.page1.click-alone-01', [photo(10)], ANY_ROOM)
     await tidyBytes()
     expect([...bytes.held.keys()]).toEqual(['it.outbox.alice.page1.click-alone-01'])
     bytes.held.get('it.outbox.alice.page1.click-alone-01')!.at -= 120_000

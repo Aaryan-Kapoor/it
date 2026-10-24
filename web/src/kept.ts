@@ -5,9 +5,21 @@
 // click's own name. That name begins with whose click it is, as everything the outbox keeps
 // does, so that letting go of one person's things finds theirs.
 
+/** At most so many bytes may be kept under names that begin with `under`: the files of one person's unsent clicks. */
+export interface Room {
+  under: string
+  most: number
+}
+
 /** Where the bytes are kept. A test gives one that keeps them in memory. */
 export interface ByteStore {
-  put(key: string, files: Blob[]): Promise<void>
+  /**
+   * Keeps the files of a click, where they and what is kept already under `room.under` come to
+   * no more than `room.most`, and answers 'full' where they would. The looking and the keeping
+   * are one step, which no other tab of the browser comes between: two clicks sent at once
+   * cannot both be let into the last of the room.
+   */
+  put(key: string, files: Blob[], room: Room): Promise<'kept' | 'full'>
   /** The files kept under a click's name, or nothing where none are. */
   get(key: string): Promise<Blob[] | null>
   remove(key: string): Promise<void>
@@ -56,8 +68,29 @@ async function within<T>(mode: IDBTransactionMode, work: (store: IDBObjectStore)
   })
 }
 
+/** How many bytes the files of a record come to. */
+const bytesOf = (files: Blob[]) => files.reduce((n, f) => n + f.size, 0)
+
 const indexed: ByteStore = {
-  put: (key, files) => within('readwrite', (s) => s.put({ key, files, at: Date.now() })).then(() => {}),
+  // In one transaction that writes, which the browser runs alone among every tab's transactions
+  // on the store: what is kept already is read, and the files are put only where they fit
+  put: async (key, files, room) => {
+    const db = await database()
+    return new Promise<'kept' | 'full'>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite')
+      const store = tx.objectStore(STORE)
+      let said: 'kept' | 'full' = 'kept'
+      const all = store.getAll() as IDBRequest<{ key: string; files: Blob[] }[]>
+      all.onsuccess = () => {
+        const taken = all.result.filter((r) => r.key !== key && r.key.startsWith(room.under)).reduce((n, r) => n + bytesOf(r.files), 0)
+        if (taken + bytesOf(files) > room.most) said = 'full'
+        else store.put({ key, files, at: Date.now() })
+      }
+      tx.oncomplete = () => resolve(said)
+      tx.onerror = () => reject(tx.error ?? new Error('The files could not be kept in this browser.'))
+      tx.onabort = () => reject(tx.error ?? new Error('The files could not be kept in this browser.'))
+    })
+  },
   get: (key) => within('readonly', (s) => s.get(key) as IDBRequest<{ files: Blob[] } | undefined>).then((kept) => kept?.files ?? null),
   remove: (key) => within('readwrite', (s) => s.delete(key)).then(() => {}),
   list: () => within('readonly', (s) => s.getAll() as IDBRequest<{ key: string; at: number }[]>).then((all) => all.map(({ key, at }) => ({ key, at }))),
@@ -75,7 +108,13 @@ export function inMemory(): ByteStore & { held: Map<string, { files: Blob[]; at:
   const held = new Map<string, { files: Blob[]; at: number }>()
   return {
     held,
-    put: async (key, files) => void held.set(key, { files, at: Date.now() }),
+    // Nothing is waited for between the looking and the keeping, so nothing comes between them
+    put: async (key, files, room) => {
+      const taken = [...held].filter(([k]) => k !== key && k.startsWith(room.under)).reduce((n, [, v]) => n + bytesOf(v.files), 0)
+      if (taken + bytesOf(files) > room.most) return 'full'
+      held.set(key, { files, at: Date.now() })
+      return 'kept'
+    },
     get: async (key) => held.get(key)?.files ?? null,
     remove: async (key) => void held.delete(key),
     list: async () => [...held].map(([key, { at }]) => ({ key, at })),

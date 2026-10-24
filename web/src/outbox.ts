@@ -596,25 +596,26 @@ async function sendNow(
   const waiting = entries(user).filter(([saved]) => saved !== key)
   if (waiting.length >= MAX || waiting.filter(([, e]) => e.artifactId === artifactId).length >= MAX_PER_PAGE)
     throw new Error('Too many actions are still waiting to be sent from this browser. Check the connection.')
-  // And files take room of their own: past so many bytes unsent, the person is told now
-  if (
-    !prior &&
-    what &&
-    waiting.reduce((n, [, e]) => n + (e.files ?? []).reduce((m, f) => m + f.size, 0), 0) + files.reduce((n, f) => n + f.size, 0) > MAX_FILE_BYTES
-  )
-    throw new Error('Too many files are still waiting to be sent from this browser. Check the connection, and send this again once they have gone.')
   let kept = false
   // Noted as being sent before it is kept, so that whatever is told of the change finds it so
   sending.add(key)
   if (what) inHand.set(key, files)
   // The bytes first, where this browser will keep them. Where it will not, the click is not kept
-  // either, and is sent from this tab while it is open, as a click is that cannot be kept
+  // either, and is sent from this tab while it is open, as a click is that cannot be kept. Files
+  // take room of their own: past so many bytes of the person's unsent, counted with what every
+  // other tab keeps in the same step as these are kept, the person is told now
   let bytesKept = !what
+  let room: 'kept' | 'full' = 'kept'
   if (what)
     try {
-      await kept_().put(key, files)
-      bytesKept = true
+      room = await kept_().put(key, files, { under: `${PREFIX}${user}.`, most: MAX_FILE_BYTES })
+      bytesKept = room === 'kept'
     } catch {}
+  if (room === 'full') {
+    sending.delete(key)
+    inHand.delete(key)
+    throw new Error('Too many files are still waiting to be sent from this browser. Check the connection, and send this again once they have gone.')
+  }
   try {
     if (!bytesKept) throw new Error('its files could not be kept')
     put(key, JSON.stringify(entry))
