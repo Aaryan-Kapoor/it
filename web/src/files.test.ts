@@ -253,6 +253,33 @@ describe('a click with files', () => {
     expect(b.state.prepared).toEqual([])
   })
 
+  test.each([
+    ['the browser is paired again', () => outboxBelongsTo('alice', 'session-new')],
+    ['the browser finds it is paired for nobody', () => outboxBelongsTo(null)],
+  ])('has its files let go of at once, however lately they were kept, where its pairing ends and %s', async (_what, ending) => {
+    outboxBelongsTo('alice', 'session-old')
+    const key = 'it.outbox.alice.page1.click-ended-0001'
+    // Saved a moment ago, and its sender gone: the files are as new as the click
+    await bytes.put(key, [photo(10)], ANY_ROOM)
+    const files = [{ name: 'a.jpg', type: 'image/jpeg', size: 10, sha256: 'a'.repeat(64) }]
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        user: 'alice',
+        artifactId: 'page1',
+        envelope: envelope('click-ended-0001'),
+        files,
+        format: 2,
+        session: 'session-old',
+        at: Date.now(),
+        left: true,
+      }),
+    )
+    ending()
+    await vi.waitFor(() => expect([...bytes.held.keys()]).toEqual([]))
+    expect(stored()).toEqual([])
+  })
+
   test('where this browser keeps no files, is sent from this tab while it is open, and said not to be saved meanwhile; with no connection it is refused at once', async () => {
     const b = it()
     keepBytesIn({ ...bytes, put: () => Promise.reject(new Error('no room')) })

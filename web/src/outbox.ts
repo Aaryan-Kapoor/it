@@ -106,9 +106,13 @@ const put = (key: string, value: string): void => {
   changed()
 }
 const drop = (key: string): void => {
+  forget(key)
+  changed()
+}
+/** Lets go of a click and of its files with it, at once: no file stays behind a click that has gone, however lately it was kept. */
+function forget(key: string): void {
   localStorage.removeItem(key)
   letGoOfBytes(key)
-  changed()
 }
 
 // The files of the clicks this tab is sending at this moment, as the page gave them. Those of a
@@ -155,7 +159,7 @@ function entries(user: string): [string, Entry][] {
       out.push([key, JSON.parse(localStorage.getItem(key) ?? '') as Entry])
     } catch {
       note('a saved click could not be read, and was dropped')
-      localStorage.removeItem(key)
+      forget(key)
     }
   }
   return out.sort((a, b) => a[1].at - b[1].at)
@@ -177,7 +181,7 @@ export function dropOld(): void {
     } catch {}
     old.push(key)
   }
-  for (const key of old) localStorage.removeItem(key)
+  for (const key of old) forget(key)
   if (old.length) {
     changed()
     note('saved clicks were too old to send, and were dropped', old.length)
@@ -379,7 +383,7 @@ export function outboxBelongsTo(user: string | null, under: string | null = null
       if (!key.startsWith(PREFIX)) continue
       try {
         const entry = JSON.parse(localStorage.getItem(key) ?? '') as Entry
-        if (entry.format !== 2 || entry.session !== null) localStorage.removeItem(key)
+        if (entry.format !== 2 || entry.session !== null) forget(key)
       } catch {}
     }
     memoryGrants.clear()
@@ -391,15 +395,15 @@ export function outboxBelongsTo(user: string | null, under: string | null = null
     if (pairedFor !== null) {
       discardPending(pairedFor)
       for (const [key, entry] of entries(pairedFor)) {
-        if (entry.format !== 2 || entry.session !== null) localStorage.removeItem(key)
+        if (entry.format !== 2 || entry.session !== null) forget(key)
       }
     }
   }
   session = under
   if (user !== null) {
-    for (const [key, entry] of entries(user)) if (entry.format === 2 && entry.session !== under) localStorage.removeItem(key)
+    for (const [key, entry] of entries(user)) if (entry.format === 2 && entry.session !== under) forget(key)
   }
-  // What a pairing that ended had kept unsent went with it, and so do its files
+  // And files whose click went some other way, such as with another tab's pairing, once they have been alone a while
   void tidyBytes()
   if (!replaced) return
   pairedFor = user
@@ -452,7 +456,7 @@ export function dismissMessage(user: string, artifactId: string, id: string): vo
 }
 export function abandonOutbox(user: string): void {
   if (pairedFor === user) outboxBelongsTo(null)
-  for (const [key] of entries(user)) localStorage.removeItem(key)
+  for (const [key] of entries(user)) forget(key)
   discardPending(user)
   void tidyBytes({ person: user })
   changed()
