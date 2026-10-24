@@ -406,6 +406,24 @@ function holdsFile(data: unknown): boolean {
 }
 
 /**
+ * A copy of what an action carries as it is at this moment, within a fixed amount of work: its
+ * objects and lists are copied, and a file is the same file, which nothing can change. Anything
+ * else stands as it is, for the channel to copy or refuse. Past the work, it throws: what is
+ * that large is more than the site takes.
+ */
+function takenNow(data: unknown): unknown {
+  let looks = 40_000
+  const copy = (v: unknown, depth: number): unknown => {
+    if (--looks < 0) throw new Error('too much to look through')
+    if (v instanceof Blob || depth > 40 || typeof v !== 'object' || v === null) return v
+    if (Array.isArray(v)) return v.map((x) => copy(x, depth + 1))
+    if (!plain(v)) return v
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, copy(x, depth + 1)]))
+  }
+  return copy(data, 0)
+}
+
+/**
  * What an action carries, with each picture in it made smaller: a copy, in which each file stands
  * where the page put it. Within the same amount of work as the looking: past it, what the page
  * gave is sent as it is.
@@ -456,8 +474,16 @@ function action(name: string, data?: unknown, sending?: Sending): Promise<unknow
   }
   const shrinking = sending?.original !== true && holdsFile(carried)
   if (!shrinking && preparing === 0) return post(carried)
+  // An action that waits is sent as it was when the person acted: what it carries is copied now,
+  // and a change the page makes to it afterwards is not sent with it
+  let taken: unknown
+  try {
+    taken = takenNow(carried)
+  } catch {
+    return Promise.reject(new Error('That is too large to send.'))
+  }
   preparing++
-  const ready = shrinking ? withSmallerPictures(carried) : Promise.resolve(carried)
+  const ready = shrinking ? withSmallerPictures(taken) : Promise.resolve(taken)
   const turn = line.then(() => ready)
   line = turn.then(
     () => {},

@@ -188,6 +188,27 @@ describe('the script inside a page', () => {
       expect(port.sent[1].envelope.payload).toEqual({ page: scan, count: 1 })
     })
 
+    test('sends what it carries as it was when the page sent it, and so does an action that waits behind it, whatever the page changes meanwhile', async () => {
+      const p = load()
+      const port = raw(p)
+      const answer = { choice: 'A', more: ['x'] }
+      const counter = { n: 1 }
+      void p.It.action('photo', { photo: new p.w.File([new Uint8Array(1)], 'a.jpg', { type: 'image/jpeg' }), answer })
+      void p.It.action('count', { counter })
+      p.It.stage('pick', answer)
+      void p.It.commit('picked')
+      // The page goes on, and changes what it sent
+      answer.choice = 'B'
+      answer.more.push('y')
+      counter.n = 2
+      await settle()
+      expect(port.sent.map((m) => m.envelope.payload.answer ?? m.envelope.payload.counter ?? m.envelope.payload.pick)).toEqual([
+        { choice: 'A', more: ['x'] },
+        { n: 1 },
+        { choice: 'A', more: ['x'] },
+      ])
+    })
+
     test('keeps what the person was looking at as it was when they acted, not when the file was ready', async () => {
       const p = load()
       const port = raw(p)
