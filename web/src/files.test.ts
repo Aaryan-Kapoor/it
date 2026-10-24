@@ -162,6 +162,20 @@ describe('a click with files', () => {
     expect(stored()).toHaveLength(1)
   }, 30_000)
 
+  test('goes on uploading once the connection is back, however often it dropped before', async () => {
+    const b = it()
+    // The connection drops in the middle of two uploads in a row, and is then back
+    let drops = 2
+    b.state.door = () => (drops-- > 0 ? 'offline' : 200)
+    const sent = await Promise.race([
+      submit(b.client, 'alice', 'page1', envelope('click-drops-0001'), () => true, undefined, [photo(100)]),
+      new Promise((resolve) => setTimeout(() => resolve('still not sent'), 15_000)),
+    ])
+    expect(sent).toEqual({ actionId: 'a1' })
+    expect(b.state.uploads.map((u) => u.n)).toEqual([1])
+    expect(stored()).toEqual([])
+  }, 30_000)
+
   test('waits out a dropped connection while its page is there, and does not send again a file that had arrived', async () => {
     const b = it()
     let offline = 1
