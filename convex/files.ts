@@ -119,8 +119,8 @@ export const _stored = internalMutation({
 
 /**
  * Takes the files of one click, before the click is sent. Answers whether they are all kept
- * whole already, and where they are not, a grant to upload them, by their numbers, to the
- * door's `/upload/` at the address the site was reached at.
+ * whole already, and where they are not, which of them are still to come, by their numbers, and
+ * a grant to upload those to the door's `/upload/<number>` at the address the site was reached at.
  */
 export const prepare = action({
   args: {
@@ -130,14 +130,23 @@ export const prepare = action({
     replayUntil: v.optional(v.number()),
     expectedSession: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<{ id: Id<'attachments'>; stored: boolean; grant?: string }> => {
+  handler: async (ctx, args): Promise<{ id: Id<'attachments'>; stored: boolean; missing?: number[]; grant?: string }> => {
     const r = await overClashes(() => ctx.runMutation(internal.files._prepare, args))
     if (r.stored) return { id: r.id, stored: true }
+    let missing = r.files.map((_, i) => i + 1)
     try {
-      // Recorded before, and not yet known to be whole: they may have arrived since they were last asked about
-      if (!r.fresh && (await ctx.runAction(internal.content.verify, { prefix: r.prefix, files: r.files })).ok) {
-        await overClashes(() => ctx.runMutation(internal.files._stored, { id: r.id }))
-        return { id: r.id, stored: true }
+      // Recorded before, and not yet known to be whole: they may have arrived since they were last
+      // asked about, all of them or some, and only what has not is to be sent again
+      if (!r.fresh) {
+        const found = await ctx.runAction(internal.content.verify, { prefix: r.prefix, files: r.files })
+        if (found.ok) {
+          await overClashes(() => ctx.runMutation(internal.files._stored, { id: r.id }))
+          return { id: r.id, stored: true }
+        }
+        const named = new Set(found.missing)
+        const still = missing.filter((n) => named.has(String(n)))
+        // What the content service says is there that was not declared is no file of these: all of them are sent again
+        if (still.length > 0 && still.length === found.missing.length) missing = still
       }
       // Declared again each time it is asked, which declares the same files: a declaration that was lost on its way is made good
       await ctx.runAction(internal.content.stage, { prefix: r.prefix, files: r.files })
@@ -145,7 +154,7 @@ export const prepare = action({
       log('files.unavailable', { attachment: r.id, kind: kind(err) }, 'error')
       throw new ConvexError({ code: 'unavailable', message: 'The file could not be sent just now. It is kept, and sent again in a moment.' })
     }
-    return { id: r.id, stored: false, grant: await mint(ctx, AUDIENCE.upload, r.prefix, { p: r.prefix }, PUBLICATION.grantSeconds) }
+    return { id: r.id, stored: false, missing, grant: await mint(ctx, AUDIENCE.upload, r.prefix, { p: r.prefix }, PUBLICATION.grantSeconds) }
   },
 })
 

@@ -18,7 +18,7 @@ const PHOTO = { name: 'IMG_2041.jpg', type: 'image/jpeg', size: 402_311, sha256:
 const SHEET = { name: 'totals.csv', type: 'text/csv', size: 120, sha256: 'b'.repeat(64) }
 
 /** Stands in for the content service. */
-let content: { calls: { op: string; body: any; token: string }[]; holds: boolean; down: boolean }
+let content: { calls: { op: string; body: any; token: string }[]; holds: boolean; down: boolean; missing?: string[] }
 beforeEach(() => {
   process.env.CONVEX_SITE_URL = SITE
   process.env.IT_PORT = '39000'
@@ -31,7 +31,7 @@ beforeEach(() => {
       const op = String(url).split('/control/')[1] ?? ''
       content.calls.push({ op, body: JSON.parse(String(init.body)), token: String((init.headers as Record<string, string>).authorization).slice(7) })
       if (content.down) return new Response(null, { status: 503 })
-      if (op === 'verify') return new Response(JSON.stringify({ ok: content.holds, missing: content.holds ? [] : ['1'] }))
+      if (op === 'verify') return new Response(JSON.stringify({ ok: content.holds, missing: content.holds ? [] : (content.missing ?? ['1']) }))
       if (op === 'delete') return new Response(JSON.stringify({ removed: 1, more: false }))
       return new Response(JSON.stringify({ ok: true }))
     }),
@@ -151,6 +151,16 @@ describe('the files of a click', () => {
     expect(await prepare('click-one')).toEqual({ id: first.id, stored: true })
     expect(await t.run((ctx) => ctx.db.query('actions').collect())).toHaveLength(1)
     expect(await t.run((ctx) => ctx.db.query('attachments').collect())).toHaveLength(1)
+  })
+
+  test('are each asked for again only where they have not arrived, so that a file that came before a connection dropped is not sent twice', async () => {
+    const { prepare } = await fixture()
+    expect((await prepare('click-partly', [PHOTO, SHEET])).missing).toEqual([1, 2])
+    content.missing = ['2']
+    expect(await prepare('click-partly', [PHOTO, SHEET])).toMatchObject({ stored: false, missing: [2] })
+    // What the content service says is there and was never declared is no file of these: every one is asked for again
+    content.missing = ['(not declared) a file declared earlier']
+    expect(await prepare('click-partly', [PHOTO, SHEET])).toMatchObject({ stored: false, missing: [1, 2] })
   })
 
   test('are listed with the action, and the list is counted in what one action may carry', async () => {
