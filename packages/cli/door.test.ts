@@ -299,7 +299,7 @@ const content = {
   /** How many answers are waiting for a piece that never comes, and how many pieces such answers gave after their first. */
   stalled: 0,
   later: 0,
-  as(which: 'showing' | 'upload' | 'control') {
+  as(which: 'showing' | 'upload' | 'download' | 'control') {
     return async (request: Request, asked: { port: number; address: string }) => {
       const url = new URL(request.url)
       // A file as large as a file may be, read a piece at a time as a file is
@@ -366,6 +366,7 @@ const content = {
 const contentStandIn: Content = {
   showing: content.as('showing'),
   upload: content.as('upload'),
+  download: content.as('download'),
   control: content.as('control'),
   close: async () => {
     content.closed += 1
@@ -2777,6 +2778,20 @@ describe('Pages', () => {
     content.asked.length = 0
     for (const method of ['GET', 'POST', 'DELETE'])
       expect([method, (await ask(door.base, { method, path: '/upload/a.txt', body: method === 'GET' ? undefined : 'x' })).status]).toEqual([method, 405])
+    expect(content.asked).toEqual([])
+  })
+
+  test('A machine reading a file that was sent with an action reaches the content package, only as a GET, and never for a page of another site', async () => {
+    const answer = await ask(door.base, { path: '/download/file', headers: [['Authorization', 'Bearer read']] })
+    expect(answer.status).toBe(201)
+    expect(JSON.parse(answer.body)).toMatchObject({ which: 'download', port: door.base, method: 'GET', path: '/download/file', bytes: 0 })
+    expect(JSON.parse(answer.body).headers).toMatchObject({ authorization: 'Bearer read' })
+    // A program names no origin. A page of another site that a browser was led to ask for it does, and is refused
+    content.asked.length = 0
+    const elsewhere = await ask(door.base, { path: '/download/file', headers: [['Origin', 'http://evil.example']] })
+    expect([elsewhere.status, JSON.parse(elsewhere.body)]).toEqual([403, { error: 'foreign_origin' }])
+    for (const method of ['PUT', 'POST', 'DELETE'])
+      expect([method, (await ask(door.base, { method, path: '/download/file', body: 'x' })).status]).toEqual([method, 405])
     expect(content.asked).toEqual([])
   })
 
