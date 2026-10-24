@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { type Browser, type BrowserType, chromium, firefox } from 'playwright'
-import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, beforeAll, describe, expect, onTestFinished, test } from 'vitest'
 import { RUNTIME } from './src/runtime.generated'
 
 /** Whether Playwright has this browser on the machine, and can run it here. */
@@ -56,15 +56,26 @@ describe.each(BROWSERS)('a photo a page sends, as %s makes it', (_name, type) =>
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
     browser = await type.launch({ timeout: 0 })
   }, 300_000)
+  // As page.test.ts does: the browser is closed first, and then every connection it left open to
+  // the server is ended, since a server that is closed waits for those, and a slow machine may
+  // not have ended them yet
   afterAll(async () => {
-    await browser?.close()
-    if (server) await new Promise<void>((resolve) => server.close(() => resolve()))
-  })
+    try {
+      await browser?.close()
+    } finally {
+      if (server) {
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
+    }
+  }, 120_000)
 
   test.skipIf(!here(type))(
     'is made smaller to 1600 pixels as a JPEG, beside a file of another kind that goes as it is; and goes as it is where the page asks for that, or where it is small already',
     async () => {
-      const tab = await browser.newPage()
+      const context = await browser.newContext()
+      onTestFinished(() => context.close())
+      const tab = await context.newPage()
       await tab.goto(origin)
       const said = await tab.evaluate(async () => {
         const It = (window as unknown as { It: { action: (name: string, data: unknown, sending?: unknown) => Promise<unknown> } }).It
