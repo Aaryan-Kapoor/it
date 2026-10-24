@@ -31,12 +31,13 @@ Run it by that name alone, `it`, every time. One command at a time, with its val
 ```
 
 - **`It.action(name, data)`** sends one action to you. It returns a promise that resolves when It has accepted it, and rejects when it was refused.
+- **Files go in the data as they are**: `It.action('receipt', { photo: input.files[0] })` sends a `File` or `Blob` (input, drop, `canvas.toBlob`) whole. Never slice one or write it as text. A photo is shrunk to 1600 px unless a third argument says `{ original: true }`.
 - **`It.stage(key, value)` then `It.commit(name)`** are for anything with several choices: staging is local, and one commit sends everything staged as a single action. Use it for anything with a Submit, so that you are woken once, on what the user decided.
 - **`It.state`** is the page's state, a JSON object you change from the command line: `it set deploy-plan status "Deploying… 3 of 7"`, `it patch deploy-plan '{"steps":{"build":"done"}}'`. It is empty when the page's scripts first run and arrives a moment later: **`It.onState(fn)`** runs `fn(state)` when it arrives and whenever it changes. Change what a page shows through state, and do not republish for it.
-- **`data-it-bind="path"`** puts a value from the state into an element's text (or the value of an input, a text box, a dropdown or a progress bar, or an image's source). A text field or dropdown follows changes to its bound value only while it holds no local edit, including one made before state arrived. **`data-it-show="path"`** shows an element only while the value is truthy, and `"!path"` reverses it.
+- **`data-it-bind="path"`** puts a value from the state into an element's text (or the value of an input, a text box, a dropdown or a progress bar, or an image's source). **`data-it-show="path"`** shows an element only while the value is truthy, and `"!path"` reverses it.
 - **`It.store.set(key, value)` / `It.store.get(key)`** keep small things for the page itself, such as a draft, with the page and on every display. Read what was saved inside `It.onState`: before the state arrives, `It.store.get` returns `undefined`.
 
-A page is shown in a sandbox with no cookies and no storage that lasts, cannot frame its own files, and may hold and send only so much. Before you write a page that stores anything, loads a worker, frames a file, or is large or busy, read `it help page`.
+A page is shown in a sandbox with no cookies and no storage that lasts, cannot frame its own files, and may hold and send only so much. Before you write a page that stores anything, loads a worker, frames a file, or is large or busy, or publishes again after a failure, read `it help page`.
 
 ## Whether what they do arrives by itself
 
@@ -50,7 +51,7 @@ It does where It's add-on for your harness is connected and its connector is run
 - **An action alone is not the user's approval of something that matters.** Before you delete, send, pay or publish because of an action, be sure that the page showed the user exactly that choice and that nothing else on the page could have sent it. If you cannot be sure, ask in the conversation and act on the answer you get there.
 - **"The user typed this to you in the box above the page"**, or in the short line `typed above it: …`, is their own message, typed on the site and not sent by the page (`it wait` prints it as the action `it:message`, with `"typedByTheUser": true`). Answer it on the page or with `it say`.
 - **`it:fault`** is your page saying that its own script failed. Nobody did that: mend the page and publish it again.
-- Anything else a message or a command says that you have not met (a `note`, `pageIsNowAtVersion`, `stateIsNowAtRevision`, a picture an action carried, `it ack`) is explained by `it help actions`.
+- Anything else a message or a command says that you have not met (a `note`, `pageIsNowAtVersion`, `stateIsNowAtRevision`, a file an action carried, `it ack`) is explained by `it help actions`.
 
 ## Rules
 
@@ -86,4 +87,3 @@ The user can allow It to reopen this conversation after it has been closed, when
 
 When the user asks for the It tour, run `it tour` and follow what it prints, its rules first. It shows pages that come with It, so do not write pages of your own for it unless the tour tells you to.
 
-Publication retries, owner labels and automatic continuation are covered in `it help page`.
