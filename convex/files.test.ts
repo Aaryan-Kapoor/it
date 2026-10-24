@@ -342,10 +342,12 @@ describe('when the files of an action go', () => {
     expect(content.calls.filter((c) => c.op === 'delete').map((c) => c.body)).toEqual([{ prefix: `u/${user}/${artifact}/f${r.id}/` }])
   })
 
-  test('with their page, whose folder takes their bytes with it', async () => {
+  test('with their page, whose folder takes their bytes with it, and what they counted against the person goes with them', async () => {
     const { t, sent, prepare, user, artifact } = await fixture()
     await sent('click-on-page')
     await prepare('click-unsent')
+    // Both count: the files of the action, and those of the click that was never sent
+    expect(await bytesHeld(t)).toBe(2 * PHOTO.size)
     await t.mutation(internal.retention.purgeArtifact, { artifactId: artifact })
     await t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await t.run((ctx) => ctx.db.query('attachments').collect())).toEqual([])

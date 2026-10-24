@@ -207,7 +207,7 @@ export async function letGoOfFiles(ctx: MutationCtx, id: Id<'attachments'> | und
   if (bytesToo) await removeLater(ctx, filesPrefix(a.userId, a.artifactId, a._id))
 }
 
-/** Daily: the files of clicks that were never accepted, once no browser could still send those clicks. */
+/** Hourly: the files of clicks that were never accepted, once no browser could still send those clicks. */
 export const sweepUnattached = internalMutation({
   args: {},
   handler: async (ctx) => {
