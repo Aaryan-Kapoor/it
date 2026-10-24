@@ -598,9 +598,18 @@ async function upload(it: Service, request: Request): Promise<Response> {
   // service. A deletion either precedes the move and refuses it, or follows it and finds the
   // file. An upload cannot put bytes back after deletion, even if another upload remade its
   // folder. Its grant must still be good, since deletion records are eventually forgotten.
+  // Which of the two it was where the file is not put in place: its version or its page deleted
+  // meanwhile, which is for good, or the grant run out while the bytes were arriving, which a
+  // fresh grant mends. A file is given a minute and its size at 20,000 bytes a second, and the
+  // files sent with one action share one grant, so a slow line can outlast it with a good file
+  let expired = false
   const allowed = (move: () => void) =>
     it.records.together(() => {
-      if (it.records.wasDeleted(prefix) || typeof grant.exp !== 'number' || grant.exp <= now() - 5) return false
+      if (it.records.wasDeleted(prefix)) return false
+      if (typeof grant.exp !== 'number' || grant.exp <= now() - 5) {
+        expired = true
+        return false
+      }
       move()
       return true
     })
@@ -609,7 +618,10 @@ async function upload(it: Service, request: Request): Promise<Response> {
   })
   // If the version was deleted while this was arriving, its declaration is gone, and what was
   // just written would be left behind with nothing pointing at it. It is taken out again.
-  if (written === 'no_folder') return refuse(403, 'version_deleted_meanwhile')
+  // Only where what was declared is still there does a fresh grant mend it: a version deleted
+  // since, whose record of that has been let go of, is gone all the same
+  if (written === 'no_folder')
+    return expired && (await it.files.declared(prefix)) ? refuse(401, 'grant_expired_meanwhile') : refuse(403, 'version_deleted_meanwhile')
   if (written !== 'ok') return refuse(400, written)
   if (!(await it.files.declared(prefix))) {
     await it.files.remove(prefix, file)

@@ -129,6 +129,24 @@ describe('a click with files', () => {
     expect(bytes.held.size).toBe(0)
   })
 
+  test('asks for a fresh grant where its grant ran out while a file was on its way, and sends only that file again, at once', async () => {
+    const b = it()
+    let ranOut = 1
+    // The first file arrives; the grant runs out while the second is on its way
+    b.state.door = (n) => (n === 2 && ranOut-- > 0 ? 401 : 200)
+    const began = Date.now()
+    expect(await submit(b.client, 'alice', 'page1', envelope('click-ran-out-1'), () => true, undefined, [photo(100), photo(200, 'b.jpg')])).toEqual({
+      actionId: 'a1',
+    })
+    expect(b.state.uploads.map((u) => [u.n, u.grant])).toEqual([
+      [1, 'grant-1'],
+      [2, 'grant-1'],
+      [2, 'grant-2'],
+    ])
+    expect(Date.now() - began).toBeLessThan(1000)
+    expect(stored()).toEqual([])
+  })
+
   test('waits between rounds where the door keeps refusing its grant, and does not ask It again and again', async () => {
     const b = it()
     let there = true

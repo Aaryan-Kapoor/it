@@ -270,9 +270,10 @@ async function attach(
   waiting: () => boolean,
 ): Promise<Id<'attachments'>> {
   const files = e.files ?? []
-  // How many rounds of uploading there have been. One is all it takes: the asking after it finds
-  // every file. A round more, as where the door keeps refusing the grant, is trouble, waited
-  // out as any is, and given up on in the same way
+  // How many rounds of uploading there have been. One is all it usually takes, as the asking
+  // after it finds every file, and a second with a fresh grant where the first ran out on a slow
+  // line. A round more, as where the door keeps refusing the grant, is trouble, waited out as
+  // any is, and given up on in the same way
   let rounds = 0
   for (let tries = 0; ; tries++) {
     try {
@@ -287,13 +288,13 @@ async function attach(
       const bytes = inHand.get(key) ?? (await kept_().get(key))
       if (!bytes || bytes.length !== files.length)
         throw new ConvexError({ code: 'invalid', message: 'The files of this action are not kept in this browser any more, so it cannot be sent.' })
+      if (++rounds > 2) throw new ConvexError({ code: 'unavailable', message: 'The files were not all taken.' })
       // Only those It does not have whole yet
       for (const n of taken.missing ?? files.map((_, i) => i + 1)) {
         if (!mine()) throw new Error('This browser’s pairing has ended.')
         if (!bytes[n - 1] || !files[n - 1]) continue
         if ((await upload(n, bytes[n - 1]!, files[n - 1]!, taken.grant!)) === 'again') break
       }
-      if (++rounds >= 2) throw new ConvexError({ code: 'unavailable', message: 'The files were not all taken.' })
     } catch (err) {
       // A refusal that says something of the click, or the pairing's end, is the click's answer
       if (!mine() || settled(err) || notNow(err)) throw err

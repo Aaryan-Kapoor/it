@@ -1823,6 +1823,50 @@ describe('files sent with actions', () => {
     expect(said).not.toContain('nonsense')
   })
 
+  test('arriving whole after their grant ran out, are not kept, and are answered so that a fresh grant is asked for, which takes them', async () => {
+    const prefix = filePrefix('slow-line')
+    await stage(prefix, [entry('1', PHOTO)])
+    let send!: ReadableStreamDefaultController<Uint8Array>
+    let reading!: () => void
+    const reached = new Promise<void>((resolve) => {
+      reading = resolve
+    })
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          send = controller
+        },
+        pull() {
+          reading()
+        },
+      },
+      { highWaterMark: 0 },
+    )
+    clock.start()
+    const request = new Request(`${SITE}/upload/1`, {
+      method: 'PUT',
+      headers: {
+        authorization: `Bearer ${await sign('it-upload', prefix, { p: prefix }, { seconds: 60 })}`,
+        'content-length': String(PHOTO.length),
+        'x-it-sha256': sha256(PHOTO),
+      },
+      body: stream,
+      duplex: 'half',
+    } as RequestInit)
+    const uploading = content.upload(request, { port: BASE, address: '127.0.0.1' })
+    await reached
+    // The line is slow: the grant runs out while the bytes are on their way
+    clock.pass(120)
+    send.enqueue(PHOTO)
+    send.close()
+    expect((await uploading).status).toBe(401)
+    expect((await control('verify', { prefix, files: [entry('1', PHOTO)] })).json()).toEqual({ ok: false, missing: ['1'] })
+    expect(wrote((e) => e.event === 'upload.refused' && e.reason === 'grant_expired_meanwhile')).toBeTruthy()
+    // A fresh grant takes the same bytes
+    expect((await upload('1', PHOTO, { prefix })).status).toBe(200)
+    expect((await control('verify', { prefix, files: [entry('1', PHOTO)] })).json()).toEqual({ ok: true, missing: [] })
+  })
+
   test('are gone once their action is deleted: they read as not there, and their grant to upload puts nothing back', async () => {
     const prefix = filePrefix('deleted')
     await seedFiles(prefix, { '1': PHOTO })
