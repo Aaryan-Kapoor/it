@@ -129,6 +129,21 @@ describe('a click with files', () => {
     expect(bytes.held.size).toBe(0)
   })
 
+  test('waits between rounds where the door keeps refusing its grant, and does not ask It again and again', async () => {
+    const b = it()
+    let there = true
+    b.state.door = () => 401
+    const done = submit(b.client, 'alice', 'page1', envelope('click-refused-01'), () => there, undefined, [photo(100)])
+    await new Promise((r) => setTimeout(r, 3500))
+    // A round, a second at once with a fresh grant, and then only so many more with waits between
+    expect(b.state.prepared.length).toBeGreaterThanOrEqual(2)
+    expect(b.state.prepared.length).toBeLessThanOrEqual(5)
+    // The page goes: it is told, and the click stays kept for later
+    there = false
+    await expect(done).rejects.toBeInstanceOf(ConvexError)
+    expect(stored()).toHaveLength(1)
+  }, 30_000)
+
   test('waits out a dropped connection while its page is there, and does not send again a file that had arrived', async () => {
     const b = it()
     let offline = 1

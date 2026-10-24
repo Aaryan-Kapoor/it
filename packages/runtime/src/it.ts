@@ -429,7 +429,7 @@ function takenNow(data: unknown): unknown {
  * gave is sent as it is.
  */
 async function withSmallerPictures(data: unknown): Promise<unknown> {
-  const made = new Map<Blob, Promise<Blob>>()
+  const found = new Set<Blob>()
   let looks = 40_000
   const copy = (v: unknown, depth: number, swap: (file: Blob) => Blob): unknown => {
     if (--looks < 0) throw new Error('too much to look through')
@@ -439,17 +439,18 @@ async function withSmallerPictures(data: unknown): Promise<unknown> {
     if (!plain(v)) return v
     return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, copy(x, depth + 1, swap)]))
   }
-  // Each file is begun once, however often it is named, and all of them at once
   try {
     copy(data, 0, (file) => {
-      if (!made.has(file)) made.set(file, smaller(file))
+      found.add(file)
       return file
     })
   } catch {
     return data
   }
+  // Each file once, however often it is named, and one after another: a photo is drawn whole
+  // before it is made smaller, and a phone has room for so many of them at once
   const done = new Map<Blob, Blob>()
-  for (const [file, making] of made) done.set(file, await making)
+  for (const file of found) done.set(file, await smaller(file))
   // The same walk again, which the first has shown to fit
   looks = Number.POSITIVE_INFINITY
   return copy(data, 0, (file) => done.get(file) ?? file)
