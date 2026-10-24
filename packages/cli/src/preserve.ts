@@ -190,7 +190,17 @@ export function restoreAbsent(original: string, target: string): void {
       // Reserve the name exclusively before copying: a checked rename could replace an
       // empty directory recreated after the check. Keep the saved tree independent too.
       tryFile(() => mkdirSync(target, { mode: 0o700 }))
-      cpSync(original, target, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true, mode: constants.COPYFILE_EXCL })
+      // Then what the folder held, each entry under its own name in the one just made, where
+      // nothing can be yet. Copying the folder itself onto the one just made is refused by Node
+      // 24.22 and later, which takes a destination folder that is there for one in the way
+      for (const name of readdirSync(original))
+        cpSync(path.join(original, name), path.join(target, name), {
+          recursive: true,
+          force: false,
+          errorOnExist: true,
+          verbatimSymlinks: true,
+          mode: constants.COPYFILE_EXCL,
+        })
       chmodSync(target, entry.mode)
       return
     }
