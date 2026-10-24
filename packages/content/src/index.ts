@@ -94,17 +94,17 @@ interface Service {
 }
 
 // Where bytes are kept: u/<person>/<page>/<version>/ for a version of a page, and beside the
-// versions u/<person>/<page>/f<file>/ for one file that was sent with an action on the page,
-// which is declared, uploaded, checked and deleted as a version of one file is. Each part is a
-// plain id, so a prefix can never mean more than it says, and deleting a page or everything of a
-// person's takes both kinds with it.
+// versions u/<person>/<page>/f<id>/ for the files that were sent with one action on the page,
+// which are declared, uploaded, checked and deleted as a version's are. Each part is a plain id,
+// so a prefix can never mean more than it says, and deleting a page or everything of a person's
+// takes both kinds with it.
 const VERSION_PREFIX = /^u\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/[0-9]+\/$/
 const FILE_PREFIX = /^u\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/f[A-Za-z0-9_-]+\/$/
 /** What may be declared and uploaded: a version, or a file sent with an action. */
 const UPLOADED_PREFIX = (prefix: string) => VERSION_PREFIX.test(prefix) || FILE_PREFIX.test(prefix)
 const ANY_PREFIX = /^u\/[A-Za-z0-9_-]+\/([A-Za-z0-9_-]+\/([0-9]+\/|f[A-Za-z0-9_-]+\/)?)?$/
-/** The one name a file sent with an action is declared under, inside its own prefix. */
-const ATTACHED = 'file'
+/** The names the files sent with one action are declared under, in their order: 1, 2 and so on. */
+const ATTACHED = /^[1-9][0-9]?$/
 /** Everything of one person's. */
 const PERSON_PREFIX = /^u\/([A-Za-z0-9_-]+)\/$/
 const MOUNT = /^[0-9a-f]{32}$/
@@ -633,7 +633,7 @@ async function download(it: Service, request: Request): Promise<Response> {
   const grant = await fromBackend(it, bearer(request), AUDIENCE.download, (code) => {
     reason = code
   })
-  if (!grant || typeof grant.p !== 'string' || grant.sub !== grant.p || !FILE_PREFIX.test(grant.p) || named[1] !== ATTACHED) {
+  if (!grant || typeof grant.p !== 'string' || grant.sub !== grant.p || !FILE_PREFIX.test(grant.p) || !ATTACHED.test(named[1]!)) {
     // Anyone can ask with no grant, or a made-up one, as often as they like
     it.log.seldom('download.refused', `grant:${reason}`, { reason: `grant:${reason}` })
     return deny()
@@ -649,7 +649,7 @@ async function download(it: Service, request: Request): Promise<Response> {
   if (limited(it, 'DOWNLOADS_PERSON', `download:${person}`)) return deny(429)
   // Deleted since the grant was made: its action, its page, or everything of the person's
   if (it.records.wasDeleted(prefix)) return refuse(404, 'deleted')
-  const stored = await it.files.open(prefix, ATTACHED).catch((err) => {
+  const stored = await it.files.open(prefix, named[1]!).catch((err) => {
     throw new Unavailable('storage', kind(err))
   })
   if (!stored) return refuse(404, 'not_there')
@@ -706,11 +706,15 @@ async function control(it: Service, request: Request, asked: Asked): Promise<Res
   const files = Array.isArray(body.files) ? (body.files as { path: unknown; size: unknown; sha256: unknown }[]) : []
 
   if (op === 'stage') {
-    // The backend declares a version's files before it gives anyone a grant to upload them. A
-    // file sent with an action is declared alone, under the one name such a file has
-    const attached = FILE_PREFIX.test(prefix)
+    // The backend declares a version's files before it gives anyone a grant to upload them. The
+    // files sent with one action are declared by their numbers in order, and held to what one
+    // action may carry
     if (!UPLOADED_PREFIX(prefix) || files.length === 0 || files.length > LIMITS.filesPerVersion) return refuse(400, 'malformed')
-    if (attached && (files.length !== 1 || files[0]?.path !== ATTACHED || (files[0]?.size as number) > LIMITS.actionFileBytes)) return refuse(400, 'malformed')
+    if (FILE_PREFIX.test(prefix)) {
+      const total = files.reduce((n, f) => n + (Number.isInteger(f.size) ? (f.size as number) : 0), 0)
+      if (files.length > LIMITS.actionFiles || total > LIMITS.actionFilesBytes) return refuse(400, 'malformed')
+      if (files.some((f, i) => f.path !== String(i + 1) || (f.size as number) > LIMITS.actionFileBytes)) return refuse(400, 'malformed')
+    }
     const clean: { path: string; size: number; sha256: string }[] = []
     for (const f of files) {
       if (!isSafePath(f.path) || !Number.isInteger(f.size) || (f.size as number) < 0 || (f.size as number) > LIMITS.fileBytes) return refuse(400, 'malformed')

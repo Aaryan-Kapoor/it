@@ -19,6 +19,7 @@ import type * as crons from "../crons.js";
 import type * as deletions from "../deletions.js";
 import type * as delivery from "../delivery.js";
 import type * as displays from "../displays.js";
+import type * as files from "../files.js";
 import type * as http from "../http.js";
 import type * as keys from "../keys.js";
 import type * as lib_authz from "../lib/authz.js";
@@ -61,6 +62,7 @@ declare const fullApi: ApiFromModules<{
   deletions: typeof deletions;
   delivery: typeof delivery;
   displays: typeof displays;
+  files: typeof files;
   http: typeof http;
   keys: typeof keys;
   "lib/authz": typeof lib_authz;

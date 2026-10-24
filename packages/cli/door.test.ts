@@ -2782,16 +2782,16 @@ describe('Pages', () => {
   })
 
   test('A machine reading a file that was sent with an action reaches the content package, only as a GET, and never for a page of another site', async () => {
-    const answer = await ask(door.base, { path: '/download/file', headers: [['Authorization', 'Bearer read']] })
+    const answer = await ask(door.base, { path: '/download/1', headers: [['Authorization', 'Bearer read']] })
     expect(answer.status).toBe(201)
-    expect(JSON.parse(answer.body)).toMatchObject({ which: 'download', port: door.base, method: 'GET', path: '/download/file', bytes: 0 })
+    expect(JSON.parse(answer.body)).toMatchObject({ which: 'download', port: door.base, method: 'GET', path: '/download/1', bytes: 0 })
     expect(JSON.parse(answer.body).headers).toMatchObject({ authorization: 'Bearer read' })
     // A program names no origin. A page of another site that a browser was led to ask for it does, and is refused
     content.asked.length = 0
-    const elsewhere = await ask(door.base, { path: '/download/file', headers: [['Origin', 'http://evil.example']] })
+    const elsewhere = await ask(door.base, { path: '/download/1', headers: [['Origin', 'http://evil.example']] })
     expect([elsewhere.status, JSON.parse(elsewhere.body)]).toEqual([403, { error: 'foreign_origin' }])
     for (const method of ['PUT', 'POST', 'DELETE'])
-      expect([method, (await ask(door.base, { method, path: '/download/file', body: 'x' })).status]).toEqual([method, 405])
+      expect([method, (await ask(door.base, { method, path: '/download/1', body: 'x' })).status]).toEqual([method, 405])
     expect(content.asked).toEqual([])
   })
 

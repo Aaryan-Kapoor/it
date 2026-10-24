@@ -310,16 +310,14 @@ export interface AttachedFile {
 
 /**
  * What stands in an action's data where the page put a file: which of the action's files it is,
- * counted from 1, with its name, kind and size. The site writes it, in place of the bytes, which
- * travel beside the action. Its numbers are those `it action <id> --save <file> --number <n>` takes.
+ * counted from 1. The site writes it, in place of the bytes, which travel beside the action, and
+ * the action's list of its files says what each is. Its numbers are those that
+ * `it action <id> --save <file> --number <n>` takes.
  */
 export interface FileMarker {
   file: number
-  name: string
-  type: string
-  bytes: number
 }
-export const fileMarker = (n: number, f: AttachedFile): FileMarker => ({ file: n, name: f.name, type: f.type, bytes: f.bytes })
+export const fileMarker = (n: number): FileMarker => ({ file: n })
 
 /**
  * How a picture sent with an action is made smaller before it leaves the page: to so many pixels

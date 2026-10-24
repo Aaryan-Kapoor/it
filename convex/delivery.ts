@@ -50,6 +50,8 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
       // Only when it is another version, or another revision: what the person acted on has changed since
       ...(replaced ? { nowVersion: a.currentVersion } : {}),
       ...(stateNow !== undefined && stateNow !== x.baseStateRevision ? { nowStateRevision: stateNow } : {}),
+      // The files it carried beside its data, as It received them: read one with `it action <id> --save`
+      ...(x.files?.length ? { files: x.files.map((f) => ({ name: f.name, type: f.type, bytes: f.size })) } : {}),
     })
   }
   return out
@@ -62,9 +64,16 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
  * what is left over is for the pages the clicks are on.
  */
 const READ_MOST = 12 * 1024 * 1024
-/** What a click's record holds beside what the click carried, at the most, and so the most one click can come to. */
+/**
+ * What a click's record holds beside what the click carried, at the most, and so the most one
+ * click can come to. The list of the files it carried is counted in what it carried, which it
+ * may not take past what an action may carry (actions.ts).
+ */
 const CLICK_BESIDE = 2048
 const CLICK_MOST = LIMITS.actionPayloadBytes + CLICK_BESIDE
+/** What a click's record came to, as what it carried, the list of its files, and the most of everything else. */
+const carried = (bytes: TextEncoder, x: Doc<'actions'>) =>
+  bytes.encode(x.payload).length + (x.files ? bytes.encode(JSON.stringify(x.files)).length : 0) + CLICK_BESIDE
 
 async function listeningRows(
   ctx: QueryCtx,
@@ -133,7 +142,7 @@ export const inbox = query({
     let left = READ_MOST
     const bytes = new TextEncoder()
     const read = <T extends Doc<'actions'>[]>(got: T): T => {
-      for (const x of got) left -= bytes.encode(x.payload).length + CLICK_BESIDE
+      for (const x of got) left -= carried(bytes, x)
       return got
     }
     rows.push(...(await listeningRows(ctx, user, machine, listening, read)))
@@ -266,7 +275,7 @@ export const inboxPage = query({
     let left = READ_MOST
     const bytes = new TextEncoder()
     const read = (rows: Doc<'actions'>[]) => {
-      for (const x of rows) left -= bytes.encode(x.payload).length + CLICK_BESIDE
+      for (const x of rows) left -= carried(bytes, x)
       return rows
     }
     const rows = await listeningRows(ctx, user, machine, listening, read)

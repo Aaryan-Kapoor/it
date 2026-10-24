@@ -11,6 +11,7 @@ import { noLongerWaiting } from './actions'
 import { prefixOf } from './artifacts'
 import { removeLater } from './content'
 import { confirmed } from './deletions'
+import { letGoOfFiles } from './files'
 import { forgetCounts } from './lib/limits'
 import { log } from './lib/log'
 import { dropStaging, STAGING_MS } from './publish'
@@ -58,6 +59,13 @@ async function removeHangers(ctx: MutationCtx, artifactId: Id<'artifacts'>): Pro
     .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
     .take(HEAVY)
   for (const x of actions) await ctx.db.delete(x._id)
+  // The files sent with its actions, and those of clicks that were never sent. Their bytes go
+  // with the page's own folder, which the content service is asked to remove with the page
+  const attachments = await ctx.db
+    .query('attachments')
+    .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
+    .take(HEAVY)
+  for (const a of attachments) await letGoOfFiles(ctx, a._id, { bytesToo: false })
   const notifications = await ctx.db
     .query('notifications')
     .withIndex('by_artifact', (q) => q.eq('artifactId', artifactId))
@@ -68,7 +76,8 @@ async function removeHangers(ctx: MutationCtx, artifactId: Id<'artifacts'>): Pro
     .withIndex('by_artifact_n', (q) => q.eq('artifactId', artifactId))
     .take(LIGHT)
   for (const p of publications) await ctx.db.delete(p._id)
-  const more = publications.length === LIGHT || versions.length === VERSIONS || actions.length === HEAVY || notifications.length === LIGHT
+  const more =
+    publications.length === LIGHT || versions.length === VERSIONS || actions.length === HEAVY || attachments.length === HEAVY || notifications.length === LIGHT
   if (!more) await forgetCounts(ctx, artifactId)
   return more
 }
@@ -222,7 +231,7 @@ export const sweepStaging = internalMutation({
   },
 })
 
-/** Clicks that are too old to keep: handled ones after a week, ones nobody took after a month. */
+/** Clicks that are too old to keep: handled ones after a week, ones nobody took after a month. The files each carried go with it. */
 export const sweepActions = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -233,13 +242,17 @@ export const sweepActions = internalMutation({
       // there to be read (`it action <id>`) for a week after its agent got it
       .withIndex('by_delivery_handed', (q) => q.eq('delivery', 'handed_off').lt('handedAt', now - RETENTION.handledActionDays * DAY))
       .take(HEAVY)
-    for (const x of handled) await ctx.db.delete(x._id)
+    for (const x of handled) {
+      await letGoOfFiles(ctx, x.attachment)
+      await ctx.db.delete(x._id)
+    }
     const unclaimed = await ctx.db
       .query('actions')
       .withIndex('by_delivery_created', (q) => q.eq('delivery', 'pending').lt('createdAt', now - RETENTION.pendingActionDays * DAY))
       .take(HEAVY)
     for (const x of unclaimed) {
       await noLongerWaiting(ctx, x)
+      await letGoOfFiles(ctx, x.attachment)
       await ctx.db.delete(x._id)
     }
     if (handled.length === HEAVY || unclaimed.length === HEAVY) await ctx.scheduler.runAfter(0, internal.retention.sweepActions, {})
@@ -372,6 +385,7 @@ export const sweep = internalMutation({
   handler: async (ctx) => {
     await ctx.scheduler.runAfter(0, internal.retention.sweepStaging, {})
     await ctx.scheduler.runAfter(0, internal.retention.sweepActions, {})
+    await ctx.scheduler.runAfter(0, internal.files.sweepUnattached, {})
     await ctx.scheduler.runAfter(0, internal.retention.sweepRecords, {})
     await ctx.scheduler.runAfter(0, internal.retention.resumeDeletions, {})
     await ctx.scheduler.runAfter(0, internal.counted.sweep, {})
