@@ -209,6 +209,27 @@ describe('the script inside a page', () => {
       ])
     })
 
+    test('is drawn one at a time, across actions sent at once as within one, so that a phone holds one photo drawn whole at a time', async () => {
+      let drawing = 0
+      let most = 0
+      const p = load('', (w) => {
+        // A browser that takes its time drawing a picture, and is watched for how many it draws at once
+        w.createImageBitmap = async () => {
+          most = Math.max(most, ++drawing)
+          await new Promise((r) => setImmediate(r))
+          drawing--
+          return { width: 100, height: 100, close() {} }
+        }
+      })
+      const port = raw(p)
+      const photo = (name: string) => new p.w.File([new Uint8Array(10)], name, { type: 'image/jpeg' })
+      void p.It.action('first', { a: photo('a.jpg'), b: photo('b.jpg') })
+      void p.It.action('second', { c: photo('c.jpg') })
+      for (let i = 0; i < 20; i++) await settle()
+      expect(port.sent.map((m) => m.envelope.name)).toEqual(['first', 'second'])
+      expect(most).toBe(1)
+    })
+
     test('keeps what the person was looking at as it was when they acted, not when the file was ready', async () => {
       const p = load()
       const port = raw(p)

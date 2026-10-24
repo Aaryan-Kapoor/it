@@ -484,8 +484,9 @@ function action(name: string, data?: unknown, sending?: Sending): Promise<unknow
     return Promise.reject(new Error('That is too large to send.'))
   }
   preparing++
-  const ready = shrinking ? withSmallerPictures(taken) : Promise.resolve(taken)
-  const turn = line.then(() => ready)
+  // Its pictures are begun only once the action before it is on its way, so that a phone holds
+  // one photo drawn whole at a time, however many actions are sent at once
+  const turn = line.then(() => (shrinking ? withSmallerPictures(taken) : taken))
   line = turn.then(
     () => {},
     () => {},
