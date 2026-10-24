@@ -47,8 +47,13 @@ export async function saveAttached(id: string, number: number, to: string): Prom
     }).catch((err: Error) => err)
     let trouble: string
     if (r instanceof Response && r.ok) {
-      const bytes = new Uint8Array(await r.arrayBuffer())
-      if (bytes.length === file.bytes && createHash('sha256').update(bytes).digest('hex') === file.sha256) {
+      // What arrives is read to its end here, and a connection that drops part of the way is
+      // trouble like any other, asked for again
+      const bytes = await r.arrayBuffer().then(
+        (b) => new Uint8Array(b),
+        () => null,
+      )
+      if (bytes && bytes.length === file.bytes && createHash('sha256').update(bytes).digest('hex') === file.sha256) {
         write(at, bytes)
         return { file: at, number: file.number, name: file.name, type: file.type, bytes: bytes.length }
       }

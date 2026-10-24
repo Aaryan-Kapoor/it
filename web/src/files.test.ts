@@ -227,6 +227,32 @@ describe('a click with files', () => {
     expect(stored()).toHaveLength(2)
   }, 30_000)
 
+  test.each([
+    ['everything is erased', () => forgetAll('alice')],
+    ['the browser is paired for someone else', () => outboxBelongsTo('bob')],
+  ])('keeps nothing of itself where, while its files were being kept, %s', async (_what, meanwhile) => {
+    const b = it()
+    // The browser takes its time keeping the files, and the pairing ends in that time
+    let release!: () => void
+    const slow = {
+      ...bytes,
+      put: (key: string, files: Blob[], room: { under: string; most: number }) =>
+        new Promise<void>((r) => (release = r)).then(() => bytes.put(key, files, room)),
+    }
+    keepBytesIn(slow)
+    const sending = submit(b.client, 'alice', 'page1', envelope('click-meanwhile-1'), () => true, undefined, [photo(10)]).then(
+      () => 'sent',
+      (e: Error) => e.message,
+    )
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    meanwhile()
+    release()
+    expect(await sending).toBe('This browser’s pairing has ended.')
+    await vi.waitFor(() => expect([...bytes.held.keys()]).toEqual([]))
+    expect(stored()).toEqual([])
+    expect(b.state.prepared).toEqual([])
+  })
+
   test('where this browser keeps no files, is sent from this tab while it is open, and said not to be saved meanwhile; with no connection it is refused at once', async () => {
     const b = it()
     keepBytesIn({ ...bytes, put: () => Promise.reject(new Error('no room')) })

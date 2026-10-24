@@ -616,6 +616,14 @@ async function sendNow(
     inHand.delete(key)
     throw new Error('Too many files are still waiting to be sent from this browser. Check the connection, and send this again once they have gone.')
   }
+  // Keeping the bytes takes a moment, in which the pairing may have ended or what is kept here
+  // been let go of, and what was kept for the person cleared away with this click not yet among
+  // it. Then nothing of it is kept now: its bytes go again, and no record of it is written back
+  if (what && (!mine() || letGo())) {
+    sending.delete(key)
+    letGoOfBytes(key)
+    throw new Error('This browser’s pairing has ended.')
+  }
   try {
     if (!bytesKept) throw new Error('its files could not be kept')
     put(key, JSON.stringify(entry))

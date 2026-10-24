@@ -197,7 +197,8 @@ async function backend(
   const uploads: { path: string; bytes: number }[] = []
   const upload: { answer: () => number | Promise<number> } = { answer: () => 200 }
   /** What the door answers a machine that reads a file an action carried: by the path and the grant it is asked with. */
-  const download: { asked: { path: string; grant: string }[]; answer: (path: string, grant: string) => [status: number, body: Buffer] } = {
+  /** `cutAfter`: how many bytes of the body are sent before the connection is dropped, as a phone's or a laptop's drops. */
+  const download: { asked: { path: string; grant: string }[]; answer: (path: string, grant: string) => [status: number, body: Buffer, cutAfter?: number] } = {
     asked: [],
     answer: () => [404, Buffer.alloc(0)],
   }
@@ -224,8 +225,11 @@ async function backend(
         if (req.method === 'GET' && req.url?.startsWith('/download/')) {
           const grant = (req.headers.authorization ?? '').replace(/^Bearer /, '')
           download.asked.push({ path: req.url, grant })
-          const [status, body] = download.answer(req.url, grant)
-          return res.writeHead(status, { 'content-type': 'application/octet-stream', 'content-length': body.length }).end(body)
+          const [status, body, cutAfter] = download.answer(req.url, grant)
+          res.writeHead(status, { 'content-type': 'application/octet-stream', 'content-length': body.length })
+          if (cutAfter === undefined) return res.end(body)
+          res.write(body.subarray(0, cutAfter))
+          return setTimeout(() => req.socket.destroy(), 50)
         }
         if (req.method === 'POST' && req.url === '/bridge/enroll') {
           const sent = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
@@ -2592,6 +2596,13 @@ describe.skipIf(process.platform === 'win32')('files an action carried beside it
     )
     try {
       const photo = path.join(m.home, 'receipt.jpg')
+      // The connection drops part of the way through the file, once: it is asked for again, and written whole
+      let cut = 1
+      b.download.answer = () => (cut-- > 0 ? [200, PHOTO, 20_000] : [200, PHOTO])
+      const resumed = await run(m, ['action', 'k58', '--save', photo], b.env)
+      expect([resumed.code, b.download.asked.length, sha(readFileSync(photo))]).toEqual([0, 2, sha(PHOTO)])
+      rmSync(photo)
+      b.download.asked.length = 0
       // Bytes of the right length that are not the file, as from a disk that went wrong
       b.download.answer = () => [200, Buffer.alloc(PHOTO.length, 1)]
       const damaged = await run(m, ['action', 'k58', '--save', photo], b.env)
