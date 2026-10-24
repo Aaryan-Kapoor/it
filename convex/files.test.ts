@@ -250,6 +250,15 @@ describe('the files of a click', () => {
     expect(await t.run((ctx) => ctx.db.query('attachments').collect())).toEqual([])
   })
 
+  test('are asked after only so often by one person, however the asking goes', async () => {
+    const { prepare } = await fixture()
+    await prepare('click-asked-often')
+    const said: string[] = []
+    for (let n = 0; n < 125; n++) said.push(await code(prepare('click-asked-often')))
+    expect(said.slice(0, 118).every((s) => s === 'ok')).toBe(true)
+    expect(said.at(-1)).toBe('rate_limited')
+  })
+
   test('are tried again later where the content service cannot be reached, and nothing is lost meanwhile', async () => {
     const { t, prepare } = await fixture()
     content.down = true

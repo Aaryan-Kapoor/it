@@ -15,6 +15,8 @@ const RULES = {
   actionKilobytes: { perMinute: 512, burst: 4096 },
   /** Clicks whose files are taken, by page, and the kilobytes of those files, by person: they are kept on the disk, and the largest are sent the least often. */
   attachPage: { perMinute: 60, burst: 30 },
+  /** Asking after a click's files at all, by person: each asking may have the content service read them back whole. */
+  attachAsk: { perMinute: 240, burst: 120 },
   fileKilobytes: { perMinute: 100 * 1024, burst: 200 * 1024 },
   storeSetPage: { perMinute: 60, burst: 30 },
   storeSet: { perMinute: 120, burst: 60 },

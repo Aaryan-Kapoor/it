@@ -51,6 +51,8 @@ export const _prepare = internalMutation({
     const c = await requireBrowser(ctx, args.expectedSession)
     const artifact = await ownArtifact(ctx, c.user._id, args.artifactId)
     if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(args.clientActionId)) fail('invalid', 'That is not an action id.')
+    // Each asking, the first or a later one, is counted: a later one has the content service read the files back
+    await rateLimit(ctx, 'attachAsk', c.user._id)
     // The same rules the site keeps, kept here as well: nothing reaches the content service that one action may not carry
     if (args.files.length === 0) fail('invalid', 'There is no file to send.')
     if (args.files.length > LIMITS.actionFiles) fail('limit', `An action carries at most ${LIMITS.actionFiles} files.`)
