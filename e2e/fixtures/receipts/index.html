@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Receipts e2e-private-page</title>
+  </head>
+  <body>
+    <h1>Receipts e2e-private-page</h1>
+    <input type="file" id="pick" multiple />
+    <button id="send" onclick="send()">Send</button>
+    <button id="original" onclick="send({ original: true })">Send as it is</button>
+    <p id="out"></p>
+    <script>
+      // What a page that takes a photo does: one action, with the files in what it carries
+      async function send(sending) {
+        const files = [...document.getElementById('pick').files]
+        const out = document.getElementById('out')
+        out.textContent = 'sending'
+        try {
+          const r = await It.action('receipt', { photo: files[0], more: files.slice(1), note: 'e2e-private-table four' }, sending)
+          out.textContent = `accepted ${r.id}`
+        } catch (e) {
+          out.textContent = `refused: ${e.message}`
+        }
+      }
+    </script>
+  </body>
+</html>
