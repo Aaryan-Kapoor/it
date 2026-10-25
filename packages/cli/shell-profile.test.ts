@@ -94,15 +94,27 @@ function startupFolders(shellIn: (home: string) => string, etcOf: (home: string)
     expect(existsSync(path.join(home, 'zshrc ran'))).toBe(false)
   })
 
-  test.skipIf(noEtc)('says nothing, and runs no .zshrc, where the system’s zshenv sets ZDOTDIR itself', async () => {
+  test.skipIf(noEtc)('where the system’s zshenv sets ZDOTDIR itself, says the folder the .zshenv there leaves, and runs no .zshrc', async () => {
+    const { home, dir, env } = fixture()
+    const shell = shellIn(home)
+    const other = path.join(home, 'other files')
+    mkdirSync(other)
+    // As the Arch wiki suggests: zsh then reads that folder's files and never It's, and is asked something narrower.
+    systemFile(etcOf(home)!, 'zshenv', `ZDOTDIR=${quote(dir)}\nexport ZDOTDIR\n`)
+    for (const folder of [dir, other]) writeFileSync(path.join(folder, '.zshrc'), `echo ran > ${quote(path.join(home, 'zshrc ran'))}\n`)
+    expect(await zshDirectory({ ...env, SHELL: shell })).toBe(dir)
+    expect(await zshDirectory({ ...env, SHELL: shell, ZDOTDIR: dir })).toBe(dir)
+    writeFileSync(path.join(dir, '.zshenv'), `ZDOTDIR=${quote(other)}\n`)
+    expect(await zshDirectory({ ...env, SHELL: shell })).toBe(other)
+    expect(existsSync(path.join(home, 'zshrc ran'))).toBe(false)
+  })
+
+  test.skipIf(noEtc)('says nothing where the system’s zshenv sets ZDOTDIR and the .zshenv there ends the shell', async () => {
     const { home, dir, env } = fixture()
     const shell = shellIn(home)
     systemFile(etcOf(home)!, 'zshenv', `ZDOTDIR=${quote(dir)}\nexport ZDOTDIR\n`)
-    writeFileSync(path.join(dir, '.zshrc'), `echo ran > ${quote(path.join(home, 'zshrc ran'))}\n`)
-    // Zsh would read that folder's files and never It's, so no answer can be had without running the .zshrc there.
+    writeFileSync(path.join(dir, '.zshenv'), 'exit 0\n')
     expect(await zshDirectory({ ...env, SHELL: shell })).toBeUndefined()
-    expect(await zshDirectory({ ...env, SHELL: shell, ZDOTDIR: dir })).toBeUndefined()
-    expect(existsSync(path.join(home, 'zshrc ran'))).toBe(false)
   })
 
   test.skipIf(noEtc)('follows a ZDOTDIR that the system’s zshenv gives only where none is set', async () => {
@@ -174,6 +186,17 @@ describe.skipIf(process.platform === 'win32' || !zsh)('zsh startup folders', () 
     systemFile(zshEtc!, 'zshenv', `if [[ -o rcs && -o globalrcs ]]; then IT_TEST_FILES=${quote(dir)}; fi\n`)
     writeFileSync(path.join(home, '.zshenv'), 'ZDOTDIR=$IT_TEST_FILES\n')
     expect(await zshDirectory({ ...env, SHELL: zsh })).toBe(dir)
+  })
+
+  test.skipIf(!zshEtc)('reads the .zshenv in the folder the system’s zshenv chose with the options of any start', async () => {
+    const { home, dir, env } = fixture()
+    const other = path.join(home, 'other files')
+    systemFile(zshEtc!, 'zshenv', `if [[ -o rcs ]]; then export ZDOTDIR=${quote(dir)}; fi\n`)
+    writeFileSync(path.join(dir, '.zshenv'), `if [[ -o rcs && -o globalrcs && ! -o privileged ]]; then ZDOTDIR=${quote(other)}; fi\n`)
+    expect(await zshDirectory({ ...env, SHELL: zsh })).toBe(other)
+    // Without RCS zsh reads no .zshrc at all.
+    writeFileSync(path.join(dir, '.zshenv'), 'unsetopt rcs\n')
+    expect(await zshDirectory({ ...env, SHELL: zsh })).toBeUndefined()
   })
 
   test.skipIf(!zshEtc)('says nothing where the system’s zshrc takes away the trap that stops zsh before .zshrc', async () => {

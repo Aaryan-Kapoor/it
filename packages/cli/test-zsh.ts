@@ -18,13 +18,14 @@ const quote = (word: string) => `'${word.replaceAll("'", "'\\''")}'`
 /**
  * Puts a program called zsh in a folder, to be named by SHELL. It does in plain sh what It relies
  * on zsh to do, with startup files written in plain sh, and its system-wide zshenv and zshrc are
- * the files `zshenv` and `zshrc` beside it. Started with -p, it reads the system's zshenv alone
- * and says what ZDOTDIR is then. Started otherwise, it reads the system's zshenv, and where
- * ZDOTDIR is still the folder It gave it, it puts back the ZDOTDIR It names, reads the person's
- * .zshenv and then the system's zshrc, and says the folder whose .zshrc zsh would read next.
- * Where the system's zshenv set ZDOTDIR to another folder, it reads that folder's .zshenv, the
- * system's zshrc and the .zshrc, as zsh would, and says nothing. It adds the words of each start
- * as one line to `zsh arguments` beside it.
+ * the files `zshenv` and `zshrc` beside it. Started with -p, it reads the system's zshenv and says
+ * what ZDOTDIR is then, or, where the script it is given reads .zshenv, it reads the person's
+ * .zshenv from there as well and says the folder ZDOTDIR names after that. Started otherwise, it
+ * reads the system's zshenv, and where ZDOTDIR is still the folder It gave it, it puts back the
+ * ZDOTDIR It names, reads the person's .zshenv and then the system's zshrc, and says the folder
+ * whose .zshrc zsh would read next. Where the system's zshenv set ZDOTDIR to another folder, it
+ * reads that folder's .zshenv, the system's zshrc and the .zshrc, as zsh would, and says nothing.
+ * It adds the words of each start as one line to `zsh arguments` beside it.
  */
 export function standInZsh(dir: string): string {
   mkdirSync(dir, { recursive: true })
@@ -39,7 +40,12 @@ export function standInZsh(dir: string): string {
       'given=${ZDOTDIR-}',
       `if [ -r ${here}/zshenv ]; then . ${here}/zshenv; fi`,
       'if [ "$1" = -p ]; then',
-      `  if [ -n "\${ZDOTDIR+set}" ]; then printf '\\0${ZSH_ANSWER}=%s\\0' "$ZDOTDIR"; else printf '\\0${ZSH_ANSWER}-\\0'; fi`,
+      '  case "$*" in',
+      '  *.zshenv*)',
+      '    if [ -r "${ZDOTDIR-$HOME}/.zshenv" ]; then . "${ZDOTDIR-$HOME}/.zshenv"; fi',
+      `    printf '\\0${ZSH_ANSWER}%s\\0' "\${ZDOTDIR-$HOME}" ;;`,
+      `  *) if [ -n "\${ZDOTDIR+set}" ]; then printf '\\0${ZSH_ANSWER}=%s\\0' "$ZDOTDIR"; else printf '\\0${ZSH_ANSWER}-\\0'; fi ;;`,
+      '  esac',
       '  exit 0',
       'fi',
       'if [ "${ZDOTDIR-}" = "$given" ]; then',

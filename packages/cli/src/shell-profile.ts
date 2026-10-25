@@ -32,6 +32,15 @@ const PROBE = `{
 const LEFT = `if [[ -n \${ZDOTDIR+set} ]]; then builtin printf '\\0${ZSH_ANSWER}=%s\\0' "$ZDOTDIR"; else builtin printf '\\0${ZSH_ANSWER}-\\0'; fi`
 
 /**
+ * Asked of a zsh started with -p, after the system's zshenv has run with RCS set and nothing of
+ * the person's has. It reads the person's .zshenv from the folder the system's zshenv chose, and
+ * says the folder ZDOTDIR names then. The options that -p and no_global_rcs changed are put back
+ * first, so that .zshenv sees them as in any start. Where .zshenv unsets RCS, zsh reads no .zshrc,
+ * and nothing is said.
+ */
+const NARROWER = `builtin unsetopt privileged; builtin setopt global_rcs; { if [[ -r "\${ZDOTDIR-$HOME}/.zshenv" ]]; then builtin source "\${ZDOTDIR-$HOME}/.zshenv"; fi; } always { if [[ -o rcs ]]; then builtin printf '\\0${ZSH_ANSWER}%s\\0' "\${ZDOTDIR-$HOME}"; fi; }`
+
+/**
  * Run once startup is over, which is only where no command of any .zshrc was reached: a .zshrc
  * that is not there or holds none. It says the folder as long as zsh would have read a .zshrc
  * there, the probe's .zshenv ran, and its trap was still set, so that no .zshrc ran unseen.
@@ -48,10 +57,16 @@ const after = (probe: string) =>
  * with ZDOTDIR naming a folder of It's own whose .zshenv is PROBE. The system's zshenv runs first
  * and sees that folder in ZDOTDIR, so it is asked twice beforehand, with -p, which keeps zsh from
  * reading anything of the person's and from the system's zshrc: once with the person's ZDOTDIR,
- * to learn what it makes of that, and once with It's folder, which it must leave as it is. A
- * system zshenv that sets ZDOTDIR of its own would send zsh past It's folder and into the
- * person's own .zshrc, so then there is no answer. A login shell would also read .zprofile, which
- * is not read here. The three starts share one bound.
+ * to learn what it makes of that, and once with It's folder, which it must leave as it is.
+ *
+ * A system zshenv that sets ZDOTDIR of its own, as one may to keep everyone's zsh files in
+ * ~/.config/zsh, would send zsh past It's folder and into the person's own .zshrc. Zsh is then
+ * asked something narrower instead: the folder that the person's .zshenv leaves, read in the
+ * folder the system's zshenv chose. That cannot see a system zshrc that changes ZDOTDIR once more,
+ * which should be rare where the system's zshenv has already chosen it. There is no answer only
+ * where even that cannot be learned: where zsh fails, hangs or ends before it says.
+ *
+ * A login shell would also read .zprofile, which is not read here. All the starts share one bound.
  */
 export async function zshDirectory(env: NodeJS.ProcessEnv = process.env, timeoutMs = 5_000): Promise<string | undefined> {
   const shell = env.SHELL
@@ -68,9 +83,12 @@ export async function zshDirectory(env: NodeJS.ProcessEnv = process.env, timeout
   try {
     const systemOnly = ['-p', '-i', '-o', 'no_global_rcs', '-c', LEFT]
     const [left, kept] = await Promise.all([ask(shell, systemOnly, theirs, until), ask(shell, systemOnly, { ...theirs, ZDOTDIR: probe }, until)])
-    if (kept !== `=${probe}` || (left !== '-' && !left?.startsWith('='))) return undefined
+    if (kept === undefined || (left !== '-' && !left?.startsWith('='))) return undefined
     const was = left === '-' ? {} : { IT_ZDOTDIR_SET: '1', IT_ZDOTDIR_WAS: left.slice(1) }
-    const answer = await ask(shell, ['-i', '-c', after(probe)], { ...theirs, ZDOTDIR: probe, ...was }, until)
+    const answer =
+      kept === `=${probe}`
+        ? await ask(shell, ['-i', '-c', after(probe)], { ...theirs, ZDOTDIR: probe, ...was }, until)
+        : await ask(shell, ['-p', '-i', '-o', 'no_global_rcs', '-c', NARROWER], theirs, until)
     return answer !== undefined && path.isAbsolute(answer) && !/[\r\n]/.test(answer) ? answer : undefined
   } finally {
     rmSync(probe, { recursive: true, force: true })
