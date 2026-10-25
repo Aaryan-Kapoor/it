@@ -15,6 +15,7 @@ const settle = () => vi.advanceTimersByTimeAsync(0)
 
 beforeEach(() => {
   vi.useFakeTimers()
+  localStorage.clear()
   hidden = false
   Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (hidden ? 'hidden' : 'visible') })
   said = []
@@ -116,5 +117,69 @@ describe('what a display says of itself', () => {
     fail = false
     await vi.advanceTimersByTimeAsync(OPEN_EVERY_MS)
     expect(said.at(-1)).toEqual({ visible: true, used: true })
+  })
+
+  /** A tab of the browser of its own, with a document and a window of its own and the browser's storage, and what it said. */
+  function aTab() {
+    const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' as DocumentVisibilityState, activeElement: null })
+    const win = Object.assign(new EventTarget(), {
+      setInterval: (fn: () => void, ms: number) => setInterval(fn, ms),
+      clearInterval: (n: number) => clearInterval(n),
+      setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+      clearTimeout: (n: number) => clearTimeout(n),
+      navigator: {},
+    })
+    const told: Said[] = []
+    const ends = presence(
+      async (one) => {
+        told.push(one)
+      },
+      { document: doc as unknown as Document, window: win as unknown as Window, store: localStorage },
+    )
+    const shownNow = (visible: boolean) => {
+      doc.visibilityState = visible ? 'visible' : 'hidden'
+      doc.dispatchEvent(new Event('visibilitychange'))
+    }
+    return { told, ends, shownNow, win }
+  }
+
+  test('of two tabs of the browser, one that is hidden does not hide the display while the other is in front of the person', async () => {
+    stop()
+    const one = aTab()
+    const two = aTab()
+    await settle()
+    one.shownNow(false)
+    await settle()
+    // The first tab says nothing of being hidden, and the second goes on saying it is open
+    expect(one.told).toEqual([{ visible: true, used: false }])
+    await vi.advanceTimersByTimeAsync(OPEN_EVERY_MS)
+    expect([one.told.length, two.told.at(-1)]).toEqual([1, { visible: true, used: false }])
+    // Once the second is hidden too, no tab is in front of the person, and that is said
+    two.shownNow(false)
+    await settle()
+    expect(two.told.at(-1)).toEqual({ visible: false, used: false })
+    one.shownNow(true)
+    await settle()
+    expect(one.told.at(-1)).toEqual({ visible: true, used: false })
+    // A tab that is closed takes its note away as it goes
+    one.win.dispatchEvent(new Event('pagehide'))
+    two.shownNow(true)
+    two.shownNow(false)
+    await settle()
+    expect(two.told.at(-1)).toEqual({ visible: false, used: false })
+    one.ends()
+    two.ends()
+  })
+
+  test('a tab that was closed without taking its note away stops counting once the note has run out, and the note goes', async () => {
+    stop()
+    localStorage.setItem('it.visible.a-tab-long-gone', String(Date.now() - 2 * OPEN_EVERY_MS - 31_000))
+    const one = aTab()
+    await settle()
+    one.shownNow(false)
+    await settle()
+    expect(one.told.at(-1)).toEqual({ visible: false, used: false })
+    expect(localStorage.getItem('it.visible.a-tab-long-gone')).toBeNull()
+    one.ends()
   })
 })
