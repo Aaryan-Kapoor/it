@@ -3576,7 +3576,8 @@ describe('displays and machines', () => {
   test('the first machine is enrolled by the service, on a backend that holds nothing, and that makes the one person', async () => {
     const t = backend()
     expect(await t.run(async (ctx) => [(await ctx.db.query('users').collect()).length, (await ctx.db.query('machines').collect()).length])).toEqual([0, 0])
-    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE })
+    // And it names the later forms of a call it takes, which a machine a version ahead of it asks about when it is refused one
+    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE, takes: ['delivery.allWaiting.for'] })
     const key = await aKeyPair()
     const made = await t.mutation(internal.bridge.enroll, { subject: 'owner', name: 'this machine', publicKey: key.publicKey })
     if ('error' in made) throw new Error(made.error)
