@@ -100,8 +100,10 @@ export interface Carrying {
  *   one they held in the mode that asks is reopened with `it` and whatever their own settings
  *   allow. It does what it could do with them there, and no more.
  * - Codex is run in its sandbox for a workspace, with the network allowed and It's own folder
- *   writable, which is what `it` needs. It can write in the conversation's folder and nowhere
- *   else, and nothing can ask the person for more, since they are not there.
+ *   writable, which is what `it` needs. It can write in the conversation's folder, It's folder
+ *   and the system's temporary folders, and nowhere else, and nothing can ask the person for
+ *   more, since they are not there. These settings are given on the command line, so they win
+ *   over a permissions profile the person chose in their own settings or a project's.
  * - Pi, OpenCode and Hermes are run as they are in a window, with whatever their own settings
  *   allow there. Nothing can ask the person for more, since they are not there.
  */
