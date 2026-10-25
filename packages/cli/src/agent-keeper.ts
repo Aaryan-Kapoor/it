@@ -144,6 +144,8 @@ export class AgentKeeper {
   private notes: Notes | 'unread' = { runs: {}, cutOff: [], left: [] }
   private timer: ReturnType<typeof setInterval> | null = null
   private ticking = false
+  /** The pass under way, which closing waits for: one left running could start a program after the rest were ended. */
+  private passing: Promise<void> = Promise.resolve()
   private closing = false
   private saidOnce = new Set<string>()
 
@@ -200,10 +202,13 @@ export class AgentKeeper {
   async close(): Promise<void> {
     this.closing = true
     if (this.timer) clearInterval(this.timer)
-    const all = [...this.kept.values()]
+    const after = (ms: number) => new Promise((r) => setTimeout(r, ms))
+    // A pass under way is let finish what it began, for a moment: it starts nothing from now
+    // on, and a program it had begun to start is among those ended below
+    await Promise.race([this.passing.catch(() => {}), after(3000)])
     await Promise.race([
       Promise.all(
-        all.map(async (k) => {
+        [...this.kept.values()].map(async (k) => {
           await k.doing?.catch(() => {})
           if (!k.run) return
           if (k.busy() && this.notes !== 'unread' && !this.notes.cutOff.includes(k.w.id)) this.notes.cutOff.push(k.w.id)
@@ -211,9 +216,11 @@ export class AgentKeeper {
           await this.d.report({ agentId: k.w.id, round: k.round, state: 'resting' }).catch(() => {})
         }),
       ),
-      new Promise((r) => setTimeout(r, 12_000)),
+      after(12_000),
     ])
-    this.keepNotes()
+    try {
+      this.keepNotes()
+    } catch {}
   }
 
   private readSettings(force = false): void {
@@ -240,31 +247,37 @@ export class AgentKeeper {
     this.d.say(line)
   }
 
-  private async tick(): Promise<void> {
-    if (this.ticking || this.closing) return
+  private tick(): Promise<void> {
+    if (this.ticking || this.closing) return this.passing
     this.ticking = true
-    try {
-      this.readSettings()
-      const offer = offerOf(this.settings)
-      const offerText = JSON.stringify(offer)
-      if (offerText !== this.offered) {
-        await this.d.offer(offer).then(
-          () => {
-            this.offered = offerText
-          },
-          (err) => this.sayOnce('offer', `project agents: It could not be told what this machine offers (${why(err)})`),
-        )
-      }
-      const ids = new Set(this.wanted.map((w) => w.id))
-      // An agent It no longer lists is not to run: it was removed, or its machine let go of
-      for (const [id, k] of this.kept)
-        if (!ids.has(id) && !k.doing) {
-          if (k.run) k.doing = this.endProgram(k).finally(() => this.kept.delete(id))
-          else this.kept.delete(id)
-        }
-      for (const w of this.wanted) await this.keep(w)
-    } finally {
+    this.passing = this.pass().finally(() => {
       this.ticking = false
+    })
+    return this.passing
+  }
+
+  private async pass(): Promise<void> {
+    this.readSettings()
+    const offer = offerOf(this.settings)
+    const offerText = JSON.stringify(offer)
+    if (offerText !== this.offered) {
+      await this.d.offer(offer).then(
+        () => {
+          this.offered = offerText
+        },
+        (err) => this.sayOnce('offer', `project agents: It could not be told what this machine offers (${why(err)})`),
+      )
+    }
+    const ids = new Set(this.wanted.map((w) => w.id))
+    // An agent It no longer lists is not to run: it was removed, or its machine let go of
+    for (const [id, k] of this.kept)
+      if (!ids.has(id) && !k.doing) {
+        if (k.run) k.doing = this.endProgram(k).finally(() => this.kept.delete(id))
+        else this.kept.delete(id)
+      }
+    for (const w of this.wanted) {
+      if (this.closing) return
+      await this.keep(w)
     }
   }
 
@@ -296,6 +309,7 @@ export class AgentKeeper {
   }
 
   private async keep(w: Wanted): Promise<void> {
+    if (this.closing) return
     const k = this.keptFor(w)
     if (k.pending) await this.send(k, k.pending)
     if (k.doing) return
@@ -467,6 +481,8 @@ export class AgentKeeper {
       k.failed = true
       return this.state(k, 'failed', { why: 'Its environment could not be made ready.' })
     }
+    // This connector began to stop while the agent was being got ready: nothing is started
+    if (this.closing) return
     const s = sessionFor(launch, on)
     if (!s) {
       k.failed = true

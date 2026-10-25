@@ -259,6 +259,27 @@ describe('the keeper of project agents', () => {
     expect(JSON.parse(readFileSync(path.join(dir, 'agent-runs.json'), 'utf8'))).toMatchObject({ runs: {}, cutOff: ['agent-000001'] })
   })
 
+  test('starts nothing once it is closing, though a pass was on its way to starting an agent', async () => {
+    let asked: () => void = () => {}
+    const asking = new Promise<void>((r) => (asked = r))
+    const w = world({
+      // The connector is slow to answer, so the pass is still under way when the keeper is closed
+      clicks: async () => {
+        asked()
+        await new Promise((r) => setTimeout(r, 500))
+        return [{ id: 'click-1', text: 'water' }]
+      },
+    })
+    const k = new AgentKeeper(w.deps)
+    await k.begin()
+    k.update([agent({ session: '3f0c3c55-1d4b-4a8e-9b1a-2a8a1c1c0b11', state: 'resting' })])
+    await asking
+    await k.close()
+    await new Promise((r) => setTimeout(r, 800))
+    expect(seen()).toBeNull()
+    expect(JSON.parse(readFileSync(path.join(dir, 'agent-runs.json'), 'utf8')).runs).toEqual({})
+  })
+
   test('starts nothing where its note of what it ran cannot be read', async () => {
     writeFileSync(path.join(dir, 'agent-runs.json'), '{ cut short')
     const w = world()
