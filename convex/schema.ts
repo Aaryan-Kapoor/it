@@ -49,7 +49,14 @@ export default defineSchema({
   // A person's running totals, kept apart from the person's own record (see lib/tally.ts):
   // clicks not yet handed to an agent, and publishes begun and not finished, by number and by
   // the bytes they declared. Both of the latter count against the quota.
-  tallies: defineTable({ userId: v.id('users'), waiting: v.number(), stagingCount: v.number(), stagingBytes: v.number() }).index('by_user', ['userId']),
+  tallies: defineTable({
+    userId: v.id('users'),
+    waiting: v.number(),
+    stagingCount: v.number(),
+    stagingBytes: v.number(),
+    /** The bytes of the files sent with actions that It holds for the person, kept or still arriving. */
+    fileBytes: v.optional(v.number()),
+  }).index('by_user', ['userId']),
 
   // How things stand with the tour an agent gives of It, kept apart from the person's own
   // record as their totals are. Every function reads that record to know who is asking, and an
@@ -352,6 +359,9 @@ export default defineSchema({
     handedAt: v.optional(v.number()),
     /** What became of the work the click started, as far as It can tell. */
     outcome: v.optional(v.union(v.literal('running'), v.literal('succeeded'), v.literal('failed'), v.literal('unknown'))),
+    /** The files it carried beside what it carried, in order, each received whole, and the record they are kept under. */
+    attachment: v.optional(v.id('attachments')),
+    files: v.optional(v.array(v.object({ name: v.string(), type: v.string(), size: v.number(), sha256: v.string() }))),
   })
     .index('by_artifact_client', ['artifactId', 'clientActionId'])
     .index('by_route', ['machineId', 'delivery', 'harness', 'sessionId', 'createdAt'])
@@ -432,6 +442,29 @@ export default defineSchema({
 
   // Things the content service has been asked to do and has not yet confirmed: ending a
   // display's sessions, deleting stored bytes. Kept until it says done, and tried again until then.
+  // The files sent with one action, beside it. The site asks for them to be taken before it
+  // sends the action, under the id the click already has, and uploads them to the content
+  // service, which keeps them in a folder of their own beside the page's versions. The action is
+  // accepted only once every one of them has arrived whole, and they then go with it.
+  attachments: defineTable({
+    userId: v.id('users'),
+    artifactId: v.id('artifacts'),
+    /** The click they were sent with, by the id the page gave it. */
+    clientActionId: v.string(),
+    /** Each file in order: the name the page gave it, its kind, its size, and the SHA-256 of its bytes in hex. */
+    files: v.array(v.object({ name: v.string(), type: v.string(), size: v.number(), sha256: v.string() })),
+    /** All of their sizes together. */
+    bytes: v.number(),
+    /** Whether the content service has said that it holds every one of them whole. */
+    stored: v.boolean(),
+    /** The action they went with, once that was accepted. */
+    actionId: v.optional(v.id('actions')),
+    createdAt: v.number(),
+  })
+    .index('by_artifact_client', ['artifactId', 'clientActionId'])
+    .index('by_artifact', ['artifactId'])
+    .index('by_unattached', ['actionId', 'createdAt']),
+
   contentJobs: defineTable({
     op: v.union(v.literal('revoke'), v.literal('delete')),
     body: v.string(),

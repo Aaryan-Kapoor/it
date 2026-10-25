@@ -468,3 +468,26 @@ describe('the frame around a page', () => {
     expect(submitted().length).toBe(results.filter((m) => m.ok).length)
   })
 })
+
+describe('what a page sends, as the site takes it', () => {
+  test('a file anywhere in what an action carries is taken out, in order, and stands there as which of the files it is; the same file named twice is one', async () => {
+    const { jsonText } = await import('./mount')
+    const photo = new File([new Uint8Array(3)], 'a.jpg', { type: 'image/jpeg' })
+    const sheet = new Blob(['a,b'], { type: 'text/csv' })
+    const files: Blob[] = []
+    const text = jsonText({ photo, more: [{ sheet }, photo], n: 4 }, 32 * 1024, files)
+    expect(JSON.parse(text)).toEqual({ photo: { file: 1 }, more: [{ sheet: { file: 2 } }, { file: 1 }], n: 4 })
+    expect(files).toEqual([photo, sheet])
+    // Data with no file in it is written as it always was
+    expect(jsonText({ plan: 'B' }, 32 * 1024, [])).toBe('{"plan":"B"}')
+  })
+
+  test('a file is not kept with It.store, and the page is told where it goes instead', async () => {
+    const { jsonText } = await import('./mount')
+    expect(() => jsonText({ photo: new Blob(['x']) }, 32 * 1024)).toThrow(
+      'A file cannot be kept with It.store. Send it with It.action, which takes files beside what it carries.',
+    )
+    // Anything else that is not plain data is refused as before
+    expect(() => jsonText({ when: new Date() }, 32 * 1024, [])).toThrow('That cannot be sent.')
+  })
+})

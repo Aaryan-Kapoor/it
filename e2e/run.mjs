@@ -1863,6 +1863,259 @@ try {
   )
 
   // ------------------------------------------------------------------
+  section('Files sent with actions')
+  // A page that takes a photo, as the bill splitter, the homework marker and the floor planner
+  // do: one action, with the files in what it carries (e2e/fixtures/receipts)
+  const fslug = `${slug}-files`
+  await it(A, ['create', marked('Receipts'), '--id', fslug, '--dir', path.join(root, 'e2e/fixtures/receipts')])
+  const scratch = mkdtempSync(path.join(tmp, 'files-'))
+  const sha = (bytes) => createHash('sha256').update(bytes).digest('hex')
+  /** How large a JPEG says its picture is, from its first frame's header. */
+  const jpegSize = (b) => {
+    for (let i = 2; i + 9 < b.length && b[i] === 0xff; i += 2 + b.readUInt16BE(i + 2)) {
+      const m = b[i + 1]
+      if (m >= 0xc0 && m <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(m)) return `${b.readUInt16BE(i + 7)}x${b.readUInt16BE(i + 5)}`
+    }
+    return 'not a JPEG'
+  }
+  // A photo as a away's camera makes one, 4032 by 3024 pixels and several megabytes, made by the browser itself
+  const photoAt = path.join(scratch, `${PRIVATE_MARK}receipt.jpg`)
+  writeFileSync(
+    photoAt,
+    Buffer.from(
+      await page.evaluate(async () => {
+        const c = document.createElement('canvas')
+        c.width = 4032
+        c.height = 3024
+        const g = c.getContext('2d')
+        const light = g.createLinearGradient(0, 0, c.width, c.height)
+        light.addColorStop(0, '#d8c9a8')
+        light.addColorStop(1, '#5a6b7c')
+        g.fillStyle = light
+        g.fillRect(0, 0, c.width, c.height)
+        const grain = g.getImageData(0, 0, c.width, c.height)
+        for (let i = 0; i < grain.data.length; i += 4) {
+          const n = (Math.random() - 0.5) * 60
+          for (let k = 0; k < 3; k++) grain.data[i + k] += n
+        }
+        g.putImageData(grain, 0, 0)
+        g.fillStyle = '#111'
+        g.font = '120px sans-serif'
+        for (let y = 300; y < c.height; y += 220) g.fillText(`Soup 4.50  Bread 2.10  Tea 3.00  ${y}`, 200, y)
+        const made = new Uint8Array(await (await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.95))).arrayBuffer())
+        let text = ''
+        for (let i = 0; i < made.length; i += 0x8000) text += String.fromCharCode(...made.subarray(i, i + 0x8000))
+        return btoa(text)
+      }),
+      'base64',
+    ),
+  )
+  const photo = readFileSync(photoAt)
+  const sheetAt = path.join(scratch, `${PRIVATE_MARK}totals.csv`)
+  writeFileSync(sheetAt, `item,amount\nsoup ${PRIVATE_MARK}bowl,4.50\n`)
+  /** Picks files on the page and presses one of its buttons, as a person does, and says what the page then shows. */
+  const sentFrom = async (tab, button, files) => {
+    const f = tab.frameLocator('.mount iframe')
+    await f.locator('#pick').setInputFiles(files)
+    await f.locator(button).click()
+    await f.locator('#out', { hasText: /^(accepted|refused)/ }).waitFor({ timeout: 90_000 })
+    return f.locator('#out').textContent()
+  }
+  /** The action on the page that the agent has and had not been seen before. */
+  const seenFiles = []
+  const newestFiles = async (ms = 30_000) => {
+    const got = await until(async () => (await it(A, ['actions', '--id', fslug])).find((x) => !seenFiles.includes(x.id)), ms, 500)
+    if (got) seenFiles.push(got.id)
+    return got
+  }
+  const savedTo = (name) => path.join(scratch, `saved-${seenFiles.length}-${name}`)
+  await page.goto(`${APP}/p/${fslug}`)
+  await pageIn(page, { id: fslug })
+  check(
+    'a photo from a camera, several megabytes, is what the page is given',
+    photo.length > 3 * 1024 * 1024 && jpegSize(photo) === '4032x3024',
+    `${photo.length}, ${jpegSize(photo)}`,
+  )
+  const shrunkSaid = await sentFrom(page, '#send', [photoAt])
+  const shrunk = await newestFiles()
+  const shrunkText = shrunk ? (await it(A, ['action', shrunk.id])).text : ''
+  const shrunkAt = savedTo('receipt.jpg')
+  const shrunkSaved = shrunk ? (await it(A, ['action', shrunk.id, '--save', shrunkAt])).saved : null
+  check(
+    'a photo put in an action goes with it in one action, made smaller in the page to what a model reads, and the agent is told it is there, by name, kind and size',
+    /^accepted /.test(shrunkSaid) &&
+      shrunk?.data?.photo?.file === 1 &&
+      shrunk?.data?.note === `${PRIVATE_MARK}table four` &&
+      shrunk?.files?.length === 1 &&
+      shrunk.files[0].name === `${PRIVATE_MARK}receipt.jpg` &&
+      shrunk.files[0].type === 'image/jpeg' &&
+      shrunk.files[0].bytes < 1024 * 1024 &&
+      shrunkText.includes(`It carries a file beside that: "${PRIVATE_MARK}receipt.jpg" (image/jpeg,`) &&
+      shrunkText.includes(`\`it action ${shrunk.id} --save <file>\``),
+    JSON.stringify({ said: shrunkSaid, listed: shrunk, text: shrunkText }),
+  )
+  check(
+    'and `it action --save` writes it as a picture of 1600 pixels on its longer side',
+    shrunkSaved?.bytes === shrunk?.files?.[0]?.bytes && existsSync(shrunkAt) && jpegSize(readFileSync(shrunkAt)) === '1600x1200',
+    JSON.stringify({ saved: shrunkSaved, size: existsSync(shrunkAt) ? jpegSize(readFileSync(shrunkAt)) : 'no file' }),
+  )
+  const asItWasSaid = await sentFrom(page, '#original', [photoAt, sheetAt])
+  const asItWas = await newestFiles()
+  const photoBack = savedTo('receipt.jpg')
+  const sheetBack = savedTo('totals.csv')
+  if (asItWas) {
+    await it(A, ['action', asItWas.id, '--save', photoBack])
+    await it(A, ['action', asItWas.id, '--save', sheetBack, '--number', '2'])
+  }
+  check(
+    'a page that asks for its files as they are has them arrive byte for byte, several in one action, each by its number',
+    /^accepted /.test(asItWasSaid) &&
+      JSON.stringify(asItWas?.files?.map((f) => [f.number, f.name, f.bytes])) ===
+        JSON.stringify([
+          [1, `${PRIVATE_MARK}receipt.jpg`, photo.length],
+          [2, `${PRIVATE_MARK}totals.csv`, readFileSync(sheetAt).length],
+        ]) &&
+      existsSync(photoBack) &&
+      sha(readFileSync(photoBack)) === sha(photo) &&
+      existsSync(sheetBack) &&
+      readFileSync(sheetBack, 'utf8') === readFileSync(sheetAt, 'utf8'),
+    JSON.stringify({ said: asItWasSaid, files: asItWas?.files }),
+  )
+  const tooLargeAt = path.join(scratch, 'too-large.bin')
+  writeFileSync(tooLargeAt, Buffer.alloc(25 * 1024 * 1024 + 1, 1))
+  const tooLargeSaid = await sentFrom(page, '#original', [tooLargeAt])
+  check(
+    'a file larger than one action may carry is refused before anything is sent, and the page is told why',
+    tooLargeSaid === 'refused: A file sent with an action is at most 25 MB.' && !(await newestFiles(3000)),
+    tooLargeSaid,
+  )
+  // A phone on a bad network: the photo is sent with no connection, the tab is closed, and the
+  // site is opened again once the connection is back
+  const away = began(await launch())
+  await pairAsOwner(away.page)
+  await away.page.goto(`${APP}/p/${fslug}`)
+  await pageIn(away.page, { id: fslug })
+  await away.context.setOffline(true)
+  const offline = during(away, [
+    { says: /ERR_INTERNET_DISCONNECTED/, of: exactly(`${APP}/upload/1`), times: 200, may: true, because: 'a file was sent with no connection' },
+  ])
+  await away.page.frameLocator('.mount iframe').locator('#pick').setInputFiles(photoAt)
+  await away.page.frameLocator('.mount iframe').locator('#original').click()
+  const keptInBrowser = (tab) =>
+    tab.evaluate(async () => {
+      const clicks = Object.keys(localStorage).filter((name) => name.startsWith('it.outbox.'))
+      const files = await new Promise((resolve) => {
+        const asked = indexedDB.open('it-outbox', 1)
+        asked.onsuccess = () => {
+          const all = asked.result.transaction('files', 'readonly').objectStore('files').getAll()
+          all.onsuccess = () => resolve(all.result.map((r) => r.files.map((f) => f.size)))
+          all.onerror = () => resolve('unreadable')
+        }
+        asked.onerror = () => resolve('no store')
+      })
+      return { clicks: clicks.length, files, sizeOfTheClick: clicks.map((name) => localStorage.getItem(name).length) }
+    })
+  const whileAway = await until(async () => {
+    const kept = await keptInBrowser(away.page)
+    return kept.clicks === 1 && Array.isArray(kept.files) && kept.files.length === 1 ? kept : undefined
+  }, 15_000)
+  await away.page.waitForTimeout(2000)
+  const nothingYet = !(await newestFiles(1000))
+  check(
+    'with no connection the click is kept in the browser, its file apart from it in IndexedDB, and the agent has nothing yet',
+    JSON.stringify(whileAway?.files) === JSON.stringify([[photo.length]]) && whileAway.sizeOfTheClick[0] < 4000 && nothingYet,
+    JSON.stringify({ kept: whileAway, nothingYet }),
+  )
+  await away.page.close()
+  await away.context.setOffline(false)
+  offline()
+  const reopened = await away.context.newPage()
+  await reopened.goto(APP)
+  const cameBack = await newestFiles(60_000)
+  const cameBackAt = savedTo('receipt.jpg')
+  if (cameBack) await it(A, ['action', cameBack.id, '--save', cameBackAt])
+  const leftThere = await until(async () => {
+    const kept = await keptInBrowser(reopened)
+    return kept.clicks === 0 && Array.isArray(kept.files) && kept.files.length === 0 ? kept : undefined
+  }, 15_000)
+  check(
+    'and once the connection is back and the site is opened again it is sent once, the file whole, and the browser keeps nothing of it',
+    cameBack?.files?.[0]?.bytes === photo.length &&
+      existsSync(cameBackAt) &&
+      sha(readFileSync(cameBackAt)) === sha(photo) &&
+      Boolean(leftThere) &&
+      !(await newestFiles(3000)),
+    JSON.stringify({ cameBack, leftThere }),
+  )
+  await away.browser.close()
+  // Several clicks with files at once, as from several tabs, are held to the room the browser
+  // keeps for files all the same: each is let in or not in one step that no other comes between
+  const crowded = began(await launch())
+  await pairAsOwner(crowded.page)
+  await crowded.page.goto(`${APP}/p/${fslug}`)
+  const crowdedFrame = await pageIn(crowded.page, { id: fslug })
+  await crowded.context.setOffline(true)
+  const crowdedOffline = during(crowded, [
+    { says: /ERR_INTERNET_DISCONNECTED/, of: exactly(`${APP}/upload/1`), times: 50, may: true, because: 'files were sent with no connection' },
+  ])
+  await crowdedFrame.evaluate(() => {
+    const clip = () => [new File([new Uint8Array(17 * 1024 * 1024)], 'a.mov'), new File([new Uint8Array(17 * 1024 * 1024)], 'b.mov')]
+    window.crowd = []
+    for (let i = 0; i < 3; i++)
+      window.It.action('clips', { clips: clip() }, { original: true }).then(
+        () => window.crowd.push('sent'),
+        (e) => window.crowd.push(String(e?.message ?? e)),
+      )
+  })
+  const crowdSaid = await until(async () => {
+    const said = await crowdedFrame.evaluate(() => window.crowd)
+    return said.length ? said : undefined
+  }, 30_000)
+  await crowded.page.waitForTimeout(1000)
+  const crowdKept = await keptInBrowser(crowded.page)
+  check(
+    'clicks with files sent at once are held to the room the browser keeps for files, 100 MB: the one past it is refused and told why, and the others are kept',
+    JSON.stringify(crowdSaid) ===
+      JSON.stringify(['Too many files are still waiting to be sent from this browser. Check the connection, and send this again once they have gone.']) &&
+      JSON.stringify(crowdKept.files) ===
+        JSON.stringify([
+          [17 * 1024 * 1024, 17 * 1024 * 1024],
+          [17 * 1024 * 1024, 17 * 1024 * 1024],
+        ]) &&
+      crowdKept.clicks === 2,
+    JSON.stringify({ said: crowdSaid, kept: crowdKept }),
+  )
+  crowdedOffline()
+  await crowded.browser.close()
+  // The agent may be on another computer: a machine that joined reads the file through the door it joined at
+  const onTheOther = savedTo('from-the-other-machine.jpg')
+  const fromTheOther = asItWas ? await it(B, ['action', asItWas.id, '--save', onTheOther]).catch((e) => ({ refused: e.code })) : {}
+  check(
+    'a machine that joined from elsewhere writes a file an action carried, whole, as the machine It runs on does',
+    fromTheOther.saved?.bytes === photo.length && existsSync(onTheOther) && sha(readFileSync(onTheOther)) === sha(photo),
+    JSON.stringify(fromTheOther),
+  )
+  // The bytes are kept by the part of It that keeps pages' files, beside the page's versions, and go with the page
+  const person = readdirSync(path.join(A, 'content', 'u')).find((u) => existsSync(path.join(A, 'content', 'u', u)))
+  const pageFolders = () =>
+    readdirSync(path.join(A, 'content', 'u', person)).flatMap((p) =>
+      existsSync(path.join(A, 'content', 'u', person, p)) ? readdirSync(path.join(A, 'content', 'u', person, p)).map((f) => f.replace(/^f.*/, 'f')) : [],
+    )
+  const keptBefore = pageFolders().filter((f) => f === 'f').length
+  // The tab goes back to the page the run shows from here on, before this one is deleted under it
+  await page.goto(`${APP}/p/${slug}`)
+  await pageIn(page, { id: slug })
+  const fdeleted = await it(A, ['delete', fslug])
+  const keptAfter = await until(() => pageFolders().filter((f) => f === 'f').length === 0, 15_000)
+  const savedAfter = asItWas ? await refused(it(A, ['action', asItWas.id, '--save', savedTo('after.jpg')])) : 'none'
+  check(
+    'deleting the page removes its files: the folder each action’s files were kept in is gone, and none can be read',
+    keptBefore >= 3 && fdeleted.deleted === fslug && keptAfter && savedAfter === 'not_found' && !existsSync(savedTo('after.jpg')),
+    JSON.stringify({ keptBefore, deleted: fdeleted, keptAfter, savedAfter }),
+  )
+  rmSync(scratch, { recursive: true, force: true })
+
+  // ------------------------------------------------------------------
   section('Versions')
   const before2 = frameOf(page).url()
   const v2 = await it(A, ['update', slug, '--html', '<h1 id="v">version two</h1><p data-it-bind="status"></p>'])
@@ -4484,11 +4737,49 @@ try {
   await shownIn(underWay.page, eslug)
   await underWay.page.frameLocator('.mount iframe').locator('#approve').click()
   await awaited('the click that was to be on its way was not sent', () => sentLate.length > 0, 15_000, 50)
-  // The other has shown a page and is closed: it hears nothing of the erasing until it is opened again
+  // A file sent with an action on the page, which It holds when everything is erased
+  const sentWithIt = await leaving.frame.evaluate(() =>
+    window.It.action('sketch', { sketch: new File([new Uint8Array(2048).fill(9)], 'e2e-private-sketch.png', { type: 'image/png' }) }, { original: true }).then(
+      (r) => r.id,
+      (e) => `refused: ${e.message}`,
+    ),
+  )
+  const filesOf = (artifactsOf) => {
+    const at = path.join(A, 'content', 'u')
+    return existsSync(at)
+      ? readdirSync(at).flatMap((u) =>
+          artifactsOf(u) ? readdirSync(path.join(at, u)).flatMap((p) => readdirSync(path.join(at, u, p)).filter((f) => f.startsWith('f'))) : [],
+        )
+      : []
+  }
+  const filesBeforeErasing = filesOf(() => true).length
+  // The other has shown a page and is closed: it hears nothing of the erasing until it is opened
+  // again. It closed with a click unsent, a file with it, kept in the browser for when it could be sent
   const closedAllTheWhile = began(await launch())
   await pairAsOwner(closedAllTheWhile.page)
-  await shownIn(closedAllTheWhile.page, eslug)
+  const closedWith = await shownIn(closedAllTheWhile.page, eslug)
+  await closedAllTheWhile.context.setOffline(true)
+  void closedWith.frame
+    .evaluate(() =>
+      window.It.action('sketch', { sketch: new File([new Uint8Array(1024).fill(3)], 'e2e-private-unsent.png', { type: 'image/png' }) }, { original: true }),
+    )
+    .catch(() => {})
+  const filesInIndexedDB = (tab) =>
+    tab.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const asked = indexedDB.open('it-outbox', 1)
+          asked.onsuccess = () => {
+            const all = asked.result.transaction('files', 'readonly').objectStore('files').count()
+            all.onsuccess = () => resolve(all.result)
+            all.onerror = () => resolve('unreadable')
+          }
+          asked.onerror = () => resolve('no store')
+        }),
+    )
+  const unsentKept = await until(async () => (await filesInIndexedDB(closedAllTheWhile.page)) === 1, 15_000)
   await closedAllTheWhile.page.close()
+  await closedAllTheWhile.context.setOffline(false)
   /**
    * What the site keeps in a tab, by the kind of thing each is, for every tab of the browser
    * and for this one alone; and how many sessions' cookies the browser holds. One thing stays
@@ -4606,10 +4897,27 @@ try {
   await underWay.page.reload()
   await until(() => underWay.page.locator('.door').isVisible(), 20_000)
   letsGo.loadedAfresh = JSON.stringify(await stillHolds(underWay, underWay.page))
+  // The files go with it all: those It held, at once, and what a closed browser kept unsent, once it is opened again
+  const filesAfterErasing = await until(() => filesOf(() => true).length === 0, 30_000)
+  check(
+    'erasing everything removes the files pages sent with actions, from the folder It kept them in',
+    typeof sentWithIt === 'string' && !sentWithIt.startsWith('refused') && filesBeforeErasing >= 1 && filesAfterErasing,
+    JSON.stringify({ sentWithIt, filesBeforeErasing, left: filesOf(() => true).length }),
+  )
   const openedAgain = await closedAllTheWhile.context.newPage()
   await openedAgain.goto(APP)
   await until(() => openedAgain.locator('.door').isVisible(), 20_000)
   letsGo.closedAllTheWhile = await holdsAtLast(closedAllTheWhile, openedAgain)
+  let unsentLeft
+  check(
+    'and a browser that was closed with a click and its file unsent lets go of the file too, once it is opened again and learns of the erasing',
+    unsentKept &&
+      (await until(async () => {
+        unsentLeft = await filesInIndexedDB(openedAgain)
+        return unsentLeft === 0
+      }, 75_000)),
+    JSON.stringify({ unsentKept, unsentLeft }),
+  )
   check(
     'and every browser that was paired lets go of all that the site kept in it and of its session’s cookie, but for the names of the sessions it held, which it keeps a day more: the one that asked, in each of its tabs; one that had a click on its way, which is not written back when its answer comes late; and one that was closed all the while, once it is opened again',
     JSON.stringify(letsGo) ===

@@ -23,6 +23,8 @@ export const AUDIENCE = {
   browser: 'it-browser',
   /** The backend asking the service on its own machine to send a notification. */
   push: 'it-push',
+  /** A machine of the person's reading one file that was sent with an action. */
+  download: 'it-download',
 } as const
 
 /**
@@ -84,6 +86,13 @@ export const LIMITS = {
   /** One value a page keeps for itself with It.store. */
   storeValueBytes: 32 * 1024,
   actionPayloadBytes: 32 * 1024,
+  /** One file sent with an action, beside what it carries. */
+  actionFileBytes: 25 * 1024 * 1024,
+  /** How many files one action may carry, and how many bytes they may come to together. */
+  actionFiles: 10,
+  actionFilesBytes: 50 * 1024 * 1024,
+  /** A file's name as it is kept with the action, in characters. */
+  actionFileName: 200,
   actionName: 64,
   notificationText: 1000,
   /** What a person types to a page's agent in the box above the page, in characters. */
@@ -119,6 +128,8 @@ export const QUOTA = {
   pendingActionsPerPage: 500,
   /** Publishes begun and not yet finished. */
   staging: 50,
+  /** The bytes of the files sent with actions that It holds for one person, however many pages they came from. */
+  actionFileBytes: 1024 * 1024 * 1024,
 } as const
 
 /** How long things are kept. */
@@ -128,6 +139,8 @@ export const RETENTION = {
   notificationDays: 30,
   stagingHours: 1,
   mountHours: 24,
+  /** A file that was prepared for an action that was never accepted: longer than a browser keeps an unsent click. */
+  unattachedFileDays: 8,
 } as const
 
 /** How long a claimed click may sit with a connector before it goes back in the queue. */
@@ -284,7 +297,59 @@ export interface Click {
   nowVersion?: number
   /** The revision the page's state is at now, when that is another one: what they could see has since changed. */
   nowStateRevision?: number
+  /** The files the action carried beside its data, in the order they are numbered from 1. It lists only what It received whole. */
+  files?: AttachedFile[]
 }
+
+/** A file an action carried, as It knows it: the name the page gave it, its kind, and its size. */
+export interface AttachedFile {
+  name: string
+  type: string
+  bytes: number
+}
+
+/**
+ * What stands in an action's data where the page put a file: which of the action's files it is,
+ * counted from 1. The site writes it, in place of the bytes, which travel beside the action, and
+ * the action's list of its files says what each is. Its numbers are those that
+ * `it action <id> --save <file> --number <n>` takes.
+ */
+export interface FileMarker {
+  file: number
+}
+export const fileMarker = (n: number): FileMarker => ({ file: n })
+
+/**
+ * How a picture sent with an action is made smaller before it leaves the page: to so many pixels
+ * on its longer side, as a JPEG of this quality, which is about what a model reads a picture at.
+ * Only these kinds are made smaller. Any other file, and a picture sent with `{ original: true }`,
+ * goes as it is.
+ */
+export const SHRINK = {
+  side: 1600,
+  quality: 0.85,
+  /** A picture already this small, in bytes and in pixels, is sent as it is. */
+  smallBytes: 1024 * 1024,
+  types: ['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/avif', 'image/heic', 'image/heif'],
+} as const
+
+/** A file's name as It keeps it: the last part of a path, with nothing in it that is not to be printed, and not too long. */
+export function fileName(name: unknown): string {
+  const plain = String(typeof name === 'string' ? name : '')
+    .split(/[\\/]/)
+    .pop()!
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what is taken out
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, '')
+    .trim()
+  return [...plain].slice(0, LIMITS.actionFileName).join('') || 'file'
+}
+/** A file's kind as It keeps it: a media type in lower case, or what any bytes are where it is not one. */
+export const fileType = (type: unknown): string =>
+  typeof type === 'string' && /^[a-z0-9.+-]{1,64}\/[a-z0-9.+-]{1,64}$/i.test(type) ? type.toLowerCase() : 'application/octet-stream'
+
+/** A size as a person reads it. */
+const sized = (bytes: number): string =>
+  bytes < 1024 ? `${bytes} bytes` : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
 
 /** How much of a click's data is put in front of an agent before it is told where the rest is. */
 export const CLICK_TEXT_BYTES = 2000
@@ -418,7 +483,26 @@ export function describeClick(c: Click, max = CLICK_TEXT_BYTES): string {
       ? `, when its state was at revision ${c.stateRevision} (it is now at revision ${c.nowStateRevision})`
       : ''
   const stale = replaced + changed
-  return `[It] ${who}${stale}: ${c.name}${data} [action ${c.id}]`
+  return `[It] ${who}${stale}: ${c.name}${data}${attached(c, max)} [action ${c.id}]`
+}
+/**
+ * What is said of the files an action carried beside its data: how many, and where its text may
+ * hold what the page chose, each by its number, its name in quotation marks that nothing in the
+ * name can close, its kind and its size, with the command that writes one to a file. The list
+ * is It's own, of what it received whole, and not whatever the data says of files.
+ */
+function attached(c: Click, max: number): string {
+  const files = c.files ?? []
+  if (files.length === 0) return ''
+  const many = files.length > 1
+  const counted = many ? `${files.length} files` : 'a file'
+  if (max <= 0) return ` It carries ${counted} beside that (run \`it action ${c.id}\` to read what ${many ? 'they are' : 'it is'}).`
+  const each = (f: AttachedFile) => `${JSON.stringify(f.name)} (${f.type}, ${sized(f.bytes)})`
+  const listed = many ? files.map((f, i) => `${i + 1}. ${each(f)}`).join('; ') : each(files[0]!)
+  const save = many
+    ? `\`it action ${c.id} --save <file> --number <n>\` writes one of them to a file you can open`
+    : `\`it action ${c.id} --save <file>\` writes it to a file you can open`
+  return ` It carries ${counted} beside that: ${listed}. ${save}.`
 }
 /**
  * A click in a few words: which page, what was done, and the id by which the rest is read. It
@@ -452,7 +536,10 @@ export function briefClick(c: Click, typed = true): string {
     const altered = shown !== whole.trim() ? ` (not as typed: read it with \`it action ${c.id}\`)` : ''
     return `[It] ${named}, typed above it: ${shown}${altered} [action ${c.id}]`
   }
-  const details = full === '' || full === '{}' ? '' : ', with details'
+  const said = full !== '' && full !== '{}'
+  const files = c.files?.length ?? 0
+  const carried = files === 0 ? '' : files === 1 ? 'a file' : `${files} files`
+  const details = said && carried ? `, with details and ${carried}` : said ? ', with details' : carried ? `, with ${carried}` : ''
   const alone = c.attended === false ? ', sent by the page itself' : ''
   const since =
     (c.version !== undefined && c.nowVersion !== undefined && c.nowVersion !== c.version) ||

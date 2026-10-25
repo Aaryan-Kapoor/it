@@ -106,7 +106,15 @@ export const exportActions = query({
       .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
       .paginate({ cursor, numItems: 100 })
     return {
-      actions: batch.page.map((x) => ({ name: x.name, payload: x.payload, at: x.createdAt, delivery: x.delivery, outcome: x.outcome ?? null })),
+      actions: batch.page.map((x) => ({
+        name: x.name,
+        payload: x.payload,
+        at: x.createdAt,
+        delivery: x.delivery,
+        outcome: x.outcome ?? null,
+        // The files it carried, by their names and checksums: a record of them, and not the files
+        ...(x.files?.length ? { files: x.files.map((f) => ({ name: f.name, type: f.type, size: f.size, sha256: f.sha256 })) } : {}),
+      })),
       next: batch.isDone ? null : batch.continueCursor,
     }
   },

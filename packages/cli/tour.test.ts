@@ -235,14 +235,14 @@ describe('the guide', () => {
 
 describe('the whiteboard', () => {
   type Page = Awaited<ReturnType<typeof opened>>
-  /** A board 900 by 600, whose picture is the text given: the stand-in draws nothing, and has no picture of its own to give. */
-  const board = (picture: string | null) => (w: any) => {
+  /** A board 900 by 600, whose picture is the file given, or none: the stand-in draws nothing, and has no picture of its own to give. */
+  const board = (picture: 'a picture' | null) => (w: any) => {
     const ink = new Proxy({}, { get: () => () => {}, set: () => true })
     w.ResizeObserver = class {
       observe() {}
     }
     w.HTMLCanvasElement.prototype.getContext = () => ink
-    w.HTMLCanvasElement.prototype.toDataURL = () => picture
+    w.HTMLCanvasElement.prototype.toBlob = (made: (b: Blob | null) => void) => made(picture ? new w.Blob(['the picture'], { type: 'image/png' }) : null)
     w.Element.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, width: 900, height: 600 })
     w.Element.prototype.setPointerCapture = () => {}
   }
@@ -263,15 +263,23 @@ describe('the whiteboard', () => {
       )
   }
   const bytes = (data: unknown) => new TextEncoder().encode(JSON.stringify(data)).length
-  const PICTURE = `data:image/png;base64,${'A'.repeat(9000)}`
+  const PICTURE = 'a picture'
+  /** What was sent last, once the picture of the drawing has been made, which takes a moment. */
+  const lastSent = async (page: Page) => {
+    await new Promise((done) => setImmediate(done))
+    return page.sent.at(-1)
+  }
 
-  test('a drawing is sent small enough for an action to hold, with fewer points along its lines where it must be, and without its picture where that is not enough', async () => {
+  test('a drawing is sent with its picture as a file beside it, and its lines small enough for an action to hold, with fewer points along them where they must be', async () => {
     // A short drawing goes whole, with its picture
     const short = await opened('whiteboard', board(PICTURE))
     scribbled(short, 3, 20)
     short.$('#send').click()
-    expect(short.sent.at(-1)).toMatchObject({ name: 'snapshot', data: { png: PICTURE } })
-    expect(short.sent.at(-1)!.data.strokes.map((s: any) => s.points.length)).toEqual([20, 20, 20])
+    const first = await lastSent(short)
+    expect(first?.name).toBe('snapshot')
+    expect(first?.data.png).toBeInstanceOf(short.w.Blob)
+    expect(first?.data.png.type).toBe('image/png')
+    expect(first!.data.strokes.map((s: any) => s.points.length)).toEqual([20, 20, 20])
     short.close()
     // Many short lines, which is where most of what is sent is not points at all: each line keeps its two ends and loses what is between
     for (const [lines, points, picture] of [
@@ -283,10 +291,11 @@ describe('the whiteboard', () => {
       const page = await opened('whiteboard', board(picture))
       scribbled(page, lines, points)
       page.$('#send').click()
-      const { name, data } = page.sent.at(-1)!
+      const { name, data } = (await lastSent(page))!
       expect(name).toBe('snapshot')
       expect(bytes(data), `${lines} lines of ${points}`).toBeLessThanOrEqual(LIMITS.actionPayloadBytes)
       expect(data.strokes.length).toBe(lines)
+      expect(data.png === null).toBe(picture === null)
       for (const s of data.strokes) expect(s.points.length).toBeGreaterThanOrEqual(2)
       page.close()
     }
@@ -294,8 +303,9 @@ describe('the whiteboard', () => {
     const long = await opened('whiteboard', board(null))
     scribbled(long, 1, 4000)
     long.$('#send').click()
-    const [line] = long.sent.at(-1)!.data.strokes
-    expect(bytes(long.sent.at(-1)!.data)).toBeLessThanOrEqual(LIMITS.actionPayloadBytes)
+    const thinned = (await lastSent(long))!
+    const [line] = thinned.data.strokes
+    expect(bytes(thinned.data)).toBeLessThanOrEqual(LIMITS.actionPayloadBytes)
     expect(line.points.length).toBeGreaterThan(1000)
     expect([line.points[0], line.points.at(-1)]).toEqual([
       [0, 0],
@@ -304,29 +314,30 @@ describe('the whiteboard', () => {
     long.close()
   })
 
-  test('a drawing of more lines than an action holds goes as its picture alone, and where that does not fit either the person is told what to do, and not to send the same again', async () => {
+  test('a drawing of more lines than an action holds goes as its picture alone, and where there is no picture the person is told what to do, and not to send the same again', async () => {
     const page = await opened('whiteboard', board(PICTURE))
     scribbled(page, 600, 1)
     page.$('#send').click()
-    expect(page.sent.at(-1)).toMatchObject({ name: 'snapshot', data: { png: PICTURE, strokes: [] } })
+    const alone = (await lastSent(page))!
+    expect([alone.name, alone.data.strokes, alone.data.png.type]).toEqual(['snapshot', [], 'image/png'])
     page.close()
-    // No picture to be had, or one that is too large by itself: nothing is sent, since it would only be refused
-    for (const picture of [null, `data:image/png;base64,${'A'.repeat(40_000)}`]) {
-      const stuck = await opened('whiteboard', board(picture))
-      scribbled(stuck, 600, 1)
-      stuck.$('#send').click()
-      expect(stuck.sent).toEqual([])
-      expect(stuck.$('#t-you b').textContent).toBe('That is too many lines to send at once. Undo some, or clear the board, and send it again.')
-      // Sending is theirs again once the drawing is another
-      expect(stuck.$('#send').disabled).toBe(true)
-      for (let i = 0; i < 300; i++) stuck.$('#undo').click()
-      expect(stuck.$('#send').disabled).toBe(false)
-      stuck.$('#send').click()
-      expect(stuck.sent.at(-1)).toMatchObject({ name: 'snapshot', data: { png: null } })
-      expect(stuck.sent.at(-1)!.data.strokes.length).toBe(300)
-      expect(bytes(stuck.sent.at(-1)!.data)).toBeLessThanOrEqual(LIMITS.actionPayloadBytes)
-      stuck.close()
-    }
+    // No picture to be had: nothing is sent, since it would only be refused
+    const stuck = await opened('whiteboard', board(null))
+    scribbled(stuck, 600, 1)
+    stuck.$('#send').click()
+    await lastSent(stuck)
+    expect(stuck.sent).toEqual([])
+    expect(stuck.$('#t-you b').textContent).toBe('That is too many lines to send at once. Undo some, or clear the board, and send it again.')
+    // Sending is theirs again once the drawing is another
+    expect(stuck.$('#send').disabled).toBe(true)
+    for (let i = 0; i < 300; i++) stuck.$('#undo').click()
+    expect(stuck.$('#send').disabled).toBe(false)
+    stuck.$('#send').click()
+    const fewer = (await lastSent(stuck))!
+    expect(fewer).toMatchObject({ name: 'snapshot', data: { png: null } })
+    expect(fewer.data.strokes.length).toBe(300)
+    expect(bytes(fewer.data)).toBeLessThanOrEqual(LIMITS.actionPayloadBytes)
+    stuck.close()
   })
 })
 

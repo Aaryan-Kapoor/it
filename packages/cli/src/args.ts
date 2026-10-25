@@ -43,6 +43,7 @@ export const VALUED = new Set([
   'step',
   'param',
   'save',
+  'number',
 ])
 export interface Args {
   _: string[]
@@ -66,7 +67,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   displays: [],
   wait: ['id', 'follow', 'timeout'],
   actions: ['id'],
-  action: ['save'],
+  action: ['save', 'number'],
   ack: ['failed'],
   setup: ['all', 'only', 'none', 'name', 'no-service', 'yes'],
   login: ['url', 'code', 'name', 'no-setup', 'all', 'only', 'none', 'no-service', 'yes'],

@@ -6,7 +6,8 @@ const page = readFileSync(new URL('./pages/whiteboard.html', import.meta.url), '
 const start = page.indexOf('    function snapshot(')
 const end = page.indexOf('    sendBtn.addEventListener', start)
 const fitting = page.slice(start, end)
-const PICTURE = `data:image/png;base64,${'A'.repeat(9000)}`
+/** What stands for the picture: it goes beside the action as a file, and is nothing in what the action carries as text. */
+const PICTURE = { file: 'the picture' }
 const stroke = (points: number) => ({
   width: 5,
   erase: false,
@@ -15,11 +16,11 @@ const stroke = (points: number) => ({
 })
 
 /** The page's fitting functions, with each measured candidate counted rather than timed. */
-function fitted(mine: ReturnType<typeof stroke>[], picture: string | null, limit: number) {
+function fitted(mine: ReturnType<typeof stroke>[], picture: object | null, limit: number) {
   let measured = 0
-  const data = runInNewContext(`${fitting}\nfitted()`, {
+  const data = runInNewContext(`${fitting}\nfitted(png)`, {
     mine,
-    picture: () => picture,
+    png: picture,
     TextEncoder: class extends TextEncoder {
       override encode(value: string) {
         measured++
@@ -32,26 +33,26 @@ function fitted(mine: ReturnType<typeof stroke>[], picture: string | null, limit
 }
 
 describe('the whiteboard fitting', () => {
-  test('many dots and a long line go as their picture without searching drawings whose ends cannot fit', () => {
+  test('many dots and a long line go as their picture alone, without searching drawings whose ends cannot fit', () => {
     const mine = [...Array.from({ length: 600 }, () => stroke(1)), stroke(8000)]
-    const { data, measured } = fitted(mine, PICTURE, 2)
+    const { data, measured } = fitted(mine, PICTURE, 1)
     expect(data).toEqual({ png: PICTURE, strokes: [] })
-    expect(measured).toBe(2)
-    expect(new TextEncoder().encode(JSON.stringify(data)).length).toBeLessThanOrEqual(30000)
+    expect(measured).toBe(1)
   })
 
-  test('a drawing whose ends and picture cannot fit stops after measuring those two choices', () => {
+  test('a drawing whose ends cannot fit, with no picture to be had, stops after measuring them once', () => {
     const mine = [...Array.from({ length: 600 }, () => stroke(1)), stroke(8000)]
-    const { data, measured } = fitted(mine, `data:image/png;base64,${'A'.repeat(40_000)}`, 2)
+    const { data, measured } = fitted(mine, null, 1)
     expect(data).toBeNull()
-    expect(measured).toBe(2)
+    expect(measured).toBe(1)
   })
 
-  test('a long line beside many dots is fitted with a bounded number of measured drawings and retains both ends', () => {
+  test('a long line beside many dots goes beside the picture, fitted with a bounded number of measured drawings, and retains both ends', () => {
     const line = stroke(8000)
     const mine = [...Array.from({ length: 480 }, () => stroke(1)), line]
-    const { data, measured } = fitted(mine, PICTURE, 2 * (Math.ceil(Math.log2(line.points.length)) + 2))
+    const { data, measured } = fitted(mine, PICTURE, Math.ceil(Math.log2(line.points.length)) + 2)
     expect(measured).toBeGreaterThan(1)
+    expect(data.png).toEqual(PICTURE)
     expect(new TextEncoder().encode(JSON.stringify(data)).length).toBeLessThanOrEqual(30000)
     expect(data.strokes).toHaveLength(mine.length)
     const points = data.strokes.at(-1).points

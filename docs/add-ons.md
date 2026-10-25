@@ -93,7 +93,7 @@ Codex runs an agent's commands in a sandbox, and as it comes that sandbox reache
 prefix_rule(pattern=["it"], decision="allow")
 ```
 
-Every `it` command then runs without Codex asking, and the sandbox is as it was for everything else: another command is still kept from the network and from writing outside its folder. `it setup` and `it status` tell you of this rule when neither it nor a sandbox with the network is there, and the answer a sandboxed agent gets carries it for the agent to pass on. What the rule means is that `it` runs unconfined, so an agent can do through `it` what `it` can do: publish a file it names as a page, and save a picture that a page sent into a file it names.
+Every `it` command then runs without Codex asking, and the sandbox is as it was for everything else: another command is still kept from the network and from writing outside its folder. `it setup` and `it status` tell you of this rule when neither it nor a sandbox with the network is there, and the answer a sandboxed agent gets carries it for the agent to pass on. What the rule means is that `it` runs unconfined, so an agent can do through `it` what `it` can do: publish a file it names as a page, and save a file that a page sent into a file it names.
 
 **Approve `it` each time.** In a git folder Codex asks before it runs each `it` command outside the sandbox. Its "don't ask again" covers the command with the words that follow it, an action's id among them, so it asks again for the next. In a folder that is not a git repository, Codex as it comes refuses the asking itself: nothing can be approved until you choose "Ask for approval" under `/permissions` in that conversation.
 

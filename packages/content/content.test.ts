@@ -170,7 +170,8 @@ const show = async (p: string, init: Init = {}) => {
 async function door(p: string, init: Init = {}): Promise<Reply> {
   const asked: Asked = { port: BASE, address: init.address ?? '127.0.0.1' }
   const service = init.on ?? content
-  return reply(await (p.startsWith('/control/') ? service.control : service.upload)(request(BASE, p, init), asked))
+  const part = p.startsWith('/control/') ? service.control : p.startsWith('/download/') ? service.download : service.upload
+  return reply(await part(request(BASE, p, init), asked))
 }
 const newMount = () => randomBytes(16).toString('hex')
 
@@ -1724,6 +1725,175 @@ describe('a version that was deleted', () => {
     expect((await control('stage', body)).status).toBe(409)
     expect((await control('stage', body, message)).status).toBe(401)
     expect((await upload('index.html', 'x', { prefix, grant })).status).toBe(401)
+  })
+})
+
+describe('files sent with actions', () => {
+  ownService(false)
+  const PHOTO = Buffer.from(Array.from({ length: 300_000 }, (_, i) => (i * 7) % 256))
+  const NOTES = Buffer.from('a,b\n1,2\n')
+  const filePrefix = (id: string, page = 'page1') => `u/${USER}/${page}/f${id}/`
+  const readGrant = (prefix: string, opts: Parameters<typeof sign>[3] = {}) => sign('it-download', prefix, { p: prefix }, opts)
+  const download = async (prefix: string, over: { grant?: string | null; name?: string } = {}) =>
+    door(`/download/${over.name ?? '1'}`, {
+      headers: over.grant === null ? {} : { authorization: `Bearer ${over.grant ?? (await readGrant(prefix))}` },
+    })
+
+  test('are declared by their numbers in order, and held to what one action may carry', async () => {
+    const prefix = filePrefix('declared')
+    const big = (size: number, path: string) => ({ path, size, sha256: sha256('x') })
+    expect((await stage(prefix, [entry('photo.jpg', PHOTO)])).status).toBe(400)
+    expect((await stage(prefix, [entry('2', PHOTO)])).status).toBe(400)
+    expect((await stage(prefix, [entry('1', PHOTO), entry('3', NOTES)])).status).toBe(400)
+    expect((await stage(prefix, [big(25 * 1024 * 1024 + 1, '1')])).status).toBe(400)
+    expect((await stage(prefix, [big(25 * 1024 * 1024, '1'), big(25 * 1024 * 1024, '2'), big(1, '3')])).status).toBe(400)
+    expect(
+      (
+        await stage(
+          prefix,
+          Array.from({ length: 11 }, (_, i) => big(1, String(i + 1))),
+        )
+      ).status,
+    ).toBe(400)
+    // A prefix that names no file, or names one with something more after it, is no place for one
+    expect((await stage(`u/${USER}/page1/f/`, [entry('1', PHOTO)])).status).toBe(400)
+    expect((await stage(`u/${USER}/page1/fx/y/`, [entry('1', PHOTO)])).status).toBe(400)
+    expect((await stage(prefix, [entry('1', PHOTO), entry('2', NOTES)])).status).toBe(200)
+  })
+
+  test('are uploaded under their grant, checked as they arrive, and read back whole by a machine with a grant to read them', async () => {
+    const prefix = filePrefix('read')
+    const files = [entry('1', PHOTO), entry('2', NOTES)]
+    await stage(prefix, files)
+    expect((await upload('1', PHOTO.subarray(1), { prefix, sha: sha256(PHOTO) })).status).toBe(400)
+    expect((await upload('1', PHOTO, { prefix })).status).toBe(200)
+    expect((await control('verify', { prefix, files })).json()).toEqual({ ok: false, missing: ['2'] })
+    expect((await upload('2', NOTES, { prefix })).status).toBe(200)
+    expect((await control('verify', { prefix, files })).json()).toEqual({ ok: true, missing: [] })
+    const got = await download(prefix)
+    expect(got.status).toBe(200)
+    expect(sha256(got.buf)).toBe(sha256(PHOTO))
+    expect((await download(prefix, { name: '2' })).text).toBe(NOTES.toString())
+    // Bytes to be saved, never something to be shown on the site's port
+    expect(got.headers.get('content-type')).toBe('application/octet-stream')
+    expect(got.headers.get('content-disposition')).toBe('attachment')
+    expect(got.headers.get('content-length')).toBe(String(PHOTO.length))
+    expect(got.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox; frame-ancestors 'none'")
+    expect([got.headers.get('x-content-type-options'), got.headers.get('cache-control'), got.headers.has('set-cookie')]).toEqual(['nosniff', 'no-store', false])
+    // A number that was not declared is not there
+    expect((await download(prefix, { name: '3' })).status).toBe(404)
+  })
+
+  test('are read only with a grant for reading those very files, signed by the backend', async () => {
+    const prefix = filePrefix('guarded')
+    await seedFiles(prefix, { '1': PHOTO })
+    const other = filePrefix('someone-else')
+    const refusals = {
+      none: (await download(prefix, { grant: null })).status,
+      nonsense: (await download(prefix, { grant: 'nonsense' })).status,
+      toUpload: (await download(prefix, { grant: await grantFor(prefix) })).status,
+      ofAStranger: (await download(prefix, { grant: await readGrant(prefix, { key: stranger.privateKey }) })).status,
+      forAVersion: (await download(prefix, { grant: await sign('it-download', PREFIX, { p: PREFIX }) })).status,
+      saidOfAnother: (await download(prefix, { grant: await sign('it-download', other, { p: prefix }) })).status,
+      expired: (await download(prefix, { grant: await readGrant(prefix, { iat: now() - 120, seconds: 60 }) })).status,
+      underAnotherName: (await download(prefix, { name: 'index.html' })).status,
+      outOfTheFolder: (await download(prefix, { name: '..%2F1' })).status,
+    }
+    expect(refusals).toEqual({
+      none: 401,
+      nonsense: 401,
+      toUpload: 401,
+      ofAStranger: 401,
+      forAVersion: 401,
+      saidOfAnother: 401,
+      expired: 401,
+      underAnotherName: 401,
+      outOfTheFolder: 401,
+    })
+    // Not by any other method, and not on the pages' port, where a page could ask for it
+    expect((await door('/download/1', { method: 'POST', headers: { authorization: `Bearer ${await readGrant(prefix)}` }, body: '{}' })).status).toBe(404)
+    expect((await show('/download/1', { headers: { authorization: `Bearer ${await readGrant(prefix)}` } })).status).toBe(404)
+    // A file that was declared and never arrived is not there to read
+    const empty = filePrefix('never-arrived')
+    await stage(empty, [entry('1', PHOTO)])
+    expect((await download(empty)).status).toBe(404)
+    // And nothing of a grant or a file's name is written down: where it was going, and why it was refused
+    const said = lines.slice(began).join('\n')
+    expect(said).toContain('"event":"download.refused"')
+    expect(said).not.toContain('nonsense')
+  })
+
+  test('arriving whole after their grant ran out, are not kept, and are answered so that a fresh grant is asked for, which takes them', async () => {
+    const prefix = filePrefix('slow-line')
+    await stage(prefix, [entry('1', PHOTO)])
+    let send!: ReadableStreamDefaultController<Uint8Array>
+    let reading!: () => void
+    const reached = new Promise<void>((resolve) => {
+      reading = resolve
+    })
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          send = controller
+        },
+        pull() {
+          reading()
+        },
+      },
+      { highWaterMark: 0 },
+    )
+    clock.start()
+    const request = new Request(`${SITE}/upload/1`, {
+      method: 'PUT',
+      headers: {
+        authorization: `Bearer ${await sign('it-upload', prefix, { p: prefix }, { seconds: 60 })}`,
+        'content-length': String(PHOTO.length),
+        'x-it-sha256': sha256(PHOTO),
+      },
+      body: stream,
+      duplex: 'half',
+    } as RequestInit)
+    const uploading = content.upload(request, { port: BASE, address: '127.0.0.1' })
+    await reached
+    // The line is slow: the grant runs out while the bytes are on their way
+    clock.pass(120)
+    send.enqueue(PHOTO)
+    send.close()
+    expect((await uploading).status).toBe(401)
+    expect((await control('verify', { prefix, files: [entry('1', PHOTO)] })).json()).toEqual({ ok: false, missing: ['1'] })
+    expect(wrote((e) => e.event === 'upload.refused' && e.reason === 'grant_expired_meanwhile')).toBeTruthy()
+    // A fresh grant takes the same bytes
+    expect((await upload('1', PHOTO, { prefix })).status).toBe(200)
+    expect((await control('verify', { prefix, files: [entry('1', PHOTO)] })).json()).toEqual({ ok: true, missing: [] })
+  })
+
+  test('are gone once their action is deleted: they read as not there, and their grant to upload puts nothing back', async () => {
+    const prefix = filePrefix('deleted')
+    await seedFiles(prefix, { '1': PHOTO })
+    const grant = await grantFor(prefix)
+    expect((await control('delete', { prefix })).json()).toEqual({ removed: 2, more: false })
+    expect((await download(prefix)).status).toBe(404)
+    expect((await upload('1', PHOTO, { prefix, grant })).status).toBe(403)
+    expect((await control('stage', { prefix, files: [entry('1', PHOTO)] })).status).toBe(409)
+  })
+
+  test('go with their page, and with everything of their person’s, beside the page’s versions', async () => {
+    const onPage = filePrefix('with-page', 'goes')
+    const version = `u/${USER}/goes/1/`
+    await seedFiles(onPage, { '1': PHOTO })
+    await seedFiles(version, { 'index.html': INDEX })
+    expect((await control('delete', { prefix: `u/${USER}/goes/` })).json().more).toBe(false)
+    expect((await download(onPage)).status).toBe(404)
+    const kept = filePrefix('kept', 'stays')
+    await seedFiles(kept, { '1': PHOTO })
+    expect((await download(kept)).status).toBe(200)
+    const person = 'user-erased'
+    const theirs = `u/${person}/page1/fphoto/`
+    await seedFiles(theirs, { '1': PHOTO })
+    expect((await control('delete', { prefix: `u/${person}/` })).json().more).toBe(false)
+    expect((await download(theirs)).status).toBe(404)
+    // What was kept for another page, of the person whose files these tests read, is still there
+    expect((await download(kept)).status).toBe(200)
   })
 })
 

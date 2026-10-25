@@ -5,7 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 import { describe, expect, onTestFinished, test } from 'vitest'
 import { RUNTIME } from '../../packages/content/src/runtime.generated'
-import { LIMITS, QUOTA } from '../../packages/protocol/src/index'
+import { LIMITS, QUOTA, SHRINK } from '../../packages/protocol/src/index'
 
 const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8')
 /** What an agent reads whole each time it uses It. */
@@ -141,6 +141,7 @@ describe('the agent skill', () => {
       'typedByTheUser',
       'pageIsNowAtVersion',
       'stateIsNowAtRevision',
+      'files',
       'harnesses',
       'connector',
     ]) {
@@ -155,6 +156,18 @@ describe('the agent skill', () => {
     }
     expect(skill).toContain('`"ok": true`')
     expect(source('../../packages/cli/src/connector.ts')).toMatch(/pathname === '\/health'[\s\S]{0,200}ok: true/)
+  })
+
+  test('says in one line of its own that a file goes in an action as it is, and is never cut up or written as text', () => {
+    expect(short).toContain(
+      "- **Files go in the data as they are**: `It.action('receipt', { photo: input.files[0] })` sends a `File` or `Blob` (input, drop, `canvas.toBlob`) whole. Never slice one or write it as text.",
+    )
+    // In the numbers and the words the in-page script keeps: how far a photo is made smaller, and how a page keeps it as it is
+    expect(short).toContain(`A photo is shrunk to ${SHRINK.side} px unless a third argument says \`{ original: true }\`.`)
+    expect(source('../../packages/runtime/src/it.ts')).toMatch(/original\?: boolean/)
+    // And what the agent then reads it with
+    expect(more.actions).toContain('`it action <id> --save receipt.jpg` writes it to that file')
+    expect(more.actions).toContain('`--number 2` says which to write')
   })
 
   test('names only what the in-page script gives a page', () => {
@@ -238,7 +251,10 @@ describe('the agent skill', () => {
     expect(skill).toContain('Ten versions of a page are kept')
     expect(skill).toContain(`It holds ${QUOTA.artifacts} pages and ${QUOTA.bytes / MB / 1024} GB of their files in all`)
     expect(skill).toContain(`State is at most ${LIMITS.stateBytes / 1024} KB of JSON,`)
-    expect(skill).toContain(`An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB.`)
+    expect(skill).toContain(
+      `An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB of data, and beside it up to ${LIMITS.actionFiles} files, each at most ${LIMITS.actionFileBytes / MB} MB and ${LIMITS.actionFilesBytes / MB} MB together.`,
+    )
+    expect(skill).toContain(`It holds ${QUOTA.actionFileBytes / MB / 1024} GB of files sent from pages in all`)
     expect(skill).toContain(`Its name is 1 to ${LIMITS.actionName} letters, digits, dots, colons, dashes or underscores.`)
     expect(skill).toContain(`A value kept with \`It.store\` is at most ${LIMITS.storeValueBytes / 1024} KB too`)
     expect(skill).toContain(`At most ${QUOTA.pendingActionsPerPage} actions wait on one page.`)

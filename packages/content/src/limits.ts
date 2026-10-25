@@ -56,5 +56,7 @@ export const createLimits = () => ({
   UPLOADS: limit(1500),
   /** Uploads, by person, however many versions they are uploading at once. */
   UPLOADS_PERSON: limit(6000),
+  /** Files sent with actions that the person's machines read, by person. */
+  DOWNLOADS_PERSON: limit(600),
 })
 export type Limits = ReturnType<typeof createLimits>

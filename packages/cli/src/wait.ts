@@ -23,6 +23,8 @@ export interface Listed {
   stateRevision?: number
   nowVersion?: number
   nowStateRevision?: number
+  /** The files it carried beside its data. */
+  files?: { name: string; type: string; bytes: number }[]
 }
 /** A click as this program prints it for an agent. */
 export const printed = (c: Listed) => ({
@@ -49,6 +51,13 @@ export const printed = (c: Listed) => ({
   // Said only when what they acted on has been replaced since, which an agent must know before it acts on it
   ...(c.nowVersion === undefined ? {} : { pageIsNowAtVersion: c.nowVersion }),
   ...(c.nowStateRevision === undefined ? {} : { stateIsNowAtRevision: c.nowStateRevision }),
+  // The files it carried beside its data, by the numbers its data names them by, and how to write one to a file
+  ...(c.files?.length
+    ? {
+        files: c.files.map((f, i) => ({ number: i + 1, ...f })),
+        saveWith: `it action ${c.id} --save <file>${c.files.length > 1 ? ' --number <n>' : ''}`,
+      }
+    : {}),
 })
 /** Writes a line and resolves once it has really left this process. */
 const emit = async (value: unknown) => {

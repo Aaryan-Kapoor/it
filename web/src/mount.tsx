@@ -9,9 +9,10 @@
 // Whatever is in the frame is generated HTML, in a sandbox: its origin is its own, and it has
 // no cookies and no storage. So a message is known to be from the page by the window it came
 // from, and by nothing else. Nothing a page says is believed beyond "this page wants to submit
-// this action for itself", and how much it may ask of the site is bounded here, before
-// anything reaches the backend.
-import { contentPort, FAULT, isStoreKey, LIMITS, MESSAGE, type PageToSite, parseJson, SANDBOX, type SiteToPage } from '@it/protocol'
+// this action for itself, with these files", and how much it may ask of the site is bounded
+// here, before anything reaches the backend. The site never opens a file a page sent: it keeps
+// and sends its bytes as they are.
+import { contentPort, FAULT, fileMarker, isStoreKey, LIMITS, MESSAGE, type PageToSite, parseJson, SANDBOX, type SiteToPage } from '@it/protocol'
 import { useConvex, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
@@ -48,8 +49,13 @@ const READY_MS = 20_000
  */
 const pages = () => `${location.protocol}//${location.hostname}:${contentPort(Number(location.port) || (location.protocol === 'https:' ? 443 : 80))}`
 
-/** JSON text and nothing else: what crosses from a page is copied, so it cannot carry anything live. */
-function jsonText(value: unknown, max: number): string {
+/**
+ * JSON text and nothing else: what crosses from a page is copied, so it cannot carry anything
+ * live. Where `files` is given, a file the page put in it (a `File` or a `Blob`, which the
+ * channel copies as the file it is) is taken out, put in `files`, and stands in the text as
+ * which of them it is, counted from 1. The same file put in twice is one file.
+ */
+export function jsonText(value: unknown, max: number, files?: Blob[]): string {
   // Looked over before it is written out, within a fixed amount of work. What a page sends can
   // be a small thing that names the same piece many times over, level upon level, and writing
   // that out in full would take all the memory the site has.
@@ -57,6 +63,10 @@ function jsonText(value: unknown, max: number): string {
   let letters = 0
   const look = (v: unknown, depth: number): void => {
     if (--looks < 0 || depth > 40) throw new Error('That is too large to send.')
+    if (v instanceof Blob) {
+      if (!files) throw new Error('A file cannot be kept with It.store. Send it with It.action, which takes files beside what it carries.')
+      return
+    }
     if (typeof v === 'string') letters += v.length
     else if (Array.isArray(v)) {
       // Its length is counted before anything is done with it: a list can be mostly holes
@@ -77,7 +87,17 @@ function jsonText(value: unknown, max: number): string {
     if (letters > max) throw new Error('That is too large to send.')
   }
   look(value, 0)
-  const text = JSON.stringify(value === undefined ? null : value)
+  const numbered = new Map<Blob, number>()
+  const text = JSON.stringify(
+    value === undefined ? null : value,
+    files
+      ? (_key, v: unknown) => {
+          if (!(v instanceof Blob)) return v
+          if (!numbered.has(v)) numbered.set(v, files.push(v))
+          return fileMarker(numbered.get(v)!)
+        }
+      : undefined,
+  )
   if (typeof text !== 'string') throw new Error('That cannot be sent.')
   return text
 }
@@ -283,11 +303,13 @@ export function Mount({
           // Said by the site, not the page: whether the person was at this page when it sent this.
           // A page can send actions with nobody touching it, and its agent should know which is which.
           const was = attended()
+          // The files it carries go beside it, and are said in what it carries by their numbers
+          const files: Blob[] = []
           const envelope: Sent = {
             v: 1,
             clientActionId: typeof e.clientActionId === 'string' ? e.clientActionId : '',
             name: typeof e.name === 'string' ? e.name : '',
-            payload: jsonText(e.payload, LIMITS.actionPayloadBytes),
+            payload: jsonText(e.payload, LIMITS.actionPayloadBytes, files),
             // The version this showing is of, as the site knows it: a showing is of one version,
             // so that is what the person was looking at, whatever the page says
             contentVersion: mount.version,
@@ -295,7 +317,7 @@ export function Mount({
             attended: was === true,
           }
           // The document that sent it is still there only while its own channel is the one in use
-          const done = await submit(convex, user, artifactId, envelope, () => live && port.current === from, typeof was === 'function' ? was : undefined)
+          const done = await submit(convex, user, artifactId, envelope, () => live && port.current === from, typeof was === 'function' ? was : undefined, files)
           toPage(from, { type: 'it:result', requestId, ok: true, actionId: done.actionId })
         } else {
           // The same rule the backend keeps, kept here so that nothing long is sent only to be refused
