@@ -4517,6 +4517,32 @@ describe('notifications', () => {
     expect(await kept()).toEqual([['to every display', 'every display']])
   })
 
+  test('with no display named and every display locked to a page, a notification is refused and none of the locked displays has it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const phoneKey = 'alice-phone-key-0001'
+    const phone = await paired(t, 'alice', 'screen', phoneKey, 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/605')
+    await phone.browser.mutation(api.displays.rename, { displayId: phone.display.id, name: 'Phone' })
+    await alice.browser.mutation(api.push.subscribe, { key: phoneKey, endpoint: PUSH('phone'), p256dh: 'p', auth: 'a' })
+    const p = await publish(m, 'calendar')
+    for (const d of [alice.display.id, phone.display.id]) await alice.browser.mutation(api.displays.lock, { displayId: d, artifactId: p.artifactId })
+    const refused = await m.as.mutation(api.notifications.send, { text: 'to nobody' }).then(
+      () => null,
+      (e) => (e instanceof ConvexError ? JSON.parse(typeof e.data === 'string' ? e.data : JSON.stringify(e.data)) : String(e)),
+    )
+    expect(refused).toMatchObject({ code: 'forbidden', notSent: 'nowhere' })
+    expect(await t.run((ctx) => ctx.db.query('notifications').collect())).toEqual([])
+    expect([
+      await alice.browser.query(api.notifications.list, { key: displayKey('alice') }),
+      await phone.browser.query(api.notifications.list, { key: phoneKey }),
+    ]).toEqual([[], []])
+    // A notification is no page: named, or sent to every display in so many words, it still reaches a locked display
+    expect(await m.as.mutation(api.notifications.send, { text: 'to the phone', display: 'phone' })).toMatchObject({ displays: ['Phone'] })
+    expect(await m.as.mutation(api.notifications.send, { text: 'to every display', display: 'all' })).toMatchObject({ displays: ['Chrome on Linux', 'Phone'] })
+    expect((await phone.browser.query(api.notifications.list, { key: phoneKey })).map((n) => n.text).sort()).toEqual(['to every display', 'to the phone'])
+  })
+
   test('with no display open, a notification goes first to one that takes notifications, which is how it reaches a closed one', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

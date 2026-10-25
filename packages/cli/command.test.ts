@@ -3776,8 +3776,9 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
 
   test('`it notify` with no display named, where none can take it, is refused with each display and why, and with nothing paired says how to pair one', async () => {
     const m = machine(true, true)
-    let displays: { name: string; paired: boolean; agents: boolean }[] = [
+    let displays: { name: string; paired: boolean; agents: boolean; lockedTo?: { id: string; slug: string; title: string } }[] = [
       { name: 'TV', paired: true, agents: false },
+      { name: 'Hall', paired: true, agents: true, lockedTo: { id: 'a1', slug: 'calendar', title: 'Calendar' } },
       { name: 'Wall', paired: false, agents: true },
     ]
     const b = await backend(m, (asked) =>
@@ -3795,7 +3796,7 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
         {
           code: 'nowhere',
           message: 'No display can take it now, so nothing was sent.',
-          hint: '"TV" is closed to agents and "Wall" is not paired any more. With --on all it is kept for every display, which has it once it can take it.',
+          hint: '"TV" is closed to agents, "Hall" is locked to a page and "Wall" is not paired any more. With --on all it is kept for every display, which has it once it can take it.',
         },
       ])
       displays = []
