@@ -39,6 +39,13 @@ const LOOKED_INTO = 24
  * read, so that one search after another reaches them all.
  */
 const SEARCH_READS = 4 * LOOKED_INTO
+/**
+ * How many thread ids the searches of every conversation may hold together. A large workspace
+ * has many hundreds of threads. A search part way through one of a thousand holds about a
+ * thousand ids between its searches, and up to about three times as many while one is under
+ * way, so this leaves room for several such searches at once.
+ */
+export const T3_HELD_MOST = 20_000
 /** One pass includes issuing a session, listing threads and reading their details. */
 const DISCOVERY_MS = 5_000
 
@@ -245,6 +252,11 @@ export function t3Search(): T3Search {
   return { pending: [], read: 0, attempted: new Set(), cleared: new Map(), unread: new Map() }
 }
 
+/** How many thread ids a search holds, in everything it keeps. */
+export function t3Held(search: T3Search): number {
+  return (search.listed?.size ?? 0) + search.pending.length + search.attempted.size + search.cleared.size + search.unread.size
+}
+
 export type T3ThreadResult = { status: 'found'; thread: string } | { status: 'absent' | 'limited' } | { status: 'incomplete'; progressed: boolean }
 
 /**
@@ -271,7 +283,6 @@ export async function t3ThreadOf(
     search.cleared.clear()
     search.unread.clear()
   }
-  if (search.read >= SEARCH_READS) search.listed = undefined
   if (!search.listed) {
     const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell', signal)
     if (!shell || !Array.isArray(shell.threads)) return { status: 'incomplete', progressed: false }
@@ -312,7 +323,13 @@ export async function t3ThreadOf(
     }
   }
   if (!search.pending.length) return { status: 'absent' }
-  if (search.read >= SEARCH_READS) return { status: 'limited' }
+  if (search.read >= SEARCH_READS) {
+    // Until the next search lists the threads again, it holds only what was read
+    search.listed = undefined
+    search.pending = []
+    search.attempted.clear()
+    return { status: 'limited' }
+  }
   return { status: 'incomplete', progressed }
 }
 

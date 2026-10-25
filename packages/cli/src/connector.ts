@@ -52,7 +52,7 @@ import { conversationFolder, conversationProfile, noteConversation } from './pub
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { type T3, type T3Search, t3Search, t3Send, t3Server, t3ThreadOf } from './t3'
+import { type T3, T3_HELD_MOST, type T3Search, t3Held, t3Search, t3Send, t3Server, t3ThreadOf } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -572,6 +572,27 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   const T3_ASKED_MS = 5_000
   /**
+   * Keeps the thread ids that the searches of every conversation hold together to
+   * `T3_HELD_MOST`, by dropping first the searches that went on longest ago. The search that
+   * has just gone on is not dropped, since it needs what it holds to go on. A search that is
+   * dropped decides nothing: the next time its conversation is asked for, a search begins again
+   * from nothing. A click already waiting for it waits no longer for that.
+   */
+  function t3Bound(going: string): void {
+    let held = 0
+    for (const search of t3Searches.values()) held += t3Held(search)
+    for (const [key, search] of t3Searches) {
+      if (held <= T3_HELD_MOST) return
+      if (key === going) continue
+      held -= t3Held(search)
+      t3Searches.delete(key)
+      if (t3Known.get(key) === 'asking') t3Known.delete(key)
+      t3Pending.delete(key)
+      t3Retries.delete(key)
+      if (steady() - (t3Asked.get(key) ?? 0) >= T3_ASKED_MS) t3Asked.delete(key)
+    }
+  }
+  /**
    * The thread of T3 Code that a conversation is held in, with the server to send to:
    * `asking` while that is being found out, and nothing where it is in none, where T3 Code
    * is not running here, where it has just failed to take something for it, and where it has
@@ -640,6 +661,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
           const thread = result.status === 'found' ? result.thread : null
           t3Known.set(key, { thread, at: Date.now() })
           if (thread) say(`${a(session.harness)} conversation (${short(session.id)}) is held in a thread of T3 Code`)
+        }
+        if (result.status === 'incomplete' || result.status === 'limited') {
+          // The search that went on last is the last to be dropped
+          t3Searches.delete(key)
+          t3Searches.set(key, search)
+          t3Bound(key)
         }
         soon(again)
       })

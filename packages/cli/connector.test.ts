@@ -46,7 +46,12 @@ const stand = vi.hoisted(() => ({
     running: false,
     threads: new Map<string, string>(),
     slow: false,
-    asked: [] as { ids: string[]; answer: (thread: string | null | undefined | Error | { status: 'limited' }, progressed?: boolean) => void }[],
+    asked: [] as {
+      ids: string[]
+      answer: (thread: string | null | undefined | Error | { status: 'limited' }, progressed?: boolean) => void
+      /** The search it was asked as part of, with how many thread ids the test says it holds. */
+      search: { held?: number }
+    }[],
     sent: [] as { thread: string; text: string }[],
     /** What T3 Code says where it will not take a message, and what it refused. */
     refusing: null as string | null,
@@ -55,13 +60,15 @@ const stand = vi.hoisted(() => ({
 }))
 // T3 Code is asked over its own server and its own command (t3.test.ts tries what is read from
 // them). Here it is a stand-in, so that the way a click goes can be tried with T3 Code running.
-vi.mock('./src/t3', () => ({
+vi.mock('./src/t3', async (original) => ({
+  T3_HELD_MOST: (await original<typeof import('./src/t3')>()).T3_HELD_MOST,
   t3Server: () => (stand.t3.running ? { origin: 'http://127.0.0.1:1', home: '/no-t3-code', program: 't3' } : undefined),
   t3Search: () => ({}),
-  t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }) =>
+  t3Held: (search: { held?: number }) => search.held ?? 0,
+  t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }, search: { held?: number }) =>
     new Promise<{ thread: string | null | undefined | Error | { status: 'limited' }; progressed: boolean }>((resolve) => {
       const answer = (thread: string | null | undefined | Error | { status: 'limited' }, progressed = true) => resolve({ thread, progressed })
-      stand.t3.asked.push({ ids: [...of.ids], answer })
+      stand.t3.asked.push({ ids: [...of.ids], answer, search })
       if (!stand.t3.slow) answer(of.ids.map((id) => stand.t3.threads.get(id)).find((thread) => thread !== undefined) ?? null)
     }).then(({ thread, progressed }) => {
       if (thread instanceof Error) throw thread
@@ -3970,6 +3977,40 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     } finally {
       wall.mockRestore()
     }
+  })
+
+  test('the searches of every conversation hold no more thread ids together than they may: the one that went on longest ago is dropped, and begins again from nothing without being taken for one with no thread', async () => {
+    const { T3_HELD_MOST } = await import('./src/t3')
+    // Two such searches fit together, and a third does not
+    const each = Math.floor(T3_HELD_MOST / 2) - 1
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    const asks = (n: number) => stand.t3.asked.filter((asked) => asked.ids.includes(`thread-${n}`))
+    offered(click(3), click(4), click(5))
+    await until(() => [3, 4, 5].every((n) => asks(n).length === 1))
+    const first = asks(3)[0]!.search
+    // Each goes on, holding as many thread ids as a search part way through a large workspace
+    for (const n of [3, 4, 5]) {
+      asks(n)[0]!.search.held = each
+      asks(n)[0]!.answer(undefined)
+      await until(() => asks(n).length >= 2)
+    }
+    // The third went past the bound, and the search that went on longest ago was dropped:
+    // its conversation is asked for again, in a search that begins from nothing
+    await until(() => asks(3).length === 3)
+    expect(asks(3)[1]!.search).toBe(first)
+    expect(asks(3)[2]!.search).not.toBe(first)
+    expect(asks(3)[2]!.search.held).toBeUndefined()
+    // The others go on with what they hold
+    expect(asks(4)[1]!.search).toBe(asks(4)[0]!.search)
+    expect(asks(5)[1]!.search).toBe(asks(5)[0]!.search)
+    // What the dropped search says in the end counts for nothing, and the new one finds the thread
+    asks(3)[1]!.answer('t3-thread-stale')
+    asks(3)[2]!.answer('t3-thread-c')
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent.map((s) => s.thread)).toEqual(['t3-thread-c'])
+    expect(stand.codex).toEqual([])
   })
 
   test('an incomplete thread search continues before using another route, also with Auto-wake off', async () => {

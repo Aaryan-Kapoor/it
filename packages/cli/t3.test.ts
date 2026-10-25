@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
-import { holds, likeliest, type T3Search, t3Search, t3Server, t3ThreadOf } from './src/t3'
+import { holds, likeliest, type T3Search, t3Held, t3Search, t3Server, t3ThreadOf } from './src/t3'
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-t3-'))
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
@@ -239,8 +239,11 @@ describe.skipIf(process.platform === 'win32')('which thread holds a conversation
     try {
       expect(await searched(found.t3, search)).toEqual({ status: 'limited' })
       expect(found.read).toEqual(ranked(96))
+      // Between its searches it holds only the threads it has read, and not the listing
+      expect(t3Held(search)).toBe(96)
       expect(await searched(found.t3, search)).toEqual({ status: 'limited' })
       expect(found.read).toEqual(ranked(192))
+      expect(t3Held(search)).toBe(192)
       expect(await searched(found.t3, search)).toEqual({ status: 'found', thread: 'thread-250' })
       // Every thread was read once, the likeliest first, and each search had a listing of its own
       expect(found.read).toEqual(ranked(251))
