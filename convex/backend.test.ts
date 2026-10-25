@@ -1055,6 +1055,31 @@ describe('publishing', () => {
     expect(verify.body.prefix).toMatch(/^u\/[^/]+\/[^/]+\/2\/$/)
   })
 
+  test('a machine is given the link at the place the owner chose for links where It can be reached there, and otherwise which place and why, as the network stands when it asks', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const named = 'http://studio.tail1234.ts.net:39000'
+    // Nothing chosen: the site's own address on this computer, and nothing beside it
+    const plain = await publish(m, 'plan')
+    expect([plain.url, 'link' in plain, 'unlinked' in plain]).toEqual(['http://localhost:39000/p/plan', false, false])
+    await t.mutation(internal.network.report, {
+      on: true,
+      wanted: true,
+      addresses: [named, 'http://100.101.102.103:39000'],
+      tailnet: true,
+      canTailnet: true,
+      tailnetName: 'studio.tail1234.ts.net',
+    })
+    await alice.browser.mutation(api.network.link, { to: 'tailnet' })
+    const linked = await publish(m, 'plan')
+    expect([linked.url, linked.link, 'unlinked' in linked]).toEqual(['http://localhost:39000/p/plan', `${named}/p/plan`, false])
+    // The network is turned off: the same publish, finished again, says where the links were to be and why It cannot be reached there now
+    await t.mutation(internal.network.report, { on: false, wanted: false, addresses: [], tailnet: false, canTailnet: true })
+    const again = await m.as.action(api.publish.finish, { artifactId: linked.artifactId, version: linked.version })
+    expect([again.url, 'link' in again, again.unlinked]).toEqual(['http://localhost:39000/p/plan', false, { to: 'tailnet', why: 'off' }])
+  })
+
   test('the content service is told exactly which files to expect before a grant is given, and the grant names only the folder', async () => {
     const t = backend()
     await person(t, 'alice')
