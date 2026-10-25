@@ -291,15 +291,46 @@ const noDisplay = () =>
 /**
  * What It answers when asked to show a page: the displays it is now shown on, and each other one
  * with why it is not shown there. `chosen` says, where no display was named, whether the one
- * chosen had the site open or was only the one used last.
+ * chosen had the site open or was only the one used last. `older` is this command's own: that
+ * `--on all` was asked of an It of an earlier version, as `aimed` says.
  */
 interface Shown {
   displays: string[]
   notShown?: { display: string; reason: string }[]
   chosen?: 'open' | 'last_used'
+  older?: boolean
 }
-async function show(slug: string, a: Args) {
-  return onDisplay(a, () => call<Shown>('mutation', api.displays.show, { slug, ...(text(a, 'on') ? { display: text(a, 'on') } : {}) }))
+/** Whether `--on` asks for every display, as `--on all` does in whatever capitals. */
+const everyDisplay = (a: Args): boolean => text(a, 'on')?.trim().toLowerCase() === 'all'
+/**
+ * Asks It, through `ask`, with the display `--on` names, and says whether the It asked was of an
+ * earlier version that `--on all` had to be asked of in its own way.
+ *
+ * An It of an earlier version takes "all" for the name of a display, and refuses it as it refuses
+ * every name that no display has: `not_found`, with `noSuchDisplay`, which every version before
+ * this one has answered so. Such an It shows what names no display on every display, so there
+ * `--on all` is asked once more with no display named. An It of this version or later takes
+ * "all" for every display, never refuses it as the name of no display, and lets no display be
+ * called that, so that refusal of `--on all` comes only from an earlier one. Any other refusal is
+ * reported as it is. An earlier It that has a display the person called "all" shows the page on
+ * that one and refuses nothing, and that cannot be told here.
+ */
+async function aimed<T>(a: Args, ask: (display: string | undefined) => Promise<T>): Promise<{ answer: T; older: boolean }> {
+  try {
+    return { answer: await ask(text(a, 'on') || undefined), older: false }
+  } catch (err) {
+    if (!(err instanceof Problem) || err.code !== 'no_such_display' || !everyDisplay(a)) throw err
+    return { answer: await ask(undefined), older: true }
+  }
+}
+/** What is said where `--on all` was asked of an It of an earlier version, of a page or of a notification. */
+const OLDER = (what: string) =>
+  `The It this machine asked is of an earlier version than this command, and does not take \`--on all\`. It was asked with no display named, which on that It ${what} on every display. The settings this version gives each display, which keep agents off it, do not apply there until that It is updated, with \`it upgrade\` on the machine it runs on, or the Update button on its Machines page.`
+async function show<T extends Shown = Shown>(slug: string, a: Args, also: Record<string, unknown> = {}): Promise<T> {
+  return onDisplay(a, async () => {
+    const { answer, older } = await aimed(a, (display) => call<T>('mutation', api.displays.show, { slug, ...(display ? { display } : {}), ...also }))
+    return older ? { ...answer, older } : answer
+  })
 }
 /** Names in quotes, joined as a sentence joins them. */
 const andJoined = (names: string[]): string => (names.length === 1 ? names[0]! : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`)
@@ -328,6 +359,7 @@ function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: str
       ELSEWHERE,
     )
   else {
+    if (shown.older) said.push(OLDER('shows the page'))
     if (ended.length) {
       const one = ended.length === 1
       said.push(
@@ -338,7 +370,7 @@ function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: str
       said.push(
         `Agents may not use ${andJoined(off)}: the user turned that off for ${off.length === 1 ? 'it' : 'each of them'}, on the display itself or on the site under Displays, and only the user can turn it on again.`,
       )
-    if (!said.length && !shown.displays.length && !notShownOn.length) said.push(noDisplay())
+    if (!shown.displays.length && !notShownOn.length) said.push(noDisplay())
   }
   return { shownOn: shown.displays, ...(notShownOn.length ? { notShownOn } : {}), ...(said.length ? { hint: said.join(' ') } : {}) }
 }
@@ -349,7 +381,7 @@ function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: str
  * say where it went is printed as it answered.
  */
 function notified(sent: { id: string } & Partial<Shown>): { id: string; sentTo?: string[]; notSentTo?: { display: string; reason: string }[]; hint?: string } {
-  if (!Array.isArray(sent.displays)) return { id: sent.id }
+  if (!Array.isArray(sent.displays)) return { id: sent.id, ...(sent.older ? { hint: OLDER('sends the notification') } : {}) }
   const notSentTo = sent.notShown ?? []
   const where = sent.displays[0]
   const hint =
@@ -3002,13 +3034,7 @@ async function main(argv: string[]): Promise<void> {
       // Which conversation this is was a choice among the apps that had marked this command: said, so that an agent that is another one knows
       const guessed = sessionNote(asked, `This ${NOUN.one} was shown for`, `run \`it open ${slug}\` again with IT_HARNESS and IT_SESSION set to your own.`)
       if (mine) await noteConversation(mine)
-      const result = await onDisplay(a, () =>
-        call<Shown & { took?: boolean }>('mutation', api.displays.show, {
-          slug,
-          ...(text(a, 'on') ? { display: text(a, 'on') } : {}),
-          ...(mine ? { session: mine, agent: mine.harness } : {}),
-        }),
-      )
+      const result = await show<Shown & { took?: boolean }>(slug, a, mine ? { session: mine, agent: mine.harness } : {})
       const took = result.took === true
       const shown = shownAs(result)
       const taken = `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
@@ -3026,22 +3052,25 @@ async function main(argv: string[]): Promise<void> {
         if (eq < 1) throw new Problem('A button is "Label=action".', 'invalid')
         return { label: b.slice(0, eq), action: b.slice(eq + 1) }
       })
-      const sent = await onDisplay(a, () =>
-        call<{ id: string } & Partial<Shown>>('mutation', api.notifications.send, {
-          text: body,
-          ...(text(a, 'id') ? { slug: text(a, 'id') } : {}),
-          ...(text(a, 'on') ? { display: text(a, 'on') } : {}),
-          ...(a.flags.sticky ? { sticky: true } : {}),
-          ...(buttons.length ? { buttons } : {}),
-        }),
-      )
+      const sent = await onDisplay(a, async () => {
+        const { answer, older } = await aimed(a, (display) =>
+          call<{ id: string } & Partial<Shown>>('mutation', api.notifications.send, {
+            text: body,
+            ...(text(a, 'id') ? { slug: text(a, 'id') } : {}),
+            ...(display ? { display } : {}),
+            ...(a.flags.sticky ? { sticky: true } : {}),
+            ...(buttons.length ? { buttons } : {}),
+          }),
+        )
+        return older ? { ...answer, older } : answer
+      })
       // Counted: which agent app sent it, whether it had buttons, stays up, or is about a page, and whether it went to one display or to every one. Never what it says
       usage.record('notification.sent', {
         agent: usage.agentOf(sessionAsked()?.session.harness),
         buttons: buttons.length > 0,
         sticky: a.flags.sticky === true,
         page: text(a, 'id') !== undefined,
-        to: text(a, 'on')?.trim().toLowerCase() === 'all' ? 'all' : 'one',
+        to: everyDisplay(a) ? 'all' : 'one',
       })
       return out(notified(sent))
     }

@@ -3679,6 +3679,77 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
     }
   })
 
+  test('`--on all` asked of an It of an earlier version, which refuses "all" as the name of no display, is asked once more with no display named, and says so', async () => {
+    const m = machine()
+    // As every earlier It refuses a name that no display has, and shows what names no display on every display
+    const noSuch = () => new Refusal({ code: 'not_found', message: 'No display has that name.', noSuchDisplay: true } as never)
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show'
+        ? asked.args.display === undefined
+          ? { displays: ['Desk', 'Kitchen'], notShown: [{ display: 'Wall', reason: 'not_paired' }], took: false }
+          : noSuch()
+        : asked.path === 'notifications:send'
+          ? asked.args.display === undefined
+            ? { id: 'n1' }
+            : noSuch()
+          : asked.path === 'displays:list'
+            ? [{ name: 'Desk' }, { name: 'Kitchen' }, { name: 'Wall' }]
+            : null,
+    )
+    const LATER =
+      'The settings this version gives each display, which keep agents off it, do not apply there until that It is updated, with `it upgrade` on the machine it runs on, or the Update button on its Machines page.'
+    const OLDER = (what: string) =>
+      `The It this machine asked is of an earlier version than this command, and does not take \`--on all\`. It was asked with no display named, which on that It ${what} on every display. ${LATER}`
+    const asked = (path: string) => b.asked.filter((x) => x.path === path).map((x) => x.args)
+    try {
+      const opened = await run(m, ['open', 'plan', '--on', 'all'], b.env)
+      expect([opened.code, printed(opened)]).toEqual([
+        0,
+        {
+          id: 'plan',
+          shownOn: ['Desk', 'Kitchen'],
+          notShownOn: [{ display: 'Wall', reason: 'not_paired' }],
+          hint: `${OLDER('shows the page')} "Wall" is not paired any more: the pairing of its browser was ended, and it shows nothing until that browser is paired again. On the machine It runs on, \`it site\` pairs the browser there. Another screen is paired from the site, under Displays, with “Add a display”.`,
+        },
+      ])
+      expect(asked('displays:show')).toEqual([{ slug: 'plan', display: 'all' }, { slug: 'plan' }])
+      const sent = await run(m, ['notify', 'Done', '--on', ' ALL '], b.env)
+      expect([sent.code, printed(sent)]).toEqual([0, { id: 'n1', hint: OLDER('sends the notification') }])
+      expect(asked('notifications:send')).toEqual([{ text: 'Done', display: ' ALL ' }, { text: 'Done' }])
+      // A name no display has is refused as that, and asked once: only `--on all` is asked again
+      const garage = await run(m, ['open', 'plan', '--on', 'Garage'], b.env)
+      expect([garage.code, garage.out, error(garage).code]).toEqual([1, '', 'not_found'])
+      expect(asked('displays:show')).toHaveLength(3)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--on all` asked of an It of this version is asked once, and is never taken for a display called "all", and any other refusal is reported as it is', async () => {
+    const m = machine()
+    let busy = false
+    const b = await backend(m, (asked) =>
+      asked.path !== 'displays:show'
+        ? null
+        : busy
+          ? new Refusal({ code: 'rate_limited', message: 'Too many at once. Try again in a moment.' })
+          : { displays: ['Desk', 'Kitchen'], notShown: [] },
+    )
+    try {
+      const opened = await run(m, ['open', 'plan', '--on', 'all'], b.env)
+      expect([opened.code, printed(opened)]).toEqual([0, { id: 'plan', shownOn: ['Desk', 'Kitchen'] }])
+      busy = true
+      const refused = await run(m, ['open', 'plan', '--on', 'all'], b.env)
+      expect([refused.code, error(refused).code]).toEqual([1, 'rate_limited'])
+      expect(b.asked.filter((x) => x.path === 'displays:show').map((x) => x.args)).toEqual([
+        { slug: 'plan', display: 'all' },
+        { slug: 'plan', display: 'all' },
+      ])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it notify` says where the notification went, and a display named that takes nothing is refused by its name, with why', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>
