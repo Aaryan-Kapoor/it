@@ -113,6 +113,17 @@ export function Projects({ rows, all, owner, now, query }: ViewProps) {
                       <span className="h-conv-agent">{agentName(first.agent) ?? 'An agent'}</span>
                       {first.machine && <span className="h-conv-on">on {first.machine}</span>}
                       <span className="h-conv-since">{`${cs.length} ${cs.length === 1 ? NOUN.one : NOUN.many}, since ${ago(started, now)}`}</span>
+                      {cs.some((r) => r.att.need === 'working') && (
+                        <span className="h-chip" data-tone="live">
+                          Working
+                        </span>
+                      )}
+                      {cs.some((r) => r.att.you) && (
+                        <span
+                          className="h-chip"
+                          data-tone="bad"
+                        >{`${cs.filter((r) => r.att.you).length} need${cs.filter((r) => r.att.you).length === 1 ? 's' : ''} you`}</span>
+                      )}
                     </div>
                     <ul className="grid h-grid h-conv-grid">
                       {cs.map((r) => (

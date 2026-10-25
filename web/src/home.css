@@ -218,7 +218,8 @@
   padding: 48px var(--gutter);
   color: var(--fg-muted);
 }
-.h-grid {
+/* The site's own grid is drawn after this file and pads itself to the page's edges: inside a section it is not */
+.grid.h-grid {
   padding: 0;
 }
 .h-card .card-frame-box {
@@ -613,6 +614,11 @@
 }
 .h-conv-since {
   color: var(--fg-faint);
+}
+.h-conv-head .h-chip {
+  align-self: center;
+  font-size: 11px;
+  padding: 1px 8px;
 }
 .h-conv-grid {
   --card-min: 230px;
@@ -1047,6 +1053,9 @@
   .h-triage .grid,
   .h-conv-grid {
     --card-min: 300px;
+  }
+  .h-busy {
+    grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
   }
   .h-projects {
     grid-template-columns: 290px minmax(0, 1fr);
