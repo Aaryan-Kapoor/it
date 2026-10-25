@@ -126,7 +126,7 @@ describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows Po
     }
   })
 
-  test('deferred deletion deletes a path as long as It allows, and where long paths are off, a path one longer is left', () => {
+  test('deferred deletion deletes a path as long as It allows, and a path one longer only where long paths are on', () => {
     const folder = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'it-longest-')))
     const entry = `ItRemoved${process.pid}-${Date.now().toString(36)}`
     const name = `it-removed-${process.pid}-${Date.now().toString(36)}.exe`
@@ -144,17 +144,17 @@ describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows Po
       const ran = asLeft(line)
       expect(ran.status, ran.stderr).toBe(0)
       expect(existsSync(longest!)).toBe(false)
-      // The same line, with the longer path put in the queue by hand. Windows holds Windows
-      // PowerShell to MAX_PATH unless the LongPathsEnabled policy is on, and it is off unless someone turned it on
+      // The same line, with the longer path put in the queue by hand. What decides it is the
+      // LongPathsEnabled policy, which GitHub's runners turn on and which is off unless someone
+      // turned it on: Windows PowerShell deletes the longer path where it is on, and not where it is off
       expect(spawnSync('reg.exe', ['add', WINDOWS_CLEANUP, '/v', entry, '/t', 'REG_SZ', '/d', longer!, '/f']).status).toBe(0)
       const over = asLeft(line)
       const policy = spawnSync('reg.exe', ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem', '/v', 'LongPathsEnabled'], {
         encoding: 'utf8',
       }).stdout
-      if (!/LongPathsEnabled\s+REG_DWORD\s+0x1\s/.test(policy)) {
-        expect(over.status).not.toBe(0)
-        expect(existsSync(longer!)).toBe(true)
-      }
+      const longPaths = /LongPathsEnabled\s+REG_DWORD\s+0x1\s/.test(policy)
+      expect(over.status === 0, over.stderr).toBe(longPaths)
+      expect(existsSync(longer!)).toBe(!longPaths)
     } finally {
       spawnSync('reg.exe', ['delete', WINDOWS_CLEANUP, '/v', entry, '/f'])
       rmSync(folder, { recursive: true, force: true })
