@@ -120,7 +120,8 @@ export async function wait(a: Args, counted: (code?: string) => void) {
   const announce = () =>
     local<{ sessions?: { harness: string; id: string }[]; clicks?: Listed[] }>('/waiting', {
       method: 'POST',
-      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }), ...got() },
+      // It says it hands clicks over by the receipt each was given with, so that the connector hands it what it holds under one
+      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }), receipts: true, ...got() },
     })
   // The connector knows the ids this conversation had before it was last cleared: pages made
   // then are still recorded under them

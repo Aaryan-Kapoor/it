@@ -646,7 +646,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   const waitingFor = async (n: number, lost = false) => {
     const answer = await local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
       method: 'POST',
-      body: { id: `waiter-${n}`, session: { harness: 'codex', id: `thread-${n}` }, ...(printed.has(n) ? { got: printed.get(n) } : {}) },
+      body: { id: `waiter-${n}`, session: { harness: 'codex', id: `thread-${n}` }, receipts: true, ...(printed.has(n) ? { got: printed.get(n) } : {}) },
     })
     if (!lost && answer?.clicks?.length) printed.set(n, [...(printed.get(n) ?? []), ...answer.clicks.map((c) => c.id)])
     return answer
@@ -778,6 +778,43 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       await pass()
       await until(() => stand.codex.length === 5)
       expect(stand.calls.filter((c) => c.name === 'delivery:claim').at(-1)!.args.receipt).not.toBe(last)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('a setting aside answered after its conversation was heard from again leaves the click to be tried afresh here, as It gives it back', async () => {
+    standIn()
+    await start()
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let answerPark: (set: boolean) => void = () => {}
+    stand.answer = (name) => (name === 'delivery:park' ? new Promise<boolean>((r) => (answerPark = r)) : undefined)
+    try {
+      offered(click(1))
+      for (let n = 1; n <= 4; n++) {
+        if (n > 1) {
+          now += 601_000
+          await pass()
+        }
+        await until(() => stand.codex.length === n)
+        stand.codex[n - 1]!.end(new Error('declined'))
+        await until(() => called(n === 4 ? 'delivery:park' : 'delivery:release').length >= (n === 4 ? 1 : n - 1 + 1))
+      }
+      const claims = () => called('delivery:claim').length
+      expect(claims()).toBe(4)
+      // While It is still to answer, the conversation is heard from again, and It is told
+      expect(await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })).toEqual({ ok: true })
+      await until(() => stand.calls.some((c) => c.name === 'delivery:unpark'))
+      // Then the answer comes: it was set aside, which the giving back has undone
+      answerPark(true)
+      await settled()
+      expect(readFileSync(path.join(home, 'journal.jsonl'), 'utf8')).not.toContain('"parked"')
+      // Offered again, it is taken again, with nothing counted against it
+      offered()
+      offered(click(1))
+      await pass()
+      await until(() => claims() === 5)
     } finally {
       clock.mockRestore()
     }
@@ -2789,11 +2826,40 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(printedEarly ? undefined : ['click-6'])
   })
 
+  test('a waiter from before receipts is given nothing this machine holds under a receipt, which stays with what holds it, and one that takes receipts is given it with its receipt', async () => {
+    await start()
+    await turn(6, true)
+    offered({ ...click(6), at: Date.now() })
+    await until(() => called('delivery:claim').includes('click-6'))
+    // The running turn's hook has been given it
+    expect((await local<{ clicks: { id: string }[] }>('/clicks?receipts=1&harness=codex&session=thread-6'))?.clicks.map((c) => c.id)).toEqual(['click-6'])
+    // An `it wait` from before receipts, still running from before this connector started, asks
+    const older = await local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
+      method: 'POST',
+      body: { id: 'older-waiter', session: { harness: 'codex', id: 'thread-6' } },
+    })
+    expect(older?.clicks).toBeUndefined()
+    expect((await local<{ held: number }>('/health'))?.held).toBe(1)
+    // An `it wait` that takes receipts is given it, with the receipt it is held by
+    const receipt = stand.calls.find((c) => c.name === 'delivery:claim' && c.args.ids.includes('click-6'))!.args.receipt
+    expect((await waitingFor(6))?.clicks).toEqual([expect.objectContaining({ id: 'click-6', receipt })])
+    expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+  })
+
   test('a waiter that says it has a click while Codex’s command for it is still to answer is not given it again once the command has', async () => {
     await start()
     expect(await turn(6, true)).toEqual({ ok: true })
     offeredEarlier(click(6))
     await until(() => stand.codex.length === 1)
+    // A waiter from before receipts is not given what Codex's command is still to answer for: it could not say it had it
+    expect(
+      (
+        await local<{ ok: boolean; clicks?: unknown[] }>('/waiting', {
+          method: 'POST',
+          body: { id: 'older-waiter', session: { harness: 'codex', id: 'thread-6' } },
+        })
+      )?.clicks,
+    ).toBeUndefined()
     // Codex's command has been started and has not answered: the waiter of the running turn is given the click meanwhile,
     // with the receipt of the taking that holds it, which the waiter says it was handed over by
     const handedOn = (await waitingFor(6))?.clicks as { id: string; receipt?: string }[] | undefined
@@ -2808,7 +2874,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     const next = () =>
       local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
         method: 'POST',
-        body: { id: 'waiter-6-next', session: { harness: 'codex', id: 'thread-6' } },
+        body: { id: 'waiter-6-next', session: { harness: 'codex', id: 'thread-6' }, receipts: true },
       })
     expect((await next())?.clicks).toBeUndefined()
     await new Promise((r) => setTimeout(r, 10_200))
@@ -2834,7 +2900,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     const next = () =>
       local<{ ok: boolean; clicks?: { id: string }[] }>('/waiting', {
         method: 'POST',
-        body: { id: 'waiter-6-next', session: { harness: 'codex', id: 'thread-6' } },
+        body: { id: 'waiter-6-next', session: { harness: 'codex', id: 'thread-6' }, receipts: true },
       })
     expect((await waitingFor(6, true))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
     // The first may be printing it this moment, so another wait is not given it yet
@@ -3503,6 +3569,7 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       body: {
         id: `waiter-${n}`,
         session: { harness: 'codex', id: `thread-${n}` },
+        receipts: true,
         ...(page === undefined ? {} : { slug: `page-${page}` }),
         ...(printed.has(n) ? { got: printed.get(n) } : {}),
       },

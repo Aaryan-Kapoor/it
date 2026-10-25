@@ -520,6 +520,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const toPark = new Map<string, { for: { harness: string; id: string } | null; tag: string; receipt?: string }>()
   /** Set aside, and It has confirmed it. Should one come back on offer, it is left alone. */
   const parked = new Set<string>()
+  /**
+   * When each conversation was last heard from again here, by a number that only goes up. A
+   * setting aside whose answer comes after that was asked before the conversation came back:
+   * It gives back what was set aside then, so it is not taken for set aside here either.
+   */
+  const heardAt = new Map<string, number>()
+  let heardTimes = 0
   /** Being put in a harness's queue right now; how often that has been tried, and when last. */
   const queueing = new Set<string>()
   /**
@@ -1004,6 +1011,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
       for (const [id, pending] of toPark) {
         const { for: tried, tag: which, receipt } = pending
         const attempt = claimAttempts.get(id)
+        // Which time of its conversation's being heard from again this is asked in, by the conversation as it is now
+        const when = () => {
+          const key = tried ? follow(keyOf(tried.harness, tried.id)) : ''
+          return `${key}#${heardAt.get(key) ?? 0}`
+        }
+        const askedWhen = when()
         // The backend says whether it is set aside. While another machine holds the click it is
         // not, and it is asked about again. A conversation that took nothing in all its tries
         // has everything else that is waiting for it set aside with this click. Asked by the
@@ -1021,7 +1034,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
           },
         )
         if (!answer) continue
-        if (answer === 'again') {
+        // Its conversation was heard from again while this was being asked: what It set aside
+        // then, it gives back by that, so here too it is tried afresh, and not left aside
+        if (answer === 'again' || when() !== askedWhen) {
           // Not set aside: its conversation was heard from again while this was ending, or
           // another taking has had it since. It is tried afresh, with no try counted against it.
           try {
@@ -1064,6 +1079,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   function revive(harness: string, id: string): void {
     const here = follow(keyOf(harness, id))
+    // Heard from again from this moment: a setting aside whose answer is still to come is of a try from before it
+    heardAt.delete(here)
+    heardAt.set(here, ++heardTimes)
+    while (heardAt.size > 500) heardAt.delete(heardAt.keys().next().value!)
     const its = (tagged: string) => follow(tagged.slice(tagged.indexOf('|') + 1)) === here
     for (const t of [...parked]) if (its(t)) parked.delete(t)
     for (const t of [...queueTries.keys()]) if (its(t)) queueTries.delete(t)
@@ -2775,6 +2794,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
           size += bytes
           return true
         }
+        // A waiter says it hands clicks over by receipt. One from before receipts, still
+        // running from before this connector started, would say so with none, which It refuses
+        // for a click this machine holds under one: it would be taken as handed over by
+        // nobody, and given again once the hold ran out. Such a waiter is given nothing this
+        // machine holds under a receipt. What is let go of below it takes itself, without one.
+        const receiptsTaken = body.receipts === true
         for (const [clickId, h] of held) {
           if (!waitedFor(waiter, h.click)) continue
           // What an add-on has been given and has not reported may be something it can only
@@ -2782,7 +2807,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // the waiter is given it too, still held for this machine. Should the add-on hand it
           // over as well, the agent can tell by its id that it is the same click.
           const given = h.served && steady() < h.leaseUntil - 1000
-          if (given && !fits(h.click)) continue
+          if (given && (!receiptsTaken || !fits(h.click))) continue
           held.delete(clickId)
           // With the receipt it is held by, which the waiter says it was handed over by
           if (given) handedBack.push({ ...h.click, receipt: h.attempt.receipt })
@@ -2798,7 +2823,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // Once: an agent that took it, dealt with it and waits again is not given it a second
           // time. Unless it never had it: the same waiter asking again with no word of it was
           // sent an answer that did not arrive
-          if (sent.printed || (sent.toWaiter && sent.given?.who !== who) || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
+          if (!receiptsTaken || sent.printed || (sent.toWaiter && sent.given?.who !== who) || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
           sent.toWaiter = true
           if (sent.given?.who !== who) sent.given = { who, at: Date.now() }
           handedBack.push(sent.click)
@@ -2813,6 +2838,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // Asking again keeps a waiter's hold in memory; it does not rewrite the saved
           // receipt's timestamp. After a restart its original timestamp is the fallback.
           if (handedBack.some((c) => c.id === clickId)) return true
+          // To a waiter from before receipts, only what Codex's queue has taken, which this
+          // connector says was handed over itself: not what its command is still to answer for
+          if (!receiptsTaken && submitting.has(clickId)) return false
           const seen = b.given ? (waiters.get(b.given.who)?.seen ?? b.given.at) : 0
           if (!waitedFor(waiter, b.click) || (b.given && b.given.who !== who && now - seen <= GIVEN_MS) || !fits(b.click)) return false
           handedBack.push(b.click)
