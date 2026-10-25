@@ -4225,6 +4225,29 @@ describe.skipIf(process.platform === 'win32')('a thread of T3 Code that is switc
     expect(carried()[2]).toEqual({ from: claude, to: codex })
   })
 
+  test('switched from Codex to Claude Code and back to the same Codex conversation within a minute, a short returning turn takes the pages back', async () => {
+    stand.t3.running = true
+    await start('socket', BOTH)
+    handing(1)
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    await codexTurn(true)
+    await until(() => carried().length === 1)
+    await codexTurn(false)
+    // Switched to Claude Code a few seconds after that turn: the pages go to the Claude conversation
+    stand.t3.runs.set('t3-thread', { now: claude, before: [codex] })
+    later(10_000)
+    await claudeAsks()
+    await until(() => carried().length === 2)
+    expect(carried()[1]).toEqual({ from: codex, to: claude })
+    // And back to the same Codex conversation, well within a minute of its last look, for one short turn
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    later(10_000)
+    await codexTurn(true)
+    await codexTurn(false)
+    await until(() => carried().length === 3)
+    expect(carried()[2]).toEqual({ from: claude, to: codex })
+  })
+
   test('where the first look cannot see the new conversation yet and nothing more is heard from it, its pages go when the connector looks again by itself', async () => {
     stand.t3.running = true
     standIn(true)

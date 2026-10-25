@@ -745,6 +745,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
             }
             moved += done.moved
             carriedOn.set(k, key)
+            // What was last found for that one no longer holds: should the thread be switched
+            // back to it, its next hook looks again at once, however lately it was looked for
+            if (t3Follows.get(k)?.at !== Number.POSITIVE_INFINITY) {
+              t3Follows.delete(k)
+              unfollowed(k)
+            }
             // What waits here for it, a mark's words and a waiter's copy of a click, waits for this one
             await recovery.session(key, k).catch(() => {})
           }
