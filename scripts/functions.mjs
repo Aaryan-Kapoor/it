@@ -9,6 +9,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { gzipSync } from 'node:zlib'
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const work = mkdtempSync(path.join(os.tmpdir(), 'it-functions-'))
@@ -51,6 +52,14 @@ const text = JSON.stringify(request)
 export const FUNCTIONS_HASH = createHash('sha256').update(text).digest('hex')
 writeFileSync(
   path.join(root, 'packages/cli/src/functions.generated.ts'),
-  `// Written by scripts/functions.mjs. Do not edit.\nexport const FUNCTIONS_HASH: string = ${JSON.stringify(FUNCTIONS_HASH)}\nexport const FUNCTIONS: string = ${JSON.stringify(text)}\n`,
+  `// Written by scripts/functions.mjs. Do not edit.
+import { gunzipSync } from 'node:zlib'
+export const FUNCTIONS_HASH: string = ${JSON.stringify(FUNCTIONS_HASH)}
+export const FUNCTIONS_GZIP: string = ${JSON.stringify(gzipSync(text, { level: 9 }).toString('base64'))}
+// Only a deployment needs the text. Ordinary commands use its hash without unpacking it.
+export function functions(): string {
+  return gunzipSync(Buffer.from(FUNCTIONS_GZIP, 'base64')).toString('utf8')
+}
+`,
 )
 console.log(`functions ${FUNCTIONS_HASH.slice(0, 12)}, ${request.appDefinition.changedModules.length} modules, ${text.length} bytes`)

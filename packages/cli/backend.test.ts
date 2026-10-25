@@ -34,7 +34,7 @@ import { PORTS } from '@it/protocol'
 import { build, type Plugin } from 'esbuild'
 import { zipSync } from 'fflate'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
-import { FUNCTIONS, FUNCTIONS_HASH } from './src/functions.generated'
+import { FUNCTIONS_HASH, functions as functionsText } from './src/functions.generated'
 import { markInstallation } from './src/installation'
 import { api, backendAt, call, type Machine, machineFile, type Problem, readJson, VERSION } from './src/lib'
 import { login } from './src/login'
@@ -1497,6 +1497,7 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
    * after the record's own. Gives the program and the hash of its functions.
    */
   const laterIt = async (name: string, version: string, more: (v: string) => string) => {
+    const FUNCTIONS = functionsText()
     const request = JSON.parse(FUNCTIONS) as { appDefinition: { schema: { source: string } } }
     request.appDefinition.schema.source = request.appDefinition.schema.source.replace(
       /subject:\s*(\w+)\.string\(\),/,
@@ -1511,7 +1512,7 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
         setup(b) {
           b.onLoad({ filter: /functions\.generated\.ts$/ }, () => ({
             loader: 'ts',
-            contents: `export const FUNCTIONS = ${JSON.stringify(other)}\nexport const FUNCTIONS_HASH = '${hash}'`,
+            contents: `export const functions = () => ${JSON.stringify(other)}\nexport const FUNCTIONS_HASH = '${hash}'`,
           }))
           b.onLoad({ filter: /[\\/]src[\\/]lib\.ts$/ }, (asked) => ({
             loader: 'ts',
@@ -3176,7 +3177,7 @@ describe.skipIf(!program || windows)('a newer backend program, and newer functio
     async () => {
       const { config, id } = await peopled()
       // The functions of another version: every person's record must have something that the one there has not
-      const request = JSON.parse(FUNCTIONS) as { appDefinition: { schema: { source: string } } }
+      const request = JSON.parse(functionsText()) as { appDefinition: { schema: { source: string } } }
       const fitted = request.appDefinition.schema.source
       request.appDefinition.schema.source = fitted.replace(/subject:\s*(\w+)\.string\(\),/, (whole, v: string) => `${whole} somethingNew: ${v}.string(),`)
       expect(request.appDefinition.schema.source).not.toBe(fitted)
@@ -3186,7 +3187,7 @@ describe.skipIf(!program || windows)('a newer backend program, and newer functio
       const NEWER = VERSION.replace(/\d+$/, (patch) => String(Number(patch) + 1))
       expect(NEWER).not.toBe(VERSION)
       vi.resetModules()
-      vi.doMock('./src/functions.generated', () => ({ FUNCTIONS: other, FUNCTIONS_HASH: hash }))
+      vi.doMock('./src/functions.generated', () => ({ functions: () => other, FUNCTIONS_HASH: hash }))
       vi.doMock('./src/lib', async (original) => ({ ...(await original<typeof import('./src/lib')>()), VERSION: NEWER }))
       try {
         const newer = await import('./src/serve/backend')

@@ -15,7 +15,7 @@ import { makeFunctionReference } from 'convex/server'
 import { build } from 'esbuild'
 import { zipSync } from 'fflate'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
-import { FUNCTIONS, FUNCTIONS_HASH } from './src/functions.generated'
+import { FUNCTIONS_HASH, functions } from './src/functions.generated'
 import { ask, backendAt, Problem, VERSION } from './src/lib'
 import { asAdmin, endOf, fetchProgram, type Running, startBackend } from './src/serve/backend'
 import { cannotRunHere, doorKey, instanceName, makeConfig, noteLoaded, programFile, RELEASE, readConfig, type ServiceConfig } from './src/serve/config'
@@ -1080,6 +1080,7 @@ describe.skipIf(!program)('the backend program, started by the service', () => {
   )
 
   test('carries the functions as the backend takes them, with no key in them', () => {
+    const FUNCTIONS = functions()
     const request = JSON.parse(FUNCTIONS) as { adminKey?: unknown; appDefinition: { changedModules: { path: string }[] } }
     expect(request.adminKey).toBeUndefined()
     expect(request.appDefinition.changedModules.map((m) => m.path)).toEqual(expect.arrayContaining(['bridge.js', 'http.js']))
