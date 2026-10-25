@@ -386,7 +386,7 @@ export default defineSchema({
     leaseMachineId: v.optional(v.id('machines')),
     /** The machine that gave up delivering it by itself. Until its page changes hands it is left out of what connectors are offered, and still waits for `it wait` and the site. */
     parkedBy: v.optional(v.id('machines')),
-    /** Which time of the conversation's being heard from again on that machine it was set aside in, as `deliveryReturns` counts it: the next time gives it back. None where it was set aside before this was counted. */
+    /** When the conversation had last been heard from again on that machine as it was set aside, as `deliveryReturns` numbers it: the next time gives it back. None where it was set aside before this was numbered. */
     parkedGeneration: v.optional(v.number()),
     leaseExpiresAt: v.optional(v.number()),
     /**
@@ -401,7 +401,7 @@ export default defineSchema({
         receipt: v.optional(v.string()),
         session: v.union(session, v.null()),
         machineId: v.id('machines'),
-        /** How many times, by then, the conversation had been heard from again on that machine, as `deliveryReturns` counts it. */
+        /** When the conversation had last been heard from again on that machine by then, as `deliveryReturns` numbers it. */
         generation: v.optional(v.number()),
       }),
     ),

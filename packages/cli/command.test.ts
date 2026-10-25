@@ -3025,8 +3025,11 @@ describe.skipIf(process.platform === 'win32')('a wait', () => {
           .split('\n')
           .map((line) => JSON.parse(line)),
       ]).toEqual([0, [{ id: 'k57', page: 'plan', title: 'Plan', action: 'approve', data: { plan: 'B' }, at: 1 }]])
-      // Claimed for the conversation it was offered for, which is the one the page was made under
-      expect(b.asked.filter((x) => x.path === 'delivery:claim').map((x) => x.args)).toEqual([{ ids: ['k57'], for: earlier }])
+      // Claimed for the conversation it was offered for, which is the one the page was made under, under a
+      // receipt of this wait's own, by which it is then said to be handed over
+      const claimed = b.asked.filter((x) => x.path === 'delivery:claim').map((x) => x.args)
+      expect(claimed).toEqual([{ ids: ['k57'], for: earlier, receipt: expect.stringMatching(/^[A-Za-z0-9_-]{16,64}$/) }])
+      expect(b.asked.filter((x) => x.path === 'delivery:handedOff').map((x) => x.args)).toEqual([{ id: 'k57', route: 'waiter', receipt: claimed[0]!.receipt }])
     } finally {
       await new Promise((resolve) => connector.close(resolve))
       await b.close()

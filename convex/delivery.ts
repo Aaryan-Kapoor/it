@@ -506,8 +506,8 @@ const unreceipted = (x: Doc<'actions'>) => x.claim?.receipt === undefined
 /** Whether this machine's taking of a click, known by that receipt, is still the click's last one. */
 const holds = (x: Doc<'actions'>, receipt: string, machine: Doc<'machines'>) => x.claim?.receipt === receipt && x.claim.machineId === machine._id
 /**
- * How many times a conversation has been heard from again on a machine, as a number in the
- * order the person's clicks and stops are written in: nothing where it never has.
+ * When a conversation was last heard from again on a machine, as its place in the order the
+ * person's clicks and stops are written in: nothing where it never has been, or not for a month.
  */
 async function generationOf(ctx: QueryCtx, machineId: Id<'machines'>, harness: string | undefined, sessionId: string | undefined): Promise<number> {
   if (harness === undefined || sessionId === undefined) return 0
@@ -913,8 +913,8 @@ export const unpark = mutation({
       await ctx.db.insert('deliveryReturns', {
         userId: user._id,
         machineId: machine._id,
-        harness: s.harness.slice(0, 40),
-        sessionId: s.id.slice(0, 200),
+        harness: s.harness,
+        sessionId: s.id,
         generation,
         at: Date.now(),
       })
