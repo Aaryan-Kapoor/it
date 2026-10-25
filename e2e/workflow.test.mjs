@@ -358,7 +358,8 @@ describe.skipIf(!listed)('what the list of what is left out on Windows says', ()
   const leavesOut = (file) => {
     const text = readFileSync(path.join(root, file), 'utf8')
     const windows = /const windows = process\.platform === 'win32'/.test(text)
-    return [...text.matchAll(/\.skipIf\(([^)]*)\)/g)].some(([, when]) => /'win32'/.test(when) || (windows && /\bwindows\b/.test(when)))
+    // `=== 'win32'` leaves a test out on Windows, and `!== 'win32'` runs it there alone
+    return [...text.matchAll(/\.skipIf\(([^)]*)\)/g)].some(([, when]) => /=== 'win32'/.test(when) || (windows && /\bwindows\b/.test(when)))
   }
 
   test('names every test file that leaves something out there, and no file that leaves nothing out', () => {
@@ -366,9 +367,11 @@ describe.skipIf(!listed)('what the list of what is left out on Windows says', ()
     expect(files.length).toBeGreaterThan(30)
     const leaving = files.filter(leavesOut)
     expect(leaving.length).toBeGreaterThan(8)
-    // Each by its path, or by its own name where that is enough to tell it by
+    // Each by its path, or by its own name where that is enough to tell it by, or as one of the
+    // add-ons' test files that the configuration leaves out whole
+    const addon = (file) => /^addons\/[^/]+\/addon\.test\.ts$/.test(file) && said.includes('`addons/*/addon.test.ts`')
     for (const file of leaving)
-      expect(said.includes(`\`${file}\``) || (!file.startsWith('e2e/') && said.includes(`\`${path.basename(file)}\``)), file).toBe(true)
+      expect(said.includes(`\`${file}\``) || (!file.startsWith('e2e/') && said.includes(`\`${path.basename(file)}\``)) || addon(file), file).toBe(true)
     // And the other way: a test file the list names by its own name is one that leaves something out, or one the configuration leaves out whole
     const named = [...said.matchAll(/`((?:[\w.*/-]+\/)?[\w*-]+\.test\.(?:ts|mjs))`/g)].map(([, name]) => name)
     expect(named.length).toBeGreaterThan(8)
@@ -380,7 +383,7 @@ describe.skipIf(!listed)('what the list of what is left out on Windows says', ()
     }
   })
 
-  test('says how many groups of the connector’s tests are left out, and that the command’s tests are left out whole', () => {
+  test('says how many groups of the connector’s tests are left out, and names each group of the command’s tests that is not', () => {
     const groups = (file) => {
       const text = readFileSync(path.join(root, file), 'utf8')
       return {
@@ -392,10 +395,11 @@ describe.skipIf(!listed)('what the list of what is left out on Windows says', ()
     const connector = groups('packages/cli/connector.test.ts')
     expect(connector.out).toBeGreaterThan(0)
     expect(said).toContain(`- ${words[connector.out - 1]} groups of \`connector.test.ts\``)
-    const command = groups('packages/cli/command.test.ts')
-    expect(command.all).toBeGreaterThan(0)
-    expect(command.out).toBe(command.all)
-    expect(said).toContain('- The whole of `packages/cli/command.test.ts`')
+    // The command's tests are left out but for the groups that run everywhere, each named by its title
+    const command = readFileSync(path.join(root, 'packages/cli/command.test.ts'), 'utf8')
+    expect(groups('packages/cli/command.test.ts').out).toBeGreaterThan(0)
+    expect(said).toContain('- All of `packages/cli/command.test.ts` but')
+    for (const [, , title] of command.matchAll(/^describe\((['"`])(.*?)\1/gm)) expect(said, title).toContain(`"${title}"`)
   })
 
   test('names the four add-ons’ tests the configuration leaves out, as the configuration does', () => {
