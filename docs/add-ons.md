@@ -32,7 +32,7 @@ Delivery is at least once, and every click carries a stable id so that an agent 
 
 An agent or a person who says with `it ack` that a click was dealt with needs no receipt, and is taken at their word.
 
-A machine that joined this It may run the It of the release before, and an agent app may still have the add-on of that release loaded until it is started again. For one release they are served without receipts: they take clicks and say they have them by their ids, and that is taken of the clicks they took that way, and of no click taken with a receipt. A machine that joined an It from before receipts hands nothing over until that It is updated, and says so on the Machines page and in its log.
+A machine that joined this It may run the It of the release before, and an agent app may still have the add-on of that release loaded until it is started again. For one release they are served without receipts. Such a machine takes clicks and says what became of each without a receipt, which counts for a taking it made without one and changes nothing about a taking made with one. Such an add-on says it has a click by its id, and is believed of a click it was given in the taking that holds it now. An `it wait` still running from before It was updated is given nothing that the connector holds under a receipt, and takes what waits for it itself. [What It protects](what-it-protects.md#a-machine-or-an-add-on-from-the-release-before-is-held-to-less) says what such a machine and add-on are not protected from. A machine that joined an It from before receipts hands nothing over until that It is updated, and says so on the Machines page and in its log.
 
 ## What to expect in each agent app
 
