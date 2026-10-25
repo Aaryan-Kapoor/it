@@ -6,28 +6,56 @@ import { ZSH_ANSWER } from './src/shell-profile'
 
 /** The zsh on this machine, or the one IT_TEST_ZSH names. */
 export const zsh = [process.env.IT_TEST_ZSH, '/bin/zsh', '/usr/bin/zsh'].find((file): file is string => Boolean(file && existsSync(file)))
+/**
+ * The folder that zsh reads its system-wide zshenv and zshrc from, where a test may write them.
+ * That is never the system's own folder, so it is given only with a zsh built or changed to read
+ * them from another one, in IT_TEST_ZSH_ETC.
+ */
+export const zshEtc = zsh && zsh === process.env.IT_TEST_ZSH ? process.env.IT_TEST_ZSH_ETC : undefined
 
 const quote = (word: string) => `'${word.replaceAll("'", "'\\''")}'`
 
 /**
- * Puts a program called zsh in a folder, to be named by SHELL. It reads the person's .zshenv as
- * zsh would, which works for one written in plain sh, and then says the folder that is left in
- * ZDOTDIR, or else the home folder, as It asks zsh to. It notes the words it was started with,
- * one to a line, in `zsh arguments` beside it.
+ * Puts a program called zsh in a folder, to be named by SHELL. It does in plain sh what It relies
+ * on zsh to do, with startup files written in plain sh, and its system-wide zshenv and zshrc are
+ * the files `zshenv` and `zshrc` beside it. Started with -p, it reads the system's zshenv alone
+ * and says what ZDOTDIR is then. Started otherwise, it reads the system's zshenv, and where
+ * ZDOTDIR is still the folder It gave it, it puts back the ZDOTDIR It names, reads the person's
+ * .zshenv and then the system's zshrc, and says the folder whose .zshrc zsh would read next.
+ * Where the system's zshenv set ZDOTDIR to another folder, it reads that folder's .zshenv, the
+ * system's zshrc and the .zshrc, as zsh would, and says nothing. It adds the words of each start
+ * as one line to `zsh arguments` beside it.
  */
 export function standInZsh(dir: string): string {
   mkdirSync(dir, { recursive: true })
   const file = path.join(dir, 'zsh')
+  const here = quote(dir)
   writeFileSync(
     file,
+    // biome-ignore-start lint/suspicious/noTemplateCurlyInString: The literals are shell source.
     [
       '#!/bin/sh',
-      `printf '%s\\n' "$@" > ${quote(path.join(dir, 'zsh arguments'))}`,
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: The literal is shell source.
+      `printf '%s\\n' "$*" >> ${quote(path.join(dir, 'zsh arguments'))}`,
+      'given=${ZDOTDIR-}',
+      `if [ -r ${here}/zshenv ]; then . ${here}/zshenv; fi`,
+      'if [ "$1" = -p ]; then',
+      `  if [ -n "\${ZDOTDIR+set}" ]; then printf '\\0${ZSH_ANSWER}=%s\\0' "$ZDOTDIR"; else printf '\\0${ZSH_ANSWER}-\\0'; fi`,
+      '  exit 0',
+      'fi',
+      'if [ "${ZDOTDIR-}" = "$given" ]; then',
+      '  if [ -n "${IT_ZDOTDIR_SET-}" ]; then ZDOTDIR=$IT_ZDOTDIR_WAS; else unset ZDOTDIR; fi',
+      '  unset IT_ZDOTDIR_SET IT_ZDOTDIR_WAS',
+      '  if [ -r "${ZDOTDIR-$HOME}/.zshenv" ]; then . "${ZDOTDIR-$HOME}/.zshenv"; fi',
+      `  if [ -r ${here}/zshrc ]; then . ${here}/zshrc; fi`,
+      `  printf '\\0${ZSH_ANSWER}%s\\0' "\${ZDOTDIR-$HOME}"`,
+      '  exit 0',
+      'fi',
       'if [ -r "${ZDOTDIR-$HOME}/.zshenv" ]; then . "${ZDOTDIR-$HOME}/.zshenv"; fi',
-      `printf '\\0${ZSH_ANSWER}%s\\0' "\${ZDOTDIR-$HOME}"`,
+      `if [ -r ${here}/zshrc ]; then . ${here}/zshrc; fi`,
+      'if [ -r "${ZDOTDIR-$HOME}/.zshrc" ]; then . "${ZDOTDIR-$HOME}/.zshrc"; fi',
       '',
     ].join('\n'),
+    // biome-ignore-end lint/suspicious/noTemplateCurlyInString: The literals are shell source.
   )
   chmodSync(file, 0o755)
   return file

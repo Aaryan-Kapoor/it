@@ -5,7 +5,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { zshDirectory } from './src/shell-profile'
-import { standInZsh, zsh } from './test-zsh'
+import { standInZsh, zsh, zshEtc } from './test-zsh'
 
 const made: string[] = []
 afterEach(() => {
@@ -26,11 +26,19 @@ const gone = (pid: number) => {
   return state === '' || state.startsWith('Z')
 }
 
+/** Writes a startup file of the system's for one test, in the folder `etc` that zsh reads them from. */
+function systemFile(etc: string, name: 'zshenv' | 'zshrc', text: string) {
+  const file = path.join(etc, name)
+  writeFileSync(file, text)
+  made.push(file)
+}
+
 /**
- * What holds for zsh and for the stand-in alike, with a .zshenv in plain sh. `shellIn` gives the
- * zsh to name in SHELL for a test's home.
+ * What holds for zsh and for the stand-in alike, with startup files in plain sh. `shellIn` gives
+ * the zsh to name in SHELL for a test's home, and `etcOf` the folder it reads the system's startup
+ * files from, where a test may write them. The tests of those files are left out where there is none.
  */
-function startupFolders(shellIn: (home: string) => string) {
+function startupFolders(shellIn: (home: string) => string, etcOf: (home: string) => string | undefined, noEtc: boolean) {
   test('reads a nonexported ZDOTDIR from .zshenv despite startup output', async () => {
     const { home, dir, env } = fixture()
     const shell = shellIn(home)
@@ -72,6 +80,38 @@ function startupFolders(shellIn: (home: string) => string) {
     // The job keeps the output open after the shell has gone, so waiting for its end would wait out the bound.
     expect(await zshDirectory({ ...env, SHELL: shell }, 3000)).toBe(dir)
     expect(gone(Number(readFileSync(pid, 'utf8')))).toBe(true)
+  })
+
+  test.skipIf(noEtc)('reports the folder the system’s zshrc moves ZDOTDIR to, and runs no .zshrc', async () => {
+    const { home, dir, env } = fixture()
+    const shell = shellIn(home)
+    const other = path.join(home, 'other files')
+    mkdirSync(other)
+    writeFileSync(path.join(home, '.zshenv'), `ZDOTDIR=${quote(dir)}\n`)
+    systemFile(etcOf(home)!, 'zshrc', `ZDOTDIR=${quote(other)}\n`)
+    for (const folder of [dir, other]) writeFileSync(path.join(folder, '.zshrc'), `echo ran > ${quote(path.join(home, 'zshrc ran'))}\n`)
+    expect(await zshDirectory({ ...env, SHELL: shell })).toBe(other)
+    expect(existsSync(path.join(home, 'zshrc ran'))).toBe(false)
+  })
+
+  test.skipIf(noEtc)('says nothing, and runs no .zshrc, where the system’s zshenv sets ZDOTDIR itself', async () => {
+    const { home, dir, env } = fixture()
+    const shell = shellIn(home)
+    systemFile(etcOf(home)!, 'zshenv', `ZDOTDIR=${quote(dir)}\nexport ZDOTDIR\n`)
+    writeFileSync(path.join(dir, '.zshrc'), `echo ran > ${quote(path.join(home, 'zshrc ran'))}\n`)
+    // Zsh would read that folder's files and never It's, so no answer can be had without running the .zshrc there.
+    expect(await zshDirectory({ ...env, SHELL: shell })).toBeUndefined()
+    expect(await zshDirectory({ ...env, SHELL: shell, ZDOTDIR: dir })).toBeUndefined()
+    expect(existsSync(path.join(home, 'zshrc ran'))).toBe(false)
+  })
+
+  test.skipIf(noEtc)('follows a ZDOTDIR that the system’s zshenv gives only where none is set', async () => {
+    const { home, dir, env } = fixture()
+    const shell = shellIn(home)
+    const other = path.join(home, 'other files')
+    systemFile(etcOf(home)!, 'zshenv', `: "\${ZDOTDIR:=${dir}}"\n`)
+    expect(await zshDirectory({ ...env, SHELL: shell })).toBe(dir)
+    expect(await zshDirectory({ ...env, SHELL: shell, ZDOTDIR: other })).toBe(other)
   })
 
   test('uses the same folder for the install script and uninstall, preserving a linked profile', () => {
@@ -117,7 +157,42 @@ function startupFolders(shellIn: (home: string) => string) {
 }
 
 describe.skipIf(process.platform === 'win32' || !zsh)('zsh startup folders', () => {
-  startupFolders(() => zsh!)
+  startupFolders(
+    () => zsh!,
+    () => zshEtc,
+    !zshEtc,
+  )
+
+  test('follows a ZDOTDIR that .zshenv sets only where RCS is set, as it is in every ordinary start', async () => {
+    const { home, dir, env } = fixture()
+    writeFileSync(path.join(home, '.zshenv'), `if [[ -o rcs && -o globalrcs ]]; then ZDOTDIR=${quote(dir)}; fi\n`)
+    expect(await zshDirectory({ ...env, SHELL: zsh })).toBe(dir)
+  })
+
+  test.skipIf(!zshEtc)('runs the system’s zshenv with RCS set, as zsh always does', async () => {
+    const { home, dir, env } = fixture()
+    systemFile(zshEtc!, 'zshenv', `if [[ -o rcs && -o globalrcs ]]; then IT_TEST_FILES=${quote(dir)}; fi\n`)
+    writeFileSync(path.join(home, '.zshenv'), 'ZDOTDIR=$IT_TEST_FILES\n')
+    expect(await zshDirectory({ ...env, SHELL: zsh })).toBe(dir)
+  })
+
+  test.skipIf(!zshEtc)('says nothing where the system’s zshrc takes away the trap that stops zsh before .zshrc', async () => {
+    const { home, dir, env } = fixture()
+    systemFile(zshEtc!, 'zshrc', 'trap - DEBUG\n')
+    writeFileSync(path.join(home, '.zshenv'), `ZDOTDIR=${quote(dir)}\n`)
+    writeFileSync(path.join(dir, '.zshrc'), 'ZDOTDIR=/elsewhere\n')
+    expect(await zshDirectory({ ...env, SHELL: zsh })).toBeUndefined()
+  })
+
+  test('leaves the history file that .zshenv names as it was', async () => {
+    const { home, dir, env } = fixture()
+    const history = path.join(home, 'history')
+    writeFileSync(history, ': 1:0;one\n: 2:0;two\n: 3:0;three\n')
+    writeFileSync(path.join(home, '.zshenv'), `HISTFILE=${quote(history)}\nSAVEHIST=1\nHISTSIZE=1\nZDOTDIR=${quote(dir)}\n`)
+    writeFileSync(path.join(dir, '.zshrc'), 'setopt share_history\n')
+    expect(await zshDirectory({ ...env, SHELL: zsh })).toBe(dir)
+    expect(readFileSync(history, 'utf8')).toBe(': 1:0;one\n: 2:0;two\n: 3:0;three\n')
+  })
 
   test('uses the startup directory selected only for an interactive shell', async () => {
     const { home, dir, env } = fixture()
@@ -142,19 +217,22 @@ describe.skipIf(process.platform === 'win32' || !zsh)('zsh startup folders', () 
 })
 
 describe.skipIf(process.platform === 'win32')('zsh startup folders, with a stand-in for zsh', () => {
-  startupFolders((home) => standInZsh(path.join(home, 'stand-in')))
+  startupFolders(
+    (home) => standInZsh(path.join(home, 'stand-in')),
+    (home) => path.join(home, 'stand-in'),
+    false,
+  )
 
-  test('asks zsh, as an interactive shell, to read no startup file of the person’s own before It reads .zshenv', async () => {
+  test('asks the system’s zshenv alone first, and then starts zsh as an ordinary interactive shell', async () => {
     const { home, dir, env } = fixture()
     const shell = standInZsh(path.join(home, 'stand-in'))
     writeFileSync(path.join(home, '.zshenv'), `ZDOTDIR=${quote(dir)}\n`)
     expect(await zshDirectory({ ...env, SHELL: shell })).toBe(dir)
-    // -f leaves zsh to read only the system's zshenv, and so no .zshrc runs or moves ZDOTDIR before the answer.
-    expect(
-      readFileSync(path.join(home, 'stand-in', 'zsh arguments'), 'utf8')
-        .split('\n')
-        .slice(0, 3),
-    ).toEqual(['-f', '-i', '-c'])
+    // -p keeps zsh from the person's files, and no_global_rcs from the system's zshrc. The last start changes no option.
+    const starts = readFileSync(path.join(home, 'stand-in', 'zsh arguments'), 'utf8')
+      .trimEnd()
+      .split('\n')
+    expect(starts.map((words) => words.split(' -c ')[0])).toEqual(['-p -i -o no_global_rcs', '-p -i -o no_global_rcs', '-i'])
   })
 
   test('says nothing where SHELL names a zsh that is not there, or that is not zsh', async () => {
