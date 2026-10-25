@@ -21,6 +21,8 @@ interface DisplayRow {
   push: boolean
   /** False for a display the person closed to agents, which they then show no page and send no notification. */
   agents?: boolean
+  /** The page the display is locked to, or null. */
+  lockedTo?: { id: string; slug: string; title: string } | null
   /** False for a display whose browser's pairing has ended. Said only where every display is listed. */
   paired?: boolean
 }
@@ -28,7 +30,8 @@ interface DisplayRow {
 /**
  * One display in a list. The browser it is being read on may turn its own notifications on and
  * off, give itself a name, and open or close itself to agents. Doing either of the last two for
- * another display, and forgetting any, are the owner's.
+ * another display, and forgetting any, are the owner's, and so is locking a display to one of
+ * `pages` and unlocking it, which the owner is offered where `pages` is given.
  * `along` says what forgetting it ends besides its own browser's pairing, when it ends more.
  */
 function DisplayItem({
@@ -38,6 +41,7 @@ function DisplayItem({
   now,
   act,
   along = '',
+  pages,
 }: {
   d: DisplayRow
   here: boolean
@@ -45,11 +49,14 @@ function DisplayItem({
   now: number
   act: (p: Promise<unknown>) => Promise<void>
   along?: string
+  pages?: { id: string; title: string }[]
 }) {
   const convex = useConvex()
   const rename = useMutation(api.displays.rename)
   const forget = useMutation(api.displays.forget)
   const allowAgents = useMutation(api.displays.allowAgents)
+  const lock = useMutation(api.displays.lock)
+  const unlock = useMutation(api.displays.unlock)
   const [name, setName] = useState<string | null>(null)
   const renaming = useOpener<HTMLButtonElement>(name !== null)
   const support = pushSupport()
@@ -95,6 +102,11 @@ function DisplayItem({
                 Closed to agents
               </span>
             )}
+            {d.lockedTo && (
+              <span className="chip quiet" title="It keeps to this page, and agents show no other page here. The browser paired as yours unlocks it.">
+                Locked to “{d.lockedTo.title}”
+              </span>
+            )}
           </span>
           <span className="row-sub">
             {here ? 'Open now' : d.paired === false ? 'Shows nothing until its browser is paired again' : `Last open ${ago(d.lastSeenAt, now)}`}
@@ -132,6 +144,28 @@ function DisplayItem({
               checked={d.agents !== false}
               onChange={() => act(allowAgents({ displayId: d.id as Id<'displays'>, allowed: d.agents === false }))}
             />
+          </label>
+        )}
+        {owner && pages && d.paired !== false && (
+          <label className="switch lock-pick" title="Lock this display to a page: it keeps to that page, and agents show no other page there">
+            <span>Locked to</span>
+            <select
+              value={d.lockedTo?.id ?? ''}
+              onChange={(e) =>
+                act(
+                  e.target.value
+                    ? lock({ displayId: d.id as Id<'displays'>, artifactId: e.target.value as Id<'artifacts'> })
+                    : unlock({ displayId: d.id as Id<'displays'> }),
+                )
+              }
+            >
+              <option value="">No page</option>
+              {pages.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.title}
+                </option>
+              ))}
+            </select>
           </label>
         )}
         {(owner || here) && name === null && (
@@ -183,6 +217,8 @@ export function Displays({ thisDisplay }: { thisDisplay?: string }) {
   const me = paired?.find((s) => s.mine)?.id
   // And so does forgetting one whose browser signed itself out: what that browser let in stayed then, and goes now
   const left = useQuery(api.sessions.leftBehind, {}) as { display: string; along: Paired['along'] }[] | undefined
+  // The pages a display can be locked to
+  const pages = useQuery(api.artifacts.list, {}) as { id: string; title: string }[] | undefined
   const alongWith = (display: string) =>
     goesAlong(paired?.find((s) => s.displays.some((d) => d.id === display))?.along ?? left?.find((l) => l.display === display)?.along, me)
   const now = useNow()
@@ -206,7 +242,7 @@ export function Displays({ thisDisplay }: { thisDisplay?: string }) {
       )}
       <ul className="rows panel">
         {displays.map((d) => (
-          <DisplayItem key={d.id} d={d} here={d.id === thisDisplay} owner now={now} act={act} along={alongWith(d.id)} />
+          <DisplayItem key={d.id} d={d} here={d.id === thisDisplay} owner now={now} act={act} along={alongWith(d.id)} pages={pages} />
         ))}
       </ul>
       <Network />

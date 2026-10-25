@@ -207,6 +207,12 @@ function NotPaired() {
     sessionStorage.removeItem('it.signout.note')
     return had
   })
+  // This display was forgotten from the owner's browser, which signed this one out
+  const [forgotten] = useState(() => {
+    const had = sessionStorage.getItem('it.forgotten.note')
+    sessionStorage.removeItem('it.forgotten.note')
+    return had
+  })
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
   const erased = wasErasedHere()
@@ -220,6 +226,12 @@ function NotPaired() {
         {note && (
           <p className="door-note" role="status">
             This browser is signed out. A page that was open on this display may go on working for a moment yet; close its tab to be sure.
+          </p>
+        )}
+        {forgotten && (
+          <p className="door-note" role="status">
+            This display was forgotten on the Displays page, so this browser is signed out.
+            {forgotten === 'locked' && ' It was locked to a page, and the lock ended with it.'}
           </p>
         )}
         {erased && (
@@ -384,6 +396,18 @@ function Paired() {
   )
 }
 
+/** Said on a display whose lock ended because the page it was locked to was deleted, until it is read. */
+function LockEnded({ onSeen }: { onSeen: () => void }) {
+  return (
+    <p className="notice" role="status">
+      <span>The page this display was locked to was deleted, so the display is not locked any more.</span>
+      <button type="button" onClick={onSeen}>
+        OK
+      </button>
+    </p>
+  )
+}
+
 /**
  * Said to the owner who opened, in their own browser, the address they made for another screen.
  * The code in it was not used here: used, it would have made this browser a screen. It is still
@@ -528,6 +552,18 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     if (pushOn) void mendPush(convex)
   }, [pushOn, convex])
 
+  // A display locked to a page keeps to it, whatever address the person opens on it: all but its
+  // settings, where a screen signs itself out, lead back to the page
+  const lockedTo = display?.lockedTo?.slug
+  useEffect(() => {
+    if (lockedTo === undefined) return
+    const page = `/p/${encodeURIComponent(lockedTo)}`
+    if (path !== page && path !== '/settings') navigate(page, true)
+  }, [lockedTo, path])
+  /** Whether this display was locked when it was last heard of, to say so if it is forgotten from somewhere else. */
+  const wasLocked = useRef(false)
+  if (display) wasLocked.current = display.lockedTo !== null
+
   // This display was forgotten from somewhere else: it is signed out here too
   const wasRegistered = useRef(false)
   /** Whether this part of the site is still on screen: what was started for it stops when it is not. */
@@ -564,6 +600,8 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
           }
           startLeaving()
           abandonOutbox(user)
+          // Said on the pairing screen this browser is about to show
+          sessionStorage.setItem('it.forgotten.note', wasLocked.current ? 'locked' : 'yes')
           // If signing out does not work, the site starts again: registering is then refused, and
           // that screen says what happened and offers to try again
           void Promise.race([endSession(), new Promise<boolean>((r) => setTimeout(() => r(false), 15_000))]).then(
@@ -708,7 +746,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const view = (
     <Guard key={path} shown={slug}>
       {slug ? (
-        <PageView slug={slug} user={user} owner={owner} />
+        <PageView slug={slug} user={user} owner={owner} display={display ?? null} />
       ) : owner && path === '/machines' ? (
         <Machines />
       ) : owner && path === '/displays' ? (
@@ -734,6 +772,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const notices = (
     <>
       <ServiceNotice />
+      {display?.lockEnded && <LockEnded onSeen={() => void convex.mutation(api.displays.lockEndedSeen, { key }).catch(() => {})} />}
       {code === 'owner' && <CodeForAnotherScreen />}
       {code === 'screen' && <ScreenOffered onDecline={codeSeen} />}
     </>

@@ -183,6 +183,17 @@ describe('a browser that is not paired', () => {
     expect(names()).toEqual(['/session/token'])
   })
 
+  test('one whose display was just forgotten from the owner’s browser says so, and that a lock it had ended with it, once', async () => {
+    // The browser was kept for the person whose display it was, who is still there
+    localStorage.setItem('it.person', 'user-1')
+    sessionStorage.setItem('it.forgotten.note', 'locked')
+    await start()
+    expect(host.querySelector('.door-note')!.textContent).toBe(
+      'This display was forgotten on the Displays page, so this browser is signed out. It was locked to a page, and the lock ended with it.',
+    )
+    expect(sessionStorage.getItem('it.forgotten.note')).toBeNull()
+  })
+
   test('a code typed there pairs it, and it registers as a display at once, saying only which browser it is', async () => {
     await start()
     await typeCode('owne rcod e000 0000 0001')
@@ -630,6 +641,41 @@ describe('a page an agent brings up on this display', () => {
     })
     expect(location.pathname).toBe('/p/tour-menu')
     expect(host.querySelector('.modal-panel')).toBeNull()
+  })
+})
+
+describe('a display locked to a page', () => {
+  const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: Date.now(), agent: 'pi', machine: 'here', run: null, pending: 0 }
+  const locked = { ...DISPLAY, lockedTo: { id: 'page-1', slug: 'plan', title: 'Plan' }, lockEnded: false }
+
+  test('keeps to its page wherever it is opened, but for its settings, and says in the bar above the page that it is locked and how it is unlocked', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:get'] = PAGE
+    watched['displays:mine'] = locked
+    await start('/')
+    expect(location.pathname).toBe('/p/plan')
+    const mark = host.querySelector('header .lock-mark')!
+    expect(mark.textContent).toBe('Locked hereUnlock')
+    // Nothing takes it back to the person's pages while it is locked
+    expect(host.querySelector('.back-btn')).toBeNull()
+    const { navigate } = await import('./lib')
+    await act(async () => navigate('/displays'))
+    expect(location.pathname).toBe('/p/plan')
+    await act(async () => navigate('/settings'))
+    expect(location.pathname).toBe('/settings')
+    // The owner's browser unlocks it from the mark
+    await act(async () => navigate('/p/plan'))
+    await act(async () => void host.querySelector<HTMLButtonElement>('header .lock-mark')!.click())
+    expect(names()).toContain('displays:unlock')
+  })
+
+  test('says that its lock ended when the page it was locked to was deleted, until that is read', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['displays:mine'] = { ...DISPLAY, lockedTo: null, lockEnded: true }
+    await start('/')
+    expect(host.textContent).toContain('The page this display was locked to was deleted, so the display is not locked any more.')
+    await press('OK')
+    expect(names()).toContain('displays:lockEndedSeen')
   })
 })
 

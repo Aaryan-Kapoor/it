@@ -34,6 +34,16 @@ Each display has a switch, "Open to agents", on the Displays page and under Sett
 
 To know which display you are using, the site tells It whether it is visible on that display, at once when that changes, and that you have used it, at most once in ten seconds while you do. It notes the time of each, and nothing of what you did.
 
+## Locking a display to a page
+
+A display can be locked to one page, such as a calendar on a kitchen TV, so that it keeps showing that page. On a page that is open, the lock in the bar above it locks the display it is open on. On the Displays page, the browser paired as yours chooses for any display the page it is locked to, under "Locked to", and that page comes up on the display at once.
+
+While a display is locked, no agent can bring another page up on it. An agent that names the display is told that it is locked, an agent that asks for every display is shown the others, and a display that is locked is never the one chosen when an agent names none. The page it is locked to can still be brought up on it, and a notification still goes to it when an agent names it or asks for every display. The site on a locked display keeps to the page: any other address opened there leads back to it, except the display's settings, and there is no way back to your pages from it. A small mark in the bar above the page, never over it, says "Locked here" and how the display is unlocked, and on a narrow screen pressing it says how.
+
+Only a browser paired as yours unlocks a display: from the mark on the display itself, where the display is that browser, or from the Displays page, by choosing "No page". A paired screen can lock itself and cannot unlock itself, so it asks first. A lock is the owner's word that a screen keeps to one page, often a screen in a shared room, and whoever is passing that screen should not be able to undo it.
+
+A lock lasts through reloading the page, It starting again, and the display's browser being paired again. It ends when the page is deleted, and the display then says so above whatever it shows next, and when the display is forgotten, which signs its browser out and says so on its pairing screen.
+
 ## Typing to a page's agent, and what it says back
 
 A page that is open has a bar above it: the way back, the page's title, which agent app made it and when it last changed, and what has become of the last thing you did there. While something you did is on its way to the agent, or with it and not yet answered on the page, a thin line moves along the bar's lower edge.
@@ -62,7 +72,7 @@ A phone, a tablet or a TV on the same network becomes a display in three steps.
 
 The code pairs one browser, once, and works for ten minutes. Opening the address uses nothing up: the page there says that the address was made to pair one screen, and the code is spent only when the button is pressed. So the address opened in your own browser, by whichever of the machine's names, changes nothing, and the code stays good for the other screen.
 
-A screen paired this way can open every one of your pages and answer on any of them, can be named, takes notifications, can open or close itself to agents, and can sign itself out. So pair only screens that are yours. It cannot delete a page, and your machines, your other displays and what It holds are looked after only from a browser paired with `it site`.
+A screen paired this way can open every one of your pages and answer on any of them, can be named, takes notifications, can open or close itself to agents, can lock itself to a page, and can sign itself out. It cannot unlock itself. So pair only screens that are yours. It cannot delete a page, and your machines, your other displays and what It holds are looked after only from a browser paired with `it site`.
 
 ## The network
 

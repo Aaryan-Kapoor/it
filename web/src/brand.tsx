@@ -51,6 +51,12 @@ export const IconLink = () => (
     <path d="M14 11a5 5 0 0 0-7.1-.1L4 13.8a5 5 0 0 0 7.1 7.1l1.5-1.5" />
   </svg>
 )
+export const IconLock = () => (
+  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" {...stroke} strokeWidth="2">
+    <rect x="5" y="11" width="14" height="10" rx="2" />
+    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+  </svg>
+)
 export const IconCopy = () => (
   <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" {...stroke} strokeWidth="2">
     <rect x="9" y="9" width="13" height="13" rx="2" />

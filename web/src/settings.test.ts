@@ -117,11 +117,41 @@ describe('what each kind of session is offered', () => {
     ])
   })
 
+  test('the owner locks a display to one of the pages, and unlocks it, and a locked display says to which page', async () => {
+    watched['displays:list'] = [DISPLAYS[0]!, { ...DISPLAYS[1]!, lockedTo: { id: 'page-2', slug: 'board', title: 'Board' } }]
+    watched['artifacts:list'] = [
+      { id: 'page-1', slug: 'plan', title: 'Plan' },
+      { id: 'page-2', slug: 'board', title: 'Board' },
+    ]
+    const { Displays } = await import('./settings')
+    await show(createElement(Displays, { thisDisplay: 'display-1' }))
+    const rows = [...host.querySelectorAll('ul.rows')[0]!.querySelectorAll('li')]
+    const picks = rows.map((li) => li.querySelector<HTMLSelectElement>('label.lock-pick select')!)
+    expect(picks.map((one) => [one.value, [...one.options].map((o) => o.textContent)])).toEqual([
+      ['', ['No page', 'Plan', 'Board']],
+      ['page-2', ['No page', 'Plan', 'Board']],
+    ])
+    expect(rows[1]!.querySelector('.row-name')!.textContent).toBe('Kitchen TVLocked to “Board”')
+    const choose = (one: HTMLSelectElement, value: string) =>
+      act(async () => {
+        one.value = value
+        one.dispatchEvent(new Event('change', { bubbles: true }))
+      })
+    await choose(picks[0]!, 'page-1')
+    await choose(picks[1]!, '')
+    expect(calls).toEqual([
+      { fn: 'displays:lock', args: { displayId: 'display-1', artifactId: 'page-1' } },
+      { fn: 'displays:unlock', args: { displayId: 'display-2' } },
+    ])
+  })
+
   test('a screen opens and closes itself to agents, under its settings', async () => {
     const { Settings } = await import('./settings')
     await show(createElement(Settings, { user: 'user-1', owner: false, display: DISPLAYS[0]!, onSignOut: () => {} }))
     const open = host.querySelector<HTMLInputElement>('label.switch input[role="switch"]')!
     expect([open.closest('label')!.textContent, open.checked]).toEqual(['Open to agents', true])
+    // A screen locks itself from a page, and is offered no way here to lock or unlock a display
+    expect(host.querySelector('label.lock-pick')).toBeNull()
     await act(async () => open.click())
     expect(calls).toEqual([{ fn: 'displays:allowAgents', args: { displayId: 'display-1', allowed: false } }])
   })
