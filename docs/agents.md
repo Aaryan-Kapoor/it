@@ -26,8 +26,9 @@ It has add-ons for six agent apps, and they are not all proven alike.
 
 Any agent app without an add-on can still use the `it` command and the agent skill. A click then waits where the site shows it, and the agent takes it with `it wait`, or reads what is waiting with `it actions`.
 
-Three things are worth knowing about connected apps.
+Four things are worth knowing about connected apps.
 
+- **In OpenCode, and in Hermes's plain terminal, a saved conversation you open again listens once you send a message in it.** Neither tells It's add-on which saved conversation you have opened until a turn begins there, so until then a click on one of its pages waits where the site shows it, and `it wait` takes it. In Hermes's TUI and desktop app, once you have allowed It to send messages there as setup says, a conversation listens as soon as it is open. [Add-ons](add-ons.md) says more of each.
 - **It listens for at most 40 conversations on one machine at a time.** Where more than that are open, it listens for the 40 it heard from most recently, and a click for any other waits, where the site shows it and `it wait` takes it, until that conversation is among them again.
 - **It does nothing to get a click to an agent app that is not connected.** Its conversations are not listened for, its add-on is given no click, and the app's own command is never run to hand one over. A click on a page that such an app made waits where the site shows it, and `it wait` takes it. It does still ask each agent app it knows for its version and for its list of plugins, with the app's own command, when it starts and every half hour, whether the app is connected or not. That is how the site can list what there is to connect.
 - **On Windows some folder names keep an add-on out.** An agent app's own command is run through a shell there, so `it setup` installs no add-on where a folder it has to name to that command holds one of the characters `" & ^ % | < > !`. It says that the command was not run and that nothing was changed.
