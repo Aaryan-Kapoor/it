@@ -1177,7 +1177,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       stand.failedWrites.add('stopped.json')
       if (failRun) stand.failedWrites.add('runs.json')
       stand.watching.get('machines:me')!({ ...on, runs: [{ harness: 'codex', sessionId: 'thread-1', stop: true, run }] })
-      await until(async () => (await local<{ held: unknown[] }>('/runs'))!.held.length === 1)
+      // An answer that did not come in time, on a busy machine, is asked for again
+      await until(async () => (await local<{ held: unknown[] }>('/runs'))?.held.length === 1)
       expect(stand.calls.filter((c) => c.name === 'machines:runEnded')).toEqual([])
       expect(readJson<Record<string, unknown>>(path.join(home, 'runs.json'))?.['codex:thread-1']).toMatchObject(failRun ? { unsure: true } : { stopped: true })
       const previousHome = home
