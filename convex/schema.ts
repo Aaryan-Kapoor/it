@@ -224,6 +224,22 @@ export default defineSchema({
     .index('by_machine', ['byMachine', 'revoked'])
     .index('by_session', ['bySession', 'revoked']),
 
+  // When a conversation was last heard from again on a machine, as a number in the order the
+  // person's clicks and stops are written in: what the machine set aside for it before then
+  // is given back, and a setting aside that was decided before then sets nothing aside. One
+  // for each conversation a machine has heard from again, kept thirty days after the last time.
+  deliveryReturns: defineTable({
+    userId: v.id('users'),
+    machineId: v.id('machines'),
+    harness: v.string(),
+    sessionId: v.string(),
+    generation: v.number(),
+    at: v.number(),
+  })
+    .index('by_user', ['userId'])
+    .index('by_machine_session', ['machineId', 'harness', 'sessionId'])
+    .index('by_at', ['at']),
+
   projects: defineTable({
     userId: v.id('users'),
     key: v.string(),
@@ -370,6 +386,8 @@ export default defineSchema({
     leaseMachineId: v.optional(v.id('machines')),
     /** The machine that gave up delivering it by itself. Until its page changes hands it is left out of what connectors are offered, and still waits for `it wait` and the site. */
     parkedBy: v.optional(v.id('machines')),
+    /** Which time of the conversation's being heard from again on that machine it was set aside in, as `deliveryReturns` counts it: the next time gives it back. None where it was set aside before this was counted. */
+    parkedGeneration: v.optional(v.number()),
     leaseExpiresAt: v.optional(v.number()),
     /**
      * The last time it was taken to be handed over: the receipt that taking is known by, which
@@ -378,7 +396,15 @@ export default defineSchema({
      * be confirmed by its receipt until the click is taken again. A taking with no receipt was
      * made by an It from before receipts.
      */
-    claim: v.optional(v.object({ receipt: v.optional(v.string()), session: v.union(session, v.null()), machineId: v.id('machines') })),
+    claim: v.optional(
+      v.object({
+        receipt: v.optional(v.string()),
+        session: v.union(session, v.null()),
+        machineId: v.id('machines'),
+        /** How many times, by then, the conversation had been heard from again on that machine, as `deliveryReturns` counts it. */
+        generation: v.optional(v.number()),
+      }),
+    ),
     route: v.optional(v.string()),
     /** The machine that said it was handed over, where a machine did: a machine that was at work on it and did not hand it over itself has lost it to that one. */
     handedBy: v.optional(v.id('machines')),
@@ -405,6 +431,8 @@ export default defineSchema({
     .index('by_user_route', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'createdAt'])
     // The same, in the order they were written, which is the order a stop is judged by
     .index('by_user_route_sequence', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'sequence'])
+    // What a machine set aside for a conversation, by when it was set aside, so that a time of the conversation being heard from again gives back only what was set aside before it
+    .index('by_user_parked', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'parkedGeneration'])
     .index('by_delivery_created', ['delivery', 'createdAt'])
     .index('by_delivery_handed', ['delivery', 'handedAt'])
     .index('by_delivery_lease', ['delivery', 'leaseExpiresAt'])

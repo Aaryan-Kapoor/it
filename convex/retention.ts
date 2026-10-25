@@ -115,7 +115,7 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
   // With each record goes what was kept under its id to hold it to a pace, and, for a machine,
   // the proofs it has used: none of it is left for the hourly cleaning to come to. A showing's
   // record is among what goes here, though its display and its page are gone already.
-  for (const table of ['displays', 'machines', 'sessions', 'invites', 'mounts', 'deletions'] as const) {
+  for (const table of ['displays', 'machines', 'sessions', 'invites', 'mounts', 'deletions', 'deliveryReturns'] as const) {
     const rows = await ctx.db
       .query(table)
       .withIndex('by_user', (q: any) => q.eq('userId', userId))
@@ -261,7 +261,7 @@ export const sweepActions = internalMutation({
   },
 })
 
-/** Bookkeeping that has expired: mounts, spent proofs, old notifications, idle rate-limit buckets, forgotten keys, codes, sessions that ended or went unused, revoked machines. */
+/** Bookkeeping that has expired: mounts, spent proofs, old notifications, idle rate-limit buckets, forgotten keys, when conversations were last heard from again, codes, sessions that ended or went unused, revoked machines. */
 export const sweepRecords = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -313,6 +313,15 @@ export const sweepRecords = internalMutation({
       await ctx.db
         .query('forgotten')
         .withIndex('by_at', (q) => q.lt('at', now - 90 * DAY))
+        .take(LIGHT),
+    )
+    // When a conversation was last heard from again on a machine, once that is a month ago:
+    // what was set aside before then has been given back, and a setting aside that was
+    // decided before then, which this tells apart, has long been told what became of it
+    await drop(
+      await ctx.db
+        .query('deliveryReturns')
+        .withIndex('by_at', (q) => q.lt('at', now - 30 * DAY))
         .take(LIGHT),
     )
     // A code is good for ten minutes, and its record goes at the next cleaning after that

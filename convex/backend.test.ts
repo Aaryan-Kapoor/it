@@ -2665,6 +2665,143 @@ describe('clicks and their delivery', () => {
     })
   })
 
+  describe('setting aside and giving back, when a conversation comes back while a delivery is ending', () => {
+    const A = 'receipt-of-the-first-taking'
+    const B = 'receipt-of-the-second-taking'
+    /** What is set aside for any conversation, by id. */
+    const aside = (t: T) =>
+      t.run(async (ctx) => (await ctx.db.query('actions').collect()).filter((x) => x.delivery === 'pending' && x.parkedBy).map((x) => x._id))
+    const returned = (t: T, machineId: string) =>
+      t.run(async (ctx) => (await ctx.db.query('deliveryReturns').collect()).find((r) => r.machineId === machineId && r.sessionId === SESSION.id)?.generation)
+    /** Clicks for the conversation, written as clicks are, a number of them at once. */
+    const waitingFor = (t: T, artifactId: string, machineId: string, n: number) =>
+      t.run(async (ctx) => {
+        const a = (await ctx.db.get(artifactId as never)) as Doc<'artifacts'>
+        const ids = []
+        for (let i = 0; i < n; i++)
+          ids.push(
+            await ctx.db.insert('actions', {
+              userId: a.userId,
+              title: a.title,
+              artifactId: a._id,
+              clientActionId: `waiting-${String(i).padStart(4, '0')}`,
+              name: 'press',
+              payload: '{}',
+              contentVersion: 1,
+              createdAt: Date.now() + i,
+              delivery: 'pending',
+              machineId: machineId as never,
+              harness: SESSION.harness,
+              sessionId: SESSION.id,
+            }),
+          )
+        await ctx.db.patch(a._id, { waiting: n })
+        return ids
+      })
+
+    test('a conversation heard from again before a failed delivery sets its click aside keeps it: the late setting aside sets nothing aside', async () => {
+      const { t, m, click } = await setup()
+      const first = (await click('click-0001')).actionId
+      const second = (await click('click-0002')).actionId
+      expect(await m.as.mutation(api.delivery.claim, { ids: [first], for: SESSION, receipt: A })).toEqual([first])
+      // The person opens the conversation, which asks for what was set aside for it: nothing is yet
+      expect(await m.as.mutation(api.delivery.unpark, { for: SESSION })).toBe(0)
+      // The try that was ending gives up, on this click and on everything else waiting for the conversation
+      expect(await m.as.mutation(api.delivery.park, { id: first, receipt: A, for: SESSION, all: true })).toBe('again')
+      await settle(t)
+      expect(await aside(t)).toEqual([])
+      expect((await inbox(m)).map((c) => c.id)).toEqual([first, second])
+      // A connector from before receipts that gives up late is told the same, of what it took
+      const old = (await click('click-0003')).actionId
+      expect(await m.as.mutation(api.delivery.claim, { ids: [old], for: SESSION, receipt: B })).toEqual([old])
+      await m.as.mutation(api.delivery.release, { id: old, receipt: B })
+      expect(await m.as.mutation(api.delivery.claim, { ids: [old], for: SESSION })).toEqual([old])
+      await m.as.mutation(api.delivery.unpark, { for: SESSION })
+      expect(await m.as.mutation(api.delivery.park, { id: old, for: SESSION, all: true })).toBe('again')
+      await settle(t)
+      expect(await aside(t)).toEqual([])
+    })
+
+    test('a conversation heard from again after a failed delivery set its clicks aside gets them back, and the rest of that setting aside, late, sets nothing more aside', async () => {
+      const { t, m, click } = await setup()
+      const first = (await click('click-0001')).actionId
+      const second = (await click('click-0002')).actionId
+      expect(await m.as.mutation(api.delivery.claim, { ids: [first], for: SESSION, receipt: A })).toEqual([first])
+      expect(await m.as.mutation(api.delivery.park, { id: first, receipt: A, for: SESSION, all: true })).toBe(true)
+      // Set aside, and the rest is still to be set aside when the conversation comes back
+      expect(await aside(t)).toEqual([first])
+      expect(await m.as.mutation(api.delivery.unpark, { for: SESSION })).toBe(1)
+      await settle(t)
+      expect(await aside(t)).toEqual([])
+      expect((await inbox(m)).map((c) => c.id)).toEqual([first, second])
+    })
+
+    test('several steps of setting aside and of giving back never leave a click aside once its conversation is back, nor give back what is set aside after', async () => {
+      const { t, alice, m, p } = await setup()
+      const ids = await waitingFor(t, p.artifactId, m.id, 120)
+      expect(await m.as.mutation(api.delivery.claim, { ids: [ids[0]!], for: SESSION, receipt: A })).toEqual([ids[0]])
+      expect(await m.as.mutation(api.delivery.park, { id: ids[0]!, receipt: A, for: SESSION, all: true })).toBe(true)
+      // One step of setting the rest aside runs, then the conversation comes back, then the next step comes, late
+      const rest = { machineId: m.id as never, harness: SESSION.harness, sessionId: SESSION.id, generation: 0 }
+      await t.mutation(internal.delivery.parkRest, rest)
+      expect((await aside(t)).length).toBe(51)
+      expect(await m.as.mutation(api.delivery.unpark, { for: SESSION })).toBe(50)
+      await t.mutation(internal.delivery.parkRest, rest)
+      await settle(t)
+      expect(await aside(t)).toEqual([])
+      // The conversation fails again after it came back: that setting aside stands, also against
+      // a step of the giving back that comes after it
+      const now = (await returned(t, m.id))!
+      expect(await m.as.mutation(api.delivery.claim, { ids: [ids[1]!], for: SESSION, receipt: B })).toEqual([ids[1]])
+      expect(await m.as.mutation(api.delivery.park, { id: ids[1]!, receipt: B, for: SESSION, all: true })).toBe(true)
+      await t.mutation(internal.delivery.unparkRest, { userId: alice.user as never, machineId: m.id as never, for: SESSION, generation: now })
+      expect(await aside(t)).toEqual([ids[1]])
+      await settle(t)
+      expect((await aside(t)).length).toBe(120)
+      // And comes back once more: all of it is given back, in steps
+      expect(await m.as.mutation(api.delivery.unpark, { for: SESSION })).toBe(50)
+      await settle(t)
+      expect(await aside(t)).toEqual([])
+      expect((await t.run((ctx) => ctx.db.query('actions').collect())).every((x) => x.machineId === m.id && x.delivery === 'pending')).toBe(true)
+    })
+
+    test('giving back what was set aside drops what a stop took, and leaves what another machine holds as it is', async () => {
+      const { t, m, p, click } = await setup()
+      const other = await machineOf(t, 'alice', 'desktop')
+      const stopped = (await click('click-0001')).actionId
+      const kept = (await click('click-0002')).actionId
+      const theirs = (await click('click-0003')).actionId
+      expect(await m.as.mutation(api.delivery.park, { id: stopped })).toBe(true)
+      expect(await m.as.mutation(api.delivery.park, { id: kept })).toBe(true)
+      // Another machine holds the third, and setting it aside waits for that hold to end
+      expect(await other.as.mutation(api.delivery.claim, { ids: [theirs], receipt: A })).toEqual([theirs])
+      expect(await m.as.mutation(api.delivery.park, { id: theirs })).toBe(false)
+      // The person stopped the conversation after the first and before the second
+      const placeOf = async (id: string) => (await t.run((ctx) => ctx.db.get(id as never) as Promise<Doc<'actions'>>)).sequence!
+      const place = await placeOf(stopped)
+      await t.run((ctx) => ctx.db.patch(p.artifactId, { stoppedThrough: Date.now(), stoppedSequence: place }))
+      expect(await m.as.mutation(api.delivery.unpark, { for: SESSION })).toBe(2)
+      const of = async (id: string) => t.run((ctx) => ctx.db.get(id as never) as Promise<Doc<'actions'>>)
+      expect(await of(stopped)).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+      expect(await of(kept)).toMatchObject({ delivery: 'pending', machineId: m.id })
+      expect(await of(theirs)).toMatchObject({ delivery: 'leased', leaseMachineId: other.id })
+    })
+
+    test('when a machine heard its conversations from again is let go of when the machine is revoked, and a month after the last time', async () => {
+      const { t, alice, m } = await setup()
+      const other = await machineOf(t, 'alice', 'desktop')
+      await m.as.mutation(api.delivery.unpark, { for: SESSION })
+      await other.as.mutation(api.delivery.unpark, { for: SESSION })
+      expect(await t.run(async (ctx) => (await ctx.db.query('deliveryReturns').collect()).length)).toBe(2)
+      await alice.browser.mutation(api.machines.revoke, { machineId: other.id })
+      await settle(t)
+      expect((await t.run((ctx) => ctx.db.query('deliveryReturns').collect())).map((r) => r.machineId)).toEqual([m.id])
+      await vi.advanceTimersByTimeAsync(31 * 86_400_000)
+      await t.mutation(internal.retention.sweepRecords, {})
+      expect(await t.run((ctx) => ctx.db.query('deliveryReturns').collect())).toEqual([])
+    })
+  })
+
   describe('the order of clicks and stops, which the clock does not decide', () => {
     /** Reopens the conversation and stops it from the page, as a person does with Stop. */
     const stopNow = async (alice: Awaited<ReturnType<typeof person>>, m: Awaited<ReturnType<typeof machineOf>>, artifactId: string) => {
@@ -4818,6 +4955,8 @@ describe('leaving', () => {
     await alice.browser.mutation(api.sessions.inviteScreen, {})
     await t.mutation(internal.bridge.spend, { machineId: m.id, jti: 'a-proof-number-0001', issuedAt: Math.floor(Date.now() / 1000) })
     await t.mutation(internal.bridge.spend, { machineId: bm.id, jti: 'a-proof-number-0002', issuedAt: Math.floor(Date.now() / 1000) })
+    // A conversation of theirs heard from again on their machine
+    await m.as.mutation(api.delivery.unpark, { for: SESSION })
     // And a limit the person reached, which is written down by a job of the backend's
     await alice.browser.mutation(api.account.exportStart, {})
     await alice.browser.mutation(api.account.exportStart, {})
@@ -4842,7 +4981,7 @@ describe('leaving', () => {
       })
     // Before: there is something of theirs in every table that holds anything of a person
     const before = await naming()
-    for (const table of ['mounts', 'rateLimits', 'spentProofs', 'actions', 'states', 'notifications', 'invites', 'tallies'])
+    for (const table of ['mounts', 'rateLimits', 'spentProofs', 'actions', 'states', 'notifications', 'invites', 'tallies', 'deliveryReturns'])
       expect([table, before[table] ?? 0]).toEqual([table, expect.any(Number)])
     expect([before.mounts, before.spentProofs, (before.rateLimits ?? 0) > 3]).toEqual([1, 1, true])
     await alice.browser.mutation(api.account.requestDeletion, { confirm: 'erase everything', user: alice.user })

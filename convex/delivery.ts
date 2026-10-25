@@ -11,11 +11,12 @@ import type { FilterBuilder, NamedTableInfo } from 'convex/server'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { DataModel, Doc, Id } from './_generated/dataModel'
-import { internalMutation, mutation, type QueryCtx, query } from './_generated/server'
+import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { destination, dropStopped, madeBefore, noLongerWaiting, type Seen, stoppedSince } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
 import { log } from './lib/log'
+import { nextSequence } from './lib/tally'
 import { session } from './schema'
 import { revisionNow } from './state'
 
@@ -504,6 +505,20 @@ const RECEIPT = /^[A-Za-z0-9_-]{16,64}$/
 const unreceipted = (x: Doc<'actions'>) => x.claim?.receipt === undefined
 /** Whether this machine's taking of a click, known by that receipt, is still the click's last one. */
 const holds = (x: Doc<'actions'>, receipt: string, machine: Doc<'machines'>) => x.claim?.receipt === receipt && x.claim.machineId === machine._id
+/**
+ * How many times a conversation has been heard from again on a machine, as a number in the
+ * order the person's clicks and stops are written in: nothing where it never has.
+ */
+async function generationOf(ctx: QueryCtx, machineId: Id<'machines'>, harness: string | undefined, sessionId: string | undefined): Promise<number> {
+  if (harness === undefined || sessionId === undefined) return 0
+  return (await returnOf(ctx, machineId, harness, sessionId))?.generation ?? 0
+}
+const returnOf = (ctx: QueryCtx, machineId: Id<'machines'>, harness: string, sessionId: string) =>
+  ctx.db
+    .query('deliveryReturns')
+    .withIndex('by_machine_session', (q) => q.eq('machineId', machineId).eq('harness', harness).eq('sessionId', sessionId))
+    .unique()
+
 /** The receipt one of a list names, where it names one. */
 const receiptFor = (receipts: { id: Id<'actions'>; receipt: string }[] | undefined, id: Id<'actions'>) => receipts?.find((r) => r.id === id)?.receipt
 
@@ -524,6 +539,13 @@ export const claim = mutation({
     const now = Date.now()
     const held = []
     const adopted = new Set<string>()
+    // Which time of its conversation's being heard from again each taking is made in: a setting aside it ends in counts only if that is still the last
+    const generations = new Map<string, number>()
+    const generation = async (harness: string | undefined, sessionId: string | undefined) => {
+      const key = `${harness}:${sessionId}`
+      if (!generations.has(key)) generations.set(key, await generationOf(ctx, machine._id, harness, sessionId))
+      return generations.get(key)!
+    }
     for (const id of ids.slice(0, 50)) {
       const x = await ctx.db.get(id)
       if (!x || x.userId !== user._id) continue
@@ -551,7 +573,12 @@ export const claim = mutation({
         delivery: 'leased',
         leaseMachineId: machine._id,
         leaseExpiresAt: now + LEASE_MS,
-        claim: { ...(receipt === undefined ? {} : { receipt }), session: expected ?? null, machineId: machine._id },
+        claim: {
+          ...(receipt === undefined ? {} : { receipt }),
+          session: expected ?? null,
+          machineId: machine._id,
+          generation: await generation(expected?.harness ?? x.harness, expected?.id ?? x.sessionId),
+        },
       })
       held.push(id)
       // A page whose machine is gone, taken for the conversation it belongs to, is this
@@ -813,7 +840,8 @@ export const park = mutation({
    * True once the click has stopped being this machine's to deliver: set aside, gone elsewhere,
    * or handed over. False when another machine holds it now, and the asking has to be repeated.
    * `again` where it was not set aside and waits to be tried afresh: another taking has had it
-   * since the one that gave up on it.
+   * since the one that gave up on it, or its conversation has been heard from again since that
+   * one began.
    */
   handler: async (ctx, { id, for: tried, all, receipt }): Promise<boolean | 'again'> => {
     const { x, machine } = await mine(ctx, id)
@@ -835,18 +863,30 @@ export const park = mutation({
       await dropStopped(ctx, x)
       return true
     }
+    // The conversation has been heard from again since this machine's last taking of the click
+    // began: it came back while that taking was ending. What stood in the way may well be over,
+    // so the click is not set aside, and goes back to be tried afresh. A click this machine has
+    // not taken since these times were counted is taken to have been tried before the first.
+    // One that another machine took last, and let go of, was tried here before that, and is set
+    // aside again as it was: what this machine heard since tells nothing of that machine's taking.
+    const current = await generationOf(ctx, machine._id, x.harness, x.sessionId)
+    const began = x.claim === undefined ? 0 : x.claim.machineId === machine._id ? (x.claim.generation ?? 0) : current
+    if (began !== current) {
+      if (x.delivery === 'leased' && x.leaseMachineId === machine._id) await ctx.db.patch(id, await backToWaiting(ctx, x))
+      return 'again'
+    }
     // The page may have changed hands while this machine was trying. Then the click is not
     // set aside at all: it goes to whoever owns the page now, who has not tried it yet.
     const to = await destination(ctx, x.artifactId)
     const moved = to.machineId !== machine._id || to.harness !== x.harness || to.sessionId !== x.sessionId
     await ctx.db.patch(id, {
-      ...(moved ? { ...to, parkedBy: undefined } : { machineId: undefined, parkedBy: machine._id }),
+      ...(moved ? { ...to, parkedBy: undefined, parkedGeneration: undefined } : { machineId: undefined, parkedBy: machine._id, parkedGeneration: current }),
       delivery: 'pending',
       leaseMachineId: undefined,
       leaseExpiresAt: undefined,
     })
     if (all && !moved && x.harness && x.sessionId)
-      await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId: machine._id, harness: x.harness, sessionId: x.sessionId })
+      await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId: machine._id, harness: x.harness, sessionId: x.sessionId, generation: current })
     return true
   },
 })
@@ -863,46 +903,88 @@ export const unpark = mutation({
   args: { for: session },
   handler: async (ctx, { for: s }): Promise<number> => {
     const { user, machine } = await requireMachine(ctx)
-    const aside = await ctx.db
-      .query('actions')
-      .withIndex('by_user_route', (q) =>
-        q
-          .eq('userId', user._id)
-          .eq('delivery', 'pending')
-          .eq('harness', s.harness)
-          .eq('sessionId', s.id)
-          .eq('machineId', undefined)
-          .eq('parkedBy', machine._id),
-      )
-      .take(50)
-    // This machine's again, as they were before it set them aside
-    for (const x of aside) await ctx.db.patch(x._id, { machineId: machine._id, parkedBy: undefined })
+    // This time of its being heard from again, numbered in the order the person's clicks and
+    // stops are written in, so that it comes after every setting aside that was written before
+    // it and before every one written after it
+    const generation = await nextSequence(ctx, user._id)
+    const was = await returnOf(ctx, machine._id, s.harness, s.id)
+    if (was) await ctx.db.patch(was._id, { generation, at: Date.now() })
+    else
+      await ctx.db.insert('deliveryReturns', {
+        userId: user._id,
+        machineId: machine._id,
+        harness: s.harness.slice(0, 40),
+        sessionId: s.id.slice(0, 200),
+        generation,
+        at: Date.now(),
+      })
+    const given = await giveBackAside(ctx, user._id, machine._id, s, generation)
     // However many there are: the rest follow a batch at a time, by themselves
-    if (aside.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.unparkRest, { userId: user._id, machineId: machine._id, for: s })
-    return aside.length
+    if (given === 50) await ctx.scheduler.runAfter(0, internal.delivery.unparkRest, { userId: user._id, machineId: machine._id, for: s, generation })
+    return given
   },
 })
 
-/** The rest of what a machine had set aside for a conversation that is back, a batch at a time. */
+/**
+ * Gives back one batch of what a machine set aside for a conversation before the time it was
+ * heard from again that `generation` names: this machine's again, as they were before it set
+ * them aside. What was set aside after that time is left as it is. With no time named, as a
+ * step scheduled before these were counted asks, what was set aside before they were counted.
+ */
+async function giveBackAside(
+  ctx: MutationCtx,
+  userId: Id<'users'>,
+  machineId: Id<'machines'>,
+  s: { harness: string; id: string },
+  generation: number | undefined,
+): Promise<number> {
+  const aside = await ctx.db
+    .query('actions')
+    .withIndex('by_user_parked', (q) => {
+      const of = q
+        .eq('userId', userId)
+        .eq('delivery', 'pending')
+        .eq('harness', s.harness)
+        .eq('sessionId', s.id)
+        .eq('machineId', undefined)
+        .eq('parkedBy', machineId)
+      return generation === undefined ? of.eq('parkedGeneration', undefined) : of.lt('parkedGeneration', generation)
+    })
+    .take(50)
+  for (const x of aside) {
+    // What a stop dropped is not given back to be delivered, whatever was set aside
+    if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
+    else await ctx.db.patch(x._id, { machineId, parkedBy: undefined, parkedGeneration: undefined })
+  }
+  return aside.length
+}
+
+/**
+ * The rest of what a machine had set aside for a conversation that is back, a batch at a time.
+ * A later time of its being heard from again gives back all that this one would, and goes on by
+ * itself: this one stops there.
+ */
 export const unparkRest = internalMutation({
-  args: { userId: v.id('users'), machineId: v.id('machines'), for: session },
-  handler: async (ctx, { userId, machineId, for: s }) => {
-    const aside = await ctx.db
-      .query('actions')
-      .withIndex('by_user_route', (q) =>
-        q.eq('userId', userId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id).eq('machineId', undefined).eq('parkedBy', machineId),
-      )
-      .take(50)
-    for (const x of aside) await ctx.db.patch(x._id, { machineId, parkedBy: undefined })
-    if (aside.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.unparkRest, { userId, machineId, for: s })
+  args: { userId: v.id('users'), machineId: v.id('machines'), for: session, generation: v.optional(v.number()) },
+  handler: async (ctx, { userId, machineId, for: s, generation }) => {
+    if (generation !== undefined && (await generationOf(ctx, machineId, s.harness, s.id)) !== generation) return null
+    if ((await giveBackAside(ctx, userId, machineId, s, generation)) === 50)
+      await ctx.scheduler.runAfter(0, internal.delivery.unparkRest, { userId, machineId, for: s, generation })
     return null
   },
 })
 
-/** Sets aside everything else waiting for a conversation that takes nothing, a batch at a time, however much there is. */
+/**
+ * Sets aside everything else waiting for a conversation that takes nothing, a batch at a time,
+ * however much there is: only for as long as the conversation has not been heard from again
+ * since the click that took nothing was set aside. A step that comes after it has been, late,
+ * sets nothing aside, and leaves what is waiting to be tried afresh. A step scheduled before
+ * these times were counted is taken to be of the time before the first.
+ */
 export const parkRest = internalMutation({
-  args: { machineId: v.id('machines'), harness: v.string(), sessionId: v.string() },
-  handler: async (ctx, { machineId, harness, sessionId }) => {
+  args: { machineId: v.id('machines'), harness: v.string(), sessionId: v.string(), generation: v.optional(v.number()) },
+  handler: async (ctx, { machineId, harness, sessionId, generation }) => {
+    if ((await generationOf(ctx, machineId, harness, sessionId)) !== (generation ?? 0)) return null
     const rest = await ctx.db
       .query('actions')
       .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId))
@@ -916,11 +998,11 @@ export const parkRest = internalMutation({
       // hands since has had its clicks addressed afresh, and they are gone from this list
       const to = await destination(ctx, other.artifactId)
       if (to.machineId === machineId && to.harness === harness && to.sessionId === sessionId)
-        await ctx.db.patch(other._id, { machineId: undefined, parkedBy: machineId })
-      else await ctx.db.patch(other._id, { ...to, parkedBy: undefined })
+        await ctx.db.patch(other._id, { machineId: undefined, parkedBy: machineId, parkedGeneration: generation ?? 0 })
+      else await ctx.db.patch(other._id, { ...to, parkedBy: undefined, parkedGeneration: undefined })
     }
     // Each batch takes what it read out of the list it reads from, so the next starts afresh
-    if (rest.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId, harness, sessionId })
+    if (rest.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId, harness, sessionId, generation })
     return null
   },
 })
@@ -946,8 +1028,28 @@ export const orphan = internalMutation({
     if (!batch.isDone) await ctx.scheduler.runAfter(0, internal.delivery.orphan, { machineId })
     // What the machine had set aside is addressed to no machine, and is not among the above: it
     // is found by the pages the machine owned, whose waiting clicks are each addressed afresh,
-    // which lets go of what a machine that is gone had set aside
-    else await ctx.scheduler.runAfter(0, internal.delivery.orphanPages, { machineId })
+    // which lets go of what a machine that is gone had set aside. And when the machine heard
+    // each conversation from again is of no more use.
+    else {
+      await ctx.scheduler.runAfter(0, internal.delivery.orphanPages, { machineId })
+      await ctx.scheduler.runAfter(0, internal.delivery.forgetReturns, { machineId })
+    }
+    return null
+  },
+})
+
+/** Lets go of when a machine that is gone heard each of its conversations from again, a batch at a time. */
+export const forgetReturns = internalMutation({
+  args: { machineId: v.id('machines') },
+  handler: async (ctx, { machineId }) => {
+    const machine = await ctx.db.get(machineId)
+    if (machine && !machine.revoked) return null
+    const rows = await ctx.db
+      .query('deliveryReturns')
+      .withIndex('by_machine_session', (q) => q.eq('machineId', machineId))
+      .take(100)
+    for (const r of rows) await ctx.db.delete(r._id)
+    if (rows.length === 100) await ctx.scheduler.runAfter(0, internal.delivery.forgetReturns, { machineId })
     return null
   },
 })
