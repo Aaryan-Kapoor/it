@@ -3572,6 +3572,24 @@ describe('which display an agent’s page goes to', () => {
     expect((await m.as.query(api.displays.list, {})).map((d) => d.lockedTo)).toEqual([null, null, null])
   })
 
+  test('a screen that is locked may lock itself to the same page again, and only the owner’s browser locks it to another', async () => {
+    const { t, m, laptop, phone } = await household()
+    await publish(m, 'board')
+    const page = async (slug: string) => (await t.run((ctx) => ctx.db.query('artifacts').collect())).find((a) => a.slug === slug)!._id
+    const lockedTo = async () => (await phone.browser.query(api.displays.mine, { key: phone.key }))?.lockedTo?.slug
+    await phone.browser.mutation(api.displays.lock, { displayId: phone.display.id, artifactId: await page('board') })
+    // Locking it to another page would undo the owner's lock as unlocking it would, and is refused as that is
+    expect(await code(phone.browser.mutation(api.displays.lock, { displayId: phone.display.id, artifactId: await page('plan') }))).toBe('forbidden')
+    expect(await lockedTo()).toBe('board')
+    expect((await phone.browser.query(api.displays.mine, { key: phone.key }))?.showing?.slug).toBe('board')
+    // Locking it to the page it is locked to changes nothing of the lock, and brings the page up again
+    expect(await code(phone.browser.mutation(api.displays.lock, { displayId: phone.display.id, artifactId: await page('board') }))).toBe('ok')
+    expect(await lockedTo()).toBe('board')
+    // The owner's browser locks it to another page
+    await laptop.browser.mutation(api.displays.lock, { displayId: phone.display.id, artifactId: await page('plan') })
+    expect(await lockedTo()).toBe('plan')
+  })
+
   test('a lock outlives a reload and the pairing of its browser being renewed, and ends with its page or its display', async () => {
     const { t, m, laptop, tv } = await household()
     const plan = (await t.run((ctx) => ctx.db.query('artifacts').collect()))[0]!._id

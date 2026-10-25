@@ -297,7 +297,10 @@ export const allowAgents = mutation({
  * Locks a display to one of the person's pages: from then on nothing an agent does brings
  * another page up there, it is never the display chosen when an agent names none, and the site
  * on it keeps to that page. The page is brought up there at once. The owner's browser locks any
- * display, and a screen itself and no other. Only the owner's browser unlocks one (`unlock`).
+ * display, and a screen itself and no other. Only the owner's browser unlocks one (`unlock`),
+ * and so only the owner's browser locks one that is locked to another page: a screen that could
+ * would undo the owner's lock as surely as unlocking it would. A screen may lock itself where it
+ * is not locked, and to the page it is locked to again.
  */
 export const lock = mutation({
   args: { displayId: v.id('displays'), artifactId: v.id('artifacts') },
@@ -306,6 +309,8 @@ export const lock = mutation({
     const d = await ownDisplay(ctx, c.user._id, displayId)
     if (!speaksFor(c, d)) fail('not_found', 'No such display.')
     const page = await ownArtifact(ctx, c.user._id, artifactId)
+    if (d.lockedTo && d.lockedTo.artifactId !== page._id && c.session.role !== 'owner')
+      fail('forbidden', 'This display is locked to another page, and only the browser paired as yours can change that.')
     const now = Date.now()
     await ctx.db.patch(d._id, {
       lockedTo: { artifactId: page._id, at: now },
