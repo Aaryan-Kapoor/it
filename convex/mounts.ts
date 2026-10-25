@@ -23,11 +23,12 @@ const TICKET_MS = 120_000
 const ASKED_MS = 60_000
 
 export const create = mutation({
-  args: { artifactId: v.id('artifacts'), displayKey: v.string() },
-  handler: async (ctx, { artifactId, displayKey }) => {
+  // `picture`: the showing is a card's picture of its page on the grid, and not the page opened
+  args: { artifactId: v.id('artifacts'), displayKey: v.string(), picture: v.optional(v.boolean()) },
+  handler: async (ctx, { artifactId, displayKey, picture }) => {
     const c = await requireBrowser(ctx)
     const { user } = c
-    await rateLimit(ctx, 'mount', user._id)
+    await rateLimit(ctx, picture ? 'picture' : 'mount', user._id)
     const artifact = await ownArtifact(ctx, user._id, artifactId)
     if (artifact.currentVersion === undefined) fail('not_found', 'That page has nothing published yet.')
     const display = await displayByKey(ctx, c, displayKey)
