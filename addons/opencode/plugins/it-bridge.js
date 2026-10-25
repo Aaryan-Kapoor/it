@@ -158,6 +158,16 @@ function exchange(c, method, route, headers, text) {
   })
 }
 
+/**
+ * What the connector is told of clicks the agent has: each by the receipt it was offered with,
+ * which names the one taking of it that this is about, and by its id for a connector that gives
+ * no receipts.
+ */
+const had = (clicks) => {
+  const receipts = clicks.flatMap((c) => (typeof c.receipt === 'string' ? [{ id: c.id, receipt: c.receipt }] : []))
+  return { ids: clicks.map((c) => c.id), ...(receipts.length ? { receipts } : {}) }
+}
+
 export const ItBridge = async ({ client }) => {
   let connector = null // { socket | port, token }, read from the connector's own file
   let lookedAt = 0
@@ -284,7 +294,7 @@ export const ItBridge = async ({ client }) => {
   function gave(clicks) {
     for (const c of clicks) given.add(c.id)
     if (given.size > 2000) for (const id of [...given].slice(0, 1000)) given.delete(id)
-    void ask('/ack', { ids: clicks.map((c) => c.id) })
+    void ask('/ack', had(clicks))
   }
 
   /** Whether an answer of OpenCode's says that it will take the message. */
@@ -398,13 +408,15 @@ export const ItBridge = async ({ client }) => {
   }
 
   async function check(s) {
-    const got = await ask(`/clicks?harness=${HARNESS}&session=${encodeURIComponent(s.id)}`)
+    // With receipts: each click comes with the one its taking is known by, and is said to be had by that
+    const got = await ask(`/clicks?receipts=1&harness=${HARNESS}&session=${encodeURIComponent(s.id)}`)
     // The conversation may have been dropped while the connector was answering
     if (!got || !Array.isArray(got.clicks) || sessions.get(s.id) !== s) return
     const clicks = got.clicks.filter((c) => c && typeof c.id === 'string' && c.id && typeof c.text === 'string' && c.text)
     const again = clicks.filter((c) => given.has(c.id))
-    // Offered something the agent already has: the earlier report of it was lost, so it is sent again
-    if (again.length) void ask('/ack', { ids: again.map((c) => c.id) })
+    // Offered something the agent already has: the earlier report of it was lost, or it is offered
+    // in a later taking, so it is said again, by the receipt it is offered with now
+    if (again.length) void ask('/ack', had(again))
     // Only what the connector offers this very moment is handed over. A click it has stopped
     // offering may have gone to someone else.
     const fresh = clicks.filter((c) => !given.has(c.id))

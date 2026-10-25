@@ -155,6 +155,16 @@ function exchange(c, method, route, headers, text) {
   })
 }
 
+/**
+ * What the connector is told of clicks the agent has: each by the receipt it was offered with,
+ * which names the one taking of it that this is about, and by its id for a connector that gives
+ * no receipts.
+ */
+const had = (clicks) => {
+  const receipts = clicks.flatMap((c) => (typeof c.receipt === 'string' ? [{ id: c.id, receipt: c.receipt }] : []))
+  return { ids: clicks.map((c) => c.id), ...(receipts.length ? { receipts } : {}) }
+}
+
 export default function (pi) {
   // The commands the agent runs are told where It's folder is too, when it is not the usual place: the `it` command they run must use the same one as this add-on
   if (!process.env.IT_HOME && typeof IT_HOME_AT_SETUP === 'string' && IT_HOME_AT_SETUP) process.env.IT_HOME = IT_HOME_AT_SETUP
@@ -237,7 +247,7 @@ export default function (pi) {
     if (shared.given.size > 2000) for (const id of [...shared.given].slice(0, 1000)) shared.given.delete(id)
     retryWait = 0
     retryAt = 0
-    void ask('/ack', { ids: clicks.map((c) => c.id) })
+    void ask('/ack', had(clicks))
   }
 
   /**
@@ -344,14 +354,16 @@ export default function (pi) {
         if (!(await ask('/session', { harness: HARNESS, session: move.now, was: move.was }))) return
         if (shared.moves[0] === move) shared.moves.shift()
       }
-      const got = await ask(`/clicks?harness=${HARNESS}&session=${encodeURIComponent(id)}`)
+      // With receipts: each click comes with the one its taking is known by, and is said to be had by that
+      const got = await ask(`/clicks?receipts=1&harness=${HARNESS}&session=${encodeURIComponent(id)}`)
       // Pi may have shut this conversation down while the connector was answering, or gone to
       // another one: what was asked for the first is not handed to the second
       if (!ctx || !got || !Array.isArray(got.clicks) || ctx.sessionManager.getSessionId() !== id) return
       const clicks = got.clicks.filter((c) => c && typeof c.id === 'string' && c.id && typeof c.text === 'string' && c.text)
       const again = clicks.filter((c) => shared.given.has(c.id))
-      // Offered something the agent already has: the earlier report of it was lost, so it is sent again
-      if (again.length) void ask('/ack', { ids: again.map((c) => c.id) })
+      // Offered something the agent already has: the earlier report of it was lost, or it is offered
+      // in a later taking, so it is said again, by the receipt it is offered with now
+      if (again.length) void ask('/ack', had(again))
       // Only what the connector offers this very moment is handed over. A click it has stopped
       // offering may have gone to someone else.
       handOver(clicks.filter((c) => !shared.given.has(c.id) && !sent.some((s) => s.id === c.id)))

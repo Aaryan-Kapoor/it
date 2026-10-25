@@ -127,6 +127,7 @@ class Connector:
         self.home = home
         self.token = token
         self.log = []  # every request it understood, in order
+        self.reports = []  # what each report that the agent has clicks said, as it was sent
         self.refused = 0  # requests it did not believe
         self.token_shown = 0  # requests that carried the token itself
         self.offers = {}  # session -> clicks, offered on every asking until the add-on reports them
@@ -197,6 +198,7 @@ class Connector:
                     return self.answer(200, {"ok": True})
                 if self.path == "/ack":
                     outer.log.append(("ack", tuple(body["ids"])))
+                    outer.reports.append(body)
                     for session in outer.offers:
                         outer.offers[session] = [c for c in outer.offers[session] if c["id"] not in body["ids"]]
                     return self.answer(200, {"ok": True, "acked": len(body["ids"])})
@@ -474,6 +476,19 @@ class InTheTerminal(Case):
         self.a_while()
         self.assertEqual(len(hermes.messages), 1, "and not handed over again")
         self.assertEqual(self.connector.acks()[:2], [("k1",), ("k1",)])
+
+    def test_a_click_is_said_to_be_had_by_the_receipt_it_was_offered_with_also_in_a_later_taking(self):
+        hermes = self.terminal()
+        hermes.turn(A, running=False)
+        self.connector.offer(A, {**click("k1"), "receipt": "the-first-taking-0001"})
+        self.assertTrue(until(lambda: len(self.connector.reports) == 1))
+        self.assertEqual(self.connector.reports[0], {"ids": ["k1"], "receipts": [{"id": "k1", "receipt": "the-first-taking-0001"}]})
+        # Offered again in a later taking: the conversation has it already, which is said by the receipt it is offered with now
+        self.connector.offer(A, {**click("k1"), "receipt": "the-second-taking-0001"})
+        self.assertTrue(until(lambda: len(self.connector.reports) == 2))
+        self.assertEqual(self.connector.reports[1], {"ids": ["k1"], "receipts": [{"id": "k1", "receipt": "the-second-taking-0001"}]})
+        self.a_while()
+        self.assertEqual(len(hermes.messages), 1)
 
     def test_a_click_hermes_would_not_take_is_not_reported(self):
         hermes = self.terminal(takes=False)
