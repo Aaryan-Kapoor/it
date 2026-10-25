@@ -287,9 +287,11 @@ const LINK_WAYS: LinkWay[] = ['local', 'tailnet', 'network']
 /**
  * Where the links agents give are, for the owner to choose. Only a place It can be reached at as
  * the network stands is offered, each with the address a link there is at, so that nobody is
- * given a link that opens nothing. A choice It can no longer be reached at is kept, and said to
- * be, while the links are this computer's: they are at it again once It can be reached there.
- * Nothing is shown by a backend that says nothing of links, as one of an earlier It does.
+ * given a link that opens nothing. A choice It can no longer be reached at is kept, and is shown
+ * as it is, chosen and marked as not reachable now, with what the links use meanwhile: they are
+ * at it again once It can be reached there. Shown as this computer's instead, it could not be
+ * given up, since choosing what is already chosen asks nothing. Nothing is shown by a backend
+ * that says nothing of links, as one of an earlier It does.
  */
 export function LinkChoice() {
   const said = useQuery(api.network.get, {}) as Stands | undefined
@@ -302,8 +304,10 @@ export function LinkChoice() {
   const links = said?.links
   if (!links || !said?.link) return null
   const offered = LINK_WAYS.filter((to) => links[to] !== undefined)
-  const kept = offered.includes(said.link) ? said.link : 'local'
-  const shown = turning ?? kept
+  /** The place chosen, where It cannot be reached at it as the network stands. */
+  const unreachable = offered.includes(said.link) ? null : said.link
+  const ways = LINK_WAYS.filter((to) => offered.includes(to) || to === unreachable)
+  const shown = turning ?? said.link
   const choose = (to: LinkWay) => {
     setFailed('')
     setTurning(to)
@@ -329,25 +333,33 @@ export function LinkChoice() {
     <div className="net">
       <fieldset className="link-ways" disabled={turning !== null}>
         <legend className="sr-only">Where the links agents give are</legend>
-        {offered.map((to) => (
+        {ways.map((to) => (
           <label key={to} className="link-way" data-on={shown === to || undefined}>
-            <input type="radio" className="net-radio" name={group} checked={shown === to} onChange={() => choose(to)} />
+            <input
+              type="radio"
+              className="net-radio"
+              name={group}
+              checked={shown === to}
+              // Chosen already, and not to be chosen again until It can be reached there
+              disabled={to === unreachable}
+              onChange={() => choose(to)}
+            />
             <span>
-              <b>{label[to]}</b>
-              <small className="mono">{links[to]}</small>
-              <small>{hint[to]}</small>
+              <b>
+                {label[to]}
+                {to === unreachable && <span className="chip quiet">Not reachable now</span>}
+              </b>
+              {links[to] && <small className="mono">{links[to]}</small>}
+              <small>
+                {to === unreachable
+                  ? 'It cannot be reached there as the network stands, so agents give this computer’s link until it can. Choose This computer to keep the links there.'
+                  : hint[to]}
+              </small>
             </span>
           </label>
         ))}
       </fieldset>
-      {said.link !== kept ? (
-        <p className="net-said" role="status">
-          Links are set to be at {said.link === 'tailnet' ? 'It’s name on your tailnet' : 'It’s address on the network'}, and It cannot be reached there as the
-          network stands. Agents give this computer’s link until it can.
-        </p>
-      ) : (
-        offered.length === 1 && <p className="net-said">Another place is offered here once another device can reach It.</p>
-      )}
+      {ways.length === 1 && <p className="net-said">Another place is offered here once another device can reach It.</p>}
       {failed && (
         <p className="net-said error" role="alert">
           {failed}
