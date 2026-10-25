@@ -225,7 +225,8 @@ describe('Codex’s app server, as a project agent', () => {
     const s = new CodexSession(launch('codex'), heard().on)
     await s.start()
     const pid = s.pid!
-    expect(['ended', 'gone']).toContain(await s.end())
+    // `unknown` where some process of this user could not be read while it looked, which a busy machine has now and then
+    expect(['ended', 'gone', 'unknown']).toContain(await s.end())
     expect(processes([pid])?.has(pid)).toBe(false)
     expect(existsSync(path.join(dir, 'codex.seen'))).toBe(true)
   })

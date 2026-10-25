@@ -225,7 +225,7 @@ describe('the keeper of project agents', () => {
       await until(() => last(w.said) === 'working')
       const session = w.said.reports.find((r) => r.session)!.session!
       await k.close()
-      expect(JSON.parse(readFileSync(path.join(dir, 'agent-runs.json'), 'utf8'))).toMatchObject({ runs: {}, cutOff: ['agent-000001'] })
+      expect(JSON.parse(readFileSync(path.join(dir, 'agent-runs.json'), 'utf8'))).toMatchObject({ runs: {}, cutOff: ['agent-000001'], left: expect.any(Array) })
       expect(last(w.said)).toBe('resting')
       // The next connector resumes it and tells it
       const w2 = world()
@@ -256,7 +256,7 @@ describe('the keeper of project agents', () => {
       await keeperOf(world(), [])
     expect(processes([left.pid!])?.has(left.pid!)).toBe(false)
     // It was at work, so it is down as cut off, to be told when it is resumed
-    expect(JSON.parse(readFileSync(path.join(dir, 'agent-runs.json'), 'utf8'))).toEqual({ runs: {}, cutOff: ['agent-000001'] })
+    expect(JSON.parse(readFileSync(path.join(dir, 'agent-runs.json'), 'utf8'))).toMatchObject({ runs: {}, cutOff: ['agent-000001'] })
   })
 
   test('starts nothing where its note of what it ran cannot be read', async () => {

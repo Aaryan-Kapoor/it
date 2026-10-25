@@ -18,7 +18,7 @@ import { AGENTS, type AgentState } from '@it/protocol'
 import { type AgentSession, appName, type Launch, type SessionEvents, sessionFor } from './agent-session'
 import { type AgentSettings, agentsFile, folderOf, offerOf, readAgents } from './agents'
 import { inHome, readJson, writePrivate } from './lib'
-import { bootId, endTree, fromAnotherStart, SINCE_TOLD } from './wake'
+import { bootId, endTree, fromAnotherStart, processes, SINCE_TOLD } from './wake'
 
 /** An agent as It says the person wants it. */
 export interface Wanted {
@@ -57,16 +57,38 @@ interface Notes {
   runs: Record<string, Note>
   /** The agents whose turn was cut off by It stopping, and which are resumed and told so. */
   cutOff: string[]
+  /**
+   * Programs that ended, where whether anything they started is still running could not be
+   * told: the system would not say of some process of this user what it was started with. Each
+   * is looked at again when It next starts, until that can be told or the machine has been
+   * started again.
+   */
+  left: Note[]
 }
+const LEFT_MOST = 50
 function readNotes(file: string): Notes | 'unread' {
   try {
     statSync(file)
   } catch {
-    return { runs: {}, cutOff: [] }
+    return { runs: {}, cutOff: [], left: [] }
   }
   const n = readJson<Notes>(file)
   if (!n || typeof n !== 'object' || typeof n.runs !== 'object' || n.runs === null || !Array.isArray(n.cutOff)) return 'unread'
-  return { runs: n.runs, cutOff: n.cutOff.filter((x) => typeof x === 'string') }
+  if (n.left !== undefined && !Array.isArray(n.left)) return 'unread'
+  return { runs: n.runs, cutOff: n.cutOff.filter((x) => typeof x === 'string'), left: n.left ?? [] }
+}
+
+/** Ends what a note names, as far as the system lets it be told. */
+const endNoted = (n: Note) =>
+  fromAnotherStart(n.boot)
+    ? Promise.resolve('gone' as const)
+    : endTree(n.pid, n.since, { harness: n.app, session: n.session ?? '', run: n.run, told: n.told }).catch(() => 'unknown' as const)
+/** Whether the app's own program that a note names is there still, or may be: two programs are never run on one conversation. Its number alone may be another's by now. */
+const stillThere = (n: Note): boolean => {
+  if (fromAnotherStart(n.boot)) return false
+  const now = processes([n.pid])
+  // Where the system cannot be asked, it may be
+  return now === null || now.get(n.pid) === n.since
 }
 
 export interface KeeperDeps {
@@ -119,7 +141,7 @@ export class AgentKeeper {
   private settings: AgentSettings | 'unread' = { on: false, most: AGENTS.most, projects: [] }
   private settingsSeen = ''
   private offered: string | null = null
-  private notes: Notes | 'unread' = { runs: {}, cutOff: [] }
+  private notes: Notes | 'unread' = { runs: {}, cutOff: [], left: [] }
   private timer: ReturnType<typeof setInterval> | null = null
   private ticking = false
   private closing = false
@@ -138,17 +160,18 @@ export class AgentKeeper {
   async begin(): Promise<void> {
     this.notes = readNotes(this.runsFile)
     if (this.notes !== 'unread') {
-      const left = Object.entries(this.notes.runs)
-      for (const [agent, n] of left) {
-        // Started before this machine was last started: nothing of it is left
-        const outcome = fromAnotherStart(n.boot)
-          ? 'gone'
-          : await endTree(n.pid, n.since, { harness: n.app, session: n.session ?? '', run: n.run, told: n.told }).catch(() => 'unknown' as const)
-        if (outcome === 'unknown') continue
+      for (const [agent, n] of Object.entries(this.notes.runs)) {
+        const outcome = await endNoted(n)
+        // The app's own program is there still: it stays noted, and the agent is not started beside it (see `keep`)
+        if (outcome === 'unknown' && stillThere(n)) continue
+        if (outcome === 'unknown') this.notes.left.push(n)
         if (n.busy && !this.notes.cutOff.includes(agent)) this.notes.cutOff.push(agent)
         delete this.notes.runs[agent]
-        this.d.say(`an agent's program left from before (${agent.slice(-6)}) was ended`)
+        this.d.say(`project agents: an agent's program left from before (${agent.slice(-6)}) was ended`)
       }
+      const looked: Note[] = []
+      for (const n of this.notes.left) if ((await endNoted(n)) === 'unknown') looked.push(n)
+      this.notes.left = looked.slice(-LEFT_MOST)
       this.keepNotes()
     }
     this.readSettings(true)
@@ -320,6 +343,17 @@ export class AgentKeeper {
       }
       k.failed = true
       return this.state(k, 'failed', { why: cannot })
+    }
+    // A program of it from before is still noted: where it has ended since, it is let go of; where it has not, nothing is started beside it
+    const before = this.notes !== 'unread' && !k.run ? this.notes.runs[w.id] : undefined
+    if (before) {
+      if (stillThere(before)) {
+        k.failed = true
+        return this.state(k, 'failed', {
+          why: `Its program from before (process ${before.pid}) is still running and could not be ended, so It starts no other beside it. End that process, then start the agent again.`,
+        })
+      }
+      this.forgetRun(w.id)
     }
     if (k.failed) return
     // What was done on its pages, asked for whether or not its program is running, so that its clicks wait for it and go nowhere else
@@ -503,8 +537,23 @@ export class AgentKeeper {
     if (!s) return
     k.run = null
     const outcome = await s.end().catch(() => 'unknown' as const)
-    if (outcome !== 'unknown') this.forgetRun(k.w.id)
-    else this.d.say(`project agents: an agent's program (${k.w.id.slice(-6)}) could not be seen to end; it is looked at again when It next starts`)
+    const noted = this.notes !== 'unread' ? this.notes.runs[k.w.id] : undefined
+    if (outcome === 'unknown' && noted && stillThere(noted)) {
+      // Not ended: it stays noted, and nothing is started beside it
+      this.d.say(`project agents: an agent's program (${k.w.id.slice(-6)}) did not end when it was asked to`)
+      if (this.closing) return
+      k.failed = true
+      return this.state(k, 'failed', {
+        why: `Its program (process ${noted.pid}) did not end when It asked, so It starts no other beside it. End that process, then start the agent again.`,
+      })
+    }
+    if (outcome === 'unknown' && noted && this.notes !== 'unread') {
+      this.notes.left = [...this.notes.left, noted].slice(-LEFT_MOST)
+      this.d.say(
+        `project agents: an agent's program (${k.w.id.slice(-6)}) ended, and whether anything it started is still running could not be told; that is looked at again when It next starts`,
+      )
+    }
+    this.forgetRun(k.w.id)
     if (this.closing) return
     await this.state(k, k.w.want === 'stop' ? 'stopped' : k.w.round !== k.round ? 'starting' : 'resting')
   }

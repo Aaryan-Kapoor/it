@@ -13,7 +13,8 @@ export interface Asked {
 }
 
 /** What a turn is answered with: what the person said last, and how many of their messages came before it. */
-export const answerTo = (said: string, before: number) => `Heard “${said.slice(0, 80)}”. Earlier messages from you in this conversation: ${before}.`
+export const answerTo = (said: string, before: number) =>
+  `Heard “${said.replace(/\s+/g, ' ').slice(0, 120)}”. Earlier messages from you in this conversation: ${before}.`
 
 /** The person's own messages in an Anthropic request, leaving out what is a tool's result and what the app adds in angle brackets. */
 function anthropicSaid(body: any): string[] {
@@ -45,6 +46,10 @@ function responsesSaid(body: any): string[] {
   return out
 }
 
+/** The page it has Claude Code publish when it is asked to make one, with a button that sends an action, and what it says once it has. */
+export const PAGE = `it create "Garden plan" --id garden-plan --html '<main style="font:16px system-ui;padding:24px"><h1>Garden plan</h1><p>Beans, peas and lettuce, in three beds by the shed.</p><button onclick="It.action(\`water\`, { beds: 3 })">Water the beds</button></main>'`
+export const MADE = 'I made the page “Garden plan”. Press “Water the beds” on it and I will hear it.'
+
 const sse = (res: http.ServerResponse, events: [string, unknown][]) => {
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
   for (const [event, data] of events) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
@@ -74,6 +79,34 @@ export async function standInModel(): Promise<{ url: string; asked: Asked[]; clo
           res.writeHead(200, { 'content-type': 'application/json' })
           return res.end(JSON.stringify({ ...message, content: [{ type: 'text', text }], stop_reason: 'end_turn' }))
         }
+        // Asked to make a page, it has Claude Code run `it create`, and says so once that has run
+        const lastTurn = body?.messages?.at(-1)
+        const ran = Array.isArray(lastTurn?.content) && lastTurn.content.some((p: any) => p.type === 'tool_result')
+        if (ran)
+          return sse(res, [
+            ['message_start', { type: 'message_start', message }],
+            ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
+            ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: MADE } }],
+            ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+            ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } }],
+            ['message_stop', { type: 'message_stop' }],
+          ])
+        if (/make a page/i.test(said.at(-1) ?? ''))
+          return sse(res, [
+            ['message_start', { type: 'message_start', message }],
+            ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `toolu_${n}`, name: 'Bash', input: {} } }],
+            [
+              'content_block_delta',
+              {
+                type: 'content_block_delta',
+                index: 0,
+                delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command: PAGE, description: 'Publish the garden plan' }) },
+              },
+            ],
+            ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+            ['message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 10 } }],
+            ['message_stop', { type: 'message_stop' }],
+          ])
         return sse(res, [
           ['message_start', { type: 'message_start', message }],
           ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
