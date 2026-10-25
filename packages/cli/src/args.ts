@@ -66,7 +66,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   notify: ['id', 'on', 'sticky', 'button'],
   displays: [],
   wait: ['id', 'follow', 'timeout'],
-  actions: ['id'],
+  actions: ['id', 'all'],
   action: ['save', 'number'],
   ack: ['failed'],
   setup: ['all', 'only', 'none', 'name', 'no-service', 'yes'],

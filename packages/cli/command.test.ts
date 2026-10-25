@@ -2987,6 +2987,83 @@ syncBuiltinESMExports();
   }, 90_000)
 })
 
+describe('what is waiting, listed', () => {
+  const now = { harness: 'pi', id: 'after-it-was-cleared' }
+  const earlier = { harness: 'pi', id: 'before-it-was-cleared' }
+  const another = { harness: 'codex', id: 'thread-2' }
+  const click = (artifact: string, at: number, session: { harness: string; id: string } | null) => ({
+    id: `on-${artifact}`,
+    artifact,
+    title: `Title of ${artifact}`,
+    name: 'approve',
+    payload: '{}',
+    at,
+    attended: true,
+    session,
+  })
+  const waiting = [click('creatine', 4, another), click('workout', 3, now), click('plan', 2, earlier), click('shopping', 1, null)]
+  /** The backend as it answers: for a conversation, what waits on its pages and on pages no conversation has, and for none, everything, newest first. */
+  const answer = ({ path: fn, args }: Asked) => {
+    if (fn !== 'delivery:allWaiting') return null
+    const s = args.for as { harness: string; id: string } | undefined
+    return s ? waiting.filter((c) => !c.session || (c.session.harness === s.harness && c.session.id === s.id)) : waiting
+  }
+  const listed = (b: { asked: Asked[] }) => b.asked.filter((x) => x.path === 'delivery:allWaiting').map((x) => JSON.stringify(x.args))
+  const agent = (s: { harness: string; id: string }) => ({ IT_HARNESS: s.harness, IT_SESSION: s.id })
+
+  test('an agent is listed the actions on its own conversation’s pages, under every id it has had, and on pages no conversation has, and never another’s', async () => {
+    const m = machine()
+    // The connector's record of a conversation that was cleared and carries on under a new id
+    writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ [`pi:${earlier.id}`]: `pi:${now.id}` }))
+    const b = await backend(m, answer)
+    try {
+      const ran = await run(m, ['actions'], { ...b.env, ...agent(now) })
+      expect(printed(ran).map((c: { page: string }) => c.page)).toEqual(['workout', 'plan', 'shopping'])
+      // Each id is asked for by itself, and every click that waits is asked for by nobody
+      expect(listed(b).sort()).toEqual([JSON.stringify({ for: now }), JSON.stringify({ for: earlier })].sort())
+      const other = await run(m, ['actions'], { ...b.env, ...agent(another) })
+      expect(printed(other).map((c: { page: string }) => c.page)).toEqual(['creatine', 'shopping'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a command that no conversation ran is listed everything, and so is one given --all, which says which are another conversation’s by their page alone', async () => {
+    const m = machine()
+    writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ [`pi:${earlier.id}`]: `pi:${now.id}` }))
+    const b = await backend(m, answer)
+    try {
+      const ran = await run(m, ['actions'], b.env)
+      expect(printed(ran).map((c: { page: string }) => c.page)).toEqual(['creatine', 'workout', 'plan', 'shopping'])
+      expect(listed(b)).toEqual([JSON.stringify({})])
+      expect(printed(ran).some((c: Record<string, unknown>) => 'forAnotherConversation' in c)).toBe(false)
+      const all = await run(m, ['actions', '--all'], { ...b.env, ...agent(now) })
+      expect(printed(all).map((c: { page: string; forAnotherConversation?: true }) => [c.page, c.forAnotherConversation ?? false])).toEqual([
+        ['creatine', true],
+        ['workout', false],
+        ['plan', false],
+        ['shopping', false],
+      ])
+      // And no conversation is named by its own id in what is printed
+      for (const s of [now, earlier, another]) expect(all.out).not.toContain(s.id)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('--id and --all together are refused, before It is asked anything', async () => {
+    const m = machine()
+    const b = await backend(m, answer)
+    try {
+      const ran = await run(m, ['actions', '--id', 'plan', '--all'], b.env)
+      expect([ran.code, error(ran).code]).toEqual([2, 'invalid'])
+      expect(b.asked.filter((x) => x.path.startsWith('delivery:'))).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('a wait', () => {
   test('whose time runs out asks It what is waiting under every id the conversation has had, and prints an action on a page made under an earlier one', async () => {
     const m = machine()
