@@ -1734,6 +1734,65 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     }
   }, 180_000)
 
+  test('`it actions` lists for each conversation what waits on its own pages and on pages no conversation has, for a command no conversation ran everything, and with --all which are another’s', async () => {
+    expect(await well(run(['setup', '--none', '--no-service']))).toBe(0)
+    run(['serve', '--log', path.join(folder, 'service.log')])
+    expect(await until(() => lines().some((line) => /^connector \S+ started/.test(line)))).toBe(true)
+    const door = `http://127.0.0.1:${process.env.IT_PORT}`
+    const fn = (name: string) => makeFunctionReference<'mutation'>(name)
+    // A browser paired as the owner's, through the door, which is what a person acts on a page with
+    const site = run(['site', '--no-open'])
+    expect(await well(site)).toBe(0)
+    const asSite = { origin: door, 'x-it-site': '1', 'content-type': 'application/json' }
+    const redeemed = await fetch(`${door}/session/redeem`, {
+      method: 'POST',
+      headers: asSite,
+      body: JSON.stringify({ code: new URL(JSON.parse(site.out()).url).hash.slice(1) }),
+    })
+    const cookie = redeemed.headers.getSetCookie()[0]!.split(';')[0]!
+    const session = (await (await fetch(`${door}/session/token`, { method: 'POST', headers: { ...asSite, cookie } })).json()) as { token: string }
+    const browser = new ConvexHttpClient(door, { logger: false })
+    browser.setAuth(session.token)
+    const displayKey = 'a-display-key-000001'
+    await browser.mutation(fn('displays:register'), { key: displayKey, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/144.0' })
+    const press = async (slug: string) => {
+      const page = (await browser.query(makeFunctionReference<'query'>('artifacts:get'), { slug })) as { id: string }
+      const { until } = (await browser.mutation(fn('actions:replayGrant'), {})) as { until: number }
+      return browser.mutation(fn('actions:submit'), {
+        replayUntil: until,
+        artifactId: page.id,
+        displayKey,
+        envelope: { v: 1, clientActionId: `click-on-${slug}`, name: 'approve', payload: '{"n":1}', contentVersion: 1 },
+      })
+    }
+    const said = async (args: string[], env: Record<string, string> = {}) => {
+      const ran = run(args, env)
+      expect([args[0], await well(ran)]).toEqual([args[0], 0])
+      return JSON.parse(ran.out())
+    }
+    // Two conversations each make a page, and a page is made from a plain terminal, which no conversation has
+    const first = { IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' }
+    const second = { IT_HARNESS: 'opencode', IT_SESSION: 'conversation-2' }
+    await said(['create', 'Workout', '--id', 'workout', '--html', '<p>hi</p>'], first)
+    await said(['create', 'Creatine', '--id', 'creatine', '--html', '<p>hi</p>'], second)
+    await said(['create', 'Shopping', '--id', 'shopping', '--html', '<p>hi</p>'])
+    for (const slug of ['workout', 'creatine', 'shopping']) await press(slug)
+    // No agent app is connected here, so all three wait
+    const listed = async (env: Record<string, string>, args: string[] = []) =>
+      ((await said(['actions', ...args], env)) as { page: string; forAnotherConversation?: true }[])
+        .map((c) => `${c.page}${c.forAnotherConversation ? ' (another’s)' : ''}`)
+        .sort()
+    expect(await listed(first)).toEqual(['shopping', 'workout'])
+    expect(await listed(second)).toEqual(['creatine', 'shopping'])
+    expect(await listed({})).toEqual(['creatine', 'shopping', 'workout'])
+    expect(await listed(first, ['--all'])).toEqual(['creatine (another’s)', 'shopping', 'workout'])
+    expect(await listed(second, ['--all'])).toEqual(['creatine', 'shopping', 'workout (another’s)'])
+    // A page that the first conversation takes takes what waits on it along
+    await said(['create', 'Creatine', '--id', 'creatine', '--html', '<p>again</p>', '--take'], first)
+    expect(await until(async () => (await listed(first)).join() === 'creatine,shopping,workout')).toBe(true)
+    expect(await listed(second)).toEqual(['shopping'])
+  }, 180_000)
+
   test('`it serve` where another program has one of the door’s ports says so at once, before the backend program is started', async () => {
     makeConfig()
     // The port of a page, which the door listens on beside the site's
