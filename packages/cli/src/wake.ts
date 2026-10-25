@@ -391,10 +391,12 @@ export async function endTree(
   // Whatever carries this run's own name, wherever it is by now: a command the run started in
   // a group of its own is in neither the run's family nor its group once the run is gone, and
   // is the run's all the same. No other run has the name, so what carries it is ended with it.
-  const markedNow = of?.run ? marked(of.run, since) : new Map<number, string>()
+  const looked = of?.run ? marked(of.run, since) : { found: new Map<number, string>(), whole: true }
+  const markedNow = looked?.found ?? null
   // Failed discovery leaves uncertainty, but does not prevent ending processes whose
-  // identities can still be checked. In particular, Stop still reaches a known leader.
-  let uncertain = markedNow === null
+  // identities can still be checked. In particular, Stop still reaches a known leader, and
+  // what was found carrying the run's name is ended though another process could not be read.
+  let uncertain = !looked?.whole
   const strays = [...(markedNow?.keys() ?? [])]
   if (reused) {
     if (!strays.length) return uncertain ? 'unknown' : 'gone'
@@ -427,9 +429,9 @@ export async function endTree(
   // have lost its mark while the system would not let us read it.
   const signalled = new Map<number, string>()
   const left = (): Map<number, string> => {
-    const found = of?.run ? marked(of.run, since) : new Map<number, string>()
-    if (found === null) uncertain = true
-    else for (const [p, at] of found) were.set(p, at)
+    const again = of?.run ? marked(of.run, since) : { found: new Map<number, string>(), whole: true }
+    if (!again?.whole) uncertain = true
+    for (const [p, at] of again?.found ?? []) were.set(p, at)
     // One identity snapshot for the whole tick. On macOS each call runs ps, so asking for
     // every process separately would keep the connector from answering while Stop runs.
     const is = processes([...were.keys()])
@@ -596,11 +598,14 @@ function belongs(pid: number, of: { harness: string; session: string }): boolean
 /**
  * The processes that carry a run's own name in what they were started with, wherever they are.
  * Null where the system could not be asked. Another person's process cannot be read and is
- * passed over: it is not this run's, which runs as this person.
+ * passed over: it is not this run's, which runs as this person. One of this person's own that
+ * cannot be read may be the run's, so then the look is not `whole`. What it found is found all
+ * the same, and is ended with the run, whatever other process of theirs began meanwhile.
  */
-function marked(run: string, since: string): Map<number, string> | null {
+function marked(run: string, since: string): { found: Map<number, string>; whole: boolean } | null {
   const mark = `IT_RUN=${run}`
   const found = new Map<number, string>()
+  let whole = true
   if (process.platform === 'linux') {
     let listed: string[]
     try {
@@ -637,7 +642,7 @@ function marked(run: string, since: string): Map<number, string> | null {
         } catch (gone) {
           if (['ENOENT', 'ESRCH'].includes((gone as NodeJS.ErrnoException).code ?? '')) continue
         }
-        return null
+        whole = false
       }
     }
   } else {
@@ -652,7 +657,7 @@ function marked(run: string, since: string): Map<number, string> | null {
     }
   }
   found.delete(process.pid)
-  return found
+  return { found, whole }
 }
 
 /**
