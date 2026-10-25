@@ -57,6 +57,7 @@ const stand = vi.hoisted(() => ({
 // them). Here it is a stand-in, so that the way a click goes can be tried with T3 Code running.
 vi.mock('./src/t3', () => ({
   t3Server: () => (stand.t3.running ? { origin: 'http://127.0.0.1:1', home: '/no-t3-code', program: 't3' } : undefined),
+  t3Search: () => ({}),
   t3ThreadOf: (_t3: unknown, of: { ids: readonly string[] }) =>
     new Promise<{ thread: string | null | undefined | Error | { status: 'limited' }; progressed: boolean }>((resolve) => {
       const answer = (thread: string | null | undefined | Error | { status: 'limited' }, progressed = true) => resolve({ thread, progressed })

@@ -52,7 +52,7 @@ import { conversationFolder, conversationProfile, noteConversation } from './pub
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { type T3, type T3Search, t3Send, t3Server, t3ThreadOf } from './t3'
+import { type T3, type T3Search, t3Search, t3Send, t3Server, t3ThreadOf } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -603,7 +603,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     t3Known.set(key, 'asking')
     if (!t3Asked.has(key)) t3Asked.set(key, steady())
-    const search = t3Searches.get(key) ?? { pending: [], read: 0, attempted: new Set() }
+    const search = t3Searches.get(key) ?? t3Search()
     t3Searches.set(key, search)
     t3Pending.set(key, session)
     // By the id its pages name and by the one it has now: T3 Code keeps the one it resumes from
