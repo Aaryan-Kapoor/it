@@ -133,6 +133,41 @@ if [ "${os}" = linux ]; then
   esac
 fi
 
+# A program for an Intel or AMD processor needs what the runtime inside it is built for: SSE4.2
+# and POPCNT on Linux, and AVX and AVX2 on a Mac. The backend program needs no more. A processor
+# without them is told so before anything is downloaded or made, and so is one in a virtual
+# machine that is not given them. On Linux what it has is read from the flags the system lists
+# for it, and on a Mac from the features the Mac reports. Where neither can be read nothing is
+# refused here, and the program is still started once below before it is put in place.
+if [ "${arch}" = x64 ]; then
+  lacks=""
+  if [ "${os}" = linux ]; then
+    features="$(sed -n 's/^flags[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -n 1 || true)"
+    if [ -n "${features}" ]; then
+      case " ${features} " in *" sse4_2 "*) ;; *) lacks="SSE4.2" ;; esac
+      case " ${features} " in *" popcnt "*) ;; *) lacks="${lacks:+${lacks} and }POPCNT" ;; esac
+    fi
+    needs="On an Intel or AMD processor It needs SSE4.2 and POPCNT, which Intel's Core i3, i5 and i7 have from their first generation on, and AMD's processors from Bulldozer on."
+  else
+    # The Mac lists AVX among the processor's features, and AVX2 in a second list. A Mac whose
+    # processor has AVX gives that list too, empty where the processor has nothing it would hold,
+    # so a second list without AVX2 is a processor without it
+    features="$(sysctl -n machdep.cpu.features 2>/dev/null || true)"
+    if [ -n "${features}" ]; then
+      case " ${features} " in
+        *" AVX1.0 "*)
+          case " $(sysctl -n machdep.cpu.leaf7_features 2>/dev/null || true) " in *" AVX2 "*) ;; *) lacks="AVX2" ;; esac ;;
+        *) lacks="AVX and AVX2" ;;
+      esac
+    fi
+    needs="On an Intel Mac It needs AVX and AVX2, which Intel's Core processors have from their fourth generation (Haswell) on."
+  fi
+  if [ -n "${lacks}" ]; then
+    say "It cannot run on this computer: its processor does not have ${lacks}. ${needs} Nothing was installed." >&2
+    exit 1
+  fi
+fi
+
 # Only over https, and a redirect may only lead to https. The one exception is a base on this
 # machine itself, which is how the install is tested before anything is published: it must be
 # exactly this machine and a port, with nothing a browser would read as a name and password
