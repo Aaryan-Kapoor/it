@@ -134,6 +134,10 @@ The Hermes add-on checks that a click still belongs to the conversation in its c
 
 Browser retries of a page click or typed message share its original identity and a server deadline of at most seven days. After that deadline, a missing receipt is refused rather than treated as new work. A saved request with no deadline can only confirm a receipt It still holds. A notification accepts one answer, and Stop names the run shown when it was pressed. Signing out or pairing again discards pending requests from the old pairing; queued requests cannot execute under the replacement pairing.
 
+### A machine or an add-on from the release before is held to less
+
+Every hand-over of a click has a receipt of its own, so a word about one hand-over that comes late cannot count for a later one of the same click, and a hand-over counts only for the conversation the click was taken for. A machine that joined this It and still runs the It from before receipts, and an add-on of that It that is still loaded in an agent app, are served without receipts for one release. Between their own hand-overs of the same click that protection is missing: a late word from one of them can still count for the next. Nothing they say without a receipt counts for a click that was taken with one. `it ack`, on any of your machines, needs no receipt and is taken at its word. Update It on every joined machine, and start agent apps again after an update.
+
 ### It is not made for the public internet
 
 Do not forward a port to It, give it a public address, or put it where strangers can reach it. It has no encryption, it answers only to the machine's own names, and its limits on how fast a caller may try things are sized for one household.

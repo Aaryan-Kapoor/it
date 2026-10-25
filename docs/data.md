@@ -85,6 +85,7 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 | A browser's pairing | For as long as the browser is used, and a year after it was last used, unless you end it sooner |
 | A showing of a page | Until nothing has asked under it for ten minutes, and a day at most. The site then shows the page again by itself. It ends at once when It stops, and a moment after the page is deleted or its display is signed out, as the second paragraph under this table says |
 | A machine you revoked | Its record for a month, and for as long after that as a page it made is still there |
+| When each conversation was last heard from again on each machine, by which It tries again the clicks that machine had stopped trying to hand it before then | A month after the last time, and no longer than the machine's record |
 | The key of a display you forgot | Refused for 90 days, so that the browser that held it has to be paired again to be a display |
 | The background service's log | Its newest few megabytes |
 | What was removed, inside the database's file | About an hour more. The next paragraph says what that means |
