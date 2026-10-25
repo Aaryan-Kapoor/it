@@ -56,6 +56,8 @@ export default defineSchema({
     stagingBytes: v.number(),
     /** The bytes of the files sent with actions that It holds for the person, kept or still arriving. */
     fileBytes: v.optional(v.number()),
+    /** The last number given out in the order the person's clicks and stops are written in (see lib/tally.ts). */
+    sequence: v.optional(v.number()),
   }).index('by_user', ['userId']),
 
   // How things stand with the tour an agent gives of It, kept apart from the person's own
@@ -200,8 +202,13 @@ export default defineSchema({
     runs: v.optional(
       v.array(v.object({ harness: v.string(), sessionId: v.string(), since: v.number(), stop: v.optional(v.boolean()), run: v.optional(v.string()) })),
     ),
-    /** The last few conversations a person stopped, and when: what was waiting for one by then is not reopened for. */
-    stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number() }))),
+    /**
+     * The last few conversations a person stopped, when, and where the stop stands in the order
+     * the person's clicks are written in: what was waiting for one by then is not reopened for.
+     * A stop with no number in that order is from before stops had one, and comes after the
+     * clicks of that time that were made up to it by the clock, and before every click that has one.
+     */
+    stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), sequence: v.optional(v.number()) }))),
     /** The last few conversations that could not be reopened, when, and why in the connector's own words: never what a command printed. */
     fails: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), why: v.string() }))),
     /** When it was last written down that this machine, revoked, asked for a token: said once an hour and not each time. */
@@ -250,6 +257,8 @@ export default defineSchema({
     waiting: v.optional(v.number()),
     /** When a person last stopped the agent from this page: what was done on the page up to then is delivered to nobody, whoever the page belongs to by now. */
     stoppedThrough: v.optional(v.number()),
+    /** Where that stop stands in the order the person's clicks are written in, which is what tells what was done up to it. A page stopped before stops had one has none. */
+    stoppedSequence: v.optional(v.number()),
     /** What the page's agent last said above the page, in its own words, and when. */
     said: v.optional(v.object({ text: v.string(), at: v.number() })),
   })
@@ -341,7 +350,16 @@ export default defineSchema({
     title: v.string(),
     /** Whether the person was at the page when it was sent. The site says; the page cannot. */
     attended: v.optional(v.boolean()),
+    /** When it was made, by the backend's clock: what is shown, and what the age limits count from. */
     createdAt: v.number(),
+    /**
+     * Where it stands in the order the person's clicks and stops are written in, which is what
+     * tells a click made before a stop from one made after it. A click made before clicks had a
+     * number has none, and comes before every stop that has one.
+     */
+    sequence: v.optional(v.number()),
+    /** The stop that dropped it, by its number in that order, where a stop with one did. */
+    stoppedSequence: v.optional(v.number()),
     /** Where the click is on its way to the agent. */
     delivery: v.union(v.literal('pending'), v.literal('leased'), v.literal('handed_off')),
     /** Where it should go: the machine and conversation that own the page. Never changed by delivery. */
@@ -368,12 +386,17 @@ export default defineSchema({
     .index('by_harness', ['machineId', 'delivery', 'harness', 'createdAt'])
     .index('by_attended_route', ['machineId', 'delivery', 'harness', 'sessionId', 'attended', 'createdAt'])
     .index('by_artifact', ['artifactId', 'createdAt'])
+    // A page's clicks in the order they were written: those without a number first
+    .index('by_artifact_sequence', ['artifactId', 'sequence'])
     .index('by_artifact_delivery', ['artifactId', 'delivery', 'createdAt'])
+    .index('by_artifact_delivery_sequence', ['artifactId', 'delivery', 'sequence'])
     .index('by_user_delivery', ['userId', 'delivery', 'createdAt'])
     .index('by_user_session', ['userId', 'delivery', 'harness', 'sessionId', 'createdAt'])
     // One person's clicks for one conversation by whose they are to deliver, oldest first: with
     // no machine and not set aside, they are the ones any of the person's machines may take
     .index('by_user_route', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'createdAt'])
+    // The same, in the order they were written, which is the order a stop is judged by
+    .index('by_user_route_sequence', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'sequence'])
     .index('by_delivery_created', ['delivery', 'createdAt'])
     .index('by_delivery_handed', ['delivery', 'handedAt'])
     .index('by_delivery_lease', ['delivery', 'leaseExpiresAt'])

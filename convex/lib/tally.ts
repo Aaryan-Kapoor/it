@@ -38,3 +38,17 @@ export async function bump(ctx: MutationCtx, userId: Id<'users'>, by: Partial<Ta
   if (t) await ctx.db.patch(t._id, next)
   else await ctx.db.insert('tallies', { userId, ...next })
 }
+
+/**
+ * The next number in the one order that a person's clicks and stops are given, as they are
+ * written. A stop is after every click that was written before it and before every click that
+ * is written after it, whatever the backend's clock says of either: the number is taken in the
+ * same step that writes the click or the stop, and no two steps that take one both stand.
+ */
+export async function nextSequence(ctx: MutationCtx, userId: Id<'users'>): Promise<number> {
+  const t = await row(ctx, userId)
+  const sequence = (t?.sequence ?? 0) + 1
+  if (t) await ctx.db.patch(t._id, { sequence })
+  else await ctx.db.insert('tallies', { userId, ...ZERO, sequence })
+  return sequence
+}

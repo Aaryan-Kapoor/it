@@ -7,11 +7,12 @@
 // which conversation. Who holds the lease is recorded separately, so a machine that borrows a
 // click and dies does not take it away from its owner.
 import { LEASE_MS, LIMITS, LISTENING_MOST, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
+import type { FilterBuilder, NamedTableInfo } from 'convex/server'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
-import type { Doc, Id } from './_generated/dataModel'
+import type { DataModel, Doc, Id } from './_generated/dataModel'
 import { internalMutation, mutation, type QueryCtx, query } from './_generated/server'
-import { destination, dropStopped, noLongerWaiting, stoppedSince } from './actions'
+import { destination, dropStopped, madeBefore, noLongerWaiting, type Seen, stoppedSince } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
 import { log } from './lib/log'
@@ -58,6 +59,39 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
 }
 
 /**
+ * What of one conversation's clicks came after its last stop on this machine: as a test of a
+ * click in hand, and as a filter for a read of them, so that what the stop dropped and its
+ * steps have not yet come to stands in front of nothing that may be taken. By the stop's place
+ * in the order the person's clicks and stops are written in, which no index on the clock can
+ * read; by the clock only for a stop from before stops had a place, and only of the clicks of
+ * that time.
+ */
+function afterStop(machine: Doc<'machines'>, harness: string, sessionId: string) {
+  const stop = (machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)
+  return {
+    kept: (x: Doc<'actions'>) => !stop || !madeBefore(x, stop),
+    filter: (q: FilterBuilder<NamedTableInfo<DataModel, 'actions'>>) =>
+      !stop
+        ? q.eq(true, true)
+        : stop.sequence !== undefined
+          ? q.gt(q.field('sequence'), stop.sequence)
+          : q.or(q.neq(q.field('sequence'), undefined), q.gt(q.field('createdAt'), stop.at)),
+  }
+}
+
+/**
+ * Leaves out what was made before a stop of its conversation, which the stop's steps drop and
+ * may not have come to yet: it is offered to nobody. Each page and machine is read once, however
+ * many clicks name it.
+ */
+async function notStopped(ctx: QueryCtx, rows: Doc<'actions'>[]) {
+  const seen: Seen = new Map()
+  const out = []
+  for (const x of rows) if (!(await stoppedSince(ctx, x, seen))) out.push(x)
+  return out
+}
+
+/**
  * How much one asking for the inbox may read of clicks, in bytes. The backend lets a query read
  * 16 MB and past that refuses it whole, which to a connector is no inbox at all, for any of its
  * conversations. Every click that is read counts, also one that is read a second time, and
@@ -97,7 +131,12 @@ async function listeningRows(
         .query('actions')
         .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id))
     // These come first and are at most four for each of forty conversations, which is within what may be read whatever they carry
-    const own = read(await route(machine._id).take(2))
+    // (What a stop of the conversation here dropped, and its steps have not yet come to, stands in front of none of them)
+    const own = read(
+      await route(machine._id)
+        .filter(afterStop(machine, s.harness, s.id).filter)
+        .take(2),
+    )
     // Those with no machine are read as exactly the ones this machine may take: this
     // person's, and not set aside. One that a machine set aside has no machine either, and is
     // not offered again: it waits for `it wait` and the site, until its page changes hands.
@@ -174,7 +213,6 @@ export const inbox = query({
         from = on.since - WAKE_BACK_MS
       }
       const each = reopened ? WAKE_MOST : 2
-      const stoppedAt = (sessionId: string) => (reopened ? ((machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)?.at ?? 0) : 0)
       const found: string[] = []
       // How many clicks this queue may read now, of the `n` wanted, each taken to be as large as a click can be
       const until = left - left / (asked.length - nth)
@@ -219,11 +257,12 @@ export const inbox = query({
       for (const [foundAt, sessionId] of found.entries()) {
         if (rows.length >= BUDGET) break
         const want = Math.min(each, BUDGET - rows.length)
-        const since = Math.max(from - 1, stoppedAt(sessionId))
+        const since = from - 1
+        const stopped = afterStop(machine, harness, sessionId)
         // What was read of the queue's oldest holds this conversation's own oldest, in their
         // order. Where that is all the queue has, or as many as are wanted, it is what reading
         // the conversation would give, and the conversation is not read.
-        const known = oldest.filter((x) => x.sessionId === sessionId && x.createdAt > since)
+        const known = oldest.filter((x) => x.sessionId === sessionId && x.createdAt > since && stopped.kept(x))
         if (all || known.length >= want) {
           rows.push(...known.slice(0, want))
           continue
@@ -245,6 +284,7 @@ export const inbox = query({
               .withIndex('by_route', (q) =>
                 q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gt('createdAt', since),
               )
+              .filter(stopped.filter)
               .take(now),
           ),
         )
@@ -253,7 +293,10 @@ export const inbox = query({
     const seen = new Set<string>()
     return asClicks(
       ctx,
-      rows.filter((x) => !seen.has(x._id) && seen.add(x._id)),
+      await notStopped(
+        ctx,
+        rows.filter((x) => !seen.has(x._id) && seen.add(x._id)),
+      ),
     )
   },
 })
@@ -314,8 +357,8 @@ export const inboxPage = query({
       next.push({ harness, id: cursor })
       for (const [n, sessionId] of found.entries()) {
         const rest = found.length - n - 1
-        const stopped = reopened ? ((machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)?.at ?? 0) : 0
-        const since = Math.max(from - 1, stopped)
+        const since = from - 1
+        const stopped = afterStop(machine, harness, sessionId)
         // Leave four reads and two response places for each later conversation, and two
         // reads for this conversation's attended lookup. Extra places carry its oldest work.
         const want = Math.min(each, places - 2 * rest, may() - 4 * rest - 2)
@@ -325,6 +368,7 @@ export const inboxPage = query({
             .withIndex('by_route', (q) =>
               q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gt('createdAt', since),
             )
+            .filter(stopped.filter)
             .take(want),
         )
         if (batch.length && batch.every((c) => c.attended === false)) {
@@ -341,6 +385,7 @@ export const inboxPage = query({
                   .eq('attended', present)
                   .gt('createdAt', since),
               )
+              .filter(stopped.filter)
               .first()
             if (first) attended.push(...read([first]))
           }
@@ -360,7 +405,10 @@ export const inboxPage = query({
     return {
       clicks: await asClicks(
         ctx,
-        rows.filter((x) => !seen.has(x._id) && seen.add(x._id)),
+        await notStopped(
+          ctx,
+          rows.filter((x) => !seen.has(x._id) && seen.add(x._id)),
+        ),
       ),
       after: next,
     }

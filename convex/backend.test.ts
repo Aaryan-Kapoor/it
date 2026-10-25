@@ -9,7 +9,7 @@ import { convexTest } from 'convex-test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
-import type { Id } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
 import { get as pageQuery, takePage } from './artifacts'
 import { inboxPage as inboxPageQuery, inbox as inboxQuery } from './delivery'
 import schema from './schema'
@@ -2150,9 +2150,10 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.delivery.claim, { ids: [first] })
     const later = await t.run(async (ctx) => {
       const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
-      await ctx.db.patch(base.artifactId, { stoppedThrough: Date.now() })
+      // Stopped from the page after these were made, by their place in the order clicks and stops are written in
+      await ctx.db.patch(base.artifactId, { stoppedThrough: Date.now(), stoppedSequence: base.sequence })
       for (let i = 1; i < 64; i++) await ctx.db.insert('actions', { ...base, clientActionId: `stopped-${i}` })
-      return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', createdAt: Date.now() + 1 })
+      return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', createdAt: Date.now() + 1, sequence: base.sequence! + 1 })
     })
     expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [], done: false })
     expect(await t.run((ctx) => ctx.db.get(first))).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
@@ -2558,6 +2559,199 @@ describe('clicks and their delivery', () => {
     await settle(t)
     expect(await stopped()).toBe(600)
     expect((await alice.browser.query(api.artifacts.list, {})).map((x) => x.pending)).toEqual([0, 0, 0])
+  })
+
+  describe('the order of clicks and stops, which the clock does not decide', () => {
+    /** Reopens the conversation and stops it from the page, as a person does with Stop. */
+    const stopNow = async (alice: Awaited<ReturnType<typeof person>>, m: Awaited<ReturnType<typeof machineOf>>, artifactId: string) => {
+      await m.as.mutation(api.machines.runEnded, {})
+      await m.as.mutation(api.machines.runBegan, { for: SESSION })
+      expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: artifactId as never })).toEqual({ stopping: true })
+    }
+    const row = (t: T, id: string) => t.run((ctx) => ctx.db.get(id as never) as Promise<Doc<'actions'> | null>)
+
+    test('a click made after a stop is delivered when the backend’s clock was set back past the stop, and one made before it is not', async () => {
+      const { t, alice, m, p, click } = await setup()
+      await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+      const before = (await click('click-before')).actionId
+      await vi.advanceTimersByTimeAsync(1000)
+      await stopNow(alice, m, p.artifactId)
+      const stoppedAt = Date.now()
+      // The machine's clock is corrected an hour back, and the person does something more
+      vi.setSystemTime(stoppedAt - 3_600_000)
+      const after = (await click('click-after')).actionId
+      expect((await row(t, after))!.createdAt).toBeLessThan(stoppedAt)
+      // What was made before the stop went with it. What was made after is offered, to an open
+      // conversation and for reopening, is taken, and starts a run
+      expect(await row(t, before)).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+      expect((await inbox(m)).map((c) => c.id)).toEqual([after])
+      expect((await inbox(m, [], ['claude-code'])).map((c) => c.id)).toEqual([after])
+      expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [after], run: 'run-2' })).toEqual({ stopped: false })
+      expect(await m.as.mutation(api.delivery.claim, { ids: [after], for: SESSION })).toEqual([after])
+      expect(await m.as.mutation(api.delivery.handedOff, { id: after, route: 'addon' })).toMatchObject({ already: false })
+      // The page says the newest is the one made after the stop, whatever their clock times say
+      const page = await alice.browser.query(api.artifacts.get, { slug: 'plan' })
+      const recent = await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId })
+      expect(recent.map((x) => x.id)).toEqual([after, before])
+      expect(recent[0]!.sequence).toBeGreaterThan(page.stoppedSequence!)
+      expect(recent[1]).toMatchObject({ route: 'stopped', stoppedSequence: page.stoppedSequence })
+      // And the age limit still counts by the clock: shown when it was made, as it was made
+      expect(recent[0]!.at).toBe((await row(t, after))!.createdAt)
+    })
+
+    test('a click, a stop and a click in the same moment by the clock are told apart by the order they were written in', async () => {
+      const { t, alice, m, p, click } = await setup()
+      await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+      await m.as.mutation(api.machines.runBegan, { for: SESSION })
+      // The clock does not move at all between the three
+      const before = (await click('click-same-0001')).actionId
+      expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+      const after = (await click('click-same-0002')).actionId
+      expect((await row(t, before))!.createdAt).toBe((await row(t, after))!.createdAt)
+      await settle(t)
+      expect(await row(t, before)).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+      expect(await row(t, after)).toMatchObject({ delivery: 'pending' })
+      expect(await m.as.mutation(api.delivery.claim, { ids: [after], for: SESSION })).toEqual([after])
+    })
+
+    test('a stop’s later steps drop what was made up to it and nothing made after, however far the clock is set back between them', async () => {
+      const { t, alice, m, p } = await setup()
+      await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+      await m.as.mutation(api.machines.runBegan, { for: SESSION })
+      // More than one step's worth, each with its place in the order, as clicks are written
+      const made = Date.now()
+      const first = await t.run(async (ctx) => {
+        const a = (await ctx.db.get(p.artifactId))!
+        const tally = (await ctx.db.query('tallies').collect())[0]!
+        for (let i = 1; i <= 250; i++)
+          await ctx.db.insert('actions', {
+            userId: a.userId,
+            title: a.title,
+            artifactId: a._id,
+            clientActionId: `waiting-${String(i).padStart(4, '0')}`,
+            name: 'press',
+            payload: '{}',
+            contentVersion: 1,
+            createdAt: made + i,
+            sequence: (tally.sequence ?? 0) + i,
+            delivery: 'pending',
+            machineId: m.id as never,
+            harness: SESSION.harness,
+            sessionId: SESSION.id,
+          })
+        await ctx.db.patch(tally._id, { sequence: (tally.sequence ?? 0) + 250, waiting: 250 })
+        await ctx.db.patch(a._id, { waiting: 250 })
+        return (tally.sequence ?? 0) + 1
+      })
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+      const stopped = async () => (await t.run((ctx) => ctx.db.query('actions').collect())).filter((x) => x.route === 'stopped')
+      // The first step has dropped its hundred and no more
+      expect((await stopped()).length).toBe(100)
+      // The clock is set back a day before the later steps run, and something more is done on the page
+      vi.setSystemTime(made - 86_400_000)
+      const after = (
+        await alice.browser.mutation(api.actions.submit, { artifactId: p.artifactId, displayKey: displayKey('alice'), envelope: envelope('click-after') })
+      ).actionId
+      await settle(t)
+      const dropped = await stopped()
+      expect(dropped.length).toBe(250)
+      expect(dropped.every((x) => x.sequence! >= first && x.sequence! < first + 250)).toBe(true)
+      expect(new Set(dropped.map((x) => x.stoppedSequence)).size).toBe(1)
+      expect(await row(t, after)).toMatchObject({ delivery: 'pending' })
+      expect((await t.run((ctx) => ctx.db.get(p.artifactId)))?.waiting).toBe(1)
+      expect((await totals(t)).waiting).toBe(1)
+      // The page counts what went with the stop, by the stop it went with
+      expect((await alice.browser.query(api.artifacts.get, { slug: 'plan' })).stoppedSequence).toBe(dropped[0]!.stoppedSequence)
+    })
+
+    test('a page taken by another conversation after a stop gives it what was done after the stop, with the clock set back, and keeps what was done before dropped', async () => {
+      const { t, alice, m, p, click } = await setup()
+      await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+      const before = (await click('click-before')).actionId
+      await stopNow(alice, m, p.artifactId)
+      vi.setSystemTime(Date.now() - 3_600_000)
+      const after = (await click('click-after')).actionId
+      const other = { harness: 'claude-code', id: 'sess-2' }
+      expect(await m.as.mutation(api.artifacts.take, { slug: 'plan', session: other, agent: 'claude-code' })).toEqual({ took: true })
+      await settle(t)
+      expect(await row(t, before)).toMatchObject({ route: 'stopped' })
+      expect(await row(t, after)).toMatchObject({ delivery: 'pending', sessionId: other.id })
+      expect(await m.as.mutation(api.delivery.claim, { ids: [after], for: other })).toEqual([after])
+    })
+
+    test('clicks and stops from before they had a place in the order keep the order the clock gave them, and every click with a place comes after a stop without one', async () => {
+      const { t, alice, m, p, click } = await setup()
+      const made = Date.now()
+      // A click and a stop of the time before clicks and stops had a place, and a click after that stop
+      const [old, later] = await t.run(async (ctx) => {
+        const a = (await ctx.db.get(p.artifactId))!
+        const one = (clientActionId: string, createdAt: number) =>
+          ctx.db.insert('actions', {
+            userId: a.userId,
+            title: a.title,
+            artifactId: a._id,
+            clientActionId,
+            name: 'press',
+            payload: '{}',
+            contentVersion: 1,
+            createdAt,
+            delivery: 'pending',
+            machineId: m.id as never,
+            harness: SESSION.harness,
+            sessionId: SESSION.id,
+          })
+        const ids = [await one('legacy-0001', made - 2000), await one('legacy-0002', made - 500)]
+        await ctx.db.patch(a._id, { stoppedThrough: made - 1000, waiting: 2 })
+        await ctx.db.patch(m.id as never, { stops: [{ harness: SESSION.harness, sessionId: SESSION.id, at: made - 1000 }] })
+        return ids
+      })
+      // The clock is set back past that stop, and the person does something: it is after the stop all the same
+      vi.setSystemTime(made - 60_000)
+      const numbered = (await click('click-numbered')).actionId
+      expect((await inbox(m)).map((c) => c.id).sort()).toEqual([later, numbered].sort())
+      expect(await m.as.mutation(api.delivery.claim, { ids: [old, later, numbered], for: SESSION })).toEqual([later, numbered])
+      expect(await row(t, old)).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+      expect((await row(t, old))!.stoppedSequence).toBeUndefined()
+      // The page says nothing was stopped after the click with a place
+      const page = await alice.browser.query(api.artifacts.get, { slug: 'plan' })
+      expect(page.stoppedSequence).toBeNull()
+      expect((await alice.browser.query(api.actions.forArtifact, { artifactId: p.artifactId }))[0]).toMatchObject({
+        id: numbered,
+        sequence: expect.any(Number),
+      })
+    })
+
+    test('a step of a stop from before stops had a place drops only the clicks of that time, also those the clock puts before it', async () => {
+      const { t, alice, m, p, click } = await setup()
+      const at = Date.now()
+      const old = await t.run(async (ctx) => {
+        const a = (await ctx.db.get(p.artifactId))!
+        await ctx.db.patch(a._id, { waiting: 1 })
+        return ctx.db.insert('actions', {
+          userId: a.userId,
+          title: a.title,
+          artifactId: a._id,
+          clientActionId: 'legacy-0001',
+          name: 'press',
+          payload: '{}',
+          contentVersion: 1,
+          createdAt: at - 1000,
+          delivery: 'pending',
+          machineId: m.id as never,
+          harness: SESSION.harness,
+          sessionId: SESSION.id,
+        })
+      })
+      // A click with a place, made with the clock set back before that stop's moment
+      vi.setSystemTime(at - 60_000)
+      const numbered = (await click('click-numbered')).actionId
+      // The step, as functions from before stops had a place scheduled it
+      await t.mutation(internal.artifacts.dropRest, { userId: alice.user as never, machineId: m.id as never, session: SESSION, at, artifactId: p.artifactId })
+      await settle(t)
+      expect(await row(t, old)).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+      expect(await row(t, numbered)).toMatchObject({ delivery: 'pending' })
+    })
   })
 
   test('a page deleted while a stop is still dropping what waited on it gives back what was waiting on it once, and what waits on another page goes on being counted', async () => {
