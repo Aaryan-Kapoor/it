@@ -4,6 +4,7 @@
 - [Screens](screens.md): opening the site, pairing a phone, a tablet or a TV, and turning the network on and off.
 - [Agents](agents.md): connecting the agent apps you use, agents on another computer, and revoking a machine.
 - [Add-ons](add-ons.md): what to expect of each agent app, and what It does not do.
+- [Project agents, an experiment](project-agents.md): turning them on for a machine, starting an agent in a project's folder from the site, and how It keeps it running.
 - [What It keeps](data.md): where everything is kept, backing it up, a newer It on the same data, how long things are kept, how much It takes, and erasing everything.
 - [Network and privacy](network-and-privacy.md): what leaves the machine, what It fetches from the internet, usage counts and how to turn them off, and the ports It uses.
 - [Usage reporting](usage-reporting.md): every count It sends, what it never sends, and what a request reveals.

@@ -17,6 +17,7 @@ Your pages and It's own records are in one folder, `~/.it`, which only your user
 | `conversation-notes-erasing` | A mark that conversation notes still need removing after erasure. It names nobody and stays until cleanup succeeds, including across service restarts |
 | `delivery-recovery.json`, `delivery-recovery.json.unreadable` | Click contents, mark texts and delivery receipts kept in a private file so delivery can resume after a restart. Erasing everything removes them |
 | `runs.json`, `cut-off.json`, `stopped.json` | Auto-wake's own notes: which conversations It has reopened and that are running now, each with its process's number, when it started and which start of the machine that was, so that a service that starts again can find and end them; and which conversations are owed the word, the next time they are reopened, that a turn of theirs was cut off or stopped. `runs.json.unreadable` is such a note that could not be read, kept as it was: It then reopens nothing until `it runs clear` is run |
+| `agents.json`, `agent-runs.json` | Project agents, an experiment: whether they are on for this machine, how many may run at once and which folders are named for them; and the program each agent that is running has, with its number, when it started and which start of the machine that was, so that a service that starts again can find and end it. They are sent nowhere |
 | `releases.json`, `updates-off` | Where this It looks for a newer version, where it was installed from another place than the usual one, and whether you have told it not to look |
 | `was.json` | On a machine that joined an It and left with `it logout`: which machine it was, so that its pages come along if it joins again |
 | `addons/` | The add-ons as they are installed into the agent apps, and a note of what was put where |
@@ -85,6 +86,7 @@ A newer version of It may bring a newer backend program, newer functions, or bot
 | A browser's pairing | For as long as the browser is used, and a year after it was last used, unless you end it sooner |
 | A showing of a page | Until nothing has asked under it for ten minutes, and a day at most. The site then shows the page again by itself. It ends at once when It stops, and a moment after the page is deleted or its display is signed out, as the second paragraph under this table says |
 | A machine you revoked | Its record for a month, and for as long after that as a page it made is still there |
+| A project agent, with the last thing it said | Until you remove it, or revoke its machine. A message you sent it goes once its machine has handed it over, or when you stop it |
 | The key of a display you forgot | Refused for 90 days, so that the browser that held it has to be paired again to be a display |
 | The background service's log | Its newest few megabytes |
 | What was removed, inside the database's file | About an hour more. The next paragraph says what that means |
@@ -157,5 +159,6 @@ Erasing ends what every display and machine can do at once, and then removes eve
 - The content service keeps two notes, by ids alone, so that nothing from before can be used: that every display was signed out, which it clears away the next time a page is shown more than a day later, and that the files were deleted, which it clears away the next time something is deleted more than an hour later.
 - The program stays, with its settings, its keys and its log, which holds ids and counts and nothing that was on a page.
 - `runs.json` stays for as long as a turn that It reopened may still be running: it names that conversation and its process, which is what keeps It from reopening the conversation a second time beside it, and it goes when the turn has ended.
+- Where project agents were on, `agents.json` stays, with the folders named for them: it is a setting of the machine's, as `it agents` keeps it. Every agent is forgotten in It, and the machine's connector ends their programs as it stops. `agent-runs.json` stays for as long as a program of an agent's, or something it started, may still be running: it names the agent's conversation by its id and the process, and the note goes once It can tell that it has ended.
 - A computer that had joined keeps its own notes of its conversations, the folders in `conversations.json` among them. It is told that It no longer knows it, and not why. `it uninstall` there removes them with everything else, and so does deleting those files.
 - A copy of the folder that you made yourself, and the records you downloaded, are yours to remove.
