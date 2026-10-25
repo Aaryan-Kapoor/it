@@ -650,25 +650,61 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * it, and where none was found to, again a few times at first, since T3 Code may not yet have
    * the conversation's id from its agent app, and then every ten minutes. Where T3 Code is not
    * running nothing is asked, and what was handed over stays where it went.
+   *
+   * A conversation is heard from only while its add-on speaks, and Codex's speaks only at
+   * moments in a turn. The first turn after a switch may be over before T3 Code has the new
+   * conversation's id, or before the one it replaced has gone quiet, and then nothing more is
+   * heard until the person's next message. So a look that is to be had again soon is had by
+   * this connector itself, on a timer of its own, whether or not anything is heard meanwhile:
+   * no more than three times in a row, and not once the conversation has been followed, has
+   * been looked for in vain that often, or the connector stops.
    */
-  const t3Follows = new Map<string, { at: number; misses: number }>()
+  const t3Follows = new Map<string, { at: number; misses: number; retries: number }>()
+  /** The look this connector is to have again by itself, by the conversation. */
+  const followTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** The conversation each one carries on as, since It was told so by this connector. */
   const carriedOn = new Map<string, string>()
   const FOLLOW_AGAIN_MS = 60_000
   const FOLLOW_SOON_MS = 20_000
   const FOLLOW_SELDOM_MS = 10 * 60_000
-  function followThread(key: string, session: { harness: string; id: string }): void {
+  /** How many looks in a row this connector has by itself for one conversation. */
+  const FOLLOW_RETRIES = 3
+  const unfollowed = (key: string) => {
+    const timer = followTimers.get(key)
+    if (timer !== undefined) clearTimeout(timer)
+    followTimers.delete(key)
+  }
+  function followThread(key: string, session: { harness: string; id: string }, retrying = false): void {
     if (session.harness !== 'codex' && session.harness !== 'claude-code') return
-    if (unfitting || closing || over || recovery.erased) return
+    if (unfitting || closing || over || recovery.erased || !chosen(session.harness)) return
     const last = t3Follows.get(key)
-    if (last && steady() < last.at) return
+    // One look at a time for each conversation, and none before the last one said, unless it is the look this connector put off until now
+    if (last && (last.at === Number.POSITIVE_INFINITY || (!retrying && steady() < last.at))) return
     if (!t3Seen || Date.now() - t3Seen.at > 5000) t3Seen = { at: Date.now(), server: t3Server() }
     const server = t3Seen.server
     if (!server) return
-    if (t3Follows.size > 2000) t3Follows.clear()
+    // A look that comes before the one put off is that look
+    unfollowed(key)
+    if (t3Follows.size > 2000) {
+      for (const timer of followTimers.values()) clearTimeout(timer)
+      followTimers.clear()
+      t3Follows.clear()
+    }
     const misses = last?.misses ?? 0
-    // Asked once at a time for each conversation
-    t3Follows.set(key, { at: Number.POSITIVE_INFINITY, misses })
+    const retries = last?.retries ?? 0
+    t3Follows.set(key, { at: Number.POSITIVE_INFINITY, misses, retries })
+    /** When the next look is to be. One that is to be soon is had by this connector itself, so many times in a row and no more. */
+    const next = (ms: number, missed: number) => {
+      const itself = ms === FOLLOW_SOON_MS && retries < FOLLOW_RETRIES && !closing && !over
+      t3Follows.set(key, { at: steady() + ms, misses: missed, retries: itself ? retries + 1 : 0 })
+      if (!itself) return
+      const timer = setTimeout(() => {
+        if (followTimers.get(key) !== timer) return
+        followTimers.delete(key)
+        followThread(key, session, true)
+      }, ms)
+      followTimers.set(key, timer)
+    }
     const known = t3Known.get(key)
     const thread = known !== undefined && known !== 'asking' ? (known.thread ?? undefined) : undefined
     // By the id it has now and by those it had before, which T3 Code may still know it by
@@ -680,7 +716,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     void t3Running(server, { harness: session.harness, ids, cwd: conversationFolder(session) }, thread)
       .catch(() => undefined)
       .then(async (found) => {
-        if (!found) return t3Follows.set(key, { at: steady() + (misses < 3 ? FOLLOW_SOON_MS : FOLLOW_SELDOM_MS), misses: misses + 1 })
+        if (!found) return next(misses < 3 ? FOLLOW_SOON_MS : FOLLOW_SELDOM_MS, misses + 1)
         // A click for it goes to that thread wherever its add-on is not there to take it. Not
         // where a search for it has begun meanwhile, which says so itself when it ends
         const knownNow = t3Known.get(key)
@@ -717,7 +753,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
               `${a(agentOf(was.harness))} conversation (${short(was.id)}) carries on as ${a(agentOf(session.harness))} conversation (${short(session.id)}) in their thread of T3 Code; ${moved} page${moved === 1 ? '' : 's'} went with it`,
             )
         }
-        t3Follows.set(key, { at: steady() + again, misses: 0 })
+        next(again, 0)
         if (carriedOn.size > 500) carriedOn.delete(carriedOn.keys().next().value!)
       })
   }
@@ -3354,6 +3390,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // was reopened for is given back, and is reopened for again when It next starts.
   closing = true
   for (const timer of markTimers) clearTimeout(timer)
+  for (const timer of followTimers.values()) clearTimeout(timer)
+  followTimers.clear()
   // Written down for the connector that starts next: each of these is given what it was
   // reopened for a second time, and must be told that its first turn at it was cut off
   // (Not the run a person has just stopped, which is ending for that reason and is noted as

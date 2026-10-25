@@ -4225,6 +4225,72 @@ describe.skipIf(process.platform === 'win32')('a thread of T3 Code that is switc
     expect(carried()[2]).toEqual({ from: claude, to: codex })
   })
 
+  test('where the first look cannot see the new conversation yet and nothing more is heard from it, its pages go when the connector looks again by itself', async () => {
+    stand.t3.running = true
+    standIn(true)
+    await start('socket', BOTH)
+    handing(1)
+    // T3 Code has switched the thread to Codex, and has not yet been told the Codex conversation's id
+    stand.t3.runs.set('t3-thread', { now: { harness: 'codex', id: 'not-told-yet' }, before: [claude] })
+    expect(await codexTurn(true)).toEqual({ ok: true })
+    await until(() => stand.t3.looked.length === 1)
+    await settled()
+    // The turn is over before the next look is due, and its last hook is the last thing heard
+    await codexTurn(false)
+    await settled()
+    expect([stand.t3.looked.length, carried()]).toEqual([1, []])
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    vi.advanceTimersByTime(20_000)
+    await until(() => carried().length === 1)
+    expect(carried()).toEqual([{ from: claude, to: codex }])
+    expect(stand.t3.looked).toHaveLength(2)
+    // Followed, the conversation is not looked for again until it is heard from
+    vi.advanceTimersByTime(70_000)
+    await settled()
+    expect(stand.t3.looked).toHaveLength(2)
+  })
+
+  test('an earlier conversation still in use when the new one is first heard from hands its pages over at the look the connector has again by itself', async () => {
+    stand.t3.running = true
+    standIn(true)
+    await start('socket', BOTH)
+    handing(1)
+    await claudeAsks()
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    await codexTurn(true)
+    await until(() => stand.t3.looked.some((l) => l.harness === 'codex'))
+    await settled()
+    expect(carried()).toEqual([])
+    // Claude Code's program has gone and asks no more, and nothing is heard from Codex either
+    later(25_000)
+    vi.advanceTimersByTime(20_000)
+    await until(() => carried().length === 1)
+    expect(carried()).toEqual([{ from: claude, to: codex }])
+  })
+
+  test('a conversation in no thread is looked for again by the connector itself three times at most, and not at all once the connector has stopped', async () => {
+    stand.t3.running = true
+    standIn(true)
+    await start('socket', BOTH)
+    await codexTurn(true, 'in-no-thread')
+    await until(() => stand.t3.looked.length === 1)
+    await settled()
+    for (let i = 0; i < 6; i++) {
+      vi.advanceTimersByTime(20_000)
+      await settled()
+    }
+    expect(stand.t3.looked).toHaveLength(4)
+    // Another is to be looked for again when the connector stops: it is not
+    await codexTurn(true, 'another-in-no-thread')
+    await until(() => stand.t3.looked.length === 5)
+    await settled()
+    await stop!()
+    stop = null
+    vi.advanceTimersByTime(60_000)
+    await settled()
+    expect(stand.t3.looked).toHaveLength(5)
+  })
+
   test('a conversation of another thread, in the same folder or not, is handed nothing, and nor is one the thread no longer runs', async () => {
     stand.t3.running = true
     await start('socket', BOTH)
