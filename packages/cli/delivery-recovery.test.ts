@@ -92,8 +92,8 @@ test(
     expect(open().waiters.has('new')).toBe(true)
   },
   // Filling the bound takes as many saves as it holds copies, one conversation at a time, and
-  // each save writes the whole record and flushes it and its folder to the disk. On Windows
-  // that has taken from nine seconds to past thirty on the same runner
+  // each save writes the whole record and flushes it and its folder to the disk. On CI's
+  // Windows runners that has taken from nine seconds to past thirty
   process.platform === 'win32' ? 120_000 : 30_000,
 )
 

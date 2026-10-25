@@ -676,8 +676,8 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     },
     // Thirty is more updates than there are recovery slots, and each one writes, flushes and
     // renames files. On Windows a program that looks into every new file can keep a rename
-    // waiting for a while, which It tries again for up to three seconds, so there the thirty
-    // have taken from three seconds to past thirty on the same runner
+    // waiting for a while, which It tries again for up to three seconds, so on CI's Windows
+    // runners the thirty have taken from three seconds to past thirty
     process.platform === 'win32' ? 120_000 : 30_000,
   )
 
