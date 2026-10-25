@@ -80,9 +80,28 @@ import {
 export interface Delivered extends Click {
   text: string
   brief: string
+  /** The receipt of the taking this machine holds it by, which the add-on says it has the click by. Given to an add-on that asks with receipts. */
+  receipt?: string
 }
+/**
+ * One taking of clicks to hand them over, known to It by its receipt. Every step of that
+ * hand-over names the receipt: keeping the hold, giving the clicks back, setting them aside, and
+ * saying they were handed over. It names no other taking, however late it comes.
+ */
+interface Attempt {
+  receipt: string
+}
+/** A receipt for a taking about to be asked for: nobody else's, and nothing anyone could guess. */
+const newAttempt = (): Attempt => ({ receipt: randomBytes(16).toString('base64url') })
 interface Held {
   click: Offered
+  /** The taking this machine holds it by. */
+  attempt: Attempt
+  /**
+   * It was given to an add-on from before receipts, which says it has a click by its id alone.
+   * Such an add-on is believed for a click it was given in this taking, for one release.
+   */
+  legacy?: boolean
   key: string
   claimedAt: number
   /** Until when the backend has confirmed this machine holds the click. Nothing is served past it. */
@@ -367,9 +386,10 @@ export async function runConnector(say: (line: string) => void): Promise<void> {
 
 /**
  * On a machine that joined an It: what is wrong where that It and this program speak different
- * versions of the way machines talk to It, as that It says at its door. Null where they speak
- * the same, or where this machine runs It itself. Undefined where the door could not be asked:
- * that says nothing either way, and whoever asked goes on as they were.
+ * versions of the way machines talk to It, as that It says at its door, or where that It does
+ * not take the receipts this program hands clicks over by. Null where they fit, or where this
+ * machine runs It itself. Undefined where the door could not be asked: that says nothing
+ * either way, and whoever asked goes on as they were.
  */
 async function unfit(): Promise<Problem | null | undefined> {
   if (!joined()) return null
@@ -382,9 +402,23 @@ async function unfit(): Promise<Problem | null | undefined> {
     return undefined
   }
   return direct(`${door}/cli/config`, { signal: AbortSignal.timeout(10_000) })
-    .then(async (answer) => (answer.ok ? incompatible(((await answer.json()) as { protocol?: unknown } | null)?.protocol) : undefined))
+    .then(async (answer) => {
+      if (!answer.ok) return undefined
+      const said = (await answer.json()) as { protocol?: unknown; receipts?: unknown } | null
+      return incompatible(said?.protocol) ?? (said?.receipts === true ? null : NO_RECEIPTS)
+    })
     .catch(() => undefined)
 }
+/**
+ * The It this machine joined is from before receipts: it would refuse every taking of a click
+ * this program asks for, and the click would wait for nothing. Nothing is handed over until it
+ * is brought up to date, which is said.
+ */
+const NO_RECEIPTS = new Problem(
+  'That It is older than the It on this machine, and does not take the receipts this one hands clicks over by.',
+  'invalid',
+  'Update It on the machine it runs on, with `it upgrade` there or the Update button on its Machines page.',
+)
 /**
  * What `carry` answers where the conversation was not reopened after all, for a reason that is
  * nobody's fault and no failure of its app: this connector is stopping, the machine does not
@@ -475,7 +509,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     )
   const held = new Map<string, Held>()
   /** Handed to an agent, and not yet confirmed to It: confirmed again and again until it is. */
-  const toConfirm = new Map<string, string>()
+  const toConfirm = new Map<string, { route: string; receipt?: string }>()
   const confirmed = new Set<string>()
   /**
    * For usage reporting, which counts a delivery once It has confirmed it: when the click was
@@ -483,7 +517,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    */
   const counting = new Map<string, { at: number; harness: string | undefined; path: 'heard' | 'woke' }>()
   /** Given up on by this machine, and It has not yet been told to set it aside. Told again until it has. */
-  const toPark = new Map<string, { for: { harness: string; id: string } | null; tag: string }>()
+  const toPark = new Map<string, { for: { harness: string; id: string } | null; tag: string; receipt?: string }>()
   /** Set aside, and It has confirmed it. Should one come back on offer, it is left alone. */
   const parked = new Set<string>()
   /** Being put in a harness's queue right now; how often that has been tried, and when last. */
@@ -512,7 +546,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // The unchanged saved record remains available for the next cleanup to retry.
   const cleanupFailed = (err: unknown) => seldom('waiter-cleanup', `could not save waiter cleanup (${why(err)}); trying again`)
   await recovery.pruneWaiters().catch(cleanupFailed)
-  for (const id of recovery.accepted) toConfirm.set(id, 'queue')
+  // Each by the receipt of the taking that handed it over, where it was kept: one kept with none is of a taking made without one
+  for (const id of recovery.accepted) toConfirm.set(id, { route: 'queue', receipt: recovery.receipts.get(id) })
   /**
    * For how long a click given to one waiter is not given to another. The first is printing it
    * and says so in a moment. One that has not said so by then never had it, or is gone.
@@ -852,14 +887,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
     return { back, done: legacyLeft.size === 0 }
   }
   // A late answer about a previous hold must not erase the receipt for a newer claim of the same click.
-  const claimAttempts = new Map<string, object>()
-  const retireClaim = async (id: string, attempt: object | undefined) => {
+  const claimAttempts = new Map<string, Attempt>()
+  const retireClaim = async (id: string, attempt: Attempt | undefined) => {
     if (recovery.stopped || claimAttempts.get(id) !== attempt) return
     await recovery.retire([id], () => claimAttempts.get(id) === attempt)
     if (claimAttempts.get(id) === attempt) claimAttempts.delete(id)
   }
   /** Confirmed lease losses whose durable cleanup may still need a successful write. */
-  const lostClaims = new Map<string, object | undefined>()
+  const lostClaims = new Map<string, Attempt | undefined>()
   const retireLostClaims = async () => {
     for (const [id, attempt] of lostClaims) {
       try {
@@ -870,20 +905,30 @@ async function connecting(say: (line: string) => void): Promise<void> {
       }
     }
   }
-  const release = async (id: string) => {
-    const attempt = claimAttempts.get(id)
+  /** Gives a click back, as the taking that holds it: by default the last this machine made of it. */
+  const release = async (id: string, attempt = claimAttempts.get(id)) => {
     try {
-      await call('mutation', api.delivery.release, { id })
+      await call('mutation', api.delivery.release, { id, ...(attempt ? { receipt: attempt.receipt } : {}) })
     } catch (err) {
       if ((err as { code?: string }).code !== 'not_found') throw err
     }
     await retireClaim(id, attempt)
   }
+  /** The receipts of the clicks a renewal or a question names, each by the taking that holds it. */
+  const receiptsOf = (ids: string[], attempts: ReadonlyMap<string, Attempt>) =>
+    ids.flatMap((id) => {
+      const attempt = attempts.get(id)
+      return attempt ? [{ id, receipt: attempt.receipt }] : []
+    })
+  /**
+   * Takes clicks for a conversation, as one taking with a receipt of its own. The receipt is kept
+   * before It is asked, so that a connector that ends before the answer comes still knows it.
+   */
   const claim = async (ids: string[], session: { harness: string; id: string }) => {
-    const attempt = {}
-    await recovery.claim(ids, keyOf(session.harness, session.id))
+    const attempt = newAttempt()
+    await recovery.claim(ids, keyOf(session.harness, session.id), attempt.receipt)
     for (const id of ids) claimAttempts.set(id, attempt)
-    const got = await call<string[]>('mutation', api.delivery.claim, { ids, for: session })
+    const got = await call<string[]>('mutation', api.delivery.claim, { ids, for: session, receipt: attempt.receipt })
     const refused = ids.filter((id) => !got.includes(id))
     for (const id of refused) {
       // A recovered row is only a snapshot. A waiter or another machine may have taken
@@ -892,7 +937,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       lostClaims.set(id, attempt)
     }
     if (refused.length) await retireLostClaims()
-    return got
+    return { got, attempt }
   }
   let inbox: Offered[] = []
   let routing = false
@@ -909,10 +954,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
   }
   async function confirmEach(): Promise<void> {
-    for (const [id, route] of toConfirm) {
+    for (const [id, { route, receipt }] of toConfirm) {
       const attempt = claimAttempts.get(id)
       try {
-        const done = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route })
+        const done = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route, ...(receipt ? { receipt } : {}) })
         if (recovery.accepted.has(id) || recovery.returning.has(id)) await recovery.confirm(id, () => claimAttempts.get(id) === attempt)
         if (claimAttempts.get(id) === attempt) claimAttempts.delete(id)
         if (done) {
@@ -957,20 +1002,40 @@ async function connecting(say: (line: string) => void): Promise<void> {
     parking = true
     try {
       for (const [id, pending] of toPark) {
-        const { for: tried, tag: which } = pending
+        const { for: tried, tag: which, receipt } = pending
         const attempt = claimAttempts.get(id)
         // The backend says whether it is set aside. While another machine holds the click it is
         // not, and it is asked about again. A conversation that took nothing in all its tries
-        // has everything else that is waiting for it set aside with this click.
-        const done = await call<boolean>('mutation', api.delivery.park, { id, ...(tried ? { for: tried, all: true } : {}) }).then(
-          (set) => set !== false,
+        // has everything else that is waiting for it set aside with this click. Asked by the
+        // taking that gave up on it, where one did: another since has not given up on it.
+        const answer = await call<boolean | 'again'>('mutation', api.delivery.park, {
+          id,
+          ...(receipt ? { receipt } : {}),
+          ...(tried ? { for: tried, all: true } : {}),
+        }).then(
+          (set) => (set === 'again' ? ('again' as const) : set !== false),
           (err) => {
             if (/not_found/.test(String((err as { code?: string }).code))) return true
             seldom('park', `could not tell It that click ${id} was set aside (${why(err)}); trying again`)
             return false
           },
         )
-        if (!done) continue
+        if (!answer) continue
+        if (answer === 'again') {
+          // Not set aside: its conversation was heard from again while this was ending, or
+          // another taking has had it since. It is tried afresh, with no try counted against it.
+          try {
+            await retireClaim(id, attempt)
+          } catch (err) {
+            seldom('recovery', `could not keep the delivery receipt (${why(err)}); trying again`)
+            continue
+          }
+          if (toPark.get(id) !== pending) continue
+          toPark.delete(id)
+          queueTries.delete(which)
+          journal('released', id)
+          continue
+        }
         try {
           await retireClaim(id, attempt)
         } catch (err) {
@@ -1009,15 +1074,38 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     // Under its own id, and under each earlier id its pages were made under
     const ids = [id, ...[...aliases].filter(([, to]) => follow(to) === here).map(([from]) => from.slice(from.indexOf(':') + 1))]
-    for (const one of new Set(ids))
-      void call<number>('mutation', api.delivery.unpark, { for: { harness, id: one } })
-        .then((given) => {
-          if (given > 0)
-            say(
-              `${a(agentOf(harness))} conversation (${short(id)}) is back: ${given} thing${given === 1 ? '' : 's'} set aside for it ${given === 1 ? 'is' : 'are'} tried again`,
-            )
-        })
-        .catch(() => {})
+    for (const one of new Set(ids)) {
+      heardAgain.delete(keyOf(harness, one))
+      heardAgain.set(keyOf(harness, one), { harness, id: one, named: id })
+    }
+    while (heardAgain.size > 200) heardAgain.delete(heardAgain.keys().next().value!)
+    void giveBackAside()
+  }
+  /**
+   * The conversations heard from again that It has not yet been told of: told again at each
+   * pass until it has answered, so that a word lost on its way leaves nothing of theirs aside.
+   * It numbers each time a conversation is heard from again, and what this machine set aside
+   * for it before then comes back, while a setting aside that was decided before then sets
+   * nothing aside, whichever reaches It first.
+   */
+  const heardAgain = new Map<string, { harness: string; id: string; named: string }>()
+  let tellingHeard = false
+  async function giveBackAside(): Promise<void> {
+    if (tellingHeard) return
+    tellingHeard = true
+    try {
+      for (const [key, s] of [...heardAgain]) {
+        const given = await call<number>('mutation', api.delivery.unpark, { for: { harness: s.harness, id: s.id } }).catch(() => null)
+        if (given === null) continue
+        if (heardAgain.get(key) === s) heardAgain.delete(key)
+        if (given > 0)
+          say(
+            `${a(agentOf(s.harness))} conversation (${short(s.named)}) is back: ${given} thing${given === 1 ? '' : 's'} set aside for it ${given === 1 ? 'is' : 'are'} tried again`,
+          )
+      }
+    } finally {
+      tellingHeard = false
+    }
   }
   /** The conversations this machine has reopened and that are running now, each with the way to stop it. */
   /**
@@ -1545,7 +1633,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (h.key !== key || h.served) continue
         held.delete(id)
         journal('released', id)
-        void release(id)
+        void release(id, h.attempt)
           .catch(() => {})
           .then(() => route())
       }
@@ -1609,10 +1697,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const key = follow(keyOf(harness, line))
     /** The other clicks waiting for the same conversation, which go with this one in the same message. */
     let withIt: Offered[] = []
+    /** The taking each click of this hand-over is held by. Every step of the hand-over names that one, however late it comes. */
+    const attempts = new Map<string, Attempt>()
+    /** A click of this hand-over as the waiter it is given to has it: with the receipt it is held by, which the waiter says it was handed over by. */
+    const receipted = (c: Offered): Offered => {
+      const attempt = attempts.get(c.id)
+      return attempt ? { ...c, receipt: attempt.receipt } : c
+    }
     const giveBack = async () => {
       for (const c of withIt) {
         journal('released', c.id)
-        await release(c.id).catch(() => {})
+        await release(c.id, attempts.get(c.id)).catch(() => {})
       }
       withIt = []
     }
@@ -1646,14 +1741,15 @@ async function connecting(say: (line: string) => void): Promise<void> {
       queueReceipts.set(click.id, key)
       receiptSlots.push(click.id)
       const claimedAt = steady()
-      const [got] = await claim([click.id], click.session!)
-      if (!got) return
+      const taken = await claim([click.id], click.session!)
+      if (!taken.got.includes(click.id)) return
+      attempts.set(click.id, taken.attempt)
       // And looked at once more, now that the claim is answered: a waiter that began while it
       // was being asked for cannot take what this machine holds, so it is given back to it. It
       // is given back as well when Codex was disconnected in that time.
       if (closing || unfitting || awaited(click, Date.now()) || !connected(harness) || (reopening && !wakes(harness, click.at))) {
         journal('released', click.id)
-        await release(click.id).catch(() => {})
+        await release(click.id, taken.attempt).catch(() => {})
         return
       }
       if (starting) {
@@ -1696,11 +1792,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
             queueReceipts.set(c.id, key)
             receiptSlots.push(c.id)
           }
-          const got = await claim(
+          const together = await claim(
             more.map((c) => c.id),
             click.session!,
-          ).catch(() => [] as string[])
-          withIt = more.filter((c) => got.includes(c.id))
+          ).catch(() => null)
+          withIt = together ? more.filter((c) => together.got.includes(c.id)) : []
+          for (const c of withIt) attempts.set(c.id, together!.attempt)
         }
         // Taken now, and only now: several conversations may have been found to have room at the
         // same moment, while each was asking for its click, and the last place goes to one of
@@ -1714,7 +1811,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         ) {
           await giveBack()
           journal('released', click.id)
-          await release(click.id).catch(() => {})
+          await release(click.id, attempts.get(click.id)).catch(() => {})
           return
         }
       }
@@ -1725,12 +1822,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (steady() - claimedAt > LEASE_MS / 3) {
         const again = steady()
         const ids = [click.id, ...withIt.map((c) => c.id)]
-        const kept = await call<string[]>('mutation', api.delivery.renew, { ids }).catch(() => [] as string[])
+        const kept = await call<string[]>('mutation', api.delivery.renew, { ids, receipts: receiptsOf(ids, attempts) }).catch(() => [] as string[])
         if (!ids.every((id) => kept.includes(id))) {
           say(`click ${click.id} was not this machine’s any more by the time it could be handed over; it is left where it is`)
           await giveBack()
           journal('released', click.id)
-          await release(click.id).catch(() => {})
+          await release(click.id, attempts.get(click.id)).catch(() => {})
           return
         }
         heldFrom = again
@@ -1740,7 +1837,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (!reopening && awaited(click, Date.now())) {
           await giveBack()
           journal('released', click.id)
-          await release(click.id).catch(() => {})
+          await release(click.id, attempts.get(click.id)).catch(() => {})
           return
         }
       }
@@ -1774,12 +1871,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (asked > heldUntil) return lose()
         if (asked - renewedAt < RENEW_MS) return
         renewedAt = asked
-        void call<string[]>('mutation', api.delivery.renew, { ids })
+        void call<string[]>('mutation', api.delivery.renew, { ids, receipts: receiptsOf(ids, attempts) })
           .then(async (kept) => {
             const not = ids.filter((id) => !kept.includes(id))
             // An It from before this could be asked says nothing: what is not held is then taken for lost, as it was
             const lost = not.length
-              ? await call<string[]>('query', api.delivery.lost, { ids: not }).then(
+              ? await call<string[]>('query', api.delivery.lost, { ids: not, receipts: receiptsOf(not, attempts) }).then(
                   (theirs) => (Array.isArray(theirs) ? theirs : not),
                   () => not,
                 )
@@ -1812,14 +1909,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Still not settled, it is reopened for nothing: said below, by `carry`, as why
       /** Whether this turn is told that the one before it was cut off: decided before it begins, since its own ending may make such a note anew. */
       const toldCutOff = cutOff.has(key)
-      const sent: { click: Offered; toWaiter: boolean; given?: Given; printed?: boolean } = { click, toWaiter: false }
+      const sent: { click: Offered; toWaiter: boolean; given?: Given; printed?: boolean } = { click: receipted(click), toWaiter: false }
       submitting.set(click.id, sent)
       // What is put into a conversation that is open, or into a thread: the mark alone, where a
       // hook of It's hands the agent the rest, and otherwise one short line for each click
       const lines = () => (t3 ? [click, ...withIt].map((c) => briefClick(asClick(c))).join('\n') : briefClick(asClick(click), false))
       const put = (text: string) => (t3 ? t3Send(t3.server, t3.thread, text) : codexPut(threadOf(follow(key)), text))
       if (!reopening && turnRunning(follow(key), Date.now())) {
-        await recovery.keepWaiters([click, ...withIt], follow(key))
+        await recovery.keepWaiters([click, ...withIt].map(receipted), follow(key))
       }
       const mark =
         !reopening && marks(follow(key), harness)
@@ -1881,13 +1978,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
         lostHold.delete(mine)
         await giveBack()
         journal('released', click.id)
-        await release(click.id).catch(() => {})
+        await release(click.id, attempts.get(click.id)).catch(() => {})
         return
       }
       if (refused === STOPPED && (closing || (unfitting && !lostHold.has(mine)))) {
         await giveBack()
         journal('released', click.id)
-        await release(click.id).catch(() => {})
+        await release(click.id, attempts.get(click.id)).catch(() => {})
         return
       }
       // Ended because the hold on it was lost: it is not this machine's to hand over or to give
@@ -1898,7 +1995,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         // It may be a click that went with this one that was lost, and this one still held
         // here: given back, it is reopened for again, with the note that its turn was cut
         // off. Where it is not this machine's, the giving back does nothing.
-        await release(click.id).catch(() => {})
+        await release(click.id, attempts.get(click.id)).catch(() => {})
         return
       }
       const handed = refused === null || refused === STOPPED
@@ -1919,7 +2016,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             await recovery.accept(
               [click, ...withIt].map((c) => c.id),
               { id: click.id, printed: sent.printed, given: sent.given },
-              !reopening && turnRunning(follow(key), Date.now()) ? { clicks: [click, ...withIt], key: follow(key) } : undefined,
+              !reopening && turnRunning(follow(key), Date.now()) ? { clicks: [click, ...withIt].map(receipted), key: follow(key) } : undefined,
             )
           } catch (err) {
             seldom('recovery', `could not keep the delivery receipt (${why(err)}); confirming the accepted clicks`)
@@ -1928,7 +2025,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (refused === STOPPED) say(`${a(harness)} conversation (${short(line)}) was stopped by the person`)
         for (const c of [click, ...withIt]) {
           journal('queued', c.id)
-          toConfirm.set(c.id, 'queue')
+          toConfirm.set(c.id, { route: 'queue', receipt: attempts.get(c.id)?.receipt })
           // The queue, or the reopening, starts a turn in a conversation that was not working
           counting.set(c.id, { at: c.at, harness, path: 'woke' })
           if (c !== click) {
@@ -1956,11 +2053,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // Given up on from here. It is set aside so that it does not hide clicks that can be
           // delivered; it is still waiting, and the person and `it wait` still see it.
           say(`click ${click.id} was not taken by ${route} after ${n} tries (${refused}); it stays waiting`)
-          toPark.set(click.id, { for: click.session, tag: tag(click) })
+          toPark.set(click.id, { for: click.session, tag: tag(click), receipt: attempts.get(click.id)?.receipt })
           await parkAll()
         } else {
           say(`click ${click.id} was not taken by ${route} (${refused}); try ${n} of ${QUEUE_WAITS.length}`)
-          await release(click.id).catch(() => {})
+          await release(click.id, attempts.get(click.id)).catch(() => {})
         }
       }
     } catch (err) {
@@ -2158,6 +2255,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // there must not hold up renewing leases or taking new clicks
       void confirmAll()
       void parkAll()
+      void giveBackAside()
       // A held click stays held while something will come for it: an add-on that is asking, or
       // a Codex turn that is still running and will reach a hook. Otherwise it goes back, so
       // another route can have it.
@@ -2167,7 +2265,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         held.delete(id)
         journal('released', id)
         say(`click ${id} was kept for an agent app that is not connected any more; it goes back to waiting`)
-        await release(id).catch(() => {})
+        await release(id, h.attempt).catch(() => {})
         return true
       }
       // How long each has been held is counted by the clock that is never set back
@@ -2183,8 +2281,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
           // someone else's, so serving it from here stops.
           // Counted from before the request went out: the backend's clock started no later than that
           const asked = steady()
-          const attempt = claimAttempts.get(id)
-          const kept = await call<string[]>('mutation', api.delivery.renew, { ids: [id] }).catch(() => null)
+          const attempt = h.attempt
+          const kept = await call<string[]>('mutation', api.delivery.renew, { ids: [id], receipts: [{ id, receipt: attempt.receipt }] }).catch(() => null)
           // While that was being asked, the click may have been handed over or given to a waiting
           // agent: it is not held here then, and nothing about it is lost
           if (held.get(id) !== h) continue
@@ -2208,7 +2306,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           held.delete(id)
           journal('released', id)
           say(`click ${id} was kept for ${h.forHook ? 'a Codex turn that ended without taking it' : 'an add-on that stopped asking'}; it goes back to waiting`)
-          await release(id).catch(() => {})
+          await release(id, h.attempt).catch(() => {})
         } else if (at > h.leaseUntil - 2000) {
           held.delete(id)
           journal('lost', id)
@@ -2247,9 +2345,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
           continue
         }
         if (unconfirmed.has(click.id)) {
-          // Its harness's queue took it before a restart; all that was missing was telling It
+          // Its harness's queue took it before a restart; all that was missing was telling It,
+          // by the receipt of the taking it was handed over by, where that was kept
           unconfirmed.delete(click.id)
-          toConfirm.set(click.id, 'queue')
+          toConfirm.set(click.id, { route: 'queue', receipt: recovery.receipts.get(click.id) })
           continue
         }
         if (!click.session || awaited(click, now)) continue
@@ -2292,16 +2391,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will
           const asked = steady()
-          const [got] = await claim([click.id], click.session)
+          const { got, attempt } = await claim([click.id], click.session)
+          const holds = got.includes(click.id)
           // An agent may have begun to wait for it while the claim was being asked for. A waiter
           // cannot take what this machine holds, so the click is given back for it to take. It
           // is given back as well when the person disconnected its app in that time.
-          if (got && (unfitting || closing || awaited(click, Date.now()) || !chosen(click.session.harness))) {
+          if (holds && (unfitting || closing || awaited(click, Date.now()) || !chosen(click.session.harness))) {
             journal('released', click.id)
-            await release(click.id).catch(() => {})
-          } else if (got) {
+            await release(click.id, attempt).catch(() => {})
+          } else if (holds) {
             // Under the id the conversation has by now: it may have carried on under another while the claim was being asked for
-            held.set(click.id, { click, key: follow(key), claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
+            held.set(click.id, { click, attempt, key: follow(key), claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
             journal('claimed', click.id)
           }
         } else if (way === 't3') {
@@ -2546,11 +2646,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
       }
       // Counted as given only if whoever asked is still there to be answered
       if (gone()) return [200, { clicks: [] }]
+      // An add-on says it has a click by the receipt of the taking it was given it in. One from
+      // before receipts asks without them, and is believed of a click by its id alone, of what
+      // it was given in the taking that holds the click now: as it always was, for one release
+      const receipts = url.searchParams.get('receipts') === '1'
       for (const h of mine) {
         if (!h.served) journal('served', h.click.id)
         h.served = true
+        if (!receipts) h.legacy = true
       }
-      return [200, { clicks: mine.map((h) => asDelivered(h.click)) }]
+      return [200, { clicks: mine.map((h) => (receipts ? { ...asDelivered(h.click), receipt: h.attempt.receipt } : asDelivered(h.click))) }]
     }
     // The runs from before that are held, for `it runs`, and letting go of them at the person's word, for `it runs clear`
     if (url.pathname === '/runs') {
@@ -2679,10 +2784,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
           const given = h.served && steady() < h.leaseUntil - 1000
           if (given && !fits(h.click)) continue
           held.delete(clickId)
-          if (given) handedBack.push(h.click)
+          // With the receipt it is held by, which the waiter says it was handed over by
+          if (given) handedBack.push({ ...h.click, receipt: h.attempt.receipt })
           // Anything set aside for an add-on and not yet given to it goes back, so the waiter
           // can have it. Not waited for: the waiter must have its answer at once.
-          else void release(clickId).catch(() => {})
+          else void release(clickId, h.attempt).catch(() => {})
         }
         // A click that Codex's own command has been started with, and has not yet answered for,
         // cannot be taken back: Codex may have it already, and would hand it over only
@@ -2719,22 +2825,38 @@ async function connecting(say: (line: string) => void): Promise<void> {
     }
     if (req.method === 'POST' && url.pathname === '/ack') {
       // The agent has it. It is never offered again from here, whatever happens to the report of that.
-      // Only a click that was given out from here is taken as received. One that is held and
-      // not yet given to anyone was claimed afresh, for a conversation that has not asked for it
-      // yet: a receipt for it is an old one, from whoever had it before, and taking it would
-      // mark the click as handed to an agent that never saw it.
-      const ids: string[] = Array.isArray(body.ids) ? body.ids.filter((x: unknown): x is string => typeof x === 'string' && held.get(x)?.served === true) : []
+      // Only a click that was given out from here is taken as received, and only by the receipt
+      // of the taking it was given out in. One that is held and not yet given to anyone was
+      // claimed afresh, for a conversation that has not asked for it yet; and one given out
+      // again, in a later taking, is not that later taking's to be said of by an earlier one.
+      // Taking either would mark the click as handed to an agent that never saw it.
+      const said: { id: string; receipt: string }[] | null = Array.isArray(body.receipts)
+        ? body.receipts.filter((r: unknown): r is { id: string; receipt: string } => {
+            const x = r as { id?: unknown; receipt?: unknown } | null
+            return typeof x?.id === 'string' && typeof x.receipt === 'string'
+          })
+        : null
+      const ids: string[] = [
+        ...new Set<string>(
+          said
+            ? said.filter((r) => held.get(r.id)?.served === true && held.get(r.id)?.attempt.receipt === r.receipt).map((r) => r.id)
+            : // An add-on from before receipts says it by the ids alone, and is believed of what it was given in this taking
+              Array.isArray(body.ids)
+              ? body.ids.filter((x: unknown): x is string => typeof x === 'string' && held.get(x)?.served === true && held.get(x)?.legacy === true)
+              : [],
+        ),
+      ]
       // An add-on that knows says whether the click started a turn or joined one that was
       // running. One that does not say is taken to have been heard at once.
       const woke = body.woke === true
       // One report is one turn, however many clicks it carried: counted as one waking
       if (woke && ids.length) record('agent.woken', { result: 'resumed', agent: agentOf(held.get(ids[0]!)!.click.session?.harness) })
       for (const clickId of ids) {
-        const click = held.get(clickId)!.click
+        const { click, attempt } = held.get(clickId)!
         counting.set(clickId, { at: click.at, harness: click.session?.harness, path: woke ? 'woke' : 'heard' })
         if (counting.size > 2000) counting.delete(counting.keys().next().value!)
         held.delete(clickId)
-        toConfirm.set(clickId, 'addon')
+        toConfirm.set(clickId, { route: 'addon', receipt: attempt.receipt })
         journal('acked', clickId)
       }
       void confirmAll()
@@ -3188,7 +3310,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (h.served) continue
         held.delete(id)
         journal('released', id)
-        void release(id).catch(() => {})
+        void release(id, h.attempt).catch(() => {})
       }
       // Said to It at once, so that the site says it beside the machine and on its pages: in
       // full, whatever plainer report this machine had fallen back on for a while
@@ -3276,8 +3398,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   for (const run of reopenedNow.values()) run.abort()
   // Held no more from this moment, before It is told so: an add-on that asks while the telling
   // is on its way is given nothing that is about to be somebody else's
-  const givenBack = [...held].filter(([, h]) => !h.served).map(([id]) => id)
-  for (const id of givenBack) held.delete(id)
+  const givenBack = [...held].filter(([, h]) => !h.served)
+  for (const [id] of givenBack) held.delete(id)
   // What is held goes back, and what was handed over is confirmed, all at once and for a few
   // seconds at most: whoever asked this program to stop will not wait long, and anything not
   // given back in that time goes back by itself when its lease runs out
@@ -3286,7 +3408,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // And It is told that this machine is going, so that its pages say at once that they wait
       // for the machine, where they would otherwise say for minutes that a conversation was closed
       ...(asked ? [call('mutation', api.machines.stopping, {})] : []),
-      ...givenBack.map((id) => release(id)),
+      ...givenBack.map(([id, h]) => release(id, h.attempt)),
       confirmAll(),
       ...queues.values(),
     ]),

@@ -12,6 +12,7 @@ const stand = vi.hoisted(() => ({
   announce: null as null | (() => Promise<any>),
   output: null as null | (() => Promise<boolean>),
   calls: [] as string[],
+  args: [] as { name: string; args: any }[],
 }))
 vi.mock('./src/connector', () => ({
   local: async (_path: string, { body }: any) => {
@@ -25,6 +26,7 @@ vi.mock('./src/lib', async (original) => ({
   call: async (_kind: string, fn: any, args: any) => {
     const name = getFunctionName(fn)
     stand.calls.push(name)
+    stand.args.push({ name, args })
     return name === 'delivery:claim' ? args.ids : name === 'delivery:handedOff' ? { already: false } : []
   },
   live: () => ({
@@ -70,7 +72,7 @@ afterEach(() => {
     for (const handler of process.listeners(signal)) if (!signals[signal]!.has(handler)) process.removeListener(signal, handler)
   vi.clearAllTimers()
   vi.useRealTimers()
-  stand.counted.length = stand.requests.length = stand.lines.length = stand.errors.length = stand.exits.length = stand.calls.length = 0
+  stand.counted.length = stand.requests.length = stand.lines.length = stand.errors.length = stand.exits.length = stand.calls.length = stand.args.length = 0
   stand.announce = stand.output = stand.updates = stand.fail = null
 })
 async function begin(timeout = '3') {
@@ -144,4 +146,22 @@ test('an interrupted output write for a newly claimed click ends without confirm
   expect(stand.calls).not.toContain('delivery:handedOff')
   expect(stand.exits).toEqual([1])
   expect(stand.counted).toEqual(['error'])
+})
+
+test('a click this wait takes is said to be handed over by the receipt of its own taking, one the connector hands on by the connector’s, and neither is printed', async () => {
+  stand.announce = async () => ({ clicks: [{ ...click('handed-on'), receipt: 'the-connector-receipt-0001' }] })
+  void wait({ _: [], flags: { id: 'board', follow: true }, many: {} }, (code) => stand.counted.push(code))
+  await flush()
+  stand.announce = null
+  stand.updates!([click('taken-here')])
+  await flush()
+  const claimed = stand.args.find((c) => c.name === 'delivery:claim')!.args
+  expect(claimed.receipt).toMatch(/^[A-Za-z0-9_-]{16,64}$/)
+  const said = stand.args.filter((c) => c.name === 'delivery:handedOff').map((c) => c.args)
+  expect(said).toEqual([
+    { id: 'handed-on', route: 'waiter', receipt: 'the-connector-receipt-0001' },
+    { id: 'taken-here', route: 'waiter', receipt: claimed.receipt },
+  ])
+  expect(stand.lines.map((c) => c.id)).toEqual(['handed-on', 'taken-here'])
+  expect(JSON.stringify(stand.lines)).not.toContain('receipt')
 })

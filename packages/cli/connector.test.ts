@@ -751,6 +751,83 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     }
   })
 
+  test('a click that It does not set aside, because its conversation came back while the last try was ending, is tried afresh under a new receipt', async () => {
+    standIn()
+    await start()
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    stand.answer = (name) => (name === 'delivery:park' ? 'again' : undefined)
+    try {
+      offered(click(1))
+      for (let n = 1; n <= 4; n++) {
+        if (n > 1) {
+          now += 601_000
+          await pass()
+        }
+        await until(() => stand.codex.length === n)
+        stand.codex[n - 1]!.end(new Error('declined'))
+        await until(() => called(n === 4 ? 'delivery:park' : 'delivery:release').length >= (n === 4 ? 1 : n - 1 + 1))
+      }
+      // It was asked to set the click aside by the receipt of the taking that gave up on it
+      const last = stand.calls.filter((c) => c.name === 'delivery:claim').at(-1)!.args.receipt
+      expect(stand.calls.find((c) => c.name === 'delivery:park')!.args).toMatchObject({ id: 'click-1', receipt: last, all: true })
+      await settled()
+      expect(recoveryClaims().returning).toEqual([])
+      expect(readFileSync(path.join(home, 'journal.jsonl'), 'utf8')).not.toContain('"parked"')
+      // And it is tried again at once, with nothing counted against it, under a receipt of its own
+      await pass()
+      await until(() => stand.codex.length === 5)
+      expect(stand.calls.filter((c) => c.name === 'delivery:claim').at(-1)!.args.receipt).not.toBe(last)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  test('a click taken again on this machine, after its hold was lost, is renewed, given back and confirmed by the new receipt alone', async () => {
+    standIn()
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      await start()
+      await turn(6, true)
+      offered({ ...click(6), at: now })
+      await until(async () => (await local<{ held: number }>('/health'))?.held === 1)
+      const first = stand.calls.filter((c) => c.name === 'delivery:claim').at(-1)!.args.receipt
+      // It gives the hold to another taking: the renewal names the first receipt, and is refused
+      offered()
+      stand.answer = (name) => (name === 'delivery:renew' ? [] : undefined)
+      now += 11_000
+      await turn(6, true)
+      await pass(2)
+      expect(stand.calls.filter((c) => c.name === 'delivery:renew').at(-1)!.args).toEqual({ ids: ['click-6'], receipts: [{ id: 'click-6', receipt: first }] })
+      expect((await local<{ held: number }>('/health'))?.held).toBe(0)
+      // Offered again, it is taken under a new receipt, and the hook is given it with that one
+      stand.answer = null
+      offered({ ...click(6), at: now })
+      await pass()
+      await until(async () => (await local<{ held: number }>('/health'))?.held === 1)
+      const second = stand.calls.filter((c) => c.name === 'delivery:claim').at(-1)!.args.receipt
+      expect(second).not.toBe(first)
+      const given = await local<{ clicks: { id: string; receipt?: string }[] }>('/clicks?receipts=1&harness=codex&session=thread-6')
+      expect(given?.clicks).toMatchObject([{ id: 'click-6', receipt: second }])
+      // A word about the first taking, late, is no word about this one
+      expect(await local('/ack', { method: 'POST', body: { ids: ['click-6'], receipts: [{ id: 'click-6', receipt: first }] } })).toEqual({ ok: true, acked: 0 })
+      expect(await local('/ack', { method: 'POST', body: { ids: ['click-6'], receipts: [{ id: 'click-6', receipt: second }] } })).toEqual({
+        ok: true,
+        acked: 1,
+      })
+      await until(() => called('delivery:handedOff').includes('click-6'))
+      expect(stand.calls.find((c) => c.name === 'delivery:handedOff')!.args).toEqual({ id: 'click-6', route: 'addon', receipt: second })
+      // Neither receipt is written in the connector's log or its journal
+      for (const receipt of [first, second]) {
+        expect(said.join('\n')).not.toContain(receipt)
+        expect(readFileSync(path.join(home, 'journal.jsonl'), 'utf8')).not.toContain(receipt)
+      }
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   test('a delayed release acknowledgement cannot retire a newer claim of the same click', async () => {
     standIn()
     await start()
@@ -1564,7 +1641,7 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     let speaks = PROTOCOL_VERSION + 1
     const door = http.createServer((req, res) =>
       req.url === '/cli/config'
-        ? res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ protocol: speaks }))
+        ? res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ protocol: speaks, receipts: true }))
         : res.writeHead(404).end(),
     )
     await new Promise<void>((r) => door.listen(0, '127.0.0.1', r))
@@ -1597,6 +1674,29 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       await new Promise((r) => door.close(r))
     }
   }, 120_000)
+
+  test('a machine that joined an It from before receipts hands nothing over, and says which of the two to update', async () => {
+    // It speaks the same version of how machines talk to It, and says nothing of receipts
+    const door = http.createServer((req, res) =>
+      req.url === '/cli/config'
+        ? res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ protocol: PROTOCOL_VERSION }))
+        : res.writeHead(404).end(),
+    )
+    await new Promise<void>((r) => door.listen(0, '127.0.0.1', r))
+    try {
+      process.env.IT_URL = `http://127.0.0.1:${(door.address() as { port: number }).port}`
+      await start('socket', {}, (home) => writeFileSync(path.join(home, 'machine.json'), JSON.stringify({ at: 'http://127.0.0.1:9' })))
+      expect(said.some((line) => line.includes('does not take the receipts') && line.includes('Update It on the machine it runs on'))).toBe(true)
+      expect((await local<{ ok: boolean; unfit?: string }>('/health'))?.unfit).toContain('does not take the receipts')
+      await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
+      offered(click(1))
+      await new Promise((r) => setTimeout(r, 2500))
+      expect(called('delivery:claim')).toEqual([])
+    } finally {
+      delete process.env.IT_URL
+      await new Promise((r) => door.close(r))
+    }
+  })
 
   test('the note of a stop is let go once a turn begins in that conversation which It did not start: the person is in it themselves, and what they stopped is no longer its last turn', async () => {
     await start('socket', {}, (home) => writeFileSync(path.join(home, 'stopped.json'), JSON.stringify(['codex:thread-1', 'codex:thread-2'])))
@@ -2694,8 +2794,11 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(await turn(6, true)).toEqual({ ok: true })
     offeredEarlier(click(6))
     await until(() => stand.codex.length === 1)
-    // Codex's command has been started and has not answered: the waiter of the running turn is given the click meanwhile
-    expect((await waitingFor(6))?.clicks?.map((c) => c.id)).toEqual(['click-6'])
+    // Codex's command has been started and has not answered: the waiter of the running turn is given the click meanwhile,
+    // with the receipt of the taking that holds it, which the waiter says it was handed over by
+    const handedOn = (await waitingFor(6))?.clicks as { id: string; receipt?: string }[] | undefined
+    expect(handedOn?.map((c) => c.id)).toEqual(['click-6'])
+    expect(handedOn?.[0]?.receipt).toBe(stand.calls.find((c) => c.name === 'delivery:claim' && c.args.ids.includes('click-6'))!.args.receipt)
     // It prints it and says so, and only then does the command answer
     expect((await waitingFor(6))?.clicks).toBeUndefined()
     stand.codex[0]!.end()
@@ -3196,6 +3299,94 @@ describe.skipIf(process.platform === 'win32')('a click claimed for an add-on tha
     expect((await local<{ clicks: { id: string }[] }>('/clicks?harness=pi&session=conversation-1'))?.clicks.map((c) => c.id)).toEqual(['click-5'])
     expect(await local('/ack', { method: 'POST', body: { ids: ['click-5'] } })).toEqual({ ok: true, acked: 1 })
     await until(() => asked('delivery:handedOff').includes('click-5'))
+  })
+
+  test('an add-on that asks with receipts is given each click with the receipt it is held by, and is believed by that receipt alone; one from before receipts, by the ids of what it was given in this taking', async () => {
+    await start()
+    const session = { harness: 'pi', id: 'conversation-1' }
+    const offer = (...ids: string[]) =>
+      stand.watching.get('delivery:inboxPage')!(
+        ids.map((id) => ({ id, artifact: 'plan', title: 'A page', name: 'approve', payload: '{}', at: Date.now() - 1000, attended: true, session })),
+      )
+    const held = async (n: number) => {
+      for (let i = 0; i < 100 && (await local<{ held: number }>('/health'))?.held !== n; i++) await new Promise((r) => setTimeout(r, 30))
+      expect((await local<{ held: number }>('/health'))?.held).toBe(n)
+    }
+    const confirmed = (id: string) => stand.calls.find((c) => c.name === 'delivery:handedOff' && c.args.id === id)?.args
+    expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-1' } })).toEqual({ ok: true })
+    offer('click-5')
+    await held(1)
+    const taking = stand.calls.find((c) => c.name === 'delivery:claim' && c.args.ids.includes('click-5'))!.args.receipt
+    expect(taking).toMatch(/^[A-Za-z0-9_-]{16,64}$/)
+    const given = await local<{ clicks: { id: string; receipt?: string }[] }>('/clicks?receipts=1&harness=pi&session=conversation-1')
+    expect(given?.clicks).toMatchObject([{ id: 'click-5', receipt: taking }])
+    // Given with receipts, it is not taken by its id alone, nor by another receipt
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-5'] } })).toEqual({ ok: true, acked: 0 })
+    expect(await local('/ack', { method: 'POST', body: { receipts: [{ id: 'click-5', receipt: 'a-receipt-of-another-taking' }] } })).toEqual({
+      ok: true,
+      acked: 0,
+    })
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-5'], receipts: [{ id: 'click-5', receipt: taking }] } })).toEqual({ ok: true, acked: 1 })
+    await until(() => confirmed('click-5') !== undefined)
+    expect(confirmed('click-5')).toEqual({ id: 'click-5', route: 'addon', receipt: taking })
+    // An add-on from before receipts asks without them, is given no receipt, and is believed of what it was given by its ids
+    offer('click-6')
+    await held(1)
+    const older = await local<{ clicks: { id: string; receipt?: string }[] }>('/clicks?harness=pi&session=conversation-1')
+    expect(older?.clicks.map((c) => c.id)).toEqual(['click-6'])
+    expect(older?.clicks[0]).not.toHaveProperty('receipt')
+    expect(await local('/ack', { method: 'POST', body: { ids: ['click-6'] } })).toEqual({ ok: true, acked: 1 })
+    await until(() => confirmed('click-6') !== undefined)
+    // And it is said to It by the receipt of the taking that held it, which this connector made
+    const second = stand.calls.find((c) => c.name === 'delivery:claim' && c.args.ids.includes('click-6'))!.args.receipt
+    expect(confirmed('click-6')).toEqual({ id: 'click-6', route: 'addon', receipt: second })
+    expect(said.join('\n')).not.toContain(taking)
+    expect(readFileSync(path.join(home, 'journal.jsonl'), 'utf8')).not.toContain(taking)
+  })
+
+  test('a connector that starts again confirms what was handed over by the receipt it was handed over by, and one kept before receipts by none', async () => {
+    // It answers that neither is waiting to be taken again
+    stand.answer = (name, args) => (name === 'delivery:recover' ? args.ids.map((id: string) => ({ id, click: null })) : undefined)
+    await start('socket', {}, (home) =>
+      writeFileSync(
+        path.join(home, 'delivery-recovery.json'),
+        JSON.stringify({
+          version: 1,
+          waiters: [],
+          marks: [],
+          accepted: ['click-1', 'click-2'],
+          returning: ['click-1', 'click-2'],
+          targets: [],
+          receipts: [['click-1', 'a-receipt-kept-before-a-restart']],
+        }),
+      ),
+    )
+    const confirmed = (id: string) => stand.calls.find((c) => c.name === 'delivery:handedOff' && c.args.id === id)?.args
+    await until(() => confirmed('click-1') !== undefined && confirmed('click-2') !== undefined)
+    expect(confirmed('click-1')).toEqual({ id: 'click-1', route: 'queue', receipt: 'a-receipt-kept-before-a-restart' })
+    expect(confirmed('click-2')).toEqual({ id: 'click-2', route: 'queue' })
+    await until(() => (readJson<{ receipts?: unknown[] }>(path.join(home, 'delivery-recovery.json'))?.receipts ?? []).length === 0)
+  })
+
+  test('a conversation heard from again is told to It until It has answered, and what was set aside for it comes back', async () => {
+    standIn()
+    await start()
+    let refused = 1
+    stand.answer = (name) => {
+      if (name !== 'delivery:unpark') return undefined
+      if (refused-- > 0) throw new Error('offline')
+      return 2
+    }
+    expect(await local('/session', { method: 'POST', body: { harness: 'pi', session: 'conversation-3' } })).toEqual({ ok: true })
+    const told = () => stand.calls.filter((c) => c.name === 'delivery:unpark')
+    await until(() => told().length === 1)
+    await pass()
+    await until(() => told().length === 2)
+    expect(told().map((c) => c.args)).toEqual([{ for: { harness: 'pi', id: 'conversation-3' } }, { for: { harness: 'pi', id: 'conversation-3' } }])
+    await until(() => said.some((line) => line.includes('2 things set aside for it are tried again')))
+    // Answered, it is asked no more
+    await pass(2)
+    expect(told()).toHaveLength(2)
   })
 
   test('a click held for a conversation is held no longer than It gives it, though this machine’s clock is set back meanwhile', async () => {
