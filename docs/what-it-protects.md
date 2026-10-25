@@ -157,6 +157,10 @@ A notification for a browser whose site is closed is sent through the push servi
 
 It sends its maker counts of how it is used, under a random id. They hold nothing of what is on a page or what was done on it, and the request itself tells the receiver your network address. [Usage reporting](usage-reporting.md) says exactly what is sent and how to turn it off.
 
+### A link at the tailnet or the network names the machine to the agent's model
+
+Where you choose to have the links agents give at the machine's name on your tailnet or at its address on your network, that name or address is in the link given to every conversation that publishes a page. It is then in what the agent app sends to the model it uses, wherever that model runs.
+
 ### What is kept is not encrypted
 
 Your pages, their state, the record of what was done on them and the files pages sent with actions are ordinary files and databases in `~/.it`, and so are the copies of the database that It keeps beside it before a newer version changes it. Whoever can read the disk, or a backup of that folder, can read all of it, and can take the keys in `service.json` and `machine.json` with it.
