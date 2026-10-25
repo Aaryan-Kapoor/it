@@ -3547,11 +3547,11 @@ describe('which display an agent’s page goes to', () => {
     await says(laptop, { visible: true, used: true })
     const shown = await record()
     expect([shown.hidden, shown.lastSeenAt, shown.usedAt]).toEqual([undefined, Date.now(), Date.now()])
-    // Used again ten seconds on is not written; thirty seconds on it is
-    await vi.advanceTimersByTimeAsync(10_000)
+    // Used again three seconds on is not written; ten seconds on it is
+    await vi.advanceTimersByTimeAsync(3000)
     await says(laptop, { visible: true, used: true })
     expect((await record()).usedAt).toBe(shown.usedAt)
-    await vi.advanceTimersByTimeAsync(20_000)
+    await vi.advanceTimersByTimeAsync(7000)
     await says(laptop, { visible: true, used: true })
     expect((await record()).usedAt).toBe(Date.now())
     // A site that says neither is taken to be visible, as it says so only while it is

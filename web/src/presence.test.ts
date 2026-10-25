@@ -46,7 +46,7 @@ describe('what a display says of itself', () => {
     expect(said.at(-1)).toEqual({ visible: true, used: false })
   })
 
-  test('that the person used it, at once, and then at most once in half a minute however much they do', async () => {
+  test('that the person used it, at once, and then at most once in ten seconds however much they do', async () => {
     await settle()
     window.dispatchEvent(new Event('pointerdown'))
     await settle()
@@ -57,15 +57,16 @@ describe('what a display says of itself', () => {
     for (const kind of ['keydown', 'wheel', 'pointerdown']) window.dispatchEvent(new Event(kind))
     await vi.advanceTimersByTimeAsync(USED_EVERY_MS - 1000)
     expect(said).toHaveLength(2)
-    // What they did meanwhile is said with the next thing said, and nothing of what it was
+    // What they did meanwhile is said once the ten seconds are up, once, and nothing of what it was
     await vi.advanceTimersByTimeAsync(1000)
-    window.dispatchEvent(new Event('keydown'))
-    await settle()
     expect(said).toEqual([
       { visible: true, used: false },
       { visible: true, used: true },
       { visible: true, used: true },
     ])
+    // Nothing done since: nothing more is said of it
+    await vi.advanceTimersByTimeAsync(USED_EVERY_MS * 2)
+    expect(said).toHaveLength(3)
   })
 
   test('that the person used a page in its frame, which the browser says by its word that they have just acted', async () => {

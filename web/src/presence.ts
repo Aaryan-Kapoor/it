@@ -1,12 +1,15 @@
 // What a display says of itself, so that It knows which display the person is using: that the
 // site is open here, whether it is visible, and whether the person has used it lately. An
 // agent's page goes to that display when the agent names none. Nothing of what the person did
-// is said: only that they did something, at most twice a minute.
+// is said: only that they did something, at most once in ten seconds.
 
 /** How often a display whose site is visible says that it is open. */
 export const OPEN_EVERY_MS = 60_000
-/** How long after it last said so that the person used it, a display says it again when they do. */
-export const USED_EVERY_MS = 30_000
+/**
+ * How long after it last said that the person used it a display says so again. What they do in
+ * between is said when that time is up, so that which display was used last is known to within it.
+ */
+export const USED_EVERY_MS = 10_000
 /** How often the site looks whether the browser says the person has just acted, which covers what they do inside a page's frame. */
 const LOOK_EVERY_MS = 2000
 
@@ -17,9 +20,10 @@ export interface Said {
 
 /**
  * Says what `say` is to send whenever there is something to say: every minute while the site is
- * visible, at once when it is hidden or shown again, and at once when the person uses it if they
- * had not been said to for half a minute. One saying at a time: what comes up while one is on
- * its way is said when it has been answered. Returns what stops it.
+ * visible, at once when it is hidden or shown again, and when the person uses it: at once where
+ * that was last said ten seconds ago or more, and otherwise once those ten seconds are up. One
+ * saying at a time: what comes up while one is on its way is said when it has been answered.
+ * Returns what stops it.
  *
  * A click, tap, key or wheel on the site itself is seen here. What the person does inside a
  * page's frame is not, since the frame is another origin: the browser's own word that the person
@@ -34,6 +38,7 @@ export function presence(say: (said: Said) => Promise<unknown>, at: { document: 
   let asking = false
   let again = false
   let stopped = false
+  let later: number | undefined
   const visible = () => doc.visibilityState === 'visible'
   const tell = () => {
     if (stopped) return
@@ -68,7 +73,13 @@ export function presence(say: (said: Said) => Promise<unknown>, at: { document: 
   const used = () => {
     if (!visible()) return
     usedSince = true
-    if (Date.now() - toldUsedAt >= USED_EVERY_MS) tell()
+    const wait = toldUsedAt + USED_EVERY_MS - Date.now()
+    if (wait <= 0) tell()
+    else if (later === undefined)
+      later = win.setTimeout(() => {
+        later = undefined
+        if (usedSince) tell()
+      }, wait)
   }
   const intoFrame = () => {
     if (doc.activeElement?.tagName === 'IFRAME') used()
@@ -91,5 +102,6 @@ export function presence(say: (said: Said) => Promise<unknown>, at: { document: 
     doc.removeEventListener('visibilitychange', tell)
     win.clearInterval(beat)
     win.clearInterval(looking)
+    win.clearTimeout(later)
   }
 }

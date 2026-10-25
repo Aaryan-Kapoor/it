@@ -279,7 +279,7 @@ export const allowAgents = mutation({
 /**
  * Presence: that the site is open here, whether it is visible, and whether the person has used
  * it since the display last said so. When it was last seen open is written at most once a
- * minute, and when it was last used at most once in 25 seconds, however often this is called;
+ * minute, and when it was last used at most once in five seconds, however often this is called;
  * that it was hidden or shown again is written as it changes. Answers with the backend's clock,
  * so a display whose own clock is wrong can still tell what is recent. A site that sends
  * neither `visible` nor `used` calls this only while it is visible.
@@ -294,7 +294,7 @@ export const heartbeat = mutation({
     if (shown && now - d.lastSeenAt > 55_000) change.lastSeenAt = now
     if (shown && d.hidden) change.hidden = undefined
     if (!shown && !d.hidden) change.hidden = true
-    if (shown && used && now - (d.usedAt ?? 0) > 25_000) change.usedAt = now
+    if (shown && used && now - (d.usedAt ?? 0) > 5000) change.usedAt = now
     if (Object.keys(change).length) await ctx.db.patch(d._id, change)
     return { now }
   },
