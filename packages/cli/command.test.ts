@@ -3750,6 +3750,39 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
     }
   })
 
+  test('`it notify` with no display named, where none can take it, is refused with each display and why, and with nothing paired says how to pair one', async () => {
+    const m = machine(true, true)
+    let displays: { name: string; paired: boolean; agents: boolean }[] = [
+      { name: 'TV', paired: true, agents: false },
+      { name: 'Wall', paired: false, agents: true },
+    ]
+    const b = await backend(m, (asked) =>
+      asked.path === 'notifications:send'
+        ? new Refusal({ code: 'forbidden', message: 'No display can take this notification now.', notSent: 'nowhere' } as never)
+        : asked.path === 'displays:list'
+          ? displays
+          : null,
+    )
+    try {
+      const refused = await run(m, ['notify', 'Done'], b.env)
+      expect([refused.code, refused.out, error(refused)]).toEqual([
+        1,
+        '',
+        {
+          code: 'nowhere',
+          message: 'No display can take it now, so nothing was sent.',
+          hint: '"TV" is closed to agents and "Wall" is not paired any more. With --on all it is kept for every display, which has it once it can take it.',
+        },
+      ])
+      displays = []
+      expect(error(await run(m, ['notify', 'Done'], b.env)).hint).toBe(
+        `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${SITE} in a browser on this machine and pair that browser. Other displays are added from there.`,
+      )
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`it notify` says where the notification went, and a display named that takes nothing is refused by its name, with why', async () => {
     const m = machine()
     const b = await backend(m, (asked) =>

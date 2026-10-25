@@ -55,8 +55,12 @@ export const send = mutation({
     // pairing ended, or agents may not use it. Without the display's name, which is the person's
     if (display && !every && aimed.to.length === 0)
       fail('forbidden', 'That display takes nothing from agents now.', { notSent: aimed.notShown[0]?.reason ?? 'not_paired' })
-    // Where no display can take it, it waits in the tray of every display, for the next one opened, paired or let take it
-    const displayId: Id<'displays'> | undefined = every ? undefined : aimed.to[0]?._id
+    // Where none was named and none can take it, nothing is sent either. Kept for every display,
+    // it would reach the very displays that were left out, as soon as one was paired again or
+    // opened to agents: only an agent that asks for every display in so many words is given that
+    if (!every && aimed.to.length === 0) fail('forbidden', 'No display can take this notification now.', { notSent: 'nowhere' })
+    // With `all`, it is for every display: those that cannot take it now have it once they can
+    const displayId: Id<'displays'> | undefined = every ? undefined : aimed.to[0]!._id
     const id = await ctx.db.insert('notifications', {
       userId: user._id,
       text: clean,

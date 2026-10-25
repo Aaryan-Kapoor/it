@@ -212,8 +212,11 @@ describe('the agent skill', () => {
     }
     expect(aim).toContain("EVERY_DISPLAY = 'all'")
     // And the codes a display named for a notification is refused with are the program's own
-    expect(main).toContain("'agents_off'")
-    expect(main).toContain("'not_paired'")
+    for (const refused of ['agents_off', 'not_paired', 'nowhere']) {
+      expect(more.showing).toContain(`\`${refused}\``)
+      expect(main).toContain(`'${refused}'`)
+    }
+    expect(source('../../convex/notifications.ts')).toContain("notSent: 'nowhere'")
   })
 
   test('says that a page which was published and could not be shown is published all the same, and what to read before saying anything of the displays', () => {

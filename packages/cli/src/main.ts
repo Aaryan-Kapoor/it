@@ -273,6 +273,20 @@ async function onDisplay<T>(a: Args, run: () => Promise<T>): Promise<T> {
       )
     if (err.code === 'not_paired')
       throw new Problem(`${on} is not paired any more, and takes nothing until its browser is paired again. Nothing was sent.`, 'not_paired', instead)
+    // None was named, and none can take it: each display, with why, as far as It says
+    if (err.code === 'nowhere') {
+      const all = await call<{ name: string; paired?: boolean; agents?: boolean; lockedTo?: unknown }[]>('query', api.displays.list).catch(() => null)
+      const why = (d: { paired?: boolean; agents?: boolean; lockedTo?: unknown }) =>
+        d.paired === false ? 'is not paired any more' : d.agents === false ? 'is closed to agents' : d.lockedTo ? 'is locked to a page' : null
+      const each = (all ?? []).flatMap((d) => (why(d) ? [`${named(d.name)} ${why(d)}`] : []))
+      throw new Problem(
+        'No display can take it now, so nothing was sent.',
+        'nowhere',
+        all && !all.length
+          ? noDisplay()
+          : `${each.length ? `${andJoined(each)}. ` : ''}With --on all it is kept for every display, which has it once it can take it.`,
+      )
+    }
     if (err.code !== 'no_such_display') throw err
     const names = await call<{ name: string }[]>('query', api.displays.list).then(
       (all) => all.map((d) => named(d.name)).join(', '),

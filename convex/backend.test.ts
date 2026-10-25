@@ -4406,6 +4406,35 @@ describe('notifications', () => {
     expect(await still()).toBe(false)
   })
 
+  test('with no display named and none that can take it, a notification is refused and kept for no display, so that none left out is sent it later', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const key = { key: displayKey('alice') }
+    const refusal = (args: { text: string; display?: string }) =>
+      m.as.mutation(api.notifications.send, args).then(
+        () => null,
+        (e) => (e instanceof ConvexError ? JSON.parse(typeof e.data === 'string' ? e.data : JSON.stringify(e.data)) : String(e)),
+      )
+    const kept = () => t.run(async (ctx) => (await ctx.db.query('notifications').collect()).map((n) => [n.text, n.displayId ?? 'every display']))
+    // Its one display is closed to agents
+    await alice.browser.mutation(api.displays.allowAgents, { displayId: alice.display.id, allowed: false })
+    expect(await refusal({ text: 'to nobody' })).toMatchObject({ code: 'forbidden', notSent: 'nowhere' })
+    expect(await kept()).toEqual([])
+    // Opened to agents again, it has nothing of that in its tray, and nothing was pushed to it
+    await alice.browser.mutation(api.displays.allowAgents, { displayId: alice.display.id, allowed: true })
+    expect(await alice.browser.query(api.notifications.list, key)).toEqual([])
+    // Asked for every display in so many words, it is kept for every display, as it was asked
+    await alice.browser.mutation(api.displays.allowAgents, { displayId: alice.display.id, allowed: false })
+    expect(await m.as.mutation(api.notifications.send, { text: 'to every display', display: 'all' })).toMatchObject({ displays: [] })
+    expect(await kept()).toEqual([['to every display', 'every display']])
+    // A display whose pairing has ended takes nothing either: with no other, a notification is refused as well
+    await alice.browser.mutation(api.displays.allowAgents, { displayId: alice.display.id, allowed: true })
+    await t.run((ctx) => ctx.db.patch(alice.session as never, { endedAt: Date.now() }))
+    expect(await refusal({ text: 'to nobody' })).toMatchObject({ code: 'forbidden', notSent: 'nowhere' })
+    expect(await kept()).toEqual([['to every display', 'every display']])
+  })
+
   test('with no display open, a notification goes first to one that takes notifications, which is how it reaches a closed one', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
