@@ -32,7 +32,7 @@ An agent can name a display, as in `it open plan --on "Kitchen TV"`, and then th
 
 Each display has a switch, "Open to agents", on the Displays page and under Settings on the display itself. A display that is closed to agents is never chosen for a page or a notification, is left out when an agent asks for every display, and refuses an agent that names it, which is told why. A notification that went to every display is not shown on a display that is closed to agents. The browser paired as yours can open or close any display to agents, and a paired screen only itself.
 
-To know which display you are using, the site tells It whether it is visible on that display, at once when that changes, and that you have used it, at most once in ten seconds while you do. It notes the time of each, and nothing of what you did.
+To know which display you are using, the site tells It whether it is visible on that display, at once when that changes, and that you have used it, at most once in ten seconds while you do. It notes the time of each, and nothing of what you did. The site open in several tabs or windows of one browser is one display, and that display is visible while any of them is.
 
 ## Locking a display to a page
 

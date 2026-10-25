@@ -111,7 +111,11 @@ export const _targets = internalQuery({
   },
 })
 
-/** Whether a push that is about to be sent should still be sent: same display, same subscription, its browser still paired, and nobody has seen it. */
+/**
+ * Whether a push that is about to be sent should still be sent: same display, same subscription,
+ * its browser still paired, agents still let use it, and nobody has seen it. A display may be
+ * closed to agents between being chosen and its push being sent, and is then sent nothing.
+ */
 export const _still = internalQuery({
   args: { notificationId: v.id('notifications'), displayId: v.id('displays'), endpoint: v.string() },
   handler: async (ctx, { notificationId, displayId, endpoint }) => {
@@ -121,7 +125,7 @@ export const _still = internalQuery({
     if (!owner || owner.deletedAt) return false
     if (n.artifactId && !(await ctx.db.get(n.artifactId))) return false
     const d = await ctx.db.get(displayId)
-    return Boolean(d && d.userId === n.userId && d.push?.endpoint === endpoint && (await paired(ctx, d)))
+    return Boolean(d && d.userId === n.userId && d.push?.endpoint === endpoint && !d.agentsOff && (await paired(ctx, d)))
   },
 })
 
