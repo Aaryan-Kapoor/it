@@ -24,6 +24,16 @@ Showing a step adopts a page made before tour marks only when its id, title and 
 
 When a tour is over its agent takes the tour's pages away, and the screen goes back to your pages. From then on, with no pages, it shows a few things to ask an agent for, each to copy, and the way back into the tour.
 
+## Where an agent shows a page
+
+An agent that shows you a page, with `it open` or with `--open` when it publishes, shows it on one display: the one you are using. That is the display that has the site open in front of you and that you clicked, tapped or typed on most recently. A display whose site is in a background tab, in a minimised window or on a locked phone does not count as open. Where no display has the site open, the page is sent to the display you used most recently, and comes up there only once the site is open on it again, so the agent gives you the link as well. A notification an agent sends goes to one display in the same way, except that where no display has the site open, a display that takes notifications comes first, since that is how a notification reaches a closed screen.
+
+An agent can name a display, as in `it open plan --on "Kitchen TV"`, and then the page goes to that display and to no other. `--on all` asks every display at once, which an agent is told to do only when you ask for a page on all of your screens. So that this always means every display, no display can be named "all". What the command prints says which display the page went to, which displays it did not go to, and why: another display was chosen, a display is not paired any more, or agents may not use it.
+
+Each display has a switch, "Open to agents", on the Displays page and under Settings on the display itself. A display that is closed to agents is never chosen for a page or a notification, is left out when an agent asks for every display, and refuses an agent that names it, which is told why. A notification that went to every display is not shown on a display that is closed to agents. The browser paired as yours can open or close any display to agents, and a paired screen only itself.
+
+To know which display you are using, the site tells It whether it is visible on that display, at once when that changes, and that you have used it, at most twice a minute while you do. It notes the time of each, and nothing of what you did.
+
 ## Typing to a page's agent, and what it says back
 
 A page that is open has a bar above it: the way back, the page's title, which agent app made it and when it last changed, and what has become of the last thing you did there. While something you did is on its way to the agent, or with it and not yet answered on the page, a thin line moves along the bar's lower edge.
@@ -52,7 +62,7 @@ A phone, a tablet or a TV on the same network becomes a display in three steps.
 
 The code pairs one browser, once, and works for ten minutes. Opening the address uses nothing up: the page there says that the address was made to pair one screen, and the code is spent only when the button is pressed. So the address opened in your own browser, by whichever of the machine's names, changes nothing, and the code stays good for the other screen.
 
-A screen paired this way can open every one of your pages and answer on any of them, can be named, takes notifications and can sign itself out. So pair only screens that are yours. It cannot delete a page, and your machines, your other displays and what It holds are looked after only from a browser paired with `it site`.
+A screen paired this way can open every one of your pages and answer on any of them, can be named, takes notifications, can open or close itself to agents, and can sign itself out. So pair only screens that are yours. It cannot delete a page, and your machines, your other displays and what It holds are looked after only from a browser paired with `it site`.
 
 ## The network
 
