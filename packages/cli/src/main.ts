@@ -25,6 +25,7 @@ import path from 'node:path'
 import readline from 'node:readline/promises'
 import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
+import { agentsSaid, changeAgents, shownAs as folderShown, readAgents } from './agents'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
 import { local } from './connector'
 import { deletePage, deletionStatus } from './delete'
@@ -325,6 +326,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   upgrade: [0, 'upgrade [--check]'],
   updates: [1, 'updates [on | off]'],
   runs: [1, 'runs [clear]'],
+  agents: [2, 'agents [on | off | add <folder> | remove <folder>] [--most <n>]'],
   create: [1, 'create "<title>" [--id <id>] (--file f | --dir d | --html "<…>" | pipe)'],
   update: [1, 'update <id> (--file f | --dir d | --html "<…>" | pipe)'],
   list: [0, 'list'],
@@ -2468,6 +2470,11 @@ This machine
   it runs [clear]                Say which conversations It has reopened, and which it holds back
                                  because a turn from before may still be running. With clear, let
                                  those be reopened again, once you have looked that none is.
+  it agents [on | off] [--most <n>] | it agents add | remove <folder>
+                                 An experiment, off until it is turned on: say whether the
+                                 site may start an agent in a folder named here, which It
+                                 keeps running, turn that on or off, or name a folder for it.
+                                 --most says how many may run here at once.
   it updates [on | off]          Say whether It looks every half hour for a newer version,
                                  or turn that on or off. It looks until it is turned off.
   it version | it help
@@ -2662,6 +2669,32 @@ async function main(argv: string[]): Promise<void> {
             ]
           : ['Nothing is held back.']),
       ])
+    }
+    case 'agents': {
+      const [sub, folder] = a._
+      const most = a.flags.most === undefined ? undefined : Number(a.flags.most)
+      if (sub !== undefined && !['on', 'off', 'add', 'remove'].includes(sub))
+        throw new Problem('It is `it agents`, `it agents on`, `it agents off`, `it agents add <folder>` or `it agents remove <folder>`.', 'invalid')
+      if ((sub === 'add' || sub === 'remove') && !folder) throw new Problem(`Say which folder: \`it agents ${sub} <folder>\`.`, 'invalid')
+      if (folder !== undefined && sub !== 'add' && sub !== 'remove') throw new Problem(`It does not know what to do with "${folder}".`, 'invalid')
+      const kept =
+        sub === undefined && most === undefined
+          ? readAgents()
+          : changeAgents({
+              ...(sub === 'on' || sub === 'off' ? { to: sub } : {}),
+              ...(sub === 'add' ? { add: folder } : {}),
+              ...(sub === 'remove' ? { remove: folder } : {}),
+              ...(most !== undefined ? { most } : {}),
+            })
+      if (kept === 'unread')
+        throw new Problem(
+          'It could not read its own note of project agents on this machine (agents.json in It’s folder), so this machine offers none.',
+          'record_unread',
+          'Look at the file, or move it aside, and run `it agents on` again.',
+        )
+      const running = (await local('/health')) !== null
+      if (!forPerson(a)) return out({ on: kept.on, most: kept.most, projects: kept.projects.map((p) => ({ id: p.id, ...folderShown(p.path) })), running })
+      return tell(agentsSaid(kept, running))
     }
     case 'updates': {
       const to = a._[0]
