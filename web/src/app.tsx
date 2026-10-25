@@ -16,6 +16,7 @@ import {
   hasSignOutToken,
   isLeaving,
   keepSignOutToken,
+  keepTo,
   learnClock,
   navigate,
   noteRegistered,
@@ -553,8 +554,11 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   }, [pushOn, convex])
 
   // A display locked to a page keeps to it, whatever address the person opens on it: all but its
-  // settings, where a screen signs itself out, lead back to the page
+  // settings, where a screen signs itself out, lead back to the page. Nothing on the site takes it
+  // elsewhere while it is locked (`keepTo`), and an address typed or kept from before is put right here
   const lockedTo = display?.lockedTo?.slug
+  keepTo(lockedTo === undefined ? null : `/p/${encodeURIComponent(lockedTo)}`)
+  useEffect(() => () => keepTo(null), [])
   useEffect(() => {
     if (lockedTo === undefined) return
     const page = `/p/${encodeURIComponent(lockedTo)}`

@@ -669,6 +669,47 @@ describe('a display locked to a page', () => {
     expect(names()).toContain('displays:unlock')
   })
 
+  test('stays on its page, which is not shown afresh, whatever on the site would take it elsewhere: Escape, the mark in the bar, the browser’s way back or a link to another page', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:get'] = PAGE
+    watched['displays:mine'] = locked
+    answers['mounts:create'] = () => ({ mountId: 'mount-1', version: 1 })
+    answers['mounts:ticket'] = () => ({ ticket: 'ticket-1' })
+    await start('/p/plan')
+    await vi.waitFor(() => expect(host.querySelector('.mount iframe')).not.toBeNull())
+    const frame = host.querySelector('.mount iframe')
+    const view = host.querySelector('main.page-view')
+    const same = () => [location.pathname, host.querySelector('.mount iframe') === frame, host.querySelector('main.page-view') === view]
+    // Escape, from the bar above the page, where it otherwise goes back to the person's pages
+    await act(async () => {
+      host.querySelector('header .lock-mark')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    // The mark in the bar, which otherwise leads to the person's pages, leads nowhere
+    expect(host.querySelector('header a.page-nav-mark')).toBeNull()
+    await act(async () => {
+      host.querySelector<HTMLElement>('header .page-nav-mark')!.click()
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    // The browser's own way back
+    await act(async () => {
+      history.pushState(null, '', '/')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    // A link to another page, as a notification or the finder offers one
+    const { navigate } = await import('./lib')
+    await act(async () => {
+      navigate('/p/another')
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    expect(names().filter((what) => what === 'mounts:create')).toHaveLength(1)
+  })
+
   test('says that its lock ended when the page it was locked to was deleted, until that is read', async () => {
     cookie = CODES.ownercode00000000001!
     watched['displays:mine'] = { ...DISPLAY, lockedTo: null, lockEnded: true }

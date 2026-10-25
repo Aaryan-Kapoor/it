@@ -382,17 +382,18 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
       document.title = 'It'
     }
   }, [page])
+  // A display locked to this page keeps to it: there is no way back from it while it is locked
+  const lockedHere = display?.lockedTo?.slug === slug
   // Escape goes back, from wherever on the site's own part of the screen the keyboard is. With
   // something open over the page, the notifications among them, it closes that and no more
   useEffect(() => {
+    if (lockedHere) return
     const key = (e: KeyboardEvent) =>
       e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.modal-overlay, .finder-overlay, .notif-panel') && navigate('/')
     document.addEventListener('keydown', key)
     return () => document.removeEventListener('keydown', key)
-  }, [])
+  }, [lockedHere])
   if (!page) return <main className="page-view" role="status" />
-  // A display locked to this page keeps to it: there is no way back from it while it is locked
-  const lockedHere = display?.lockedTo?.slug === slug
   return (
     <main className="page-view">
       <header className="page-bar page-nav">
@@ -402,16 +403,22 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
             <IconBack />
           </button>
         )}
-        <a
-          className="page-nav-mark"
-          href="/"
-          onClick={(e) => {
-            e.preventDefault()
-            navigate('/')
-          }}
-        >
-          <Mark />
-        </a>
+        {lockedHere ? (
+          <span className="page-nav-mark">
+            <Mark />
+          </span>
+        ) : (
+          <a
+            className="page-nav-mark"
+            href="/"
+            onClick={(e) => {
+              e.preventDefault()
+              navigate('/')
+            }}
+          >
+            <Mark />
+          </a>
+        )}
         <div className="page-nav-titlewrap">
           <h1 className="page-title page-nav-title">{page.title}</h1>
           <div className="page-meta page-nav-meta">
