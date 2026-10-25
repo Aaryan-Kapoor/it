@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { psQuote, WINDOWS_CLEANUP, windowsDeletionCommand } from './src/lib'
+import { psQuote, WINDOWS_CLEANUP, WINDOWS_PATH_MOST, windowsDeletionCommand } from './src/lib'
 import { startOf } from './src/serve/backend'
 import {
   PS_QUIET,
@@ -25,12 +25,26 @@ const powershell = (script: string) =>
   )
 
 test('deferred deletion carries a queue entry and refuses names that cannot fit RunOnce', () => {
-  const line = windowsDeletionCommand('ItRemoved12345-abcdefgh')!
+  const file = 'C:\\Users\\%USERNAME%\\it.exe'
+  const line = windowsDeletionCommand('ItRemoved12345-abcdefgh', file)!
   expect(line.length).toBeLessThanOrEqual(260)
   expect(line).toContain('-LiteralPath')
   expect(line).not.toContain('cmd.exe')
-  expect(windowsDeletionCommand(`ItRemoved1${'x'.repeat(260)}`)).toBeUndefined()
-  expect(windowsDeletionCommand("ItRemoved1'; throw 'injected")).toBeUndefined()
+  // Nothing in the line is a name Windows could put something else in place of
+  expect(line).not.toContain('%')
+  expect(windowsDeletionCommand(`ItRemoved1${'x'.repeat(260)}`, file)).toBeUndefined()
+  expect(windowsDeletionCommand("ItRemoved1'; throw 'injected", file)).toBeUndefined()
+})
+
+test('deferred deletion refuses a path longer than Windows PowerShell can be counted on to delete, counted as Windows counts it', () => {
+  const longest = `C:\\${'x'.repeat(WINDOWS_PATH_MOST - 3)}`
+  expect(longest.length).toBe(259)
+  expect(windowsDeletionCommand('ItRemoved1-a', longest)).toBeDefined()
+  expect(windowsDeletionCommand('ItRemoved1-a', `${longest}x`)).toBeUndefined()
+  // A letter outside the Basic Multilingual Plane is two UTF-16 code units, and Windows counts both
+  const wide = `C:\\${'𝒳'.repeat((WINDOWS_PATH_MOST - 3) / 2)}`
+  expect(windowsDeletionCommand('ItRemoved1-a', wide)).toBeDefined()
+  expect(windowsDeletionCommand('ItRemoved1-a', `${wide}x`)).toBeUndefined()
 })
 
 test('the launcher repairs a missing standalone program before attempting to start it', () => {
@@ -61,10 +75,10 @@ describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows Po
   test('deferred deletion reads percent signs, quotes, Unicode and long paths as literal registry data', () => {
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-remove-'))
     const entry = `ItRemoved${process.pid}-${Date.now().toString(36)}`
-    const line = windowsDeletionCommand(entry)!
     const nested = path.join(folder, 'x'.repeat(80))
     mkdirSync(nested)
     const file = path.join(nested, "%USERNAME% O'Neil 漢字 [literal].exe")
+    const line = windowsDeletionCommand(entry, file)!
     const other = path.join(nested, `${process.env.USERNAME} O'Neil 漢字 [literal].exe`)
     writeFileSync(file, 'remove this')
     writeFileSync(other, 'keep this')

@@ -14,7 +14,6 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  renameSync,
   rmdirSync,
   rmSync,
   statSync,
@@ -70,9 +69,7 @@ import {
   siteAddress,
   textOf,
   VERSION,
-  WINDOWS_CLEANUP,
   why,
-  windowsDeletionCommand,
   windowsPathCommand,
   windowsPathHas,
   windowsPathRemoval,
@@ -111,7 +108,7 @@ import {
 import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, STEPS as TOUR_STEPS, tourPage } from './tour'
-import { finishInstallationRemoval, installationFile, removeInstallationFiles, withInstallationLock } from './uninstall-files'
+import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import * as usage from './usage'
 import { type Listed, printed, wait } from './wait'
@@ -865,49 +862,6 @@ function offWindowsPath(folder: string): 'off' | 'absent' | undefined {
   const said = inPowerShell(windowsPathRemoval(folder))
   return said === 'off' || said === 'absent' ? said : undefined
 }
-/** Where Windows keeps what it runs once, the next time this person signs in. */
-const RUN_ONCE = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'
-/**
- * On Windows a program that is running cannot delete its own file, and can move it. So that
- * It's folder can be deleted whole by the program that is in it, this program is moved out of
- * the folder first, to where the system keeps what may be thrown away, or beside the folder
- * where that is on another disk. It cannot delete itself from there either, and nothing it
- * starts can be counted on to outlive it and do so: on the Windows runner, a program started
- * for that was gone when this one was. So Windows is left one line to run the next time this
- * person signs in, which deletes the file. Where the program went, and whether Windows was
- * left that line; nothing where it did not move, and the folder is then found still to be
- * there, which is said.
- */
-function stepOutOf(folder: string): { at: string; deletedLater: boolean } | undefined {
-  const me = process.execPath
-  const inside = path.relative(path.resolve(folder), path.resolve(me))
-  // Run as a script, the program is Node's and is not in the folder
-  if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) return undefined
-  const name = `it-removed-${process.pid}-${Date.now().toString(36)}.exe`
-  for (const where of [os.tmpdir(), path.dirname(path.resolve(folder))]) {
-    const at = path.join(where, name)
-    try {
-      renameSync(me, at)
-    } catch {
-      continue
-    }
-    let deletedLater = false
-    try {
-      const entry = `ItRemoved${process.pid}-${Date.now().toString(36)}`
-      const line = windowsDeletionCommand(entry)
-      if (line !== undefined) {
-        const reg = (args: string[]) => spawnSync('reg.exe', args, { windowsHide: true, timeout: 15_000 }).status === 0
-        if (reg(['add', WINDOWS_CLEANUP, '/v', entry, '/t', 'REG_SZ', '/d', at, '/f'])) {
-          deletedLater = reg(['add', RUN_ONCE, '/v', entry, '/t', 'REG_SZ', '/d', line, '/f'])
-          if (!deletedLater) reg(['delete', WINDOWS_CLEANUP, '/v', entry, '/f'])
-        }
-      }
-    } catch {}
-    return { at, deletedLater }
-  }
-  return undefined
-}
-
 /** Whether this command has taken It off the machine. Nothing is counted after that: the folder a count is kept in is gone, or holds only what taking an add-on out later needs. */
 let takenOff = false
 
@@ -1033,11 +987,8 @@ async function uninstall(a: Args) {
           // 5. Whole owned folders and recognised top-level files. Windows moves the running executable out first. An add-on
           // that remains keeps the program and its ownership record so removal can be retried.
           const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
-          if (stepped?.deletedLater)
-            say(
-              `The program moved itself to ${stepped.at} to do this, and Windows was asked to delete it from there the next time you sign in. If it remains, delete it yourself.`,
-            )
-          else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+          if (stepped && 'said' in stepped) say(stepped.said)
+          else if (stepped) left.push(stepped.left)
           takenOff = true
           const settingsAt = path.join(real, 'service.json')
           const settings = existsSync(settingsAt) ? readFileSync(settingsAt, 'utf8') : undefined
