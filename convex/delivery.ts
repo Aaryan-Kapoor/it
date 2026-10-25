@@ -559,7 +559,14 @@ export const claim = mutation({
       }
       if (receipt !== undefined && holds(x, receipt, machine)) {
         // The same taking asked for again: held still where its hold has not run out, and otherwise over
-        if (x.delivery === 'leased' && (x.leaseExpiresAt ?? 0) >= now) held.push(id)
+        if (x.delivery !== 'leased' || (x.leaseExpiresAt ?? 0) < now) continue
+        // Unless its conversation was stopped since it was taken, and the stop's steps have not
+        // come to it yet: it goes with the stop now, and is given out no more
+        if (await stoppedSince(ctx, x)) {
+          await dropStopped(ctx, x)
+          continue
+        }
+        held.push(id)
         continue
       }
       const free = x.delivery === 'pending' || (x.delivery === 'leased' && (x.leaseExpiresAt ?? 0) < now)
@@ -618,6 +625,12 @@ export const renew = mutation({
       if (!x || x.userId !== user._id || x.delivery !== 'leased' || x.leaseMachineId !== machine._id || (x.leaseExpiresAt ?? 0) < now) continue
       const receipt = receiptFor(named, id)
       if (receipt === undefined ? !unreceipted(x) : !holds(x, receipt, machine)) continue
+      // Stopped with its conversation while this machine held it: it goes with the stop, and the
+      // machine, told it does not hold it, gives it out no more
+      if (await stoppedSince(ctx, x)) {
+        await dropStopped(ctx, x)
+        continue
+      }
       await ctx.db.patch(id, { leaseExpiresAt: now + LEASE_MS })
       held.push(id)
     }
@@ -853,10 +866,11 @@ export const park = mutation({
     // was still running). What that machine holds is left exactly as it is.
     const live = x.delivery === 'leased' && (x.leaseExpiresAt ?? 0) > Date.now()
     if (live && x.leaseMachineId !== machine._id) return false
-    // And so is what another taking on this machine holds, which has not given up on it: an
-    // asking with no receipt waits for that hold to end, and one that names an earlier taking is
-    // over, and the click is tried afresh
-    if (receipt !== undefined ? !holds(x, receipt, machine) : live && !unreceipted(x)) return receipt === undefined ? false : 'again'
+    // And so is a click whose last taking is not the one that gave up on it: one that names an
+    // earlier taking is over, and the click is tried afresh. One that names none comes from an It
+    // from before receipts, and changes nothing of a taking made with a receipt, whether that
+    // taking still holds the click or its hold has run out or been given back.
+    if (receipt !== undefined ? !holds(x, receipt, machine) : !unreceipted(x)) return 'again'
     // Stopped with its conversation while this machine was trying: it is marked so, and not
     // set aside or sent on under another address, where the stop would not be found again
     if (await stoppedSince(ctx, x)) {

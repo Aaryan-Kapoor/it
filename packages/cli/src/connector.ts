@@ -2299,7 +2299,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             }
             journal('lost', id)
             say(
-              `click ${id} is not this machine's to deliver any more (${kept === null ? 'It could not be reached to keep it' : 'It gave it to another'}); it goes back to waiting`,
+              `click ${id} is not this machine's to deliver any more (${kept === null ? 'It could not be reached to keep it' : 'It says this machine no longer holds it'})`,
             )
           }
         } else if (at - h.claimedAt > HOLD_MS && !h.served) {

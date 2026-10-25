@@ -2638,6 +2638,77 @@ describe('clicks and their delivery', () => {
       expect(await m.as.mutation(api.delivery.renew, { ids: [retaken], receipts: [{ id: retaken, receipt: B }] })).toEqual([retaken])
     })
 
+    test('a click held under a receipt is given out no more once its conversation is stopped, though the stop’s steps have not come to it yet: asked again under its receipt, or renewed, it goes with the stop', async () => {
+      const { t, alice, m, p, click } = await setup()
+      await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
+      await m.as.mutation(api.machines.runBegan, { for: SESSION })
+      // More waiting from before than the stop's first step drops, so that its later steps come to these two last
+      await t.run(async (ctx) => {
+        const a = (await ctx.db.get(p.artifactId))!
+        const tally = (await ctx.db.query('tallies').collect())[0]!
+        for (let i = 1; i <= 120; i++)
+          await ctx.db.insert('actions', {
+            userId: a.userId,
+            title: a.title,
+            artifactId: a._id,
+            clientActionId: `waiting-${String(i).padStart(4, '0')}`,
+            name: 'press',
+            payload: '{}',
+            contentVersion: 1,
+            createdAt: Date.now(),
+            sequence: (tally.sequence ?? 0) + i,
+            delivery: 'pending',
+            machineId: m.id as never,
+            harness: SESSION.harness,
+            sessionId: SESSION.id,
+          })
+        await ctx.db.patch(tally._id, { sequence: (tally.sequence ?? 0) + 120, waiting: 120 })
+        await ctx.db.patch(a._id, { waiting: 120 })
+      })
+      const retried = (await click('click-retried')).actionId
+      const renewed = (await click('click-renewed')).actionId
+      expect(await m.as.mutation(api.delivery.claim, { ids: [retried], for: SESSION, receipt: A })).toEqual([retried])
+      expect(await m.as.mutation(api.delivery.claim, { ids: [renewed], for: SESSION, receipt: B })).toEqual([renewed])
+      expect(await alice.browser.mutation(api.artifacts.stop, { artifactId: p.artifactId })).toEqual({ stopping: true })
+      // The stop's first step has not come to either: both are still held
+      expect(await row(t, retried)).toMatchObject({ delivery: 'leased' })
+      expect(await row(t, renewed)).toMatchObject({ delivery: 'leased' })
+      // The answer to the first taking was lost, and it is asked for again under its receipt: it is not held for it
+      expect(await m.as.mutation(api.delivery.claim, { ids: [retried], for: SESSION, receipt: A })).toEqual([])
+      expect(await row(t, retried)).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+      // And a hold that is renewed is not kept: the machine stops giving the click out
+      expect(await m.as.mutation(api.delivery.renew, { ids: [renewed], receipts: [{ id: renewed, receipt: B }] })).toEqual([])
+      expect(await row(t, renewed)).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+    })
+
+    test('nothing said without a receipt sets aside, gives back, keeps or confirms a click taken with one, after that hold has run out or been given back as much as while it lasts', async () => {
+      const { t, m, click } = await setup()
+      const expired = (await click('click-expired')).actionId
+      const released = (await click('click-released')).actionId
+      const other = (await click('click-other')).actionId
+      expect(await m.as.mutation(api.delivery.claim, { ids: [expired], for: SESSION, receipt: A })).toEqual([expired])
+      expect(await m.as.mutation(api.delivery.claim, { ids: [released], for: SESSION, receipt: B })).toEqual([released])
+      await m.as.mutation(api.delivery.release, { id: released, receipt: B })
+      // The first hold runs out, and nothing has taken either click since
+      await vi.advanceTimersByTimeAsync(LEASE_MS + 1000)
+      // A late word from a machine from before receipts, with no receipt
+      for (const id of [expired, released]) {
+        expect(await m.as.mutation(api.delivery.park, { id, for: SESSION, all: true })).toBe('again')
+        expect(await m.as.mutation(api.delivery.renew, { ids: [id] })).toEqual([])
+        await m.as.mutation(api.delivery.release, { id })
+        expect(await code(m.as.mutation(api.delivery.handedOff, { id, route: 'queue' }))).toBe('conflict')
+      }
+      await settle(t)
+      // Neither is set aside, nor is anything else of the conversation's, and each is still the taking's it was
+      expect(await row(t, expired)).toMatchObject({ delivery: 'leased', machineId: m.id, claim: { receipt: A } })
+      expect(await row(t, released)).toMatchObject({ delivery: 'pending', machineId: m.id, claim: { receipt: B } })
+      expect((await row(t, released))!.parkedBy).toBeUndefined()
+      expect(await row(t, other)).toMatchObject({ delivery: 'pending', machineId: m.id })
+      expect((await row(t, other))!.parkedBy).toBeUndefined()
+      // The taking that holds its receipt may still say what became of it
+      expect(await m.as.mutation(api.delivery.handedOff, { id: expired, route: 'queue', receipt: A })).toMatchObject({ already: false })
+    })
+
     test('a machine from before receipts is served as before, for what it took without one, and touches nothing taken with one; an `it ack` needs none', async () => {
       const { t, m, click } = await setup()
       const old = await machineOf(t, 'alice', 'old laptop')
@@ -2652,7 +2723,7 @@ describe('clicks and their delivery', () => {
       expect(await m.as.mutation(api.delivery.claim, { ids: [mine], for: SESSION, receipt: A })).toEqual([mine])
       expect(await m.as.mutation(api.delivery.renew, { ids: [mine] })).toEqual([])
       await m.as.mutation(api.delivery.release, { id: mine })
-      expect(await m.as.mutation(api.delivery.park, { id: mine, for: SESSION })).toBe(false)
+      expect(await m.as.mutation(api.delivery.park, { id: mine, for: SESSION })).toBe('again')
       expect(await code(m.as.mutation(api.delivery.handedOff, { id: mine, route: 'queue' }))).toBe('conflict')
       expect(await row(t, mine)).toMatchObject({ delivery: 'leased', claim: { receipt: A } })
       // Nor does another machine that says nothing of a receipt, while that hold lasts
