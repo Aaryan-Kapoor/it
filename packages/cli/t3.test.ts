@@ -248,18 +248,18 @@ describe.skipIf(process.platform === 'win32')('the thread that runs a conversati
       },
     )
     try {
-      expect(await t3Running(found.t3, { harness: 'codex', id: 'codex-conversation', cwd: '/work/site' })).toEqual({
+      expect(await t3Running(found.t3, { harness: 'codex', ids: ['codex-conversation'], cwd: '/work/site' })).toEqual({
         thread: 'switched',
         before: [{ harness: 'claude-code', id: 'claude-conversation' }],
       })
-      expect(await t3Running(found.t3, { harness: 'codex', id: 'neighbour-conversation', cwd: '/work/site' })).toEqual({
+      expect(await t3Running(found.t3, { harness: 'codex', ids: ['neighbour-conversation'], cwd: '/work/site' })).toEqual({
         thread: 'neighbour',
         before: [{ harness: 'claude-code', id: 'neighbours-claude' }],
       })
       // A conversation the thread ran before is not one it runs now: nothing is found for it
-      expect(await t3Running(found.t3, { harness: 'claude-code', id: 'claude-conversation', cwd: '/work/site' })).toBeUndefined()
+      expect(await t3Running(found.t3, { harness: 'claude-code', ids: ['claude-conversation'], cwd: '/work/site' })).toBeUndefined()
       // Nor for one with the same id under another agent app
-      expect(await t3Running(found.t3, { harness: 'claude-code', id: 'codex-conversation', cwd: '/work/site' })).toBeUndefined()
+      expect(await t3Running(found.t3, { harness: 'claude-code', ids: ['codex-conversation'], cwd: '/work/site' })).toBeUndefined()
     } finally {
       found.close()
     }
@@ -278,18 +278,18 @@ describe.skipIf(process.platform === 'win32')('the thread that runs a conversati
     const found = await server([...quiet, ...lively], snapshots)
     try {
       // A quiet thread is not looked into, and no more than eight of the lively ones are
-      expect(await t3Running(found.t3, { harness: 'codex', id: 'codex-conversation', cwd: '/work/site' })).toBeUndefined()
+      expect(await t3Running(found.t3, { harness: 'codex', ids: ['codex-conversation'], cwd: '/work/site' })).toBeUndefined()
       expect(found.read).toHaveLength(8)
       expect(found.read.every((id) => id.startsWith('lively-'))).toBe(true)
       // The thread It already knows of is the one read, and only that one
       found.read.length = 0
-      expect(await t3Running(found.t3, { harness: 'codex', id: 'codex-conversation' }, 'quiet-3')).toEqual({
+      expect(await t3Running(found.t3, { harness: 'codex', ids: ['an-id-it-has-since', 'codex-conversation'] }, 'quiet-3')).toEqual({
         thread: 'quiet-3',
         before: [{ harness: 'claude-code', id: 'claude-conversation' }],
       })
       expect(found.read).toEqual(['quiet-3'])
       // And a thread that cannot be read says nothing
-      expect(await t3Running(found.t3, { harness: 'codex', id: 'codex-conversation' }, 'gone')).toBeUndefined()
+      expect(await t3Running(found.t3, { harness: 'codex', ids: ['codex-conversation'] }, 'gone')).toBeUndefined()
     } finally {
       found.close()
     }

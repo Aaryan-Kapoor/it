@@ -270,11 +270,11 @@ export function conversationsOf(snapshot: unknown, thread: string): { now: Conve
  * are in no thread at all, so few threads are read for this: the one It knows the conversation
  * to be in, where it knows one, and otherwise those in the middle of a run or changed in the last
  * few minutes, the likeliest first, and no more than eight of them. Nothing where none of them
- * runs this very conversation now, or T3 Code could not say.
+ * runs this very conversation now, by any of the ids it is known by, or T3 Code could not say.
  */
 export async function t3Running(
   t3: T3,
-  of: { harness: string; id: string; cwd?: string },
+  of: { harness: string; ids: readonly string[]; cwd?: string },
   known?: string,
   signal: AbortSignal = AbortSignal.timeout(DISCOVERY_MS),
 ): Promise<{ thread: string; before: Conversation[] } | undefined> {
@@ -292,7 +292,7 @@ export async function t3Running(
     if (signal.aborted) return undefined
     const snapshot = await ask(t3, 'GET', `/api/orchestration/threads/${encodeURIComponent(thread)}/bounded`, signal)
     const { now, before } = conversationsOf(snapshot, thread)
-    if (now?.harness === of.harness && now.id === of.id) return { thread, before }
+    if (now?.harness === of.harness && of.ids.includes(now.id)) return { thread, before }
   }
   return undefined
 }
