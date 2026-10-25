@@ -9,7 +9,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { PORTS } from '@it/protocol'
+import { PORTS, TAKES } from '@it/protocol'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { build } from 'esbuild'
@@ -1770,6 +1770,8 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
       expect([args[0], await well(ran)]).toEqual([args[0], 0])
       return JSON.parse(ran.out())
     }
+    // It says at its door that its list takes a conversation, which a machine that joined it reads where it is refused one
+    expect(((await (await fetch(`${door}/cli/config`)).json()) as { takes?: string[] }).takes).toContain(TAKES.conversationsWaiting)
     // Two conversations each make a page, and a page is made from a plain terminal, which no conversation has
     const first = { IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' }
     const second = { IT_HARNESS: 'opencode', IT_SESSION: 'conversation-2' }
