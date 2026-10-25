@@ -472,6 +472,10 @@ describe('what the service takes of the notes the backend made for the counts of
   }
 
   test('a reply delayed past a reporting reset is discarded before the sender can count it under the new identity', async () => {
+    // The sender does not send on a decision that took it longer than a quarter of a second by
+    // the clock `performance` keeps, which a busy machine's disk can take. This test is about
+    // which notes are sent, so that clock is its own. Nothing here waits on a timer.
+    vi.useFakeTimers({ toFake: ['performance'] })
     usage.begin()
     const id = () => (usage.counting() ? JSON.parse(readFileSync(path.join(folder, 'telemetry.json'), 'utf8')).installation : undefined)
     const first = id()
@@ -527,6 +531,7 @@ describe('what the service takes of the notes the backend made for the counts of
       expect(JSON.parse(posts[0]!).events).toHaveLength(1)
     } finally {
       sender.stop()
+      vi.useRealTimers()
     }
   })
 
