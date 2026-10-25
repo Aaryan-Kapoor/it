@@ -331,7 +331,8 @@ export const report = mutation({
     const now = Date.now()
     await ctx.db.patch(a._id, {
       state,
-      why: why ? why.slice(0, AGENTS.whyText) : undefined,
+      // Why it was stopped, where It knows, is kept when its machine says it has stopped it
+      why: why ? why.slice(0, AGENTS.whyText) : state === 'stopped' && a.want === 'stop' ? a.why : undefined,
       ...(session !== undefined ? { session } : {}),
       ...(said ? { said: { text: said.slice(0, AGENTS.saidText), at: now } } : {}),
       changedAt: now,

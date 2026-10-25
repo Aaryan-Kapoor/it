@@ -178,6 +178,9 @@ describe('a project agent', () => {
       [one.id]: ['stop', 'stopped', 'laptop does not offer this folder any more.', 0],
       [two.id]: ['run', 'starting', null, 0],
     })
+    // And its machine, saying it has stopped it, leaves why as it is
+    await machine.mutation(api.agents.report, { agentId: one.id, round: 1, state: 'stopped' })
+    expect((await shown())[one.id]).toEqual(['stop', 'stopped', 'laptop does not offer this folder any more.', 0])
     await expect(browser.mutation(api.agents.restart, { agentId: one.id })).rejects.toThrow(/does not offer that folder/)
     await machine.mutation(api.agents.offer, { offer: null })
     expect((await shown())[two.id]).toEqual(['stop', 'stopped', 'Project agents were turned off on laptop.', 0])
