@@ -74,8 +74,9 @@ async function paired(ctx: QueryCtx, d: Doc<'displays'>): Promise<boolean> {
 }
 
 /**
- * Who should be pushed a notification: the displays it is for that are closed right now and
- * have not been pushed it already. Nobody, once someone has seen or dismissed it.
+ * Who should be pushed a notification: the displays it is for that are closed right now, that
+ * agents may use, and that have not been pushed it already. Nobody, once someone has seen or
+ * dismissed it.
  */
 export const _targets = internalQuery({
   args: { notificationId: v.id('notifications') },
@@ -97,7 +98,7 @@ export const _targets = internalQuery({
     const already = new Set<string>(n.pushedTo ?? [])
     const targets = []
     for (const d of displays) {
-      if (!d.push || d.lastSeenAt >= quiet || already.has(d._id) || (n.displayId && n.displayId !== d._id)) continue
+      if (!d.push || d.agentsOff || d.lastSeenAt >= quiet || already.has(d._id) || (n.displayId && n.displayId !== d._id)) continue
       if (await paired(ctx, d)) targets.push({ displayId: d._id, push: d.push })
     }
     return {

@@ -2,9 +2,10 @@ import { AUDIENCE, LIMITS, parseJson, QUOTA } from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { action, internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
+import { action, internalMutation, mutation, query } from './_generated/server'
 import { takePage } from './artifacts'
 import { revokeLater } from './content'
+import { aim, EVERY_DISPLAY, stillPaired } from './lib/aim'
 import {
   artifactBySlug,
   displayByKey,
@@ -59,6 +60,7 @@ const view = (d: Doc<'displays'>) => ({
   named: d.name !== undefined,
   lastSeenAt: d.lastSeenAt,
   push: d.push !== undefined,
+  agents: d.agentsOff !== true,
 })
 
 /** A browser that has just been paired registers itself on the spot. The person can name it later. */
@@ -149,6 +151,8 @@ export const register = mutation({
       generatedName: unlike,
       createdAt: now,
       lastSeenAt: now,
+      // Someone paired it a moment ago, there, and is looking at it
+      usedAt: now,
       epoch: 0,
       sessionId: session._id,
       screen: screenOf(userAgent),
@@ -222,17 +226,6 @@ export const mine = query({
 })
 
 /**
- * Whether the browser a display is still holds the session it registered under. A display's
- * record stays when that session ends, so that the browser is the same display once it is
- * paired again. Until it is, the display shows nothing, and is said to be not paired wherever
- * displays are listed.
- */
-async function stillPaired(ctx: QueryCtx | MutationCtx, d: Doc<'displays'>): Promise<boolean> {
-  const session = await ctx.db.get(d.sessionId)
-  return session !== null && session.endedAt === undefined
-}
-
-/**
  * Every display the person has: for the owner's browser, and for a machine that is to show
  * something on one. `paired` is false for a display whose browser's pairing has ended.
  */
@@ -259,21 +252,50 @@ export const rename = mutation({
     if (!speaksFor(c, d)) fail('not_found', 'No such display.')
     const clean = name.trim()
     if (!clean || clean.length > LIMITS.displayName) fail('invalid', `A display name is 1 to ${LIMITS.displayName} characters.`)
+    // An agent names it to show a page on every display at once
+    if (clean.toLowerCase() === EVERY_DISPLAY)
+      fail('invalid', `An agent asks for every display at once with “${EVERY_DISPLAY}”, so no display can be called that.`)
     await ctx.db.patch(d._id, { name: clean })
     return null
   },
 })
 
 /**
- * Presence. Written at most once a minute, however often it is called. Answers with the
- * backend's clock, so a display whose own clock is wrong can still tell what is recent.
+ * Whether agents may show pages and send notifications on a display. The owner's browser says so
+ * for any display, and a screen for itself and no other.
+ */
+export const allowAgents = mutation({
+  args: { displayId: v.id('displays'), allowed: v.boolean() },
+  handler: async (ctx, { displayId, allowed }) => {
+    const c = await requireBrowser(ctx)
+    const d = await ownDisplay(ctx, c.user._id, displayId)
+    if (!speaksFor(c, d)) fail('not_found', 'No such display.')
+    if ((d.agentsOff === true) === !allowed) return null
+    await ctx.db.patch(d._id, { agentsOff: allowed ? undefined : true })
+    return null
+  },
+})
+
+/**
+ * Presence: that the site is open here, whether it is visible, and whether the person has used
+ * it since the display last said so. When it was last seen open is written at most once a
+ * minute, and when it was last used at most once in 25 seconds, however often this is called;
+ * that it was hidden or shown again is written as it changes. Answers with the backend's clock,
+ * so a display whose own clock is wrong can still tell what is recent. A site that sends
+ * neither `visible` nor `used` calls this only while it is visible.
  */
 export const heartbeat = mutation({
-  args: { key: v.string() },
-  handler: async (ctx, { key }) => {
+  args: { key: v.string(), visible: v.optional(v.boolean()), used: v.optional(v.boolean()) },
+  handler: async (ctx, { key, visible, used }) => {
     const d = await displayByKey(ctx, await requireBrowser(ctx), key)
     const now = Date.now()
-    if (now - d.lastSeenAt > 55_000) await ctx.db.patch(d._id, { lastSeenAt: now })
+    const shown = visible !== false
+    const change: Partial<Doc<'displays'>> = {}
+    if (shown && now - d.lastSeenAt > 55_000) change.lastSeenAt = now
+    if (shown && d.hidden) change.hidden = undefined
+    if (!shown && !d.hidden) change.hidden = true
+    if (shown && used && now - (d.usedAt ?? 0) > 25_000) change.usedAt = now
+    if (Object.keys(change).length) await ctx.db.patch(d._id, change)
     return { now }
   },
 })
@@ -377,10 +399,13 @@ export const forget = mutation({
 })
 
 /**
- * An agent asks for a page to be brought up: on one named display, or on all of them. The
- * answer names the displays it is shown on, and, in `notShown`, each one it was asked onto and
- * is not shown on, with why: `not_paired` for a display whose browser's pairing has ended,
- * which shows nothing until that browser is paired again.
+ * An agent asks for a page to be brought up: on one named display, on all of them with `all`,
+ * or, where it names none, on the one display the person is most likely looking at (see
+ * `lib/aim.ts`). The answer names the displays it is shown on, says in `chosen` why a display
+ * was chosen where none was named, and lists in `notShown` each other display with why it was
+ * not shown there: `not_paired` for a display whose browser's pairing has ended, which shows
+ * nothing until that browser is paired again; `agents_off` for one the person said agents may
+ * not use; and `not_chosen` for one that was passed over for the display that was chosen.
  */
 export const show = mutation({
   args: { slug: v.string(), display: v.optional(v.string()), session: v.optional(session), agent: v.optional(v.string()) },
@@ -388,31 +413,18 @@ export const show = mutation({
     const { user, machine } = await requireMachine(ctx)
     await rateLimit(ctx, 'show', user._id)
     const artifact = (await artifactBySlug(ctx, user._id, slug)) ?? fail('not_found', 'No such page.')
-    const all = await ctx.db
-      .query('displays')
-      .withIndex('by_user', (q) => q.eq('userId', user._id))
-      .take(QUOTA.displays)
-    const wanted = display?.trim().toLowerCase()
-    const targets = wanted ? all.filter((d) => (d.name ?? d.generatedName).toLowerCase() === wanted) : all
-    // Said without the name that was asked for and without the names there are: a refusal is
-    // kept in the backend's own record of what failed, and a display's name is the person's.
-    // The machine that asked knows what it asked, and reads the names with `it displays`.
-    if (wanted && targets.length === 0) fail('not_found', 'No display has that name.', { noSuchDisplay: true })
+    const aimed = await aim(ctx, user._id, display)
     const shown: string[] = []
-    const notShown: { display: string; reason: 'not_paired' }[] = []
-    for (const d of targets) {
-      const name = d.name ?? d.generatedName
-      if (await stillPaired(ctx, d)) {
-        // The time of a showing is what a display goes by to tell a new asking from one it has
-        // seen, and so it never goes back: a clock that was set back would otherwise have every
-        // display ignore what it is asked to show until the clock had caught up again
-        await ctx.db.patch(d._id, { showing: { artifactId: artifact._id, at: Math.max(Date.now(), (d.showing?.at ?? 0) + 1) } })
-        shown.push(name)
-      } else notShown.push({ display: name, reason: 'not_paired' })
+    for (const d of aimed.to) {
+      // The time of a showing is what a display goes by to tell a new asking from one it has
+      // seen, and so it never goes back: a clock that was set back would otherwise have every
+      // display ignore what it is asked to show until the clock had caught up again
+      await ctx.db.patch(d._id, { showing: { artifactId: artifact._id, at: Math.max(Date.now(), (d.showing?.at ?? 0) + 1) } })
+      shown.push(d.name ?? d.generatedName)
     }
     // A page changes owner only if at least one requested display can show it. All display
     // changes and ownership changes commit together, including the rate-limit checks.
     const took = mine && shown.length ? (await takePage(ctx, artifact, machine, mine, agent)).took : false
-    return { displays: shown, notShown, took }
+    return { displays: shown, notShown: aimed.notShown, took, ...(aimed.chosen ? { chosen: aimed.chosen } : {}) }
   },
 })

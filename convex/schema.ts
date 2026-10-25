@@ -133,6 +133,12 @@ export default defineSchema({
     /** What an agent asked this display to show, and when. */
     showing: v.optional(v.object({ artifactId: v.id('artifacts'), at: v.number() })),
     push: v.optional(v.object({ endpoint: v.string(), p256dh: v.string(), auth: v.string() })),
+    /** Set while the site is hidden on this display, as it last said: in a background tab, a minimised window or a phone that is locked. */
+    hidden: v.optional(v.boolean()),
+    /** When the person last clicked, tapped or typed on the site here, to within half a minute, or when the display was registered. Which display a page goes to when an agent names none is chosen by this. */
+    usedAt: v.optional(v.number()),
+    /** Set where the person said that agents may not show pages or send notifications on this display. */
+    agentsOff: v.optional(v.boolean()),
     /** The session of the browser that registered it: forgetting the display ends that session, and that session ending signs the display out. */
     sessionId: v.id('sessions'),
     /** Earlier pairings of this display, whose invitations are ended when it is forgotten. */
