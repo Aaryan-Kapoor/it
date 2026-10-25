@@ -39,6 +39,7 @@ import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
 import { instanceName } from './src/serve/config'
 import { bases, holdBase } from './test-ports'
+import { standInZsh, zsh } from './test-zsh'
 
 // Every test here starts the program, and some start it a dozen times over. Each is given the
 // time that takes on a machine that is busy with other things as well.
@@ -5757,28 +5758,53 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
 })
 
 describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent will find `it`', () => {
-  const zsh = [process.env.IT_TEST_ZSH, '/bin/zsh', '/usr/bin/zsh'].find((file): file is string => Boolean(file && existsSync(file)))
-  test.skipIf(!zsh)('does not accept an unused zsh profile as proof that a new terminal will find It', async () => {
+  /**
+   * Sets It up twice where SHELL names `shell` and .zshenv sends zsh to a folder other than the
+   * home, without exporting ZDOTDIR: first with It's line only in the file `unused` names, which a
+   * new zsh does not read, and then with the line also in the .zshrc it does read, after what
+   * `zshrc` holds there already.
+   */
+  async function zshProof(shell: (m: ReturnType<typeof machine>) => string, unused: (m: ReturnType<typeof machine>) => string, zshrc = '') {
     const m = machine()
     const dir = path.join(m.home, 'zsh-files')
     mkdirSync(dir)
     writeFileSync(path.join(m.home, '.zshenv'), `ZDOTDIR='${dir}'\n`)
+    if (zshrc) writeFileSync(path.join(dir, '.zshrc'), zshrc)
     const line = `export PATH='${path.join(m.it, 'bin')}':"$PATH"`
-    writeFileSync(path.join(m.home, '.zshrc'), `${line}\n`)
+    mkdirSync(path.dirname(unused(m)), { recursive: true })
+    writeFileSync(unused(m), `${line}\n`)
     const b = await backend({ it: m.it })
     try {
-      const env = { ...b.env, SHELL: zsh! }
-      const unused = await run(m, ['setup', '--yes', '--no-service'], env)
-      expect(unused.code).toBe(0)
-      expect(unused.err).toContain('`it` is not on your PATH yet')
-      writeFileSync(path.join(dir, '.zshrc'), `${line}\n`)
-      const active = await run(m, ['setup', '--yes', '--no-service'], env)
-      expect(active.code).toBe(0)
-      expect(active.err).not.toContain('`it` is not on your PATH yet')
+      const env = { ...b.env, SHELL: shell(m) }
+      const notRead = await run(m, ['setup', '--yes', '--no-service'], env)
+      expect(notRead.code).toBe(0)
+      expect(notRead.err).toContain('`it` is not on your PATH yet')
+      writeFileSync(path.join(dir, '.zshrc'), `${zshrc}${line}\n`)
+      const read = await run(m, ['setup', '--yes', '--no-service'], env)
+      expect(read.code).toBe(0)
+      expect(read.err).not.toContain('`it` is not on your PATH yet')
     } finally {
       await b.close()
     }
-  })
+  }
+  test.skipIf(!zsh)('does not accept an unused zsh profile as proof that a new terminal will find It', () =>
+    zshProof(
+      () => zsh!,
+      (m) => path.join(m.home, '.zshrc'),
+    ),
+  )
+  test.skipIf(!zsh)('does not accept the profile of a folder that .zshrc moves ZDOTDIR to, after zsh has read .zshrc', () =>
+    zshProof(
+      () => zsh!,
+      (m) => path.join(m.home, 'elsewhere', '.zshrc'),
+      'ZDOTDIR="$HOME/elsewhere"\n',
+    ),
+  )
+  test('does not accept an unused zsh profile, where a stand-in for zsh says which folder it reads', () =>
+    zshProof(
+      (m) => standInZsh(path.join(m.home, 'stand-in')),
+      (m) => path.join(m.home, '.zshrc'),
+    ))
 
   test('says that It’s folder of programs is not on the PATH, with the line that puts it there, and says nothing once it is', async () => {
     // A home with an apostrophe in its name: the line must still be one a shell reads as meant
