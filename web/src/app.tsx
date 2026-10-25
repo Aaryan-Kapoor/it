@@ -8,6 +8,7 @@ import { askTwice } from './backend'
 import { IconGuide, IconMore, Mark } from './brand'
 import { Copyable } from './dialog'
 import { Finder } from './finder'
+import { Home } from './home'
 import {
   api,
   displayKey,
@@ -34,7 +35,7 @@ import {
 import { Machines } from './machines'
 import { Bell, Toasts } from './notifications'
 import { abandonOutbox, anyUnsaved, drain, outboxBelongsTo, pairedForSomeone, stillPairedFor, thisPairing, watchOutbox } from './outbox'
-import { Grid, PageView, wasShown } from './pages'
+import { PageView, wasShown } from './pages'
 import { hasPending, watchPending } from './pending'
 import { dropPushHere, mendPush, pushSupport, turnOffPush, turnOnPush } from './push'
 import { ServiceNotice } from './service'
@@ -739,7 +740,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
               </span>
             </p>
           )}
-          <Grid pages={pages} owner={owner} query={query} onQuery={setQuery} />
+          <Home pages={pages} owner={owner} query={query} onQuery={setQuery} />
         </>
       )}
     </Guard>
