@@ -16,6 +16,8 @@ import http from 'node:http'
 import path from 'node:path'
 import { ALIVE, briefClick, type Click, describeClick, LEASE_MS, LISTENING_MOST, MARK, newer, parseJson, QUEUES, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
 import { AddonRuntimes } from './addon-runtime'
+import { AgentKeeper } from './agent-keeper'
+import { agentsFile } from './agents'
 import {
   DeliveryRecovery,
   eraseDeliveryRecovery,
@@ -443,6 +445,11 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const wakes = (harness: string, at: number) => wakesOn(process.platform) && mayWake(wakesNow, harness, at)
 
   const sessions = new Map<string, { seen: number; busy: boolean; busyAt: number }>()
+  // The project agents this machine runs, an experiment, once someone at it has turned them on
+  // (see agent-keeper.ts). A conversation that is one of them has its clicks given to the
+  // keeper alone, which hands them to the agent a turn at a time.
+  let keeper: AgentKeeper | null = null
+  const agentOwned = (key: string) => keeper?.owns(key) === true
   // A conversation that was cleared carries on under a new id; its pages follow it
   const aliases = new Map<string, string>(Object.entries(readJson<Record<string, string>>(aliasFile()) ?? {}))
   const follow = (key: string) => {
@@ -2267,8 +2274,13 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const s = sessions.get(key)
         const codex = click.session.harness === 'codex'
         // An add-on that asks every second is listening. Codex's hooks only run at moments in a
-        // turn, so having heard from one says nothing about the next.
-        const listening = !codex && s !== undefined && now - s.seen < LIVE_MS
+        // turn, so having heard from one says nothing about the next. A project agent's keeper
+        // asks every second whatever its app.
+        const owned = agentOwned(key)
+        const listening = (!codex || owned) && s !== undefined && now - s.seen < LIVE_MS
+        // A project agent's clicks wait for its keeper, which asks again in a moment: no other
+        // way is tried for them, since each would run the conversation beside the agent's own program
+        if (owned && !listening) continue
         // A Codex turn that is running will reach a hook: after its next command, or when it stops
         const inTurn = codex && turnRunning(key, now)
         // Codex's queue may hold an earlier click of the conversation behind this very turn, or
@@ -2301,7 +2313,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
             await release(click.id).catch(() => {})
           } else if (got) {
             // Under the id the conversation has by now: it may have carried on under another while the claim was being asked for
-            held.set(click.id, { click, key: follow(key), claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn, served: false })
+            held.set(click.id, { click, key: follow(key), claimedAt: at, leaseUntil: asked + LEASE_MS, forHook: inTurn && !owned, served: false })
             journal('claimed', click.id)
           }
         } else if (way === 't3') {
@@ -2392,6 +2404,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           waiting: inbox.length,
           held: held.size,
           sessions: [...sessions].filter(([, v]) => now - v.seen < LIVE_MS).map(([k]) => k),
+          ...(keeper ? { agents: keeper.standing() } : {}),
         },
       ]
     }
@@ -2544,6 +2557,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
         if (mine.length >= SERVE_MOST || (mine.length > 0 && size > SERVE_BYTES)) break
         mine.push(h)
       }
+      // A project agent's clicks go to its keeper alone, which hands them over a turn at a time:
+      // It's add-on inside the agent's own program is given none of them
+      if (agentOwned(follow(key)) && body.agent !== true) return [200, { clicks: [] }]
       // Counted as given only if whoever asked is still there to be answered
       if (gone()) return [200, { clicks: [] }]
       for (const h of mine) {
@@ -3157,6 +3173,45 @@ async function connecting(say: (line: string) => void): Promise<void> {
     },
     (err) => say(`settings: ${why(err)}`),
   )
+  // Project agents are kept only where someone at this machine has run `it agents`, and only on
+  // a system where It can find again and end what it runs: nothing of them is asked of It until then
+  const keepAgents = () => {
+    if (keeper || closing || !wakesOn(process.platform) || !existsSync(agentsFile())) return
+    keeper = new AgentKeeper({
+      offer: (offer) => call('mutation', api.agents.offer, { offer }),
+      report: (r) => call('mutation', api.agents.report, r),
+      taken: (agentId, ids) => call('mutation', api.agents.taken, { agentId, ids }),
+      clicks: async (app, session, busy, folder) =>
+        (
+          await local<{ clicks?: Delivered[] }>(`/clicks?harness=${encodeURIComponent(app)}&session=${encodeURIComponent(session)}`, {
+            method: 'POST',
+            body: { harness: app, session, busy, folder, agent: true },
+          })
+        )?.clicks?.map((c) => ({ id: c.id, text: c.text })) ?? null,
+      ack: (ids) => local('/ack', { method: 'POST', body: { ids, woke: true } }),
+      connected,
+      env: async () => {
+        await shellLearned()
+        return harnessEnv()
+      },
+      say,
+      itHome: home(),
+      itAt: [
+        ...new Set([path.join(home(), 'bin', process.platform === 'win32' ? 'it.exe' : 'it'), process.execPath].filter((p) => /[\\/]it(\.exe)?$/.test(p))),
+      ],
+    })
+    const kept = keeper
+    client.onUpdate(
+      api.agents.mine,
+      {},
+      (mine: { agents: Parameters<AgentKeeper['update']>[0] }) => kept.update(mine.agents),
+      (err) => seldom('agents', `project agents: ${why(err)}`),
+    )
+    void kept.begin().catch((err) => say(`project agents: ${why(err)}`))
+  }
+  keepAgents()
+  const lookForAgents = setInterval(keepAgents, 5_000)
+  lookForAgents.unref?.()
   /**
    * Asks whether this machine and the It it joined fit, and acts on a change. Found not to
    * fit: said, with which of the two to update, and whatever this machine reopened is ended and
@@ -3274,6 +3329,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
   for (const key of reopenedNow.keys()) if (stoppedRun.get(key) === undefined || stoppedRun.get(key) !== runNames.get(key)) cutOff.add(key)
   keepCutOff()
   for (const run of reopenedNow.values()) run.abort()
+  // And so are the programs of the project agents it keeps: each is resumed when It next starts,
+  // and one that was in the middle of a turn is told that the turn was cut off
+  clearInterval(lookForAgents)
+  if (keeper) await Promise.race([keeper.close().catch(() => {}), new Promise((r) => setTimeout(r, 15_000))])
   // Held no more from this moment, before It is told so: an add-on that asks while the telling
   // is on its way is given nothing that is about to be somebody else's
   const givenBack = [...held].filter(([, h]) => !h.served).map(([id]) => id)
