@@ -2937,7 +2937,6 @@ async function main(argv: string[]): Promise<void> {
       const mine = asked?.session
       // Which conversation this is was a choice among the apps that had marked this command: said, so that an agent that is another one knows
       const guessed = sessionNote(asked, `This ${NOUN.one} was shown for`, `run \`it open ${slug}\` again with IT_HARNESS and IT_SESSION set to your own.`)
-      if (mine) await noteConversation(mine)
       const result = await onDisplay(a, () =>
         call<Shown & { took?: boolean }>('mutation', api.displays.show, {
           slug,
@@ -2945,6 +2944,9 @@ async function main(argv: string[]): Promise<void> {
           ...(mine ? { session: mine, agent: mine.harness } : {}),
         }),
       )
+      // Noted only once It has answered, since it is as the page is shown that it becomes this
+      // conversation's: a page It refuses to show leaves no note of the conversation
+      if (mine) await noteConversation(mine)
       const took = result.took === true
       const shown = shownAs(result)
       const taken = `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
