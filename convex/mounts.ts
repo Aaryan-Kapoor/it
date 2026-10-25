@@ -44,9 +44,10 @@ export const create = mutation({
       ticketGiven: false,
       epoch: display.epoch,
     })
-    // Counted: that a page was shown, on what kind of screen, and whether an agent had just asked this display for it or the person opened it
+    // Counted: that a page was shown, on what kind of screen, and whether an agent had just asked
+    // this display for it or the person opened it. A picture of it on the grid is no page shown
     const asked = display.showing?.artifactId === artifactId && Date.now() - display.showing.at < ASKED_MS
-    await counted(ctx, 'page.shown', { screen: display.screen ?? 'computer', by: asked ? 'agent' : 'person' })
+    if (!picture) await counted(ctx, 'page.shown', { screen: display.screen ?? 'computer', by: asked ? 'agent' : 'person' })
     return { mountId, version: artifact.currentVersion }
   },
 })
