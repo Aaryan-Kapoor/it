@@ -795,8 +795,11 @@ const heldAsked = new Map<string, { at: number; held: boolean | null }>()
  *
  * Codex lets one program at a time write a conversation, and says which conversations are
  * being written with a file each: `thread-writer-locks/<id>.lock` in its folder, there for as
- * long as the conversation is open in some Codex. A Codex that was ended without warning
- * leaves its file behind, so where the system says who has a file open, that is asked too.
+ * long as the conversation is open in some Codex. The Codex that writes a conversation keeps
+ * its file open and holds a lock on all of it, which the system lets go of when that Codex
+ * ends, however it ends. A Codex that was ended without warning leaves the file behind, so the
+ * system is asked too: on Linux and macOS whether a program has the file open, and on Windows
+ * whether a program holds that lock.
  */
 export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), now = Date.now()): boolean | null {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(thread)) return false
@@ -804,7 +807,7 @@ export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || 
   // Asked for every action that waits, on every pass: what was found is good for a moment
   const asked = heldAsked.get(lock)
   if (asked && now - asked.at < 1500) return asked.held
-  const held = existsSync(lock) ? openSomewhere(lock) : false
+  const held = !existsSync(lock) ? false : process.platform === 'win32' ? lockedElsewhere(lock) : openSomewhere(lock)
   if (heldAsked.size > 500) heldAsked.clear()
   heldAsked.set(lock, { at: now, held })
   return held
@@ -854,6 +857,36 @@ export function openSomewhere(file: string): boolean | null {
     }
   }
   return null
+}
+
+/**
+ * Whether a program holds a lock on the start of a file that keeps others from reading it, as
+ * Windows tells it. Codex holds such a lock on all of a conversation's file for as long as it
+ * writes the conversation. The file is opened for reading alone, shared with every other
+ * program for reading, writing and removing it, and its first byte is read: Windows refuses
+ * that read while another program holds the lock. Nothing is locked or written. Null where the
+ * file cannot be opened or read for another reason, as when a program that has it open lets
+ * nobody else read it, which says nothing of whether it is held.
+ */
+export function lockedElsewhere(file: string): boolean | null {
+  let fd: number
+  try {
+    fd = openSync(file, 'r')
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? false : null
+  }
+  try {
+    readSync(fd, Buffer.alloc(1), 0, 1, 0)
+    return false
+  } catch (err) {
+    // A read refused for a lock, which Node and Bun both give as EBUSY. Refused at the opening,
+    // EBUSY is another program's having the file to itself, or its being removed, and not a lock.
+    return (err as NodeJS.ErrnoException).code === 'EBUSY' ? true : null
+  } finally {
+    try {
+      closeSync(fd)
+    } catch {}
+  }
 }
 
 /**
