@@ -3889,13 +3889,13 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.t3.asked.length).toBe(1)
   })
 
-  test('a search at its read limit uses the fallback route and starts afresh only after six hours', async () => {
+  test('a search that read every thread and found none uses the fallback route, and another begins only after six hours', async () => {
     withT3Code()
     stand.t3.slow = true
     await start()
     offered(click(3))
     await until(() => stand.t3.asked.length === 1)
-    stand.t3.asked[0]!.answer({ status: 'limited' })
+    stand.t3.asked[0]!.answer(null)
     await until(() => stand.codex.length === 1)
     stand.codex[0]!.end()
     await until(() => called('delivery:handedOff').includes('click-3'))
@@ -3913,6 +3913,60 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       await until(() => stand.t3.sent.length === 1)
       expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
       expect(stand.codex).toHaveLength(2)
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
+  test('a search that used its reads while its click waits is followed at once by the next, and the click waits no longer than its own five seconds', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    stand.t3.asked[0]!.answer({ status: 'limited' })
+    await until(() => stand.t3.asked.length === 2)
+    expect(stand.codex).toEqual([])
+    // Past its five seconds the click goes the way it would without T3 Code, though the search goes on
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6_000)
+    try {
+      await until(() => stand.codex.length === 1)
+      expect(stand.t3.asked).toHaveLength(2)
+      stand.t3.asked[1]!.answer({ status: 'limited' })
+      stand.codex[0]!.end()
+      await until(() => called('delivery:handedOff').includes('click-3'))
+      offered()
+      // With no click to ask for the thread, no other search begins
+      await pause(1500)
+      expect(stand.t3.asked).toHaveLength(2)
+      expect(stand.t3.sent).toEqual([])
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
+  test('a search that used its reads after its click went another way is taken up by the next click, which waits for it, and goes to the thread it finds', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    offered(click(3))
+    await until(() => stand.t3.asked.length === 1)
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6_000)
+    try {
+      await until(() => stand.codex.length === 1)
+      stand.t3.asked[0]!.answer({ status: 'limited' })
+      stand.codex[0]!.end()
+      await until(() => called('delivery:handedOff').includes('click-3'))
+      offered({ ...click(3), id: 'next-click' })
+      await until(() => stand.t3.asked.length === 2)
+      expect(stand.t3.asked[1]!.ids).toEqual(['thread-3'])
+      // It is given a wait of its own, and nothing else is tried in that time
+      await pause(1500)
+      expect(stand.codex).toHaveLength(1)
+      stand.t3.asked[1]!.answer('t3-thread-c')
+      await until(() => stand.t3.sent.length === 1)
+      expect(stand.t3.sent[0]!.thread).toBe('t3-thread-c')
+      expect(stand.codex).toHaveLength(1)
     } finally {
       wall.mockRestore()
     }

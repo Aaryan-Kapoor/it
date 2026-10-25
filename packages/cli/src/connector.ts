@@ -546,10 +546,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const queueTries = new Map<string, { n: number; at: number; reopening: boolean }>()
   /**
    * What is known of the thread in T3 Code that a conversation is held in: the thread, that T3
-   * Code has none of it or the search reached its read limit (asked again after a while,
-   * since a conversation may be brought into T3 Code later), or that it is being asked for
-   * at this moment. A conversation T3 Code could not take a message for is not offered to it
-   * again for a while: `t3Refused`.
+   * Code has none of it (asked again after a while, since a conversation may be brought into
+   * T3 Code later), or that it is being asked for at this moment. A conversation T3 Code could
+   * not take a message for is not offered to it again for a while: `t3Refused`.
    */
   const t3Known = new Map<string, { thread: string | null; at: number } | 'asking'>()
   /** When each conversation that is being asked for was first asked for, by the clock that only goes forward. */
@@ -559,15 +558,17 @@ async function connecting(say: (line: string) => void): Promise<void> {
   const t3Retries = new Map<string, { at: number; delay: number }>()
   const t3Refused = new Map<string, number>()
   let t3Seen: { at: number; server: T3 | undefined } | undefined
-  /** How long before another search after none matched or its read limit was reached. */
+  /** How long before another search, after one that read every thread found none that holds the conversation. */
   const T3_AGAIN_MS = 6 * 3_600_000
   /** How long a conversation is kept from T3 Code after it could not take a message for it. */
   const T3_REFUSED_MS = 10 * 60_000
   /**
    * How long T3 Code is given to say which thread holds a conversation, before a click for it
    * goes the way it would without T3 Code. It says so in a fifth of a second to two seconds
-   * where it is well. Later batches keep their progress but do not restart this wait.
-   * What it says in the end is kept for the clicks that come after.
+   * where it is well. Later batches keep their progress but do not restart this wait, and
+   * neither does a search that follows one that used its reads within it. What it says in
+   * the end is kept for the clicks that come after. A search that has used its reads once
+   * its click has gone another way is taken up by the next click, which waits as long again.
    */
   const T3_ASKED_MS = 5_000
   /**
@@ -613,15 +614,24 @@ async function connecting(say: (line: string) => void): Promise<void> {
       .then((result) => {
         if (t3Searches.get(key) !== search) return
         let again = 10
-        if (result.status === 'incomplete') {
+        // A search that used its reads while its click still waits is followed at once by the next
+        if (result.status === 'incomplete' || (result.status === 'limited' && waiting())) {
           // More candidates, unread answers and expired budgets are not evidence of absence.
           // Keep the first deadline while continuing through later batches on subsequent passes.
           t3Known.delete(key)
           // New batches keep moving. Repeated failures wait longer, up to a minute, until
           // another candidate is reached or read successfully. A later failure starts afresh.
-          const delay = result.progressed ? 0 : Math.min((t3Retries.get(key)?.delay || 150) * 2, 60_000)
+          const delay = result.status === 'incomplete' && !result.progressed ? Math.min((t3Retries.get(key)?.delay || 150) * 2, 60_000) : 0
           t3Retries.set(key, { at: steady() + (delay || 300), delay })
           again = (delay || 300) + 10
+        } else if (result.status === 'limited') {
+          // Its click has gone another way. What the search has read is kept, and the next click
+          // that asks for the thread begins the next search, over the threads not yet read, and
+          // is given a wait of its own
+          t3Known.delete(key)
+          t3Asked.delete(key)
+          t3Pending.delete(key)
+          t3Retries.delete(key)
         } else {
           t3Asked.delete(key)
           t3Searches.delete(key)
