@@ -204,6 +204,13 @@ export default defineSchema({
     stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number() }))),
     /** The last few conversations that could not be reopened, when, and why in the connector's own words: never what a command printed. */
     fails: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), why: v.string() }))),
+    /**
+     * The folders this machine offers to start an agent in, which is an experiment that is off
+     * until someone at the machine turns it on, and how many may run there at once. Each folder
+     * is named by the machine's own word for it, by its name, and by where it is with the
+     * person's home folder written as `~`. The machine runs an agent only in a folder it named.
+     */
+    agents: v.optional(v.object({ most: v.number(), projects: v.array(v.object({ id: v.string(), name: v.string(), where: v.string() })) })),
     /** When it was last written down that this machine, revoked, asked for a token: said once an hour and not each time. */
     refusalSaidAt: v.optional(v.number()),
     /** The earlier identity of the same computer whose place this one took, if it took one's. */
@@ -223,6 +230,38 @@ export default defineSchema({
     name: v.string(),
     createdAt: v.number(),
   }).index('by_user_key', ['userId', 'key']),
+
+  // An agent the person started from the site in a folder on one of their machines, which is an
+  // experiment: what they want of it, and how it stands as its machine last said.
+  agents: defineTable({
+    userId: v.id('users'),
+    machineId: v.id('machines'),
+    /** The machine's own word for the folder, and the folder's name and where it is, as the machine offered them. */
+    project: v.string(),
+    name: v.string(),
+    where: v.string(),
+    app: v.string(),
+    /** Whether the person wants it running. */
+    want: v.union(v.literal('run'), v.literal('stop')),
+    /** Counted up each time the person starts it again. What its machine says of an earlier count is not about the agent as it is now. */
+    round: v.number(),
+    state: v.string(),
+    /** Why it is stopped or could not run, in the connector's own words. */
+    why: v.optional(v.string()),
+    /** The conversation it is, once its app has made one. */
+    session: v.optional(v.string()),
+    /** What it last said at the end of a turn, and when. */
+    said: v.optional(v.object({ text: v.string(), at: v.number() })),
+    createdAt: v.number(),
+    changedAt: v.number(),
+  })
+    .index('by_user', ['userId'])
+    .index('by_machine', ['machineId']),
+
+  // What the person sent a project agent from the site, until its machine has handed it over.
+  agentMessages: defineTable({ userId: v.id('users'), agentId: v.id('agents'), text: v.string(), at: v.number() })
+    .index('by_user', ['userId'])
+    .index('by_agent', ['agentId']),
 
   // A page. Its bytes are kept by the content service; this is everything else.
   artifacts: defineTable({

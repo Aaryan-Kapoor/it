@@ -20,6 +20,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, internalQuery, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
+import { forgetAgentsOf } from './agents'
 import { revokeLater } from './content'
 import { type Caller, ownSession, requireMachine, requireMachineOrOwner, requireOwner } from './lib/authz'
 import { cookieFor } from './lib/cookie'
@@ -258,11 +259,14 @@ export async function revokeMachine(
     .withIndex('by_machine', (q) => q.eq('byMachine', m._id).gt('expiresAt', now))
     .take(WAITING)
   for (const i of waiting) if (i.usedAt === undefined) await ctx.db.delete(i._id)
+  // The agents it was running for the person go with it: its connector can no longer be told
+  // anything, and ends them itself once It refuses it
+  const agents = await forgetAgentsOf(ctx, m._id)
   const machines = await ctx.db
     .query('machines')
     .withIndex('by_machine', (q) => q.eq('byMachine', m._id).eq('revoked', false))
     .take(QUOTA.machines)
-  log('machine.revoked', { userId: m.userId, machineId: m._id, by, browsers: sessions.length, machines: machines.length })
+  log('machine.revoked', { userId: m.userId, machineId: m._id, by, browsers: sessions.length, machines: machines.length, agents })
   for (const x of machines) await revokeMachine(ctx, x, 'machine_revoked', but)
   // A computer may have asked for this machine's place while the machine was still one of the
   // person's: it enrolled as an identity that this one had replaced (see `record` in
