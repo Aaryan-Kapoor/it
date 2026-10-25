@@ -4246,6 +4246,11 @@ describe.skipIf(process.platform === 'win32')('a thread of T3 Code that is switc
       { harness: 'codex', ids: [neighbour.id] },
       { harness: 'claude-code', ids: [claude.id] },
     ])
+    // A click for the conversation, while no turn of it runs, goes to the thread found for it, with no search for one
+    await codexTurn(false, neighbour.id)
+    stand.watching.get('delivery:inboxPage')!([click(neighbour)])
+    await until(() => stand.t3.sent.length === 1)
+    expect([stand.t3.sent[0]!.thread, stand.t3.asked]).toEqual(['t3-next-door', []])
   })
 
   test('where T3 Code is not running nothing is asked of it and nothing changes hands, and a click on a page that went goes where the page went', async () => {

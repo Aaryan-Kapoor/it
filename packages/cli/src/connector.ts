@@ -681,8 +681,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       .catch(() => undefined)
       .then(async (found) => {
         if (!found) return t3Follows.set(key, { at: steady() + (misses < 3 ? FOLLOW_SOON_MS : FOLLOW_SELDOM_MS), misses: misses + 1 })
-        // A click for it goes to that thread wherever its add-on is not there to take it
-        if (known !== 'asking' && !known?.thread) t3Known.set(key, { thread: found.thread, at: Date.now() })
+        // A click for it goes to that thread wherever its add-on is not there to take it. Not
+        // where a search for it has begun meanwhile, which says so itself when it ends
+        const knownNow = t3Known.get(key)
+        if (knownNow !== 'asking' && !knownNow?.thread) t3Known.set(key, { thread: found.thread, at: Date.now() })
         // It is the thread's own conversation now, and carries on as nothing else
         carriedOn.delete(key)
         let again = FOLLOW_AGAIN_MS
