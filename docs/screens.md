@@ -42,7 +42,7 @@ While a display is locked, no agent can bring another page up on it. An agent th
 
 Only a browser paired as yours unlocks a display: from the mark on the display itself, where the display is that browser, or from the Displays page, by choosing "No page". A paired screen can lock itself and cannot unlock itself, so it asks first. A lock is the owner's word that a screen keeps to one page, often a screen in a shared room, and whoever is passing that screen should not be able to undo it.
 
-A lock lasts through reloading the page, It starting again, and the display's browser being paired again. It ends when the page is deleted, and the display then says so above whatever it shows next, and when the display is forgotten, which signs its browser out and says so on its pairing screen.
+A lock lasts through reloading the page, It starting again, and the display's browser being paired again. It ends when the page is deleted, and the display then says so above whatever it shows next. It also ends when the display is forgotten, which signs its browser out: that browser shows the pairing screen, as it does whenever its pairing ends, and is not told why, since what became of a display is told to a browser paired as yours alone.
 
 ## Typing to a page's agent, and what it says back
 

@@ -334,7 +334,7 @@ function Lock({ display, owner, page, here }: { display: LockableDisplay; owner:
       >
         <IconLock />
         <span>Locked here</span>
-        <span className="lock-mark-how">{owner ? 'Unlock' : 'Unlocked from your own browser'}</span>
+        <span className="lock-mark-how">{owner ? 'Unlock' : 'Unlock it from your own browser'}</span>
       </button>
     )
   return (

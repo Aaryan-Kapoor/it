@@ -3696,7 +3696,7 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
     )
     try {
       expect(printed(await run(m, ['open', 'plan', '--on', 'all'], b.env)).hint).toBe(
-        '"Hall" and "Kitchen" are locked to another page: the user locked them to it, and only the user’s own browser can unlock them, under Displays on the site.',
+        'The user locked "Hall" and "Kitchen" to another page, and only the user’s own browser can unlock them, under Displays on the site.',
       )
     } finally {
       await b.close()

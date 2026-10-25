@@ -342,7 +342,7 @@ function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: str
     const held = of('locked')
     if (held.length)
       said.push(
-        `${andJoined(held)} ${held.length === 1 ? 'is' : 'are'} locked to another page: the user locked ${held.length === 1 ? 'it' : 'them'} to it, and only the user’s own browser can unlock ${held.length === 1 ? 'it' : 'them'}, under Displays on the site.`,
+        `The user locked ${andJoined(held)} to another page, and only the user’s own browser can unlock ${held.length === 1 ? 'it' : 'them'}, under Displays on the site.`,
       )
     if (!said.length && !shown.displays.length && !notShownOn.length) said.push(noDisplay())
   }
