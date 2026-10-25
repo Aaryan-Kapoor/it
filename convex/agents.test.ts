@@ -119,7 +119,7 @@ describe('a project agent', () => {
     await browser.mutation(api.agents.send, { agentId: id, text: 'second' })
     const session = '3f0c3c55-1d4b-4a8e-9b1a-2a8a1c1c0b11'
     expect(await machine.mutation(api.agents.report, { agentId: id, round: 1, state: 'working', session })).toEqual({ gone: false, want: 'run' })
-    const [{ messages }] = (await machine.query(api.agents.mine, {})).agents as [{ messages: { id: Id<'agentMessages'>; text: string }[] }]
+    const [{ messages }] = (await machine.query(api.agents.mine, {})).agents as unknown as [{ messages: { id: Id<'agentMessages'>; text: string }[] }]
     await machine.mutation(api.agents.taken, { agentId: id, ids: messages.map((m) => m.id) })
     await machine.mutation(api.agents.report, { agentId: id, round: 1, state: 'ready', said: `Done. ${'x'.repeat(AGENTS.saidText)}` })
     const [shown] = (await browser.query(api.agents.list, {})).agents

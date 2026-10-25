@@ -90,9 +90,16 @@ export const list = query({
       .query('agents')
       .withIndex('by_user', (q) => q.eq('userId', user._id))
       .take(AGENTS.perPerson)
-    const live = new Set<string>(machines.map((m) => m._id))
     const shown = []
-    for (const a of agents) if (live.has(a.machineId)) shown.push(view(a, (await waitingFor(ctx, a._id)).length))
+    for (const a of agents) {
+      // An agent is shown with its machine, by which the site tells whether it is there; one whose machine is gone is not shown
+      const m = machines.find((x) => x._id === a.machineId)
+      if (m)
+        shown.push({
+          ...view(a, (await waitingFor(ctx, a._id)).length),
+          machine: { name: m.name, lastSeenAt: m.lastSeenAt, off: m.offAt !== undefined, connectorVersion: m.connectorVersion ?? null },
+        })
+    }
     return {
       machines: machines
         .filter((m) => m.agents)
