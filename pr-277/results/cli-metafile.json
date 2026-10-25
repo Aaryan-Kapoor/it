@@ -1,0 +1,6307 @@
+{
+  "inputs": {
+    "packages/protocol/src/index.ts": {
+      "bytes": 36330,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/cli/src/addons.generated.ts": {
+      "bytes": 296364,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/index.js": {
+      "bytes": 81,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/values/base64.js": {
+      "bytes": 3251,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/common/index.js": {
+      "bytes": 1936,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/values/value.js": {
+      "bytes": 10045,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/base64.js",
+          "kind": "import-statement",
+          "original": "./base64.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/common/index.js",
+          "kind": "import-statement",
+          "original": "../common/index.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/values/validators.js": {
+      "bytes": 13168,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/value.js",
+          "kind": "import-statement",
+          "original": "./value.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/values/validator.js": {
+      "bytes": 8089,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/validators.js",
+          "kind": "import-statement",
+          "original": "./validators.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/values/errors.js": {
+      "bytes": 796,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/value.js",
+          "kind": "import-statement",
+          "original": "./value.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/values/compare_utf8.js": {
+      "bytes": 2034,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/values/compare.js": {
+      "bytes": 3289,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/value.js",
+          "kind": "import-statement",
+          "original": "./value.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/compare_utf8.js",
+          "kind": "import-statement",
+          "original": "./compare_utf8.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/values/size.js": {
+      "bytes": 2300,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/value.js",
+          "kind": "import-statement",
+          "original": "./value.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/common/index.js",
+          "kind": "import-statement",
+          "original": "../common/index.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/values/index.js": {
+      "bytes": 374,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/value.js",
+          "kind": "import-statement",
+          "original": "./value.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/validator.js",
+          "kind": "import-statement",
+          "original": "./validator.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/base64.js",
+          "kind": "import-statement",
+          "original": "./base64.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/errors.js",
+          "kind": "import-statement",
+          "original": "./errors.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/compare.js",
+          "kind": "import-statement",
+          "original": "./compare.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/size.js",
+          "kind": "import-statement",
+          "original": "./size.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/logging.js": {
+      "bytes": 3563,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/udf_path_utils.js": {
+      "bytes": 1159,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/local_state.js": {
+      "bytes": 8668,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/udf_path_utils.js",
+          "kind": "import-statement",
+          "original": "./udf_path_utils.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/request_manager.js": {
+      "bytes": 7146,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/logging.js",
+          "kind": "import-statement",
+          "original": "../logging.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/functionName.js": {
+      "bytes": 111,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/components/paths.js": {
+      "bytes": 1106,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/server/functionName.js",
+          "kind": "import-statement",
+          "original": "../functionName.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/api.js": {
+      "bytes": 2584,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/server/functionName.js",
+          "kind": "import-statement",
+          "original": "./functionName.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/components/paths.js",
+          "kind": "import-statement",
+          "original": "./components/paths.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/optimistic_updates_impl.js": {
+      "bytes": 5135,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/server/api.js",
+          "kind": "import-statement",
+          "original": "../../server/api.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/common/index.js",
+          "kind": "import-statement",
+          "original": "../../common/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/logging.js",
+          "kind": "import-statement",
+          "original": "../logging.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/udf_path_utils.js",
+          "kind": "import-statement",
+          "original": "./udf_path_utils.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/errors.js",
+          "kind": "import-statement",
+          "original": "../../values/errors.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/vendor/long.js": {
+      "bytes": 2503,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/remote_query_set.js": {
+      "bytes": 3036,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/vendor/long.js",
+          "kind": "import-statement",
+          "original": "../../vendor/long.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/logging.js",
+          "kind": "import-statement",
+          "original": "../logging.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/protocol.js": {
+      "bytes": 1759,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/vendor/long.js",
+          "kind": "import-statement",
+          "original": "../../vendor/long.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/web_socket_manager.js": {
+      "bytes": 22509,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/protocol.js",
+          "kind": "import-statement",
+          "original": "./protocol.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/session.js": {
+      "bytes": 302,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/vendor/jwt-decode/index.js": {
+      "bytes": 1634,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/authentication_manager.js": {
+      "bytes": 13198,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/vendor/jwt-decode/index.js",
+          "kind": "import-statement",
+          "original": "../../vendor/jwt-decode/index.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/metrics.js": {
+      "bytes": 977,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/client.js": {
+      "bytes": 26101,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/index.js",
+          "kind": "import-statement",
+          "original": "../../index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/logging.js",
+          "kind": "import-statement",
+          "original": "../logging.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/local_state.js",
+          "kind": "import-statement",
+          "original": "./local_state.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/request_manager.js",
+          "kind": "import-statement",
+          "original": "./request_manager.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/optimistic_updates_impl.js",
+          "kind": "import-statement",
+          "original": "./optimistic_updates_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/remote_query_set.js",
+          "kind": "import-statement",
+          "original": "./remote_query_set.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/udf_path_utils.js",
+          "kind": "import-statement",
+          "original": "./udf_path_utils.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/web_socket_manager.js",
+          "kind": "import-statement",
+          "original": "./web_socket_manager.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/session.js",
+          "kind": "import-statement",
+          "original": "./session.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/authentication_manager.js",
+          "kind": "import-statement",
+          "original": "./authentication_manager.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/metrics.js",
+          "kind": "import-statement",
+          "original": "./metrics.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/common/index.js",
+          "kind": "import-statement",
+          "original": "../../common/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/errors.js",
+          "kind": "import-statement",
+          "original": "../../values/errors.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/vendor/jwt-decode/index.js",
+          "kind": "import-statement",
+          "original": "../../vendor/jwt-decode/index.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/pagination.js": {
+      "bytes": 568,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/sync/paginated_query_client.js": {
+      "bytes": 12074,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/udf_path_utils.js",
+          "kind": "import-statement",
+          "original": "./udf_path_utils.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/pagination.js",
+          "kind": "import-statement",
+          "original": "./pagination.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/vendor/long.js",
+          "kind": "import-statement",
+          "original": "../../vendor/long.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/simple_client.js": {
+      "bytes": 13515,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/common/index.js",
+          "kind": "import-statement",
+          "original": "../common/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/api.js",
+          "kind": "import-statement",
+          "original": "../server/api.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/client.js",
+          "kind": "import-statement",
+          "original": "./sync/client.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/paginated_query_client.js",
+          "kind": "import-statement",
+          "original": "./sync/paginated_query_client.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/udf_path_utils.js",
+          "kind": "import-statement",
+          "original": "./sync/udf_path_utils.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/simple_client-node.js": {
+      "bytes": 137940,
+      "imports": [
+        {
+          "path": "module",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/simple_client.js",
+          "kind": "import-statement",
+          "original": "./simple_client.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/http_client.js": {
+      "bytes": 15649,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/server/api.js",
+          "kind": "import-statement",
+          "original": "../server/api.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/common/index.js",
+          "kind": "import-statement",
+          "original": "../common/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/index.js",
+          "kind": "import-statement",
+          "original": "../index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/logging.js",
+          "kind": "import-statement",
+          "original": "./logging.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/query_options.js": {
+      "bytes": 122,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/browser/index-node.js": {
+      "bytes": 267,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/browser/sync/client.js",
+          "kind": "import-statement",
+          "original": "./sync/client.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/simple_client-node.js",
+          "kind": "import-statement",
+          "original": "./simple_client-node.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/http_client.js",
+          "kind": "import-statement",
+          "original": "./http_client.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/query_options.js",
+          "kind": "import-statement",
+          "original": "./query_options.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/database.js": {
+      "bytes": 51,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/syscall.js": {
+      "bytes": 1560,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/errors.js",
+          "kind": "import-statement",
+          "original": "../../values/errors.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/value.js",
+          "kind": "import-statement",
+          "original": "../../values/value.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/validate.js": {
+      "bytes": 680,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/actions_impl.js": {
+      "bytes": 1609,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/index.js",
+          "kind": "import-statement",
+          "original": "../../index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "./syscall.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/common/index.js",
+          "kind": "import-statement",
+          "original": "../../common/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/components/paths.js",
+          "kind": "import-statement",
+          "original": "../components/paths.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/vector_search.js": {
+      "bytes": 642,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/vector_search_impl.js": {
+      "bytes": 3056,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "./syscall.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/index.js",
+          "kind": "import-statement",
+          "original": "../../index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/vector_search.js",
+          "kind": "import-statement",
+          "original": "../vector_search.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/value.js",
+          "kind": "import-statement",
+          "original": "../../values/value.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/authentication_impl.js": {
+      "bytes": 304,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "./syscall.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/filter_builder.js": {
+      "bytes": 637,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/filter_builder_impl.js": {
+      "bytes": 2977,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/value.js",
+          "kind": "import-statement",
+          "original": "../../values/value.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/filter_builder.js",
+          "kind": "import-statement",
+          "original": "../filter_builder.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/index_range_builder.js": {
+      "bytes": 535,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/index_range_builder_impl.js": {
+      "bytes": 2347,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/value.js",
+          "kind": "import-statement",
+          "original": "../../values/value.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/index_range_builder.js",
+          "kind": "import-statement",
+          "original": "../index_range_builder.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/search_filter_builder.js": {
+      "bytes": 541,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/search_filter_builder_impl.js": {
+      "bytes": 1818,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/value.js",
+          "kind": "import-statement",
+          "original": "../../values/value.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/search_filter_builder.js",
+          "kind": "import-statement",
+          "original": "../search_filter_builder.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/query_impl.js": {
+      "bytes": 8019,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "./syscall.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/filter_builder_impl.js",
+          "kind": "import-statement",
+          "original": "./filter_builder_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/index_range_builder_impl.js",
+          "kind": "import-statement",
+          "original": "./index_range_builder_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/search_filter_builder_impl.js",
+          "kind": "import-statement",
+          "original": "./search_filter_builder_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/index.js",
+          "kind": "import-statement",
+          "original": "../../index.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/database_impl.js": {
+      "bytes": 4967,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "./syscall.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/query_impl.js",
+          "kind": "import-statement",
+          "original": "./query_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/index.js",
+          "kind": "import-statement",
+          "original": "../../index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/value.js",
+          "kind": "import-statement",
+          "original": "../../values/value.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/scheduler_impl.js": {
+      "bytes": 3065,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/index.js",
+          "kind": "import-statement",
+          "original": "../../index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "./syscall.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/common/index.js",
+          "kind": "import-statement",
+          "original": "../../common/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/components/paths.js",
+          "kind": "import-statement",
+          "original": "../components/paths.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/storage_impl.js": {
+      "bytes": 1653,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/index.js",
+          "kind": "import-statement",
+          "original": "../../index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "./syscall.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/meta_impl.js": {
+      "bytes": 2252,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "./syscall.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/impl/registration_impl.js": {
+      "bytes": 10102,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/actions_impl.js",
+          "kind": "import-statement",
+          "original": "./actions_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/vector_search_impl.js",
+          "kind": "import-statement",
+          "original": "./vector_search_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/authentication_impl.js",
+          "kind": "import-statement",
+          "original": "./authentication_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/database_impl.js",
+          "kind": "import-statement",
+          "original": "./database_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/query_impl.js",
+          "kind": "import-statement",
+          "original": "./query_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/scheduler_impl.js",
+          "kind": "import-statement",
+          "original": "./scheduler_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/storage_impl.js",
+          "kind": "import-statement",
+          "original": "./storage_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/common/index.js",
+          "kind": "import-statement",
+          "original": "../../common/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "./syscall.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/validator.js",
+          "kind": "import-statement",
+          "original": "../../values/validator.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/components/paths.js",
+          "kind": "import-statement",
+          "original": "../components/paths.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/meta_impl.js",
+          "kind": "import-statement",
+          "original": "./meta_impl.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/pagination.js": {
+      "bytes": 775,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/validator.js",
+          "kind": "import-statement",
+          "original": "../values/validator.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/storage.js": {
+      "bytes": 50,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/cron.js": {
+      "bytes": 8904,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/server/api.js",
+          "kind": "import-statement",
+          "original": "../server/api.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/common/index.js",
+          "kind": "import-statement",
+          "original": "../common/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "../values/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/components/paths.js",
+          "kind": "import-statement",
+          "original": "./components/paths.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/router.js": {
+      "bytes": 7101,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "./impl/syscall.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/components/index.js": {
+      "bytes": 9424,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/index.js",
+          "kind": "import-statement",
+          "original": "../../index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "../impl/syscall.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/components/paths.js",
+          "kind": "import-statement",
+          "original": "./paths.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/validator.js",
+          "kind": "import-statement",
+          "original": "../../values/validator.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/components/paths.js",
+          "kind": "import-statement",
+          "original": "./paths.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/logVars.js": {
+      "bytes": 976,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/audit_logging.js": {
+      "bytes": 1201,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/index.js",
+          "kind": "import-statement",
+          "original": "../index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/syscall.js",
+          "kind": "import-statement",
+          "original": "./impl/syscall.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/logVars.js",
+          "kind": "import-statement",
+          "original": "./logVars.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/log.js": {
+      "bytes": 167,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/server/audit_logging.js",
+          "kind": "import-statement",
+          "original": "./audit_logging.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/logVars.js",
+          "kind": "import-statement",
+          "original": "./logVars.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/schema.js": {
+      "bytes": 9649,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/values/validator.js",
+          "kind": "import-statement",
+          "original": "../values/validator.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/convex/dist/esm/server/index.js": {
+      "bytes": 997,
+      "imports": [
+        {
+          "path": "node_modules/convex/dist/esm/server/database.js",
+          "kind": "import-statement",
+          "original": "./database.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/registration_impl.js",
+          "kind": "import-statement",
+          "original": "./impl/registration_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/impl/actions_impl.js",
+          "kind": "import-statement",
+          "original": "./impl/actions_impl.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/pagination.js",
+          "kind": "import-statement",
+          "original": "./pagination.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/search_filter_builder.js",
+          "kind": "import-statement",
+          "original": "./search_filter_builder.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/storage.js",
+          "kind": "import-statement",
+          "original": "./storage.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/cron.js",
+          "kind": "import-statement",
+          "original": "./cron.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/router.js",
+          "kind": "import-statement",
+          "original": "./router.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/api.js",
+          "kind": "import-statement",
+          "original": "./api.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/components/index.js",
+          "kind": "import-statement",
+          "original": "./components/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/components/index.js",
+          "kind": "import-statement",
+          "original": "./components/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/components/index.js",
+          "kind": "import-statement",
+          "original": "./components/index.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/log.js",
+          "kind": "import-statement",
+          "original": "./log.js"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/schema.js",
+          "kind": "import-statement",
+          "original": "./schema.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/buffer_utils.js": {
+      "bytes": 2736,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/util/errors.js": {
+      "bytes": 3305,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/util/base64url.js": {
+      "bytes": 490,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "../lib/buffer_utils.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/validate.js": {
+      "bytes": 4678,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "../util/base64url.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "./buffer_utils.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/key.js": {
+      "bytes": 7824,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "../util/base64url.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/content_encryption.js": {
+      "bytes": 4224,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "./buffer_utils.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "./key.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/key_descriptor.js": {
+      "bytes": 167,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/jwe_algorithms.js": {
+      "bytes": 3326,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key_descriptor.js",
+          "kind": "import-statement",
+          "original": "./key_descriptor.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/key_management.js": {
+      "bytes": 10987,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "../util/base64url.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "./key.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_algorithms.js",
+          "kind": "import-statement",
+          "original": "./jwe_algorithms.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "./buffer_utils.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/content_encryption.js",
+          "kind": "import-statement",
+          "original": "./content_encryption.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/deflate.js": {
+      "bytes": 1598,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "./buffer_utils.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/jwe_decrypt.js": {
+      "bytes": 8956,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/content_encryption.js",
+          "kind": "import-statement",
+          "original": "./content_encryption.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key_management.js",
+          "kind": "import-statement",
+          "original": "./key_management.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "./buffer_utils.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "./key.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_algorithms.js",
+          "kind": "import-statement",
+          "original": "./jwe_algorithms.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/deflate.js",
+          "kind": "import-statement",
+          "original": "./deflate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwe/compact/decrypt.js": {
+      "bytes": 217,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_decrypt.js",
+          "kind": "import-statement",
+          "original": "../../lib/jwe_decrypt.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwe/flattened/decrypt.js": {
+      "bytes": 659,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../../lib/validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_decrypt.js",
+          "kind": "import-statement",
+          "original": "../../lib/jwe_decrypt.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwe/general/decrypt.js": {
+      "bytes": 1811,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_decrypt.js",
+          "kind": "import-statement",
+          "original": "../../lib/jwe_decrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../../lib/validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_algorithms.js",
+          "kind": "import-statement",
+          "original": "../../lib/jwe_algorithms.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/jwe_encrypt.js": {
+      "bytes": 5899,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "../util/base64url.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/content_encryption.js",
+          "kind": "import-statement",
+          "original": "./content_encryption.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key_management.js",
+          "kind": "import-statement",
+          "original": "./key_management.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "./buffer_utils.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "./key.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_algorithms.js",
+          "kind": "import-statement",
+          "original": "./jwe_algorithms.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/deflate.js",
+          "kind": "import-statement",
+          "original": "./deflate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwe/general/encrypt.js": {
+      "bytes": 4388,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../../lib/validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/content_encryption.js",
+          "kind": "import-statement",
+          "original": "../../lib/content_encryption.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "../../util/base64url.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_encrypt.js",
+          "kind": "import-statement",
+          "original": "../../lib/jwe_encrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key_management.js",
+          "kind": "import-statement",
+          "original": "../../lib/key_management.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_algorithms.js",
+          "kind": "import-statement",
+          "original": "../../lib/jwe_algorithms.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/jws_algorithms.js": {
+      "bytes": 1746,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key_descriptor.js",
+          "kind": "import-statement",
+          "original": "./key_descriptor.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/jws_verify.js": {
+      "bytes": 5402,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_algorithms.js",
+          "kind": "import-statement",
+          "original": "./jws_algorithms.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "./buffer_utils.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "./key.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jws/compact/verify.js": {
+      "bytes": 243,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_verify.js",
+          "kind": "import-statement",
+          "original": "../../lib/jws_verify.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jws/flattened/verify.js": {
+      "bytes": 538,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../../lib/validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_verify.js",
+          "kind": "import-statement",
+          "original": "../../lib/jws_verify.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jws/general/verify.js": {
+      "bytes": 1967,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_verify.js",
+          "kind": "import-statement",
+          "original": "../../lib/jws_verify.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../../lib/validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/jwt_claims_set.js": {
+      "bytes": 7307,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "./buffer_utils.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwt/verify.js": {
+      "bytes": 534,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_verify.js",
+          "kind": "import-statement",
+          "original": "../lib/jws_verify.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwt_claims_set.js",
+          "kind": "import-statement",
+          "original": "../lib/jwt_claims_set.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwt/decrypt.js": {
+      "bytes": 841,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_decrypt.js",
+          "kind": "import-statement",
+          "original": "../lib/jwe_decrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwt_claims_set.js",
+          "kind": "import-statement",
+          "original": "../lib/jwt_claims_set.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwe/compact/encrypt.js": {
+      "bytes": 978,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../../lib/validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_encrypt.js",
+          "kind": "import-statement",
+          "original": "../../lib/jwe_encrypt.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwe/flattened/encrypt.js": {
+      "bytes": 1369,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../../lib/validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_encrypt.js",
+          "kind": "import-statement",
+          "original": "../../lib/jwe_encrypt.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/jws_sign.js": {
+      "bytes": 2738,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "../util/base64url.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_algorithms.js",
+          "kind": "import-statement",
+          "original": "./jws_algorithms.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "./validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "./buffer_utils.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "./key.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jws/compact/sign.js": {
+      "bytes": 702,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_sign.js",
+          "kind": "import-statement",
+          "original": "../../lib/jws_sign.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../../lib/validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jws/flattened/sign.js": {
+      "bytes": 757,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_sign.js",
+          "kind": "import-statement",
+          "original": "../../lib/jws_sign.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../../lib/validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jws/general/sign.js": {
+      "bytes": 1895,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_sign.js",
+          "kind": "import-statement",
+          "original": "../../lib/jws_sign.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../../lib/validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwt/sign.js": {
+      "bytes": 719,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_sign.js",
+          "kind": "import-statement",
+          "original": "../lib/jws_sign.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwt_claims_set.js",
+          "kind": "import-statement",
+          "original": "../lib/jwt_claims_set.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../lib/validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwt/encrypt.js": {
+      "bytes": 1843,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_encrypt.js",
+          "kind": "import-statement",
+          "original": "../lib/jwe_encrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwt_claims_set.js",
+          "kind": "import-statement",
+          "original": "../lib/jwt_claims_set.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../lib/validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/key_algorithm.js": {
+      "bytes": 517,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_algorithms.js",
+          "kind": "import-statement",
+          "original": "./jws_algorithms.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwe_algorithms.js",
+          "kind": "import-statement",
+          "original": "./jwe_algorithms.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/lib/asn1.js": {
+      "bytes": 5853,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "./key.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "./buffer_utils.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key_algorithm.js",
+          "kind": "import-statement",
+          "original": "./key_algorithm.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/key/export.js": {
+      "bytes": 1120,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/asn1.js",
+          "kind": "import-statement",
+          "original": "../lib/asn1.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "../lib/key.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "../util/base64url.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwk/thumbprint.js": {
+      "bytes": 2682,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "../lib/buffer_utils.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "../util/base64url.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "../lib/key.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../lib/validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/key/export.js",
+          "kind": "import-statement",
+          "original": "../key/export.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwk/embedded.js": {
+      "bytes": 1134,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "../lib/key.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_algorithms.js",
+          "kind": "import-statement",
+          "original": "../lib/jws_algorithms.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../lib/validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwks/local.js": {
+      "bytes": 2779,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "../lib/key.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jws_algorithms.js",
+          "kind": "import-statement",
+          "original": "../lib/jws_algorithms.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../lib/validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwks/remote.js": {
+      "bytes": 4238,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwks/local.js",
+          "kind": "import-statement",
+          "original": "./local.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../lib/validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/jwt/unsecured.js": {
+      "bytes": 1580,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "../util/base64url.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../lib/validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/jwt_claims_set.js",
+          "kind": "import-statement",
+          "original": "../lib/jwt_claims_set.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/key/import.js": {
+      "bytes": 2279,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "../util/base64url.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/asn1.js",
+          "kind": "import-statement",
+          "original": "../lib/asn1.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "../lib/key.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key_algorithm.js",
+          "kind": "import-statement",
+          "original": "../lib/key_algorithm.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../lib/validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/util/decode_protected_header.js": {
+      "bytes": 717,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../lib/validate.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/util/decode_jwt.js": {
+      "bytes": 1053,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "./base64url.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/buffer_utils.js",
+          "kind": "import-statement",
+          "original": "../lib/buffer_utils.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/validate.js",
+          "kind": "import-statement",
+          "original": "../lib/validate.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "./errors.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/key/generate_key_pair.js": {
+      "bytes": 1645,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "../util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "../lib/key.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key_algorithm.js",
+          "kind": "import-statement",
+          "original": "../lib/key_algorithm.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/key/generate_secret.js": {
+      "bytes": 1233,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key_algorithm.js",
+          "kind": "import-statement",
+          "original": "../lib/key_algorithm.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/lib/key.js",
+          "kind": "import-statement",
+          "original": "../lib/key.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/jose/dist/webapi/index.js": {
+      "bytes": 2376,
+      "imports": [
+        {
+          "path": "node_modules/jose/dist/webapi/jwe/compact/decrypt.js",
+          "kind": "import-statement",
+          "original": "./jwe/compact/decrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwe/flattened/decrypt.js",
+          "kind": "import-statement",
+          "original": "./jwe/flattened/decrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwe/general/decrypt.js",
+          "kind": "import-statement",
+          "original": "./jwe/general/decrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwe/general/encrypt.js",
+          "kind": "import-statement",
+          "original": "./jwe/general/encrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jws/compact/verify.js",
+          "kind": "import-statement",
+          "original": "./jws/compact/verify.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jws/flattened/verify.js",
+          "kind": "import-statement",
+          "original": "./jws/flattened/verify.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jws/general/verify.js",
+          "kind": "import-statement",
+          "original": "./jws/general/verify.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwt/verify.js",
+          "kind": "import-statement",
+          "original": "./jwt/verify.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwt/decrypt.js",
+          "kind": "import-statement",
+          "original": "./jwt/decrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwe/compact/encrypt.js",
+          "kind": "import-statement",
+          "original": "./jwe/compact/encrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwe/flattened/encrypt.js",
+          "kind": "import-statement",
+          "original": "./jwe/flattened/encrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jws/compact/sign.js",
+          "kind": "import-statement",
+          "original": "./jws/compact/sign.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jws/flattened/sign.js",
+          "kind": "import-statement",
+          "original": "./jws/flattened/sign.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jws/general/sign.js",
+          "kind": "import-statement",
+          "original": "./jws/general/sign.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwt/sign.js",
+          "kind": "import-statement",
+          "original": "./jwt/sign.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwt/encrypt.js",
+          "kind": "import-statement",
+          "original": "./jwt/encrypt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwk/thumbprint.js",
+          "kind": "import-statement",
+          "original": "./jwk/thumbprint.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwk/embedded.js",
+          "kind": "import-statement",
+          "original": "./jwk/embedded.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwks/local.js",
+          "kind": "import-statement",
+          "original": "./jwks/local.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwks/remote.js",
+          "kind": "import-statement",
+          "original": "./jwks/remote.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/jwt/unsecured.js",
+          "kind": "import-statement",
+          "original": "./jwt/unsecured.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/key/export.js",
+          "kind": "import-statement",
+          "original": "./key/export.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/key/import.js",
+          "kind": "import-statement",
+          "original": "./key/import.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/decode_protected_header.js",
+          "kind": "import-statement",
+          "original": "./util/decode_protected_header.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/decode_jwt.js",
+          "kind": "import-statement",
+          "original": "./util/decode_jwt.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/errors.js",
+          "kind": "import-statement",
+          "original": "./util/errors.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/key/generate_key_pair.js",
+          "kind": "import-statement",
+          "original": "./key/generate_key_pair.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/key/generate_secret.js",
+          "kind": "import-statement",
+          "original": "./key/generate_secret.js"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/util/base64url.js",
+          "kind": "import-statement",
+          "original": "./util/base64url.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/ancestry.ts": {
+      "bytes": 10175,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/codex-settings.ts": {
+      "bytes": 9611,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/fflate/esm/index.mjs": {
+      "bytes": 91765,
+      "imports": [
+        {
+          "path": "module",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/functions.generated.ts": {
+      "bytes": 1147201,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/cli/src/serve/config.ts": {
+      "bytes": 12091,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "../lib"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "../lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/serve/backend.ts": {
+      "bytes": 125298,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/index-node.js",
+          "kind": "import-statement",
+          "original": "convex/browser"
+        },
+        {
+          "path": "node_modules/fflate/esm/index.mjs",
+          "kind": "import-statement",
+          "original": "fflate"
+        },
+        {
+          "path": "packages/cli/src/functions.generated.ts",
+          "kind": "import-statement",
+          "original": "../functions.generated"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "../lib"
+        },
+        {
+          "path": "packages/cli/src/serve/config.ts",
+          "kind": "import-statement",
+          "original": "./config"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/installer-lock.ts": {
+      "bytes": 4189,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/serve/backend.ts",
+          "kind": "import-statement",
+          "original": "./serve/backend"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/uninstall-files.ts": {
+      "bytes": 9524,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/cli/src/installation.ts",
+          "kind": "import-statement",
+          "original": "./installation"
+        },
+        {
+          "path": "packages/cli/src/installer-lock.ts",
+          "kind": "import-statement",
+          "original": "./installer-lock"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/serve/backend.ts",
+          "kind": "import-statement",
+          "original": "./serve/backend"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/installation.ts": {
+      "bytes": 6450,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/addons.generated.ts",
+          "kind": "import-statement",
+          "original": "./addons.generated"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/uninstall-files.ts",
+          "kind": "import-statement",
+          "original": "./uninstall-files"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/preserve.ts": {
+      "bytes": 10122,
+      "imports": [
+        {
+          "path": "node:async_hooks",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/shell-env.ts": {
+      "bytes": 6064,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/lib.ts": {
+      "bytes": 86857,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/browser/index-node.js",
+          "kind": "import-statement",
+          "original": "convex/browser"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/server/index.js",
+          "kind": "import-statement",
+          "original": "convex/server"
+        },
+        {
+          "path": "node_modules/convex/dist/esm/values/index.js",
+          "kind": "import-statement",
+          "original": "convex/values"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/index.js",
+          "kind": "import-statement",
+          "original": "jose"
+        },
+        {
+          "path": "packages/cli/src/ancestry.ts",
+          "kind": "import-statement",
+          "original": "./ancestry"
+        },
+        {
+          "path": "packages/cli/src/codex-settings.ts",
+          "kind": "import-statement",
+          "original": "./codex-settings"
+        },
+        {
+          "path": "packages/cli/src/installation.ts",
+          "kind": "import-statement",
+          "original": "./installation"
+        },
+        {
+          "path": "packages/cli/src/preserve.ts",
+          "kind": "import-statement",
+          "original": "./preserve"
+        },
+        {
+          "path": "packages/cli/src/shell-env.ts",
+          "kind": "import-statement",
+          "original": "./shell-env"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/args.ts": {
+      "bytes": 7263,
+      "imports": [
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/addon-runtime.ts": {
+      "bytes": 5083,
+      "imports": [
+        {
+          "path": "packages/cli/src/addons.generated.ts",
+          "kind": "import-statement",
+          "original": "./addons.generated"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/delivery-recovery.ts": {
+      "bytes": 19828,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/login.ts": {
+      "bytes": 11878,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/index.js",
+          "kind": "import-statement",
+          "original": "jose"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/serve/backend.ts",
+          "kind": "import-statement",
+          "original": "./serve/backend"
+        },
+        {
+          "path": "packages/cli/src/serve/config.ts",
+          "kind": "import-statement",
+          "original": "./serve/config"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/profiles.ts": {
+      "bytes": 4886,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/legacy-lock.ts": {
+      "bytes": 6021,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/serve/config.ts",
+          "kind": "import-statement",
+          "original": "./serve/config"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/usage.ts": {
+      "bytes": 49156,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/legacy-lock.ts",
+          "kind": "import-statement",
+          "original": "./legacy-lock"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/publish.ts": {
+      "bytes": 26174,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/legacy-lock.ts",
+          "kind": "import-statement",
+          "original": "./legacy-lock"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/profiles.ts",
+          "kind": "import-statement",
+          "original": "./profiles"
+        },
+        {
+          "path": "packages/cli/src/serve/backend.ts",
+          "kind": "import-statement",
+          "original": "./serve/backend"
+        },
+        {
+          "path": "packages/cli/src/serve/config.ts",
+          "kind": "import-statement",
+          "original": "./serve/config"
+        },
+        {
+          "path": "packages/cli/src/usage.ts",
+          "kind": "import-statement",
+          "original": "./usage"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/serve/startup.ts": {
+      "bytes": 7706,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:timers/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "../lib"
+        },
+        {
+          "path": "packages/cli/src/serve/config.ts",
+          "kind": "import-statement",
+          "original": "./config"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/upgrade.ts": {
+      "bytes": 21234,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/serve/backend.ts",
+          "kind": "import-statement",
+          "original": "./serve/backend"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/service.ts": {
+      "bytes": 46819,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/serve/backend.ts",
+          "kind": "import-statement",
+          "original": "./serve/backend"
+        },
+        {
+          "path": "packages/cli/src/serve/startup.ts",
+          "kind": "import-statement",
+          "original": "./serve/startup"
+        },
+        {
+          "path": "packages/cli/src/upgrade.ts",
+          "kind": "import-statement",
+          "original": "./upgrade"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/setup.ts": {
+      "bytes": 99939,
+      "imports": [
+        {
+          "path": "node:async_hooks",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/addons.generated.ts",
+          "kind": "import-statement",
+          "original": "./addons.generated"
+        },
+        {
+          "path": "packages/cli/src/codex-settings.ts",
+          "kind": "import-statement",
+          "original": "./codex-settings"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/preserve.ts",
+          "kind": "import-statement",
+          "original": "./preserve"
+        },
+        {
+          "path": "packages/cli/src/serve/backend.ts",
+          "kind": "import-statement",
+          "original": "./serve/backend"
+        },
+        {
+          "path": "packages/cli/src/codex-settings.ts",
+          "kind": "import-statement",
+          "original": "./codex-settings"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/t3.ts": {
+      "bytes": 15842,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/wake.ts": {
+      "bytes": 47683,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/connector.ts": {
+      "bytes": 183038,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:http",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/addon-runtime.ts",
+          "kind": "import-statement",
+          "original": "./addon-runtime"
+        },
+        {
+          "path": "packages/cli/src/delivery-recovery.ts",
+          "kind": "import-statement",
+          "original": "./delivery-recovery"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/login.ts",
+          "kind": "import-statement",
+          "original": "./login"
+        },
+        {
+          "path": "packages/cli/src/profiles.ts",
+          "kind": "import-statement",
+          "original": "./profiles"
+        },
+        {
+          "path": "packages/cli/src/publish.ts",
+          "kind": "import-statement",
+          "original": "./publish"
+        },
+        {
+          "path": "packages/cli/src/serve/backend.ts",
+          "kind": "import-statement",
+          "original": "./serve/backend"
+        },
+        {
+          "path": "packages/cli/src/service.ts",
+          "kind": "import-statement",
+          "original": "./service"
+        },
+        {
+          "path": "packages/cli/src/setup.ts",
+          "kind": "import-statement",
+          "original": "./setup"
+        },
+        {
+          "path": "packages/cli/src/t3.ts",
+          "kind": "import-statement",
+          "original": "./t3"
+        },
+        {
+          "path": "packages/cli/src/upgrade.ts",
+          "kind": "import-statement",
+          "original": "./upgrade"
+        },
+        {
+          "path": "packages/cli/src/usage.ts",
+          "kind": "import-statement",
+          "original": "./usage"
+        },
+        {
+          "path": "packages/cli/src/wake.ts",
+          "kind": "import-statement",
+          "original": "./wake"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/delete.ts": {
+      "bytes": 2176,
+      "imports": [
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/files.ts": {
+      "bytes": 4100,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/qrcode-generator/dist/qrcode.mjs": {
+      "bytes": 51907,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/cli/src/flow.ts": {
+      "bytes": 12288,
+      "imports": [
+        {
+          "path": "node_modules/qrcode-generator/dist/qrcode.mjs",
+          "kind": "import-statement",
+          "original": "qrcode-generator"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/hooks.ts": {
+      "bytes": 6809,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/addon-runtime.ts",
+          "kind": "import-statement",
+          "original": "./addon-runtime"
+        },
+        {
+          "path": "packages/cli/src/addons.generated.ts",
+          "kind": "import-statement",
+          "original": "./addons.generated"
+        },
+        {
+          "path": "packages/cli/src/connector.ts",
+          "kind": "import-statement",
+          "original": "./connector"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/profiles.ts",
+          "kind": "import-statement",
+          "original": "./profiles"
+        },
+        {
+          "path": "packages/cli/src/setup.ts",
+          "kind": "import-statement",
+          "original": "./setup"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/node.ts": {
+      "bytes": 3585,
+      "imports": [
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/output.ts": {
+      "bytes": 1076,
+      "imports": [
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/serve/firstrun.ts": {
+      "bytes": 12932,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/index.js",
+          "kind": "import-statement",
+          "original": "jose"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "../lib"
+        },
+        {
+          "path": "packages/cli/src/login.ts",
+          "kind": "import-statement",
+          "original": "../login"
+        },
+        {
+          "path": "packages/cli/src/service.ts",
+          "kind": "import-statement",
+          "original": "../service"
+        },
+        {
+          "path": "packages/cli/src/serve/backend.ts",
+          "kind": "import-statement",
+          "original": "./backend"
+        },
+        {
+          "path": "packages/cli/src/serve/config.ts",
+          "kind": "import-statement",
+          "original": "./config"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/content/src/files.ts": {
+      "bytes": 23588,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/content/src/limits.ts": {
+      "bytes": 2771,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/content/src/log.ts": {
+      "bytes": 3661,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/content/src/page.ts": {
+      "bytes": 13250,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/content/src/records.ts": {
+      "bytes": 8074,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/content/src/runtime.generated.ts": {
+      "bytes": 10629,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/content/src/index.ts": {
+      "bytes": 44976,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/index.js",
+          "kind": "import-statement",
+          "original": "jose"
+        },
+        {
+          "path": "packages/content/src/files.ts",
+          "kind": "import-statement",
+          "original": "./files"
+        },
+        {
+          "path": "packages/content/src/limits.ts",
+          "kind": "import-statement",
+          "original": "./limits"
+        },
+        {
+          "path": "packages/content/src/log.ts",
+          "kind": "import-statement",
+          "original": "./log"
+        },
+        {
+          "path": "packages/content/src/page.ts",
+          "kind": "import-statement",
+          "original": "./page"
+        },
+        {
+          "path": "packages/content/src/records.ts",
+          "kind": "import-statement",
+          "original": "./records"
+        },
+        {
+          "path": "packages/content/src/runtime.generated.ts",
+          "kind": "import-statement",
+          "original": "./runtime.generated"
+        },
+        {
+          "path": "packages/content/src/files.ts",
+          "kind": "import-statement",
+          "original": "./files"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/serve/export.ts": {
+      "bytes": 10248,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "../lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/bn.js/lib/bn.js": {
+      "bytes": 88069,
+      "imports": [
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/inherits/inherits_browser.js": {
+      "bytes": 753,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/inherits/inherits.js": {
+      "bytes": 250,
+      "imports": [
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/inherits/inherits_browser.js",
+          "kind": "require-call",
+          "original": "./inherits_browser.js"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/safer-buffer/safer.js": {
+      "bytes": 2110,
+      "imports": [
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/base/reporter.js": {
+      "bytes": 2682,
+      "imports": [
+        {
+          "path": "node_modules/inherits/inherits.js",
+          "kind": "require-call",
+          "original": "inherits"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/base/buffer.js": {
+      "bytes": 4141,
+      "imports": [
+        {
+          "path": "node_modules/inherits/inherits.js",
+          "kind": "require-call",
+          "original": "inherits"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/reporter.js",
+          "kind": "require-call",
+          "original": "../base/reporter"
+        },
+        {
+          "path": "node_modules/safer-buffer/safer.js",
+          "kind": "require-call",
+          "original": "safer-buffer"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/minimalistic-assert/index.js": {
+      "bytes": 252,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/base/node.js": {
+      "bytes": 16732,
+      "imports": [
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/reporter.js",
+          "kind": "require-call",
+          "original": "../base/reporter"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/buffer.js",
+          "kind": "require-call",
+          "original": "../base/buffer"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/buffer.js",
+          "kind": "require-call",
+          "original": "../base/buffer"
+        },
+        {
+          "path": "node_modules/minimalistic-assert/index.js",
+          "kind": "require-call",
+          "original": "minimalistic-assert"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/constants/der.js": {
+      "bytes": 1012,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/encoders/der.js": {
+      "bytes": 7878,
+      "imports": [
+        {
+          "path": "node_modules/inherits/inherits.js",
+          "kind": "require-call",
+          "original": "inherits"
+        },
+        {
+          "path": "node_modules/safer-buffer/safer.js",
+          "kind": "require-call",
+          "original": "safer-buffer"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/node.js",
+          "kind": "require-call",
+          "original": "../base/node"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/constants/der.js",
+          "kind": "require-call",
+          "original": "../constants/der"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/encoders/pem.js": {
+      "bytes": 614,
+      "imports": [
+        {
+          "path": "node_modules/inherits/inherits.js",
+          "kind": "require-call",
+          "original": "inherits"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/encoders/der.js",
+          "kind": "require-call",
+          "original": "./der"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/encoders/index.js": {
+      "bytes": 108,
+      "imports": [
+        {
+          "path": "node_modules/asn1.js/lib/asn1/encoders/der.js",
+          "kind": "require-call",
+          "original": "./der"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/encoders/pem.js",
+          "kind": "require-call",
+          "original": "./pem"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/decoders/der.js": {
+      "bytes": 8062,
+      "imports": [
+        {
+          "path": "node_modules/inherits/inherits.js",
+          "kind": "require-call",
+          "original": "inherits"
+        },
+        {
+          "path": "node_modules/bn.js/lib/bn.js",
+          "kind": "require-call",
+          "original": "bn.js"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/buffer.js",
+          "kind": "require-call",
+          "original": "../base/buffer"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/node.js",
+          "kind": "require-call",
+          "original": "../base/node"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/constants/der.js",
+          "kind": "require-call",
+          "original": "../constants/der"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/decoders/pem.js": {
+      "bytes": 1219,
+      "imports": [
+        {
+          "path": "node_modules/inherits/inherits.js",
+          "kind": "require-call",
+          "original": "inherits"
+        },
+        {
+          "path": "node_modules/safer-buffer/safer.js",
+          "kind": "require-call",
+          "original": "safer-buffer"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/decoders/der.js",
+          "kind": "require-call",
+          "original": "./der"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/decoders/index.js": {
+      "bytes": 108,
+      "imports": [
+        {
+          "path": "node_modules/asn1.js/lib/asn1/decoders/der.js",
+          "kind": "require-call",
+          "original": "./der"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/decoders/pem.js",
+          "kind": "require-call",
+          "original": "./pem"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/api.js": {
+      "bytes": 1431,
+      "imports": [
+        {
+          "path": "node_modules/asn1.js/lib/asn1/encoders/index.js",
+          "kind": "require-call",
+          "original": "./encoders"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/decoders/index.js",
+          "kind": "require-call",
+          "original": "./decoders"
+        },
+        {
+          "path": "node_modules/inherits/inherits.js",
+          "kind": "require-call",
+          "original": "inherits"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/base/index.js": {
+      "bytes": 229,
+      "imports": [
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/reporter.js",
+          "kind": "require-call",
+          "original": "./reporter"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/buffer.js",
+          "kind": "require-call",
+          "original": "./buffer"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/buffer.js",
+          "kind": "require-call",
+          "original": "./buffer"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/node.js",
+          "kind": "require-call",
+          "original": "./node"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1/constants/index.js": {
+      "bytes": 368,
+      "imports": [
+        {
+          "path": "node_modules/asn1.js/lib/asn1/constants/der.js",
+          "kind": "require-call",
+          "original": "./der"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/asn1.js/lib/asn1.js": {
+      "bytes": 285,
+      "imports": [
+        {
+          "path": "node_modules/bn.js/lib/bn.js",
+          "kind": "require-call",
+          "original": "bn.js"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/api.js",
+          "kind": "require-call",
+          "original": "./asn1/api"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/base/index.js",
+          "kind": "require-call",
+          "original": "./asn1/base"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/constants/index.js",
+          "kind": "require-call",
+          "original": "./asn1/constants"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/decoders/index.js",
+          "kind": "require-call",
+          "original": "./asn1/decoders"
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1/encoders/index.js",
+          "kind": "require-call",
+          "original": "./asn1/encoders"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/safe-buffer/index.js": {
+      "bytes": 1670,
+      "imports": [
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/jws/lib/data-stream.js": {
+      "bytes": 1242,
+      "imports": [
+        {
+          "path": "node_modules/safe-buffer/index.js",
+          "kind": "require-call",
+          "original": "safe-buffer"
+        },
+        {
+          "path": "stream",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/ecdsa-sig-formatter/src/param-bytes-for-alg.js": {
+      "bytes": 456,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/ecdsa-sig-formatter/src/ecdsa-sig-formatter.js": {
+      "bytes": 5009,
+      "imports": [
+        {
+          "path": "node_modules/safe-buffer/index.js",
+          "kind": "require-call",
+          "original": "safe-buffer"
+        },
+        {
+          "path": "node_modules/ecdsa-sig-formatter/src/param-bytes-for-alg.js",
+          "kind": "require-call",
+          "original": "./param-bytes-for-alg"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/buffer-equal-constant-time/index.js": {
+      "bytes": 1045,
+      "imports": [
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/jwa/index.js": {
+      "bytes": 6800,
+      "imports": [
+        {
+          "path": "node_modules/safe-buffer/index.js",
+          "kind": "require-call",
+          "original": "safe-buffer"
+        },
+        {
+          "path": "crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/ecdsa-sig-formatter/src/ecdsa-sig-formatter.js",
+          "kind": "require-call",
+          "original": "ecdsa-sig-formatter"
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/buffer-equal-constant-time/index.js",
+          "kind": "require-call",
+          "original": "buffer-equal-constant-time"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/jws/lib/tostring.js": {
+      "bytes": 262,
+      "imports": [
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/jws/lib/sign-stream.js": {
+      "bytes": 2416,
+      "imports": [
+        {
+          "path": "node_modules/safe-buffer/index.js",
+          "kind": "require-call",
+          "original": "safe-buffer"
+        },
+        {
+          "path": "node_modules/jws/lib/data-stream.js",
+          "kind": "require-call",
+          "original": "./data-stream"
+        },
+        {
+          "path": "node_modules/jwa/index.js",
+          "kind": "require-call",
+          "original": "jwa"
+        },
+        {
+          "path": "stream",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/jws/lib/tostring.js",
+          "kind": "require-call",
+          "original": "./tostring"
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/jws/lib/verify-stream.js": {
+      "bytes": 3479,
+      "imports": [
+        {
+          "path": "node_modules/safe-buffer/index.js",
+          "kind": "require-call",
+          "original": "safe-buffer"
+        },
+        {
+          "path": "node_modules/jws/lib/data-stream.js",
+          "kind": "require-call",
+          "original": "./data-stream"
+        },
+        {
+          "path": "node_modules/jwa/index.js",
+          "kind": "require-call",
+          "original": "jwa"
+        },
+        {
+          "path": "stream",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/jws/lib/tostring.js",
+          "kind": "require-call",
+          "original": "./tostring"
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/jws/index.js": {
+      "bytes": 609,
+      "imports": [
+        {
+          "path": "node_modules/jws/lib/sign-stream.js",
+          "kind": "require-call",
+          "original": "./lib/sign-stream"
+        },
+        {
+          "path": "node_modules/jws/lib/verify-stream.js",
+          "kind": "require-call",
+          "original": "./lib/verify-stream"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/web-push/src/web-push-constants.js": {
+      "bytes": 294,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/web-push/src/urlsafe-base64-helper.js": {
+      "bytes": 188,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/web-push/src/vapid-helper.js": {
+      "bytes": 7732,
+      "imports": [
+        {
+          "path": "crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/asn1.js/lib/asn1.js",
+          "kind": "require-call",
+          "original": "asn1.js"
+        },
+        {
+          "path": "node_modules/jws/index.js",
+          "kind": "require-call",
+          "original": "jws"
+        },
+        {
+          "path": "url",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/web-push/src/web-push-constants.js",
+          "kind": "require-call",
+          "original": "./web-push-constants.js"
+        },
+        {
+          "path": "node_modules/web-push/src/urlsafe-base64-helper.js",
+          "kind": "require-call",
+          "original": "./urlsafe-base64-helper"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/http_ece/ece.js": {
+      "bytes": 15871,
+      "imports": [
+        {
+          "path": "crypto",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/web-push/src/encryption-helper.js": {
+      "bytes": 1609,
+      "imports": [
+        {
+          "path": "crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/http_ece/ece.js",
+          "kind": "require-call",
+          "original": "http_ece"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/web-push/src/web-push-error.js": {
+      "bytes": 388,
+      "imports": [
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/ms/index.js": {
+      "bytes": 3024,
+      "imports": [],
+      "format": "cjs"
+    },
+    "node_modules/debug/src/common.js": {
+      "bytes": 6915,
+      "imports": [
+        {
+          "path": "node_modules/ms/index.js",
+          "kind": "require-call",
+          "original": "ms"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/debug/src/browser.js": {
+      "bytes": 6103,
+      "imports": [
+        {
+          "path": "node_modules/debug/src/common.js",
+          "kind": "require-call",
+          "original": "./common"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/debug/src/node.js": {
+      "bytes": 4728,
+      "imports": [
+        {
+          "path": "tty",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "supports-color",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/debug/src/common.js",
+          "kind": "require-call",
+          "original": "./common"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/debug/src/index.js": {
+      "bytes": 314,
+      "imports": [
+        {
+          "path": "node_modules/debug/src/browser.js",
+          "kind": "require-call",
+          "original": "./browser.js"
+        },
+        {
+          "path": "node_modules/debug/src/node.js",
+          "kind": "require-call",
+          "original": "./node.js"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/agent-base/dist/helpers.js": {
+      "bytes": 2314,
+      "imports": [
+        {
+          "path": "http",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "https",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/agent-base/dist/index.js": {
+      "bytes": 7324,
+      "imports": [
+        {
+          "path": "net",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "http",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "https",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/agent-base/dist/helpers.js",
+          "kind": "require-call",
+          "original": "./helpers"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/https-proxy-agent/dist/parse-proxy-response.js": {
+      "bytes": 3908,
+      "imports": [
+        {
+          "path": "node_modules/debug/src/index.js",
+          "kind": "require-call",
+          "original": "debug"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/https-proxy-agent/dist/index.js": {
+      "bytes": 7451,
+      "imports": [
+        {
+          "path": "net",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "tls",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "assert",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/debug/src/index.js",
+          "kind": "require-call",
+          "original": "debug"
+        },
+        {
+          "path": "node_modules/agent-base/dist/index.js",
+          "kind": "require-call",
+          "original": "agent-base"
+        },
+        {
+          "path": "url",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/https-proxy-agent/dist/parse-proxy-response.js",
+          "kind": "require-call",
+          "original": "./parse-proxy-response"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/web-push/src/web-push-lib.js": {
+      "bytes": 13735,
+      "imports": [
+        {
+          "path": "url",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "https",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node_modules/web-push/src/web-push-error.js",
+          "kind": "require-call",
+          "original": "./web-push-error.js"
+        },
+        {
+          "path": "node_modules/web-push/src/vapid-helper.js",
+          "kind": "require-call",
+          "original": "./vapid-helper.js"
+        },
+        {
+          "path": "node_modules/web-push/src/encryption-helper.js",
+          "kind": "require-call",
+          "original": "./encryption-helper.js"
+        },
+        {
+          "path": "node_modules/web-push/src/web-push-constants.js",
+          "kind": "require-call",
+          "original": "./web-push-constants.js"
+        },
+        {
+          "path": "node_modules/web-push/src/urlsafe-base64-helper.js",
+          "kind": "require-call",
+          "original": "./urlsafe-base64-helper"
+        },
+        {
+          "path": "node_modules/https-proxy-agent/dist/index.js",
+          "kind": "require-call",
+          "original": "https-proxy-agent"
+        }
+      ],
+      "format": "cjs"
+    },
+    "node_modules/web-push/src/index.js": {
+      "bytes": 785,
+      "imports": [
+        {
+          "path": "node_modules/web-push/src/vapid-helper.js",
+          "kind": "require-call",
+          "original": "./vapid-helper.js"
+        },
+        {
+          "path": "node_modules/web-push/src/encryption-helper.js",
+          "kind": "require-call",
+          "original": "./encryption-helper.js"
+        },
+        {
+          "path": "node_modules/web-push/src/web-push-lib.js",
+          "kind": "require-call",
+          "original": "./web-push-lib.js"
+        },
+        {
+          "path": "node_modules/web-push/src/web-push-error.js",
+          "kind": "require-call",
+          "original": "./web-push-error.js"
+        },
+        {
+          "path": "node_modules/web-push/src/web-push-constants.js",
+          "kind": "require-call",
+          "original": "./web-push-constants.js"
+        }
+      ],
+      "format": "cjs"
+    },
+    "packages/cli/src/serve/push.ts": {
+      "bytes": 9098,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "node_modules/jose/dist/webapi/index.js",
+          "kind": "import-statement",
+          "original": "jose"
+        },
+        {
+          "path": "node_modules/web-push/src/index.js",
+          "kind": "import-statement",
+          "original": "web-push"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "../lib"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/site.generated.ts": {
+      "bytes": 1853367,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/cli/src/serve/site.ts": {
+      "bytes": 7956,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/site.generated.ts",
+          "kind": "import-statement",
+          "original": "../site.generated"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/serve/tailnet.ts": {
+      "bytes": 3196,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/serve/door.ts": {
+      "bytes": 82142,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:http",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/content/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/content"
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "../lib"
+        },
+        {
+          "path": "packages/cli/src/serve/config.ts",
+          "kind": "import-statement",
+          "original": "./config"
+        },
+        {
+          "path": "packages/cli/src/serve/export.ts",
+          "kind": "import-statement",
+          "original": "./export"
+        },
+        {
+          "path": "packages/cli/src/serve/push.ts",
+          "kind": "import-statement",
+          "original": "./push"
+        },
+        {
+          "path": "packages/cli/src/serve/site.ts",
+          "kind": "import-statement",
+          "original": "./site"
+        },
+        {
+          "path": "packages/cli/src/serve/tailnet.ts",
+          "kind": "import-statement",
+          "original": "./tailnet"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/serve/network.ts": {
+      "bytes": 9586,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/cli/src/serve/tailnet.ts",
+          "kind": "import-statement",
+          "original": "./tailnet"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/serve/index.ts": {
+      "bytes": 31352,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/connector.ts",
+          "kind": "import-statement",
+          "original": "../connector"
+        },
+        {
+          "path": "packages/cli/src/delivery-recovery.ts",
+          "kind": "import-statement",
+          "original": "../delivery-recovery"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "../lib"
+        },
+        {
+          "path": "packages/cli/src/publish.ts",
+          "kind": "import-statement",
+          "original": "../publish"
+        },
+        {
+          "path": "packages/cli/src/service.ts",
+          "kind": "import-statement",
+          "original": "../service"
+        },
+        {
+          "path": "packages/cli/src/usage.ts",
+          "kind": "import-statement",
+          "original": "../usage"
+        },
+        {
+          "path": "packages/cli/src/serve/backend.ts",
+          "kind": "import-statement",
+          "original": "./backend"
+        },
+        {
+          "path": "packages/cli/src/serve/config.ts",
+          "kind": "import-statement",
+          "original": "./config"
+        },
+        {
+          "path": "packages/cli/src/serve/door.ts",
+          "kind": "import-statement",
+          "original": "./door"
+        },
+        {
+          "path": "packages/cli/src/serve/network.ts",
+          "kind": "import-statement",
+          "original": "./network"
+        },
+        {
+          "path": "packages/cli/src/serve/startup.ts",
+          "kind": "import-statement",
+          "original": "./startup"
+        },
+        {
+          "path": "packages/cli/src/serve/tailnet.ts",
+          "kind": "import-statement",
+          "original": "./tailnet"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/shell-profile.ts": {
+      "bytes": 1661,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/tour.generated.ts": {
+      "bytes": 206476,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/cli/src/tour.ts": {
+      "bytes": 2747,
+      "imports": [
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/tour.generated.ts",
+          "kind": "import-statement",
+          "original": "./tour.generated"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/wait.ts": {
+      "bytes": 19169,
+      "imports": [
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/args.ts",
+          "kind": "import-statement",
+          "original": "./args"
+        },
+        {
+          "path": "packages/cli/src/connector.ts",
+          "kind": "import-statement",
+          "original": "./connector"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/output.ts",
+          "kind": "import-statement",
+          "original": "./output"
+        },
+        {
+          "path": "packages/cli/src/usage.ts",
+          "kind": "import-statement",
+          "original": "./usage"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/cli/src/main.ts": {
+      "bytes": 169666,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:readline/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@it/protocol"
+        },
+        {
+          "path": "packages/cli/src/addons.generated.ts",
+          "kind": "import-statement",
+          "original": "./addons.generated"
+        },
+        {
+          "path": "packages/cli/src/args.ts",
+          "kind": "import-statement",
+          "original": "./args"
+        },
+        {
+          "path": "packages/cli/src/connector.ts",
+          "kind": "import-statement",
+          "original": "./connector"
+        },
+        {
+          "path": "packages/cli/src/delete.ts",
+          "kind": "import-statement",
+          "original": "./delete"
+        },
+        {
+          "path": "packages/cli/src/files.ts",
+          "kind": "import-statement",
+          "original": "./files"
+        },
+        {
+          "path": "packages/cli/src/flow.ts",
+          "kind": "import-statement",
+          "original": "./flow"
+        },
+        {
+          "path": "packages/cli/src/hooks.ts",
+          "kind": "import-statement",
+          "original": "./hooks"
+        },
+        {
+          "path": "packages/cli/src/installation.ts",
+          "kind": "import-statement",
+          "original": "./installation"
+        },
+        {
+          "path": "packages/cli/src/installer-lock.ts",
+          "kind": "import-statement",
+          "original": "./installer-lock"
+        },
+        {
+          "path": "packages/cli/src/lib.ts",
+          "kind": "import-statement",
+          "original": "./lib"
+        },
+        {
+          "path": "packages/cli/src/login.ts",
+          "kind": "import-statement",
+          "original": "./login"
+        },
+        {
+          "path": "packages/cli/src/node.ts",
+          "kind": "import-statement",
+          "original": "./node"
+        },
+        {
+          "path": "packages/cli/src/output.ts",
+          "kind": "import-statement",
+          "original": "./output"
+        },
+        {
+          "path": "packages/cli/src/publish.ts",
+          "kind": "import-statement",
+          "original": "./publish"
+        },
+        {
+          "path": "packages/cli/src/serve/backend.ts",
+          "kind": "import-statement",
+          "original": "./serve/backend"
+        },
+        {
+          "path": "packages/cli/src/serve/config.ts",
+          "kind": "import-statement",
+          "original": "./serve/config"
+        },
+        {
+          "path": "packages/cli/src/serve/firstrun.ts",
+          "kind": "import-statement",
+          "original": "./serve/firstrun"
+        },
+        {
+          "path": "packages/cli/src/serve/index.ts",
+          "kind": "import-statement",
+          "original": "./serve/index"
+        },
+        {
+          "path": "packages/cli/src/serve/network.ts",
+          "kind": "import-statement",
+          "original": "./serve/network"
+        },
+        {
+          "path": "packages/cli/src/serve/tailnet.ts",
+          "kind": "import-statement",
+          "original": "./serve/tailnet"
+        },
+        {
+          "path": "packages/cli/src/service.ts",
+          "kind": "import-statement",
+          "original": "./service"
+        },
+        {
+          "path": "packages/cli/src/setup.ts",
+          "kind": "import-statement",
+          "original": "./setup"
+        },
+        {
+          "path": "packages/cli/src/shell-env.ts",
+          "kind": "import-statement",
+          "original": "./shell-env"
+        },
+        {
+          "path": "packages/cli/src/shell-profile.ts",
+          "kind": "import-statement",
+          "original": "./shell-profile"
+        },
+        {
+          "path": "packages/cli/src/tour.ts",
+          "kind": "import-statement",
+          "original": "./tour"
+        },
+        {
+          "path": "packages/cli/src/uninstall-files.ts",
+          "kind": "import-statement",
+          "original": "./uninstall-files"
+        },
+        {
+          "path": "packages/cli/src/upgrade.ts",
+          "kind": "import-statement",
+          "original": "./upgrade"
+        },
+        {
+          "path": "packages/cli/src/usage.ts",
+          "kind": "import-statement",
+          "original": "./usage"
+        },
+        {
+          "path": "packages/cli/src/wait.ts",
+          "kind": "import-statement",
+          "original": "./wait"
+        }
+      ],
+      "format": "esm"
+    }
+  },
+  "outputs": {
+    "packages/cli/dist/it.mjs": {
+      "imports": [
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "stream",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "buffer",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "stream",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "stream",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "url",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "tty",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "util",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "supports-color",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "http",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "https",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "net",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "http",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "https",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "net",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "tls",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "assert",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "url",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "url",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "https",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:readline/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "module",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "module",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:async_hooks",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:http",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:timers/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:async_hooks",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:http",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:net",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "exports": [
+        "AFTER_SETUP"
+      ],
+      "entryPoint": "packages/cli/src/main.ts",
+      "inputs": {
+        "node_modules/bn.js/lib/bn.js": {
+          "bytesInOutput": 91004
+        },
+        "node_modules/inherits/inherits_browser.js": {
+          "bytesInOutput": 894
+        },
+        "node_modules/inherits/inherits.js": {
+          "bytesInOutput": 327
+        },
+        "node_modules/safer-buffer/safer.js": {
+          "bytesInOutput": 2313
+        },
+        "node_modules/asn1.js/lib/asn1/base/reporter.js": {
+          "bytesInOutput": 3113
+        },
+        "node_modules/asn1.js/lib/asn1/base/buffer.js": {
+          "bytesInOutput": 4498
+        },
+        "node_modules/minimalistic-assert/index.js": {
+          "bytesInOutput": 404
+        },
+        "node_modules/asn1.js/lib/asn1/base/node.js": {
+          "bytesInOutput": 17821
+        },
+        "node_modules/asn1.js/lib/asn1/constants/der.js": {
+          "bytesInOutput": 1178
+        },
+        "node_modules/asn1.js/lib/asn1/encoders/der.js": {
+          "bytesInOutput": 8268
+        },
+        "node_modules/asn1.js/lib/asn1/encoders/pem.js": {
+          "bytesInOutput": 785
+        },
+        "node_modules/asn1.js/lib/asn1/encoders/index.js": {
+          "bytesInOutput": 222
+        },
+        "node_modules/asn1.js/lib/asn1/decoders/der.js": {
+          "bytesInOutput": 8758
+        },
+        "node_modules/asn1.js/lib/asn1/decoders/pem.js": {
+          "bytesInOutput": 1438
+        },
+        "node_modules/asn1.js/lib/asn1/decoders/index.js": {
+          "bytesInOutput": 223
+        },
+        "node_modules/asn1.js/lib/asn1/api.js": {
+          "bytesInOutput": 1622
+        },
+        "node_modules/asn1.js/lib/asn1/base/index.js": {
+          "bytesInOutput": 336
+        },
+        "node_modules/asn1.js/lib/asn1/constants/index.js": {
+          "bytesInOutput": 461
+        },
+        "node_modules/asn1.js/lib/asn1.js": {
+          "bytesInOutput": 357
+        },
+        "node_modules/safe-buffer/index.js": {
+          "bytesInOutput": 1742
+        },
+        "node_modules/jws/lib/data-stream.js": {
+          "bytesInOutput": 1399
+        },
+        "node_modules/ecdsa-sig-formatter/src/param-bytes-for-alg.js": {
+          "bytesInOutput": 670
+        },
+        "node_modules/ecdsa-sig-formatter/src/ecdsa-sig-formatter.js": {
+          "bytesInOutput": 5452
+        },
+        "node_modules/buffer-equal-constant-time/index.js": {
+          "bytesInOutput": 1010
+        },
+        "node_modules/jwa/index.js": {
+          "bytesInOutput": 7674
+        },
+        "node_modules/jws/lib/tostring.js": {
+          "bytesInOutput": 379
+        },
+        "node_modules/jws/lib/sign-stream.js": {
+          "bytesInOutput": 2744
+        },
+        "node_modules/jws/lib/verify-stream.js": {
+          "bytesInOutput": 3982
+        },
+        "node_modules/jws/index.js": {
+          "bytesInOutput": 778
+        },
+        "node_modules/web-push/src/web-push-constants.js": {
+          "bytesInOutput": 465
+        },
+        "node_modules/web-push/src/urlsafe-base64-helper.js": {
+          "bytesInOutput": 279
+        },
+        "node_modules/web-push/src/vapid-helper.js": {
+          "bytesInOutput": 6609
+        },
+        "node_modules/http_ece/ece.js": {
+          "bytesInOutput": 15086
+        },
+        "node_modules/web-push/src/encryption-helper.js": {
+          "bytesInOutput": 1841
+        },
+        "node_modules/web-push/src/web-push-error.js": {
+          "bytesInOutput": 553
+        },
+        "node_modules/ms/index.js": {
+          "bytesInOutput": 2883
+        },
+        "node_modules/debug/src/common.js": {
+          "bytesInOutput": 5929
+        },
+        "node_modules/debug/src/browser.js": {
+          "bytesInOutput": 4713
+        },
+        "node_modules/debug/src/node.js": {
+          "bytesInOutput": 4338
+        },
+        "node_modules/debug/src/index.js": {
+          "bytesInOutput": 314
+        },
+        "node_modules/agent-base/dist/helpers.js": {
+          "bytesInOutput": 2482
+        },
+        "node_modules/agent-base/dist/index.js": {
+          "bytesInOutput": 5766
+        },
+        "node_modules/https-proxy-agent/dist/parse-proxy-response.js": {
+          "bytesInOutput": 3415
+        },
+        "node_modules/https-proxy-agent/dist/index.js": {
+          "bytesInOutput": 5831
+        },
+        "node_modules/web-push/src/web-push-lib.js": {
+          "bytesInOutput": 11668
+        },
+        "node_modules/web-push/src/index.js": {
+          "bytesInOutput": 896
+        },
+        "packages/cli/src/main.ts": {
+          "bytesInOutput": 111987
+        },
+        "packages/protocol/src/index.ts": {
+          "bytesInOutput": 14448
+        },
+        "packages/cli/src/addons.generated.ts": {
+          "bytesInOutput": 295034
+        },
+        "packages/cli/src/lib.ts": {
+          "bytesInOutput": 45618
+        },
+        "node_modules/convex/dist/esm/index.js": {
+          "bytesInOutput": 24
+        },
+        "node_modules/convex/dist/esm/values/base64.js": {
+          "bytesInOutput": 3425
+        },
+        "node_modules/convex/dist/esm/common/index.js": {
+          "bytesInOutput": 1869
+        },
+        "node_modules/convex/dist/esm/values/value.js": {
+          "bytesInOutput": 9551
+        },
+        "node_modules/convex/dist/esm/values/index.js": {
+          "bytesInOutput": 0
+        },
+        "node_modules/convex/dist/esm/values/validators.js": {
+          "bytesInOutput": 11540
+        },
+        "node_modules/convex/dist/esm/values/validator.js": {
+          "bytesInOutput": 7717
+        },
+        "node_modules/convex/dist/esm/values/errors.js": {
+          "bytesInOutput": 704
+        },
+        "node_modules/convex/dist/esm/values/compare_utf8.js": {
+          "bytesInOutput": 92
+        },
+        "node_modules/convex/dist/esm/browser/logging.js": {
+          "bytesInOutput": 3492
+        },
+        "node_modules/convex/dist/esm/browser/sync/udf_path_utils.js": {
+          "bytesInOutput": 1033
+        },
+        "node_modules/convex/dist/esm/browser/sync/local_state.js": {
+          "bytesInOutput": 8495
+        },
+        "node_modules/convex/dist/esm/browser/sync/request_manager.js": {
+          "bytesInOutput": 7029
+        },
+        "node_modules/convex/dist/esm/server/functionName.js": {
+          "bytesInOutput": 47
+        },
+        "node_modules/convex/dist/esm/server/components/paths.js": {
+          "bytesInOutput": 896
+        },
+        "node_modules/convex/dist/esm/server/api.js": {
+          "bytesInOutput": 1916
+        },
+        "node_modules/convex/dist/esm/browser/sync/optimistic_updates_impl.js": {
+          "bytesInOutput": 4687
+        },
+        "node_modules/convex/dist/esm/vendor/long.js": {
+          "bytesInOutput": 2468
+        },
+        "node_modules/convex/dist/esm/browser/sync/remote_query_set.js": {
+          "bytesInOutput": 2843
+        },
+        "node_modules/convex/dist/esm/browser/sync/protocol.js": {
+          "bytesInOutput": 1611
+        },
+        "node_modules/convex/dist/esm/browser/sync/web_socket_manager.js": {
+          "bytesInOutput": 21858
+        },
+        "node_modules/convex/dist/esm/browser/sync/session.js": {
+          "bytesInOutput": 247
+        },
+        "node_modules/convex/dist/esm/vendor/jwt-decode/index.js": {
+          "bytesInOutput": 1587
+        },
+        "node_modules/convex/dist/esm/browser/sync/authentication_manager.js": {
+          "bytesInOutput": 12645
+        },
+        "node_modules/convex/dist/esm/browser/sync/metrics.js": {
+          "bytesInOutput": 916
+        },
+        "node_modules/convex/dist/esm/browser/sync/client.js": {
+          "bytesInOutput": 24943
+        },
+        "node_modules/convex/dist/esm/browser/index-node.js": {
+          "bytesInOutput": 0
+        },
+        "node_modules/convex/dist/esm/browser/simple_client-node.js": {
+          "bytesInOutput": 136708
+        },
+        "node_modules/convex/dist/esm/browser/sync/pagination.js": {
+          "bytesInOutput": 304
+        },
+        "node_modules/convex/dist/esm/browser/sync/paginated_query_client.js": {
+          "bytesInOutput": 11808
+        },
+        "node_modules/convex/dist/esm/browser/simple_client.js": {
+          "bytesInOutput": 13094
+        },
+        "node_modules/convex/dist/esm/browser/http_client.js": {
+          "bytesInOutput": 15144
+        },
+        "node_modules/convex/dist/esm/server/index.js": {
+          "bytesInOutput": 0
+        },
+        "node_modules/convex/dist/esm/server/pagination.js": {
+          "bytesInOutput": 282
+        },
+        "node_modules/convex/dist/esm/server/components/index.js": {
+          "bytesInOutput": 0
+        },
+        "node_modules/convex/dist/esm/server/logVars.js": {
+          "bytesInOutput": 326
+        },
+        "node_modules/convex/dist/esm/server/schema.js": {
+          "bytesInOutput": 9353
+        },
+        "node_modules/jose/dist/webapi/lib/buffer_utils.js": {
+          "bytesInOutput": 1909
+        },
+        "node_modules/jose/dist/webapi/util/errors.js": {
+          "bytesInOutput": 3818
+        },
+        "node_modules/jose/dist/webapi/util/base64url.js": {
+          "bytesInOutput": 375
+        },
+        "node_modules/jose/dist/webapi/lib/validate.js": {
+          "bytesInOutput": 4048
+        },
+        "node_modules/jose/dist/webapi/lib/key.js": {
+          "bytesInOutput": 7338
+        },
+        "node_modules/jose/dist/webapi/lib/key_descriptor.js": {
+          "bytesInOutput": 150
+        },
+        "node_modules/jose/dist/webapi/lib/jwe_algorithms.js": {
+          "bytesInOutput": 2619
+        },
+        "node_modules/jose/dist/webapi/lib/jws_algorithms.js": {
+          "bytesInOutput": 1619
+        },
+        "node_modules/jose/dist/webapi/lib/jws_verify.js": {
+          "bytesInOutput": 3352
+        },
+        "node_modules/jose/dist/webapi/lib/jwt_claims_set.js": {
+          "bytesInOutput": 6985
+        },
+        "node_modules/jose/dist/webapi/jwt/verify.js": {
+          "bytesInOutput": 331
+        },
+        "node_modules/jose/dist/webapi/lib/jws_sign.js": {
+          "bytesInOutput": 2279
+        },
+        "node_modules/jose/dist/webapi/jwt/sign.js": {
+          "bytesInOutput": 472
+        },
+        "node_modules/jose/dist/webapi/lib/key_algorithm.js": {
+          "bytesInOutput": 319
+        },
+        "node_modules/jose/dist/webapi/key/export.js": {
+          "bytesInOutput": 741
+        },
+        "node_modules/jose/dist/webapi/jwks/local.js": {
+          "bytesInOutput": 2492
+        },
+        "node_modules/jose/dist/webapi/jwks/remote.js": {
+          "bytesInOutput": 4044
+        },
+        "node_modules/jose/dist/webapi/key/import.js": {
+          "bytesInOutput": 1110
+        },
+        "node_modules/jose/dist/webapi/key/generate_key_pair.js": {
+          "bytesInOutput": 1420
+        },
+        "packages/cli/src/ancestry.ts": {
+          "bytesInOutput": 5417
+        },
+        "packages/cli/src/codex-settings.ts": {
+          "bytesInOutput": 4472
+        },
+        "packages/cli/src/installation.ts": {
+          "bytesInOutput": 4667
+        },
+        "packages/cli/src/uninstall-files.ts": {
+          "bytesInOutput": 7256
+        },
+        "packages/cli/src/installer-lock.ts": {
+          "bytesInOutput": 3690
+        },
+        "packages/cli/src/serve/backend.ts": {
+          "bytesInOutput": 66968
+        },
+        "node_modules/fflate/esm/index.mjs": {
+          "bytesInOutput": 15746
+        },
+        "packages/cli/src/functions.generated.ts": {
+          "bytesInOutput": 1126916
+        },
+        "packages/cli/src/serve/config.ts": {
+          "bytesInOutput": 6137
+        },
+        "packages/cli/src/preserve.ts": {
+          "bytesInOutput": 6421
+        },
+        "packages/cli/src/shell-env.ts": {
+          "bytesInOutput": 3619
+        },
+        "packages/cli/src/args.ts": {
+          "bytesInOutput": 5365
+        },
+        "packages/cli/src/connector.ts": {
+          "bytesInOutput": 98751
+        },
+        "packages/cli/src/addon-runtime.ts": {
+          "bytesInOutput": 3492
+        },
+        "packages/cli/src/delivery-recovery.ts": {
+          "bytesInOutput": 15148
+        },
+        "packages/cli/src/login.ts": {
+          "bytesInOutput": 5872
+        },
+        "packages/cli/src/profiles.ts": {
+          "bytesInOutput": 3726
+        },
+        "packages/cli/src/publish.ts": {
+          "bytesInOutput": 16897
+        },
+        "packages/cli/src/legacy-lock.ts": {
+          "bytesInOutput": 4174
+        },
+        "packages/cli/src/usage.ts": {
+          "bytesInOutput": 26287
+        },
+        "packages/cli/src/service.ts": {
+          "bytesInOutput": 27454
+        },
+        "packages/cli/src/serve/startup.ts": {
+          "bytesInOutput": 6536
+        },
+        "packages/cli/src/upgrade.ts": {
+          "bytesInOutput": 12339
+        },
+        "packages/cli/src/setup.ts": {
+          "bytesInOutput": 60551
+        },
+        "packages/cli/src/t3.ts": {
+          "bytesInOutput": 8524
+        },
+        "packages/cli/src/wake.ts": {
+          "bytesInOutput": 24070
+        },
+        "packages/cli/src/delete.ts": {
+          "bytesInOutput": 1604
+        },
+        "packages/cli/src/files.ts": {
+          "bytesInOutput": 2523
+        },
+        "node_modules/qrcode-generator/dist/qrcode.mjs": {
+          "bytesInOutput": 46390
+        },
+        "packages/cli/src/flow.ts": {
+          "bytesInOutput": 7561
+        },
+        "packages/cli/src/hooks.ts": {
+          "bytesInOutput": 3585
+        },
+        "packages/cli/src/node.ts": {
+          "bytesInOutput": 1520
+        },
+        "packages/cli/src/output.ts": {
+          "bytesInOutput": 383
+        },
+        "packages/cli/src/serve/firstrun.ts": {
+          "bytesInOutput": 7072
+        },
+        "packages/cli/src/serve/index.ts": {
+          "bytesInOutput": 14792
+        },
+        "packages/cli/src/serve/door.ts": {
+          "bytesInOutput": 44211
+        },
+        "packages/content/src/index.ts": {
+          "bytesInOutput": 23144
+        },
+        "packages/content/src/files.ts": {
+          "bytesInOutput": 13796
+        },
+        "packages/content/src/limits.ts": {
+          "bytesInOutput": 1675
+        },
+        "packages/content/src/log.ts": {
+          "bytesInOutput": 1329
+        },
+        "packages/content/src/page.ts": {
+          "bytesInOutput": 8124
+        },
+        "packages/content/src/records.ts": {
+          "bytesInOutput": 4203
+        },
+        "packages/content/src/runtime.generated.ts": {
+          "bytesInOutput": 10335
+        },
+        "packages/cli/src/serve/export.ts": {
+          "bytesInOutput": 8764
+        },
+        "packages/cli/src/serve/push.ts": {
+          "bytesInOutput": 5040
+        },
+        "packages/cli/src/serve/site.ts": {
+          "bytesInOutput": 3556
+        },
+        "packages/cli/src/site.generated.ts": {
+          "bytesInOutput": 1853349
+        },
+        "packages/cli/src/serve/tailnet.ts": {
+          "bytesInOutput": 1502
+        },
+        "packages/cli/src/serve/network.ts": {
+          "bytesInOutput": 4670
+        },
+        "packages/cli/src/shell-profile.ts": {
+          "bytesInOutput": 1465
+        },
+        "packages/cli/src/tour.generated.ts": {
+          "bytesInOutput": 199621
+        },
+        "packages/cli/src/tour.ts": {
+          "bytesInOutput": 1383
+        },
+        "packages/cli/src/wait.ts": {
+          "bytesInOutput": 10796
+        }
+      },
+      "bytes": 4936495
+    }
+  }
+}

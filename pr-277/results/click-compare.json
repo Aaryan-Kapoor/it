@@ -1,0 +1,540 @@
+{
+  "rows": [
+    {
+      "round": 0,
+      "label": "baseline",
+      "loadBefore": [
+        16.9,
+        15.04,
+        8.31
+      ],
+      "startedAt": "2026-10-25T15:24:29.605Z",
+      "fixture": {
+        "selected": true,
+        "alreadyChosen": true,
+        "listening": true,
+        "drained": 0,
+        "polls": 2
+      },
+      "clicks": {
+        "kind": "click_to_polling_addon",
+        "pollEveryMs": 1000,
+        "schedule": "fixed cadence, missed ticks skipped, requests never overlap",
+        "warmup": 1,
+        "iterations": 5,
+        "frameClockUncertaintyMs": 4.625,
+        "clickToDeliveryMs": {
+          "n": 5,
+          "min": 483.286,
+          "p25": 673.98,
+          "median": 911.627,
+          "p75": 1098.037,
+          "p95": 1256.064,
+          "max": 1295.571
+        },
+        "deliveringPollMs": {
+          "n": 5,
+          "min": 1.504,
+          "p25": 1.54,
+          "median": 1.676,
+          "p75": 1.752,
+          "p95": 1.953,
+          "max": 2.003
+        },
+        "ackRequestMs": {
+          "n": 5,
+          "min": 1.172,
+          "p25": 1.382,
+          "median": 1.47,
+          "p75": 1.686,
+          "p95": 2.709,
+          "max": 2.965
+        },
+        "pollIntervalsMs": {
+          "n": 17,
+          "min": 996.502,
+          "p25": 999.667,
+          "median": 999.995,
+          "p75": 1000.406,
+          "p95": 1002.968,
+          "max": 1004.124
+        },
+        "pollLatenessMs": {
+          "n": 18,
+          "min": -1.696,
+          "p25": -0.128,
+          "median": 0.065,
+          "p75": 0.235,
+          "p95": 2.01,
+          "max": 3.189
+        },
+        "rows": [
+          {
+            "targetPhaseMs": 50,
+            "observedPhaseMs": 90.228,
+            "clickToDeliveryMs": 911.627,
+            "commandToDeliveryMs": 943.779,
+            "clickToDeliveringPollStartMs": 909.875,
+            "deliveringPollMs": 1.752,
+            "sincePreviousPollStartMs": 90.404,
+            "backendAcceptedToDeliveryMs": 842.782,
+            "ackRequestMs": 1.47
+          },
+          {
+            "targetPhaseMs": 250,
+            "observedPhaseMs": 325.828,
+            "clickToDeliveryMs": 673.98,
+            "commandToDeliveryMs": 719.757,
+            "clickToDeliveringPollStartMs": 672.476,
+            "deliveringPollMs": 1.504,
+            "sincePreviousPollStartMs": 324.027,
+            "backendAcceptedToDeliveryMs": 632.735,
+            "ackRequestMs": 1.686
+          },
+          {
+            "targetPhaseMs": 450,
+            "observedPhaseMs": 518.628,
+            "clickToDeliveryMs": 483.286,
+            "commandToDeliveryMs": 540.019,
+            "clickToDeliveringPollStartMs": 481.283,
+            "deliveringPollMs": 2.003,
+            "sincePreviousPollStartMs": 517.645,
+            "backendAcceptedToDeliveryMs": 415.841,
+            "ackRequestMs": 1.172
+          },
+          {
+            "targetPhaseMs": 650,
+            "observedPhaseMs": 705.828,
+            "clickToDeliveryMs": 1295.571,
+            "commandToDeliveryMs": 1336.381,
+            "clickToDeliveringPollStartMs": 1294.031,
+            "deliveringPollMs": 1.54,
+            "sincePreviousPollStartMs": 705.631,
+            "backendAcceptedToDeliveryMs": 1231.325,
+            "ackRequestMs": 2.965
+          },
+          {
+            "targetPhaseMs": 850,
+            "observedPhaseMs": 906.828,
+            "clickToDeliveryMs": 1098.037,
+            "commandToDeliveryMs": 1139.166,
+            "clickToDeliveringPollStartMs": 1096.361,
+            "deliveringPollMs": 1.676,
+            "sincePreviousPollStartMs": 906.564,
+            "backendAcceptedToDeliveryMs": 1026.792,
+            "ackRequestMs": 1.382
+          }
+        ],
+        "deliveryBoundary": "Complete connector response parsed in the stand-in add-on; no model turn or application queue is measured.",
+        "ackBoundary": "Connector acknowledgement response; asynchronous backend handoff confirmation is not awaited."
+      },
+      "loadAfter": [
+        16.08,
+        15,
+        8.48
+      ]
+    },
+    {
+      "round": 0,
+      "label": "candidate",
+      "loadBefore": [
+        16.08,
+        15,
+        8.48
+      ],
+      "startedAt": "2026-10-25T15:24:52.473Z",
+      "fixture": {
+        "selected": true,
+        "alreadyChosen": true,
+        "listening": true,
+        "drained": 0,
+        "polls": 2
+      },
+      "clicks": {
+        "kind": "click_to_polling_addon",
+        "pollEveryMs": 1000,
+        "schedule": "fixed cadence, missed ticks skipped, requests never overlap",
+        "warmup": 1,
+        "iterations": 5,
+        "frameClockUncertaintyMs": 3.635,
+        "clickToDeliveryMs": {
+          "n": 5,
+          "min": 311.655,
+          "p25": 507.894,
+          "median": 687.027,
+          "p75": 883.703,
+          "p95": 1065.642,
+          "max": 1111.127
+        },
+        "deliveringPollMs": {
+          "n": 5,
+          "min": 1.196,
+          "p25": 1.386,
+          "median": 2.091,
+          "p75": 4.333,
+          "p95": 4.823,
+          "max": 4.946
+        },
+        "ackRequestMs": {
+          "n": 5,
+          "min": 0.975,
+          "p25": 1.137,
+          "median": 2.161,
+          "p75": 3.579,
+          "p95": 5,
+          "max": 5.355
+        },
+        "pollIntervalsMs": {
+          "n": 16,
+          "min": 998.751,
+          "p25": 999.321,
+          "median": 999.999,
+          "p75": 1000.439,
+          "p95": 1001.143,
+          "max": 1001.26
+        },
+        "pollLatenessMs": {
+          "n": 17,
+          "min": -0.882,
+          "p25": -0.546,
+          "median": -0.038,
+          "p75": 0.317,
+          "p95": 0.454,
+          "max": 0.737
+        },
+        "rows": [
+          {
+            "targetPhaseMs": 50,
+            "observedPhaseMs": 121.224,
+            "clickToDeliveryMs": 883.703,
+            "commandToDeliveryMs": 944.814,
+            "clickToDeliveringPollStartMs": 878.757,
+            "deliveringPollMs": 4.946,
+            "sincePreviousPollStartMs": 121.871,
+            "backendAcceptedToDeliveryMs": 820.689,
+            "ackRequestMs": 3.579
+          },
+          {
+            "targetPhaseMs": 250,
+            "observedPhaseMs": 317.624,
+            "clickToDeliveryMs": 687.027,
+            "commandToDeliveryMs": 745.996,
+            "clickToDeliveringPollStartMs": 682.694,
+            "deliveringPollMs": 4.333,
+            "sincePreviousPollStartMs": 317.267,
+            "backendAcceptedToDeliveryMs": 618.413,
+            "ackRequestMs": 5.355
+          },
+          {
+            "targetPhaseMs": 450,
+            "observedPhaseMs": 493.124,
+            "clickToDeliveryMs": 507.894,
+            "commandToDeliveryMs": 541.329,
+            "clickToDeliveringPollStartMs": 506.508,
+            "deliveringPollMs": 1.386,
+            "sincePreviousPollStartMs": 493.766,
+            "backendAcceptedToDeliveryMs": 392.78,
+            "ackRequestMs": 2.161
+          },
+          {
+            "targetPhaseMs": 650,
+            "observedPhaseMs": 689.924,
+            "clickToDeliveryMs": 311.655,
+            "commandToDeliveryMs": 342.605,
+            "clickToDeliveringPollStartMs": 309.564,
+            "deliveringPollMs": 2.091,
+            "sincePreviousPollStartMs": 689.187,
+            "backendAcceptedToDeliveryMs": 254.34,
+            "ackRequestMs": 1.137
+          },
+          {
+            "targetPhaseMs": 850,
+            "observedPhaseMs": 889.524,
+            "clickToDeliveryMs": 1111.127,
+            "commandToDeliveryMs": 1145.461,
+            "clickToDeliveringPollStartMs": 1109.93,
+            "deliveringPollMs": 1.196,
+            "sincePreviousPollStartMs": 889.141,
+            "backendAcceptedToDeliveryMs": 1042.413,
+            "ackRequestMs": 0.975
+          }
+        ],
+        "deliveryBoundary": "Complete connector response parsed in the stand-in add-on; no model turn or application queue is measured.",
+        "ackBoundary": "Connector acknowledgement response; asynchronous backend handoff confirmation is not awaited."
+      },
+      "loadAfter": [
+        16.38,
+        15.17,
+        8.68
+      ]
+    },
+    {
+      "round": 1,
+      "label": "candidate",
+      "loadBefore": [
+        16.38,
+        15.17,
+        8.68
+      ],
+      "startedAt": "2026-10-25T15:25:13.228Z",
+      "fixture": {
+        "selected": true,
+        "alreadyChosen": true,
+        "listening": true,
+        "drained": 0,
+        "polls": 2
+      },
+      "clicks": {
+        "kind": "click_to_polling_addon",
+        "pollEveryMs": 1000,
+        "schedule": "fixed cadence, missed ticks skipped, requests never overlap",
+        "warmup": 1,
+        "iterations": 5,
+        "frameClockUncertaintyMs": 4.023,
+        "clickToDeliveryMs": {
+          "n": 5,
+          "min": 304.528,
+          "p25": 483.716,
+          "median": 722.514,
+          "p75": 922.033,
+          "p95": 1068.108,
+          "max": 1104.627
+        },
+        "deliveringPollMs": {
+          "n": 5,
+          "min": 1.334,
+          "p25": 1.372,
+          "median": 1.373,
+          "p75": 1.484,
+          "p95": 1.562,
+          "max": 1.581
+        },
+        "ackRequestMs": {
+          "n": 5,
+          "min": 0.91,
+          "p25": 0.966,
+          "median": 1.029,
+          "p75": 1.275,
+          "p95": 1.277,
+          "max": 1.277
+        },
+        "pollIntervalsMs": {
+          "n": 16,
+          "min": 998.168,
+          "p25": 999.502,
+          "median": 1000.015,
+          "p75": 1000.367,
+          "p95": 1000.937,
+          "max": 1001.827
+        },
+        "pollLatenessMs": {
+          "n": 17,
+          "min": -1.119,
+          "p25": -0.476,
+          "median": -0.233,
+          "p75": 0.211,
+          "p95": 0.881,
+          "max": 1.151
+        },
+        "rows": [
+          {
+            "targetPhaseMs": 50,
+            "observedPhaseMs": 79.127,
+            "clickToDeliveryMs": 922.033,
+            "commandToDeliveryMs": 946.383,
+            "clickToDeliveringPollStartMs": 920.549,
+            "deliveringPollMs": 1.484,
+            "sincePreviousPollStartMs": 79.359,
+            "backendAcceptedToDeliveryMs": 878.523,
+            "ackRequestMs": 0.91
+          },
+          {
+            "targetPhaseMs": 250,
+            "observedPhaseMs": 279.227,
+            "clickToDeliveryMs": 722.514,
+            "commandToDeliveryMs": 747.303,
+            "clickToDeliveringPollStartMs": 721.143,
+            "deliveringPollMs": 1.372,
+            "sincePreviousPollStartMs": 279.429,
+            "backendAcceptedToDeliveryMs": 678.104,
+            "ackRequestMs": 0.966
+          },
+          {
+            "targetPhaseMs": 450,
+            "observedPhaseMs": 518.127,
+            "clickToDeliveryMs": 483.716,
+            "commandToDeliveryMs": 532.661,
+            "clickToDeliveringPollStartMs": 482.382,
+            "deliveringPollMs": 1.334,
+            "sincePreviousPollStartMs": 517.313,
+            "backendAcceptedToDeliveryMs": 408.206,
+            "ackRequestMs": 1.277
+          },
+          {
+            "targetPhaseMs": 650,
+            "observedPhaseMs": 696.727,
+            "clickToDeliveryMs": 304.528,
+            "commandToDeliveryMs": 344.762,
+            "clickToDeliveringPollStartMs": 302.948,
+            "deliveringPollMs": 1.581,
+            "sincePreviousPollStartMs": 696.96,
+            "backendAcceptedToDeliveryMs": 258.618,
+            "ackRequestMs": 1.275
+          },
+          {
+            "targetPhaseMs": 850,
+            "observedPhaseMs": 895.627,
+            "clickToDeliveryMs": 1104.627,
+            "commandToDeliveryMs": 1139.493,
+            "clickToDeliveringPollStartMs": 1103.255,
+            "deliveringPollMs": 1.373,
+            "sincePreviousPollStartMs": 895.756,
+            "backendAcceptedToDeliveryMs": 936.618,
+            "ackRequestMs": 1.029
+          }
+        ],
+        "deliveryBoundary": "Complete connector response parsed in the stand-in add-on; no model turn or application queue is measured.",
+        "ackBoundary": "Connector acknowledgement response; asynchronous backend handoff confirmation is not awaited."
+      },
+      "loadAfter": [
+        15.63,
+        15.12,
+        8.8
+      ]
+    },
+    {
+      "round": 1,
+      "label": "baseline",
+      "loadBefore": [
+        15.63,
+        15.12,
+        8.8
+      ],
+      "startedAt": "2026-10-25T15:25:34.377Z",
+      "fixture": {
+        "selected": true,
+        "alreadyChosen": true,
+        "listening": true,
+        "drained": 0,
+        "polls": 2
+      },
+      "clicks": {
+        "kind": "click_to_polling_addon",
+        "pollEveryMs": 1000,
+        "schedule": "fixed cadence, missed ticks skipped, requests never overlap",
+        "warmup": 1,
+        "iterations": 5,
+        "frameClockUncertaintyMs": 3.907,
+        "clickToDeliveryMs": {
+          "n": 5,
+          "min": 303.163,
+          "p25": 520.455,
+          "median": 719.808,
+          "p75": 917.422,
+          "p95": 1028.087,
+          "max": 1055.753
+        },
+        "deliveringPollMs": {
+          "n": 5,
+          "min": 0.952,
+          "p25": 1.143,
+          "median": 1.172,
+          "p75": 1.217,
+          "p95": 1.654,
+          "max": 1.763
+        },
+        "ackRequestMs": {
+          "n": 5,
+          "min": 1.015,
+          "p25": 1.107,
+          "median": 1.151,
+          "p75": 1.335,
+          "p95": 1.445,
+          "max": 1.472
+        },
+        "pollIntervalsMs": {
+          "n": 16,
+          "min": 996.755,
+          "p25": 999.279,
+          "median": 999.998,
+          "p75": 1000.764,
+          "p95": 1001.74,
+          "max": 1001.89
+        },
+        "pollLatenessMs": {
+          "n": 17,
+          "min": -0.984,
+          "p25": -0.359,
+          "median": -0.107,
+          "p75": 0.005,
+          "p95": 1.534,
+          "max": 2.886
+        },
+        "rows": [
+          {
+            "targetPhaseMs": 50,
+            "observedPhaseMs": 84.96,
+            "clickToDeliveryMs": 917.422,
+            "commandToDeliveryMs": 945.656,
+            "clickToDeliveringPollStartMs": 915.659,
+            "deliveringPollMs": 1.763,
+            "sincePreviousPollStartMs": 85.067,
+            "backendAcceptedToDeliveryMs": 864.606,
+            "ackRequestMs": 1.107
+          },
+          {
+            "targetPhaseMs": 250,
+            "observedPhaseMs": 280.16,
+            "clickToDeliveryMs": 719.808,
+            "commandToDeliveryMs": 744.72,
+            "clickToDeliveringPollStartMs": 718.856,
+            "deliveringPollMs": 0.952,
+            "sincePreviousPollStartMs": 280.26,
+            "backendAcceptedToDeliveryMs": 643.192,
+            "ackRequestMs": 1.015
+          },
+          {
+            "targetPhaseMs": 450,
+            "observedPhaseMs": 480.06,
+            "clickToDeliveryMs": 520.455,
+            "commandToDeliveryMs": 545.283,
+            "clickToDeliveringPollStartMs": 519.313,
+            "deliveringPollMs": 1.143,
+            "sincePreviousPollStartMs": 480.156,
+            "backendAcceptedToDeliveryMs": 458.74,
+            "ackRequestMs": 1.151
+          },
+          {
+            "targetPhaseMs": 650,
+            "observedPhaseMs": 697.36,
+            "clickToDeliveryMs": 303.163,
+            "commandToDeliveryMs": 342.96,
+            "clickToDeliveringPollStartMs": 301.947,
+            "deliveringPollMs": 1.217,
+            "sincePreviousPollStartMs": 697.647,
+            "backendAcceptedToDeliveryMs": 239.747,
+            "ackRequestMs": 1.335
+          },
+          {
+            "targetPhaseMs": 850,
+            "observedPhaseMs": 945.06,
+            "clickToDeliveryMs": 1055.753,
+            "commandToDeliveryMs": 1125.4,
+            "clickToDeliveringPollStartMs": 1054.581,
+            "deliveringPollMs": 1.172,
+            "sincePreviousPollStartMs": 943.864,
+            "backendAcceptedToDeliveryMs": 953.037,
+            "ackRequestMs": 1.472
+          }
+        ],
+        "deliveryBoundary": "Complete connector response parsed in the stand-in add-on; no model turn or application queue is measured.",
+        "ackBoundary": "Connector acknowledgement response; asynchronous backend handoff confirmation is not awaited."
+      },
+      "loadAfter": [
+        13.31,
+        14.62,
+        8.78
+      ]
+    }
+  ]
+}

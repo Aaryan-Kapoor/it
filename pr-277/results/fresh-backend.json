@@ -1,0 +1,4124 @@
+{
+  "rows": [
+    {
+      "round": 0,
+      "label": "baseline",
+      "startedAt": "2026-10-25T15:26:06.447Z",
+      "loadBefore": [
+        12.9,
+        14.47,
+        8.82
+      ],
+      "hot": {
+        "kind": "hot_backend",
+        "transport": "HTTP via door",
+        "iterations": 1,
+        "warmup": 0,
+        "serverTimingRequested": true,
+        "adminLogAvailable": true,
+        "clockAssumption": "HTTP client and backend run on the same machine; time-window correlations are inferred and ambiguous matches are omitted.",
+        "cacheNote": "Warm queries may be server cache hits. Only uncachedExecutionMs describes successful fresh executions.",
+        "mutationEffect": "state:patch merges an empty object and advances the state revision.",
+        "measurements": [
+          {
+            "operation": "artifacts:list",
+            "function": "artifacts:list",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 53.013,
+              "p25": 53.013,
+              "median": 53.013,
+              "p75": 53.013,
+              "p95": 53.013,
+              "max": 53.013
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 14381,
+              "p25": 14381,
+              "median": 14381,
+              "p75": 14381,
+              "p95": 14381,
+              "max": 14381
+            },
+            "wallSamplesMs": [
+              53.013
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 45.08,
+                "p25": 45.08,
+                "median": 45.08,
+                "p75": 45.08,
+                "p95": 45.08,
+                "max": 45.08
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 45.08,
+                "p25": 45.08,
+                "median": 45.08,
+                "p75": 45.08,
+                "p95": 45.08,
+                "max": 45.08
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 45.08,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_with_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 35.244,
+              "p25": 35.244,
+              "median": 35.244,
+              "p75": 35.244,
+              "p95": 35.244,
+              "max": 35.244
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 740,
+              "p25": 740,
+              "median": 740,
+              "p75": 740,
+              "p95": 740,
+              "max": 740
+            },
+            "wallSamplesMs": [
+              35.244
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.01,
+                "p25": 8.01,
+                "median": 8.01,
+                "p75": 8.01,
+                "p95": 8.01,
+                "max": 8.01
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.01,
+                "p25": 8.01,
+                "median": 8.01,
+                "p75": 8.01,
+                "p95": 8.01,
+                "max": 8.01
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.01,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_without_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 10.953,
+              "p25": 10.953,
+              "median": 10.953,
+              "p75": 10.953,
+              "p95": 10.953,
+              "max": 10.953
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 661,
+              "p25": 661,
+              "median": 661,
+              "p75": 661,
+              "p95": 661,
+              "max": 661
+            },
+            "wallSamplesMs": [
+              10.953
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 6.431,
+                "p25": 6.431,
+                "median": 6.431,
+                "p75": 6.431,
+                "p95": 6.431,
+                "max": 6.431
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 6.431,
+                "p25": 6.431,
+                "median": 6.431,
+                "p75": 6.431,
+                "p95": 6.431,
+                "max": 6.431
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 6.431,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:get",
+            "function": "state:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 14.269,
+              "p25": 14.269,
+              "median": 14.269,
+              "p75": 14.269,
+              "p95": 14.269,
+              "max": 14.269
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 59,
+              "p25": 59,
+              "median": 59,
+              "p75": 59,
+              "p95": 59,
+              "max": 59
+            },
+            "wallSamplesMs": [
+              14.269
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 9.445,
+                "p25": 9.445,
+                "median": 9.445,
+                "p75": 9.445,
+                "p95": 9.445,
+                "max": 9.445
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 9.445,
+                "p25": 9.445,
+                "median": 9.445,
+                "p75": 9.445,
+                "p95": 9.445,
+                "max": 9.445
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 9.445,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "delivery:waitingFor",
+            "function": "delivery:waitingFor",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 9.898,
+              "p25": 9.898,
+              "median": 9.898,
+              "p75": 9.898,
+              "p95": 9.898,
+              "max": 9.898
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 31,
+              "p25": 31,
+              "median": 31,
+              "p75": 31,
+              "p95": 31,
+              "max": 31
+            },
+            "wallSamplesMs": [
+              9.898
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 6.559,
+                "p25": 6.559,
+                "median": 6.559,
+                "p75": 6.559,
+                "p95": 6.559,
+                "max": 6.559
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 6.559,
+                "p25": 6.559,
+                "median": 6.559,
+                "p75": 6.559,
+                "p95": 6.559,
+                "max": 6.559
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 6.559,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:patch",
+            "function": "state:patch",
+            "type": "mutation",
+            "wallMs": {
+              "n": 1,
+              "min": 66.864,
+              "p25": 66.864,
+              "median": 66.864,
+              "p75": 66.864,
+              "p95": 66.864,
+              "max": 66.864
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 47,
+              "p25": 47,
+              "median": 47,
+              "p75": 47,
+              "p95": 47,
+              "max": 47
+            },
+            "wallSamplesMs": [
+              66.864
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 13.331,
+                "p25": 13.331,
+                "median": 13.331,
+                "p75": 13.331,
+                "p95": 13.331,
+                "max": 13.331
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 13.331,
+                "p25": 13.331,
+                "median": 13.331,
+                "p75": 13.331,
+                "p95": 13.331,
+                "max": 13.331
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 13.331,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "loadAfter": [
+        12.27,
+        14.32,
+        8.8
+      ]
+    },
+    {
+      "round": 0,
+      "label": "candidate",
+      "startedAt": "2026-10-25T15:26:12.606Z",
+      "loadBefore": [
+        12.27,
+        14.32,
+        8.8
+      ],
+      "hot": {
+        "kind": "hot_backend",
+        "transport": "HTTP via door",
+        "iterations": 1,
+        "warmup": 0,
+        "serverTimingRequested": true,
+        "adminLogAvailable": true,
+        "clockAssumption": "HTTP client and backend run on the same machine; time-window correlations are inferred and ambiguous matches are omitted.",
+        "cacheNote": "Warm queries may be server cache hits. Only uncachedExecutionMs describes successful fresh executions.",
+        "mutationEffect": "state:patch merges an empty object and advances the state revision.",
+        "measurements": [
+          {
+            "operation": "artifacts:list",
+            "function": "artifacts:list",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 17.151,
+              "p25": 17.151,
+              "median": 17.151,
+              "p75": 17.151,
+              "p95": 17.151,
+              "max": 17.151
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 14381,
+              "p25": 14381,
+              "median": 14381,
+              "p75": 14381,
+              "p95": 14381,
+              "max": 14381
+            },
+            "wallSamplesMs": [
+              17.151
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 11.909,
+                "p25": 11.909,
+                "median": 11.909,
+                "p75": 11.909,
+                "p95": 11.909,
+                "max": 11.909
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 11.909,
+                "p25": 11.909,
+                "median": 11.909,
+                "p75": 11.909,
+                "p95": 11.909,
+                "max": 11.909
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 11.909,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_with_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 17.673,
+              "p25": 17.673,
+              "median": 17.673,
+              "p75": 17.673,
+              "p95": 17.673,
+              "max": 17.673
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 740,
+              "p25": 740,
+              "median": 740,
+              "p75": 740,
+              "p95": 740,
+              "max": 740
+            },
+            "wallSamplesMs": [
+              17.673
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 12.569,
+                "p25": 12.569,
+                "median": 12.569,
+                "p75": 12.569,
+                "p95": 12.569,
+                "max": 12.569
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 12.569,
+                "p25": 12.569,
+                "median": 12.569,
+                "p75": 12.569,
+                "p95": 12.569,
+                "max": 12.569
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 12.569,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_without_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 10.649,
+              "p25": 10.649,
+              "median": 10.649,
+              "p75": 10.649,
+              "p95": 10.649,
+              "max": 10.649
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 661,
+              "p25": 661,
+              "median": 661,
+              "p75": 661,
+              "p95": 661,
+              "max": 661
+            },
+            "wallSamplesMs": [
+              10.649
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 6.511,
+                "p25": 6.511,
+                "median": 6.511,
+                "p75": 6.511,
+                "p95": 6.511,
+                "max": 6.511
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 6.511,
+                "p25": 6.511,
+                "median": 6.511,
+                "p75": 6.511,
+                "p95": 6.511,
+                "max": 6.511
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 6.511,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:get",
+            "function": "state:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 12.225,
+              "p25": 12.225,
+              "median": 12.225,
+              "p75": 12.225,
+              "p95": 12.225,
+              "max": 12.225
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 59,
+              "p25": 59,
+              "median": 59,
+              "p75": 59,
+              "p95": 59,
+              "max": 59
+            },
+            "wallSamplesMs": [
+              12.225
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 7.967,
+                "p25": 7.967,
+                "median": 7.967,
+                "p75": 7.967,
+                "p95": 7.967,
+                "max": 7.967
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 7.967,
+                "p25": 7.967,
+                "median": 7.967,
+                "p75": 7.967,
+                "p95": 7.967,
+                "max": 7.967
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 7.967,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "delivery:waitingFor",
+            "function": "delivery:waitingFor",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 10.522,
+              "p25": 10.522,
+              "median": 10.522,
+              "p75": 10.522,
+              "p95": 10.522,
+              "max": 10.522
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 31,
+              "p25": 31,
+              "median": 31,
+              "p75": 31,
+              "p95": 31,
+              "max": 31
+            },
+            "wallSamplesMs": [
+              10.522
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 6.81,
+                "p25": 6.81,
+                "median": 6.81,
+                "p75": 6.81,
+                "p95": 6.81,
+                "max": 6.81
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 6.81,
+                "p25": 6.81,
+                "median": 6.81,
+                "p75": 6.81,
+                "p95": 6.81,
+                "max": 6.81
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 6.81,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:patch",
+            "function": "state:patch",
+            "type": "mutation",
+            "wallMs": {
+              "n": 1,
+              "min": 75.554,
+              "p25": 75.554,
+              "median": 75.554,
+              "p75": 75.554,
+              "p95": 75.554,
+              "max": 75.554
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 47,
+              "p25": 47,
+              "median": 47,
+              "p75": 47,
+              "p95": 47,
+              "max": 47
+            },
+            "wallSamplesMs": [
+              75.554
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.294,
+                "p25": 8.294,
+                "median": 8.294,
+                "p75": 8.294,
+                "p95": 8.294,
+                "max": 8.294
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.294,
+                "p25": 8.294,
+                "median": 8.294,
+                "p75": 8.294,
+                "p95": 8.294,
+                "max": 8.294
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.294,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "loadAfter": [
+        11.85,
+        14.19,
+        8.79
+      ]
+    },
+    {
+      "round": 1,
+      "label": "candidate",
+      "startedAt": "2026-10-25T15:26:19.209Z",
+      "loadBefore": [
+        11.85,
+        14.19,
+        8.79
+      ],
+      "hot": {
+        "kind": "hot_backend",
+        "transport": "HTTP via door",
+        "iterations": 1,
+        "warmup": 0,
+        "serverTimingRequested": true,
+        "adminLogAvailable": true,
+        "clockAssumption": "HTTP client and backend run on the same machine; time-window correlations are inferred and ambiguous matches are omitted.",
+        "cacheNote": "Warm queries may be server cache hits. Only uncachedExecutionMs describes successful fresh executions.",
+        "mutationEffect": "state:patch merges an empty object and advances the state revision.",
+        "measurements": [
+          {
+            "operation": "artifacts:list",
+            "function": "artifacts:list",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 16.431,
+              "p25": 16.431,
+              "median": 16.431,
+              "p75": 16.431,
+              "p95": 16.431,
+              "max": 16.431
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 14381,
+              "p25": 14381,
+              "median": 14381,
+              "p75": 14381,
+              "p95": 14381,
+              "max": 14381
+            },
+            "wallSamplesMs": [
+              16.431
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 12.017,
+                "p25": 12.017,
+                "median": 12.017,
+                "p75": 12.017,
+                "p95": 12.017,
+                "max": 12.017
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 12.017,
+                "p25": 12.017,
+                "median": 12.017,
+                "p75": 12.017,
+                "p95": 12.017,
+                "max": 12.017
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 12.017,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_with_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 10.17,
+              "p25": 10.17,
+              "median": 10.17,
+              "p75": 10.17,
+              "p95": 10.17,
+              "max": 10.17
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 740,
+              "p25": 740,
+              "median": 740,
+              "p75": 740,
+              "p95": 740,
+              "max": 740
+            },
+            "wallSamplesMs": [
+              10.17
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 6.763,
+                "p25": 6.763,
+                "median": 6.763,
+                "p75": 6.763,
+                "p95": 6.763,
+                "max": 6.763
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 6.763,
+                "p25": 6.763,
+                "median": 6.763,
+                "p75": 6.763,
+                "p95": 6.763,
+                "max": 6.763
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 6.763,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_without_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 12.894,
+              "p25": 12.894,
+              "median": 12.894,
+              "p75": 12.894,
+              "p95": 12.894,
+              "max": 12.894
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 661,
+              "p25": 661,
+              "median": 661,
+              "p75": 661,
+              "p95": 661,
+              "max": 661
+            },
+            "wallSamplesMs": [
+              12.894
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 7.488,
+                "p25": 7.488,
+                "median": 7.488,
+                "p75": 7.488,
+                "p95": 7.488,
+                "max": 7.488
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 7.488,
+                "p25": 7.488,
+                "median": 7.488,
+                "p75": 7.488,
+                "p95": 7.488,
+                "max": 7.488
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 7.488,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:get",
+            "function": "state:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 9.057,
+              "p25": 9.057,
+              "median": 9.057,
+              "p75": 9.057,
+              "p95": 9.057,
+              "max": 9.057
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 59,
+              "p25": 59,
+              "median": 59,
+              "p75": 59,
+              "p95": 59,
+              "max": 59
+            },
+            "wallSamplesMs": [
+              9.057
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 5.946,
+                "p25": 5.946,
+                "median": 5.946,
+                "p75": 5.946,
+                "p95": 5.946,
+                "max": 5.946
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 5.946,
+                "p25": 5.946,
+                "median": 5.946,
+                "p75": 5.946,
+                "p95": 5.946,
+                "max": 5.946
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 5.946,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "delivery:waitingFor",
+            "function": "delivery:waitingFor",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 10.69,
+              "p25": 10.69,
+              "median": 10.69,
+              "p75": 10.69,
+              "p95": 10.69,
+              "max": 10.69
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 31,
+              "p25": 31,
+              "median": 31,
+              "p75": 31,
+              "p95": 31,
+              "max": 31
+            },
+            "wallSamplesMs": [
+              10.69
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 6.779,
+                "p25": 6.779,
+                "median": 6.779,
+                "p75": 6.779,
+                "p95": 6.779,
+                "max": 6.779
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 6.779,
+                "p25": 6.779,
+                "median": 6.779,
+                "p75": 6.779,
+                "p95": 6.779,
+                "max": 6.779
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 6.779,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:patch",
+            "function": "state:patch",
+            "type": "mutation",
+            "wallMs": {
+              "n": 1,
+              "min": 59.752,
+              "p25": 59.752,
+              "median": 59.752,
+              "p75": 59.752,
+              "p95": 59.752,
+              "max": 59.752
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 47,
+              "p25": 47,
+              "median": 47,
+              "p75": 47,
+              "p95": 47,
+              "max": 47
+            },
+            "wallSamplesMs": [
+              59.752
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 9.765,
+                "p25": 9.765,
+                "median": 9.765,
+                "p75": 9.765,
+                "p95": 9.765,
+                "max": 9.765
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 9.765,
+                "p25": 9.765,
+                "median": 9.765,
+                "p75": 9.765,
+                "p95": 9.765,
+                "max": 9.765
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 9.765,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "loadAfter": [
+        11.3,
+        14.04,
+        8.77
+      ]
+    },
+    {
+      "round": 1,
+      "label": "baseline",
+      "startedAt": "2026-10-25T15:26:25.071Z",
+      "loadBefore": [
+        11.3,
+        14.04,
+        8.77
+      ],
+      "hot": {
+        "kind": "hot_backend",
+        "transport": "HTTP via door",
+        "iterations": 1,
+        "warmup": 0,
+        "serverTimingRequested": true,
+        "adminLogAvailable": true,
+        "clockAssumption": "HTTP client and backend run on the same machine; time-window correlations are inferred and ambiguous matches are omitted.",
+        "cacheNote": "Warm queries may be server cache hits. Only uncachedExecutionMs describes successful fresh executions.",
+        "mutationEffect": "state:patch merges an empty object and advances the state revision.",
+        "measurements": [
+          {
+            "operation": "artifacts:list",
+            "function": "artifacts:list",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 19.026,
+              "p25": 19.026,
+              "median": 19.026,
+              "p75": 19.026,
+              "p95": 19.026,
+              "max": 19.026
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 14381,
+              "p25": 14381,
+              "median": 14381,
+              "p75": 14381,
+              "p95": 14381,
+              "max": 14381
+            },
+            "wallSamplesMs": [
+              19.026
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 13.892,
+                "p25": 13.892,
+                "median": 13.892,
+                "p75": 13.892,
+                "p95": 13.892,
+                "max": 13.892
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 13.892,
+                "p25": 13.892,
+                "median": 13.892,
+                "p75": 13.892,
+                "p95": 13.892,
+                "max": 13.892
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 13.892,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_with_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 12.529,
+              "p25": 12.529,
+              "median": 12.529,
+              "p75": 12.529,
+              "p95": 12.529,
+              "max": 12.529
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 740,
+              "p25": 740,
+              "median": 740,
+              "p75": 740,
+              "p95": 740,
+              "max": 740
+            },
+            "wallSamplesMs": [
+              12.529
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.183,
+                "p25": 8.183,
+                "median": 8.183,
+                "p75": 8.183,
+                "p95": 8.183,
+                "max": 8.183
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.183,
+                "p25": 8.183,
+                "median": 8.183,
+                "p75": 8.183,
+                "p95": 8.183,
+                "max": 8.183
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.183,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_without_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 11.708,
+              "p25": 11.708,
+              "median": 11.708,
+              "p75": 11.708,
+              "p95": 11.708,
+              "max": 11.708
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 661,
+              "p25": 661,
+              "median": 661,
+              "p75": 661,
+              "p95": 661,
+              "max": 661
+            },
+            "wallSamplesMs": [
+              11.708
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 7.51,
+                "p25": 7.51,
+                "median": 7.51,
+                "p75": 7.51,
+                "p95": 7.51,
+                "max": 7.51
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 7.51,
+                "p25": 7.51,
+                "median": 7.51,
+                "p75": 7.51,
+                "p95": 7.51,
+                "max": 7.51
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 7.51,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:get",
+            "function": "state:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 10.198,
+              "p25": 10.198,
+              "median": 10.198,
+              "p75": 10.198,
+              "p95": 10.198,
+              "max": 10.198
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 59,
+              "p25": 59,
+              "median": 59,
+              "p75": 59,
+              "p95": 59,
+              "max": 59
+            },
+            "wallSamplesMs": [
+              10.198
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 6.507,
+                "p25": 6.507,
+                "median": 6.507,
+                "p75": 6.507,
+                "p95": 6.507,
+                "max": 6.507
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 6.507,
+                "p25": 6.507,
+                "median": 6.507,
+                "p75": 6.507,
+                "p95": 6.507,
+                "max": 6.507
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 6.507,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "delivery:waitingFor",
+            "function": "delivery:waitingFor",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 12.309,
+              "p25": 12.309,
+              "median": 12.309,
+              "p75": 12.309,
+              "p95": 12.309,
+              "max": 12.309
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 31,
+              "p25": 31,
+              "median": 31,
+              "p75": 31,
+              "p95": 31,
+              "max": 31
+            },
+            "wallSamplesMs": [
+              12.309
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.903,
+                "p25": 8.903,
+                "median": 8.903,
+                "p75": 8.903,
+                "p95": 8.903,
+                "max": 8.903
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.903,
+                "p25": 8.903,
+                "median": 8.903,
+                "p75": 8.903,
+                "p95": 8.903,
+                "max": 8.903
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.903,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:patch",
+            "function": "state:patch",
+            "type": "mutation",
+            "wallMs": {
+              "n": 1,
+              "min": 60.967,
+              "p25": 60.967,
+              "median": 60.967,
+              "p75": 60.967,
+              "p95": 60.967,
+              "max": 60.967
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 47,
+              "p25": 47,
+              "median": 47,
+              "p75": 47,
+              "p95": 47,
+              "max": 47
+            },
+            "wallSamplesMs": [
+              60.967
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.432,
+                "p25": 8.432,
+                "median": 8.432,
+                "p75": 8.432,
+                "p95": 8.432,
+                "max": 8.432
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.432,
+                "p25": 8.432,
+                "median": 8.432,
+                "p75": 8.432,
+                "p95": 8.432,
+                "max": 8.432
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.432,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "loadAfter": [
+        12.55,
+        14.26,
+        8.87
+      ]
+    },
+    {
+      "round": 2,
+      "label": "baseline",
+      "startedAt": "2026-10-25T15:26:30.868Z",
+      "loadBefore": [
+        12.55,
+        14.26,
+        8.87
+      ],
+      "hot": {
+        "kind": "hot_backend",
+        "transport": "HTTP via door",
+        "iterations": 1,
+        "warmup": 0,
+        "serverTimingRequested": true,
+        "adminLogAvailable": true,
+        "clockAssumption": "HTTP client and backend run on the same machine; time-window correlations are inferred and ambiguous matches are omitted.",
+        "cacheNote": "Warm queries may be server cache hits. Only uncachedExecutionMs describes successful fresh executions.",
+        "mutationEffect": "state:patch merges an empty object and advances the state revision.",
+        "measurements": [
+          {
+            "operation": "artifacts:list",
+            "function": "artifacts:list",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 17.845,
+              "p25": 17.845,
+              "median": 17.845,
+              "p75": 17.845,
+              "p95": 17.845,
+              "max": 17.845
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 14381,
+              "p25": 14381,
+              "median": 14381,
+              "p75": 14381,
+              "p95": 14381,
+              "max": 14381
+            },
+            "wallSamplesMs": [
+              17.845
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 12.016,
+                "p25": 12.016,
+                "median": 12.016,
+                "p75": 12.016,
+                "p95": 12.016,
+                "max": 12.016
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 12.016,
+                "p25": 12.016,
+                "median": 12.016,
+                "p75": 12.016,
+                "p95": 12.016,
+                "max": 12.016
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 12.016,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_with_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 12.687,
+              "p25": 12.687,
+              "median": 12.687,
+              "p75": 12.687,
+              "p95": 12.687,
+              "max": 12.687
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 740,
+              "p25": 740,
+              "median": 740,
+              "p75": 740,
+              "p95": 740,
+              "max": 740
+            },
+            "wallSamplesMs": [
+              12.687
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.649,
+                "p25": 8.649,
+                "median": 8.649,
+                "p75": 8.649,
+                "p95": 8.649,
+                "max": 8.649
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.649,
+                "p25": 8.649,
+                "median": 8.649,
+                "p75": 8.649,
+                "p95": 8.649,
+                "max": 8.649
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.649,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_without_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 13.155,
+              "p25": 13.155,
+              "median": 13.155,
+              "p75": 13.155,
+              "p95": 13.155,
+              "max": 13.155
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 661,
+              "p25": 661,
+              "median": 661,
+              "p75": 661,
+              "p95": 661,
+              "max": 661
+            },
+            "wallSamplesMs": [
+              13.155
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 9.372,
+                "p25": 9.372,
+                "median": 9.372,
+                "p75": 9.372,
+                "p95": 9.372,
+                "max": 9.372
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 9.372,
+                "p25": 9.372,
+                "median": 9.372,
+                "p75": 9.372,
+                "p95": 9.372,
+                "max": 9.372
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 9.372,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:get",
+            "function": "state:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 9.05,
+              "p25": 9.05,
+              "median": 9.05,
+              "p75": 9.05,
+              "p95": 9.05,
+              "max": 9.05
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 59,
+              "p25": 59,
+              "median": 59,
+              "p75": 59,
+              "p95": 59,
+              "max": 59
+            },
+            "wallSamplesMs": [
+              9.05
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 5.506,
+                "p25": 5.506,
+                "median": 5.506,
+                "p75": 5.506,
+                "p95": 5.506,
+                "max": 5.506
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 5.506,
+                "p25": 5.506,
+                "median": 5.506,
+                "p75": 5.506,
+                "p95": 5.506,
+                "max": 5.506
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 5.506,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "delivery:waitingFor",
+            "function": "delivery:waitingFor",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 9.645,
+              "p25": 9.645,
+              "median": 9.645,
+              "p75": 9.645,
+              "p95": 9.645,
+              "max": 9.645
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 31,
+              "p25": 31,
+              "median": 31,
+              "p75": 31,
+              "p95": 31,
+              "max": 31
+            },
+            "wallSamplesMs": [
+              9.645
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 5.778,
+                "p25": 5.778,
+                "median": 5.778,
+                "p75": 5.778,
+                "p95": 5.778,
+                "max": 5.778
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 5.778,
+                "p25": 5.778,
+                "median": 5.778,
+                "p75": 5.778,
+                "p95": 5.778,
+                "max": 5.778
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 5.778,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:patch",
+            "function": "state:patch",
+            "type": "mutation",
+            "wallMs": {
+              "n": 1,
+              "min": 49.896,
+              "p25": 49.896,
+              "median": 49.896,
+              "p75": 49.896,
+              "p95": 49.896,
+              "max": 49.896
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 47,
+              "p25": 47,
+              "median": 47,
+              "p75": 47,
+              "p95": 47,
+              "max": 47
+            },
+            "wallSamplesMs": [
+              49.896
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 7.214,
+                "p25": 7.214,
+                "median": 7.214,
+                "p75": 7.214,
+                "p95": 7.214,
+                "max": 7.214
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 7.214,
+                "p25": 7.214,
+                "median": 7.214,
+                "p75": 7.214,
+                "p95": 7.214,
+                "max": 7.214
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 7.214,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "loadAfter": [
+        11.31,
+        13.93,
+        8.82
+      ]
+    },
+    {
+      "round": 2,
+      "label": "candidate",
+      "startedAt": "2026-10-25T15:26:36.785Z",
+      "loadBefore": [
+        11.31,
+        13.93,
+        8.82
+      ],
+      "hot": {
+        "kind": "hot_backend",
+        "transport": "HTTP via door",
+        "iterations": 1,
+        "warmup": 0,
+        "serverTimingRequested": true,
+        "adminLogAvailable": true,
+        "clockAssumption": "HTTP client and backend run on the same machine; time-window correlations are inferred and ambiguous matches are omitted.",
+        "cacheNote": "Warm queries may be server cache hits. Only uncachedExecutionMs describes successful fresh executions.",
+        "mutationEffect": "state:patch merges an empty object and advances the state revision.",
+        "measurements": [
+          {
+            "operation": "artifacts:list",
+            "function": "artifacts:list",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 33.698,
+              "p25": 33.698,
+              "median": 33.698,
+              "p75": 33.698,
+              "p95": 33.698,
+              "max": 33.698
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 14381,
+              "p25": 14381,
+              "median": 14381,
+              "p75": 14381,
+              "p95": 14381,
+              "max": 14381
+            },
+            "wallSamplesMs": [
+              33.698
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 14.945,
+                "p25": 14.945,
+                "median": 14.945,
+                "p75": 14.945,
+                "p95": 14.945,
+                "max": 14.945
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 14.945,
+                "p25": 14.945,
+                "median": 14.945,
+                "p75": 14.945,
+                "p95": 14.945,
+                "max": 14.945
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 14.945,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_with_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 51.842,
+              "p25": 51.842,
+              "median": 51.842,
+              "p75": 51.842,
+              "p95": 51.842,
+              "max": 51.842
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 740,
+              "p25": 740,
+              "median": 740,
+              "p75": 740,
+              "p95": 740,
+              "max": 740
+            },
+            "wallSamplesMs": [
+              51.842
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 47.403,
+                "p25": 47.403,
+                "median": 47.403,
+                "p75": 47.403,
+                "p95": 47.403,
+                "max": 47.403
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 47.403,
+                "p25": 47.403,
+                "median": 47.403,
+                "p75": 47.403,
+                "p95": 47.403,
+                "max": 47.403
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 47.403,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_without_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 13.226,
+              "p25": 13.226,
+              "median": 13.226,
+              "p75": 13.226,
+              "p95": 13.226,
+              "max": 13.226
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 661,
+              "p25": 661,
+              "median": 661,
+              "p75": 661,
+              "p95": 661,
+              "max": 661
+            },
+            "wallSamplesMs": [
+              13.226
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.229,
+                "p25": 8.229,
+                "median": 8.229,
+                "p75": 8.229,
+                "p95": 8.229,
+                "max": 8.229
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.229,
+                "p25": 8.229,
+                "median": 8.229,
+                "p75": 8.229,
+                "p95": 8.229,
+                "max": 8.229
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.229,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:get",
+            "function": "state:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 9.671,
+              "p25": 9.671,
+              "median": 9.671,
+              "p75": 9.671,
+              "p95": 9.671,
+              "max": 9.671
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 59,
+              "p25": 59,
+              "median": 59,
+              "p75": 59,
+              "p95": 59,
+              "max": 59
+            },
+            "wallSamplesMs": [
+              9.671
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 5.787,
+                "p25": 5.787,
+                "median": 5.787,
+                "p75": 5.787,
+                "p95": 5.787,
+                "max": 5.787
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 5.787,
+                "p25": 5.787,
+                "median": 5.787,
+                "p75": 5.787,
+                "p95": 5.787,
+                "max": 5.787
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 5.787,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "delivery:waitingFor",
+            "function": "delivery:waitingFor",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 9.504,
+              "p25": 9.504,
+              "median": 9.504,
+              "p75": 9.504,
+              "p95": 9.504,
+              "max": 9.504
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 31,
+              "p25": 31,
+              "median": 31,
+              "p75": 31,
+              "p95": 31,
+              "max": 31
+            },
+            "wallSamplesMs": [
+              9.504
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 5.999,
+                "p25": 5.999,
+                "median": 5.999,
+                "p75": 5.999,
+                "p95": 5.999,
+                "max": 5.999
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 5.999,
+                "p25": 5.999,
+                "median": 5.999,
+                "p75": 5.999,
+                "p95": 5.999,
+                "max": 5.999
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 5.999,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:patch",
+            "function": "state:patch",
+            "type": "mutation",
+            "wallMs": {
+              "n": 1,
+              "min": 67.665,
+              "p25": 67.665,
+              "median": 67.665,
+              "p75": 67.665,
+              "p95": 67.665,
+              "max": 67.665
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 47,
+              "p25": 47,
+              "median": 47,
+              "p75": 47,
+              "p95": 47,
+              "max": 47
+            },
+            "wallSamplesMs": [
+              67.665
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 9.129,
+                "p25": 9.129,
+                "median": 9.129,
+                "p75": 9.129,
+                "p95": 9.129,
+                "max": 9.129
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 9.129,
+                "p25": 9.129,
+                "median": 9.129,
+                "p75": 9.129,
+                "p95": 9.129,
+                "max": 9.129
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 9.129,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "loadAfter": [
+        11.31,
+        13.93,
+        8.82
+      ]
+    },
+    {
+      "round": 3,
+      "label": "candidate",
+      "startedAt": "2026-10-25T15:26:40.652Z",
+      "loadBefore": [
+        11.31,
+        13.93,
+        8.82
+      ],
+      "hot": {
+        "kind": "hot_backend",
+        "transport": "HTTP via door",
+        "iterations": 1,
+        "warmup": 0,
+        "serverTimingRequested": true,
+        "adminLogAvailable": true,
+        "clockAssumption": "HTTP client and backend run on the same machine; time-window correlations are inferred and ambiguous matches are omitted.",
+        "cacheNote": "Warm queries may be server cache hits. Only uncachedExecutionMs describes successful fresh executions.",
+        "mutationEffect": "state:patch merges an empty object and advances the state revision.",
+        "measurements": [
+          {
+            "operation": "artifacts:list",
+            "function": "artifacts:list",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 17.547,
+              "p25": 17.547,
+              "median": 17.547,
+              "p75": 17.547,
+              "p95": 17.547,
+              "max": 17.547
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 14381,
+              "p25": 14381,
+              "median": 14381,
+              "p75": 14381,
+              "p95": 14381,
+              "max": 14381
+            },
+            "wallSamplesMs": [
+              17.547
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 12.779,
+                "p25": 12.779,
+                "median": 12.779,
+                "p75": 12.779,
+                "p95": 12.779,
+                "max": 12.779
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 12.779,
+                "p25": 12.779,
+                "median": 12.779,
+                "p75": 12.779,
+                "p95": 12.779,
+                "max": 12.779
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 12.779,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_with_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 11.052,
+              "p25": 11.052,
+              "median": 11.052,
+              "p75": 11.052,
+              "p95": 11.052,
+              "max": 11.052
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 740,
+              "p25": 740,
+              "median": 740,
+              "p75": 740,
+              "p95": 740,
+              "max": 740
+            },
+            "wallSamplesMs": [
+              11.052
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 7.302,
+                "p25": 7.302,
+                "median": 7.302,
+                "p75": 7.302,
+                "p95": 7.302,
+                "max": 7.302
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 7.302,
+                "p25": 7.302,
+                "median": 7.302,
+                "p75": 7.302,
+                "p95": 7.302,
+                "max": 7.302
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 7.302,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_without_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 12.855,
+              "p25": 12.855,
+              "median": 12.855,
+              "p75": 12.855,
+              "p95": 12.855,
+              "max": 12.855
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 661,
+              "p25": 661,
+              "median": 661,
+              "p75": 661,
+              "p95": 661,
+              "max": 661
+            },
+            "wallSamplesMs": [
+              12.855
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.785,
+                "p25": 8.785,
+                "median": 8.785,
+                "p75": 8.785,
+                "p95": 8.785,
+                "max": 8.785
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.785,
+                "p25": 8.785,
+                "median": 8.785,
+                "p75": 8.785,
+                "p95": 8.785,
+                "max": 8.785
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.785,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:get",
+            "function": "state:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 10.034,
+              "p25": 10.034,
+              "median": 10.034,
+              "p75": 10.034,
+              "p95": 10.034,
+              "max": 10.034
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 59,
+              "p25": 59,
+              "median": 59,
+              "p75": 59,
+              "p95": 59,
+              "max": 59
+            },
+            "wallSamplesMs": [
+              10.034
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 6.617,
+                "p25": 6.617,
+                "median": 6.617,
+                "p75": 6.617,
+                "p95": 6.617,
+                "max": 6.617
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 6.617,
+                "p25": 6.617,
+                "median": 6.617,
+                "p75": 6.617,
+                "p95": 6.617,
+                "max": 6.617
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 6.617,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "delivery:waitingFor",
+            "function": "delivery:waitingFor",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 11.747,
+              "p25": 11.747,
+              "median": 11.747,
+              "p75": 11.747,
+              "p95": 11.747,
+              "max": 11.747
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 31,
+              "p25": 31,
+              "median": 31,
+              "p75": 31,
+              "p95": 31,
+              "max": 31
+            },
+            "wallSamplesMs": [
+              11.747
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 6.884,
+                "p25": 6.884,
+                "median": 6.884,
+                "p75": 6.884,
+                "p95": 6.884,
+                "max": 6.884
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 6.884,
+                "p25": 6.884,
+                "median": 6.884,
+                "p75": 6.884,
+                "p95": 6.884,
+                "max": 6.884
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 6.884,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:patch",
+            "function": "state:patch",
+            "type": "mutation",
+            "wallMs": {
+              "n": 1,
+              "min": 65.168,
+              "p25": 65.168,
+              "median": 65.168,
+              "p75": 65.168,
+              "p95": 65.168,
+              "max": 65.168
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 47,
+              "p25": 47,
+              "median": 47,
+              "p75": 47,
+              "p95": 47,
+              "max": 47
+            },
+            "wallSamplesMs": [
+              65.168
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 10.751,
+                "p25": 10.751,
+                "median": 10.751,
+                "p75": 10.751,
+                "p95": 10.751,
+                "max": 10.751
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 10.751,
+                "p25": 10.751,
+                "median": 10.751,
+                "p75": 10.751,
+                "p95": 10.751,
+                "max": 10.751
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 10.751,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "loadAfter": [
+        11.39,
+        13.87,
+        8.86
+      ]
+    },
+    {
+      "round": 3,
+      "label": "baseline",
+      "startedAt": "2026-10-25T15:26:46.713Z",
+      "loadBefore": [
+        11.39,
+        13.87,
+        8.86
+      ],
+      "hot": {
+        "kind": "hot_backend",
+        "transport": "HTTP via door",
+        "iterations": 1,
+        "warmup": 0,
+        "serverTimingRequested": true,
+        "adminLogAvailable": true,
+        "clockAssumption": "HTTP client and backend run on the same machine; time-window correlations are inferred and ambiguous matches are omitted.",
+        "cacheNote": "Warm queries may be server cache hits. Only uncachedExecutionMs describes successful fresh executions.",
+        "mutationEffect": "state:patch merges an empty object and advances the state revision.",
+        "measurements": [
+          {
+            "operation": "artifacts:list",
+            "function": "artifacts:list",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 18.52,
+              "p25": 18.52,
+              "median": 18.52,
+              "p75": 18.52,
+              "p95": 18.52,
+              "max": 18.52
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 14381,
+              "p25": 14381,
+              "median": 14381,
+              "p75": 14381,
+              "p95": 14381,
+              "max": 14381
+            },
+            "wallSamplesMs": [
+              18.52
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 13.423,
+                "p25": 13.423,
+                "median": 13.423,
+                "p75": 13.423,
+                "p95": 13.423,
+                "max": 13.423
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 13.423,
+                "p25": 13.423,
+                "median": 13.423,
+                "p75": 13.423,
+                "p95": 13.423,
+                "max": 13.423
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 13.423,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_with_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 15.568,
+              "p25": 15.568,
+              "median": 15.568,
+              "p75": 15.568,
+              "p95": 15.568,
+              "max": 15.568
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 740,
+              "p25": 740,
+              "median": 740,
+              "p75": 740,
+              "p95": 740,
+              "max": 740
+            },
+            "wallSamplesMs": [
+              15.568
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 11.043,
+                "p25": 11.043,
+                "median": 11.043,
+                "p75": 11.043,
+                "p95": 11.043,
+                "max": 11.043
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 11.043,
+                "p25": 11.043,
+                "median": 11.043,
+                "p75": 11.043,
+                "p95": 11.043,
+                "max": 11.043
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 11.043,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_without_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 12.175,
+              "p25": 12.175,
+              "median": 12.175,
+              "p75": 12.175,
+              "p95": 12.175,
+              "max": 12.175
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 661,
+              "p25": 661,
+              "median": 661,
+              "p75": 661,
+              "p95": 661,
+              "max": 661
+            },
+            "wallSamplesMs": [
+              12.175
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.224,
+                "p25": 8.224,
+                "median": 8.224,
+                "p75": 8.224,
+                "p95": 8.224,
+                "max": 8.224
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.224,
+                "p25": 8.224,
+                "median": 8.224,
+                "p75": 8.224,
+                "p95": 8.224,
+                "max": 8.224
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.224,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:get",
+            "function": "state:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 12.297,
+              "p25": 12.297,
+              "median": 12.297,
+              "p75": 12.297,
+              "p95": 12.297,
+              "max": 12.297
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 59,
+              "p25": 59,
+              "median": 59,
+              "p75": 59,
+              "p95": 59,
+              "max": 59
+            },
+            "wallSamplesMs": [
+              12.297
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.406,
+                "p25": 8.406,
+                "median": 8.406,
+                "p75": 8.406,
+                "p95": 8.406,
+                "max": 8.406
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.406,
+                "p25": 8.406,
+                "median": 8.406,
+                "p75": 8.406,
+                "p95": 8.406,
+                "max": 8.406
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.406,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "delivery:waitingFor",
+            "function": "delivery:waitingFor",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 10.675,
+              "p25": 10.675,
+              "median": 10.675,
+              "p75": 10.675,
+              "p95": 10.675,
+              "max": 10.675
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 31,
+              "p25": 31,
+              "median": 31,
+              "p75": 31,
+              "p95": 31,
+              "max": 31
+            },
+            "wallSamplesMs": [
+              10.675
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 7.038,
+                "p25": 7.038,
+                "median": 7.038,
+                "p75": 7.038,
+                "p95": 7.038,
+                "max": 7.038
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 7.038,
+                "p25": 7.038,
+                "median": 7.038,
+                "p75": 7.038,
+                "p95": 7.038,
+                "max": 7.038
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 7.038,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:patch",
+            "function": "state:patch",
+            "type": "mutation",
+            "wallMs": {
+              "n": 1,
+              "min": 71.743,
+              "p25": 71.743,
+              "median": 71.743,
+              "p75": 71.743,
+              "p95": 71.743,
+              "max": 71.743
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 47,
+              "p25": 47,
+              "median": 47,
+              "p75": 47,
+              "p95": 47,
+              "max": 47
+            },
+            "wallSamplesMs": [
+              71.743
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 9.269,
+                "p25": 9.269,
+                "median": 9.269,
+                "p75": 9.269,
+                "p95": 9.269,
+                "max": 9.269
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 9.269,
+                "p25": 9.269,
+                "median": 9.269,
+                "p75": 9.269,
+                "p95": 9.269,
+                "max": 9.269
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 9.269,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "loadAfter": [
+        11.03,
+        13.76,
+        8.85
+      ]
+    },
+    {
+      "round": 4,
+      "label": "baseline",
+      "startedAt": "2026-10-25T15:26:52.638Z",
+      "loadBefore": [
+        11.03,
+        13.76,
+        8.85
+      ],
+      "hot": {
+        "kind": "hot_backend",
+        "transport": "HTTP via door",
+        "iterations": 1,
+        "warmup": 0,
+        "serverTimingRequested": true,
+        "adminLogAvailable": true,
+        "clockAssumption": "HTTP client and backend run on the same machine; time-window correlations are inferred and ambiguous matches are omitted.",
+        "cacheNote": "Warm queries may be server cache hits. Only uncachedExecutionMs describes successful fresh executions.",
+        "mutationEffect": "state:patch merges an empty object and advances the state revision.",
+        "measurements": [
+          {
+            "operation": "artifacts:list",
+            "function": "artifacts:list",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 23.031,
+              "p25": 23.031,
+              "median": 23.031,
+              "p75": 23.031,
+              "p95": 23.031,
+              "max": 23.031
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 14381,
+              "p25": 14381,
+              "median": 14381,
+              "p75": 14381,
+              "p95": 14381,
+              "max": 14381
+            },
+            "wallSamplesMs": [
+              23.031
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 15.115,
+                "p25": 15.115,
+                "median": 15.115,
+                "p75": 15.115,
+                "p95": 15.115,
+                "max": 15.115
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 15.115,
+                "p25": 15.115,
+                "median": 15.115,
+                "p75": 15.115,
+                "p95": 15.115,
+                "max": 15.115
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 15.115,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_with_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 12.376,
+              "p25": 12.376,
+              "median": 12.376,
+              "p75": 12.376,
+              "p95": 12.376,
+              "max": 12.376
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 740,
+              "p25": 740,
+              "median": 740,
+              "p75": 740,
+              "p95": 740,
+              "max": 740
+            },
+            "wallSamplesMs": [
+              12.376
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 7.891,
+                "p25": 7.891,
+                "median": 7.891,
+                "p75": 7.891,
+                "p95": 7.891,
+                "max": 7.891
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 7.891,
+                "p25": 7.891,
+                "median": 7.891,
+                "p75": 7.891,
+                "p95": 7.891,
+                "max": 7.891
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 7.891,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_without_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 11.619,
+              "p25": 11.619,
+              "median": 11.619,
+              "p75": 11.619,
+              "p95": 11.619,
+              "max": 11.619
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 661,
+              "p25": 661,
+              "median": 661,
+              "p75": 661,
+              "p95": 661,
+              "max": 661
+            },
+            "wallSamplesMs": [
+              11.619
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.438,
+                "p25": 8.438,
+                "median": 8.438,
+                "p75": 8.438,
+                "p95": 8.438,
+                "max": 8.438
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.438,
+                "p25": 8.438,
+                "median": 8.438,
+                "p75": 8.438,
+                "p95": 8.438,
+                "max": 8.438
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.438,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:get",
+            "function": "state:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 9.348,
+              "p25": 9.348,
+              "median": 9.348,
+              "p75": 9.348,
+              "p95": 9.348,
+              "max": 9.348
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 59,
+              "p25": 59,
+              "median": 59,
+              "p75": 59,
+              "p95": 59,
+              "max": 59
+            },
+            "wallSamplesMs": [
+              9.348
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 5.931,
+                "p25": 5.931,
+                "median": 5.931,
+                "p75": 5.931,
+                "p95": 5.931,
+                "max": 5.931
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 5.931,
+                "p25": 5.931,
+                "median": 5.931,
+                "p75": 5.931,
+                "p95": 5.931,
+                "max": 5.931
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 5.931,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "delivery:waitingFor",
+            "function": "delivery:waitingFor",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 10.661,
+              "p25": 10.661,
+              "median": 10.661,
+              "p75": 10.661,
+              "p95": 10.661,
+              "max": 10.661
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 31,
+              "p25": 31,
+              "median": 31,
+              "p75": 31,
+              "p95": 31,
+              "max": 31
+            },
+            "wallSamplesMs": [
+              10.661
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 6.968,
+                "p25": 6.968,
+                "median": 6.968,
+                "p75": 6.968,
+                "p95": 6.968,
+                "max": 6.968
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 6.968,
+                "p25": 6.968,
+                "median": 6.968,
+                "p75": 6.968,
+                "p95": 6.968,
+                "max": 6.968
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 6.968,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:patch",
+            "function": "state:patch",
+            "type": "mutation",
+            "wallMs": {
+              "n": 1,
+              "min": 40.978,
+              "p25": 40.978,
+              "median": 40.978,
+              "p75": 40.978,
+              "p95": 40.978,
+              "max": 40.978
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 47,
+              "p25": 47,
+              "median": 47,
+              "p75": 47,
+              "p95": 47,
+              "max": 47
+            },
+            "wallSamplesMs": [
+              40.978
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.531,
+                "p25": 8.531,
+                "median": 8.531,
+                "p75": 8.531,
+                "p95": 8.531,
+                "max": 8.531
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.531,
+                "p25": 8.531,
+                "median": 8.531,
+                "p75": 8.531,
+                "p95": 8.531,
+                "max": 8.531
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.531,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "loadAfter": [
+        10.87,
+        13.68,
+        8.85
+      ]
+    },
+    {
+      "round": 4,
+      "label": "candidate",
+      "startedAt": "2026-10-25T15:26:58.489Z",
+      "loadBefore": [
+        10.87,
+        13.68,
+        8.85
+      ],
+      "hot": {
+        "kind": "hot_backend",
+        "transport": "HTTP via door",
+        "iterations": 1,
+        "warmup": 0,
+        "serverTimingRequested": true,
+        "adminLogAvailable": true,
+        "clockAssumption": "HTTP client and backend run on the same machine; time-window correlations are inferred and ambiguous matches are omitted.",
+        "cacheNote": "Warm queries may be server cache hits. Only uncachedExecutionMs describes successful fresh executions.",
+        "mutationEffect": "state:patch merges an empty object and advances the state revision.",
+        "measurements": [
+          {
+            "operation": "artifacts:list",
+            "function": "artifacts:list",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 38.545,
+              "p25": 38.545,
+              "median": 38.545,
+              "p75": 38.545,
+              "p95": 38.545,
+              "max": 38.545
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 14381,
+              "p25": 14381,
+              "median": 14381,
+              "p75": 14381,
+              "p95": 14381,
+              "max": 14381
+            },
+            "wallSamplesMs": [
+              38.545
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 29.231,
+                "p25": 29.231,
+                "median": 29.231,
+                "p75": 29.231,
+                "p95": 29.231,
+                "max": 29.231
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 29.231,
+                "p25": 29.231,
+                "median": 29.231,
+                "p75": 29.231,
+                "p95": 29.231,
+                "max": 29.231
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 29.231,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_with_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 24.227,
+              "p25": 24.227,
+              "median": 24.227,
+              "p75": 24.227,
+              "p95": 24.227,
+              "max": 24.227
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 740,
+              "p25": 740,
+              "median": 740,
+              "p75": 740,
+              "p95": 740,
+              "max": 740
+            },
+            "wallSamplesMs": [
+              24.227
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.745,
+                "p25": 8.745,
+                "median": 8.745,
+                "p75": 8.745,
+                "p95": 8.745,
+                "max": 8.745
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.745,
+                "p25": 8.745,
+                "median": 8.745,
+                "p75": 8.745,
+                "p95": 8.745,
+                "max": 8.745
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.745,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "artifact_without_history",
+            "function": "artifacts:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 12.799,
+              "p25": 12.799,
+              "median": 12.799,
+              "p75": 12.799,
+              "p95": 12.799,
+              "max": 12.799
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 661,
+              "p25": 661,
+              "median": 661,
+              "p75": 661,
+              "p95": 661,
+              "max": 661
+            },
+            "wallSamplesMs": [
+              12.799
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 6.811,
+                "p25": 6.811,
+                "median": 6.811,
+                "p75": 6.811,
+                "p95": 6.811,
+                "max": 6.811
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 6.811,
+                "p25": 6.811,
+                "median": 6.811,
+                "p75": 6.811,
+                "p95": 6.811,
+                "max": 6.811
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 6.811,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:get",
+            "function": "state:get",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 12.333,
+              "p25": 12.333,
+              "median": 12.333,
+              "p75": 12.333,
+              "p95": 12.333,
+              "max": 12.333
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 59,
+              "p25": 59,
+              "median": 59,
+              "p75": 59,
+              "p95": 59,
+              "max": 59
+            },
+            "wallSamplesMs": [
+              12.333
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 8.304,
+                "p25": 8.304,
+                "median": 8.304,
+                "p75": 8.304,
+                "p95": 8.304,
+                "max": 8.304
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 8.304,
+                "p25": 8.304,
+                "median": 8.304,
+                "p75": 8.304,
+                "p95": 8.304,
+                "max": 8.304
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 8.304,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "delivery:waitingFor",
+            "function": "delivery:waitingFor",
+            "type": "query",
+            "wallMs": {
+              "n": 1,
+              "min": 9.652,
+              "p25": 9.652,
+              "median": 9.652,
+              "p75": 9.652,
+              "p95": 9.652,
+              "max": 9.652
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 31,
+              "p25": 31,
+              "median": 31,
+              "p75": 31,
+              "p95": 31,
+              "max": 31
+            },
+            "wallSamplesMs": [
+              9.652
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 5.884,
+                "p25": 5.884,
+                "median": 5.884,
+                "p75": 5.884,
+                "p95": 5.884,
+                "max": 5.884
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 5.884,
+                "p25": 5.884,
+                "median": 5.884,
+                "p75": 5.884,
+                "p95": 5.884,
+                "max": 5.884
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 5.884,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          },
+          {
+            "operation": "state:patch",
+            "function": "state:patch",
+            "type": "mutation",
+            "wallMs": {
+              "n": 1,
+              "min": 43.332,
+              "p25": 43.332,
+              "median": 43.332,
+              "p75": 43.332,
+              "p95": 43.332,
+              "max": 43.332
+            },
+            "responseBytes": {
+              "n": 1,
+              "min": 47,
+              "p25": 47,
+              "median": 47,
+              "p75": 47,
+              "p95": 47,
+              "max": 47
+            },
+            "wallSamplesMs": [
+              43.332
+            ],
+            "server": {
+              "available": true,
+              "matched": 1,
+              "unmatched": 0,
+              "requestIdMatches": 0,
+              "timeWindowMatches": 1,
+              "executionMs": {
+                "n": 1,
+                "min": 10.013,
+                "p25": 10.013,
+                "median": 10.013,
+                "p75": 10.013,
+                "p95": 10.013,
+                "max": 10.013
+              },
+              "cachedExecutionMs": {
+                "n": 0
+              },
+              "uncachedExecutionMs": {
+                "n": 1,
+                "min": 10.013,
+                "p25": 10.013,
+                "median": 10.013,
+                "p75": 10.013,
+                "p95": 10.013,
+                "max": 10.013
+              },
+              "unknownCacheEntries": 0,
+              "failed": 0,
+              "retryEntries": 0,
+              "samples": [
+                {
+                  "executionMs": 10.013,
+                  "cached": false,
+                  "matchedBy": "window_inferred"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "loadAfter": [
+        10.4,
+        13.53,
+        8.83
+      ]
+    }
+  ]
+}

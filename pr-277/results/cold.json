@@ -1,0 +1,174 @@
+{
+  "rows": [
+    {
+      "round": 0,
+      "label": "baseline",
+      "freshSetupMs": 4444.898399,
+      "firstServeMs": 1107.2401849999997,
+      "startedAt": "2026-10-25T15:22:57.335Z",
+      "loadBefore": [
+        18.98,
+        14.59,
+        7.49
+      ],
+      "loadAfter": [
+        18.26,
+        14.52,
+        7.51
+      ]
+    },
+    {
+      "round": 0,
+      "label": "candidate",
+      "freshSetupMs": 5500.7929970000005,
+      "firstServeMs": 951.2896679999994,
+      "startedAt": "2026-10-25T15:23:03.820Z",
+      "loadBefore": [
+        18.26,
+        14.52,
+        7.51
+      ],
+      "loadAfter": [
+        19.2,
+        14.77,
+        7.63
+      ]
+    },
+    {
+      "round": 1,
+      "label": "candidate",
+      "freshSetupMs": 6280.909947,
+      "firstServeMs": 1159.5080830000006,
+      "startedAt": "2026-10-25T15:23:11.280Z",
+      "loadBefore": [
+        19.66,
+        14.94,
+        7.72
+      ],
+      "loadAfter": [
+        18.81,
+        14.84,
+        7.73
+      ]
+    },
+    {
+      "round": 1,
+      "label": "baseline",
+      "freshSetupMs": 5966.613035000002,
+      "firstServeMs": 959.2695590000003,
+      "startedAt": "2026-10-25T15:23:19.634Z",
+      "loadBefore": [
+        18.81,
+        14.84,
+        7.73
+      ],
+      "loadAfter": [
+        19.38,
+        15.11,
+        7.89
+      ]
+    },
+    {
+      "round": 2,
+      "label": "baseline",
+      "freshSetupMs": 5073.7866120000035,
+      "firstServeMs": 891.9201150000008,
+      "startedAt": "2026-10-25T15:23:27.488Z",
+      "loadBefore": [
+        19.38,
+        15.11,
+        7.89
+      ],
+      "loadAfter": [
+        18.15,
+        14.93,
+        7.87
+      ]
+    },
+    {
+      "round": 2,
+      "label": "candidate",
+      "freshSetupMs": 5011.773306999996,
+      "firstServeMs": 923.3117540000021,
+      "startedAt": "2026-10-25T15:23:34.403Z",
+      "loadBefore": [
+        18.15,
+        14.93,
+        7.87
+      ],
+      "loadAfter": [
+        17.81,
+        14.91,
+        7.91
+      ]
+    },
+    {
+      "round": 3,
+      "label": "candidate",
+      "freshSetupMs": 4504.201122999999,
+      "firstServeMs": 707.2370450000017,
+      "startedAt": "2026-10-25T15:23:41.313Z",
+      "loadBefore": [
+        17.43,
+        14.88,
+        7.93
+      ],
+      "loadAfter": [
+        16.75,
+        14.78,
+        7.94
+      ]
+    },
+    {
+      "round": 3,
+      "label": "baseline",
+      "freshSetupMs": 4737.552078000001,
+      "firstServeMs": 883.3576089999988,
+      "startedAt": "2026-10-25T15:23:47.456Z",
+      "loadBefore": [
+        16.75,
+        14.78,
+        7.94
+      ],
+      "loadAfter": [
+        16.05,
+        14.67,
+        7.94
+      ]
+    },
+    {
+      "round": 4,
+      "label": "baseline",
+      "freshSetupMs": 5813.820971000001,
+      "firstServeMs": 993.7733920000028,
+      "startedAt": "2026-10-25T15:23:54.007Z",
+      "loadBefore": [
+        16.05,
+        14.67,
+        7.94
+      ],
+      "loadAfter": [
+        15.49,
+        14.57,
+        7.95
+      ]
+    },
+    {
+      "round": 4,
+      "label": "candidate",
+      "freshSetupMs": 4967.737854999999,
+      "firstServeMs": 1074.7895660000067,
+      "startedAt": "2026-10-25T15:24:01.748Z",
+      "loadBefore": [
+        15.85,
+        14.66,
+        8.01
+      ],
+      "loadAfter": [
+        16.98,
+        14.92,
+        8.13
+      ]
+    }
+  ]
+}

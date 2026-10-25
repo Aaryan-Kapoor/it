@@ -1,0 +1,223 @@
+{
+  "baselineSha256": "fcdb4ba8c480138631a791e9b1a42103b1119ce07780ea96c695e2a135c1cf8b",
+  "auditSha256": "fcdb4ba8c480138631a791e9b1a42103b1119ce07780ea96c695e2a135c1cf8b",
+  "identical": true,
+  "outputBytes": 4936495,
+  "modules": 159,
+  "groups": [
+    [
+      "packages/cli/src/site.generated.ts",
+      1853349
+    ],
+    [
+      "packages/cli/src/functions.generated.ts",
+      1126916
+    ],
+    [
+      "CLI source",
+      705865
+    ],
+    [
+      "convex",
+      318654
+    ],
+    [
+      "packages/cli/src/addons.generated.ts",
+      295034
+    ],
+    [
+      "packages/cli/src/tour.generated.ts",
+      199621
+    ],
+    [
+      "bn.js",
+      91004
+    ],
+    [
+      "content source",
+      52271
+    ],
+    [
+      "asn1.js",
+      49080
+    ],
+    [
+      "qrcode-generator",
+      46390
+    ],
+    [
+      "jose",
+      45421
+    ],
+    [
+      "web-push",
+      22311
+    ],
+    [
+      "fflate",
+      15746
+    ],
+    [
+      "debug",
+      15294
+    ],
+    [
+      "http_ece",
+      15086
+    ],
+    [
+      "other source",
+      14448
+    ],
+    [
+      "packages/content/src/runtime.generated.ts",
+      10335
+    ],
+    [
+      "jws",
+      9282
+    ],
+    [
+      "https-proxy-agent",
+      9246
+    ],
+    [
+      "agent-base",
+      8248
+    ],
+    [
+      "jwa",
+      7674
+    ],
+    [
+      "ecdsa-sig-formatter",
+      6122
+    ],
+    [
+      "ms",
+      2883
+    ],
+    [
+      "safer-buffer",
+      2313
+    ],
+    [
+      "safe-buffer",
+      1742
+    ],
+    [
+      "inherits",
+      1221
+    ],
+    [
+      "buffer-equal-constant-time",
+      1010
+    ],
+    [
+      "minimalistic-assert",
+      404
+    ]
+  ],
+  "topModules": [
+    {
+      "path": "packages/cli/src/site.generated.ts",
+      "bytes": 1853349
+    },
+    {
+      "path": "packages/cli/src/functions.generated.ts",
+      "bytes": 1126916
+    },
+    {
+      "path": "packages/cli/src/addons.generated.ts",
+      "bytes": 295034
+    },
+    {
+      "path": "packages/cli/src/tour.generated.ts",
+      "bytes": 199621
+    },
+    {
+      "path": "node_modules/convex/dist/esm/browser/simple_client-node.js",
+      "bytes": 136708
+    },
+    {
+      "path": "packages/cli/src/main.ts",
+      "bytes": 111987
+    },
+    {
+      "path": "packages/cli/src/connector.ts",
+      "bytes": 98751
+    },
+    {
+      "path": "node_modules/bn.js/lib/bn.js",
+      "bytes": 91004
+    },
+    {
+      "path": "packages/cli/src/serve/backend.ts",
+      "bytes": 66968
+    },
+    {
+      "path": "packages/cli/src/setup.ts",
+      "bytes": 60551
+    },
+    {
+      "path": "node_modules/qrcode-generator/dist/qrcode.mjs",
+      "bytes": 46390
+    },
+    {
+      "path": "packages/cli/src/lib.ts",
+      "bytes": 45618
+    },
+    {
+      "path": "packages/cli/src/serve/door.ts",
+      "bytes": 44211
+    },
+    {
+      "path": "packages/cli/src/service.ts",
+      "bytes": 27454
+    },
+    {
+      "path": "packages/cli/src/usage.ts",
+      "bytes": 26287
+    },
+    {
+      "path": "node_modules/convex/dist/esm/browser/sync/client.js",
+      "bytes": 24943
+    },
+    {
+      "path": "packages/cli/src/wake.ts",
+      "bytes": 24070
+    },
+    {
+      "path": "packages/content/src/index.ts",
+      "bytes": 23144
+    },
+    {
+      "path": "node_modules/convex/dist/esm/browser/sync/web_socket_manager.js",
+      "bytes": 21858
+    },
+    {
+      "path": "node_modules/asn1.js/lib/asn1/base/node.js",
+      "bytes": 17821
+    },
+    {
+      "path": "packages/cli/src/publish.ts",
+      "bytes": 16897
+    },
+    {
+      "path": "node_modules/fflate/esm/index.mjs",
+      "bytes": 15746
+    },
+    {
+      "path": "packages/cli/src/delivery-recovery.ts",
+      "bytes": 15148
+    },
+    {
+      "path": "node_modules/convex/dist/esm/browser/http_client.js",
+      "bytes": 15144
+    },
+    {
+      "path": "node_modules/http_ece/ece.js",
+      "bytes": 15086
+    }
+  ]
+}

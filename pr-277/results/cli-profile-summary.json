@@ -1,0 +1,622 @@
+{
+  "version": {
+    "averageSampledMs": 154.086,
+    "topSelfMs": [
+      {
+        "frame": "compileSourceTextModule node:internal/modules/esm/utils:317",
+        "ms": 59.07633333333333,
+        "pct": 38.33984484854778
+      },
+      {
+        "frame": "compileForInternalLoader node:internal/bootstrap/realm:383",
+        "ms": 13.792666666666667,
+        "pct": 8.951278290478477
+      },
+      {
+        "frame": "(program) :0",
+        "ms": 12.149,
+        "pct": 7.88455797411835
+      },
+      {
+        "frame": "<anonymous> file:///benchmark/baseline/it.mjs:1",
+        "ms": 9.598666666666666,
+        "pct": 6.229421664957664
+      },
+      {
+        "frame": "__require node:internal/deps/undici/undici:5",
+        "ms": 8.322,
+        "pct": 5.400880028036291
+      },
+      {
+        "frame": "decodeUTF8 :0",
+        "ms": 6.646,
+        "pct": 4.313175758991732
+      },
+      {
+        "frame": "(garbage collector) :0",
+        "ms": 3.73,
+        "pct": 2.420726088028763
+      },
+      {
+        "frame": "read :0",
+        "ms": 3.4236666666666666,
+        "pct": 2.221919361049457
+      },
+      {
+        "frame": "internalBinding node:internal/bootstrap/realm:182",
+        "ms": 1.9836666666666667,
+        "pct": 1.287376313660337
+      },
+      {
+        "frame": "__require3 file:///benchmark/baseline/it.mjs:15",
+        "ms": 1.8426666666666667,
+        "pct": 1.1958689736034855
+      },
+      {
+        "frame": "<anonymous> node:_http_agent:1",
+        "ms": 1.7393333333333334,
+        "pct": 1.1288068567769514
+      },
+      {
+        "frame": "__require22 file:///benchmark/baseline/it.mjs:13385",
+        "ms": 1.2233333333333334,
+        "pct": 0.7939289314625166
+      },
+      {
+        "frame": "freb file:///benchmark/baseline/it.mjs:19511",
+        "ms": 0.9213333333333333,
+        "pct": 0.5979344868017428
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/util:1",
+        "ms": 0.882,
+        "pct": 0.5724076165258363
+      },
+      {
+        "frame": "requireBuiltin node:internal/bootstrap/realm:420",
+        "ms": 0.777,
+        "pct": 0.5042638526537129
+      },
+      {
+        "frame": "compileFunction :0",
+        "ms": 0.7703333333333333,
+        "pct": 0.49993726447135584
+      },
+      {
+        "frame": "lib/llhttp/constants.js node:internal/deps/undici/undici:3412",
+        "ms": 0.6416666666666667,
+        "pct": 0.41643411255186497
+      },
+      {
+        "frame": "getCLIOptionsFromBinding node:internal/options:32",
+        "ms": 0.618,
+        "pct": 0.4010747245044975
+      },
+      {
+        "frame": "<anonymous> node:zlib:1",
+        "ms": 0.553,
+        "pct": 0.3588904897265164
+      },
+      {
+        "frame": "createSupportedAlgorithms node:internal/crypto/util:572",
+        "ms": 0.5443333333333333,
+        "pct": 0.3532659250894522
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/util:182",
+        "ms": 0.4846666666666667,
+        "pct": 0.3145429608573567
+      },
+      {
+        "frame": "__name node:internal/deps/undici/undici:4",
+        "ms": 0.474,
+        "pct": 0.30762041976558546
+      },
+      {
+        "frame": "<anonymous> node:internal/deps/undici/undici:1",
+        "ms": 0.4613333333333333,
+        "pct": 0.29939990221910706
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/keys:1",
+        "ms": 0.435,
+        "pct": 0.2823098788987968
+      },
+      {
+        "frame": "Duplex node:internal/streams/duplex:64",
+        "ms": 0.3973333333333333,
+        "pct": 0.2578646556684795
+      },
+      {
+        "frame": "__copyProps2 file:///benchmark/baseline/it.mjs:13388",
+        "ms": 0.38566666666666666,
+        "pct": 0.2502931263493547
+      },
+      {
+        "frame": "<anonymous> :0",
+        "ms": 0.38066666666666665,
+        "pct": 0.24704818521258692
+      },
+      {
+        "frame": "main file:///benchmark/baseline/it.mjs:43413",
+        "ms": 0.36533333333333334,
+        "pct": 0.2370970323931657
+      },
+      {
+        "frame": "createWritableStdioStream node:internal/bootstrap/switches/is_main_thread:50",
+        "ms": 0.36333333333333334,
+        "pct": 0.2357990559384586
+      },
+      {
+        "frame": "add node:internal/deps/undici/undici:1115",
+        "ms": 0.35333333333333333,
+        "pct": 0.22930917366492304
+      }
+    ]
+  },
+  "help": {
+    "averageSampledMs": 149.24566666666666,
+    "topSelfMs": [
+      {
+        "frame": "compileSourceTextModule node:internal/modules/esm/utils:317",
+        "ms": 54.18533333333333,
+        "pct": 36.30613507483188
+      },
+      {
+        "frame": "compileForInternalLoader node:internal/bootstrap/realm:383",
+        "ms": 13.993,
+        "pct": 9.375816606623978
+      },
+      {
+        "frame": "(program) :0",
+        "ms": 11.921333333333333,
+        "pct": 7.987724936737415
+      },
+      {
+        "frame": "<anonymous> file:///benchmark/baseline/it.mjs:1",
+        "ms": 9.413666666666666,
+        "pct": 6.307497481780599
+      },
+      {
+        "frame": "__require node:internal/deps/undici/undici:5",
+        "ms": 8.682,
+        "pct": 5.817254325642062
+      },
+      {
+        "frame": "decodeUTF8 :0",
+        "ms": 5.851666666666667,
+        "pct": 3.9208285221011443
+      },
+      {
+        "frame": "(garbage collector) :0",
+        "ms": 5.044,
+        "pct": 3.3796626144366
+      },
+      {
+        "frame": "read :0",
+        "ms": 3.08,
+        "pct": 2.063711509211881
+      },
+      {
+        "frame": "__require3 file:///benchmark/baseline/it.mjs:15",
+        "ms": 1.641,
+        "pct": 1.0995294112391873
+      },
+      {
+        "frame": "<anonymous> node:internal/http:1",
+        "ms": 1.597,
+        "pct": 1.070047818250446
+      },
+      {
+        "frame": "internalBinding node:internal/bootstrap/realm:182",
+        "ms": 1.4683333333333333,
+        "pct": 0.9838364932985212
+      },
+      {
+        "frame": "__require22 file:///benchmark/baseline/it.mjs:13385",
+        "ms": 0.9623333333333334,
+        "pct": 0.6447981739279979
+      },
+      {
+        "frame": "freb file:///benchmark/baseline/it.mjs:19511",
+        "ms": 0.8183333333333334,
+        "pct": 0.5483129605102995
+      },
+      {
+        "frame": "_TstNode node:internal/deps/undici/undici:1096",
+        "ms": 0.7643333333333333,
+        "pct": 0.5121310054786627
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/util:1",
+        "ms": 0.7583333333333333,
+        "pct": 0.5081107882529252
+      },
+      {
+        "frame": "<anonymous> node:zlib:1",
+        "ms": 0.7383333333333333,
+        "pct": 0.4947100641671338
+      },
+      {
+        "frame": "<anonymous> node:internal/streams/readable:1",
+        "ms": 0.6253333333333333,
+        "pct": 0.4189959730824122
+      },
+      {
+        "frame": "filterDuplicateStrings node:internal/util:333",
+        "ms": 0.598,
+        "pct": 0.40068165016516394
+      },
+      {
+        "frame": "<anonymous> node:internal/modules/cjs/loader:1314",
+        "ms": 0.5486666666666666,
+        "pct": 0.36762653075354507
+      },
+      {
+        "frame": "getCLIOptionsFromBinding node:internal/options:32",
+        "ms": 0.5366666666666666,
+        "pct": 0.35958609630207017
+      },
+      {
+        "frame": "createWritableStdioStream node:internal/bootstrap/switches/is_main_thread:50",
+        "ms": 0.49133333333333334,
+        "pct": 0.3292111217076096
+      },
+      {
+        "frame": "compileFunction :0",
+        "ms": 0.4776666666666667,
+        "pct": 0.32005396024898547
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/keys:1",
+        "ms": 0.444,
+        "pct": 0.29749607470456985
+      },
+      {
+        "frame": "createSupportedAlgorithms node:internal/crypto/util:572",
+        "ms": 0.44066666666666665,
+        "pct": 0.2952626206902713
+      },
+      {
+        "frame": "lib/llhttp/constants.js node:internal/deps/undici/undici:3412",
+        "ms": 0.43433333333333335,
+        "pct": 0.291019058063104
+      },
+      {
+        "frame": "requireBuiltin node:internal/bootstrap/realm:420",
+        "ms": 0.391,
+        "pct": 0.26198415587722257
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/x509:1",
+        "ms": 0.3606666666666667,
+        "pct": 0.24165972434710556
+      },
+      {
+        "frame": "<anonymous> node:internal/tls/wrap:1",
+        "ms": 0.328,
+        "pct": 0.21977187500697953
+      },
+      {
+        "frame": "<anonymous> node:stream:1",
+        "ms": 0.327,
+        "pct": 0.21910183880268996
+      },
+      {
+        "frame": "Socket node:net:611",
+        "ms": 0.324,
+        "pct": 0.21709173018982125
+      }
+    ]
+  },
+  "not-a-command": {
+    "averageSampledMs": 145.363,
+    "topSelfMs": [
+      {
+        "frame": "compileSourceTextModule node:internal/modules/esm/utils:317",
+        "ms": 53.86533333333333,
+        "pct": 37.05573862216199
+      },
+      {
+        "frame": "(program) :0",
+        "ms": 11.478333333333333,
+        "pct": 7.896323915531004
+      },
+      {
+        "frame": "compileForInternalLoader node:internal/bootstrap/realm:383",
+        "ms": 11.249333333333333,
+        "pct": 7.738787265902144
+      },
+      {
+        "frame": "<anonymous> file:///benchmark/baseline/it.mjs:1",
+        "ms": 9.183333333333334,
+        "pct": 6.317517754403344
+      },
+      {
+        "frame": "__require node:internal/deps/undici/undici:5",
+        "ms": 8.214333333333334,
+        "pct": 5.650910708593888
+      },
+      {
+        "frame": "decodeUTF8 :0",
+        "ms": 5.734,
+        "pct": 3.9446076374318086
+      },
+      {
+        "frame": "read :0",
+        "ms": 2.941333333333333,
+        "pct": 2.0234401693232344
+      },
+      {
+        "frame": "(garbage collector) :0",
+        "ms": 2.582,
+        "pct": 1.7762429228895937
+      },
+      {
+        "frame": "__require3 file:///benchmark/baseline/it.mjs:15",
+        "ms": 1.8996666666666666,
+        "pct": 1.3068433278528007
+      },
+      {
+        "frame": "lib/core/tree.js node:internal/deps/undici/undici:1071",
+        "ms": 1.7716666666666667,
+        "pct": 1.2187879079729138
+      },
+      {
+        "frame": "<anonymous> node:_http_agent:1",
+        "ms": 1.7383333333333333,
+        "pct": 1.19585680904586
+      },
+      {
+        "frame": "<anonymous> node:internal/http:1",
+        "ms": 1.638,
+        "pct": 1.1268342012754278
+      },
+      {
+        "frame": "internalBinding node:internal/bootstrap/realm:182",
+        "ms": 1.5113333333333334,
+        "pct": 1.039696025352623
+      },
+      {
+        "frame": "__require22 file:///benchmark/baseline/it.mjs:13385",
+        "ms": 1.12,
+        "pct": 0.7704849239490104
+      },
+      {
+        "frame": "freb file:///benchmark/baseline/it.mjs:19511",
+        "ms": 0.9286666666666666,
+        "pct": 0.6388604161077212
+      },
+      {
+        "frame": "<anonymous> node:zlib:1",
+        "ms": 0.8283333333333334,
+        "pct": 0.5698378083372889
+      },
+      {
+        "frame": "main file:///benchmark/baseline/it.mjs:43413",
+        "ms": 0.691,
+        "pct": 0.475361680757827
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/util:1",
+        "ms": 0.5923333333333334,
+        "pct": 0.4074856279337475
+      },
+      {
+        "frame": "lib/llhttp/constants.js node:internal/deps/undici/undici:3412",
+        "ms": 0.59,
+        "pct": 0.40588045100885367
+      },
+      {
+        "frame": "record file:///benchmark/baseline/it.mjs:24829",
+        "ms": 0.49566666666666664,
+        "pct": 0.3409854410452912
+      },
+      {
+        "frame": "createWritableStdioStream node:internal/bootstrap/switches/is_main_thread:50",
+        "ms": 0.426,
+        "pct": 0.2930594442877486
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/util:182",
+        "ms": 0.392,
+        "pct": 0.26966972338215367
+      },
+      {
+        "frame": "createSupportedAlgorithms node:internal/crypto/util:572",
+        "ms": 0.38266666666666665,
+        "pct": 0.2632490156825786
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/keys:1",
+        "ms": 0.38066666666666665,
+        "pct": 0.2618731497469553
+      },
+      {
+        "frame": "_hashCache node:internal/crypto/util:184",
+        "ms": 0.369,
+        "pct": 0.25384726512248645
+      },
+      {
+        "frame": "requireBuiltin node:internal/bootstrap/realm:420",
+        "ms": 0.361,
+        "pct": 0.24834380137999354
+      },
+      {
+        "frame": "compileFunction :0",
+        "ms": 0.35833333333333334,
+        "pct": 0.24650931346582922
+      },
+      {
+        "frame": "<anonymous> node:internal/webstreams/readablestream:1",
+        "ms": 0.3433333333333333,
+        "pct": 0.23619031894865497
+      },
+      {
+        "frame": "counted file:///benchmark/baseline/it.mjs:43911",
+        "ms": 0.32566666666666666,
+        "pct": 0.22403683651731643
+      },
+      {
+        "frame": "set TextDecoder :0",
+        "ms": 0.32133333333333336,
+        "pct": 0.22105579365679942
+      }
+    ]
+  },
+  "displays": {
+    "averageSampledMs": 147.15433333333334,
+    "topSelfMs": [
+      {
+        "frame": "compileSourceTextModule node:internal/modules/esm/utils:317",
+        "ms": 55.87433333333333,
+        "pct": 37.96988649105361
+      },
+      {
+        "frame": "(program) :0",
+        "ms": 12.264333333333333,
+        "pct": 8.33433379467815
+      },
+      {
+        "frame": "compileForInternalLoader node:internal/bootstrap/realm:383",
+        "ms": 11.408,
+        "pct": 7.75240507131968
+      },
+      {
+        "frame": "<anonymous> file:///benchmark/baseline/it.mjs:1",
+        "ms": 9.704333333333333,
+        "pct": 6.594663652446524
+      },
+      {
+        "frame": "__require node:internal/deps/undici/undici:5",
+        "ms": 6.969666666666667,
+        "pct": 4.736297266135554
+      },
+      {
+        "frame": "decodeUTF8 :0",
+        "ms": 6.203,
+        "pct": 4.215302301665146
+      },
+      {
+        "frame": "(garbage collector) :0",
+        "ms": 5.221666666666667,
+        "pct": 3.548428747143022
+      },
+      {
+        "frame": "read :0",
+        "ms": 3.2163333333333335,
+        "pct": 2.1856871357282492
+      },
+      {
+        "frame": "__require3 file:///benchmark/baseline/it.mjs:15",
+        "ms": 2.0756666666666668,
+        "pct": 1.410537236416189
+      },
+      {
+        "frame": "internalBinding node:internal/bootstrap/realm:182",
+        "ms": 1.4543333333333333,
+        "pct": 0.9883047956453882
+      },
+      {
+        "frame": "__require22 file:///benchmark/baseline/it.mjs:13385",
+        "ms": 1.2176666666666667,
+        "pct": 0.8274759153088708
+      },
+      {
+        "frame": "_hashCache node:internal/crypto/util:184",
+        "ms": 0.8053333333333333,
+        "pct": 0.5472712322436988
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/util:1",
+        "ms": 0.781,
+        "pct": 0.5307353051105076
+      },
+      {
+        "frame": "freb file:///benchmark/baseline/it.mjs:19511",
+        "ms": 0.6906666666666667,
+        "pct": 0.46934850712290727
+      },
+      {
+        "frame": "<anonymous> node:zlib:1",
+        "ms": 0.659,
+        "pct": 0.4478291498947817
+      },
+      {
+        "frame": "requireBuiltin node:internal/bootstrap/realm:420",
+        "ms": 0.645,
+        "pct": 0.43831532880445245
+      },
+      {
+        "frame": "lib/llhttp/constants.js node:internal/deps/undici/undici:3412",
+        "ms": 0.6396666666666667,
+        "pct": 0.4346910160081366
+      },
+      {
+        "frame": "<anonymous> node:internal/fs/recursive_watch:1",
+        "ms": 0.634,
+        "pct": 0.43084018366205096
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/keys:1",
+        "ms": 0.5943333333333334,
+        "pct": 0.40388435723945154
+      },
+      {
+        "frame": "compileFunction :0",
+        "ms": 0.5896666666666667,
+        "pct": 0.40071308354267515
+      },
+      {
+        "frame": "main file:///benchmark/baseline/it.mjs:43413",
+        "ms": 0.531,
+        "pct": 0.3608456427832004
+      },
+      {
+        "frame": "<anonymous> node:internal/crypto/util:182",
+        "ms": 0.4796666666666667,
+        "pct": 0.32596163211866
+      },
+      {
+        "frame": "record file:///benchmark/baseline/it.mjs:24829",
+        "ms": 0.4693333333333333,
+        "pct": 0.31893952607579795
+      },
+      {
+        "frame": "createWritableStdioStream node:internal/bootstrap/switches/is_main_thread:50",
+        "ms": 0.37233333333333335,
+        "pct": 0.2530223370928028
+      },
+      {
+        "frame": "lib/web/webidl/index.js node:internal/deps/undici/undici:4877",
+        "ms": 0.365,
+        "pct": 0.24803890699786846
+      },
+      {
+        "frame": "<anonymous> node:internal/webstreams/readablestream:1",
+        "ms": 0.32566666666666666,
+        "pct": 0.22130960012503878
+      },
+      {
+        "frame": "resolve node:path:1245",
+        "ms": 0.32266666666666666,
+        "pct": 0.2192709241771111
+      },
+      {
+        "frame": "<anonymous> node:internal/streams/readable:1",
+        "ms": 0.322,
+        "pct": 0.21881788507757163
+      },
+      {
+        "frame": "set TextDecoder :0",
+        "ms": 0.322,
+        "pct": 0.21881788507757163
+      },
+      {
+        "frame": "createSupportedAlgorithms node:internal/crypto/util:572",
+        "ms": 0.32033333333333336,
+        "pct": 0.21768528732872292
+      }
+    ]
+  }
+}

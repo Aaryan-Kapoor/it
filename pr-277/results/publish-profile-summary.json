@@ -1,0 +1,166 @@
+{
+  "baseline": {
+    "sampleIntervalMicroseconds": 100,
+    "captureMs": 478.547,
+    "sampledMs": 478.367,
+    "topSelfMs": [
+      {
+        "function": "(idle)",
+        "source": "",
+        "ms": 260.79999999999933
+      },
+      {
+        "function": "compileSourceTextModule",
+        "source": "node:internal/modules/esm/utils",
+        "ms": 58.51199999999989
+      },
+      {
+        "function": "fsync",
+        "source": "",
+        "ms": 32.001999999999995
+      },
+      {
+        "function": "(program)",
+        "source": "",
+        "ms": 12.878
+      },
+      {
+        "function": "compileForInternalLoader",
+        "source": "node:internal/bootstrap/realm",
+        "ms": 11.299999999999999
+      },
+      {
+        "function": "(anonymous)",
+        "source": "bundle:it.mjs",
+        "ms": 10.466
+      },
+      {
+        "function": "spawnSync",
+        "source": "node:internal/child_process",
+        "ms": 9.321999999999997
+      },
+      {
+        "function": "(garbage collector)",
+        "source": "",
+        "ms": 8.284
+      },
+      {
+        "function": "__require",
+        "source": "node:internal/deps/undici/undici",
+        "ms": 7.262999999999998
+      },
+      {
+        "function": "decodeUTF8",
+        "source": "",
+        "ms": 5.681999999999999
+      },
+      {
+        "function": "read",
+        "source": "",
+        "ms": 3.369
+      },
+      {
+        "function": "__require3",
+        "source": "bundle:it.mjs",
+        "ms": 2.2410000000000005
+      },
+      {
+        "function": "(anonymous)",
+        "source": "node:internal/crypto/util",
+        "ms": 1.527
+      },
+      {
+        "function": "connect",
+        "source": "node:net",
+        "ms": 1.443
+      },
+      {
+        "function": "internalBinding",
+        "source": "node:internal/bootstrap/realm",
+        "ms": 1.2939999999999998
+      }
+    ]
+  },
+  "candidate": {
+    "sampleIntervalMicroseconds": 100,
+    "captureMs": 584.613,
+    "sampledMs": 584.447,
+    "topSelfMs": [
+      {
+        "function": "(idle)",
+        "source": "",
+        "ms": 271.76899999999927
+      },
+      {
+        "function": "fsync",
+        "source": "",
+        "ms": 163.72199999999998
+      },
+      {
+        "function": "compileSourceTextModule",
+        "source": "node:internal/modules/esm/utils",
+        "ms": 37.570999999999984
+      },
+      {
+        "function": "compileForInternalLoader",
+        "source": "node:internal/bootstrap/realm",
+        "ms": 11.282000000000002
+      },
+      {
+        "function": "(program)",
+        "source": "",
+        "ms": 11.061000000000002
+      },
+      {
+        "function": "(anonymous)",
+        "source": "bundle:it.mjs",
+        "ms": 10.952999999999996
+      },
+      {
+        "function": "spawnSync",
+        "source": "node:internal/child_process",
+        "ms": 7.764000000000002
+      },
+      {
+        "function": "__require",
+        "source": "node:internal/deps/undici/undici",
+        "ms": 6.547999999999998
+      },
+      {
+        "function": "(garbage collector)",
+        "source": "",
+        "ms": 6.079
+      },
+      {
+        "function": "decodeUTF8",
+        "source": "",
+        "ms": 3.054
+      },
+      {
+        "function": "read",
+        "source": "",
+        "ms": 1.883
+      },
+      {
+        "function": "__require3",
+        "source": "bundle:it.mjs",
+        "ms": 1.7149999999999999
+      },
+      {
+        "function": "__require22",
+        "source": "bundle:it.mjs",
+        "ms": 1.378
+      },
+      {
+        "function": "(anonymous)",
+        "source": "node:internal/crypto/util",
+        "ms": 1.275
+      },
+      {
+        "function": "internalBinding",
+        "source": "node:internal/bootstrap/realm",
+        "ms": 1.104
+      }
+    ]
+  }
+}

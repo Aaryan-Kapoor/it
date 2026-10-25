@@ -1,0 +1,733 @@
+{
+  "node": "v24.22.1",
+  "preload": "resource.cjs",
+  "rounds": 13,
+  "warmups": 3,
+  "variants": {
+    "baseline": "baseline.mjs",
+    "functions-eager": "functions-eager.mjs",
+    "functions-lazy": "functions-lazy.mjs"
+  },
+  "results": {
+    "version": {
+      "summary": {
+        "baseline": {
+          "wallMs": 419.8107549999995,
+          "cpuMs": 196.97899999999998,
+          "rssKb": 88882,
+          "outputIdentical": true
+        },
+        "functions-eager": {
+          "wallMs": 323.71468449999975,
+          "cpuMs": 189.9865,
+          "rssKb": 86884,
+          "outputIdentical": true
+        },
+        "functions-lazy": {
+          "wallMs": 387.90714899999966,
+          "cpuMs": 184.817,
+          "rssKb": 84524,
+          "outputIdentical": true
+        }
+      },
+      "runs": {
+        "baseline": [
+          {
+            "wallMs": 621.5193689999996,
+            "cpuMs": 202.407,
+            "userMs": 156.227,
+            "systemMs": 46.18,
+            "rssKb": 83432
+          },
+          {
+            "wallMs": 351.07510999999977,
+            "cpuMs": 196.517,
+            "userMs": 159.365,
+            "systemMs": 37.152,
+            "rssKb": 89144
+          },
+          {
+            "wallMs": 356.91096800000014,
+            "cpuMs": 184.939,
+            "userMs": 144.173,
+            "systemMs": 40.766,
+            "rssKb": 88796
+          },
+          {
+            "wallMs": 267.8086919999996,
+            "cpuMs": 191.743,
+            "userMs": 149.58,
+            "systemMs": 42.163,
+            "rssKb": 89188
+          },
+          {
+            "wallMs": 252.04048899999907,
+            "cpuMs": 193.928,
+            "userMs": 152.3,
+            "systemMs": 41.628,
+            "rssKb": 88924
+          },
+          {
+            "wallMs": 211.5707020000009,
+            "cpuMs": 183.661,
+            "userMs": 136.045,
+            "systemMs": 47.616,
+            "rssKb": 88796
+          },
+          {
+            "wallMs": 827.1934299999994,
+            "cpuMs": 203.171,
+            "userMs": 157.386,
+            "systemMs": 45.785,
+            "rssKb": 88840
+          },
+          {
+            "wallMs": 857.7265079999997,
+            "cpuMs": 200.614,
+            "userMs": 158.534,
+            "systemMs": 42.08,
+            "rssKb": 88400
+          },
+          {
+            "wallMs": 724.7799699999996,
+            "cpuMs": 199.027,
+            "userMs": 160.381,
+            "systemMs": 38.646,
+            "rssKb": 89648
+          },
+          {
+            "wallMs": 482.7105419999989,
+            "cpuMs": 197.441,
+            "userMs": 149.049,
+            "systemMs": 48.392,
+            "rssKb": 89036
+          }
+        ],
+        "functions-eager": [
+          {
+            "wallMs": 390.74438699999973,
+            "cpuMs": 204.2,
+            "userMs": 154.171,
+            "systemMs": 50.029,
+            "rssKb": 86932
+          },
+          {
+            "wallMs": 302.0910009999998,
+            "cpuMs": 190.651,
+            "userMs": 147.539,
+            "systemMs": 43.112,
+            "rssKb": 87136
+          },
+          {
+            "wallMs": 222.11016000000018,
+            "cpuMs": 187.301,
+            "userMs": 140.231,
+            "systemMs": 47.07,
+            "rssKb": 86416
+          },
+          {
+            "wallMs": 296.50365899999997,
+            "cpuMs": 183.124,
+            "userMs": 140.789,
+            "systemMs": 42.335,
+            "rssKb": 86844
+          },
+          {
+            "wallMs": 321.2785550000008,
+            "cpuMs": 189.322,
+            "userMs": 151.833,
+            "systemMs": 37.489,
+            "rssKb": 86672
+          },
+          {
+            "wallMs": 240.57124400000066,
+            "cpuMs": 180.434,
+            "userMs": 126.899,
+            "systemMs": 53.535,
+            "rssKb": 86924
+          },
+          {
+            "wallMs": 467.66907399999945,
+            "cpuMs": 192.332,
+            "userMs": 152.506,
+            "systemMs": 39.826,
+            "rssKb": 87024
+          },
+          {
+            "wallMs": 326.1508139999987,
+            "cpuMs": 178.136,
+            "userMs": 147.627,
+            "systemMs": 30.509,
+            "rssKb": 86800
+          },
+          {
+            "wallMs": 524.9360379999998,
+            "cpuMs": 190.969,
+            "userMs": 148.745,
+            "systemMs": 42.224,
+            "rssKb": 86528
+          },
+          {
+            "wallMs": 524.8247640000009,
+            "cpuMs": 197.085,
+            "userMs": 149.249,
+            "systemMs": 47.836,
+            "rssKb": 87168
+          }
+        ],
+        "functions-lazy": [
+          {
+            "wallMs": 269.4073419999995,
+            "cpuMs": 187.644,
+            "userMs": 146.722,
+            "systemMs": 40.922,
+            "rssKb": 84224
+          },
+          {
+            "wallMs": 338.01162399999976,
+            "cpuMs": 189.497,
+            "userMs": 148.525,
+            "systemMs": 40.972,
+            "rssKb": 84080
+          },
+          {
+            "wallMs": 308.640574,
+            "cpuMs": 181.627,
+            "userMs": 143.043,
+            "systemMs": 38.584,
+            "rssKb": 84684
+          },
+          {
+            "wallMs": 369.0996290000003,
+            "cpuMs": 184.582,
+            "userMs": 147.293,
+            "systemMs": 37.289,
+            "rssKb": 84520
+          },
+          {
+            "wallMs": 426.1936250000017,
+            "cpuMs": 185.052,
+            "userMs": 144.909,
+            "systemMs": 40.143,
+            "rssKb": 84600
+          },
+          {
+            "wallMs": 215.32766100000117,
+            "cpuMs": 176.565,
+            "userMs": 137.109,
+            "systemMs": 39.456,
+            "rssKb": 84024
+          },
+          {
+            "wallMs": 581.112212,
+            "cpuMs": 180.258,
+            "userMs": 129.591,
+            "systemMs": 50.667,
+            "rssKb": 84304
+          },
+          {
+            "wallMs": 448.37751000000026,
+            "cpuMs": 182.649,
+            "userMs": 144.352,
+            "systemMs": 38.297,
+            "rssKb": 84672
+          },
+          {
+            "wallMs": 406.71466899999905,
+            "cpuMs": 191.625,
+            "userMs": 153.867,
+            "systemMs": 37.758,
+            "rssKb": 84528
+          },
+          {
+            "wallMs": 590.291631,
+            "cpuMs": 186.439,
+            "userMs": 152.88,
+            "systemMs": 33.559,
+            "rssKb": 84684
+          }
+        ]
+      }
+    },
+    "help": {
+      "summary": {
+        "baseline": {
+          "wallMs": 637.5437500000025,
+          "cpuMs": 201.5055,
+          "rssKb": 88994,
+          "outputIdentical": true
+        },
+        "functions-eager": {
+          "wallMs": 474.3676155000012,
+          "cpuMs": 191.253,
+          "rssKb": 86526,
+          "outputIdentical": true
+        },
+        "functions-lazy": {
+          "wallMs": 478.10136200000125,
+          "cpuMs": 189.41750000000002,
+          "rssKb": 84438,
+          "outputIdentical": true
+        }
+      },
+      "runs": {
+        "baseline": [
+          {
+            "wallMs": 617.0771370000002,
+            "cpuMs": 196.611,
+            "userMs": 156.705,
+            "systemMs": 39.906,
+            "rssKb": 89276
+          },
+          {
+            "wallMs": 1195.0027599999994,
+            "cpuMs": 196.451,
+            "userMs": 158.334,
+            "systemMs": 38.117,
+            "rssKb": 89460
+          },
+          {
+            "wallMs": 692.0341850000004,
+            "cpuMs": 207.19,
+            "userMs": 154.62,
+            "systemMs": 52.57,
+            "rssKb": 83872
+          },
+          {
+            "wallMs": 638.1594880000011,
+            "cpuMs": 205.499,
+            "userMs": 156.425,
+            "systemMs": 49.074,
+            "rssKb": 89312
+          },
+          {
+            "wallMs": 480.83288300000277,
+            "cpuMs": 200.991,
+            "userMs": 152.236,
+            "systemMs": 48.755,
+            "rssKb": 88864
+          },
+          {
+            "wallMs": 405.4272800000035,
+            "cpuMs": 202.127,
+            "userMs": 151.828,
+            "systemMs": 50.299,
+            "rssKb": 89356
+          },
+          {
+            "wallMs": 358.28713100000095,
+            "cpuMs": 193.739,
+            "userMs": 155.96,
+            "systemMs": 37.779,
+            "rssKb": 84404
+          },
+          {
+            "wallMs": 636.928012000004,
+            "cpuMs": 194.652,
+            "userMs": 153.57,
+            "systemMs": 41.082,
+            "rssKb": 88696
+          },
+          {
+            "wallMs": 1027.285192000003,
+            "cpuMs": 207.992,
+            "userMs": 158.424,
+            "systemMs": 49.568,
+            "rssKb": 88924
+          },
+          {
+            "wallMs": 826.1070039999977,
+            "cpuMs": 202.02,
+            "userMs": 157.858,
+            "systemMs": 44.162,
+            "rssKb": 89064
+          }
+        ],
+        "functions-eager": [
+          {
+            "wallMs": 479.42561900000146,
+            "cpuMs": 185.834,
+            "userMs": 154.536,
+            "systemMs": 31.298,
+            "rssKb": 85052
+          },
+          {
+            "wallMs": 835.283707999999,
+            "cpuMs": 191.549,
+            "userMs": 152.656,
+            "systemMs": 38.893,
+            "rssKb": 84968
+          },
+          {
+            "wallMs": 630.3949219999995,
+            "cpuMs": 189.894,
+            "userMs": 141.038,
+            "systemMs": 48.856,
+            "rssKb": 86640
+          },
+          {
+            "wallMs": 351.34862799999974,
+            "cpuMs": 187.833,
+            "userMs": 135.279,
+            "systemMs": 52.554,
+            "rssKb": 86436
+          },
+          {
+            "wallMs": 502.1062290000009,
+            "cpuMs": 195.927,
+            "userMs": 161.94,
+            "systemMs": 33.987,
+            "rssKb": 86660
+          },
+          {
+            "wallMs": 337.2318150000028,
+            "cpuMs": 196.309,
+            "userMs": 155.132,
+            "systemMs": 41.177,
+            "rssKb": 86616
+          },
+          {
+            "wallMs": 361.6907330000031,
+            "cpuMs": 190.957,
+            "userMs": 145.399,
+            "systemMs": 45.558,
+            "rssKb": 86732
+          },
+          {
+            "wallMs": 469.3096120000009,
+            "cpuMs": 194.591,
+            "userMs": 152.962,
+            "systemMs": 41.629,
+            "rssKb": 86668
+          },
+          {
+            "wallMs": 809.8527239999967,
+            "cpuMs": 192,
+            "userMs": 152.381,
+            "systemMs": 39.619,
+            "rssKb": 81528
+          },
+          {
+            "wallMs": 432.44272599999385,
+            "cpuMs": 190.468,
+            "userMs": 148.251,
+            "systemMs": 42.217,
+            "rssKb": 81600
+          }
+        ],
+        "functions-lazy": [
+          {
+            "wallMs": 463.26717100000315,
+            "cpuMs": 183.585,
+            "userMs": 136.945,
+            "systemMs": 46.64,
+            "rssKb": 84512
+          },
+          {
+            "wallMs": 1087.6197229999998,
+            "cpuMs": 183.125,
+            "userMs": 144.622,
+            "systemMs": 38.503,
+            "rssKb": 84216
+          },
+          {
+            "wallMs": 581.6689189999997,
+            "cpuMs": 187.416,
+            "userMs": 151.336,
+            "systemMs": 36.08,
+            "rssKb": 79180
+          },
+          {
+            "wallMs": 470.1846399999995,
+            "cpuMs": 180.263,
+            "userMs": 136.849,
+            "systemMs": 43.414,
+            "rssKb": 84504
+          },
+          {
+            "wallMs": 429.6217859999997,
+            "cpuMs": 191.419,
+            "userMs": 155.099,
+            "systemMs": 36.32,
+            "rssKb": 84324
+          },
+          {
+            "wallMs": 486.018084000003,
+            "cpuMs": 197.973,
+            "userMs": 147.528,
+            "systemMs": 50.445,
+            "rssKb": 84176
+          },
+          {
+            "wallMs": 432.0222670000003,
+            "cpuMs": 194.237,
+            "userMs": 154.394,
+            "systemMs": 39.843,
+            "rssKb": 84512
+          },
+          {
+            "wallMs": 987.7727030000024,
+            "cpuMs": 191.586,
+            "userMs": 160.307,
+            "systemMs": 31.279,
+            "rssKb": 84524
+          },
+          {
+            "wallMs": 497.86437699999806,
+            "cpuMs": 194.452,
+            "userMs": 133.147,
+            "systemMs": 61.305,
+            "rssKb": 84372
+          },
+          {
+            "wallMs": 358.5730330000006,
+            "cpuMs": 175.689,
+            "userMs": 129.815,
+            "systemMs": 45.874,
+            "rssKb": 84540
+          }
+        ]
+      }
+    },
+    "displays": {
+      "summary": {
+        "baseline": {
+          "wallMs": 449.35954599999604,
+          "cpuMs": 194.54149999999998,
+          "rssKb": 88786,
+          "outputIdentical": true
+        },
+        "functions-eager": {
+          "wallMs": 438.9633010000034,
+          "cpuMs": 186.8965,
+          "rssKb": 85448,
+          "outputIdentical": true
+        },
+        "functions-lazy": {
+          "wallMs": 368.752876999999,
+          "cpuMs": 182.5935,
+          "rssKb": 84120,
+          "outputIdentical": true
+        }
+      },
+      "runs": {
+        "baseline": [
+          {
+            "wallMs": 491.93916300000274,
+            "cpuMs": 197.775,
+            "userMs": 147.822,
+            "systemMs": 49.953,
+            "rssKb": 88576
+          },
+          {
+            "wallMs": 482.103200000005,
+            "cpuMs": 191.847,
+            "userMs": 151.009,
+            "systemMs": 40.838,
+            "rssKb": 88700
+          },
+          {
+            "wallMs": 378.72156999999424,
+            "cpuMs": 193.928,
+            "userMs": 149.547,
+            "systemMs": 44.381,
+            "rssKb": 89020
+          },
+          {
+            "wallMs": 448.78732299999683,
+            "cpuMs": 205.834,
+            "userMs": 161.8,
+            "systemMs": 44.034,
+            "rssKb": 88828
+          },
+          {
+            "wallMs": 492.79228899999725,
+            "cpuMs": 196.954,
+            "userMs": 147.716,
+            "systemMs": 49.238,
+            "rssKb": 88480
+          },
+          {
+            "wallMs": 705.9749579999989,
+            "cpuMs": 195.155,
+            "userMs": 147.845,
+            "systemMs": 47.31,
+            "rssKb": 82964
+          },
+          {
+            "wallMs": 449.93176899999526,
+            "cpuMs": 193.592,
+            "userMs": 146.448,
+            "systemMs": 47.144,
+            "rssKb": 88828
+          },
+          {
+            "wallMs": 361.0763240000015,
+            "cpuMs": 191.421,
+            "userMs": 149.765,
+            "systemMs": 41.656,
+            "rssKb": 89056
+          },
+          {
+            "wallMs": 445.6462270000047,
+            "cpuMs": 196.505,
+            "userMs": 153.489,
+            "systemMs": 43.016,
+            "rssKb": 88916
+          },
+          {
+            "wallMs": 294.0148390000031,
+            "cpuMs": 191.416,
+            "userMs": 148.989,
+            "systemMs": 42.427,
+            "rssKb": 88744
+          }
+        ],
+        "functions-eager": [
+          {
+            "wallMs": 705.987850999998,
+            "cpuMs": 195.281,
+            "userMs": 154.32,
+            "systemMs": 40.961,
+            "rssKb": 84756
+          },
+          {
+            "wallMs": 586.4753049999999,
+            "cpuMs": 203.818,
+            "userMs": 150.39,
+            "systemMs": 53.428,
+            "rssKb": 84828
+          },
+          {
+            "wallMs": 385.83357900000556,
+            "cpuMs": 184.565,
+            "userMs": 147.652,
+            "systemMs": 36.913,
+            "rssKb": 86612
+          },
+          {
+            "wallMs": 492.09302300000127,
+            "cpuMs": 193.195,
+            "userMs": 155.739,
+            "systemMs": 37.456,
+            "rssKb": 86068
+          },
+          {
+            "wallMs": 303.2200759999978,
+            "cpuMs": 184.448,
+            "userMs": 144.436,
+            "systemMs": 40.012,
+            "rssKb": 86740
+          },
+          {
+            "wallMs": 505.6788250000027,
+            "cpuMs": 180.529,
+            "userMs": 143.277,
+            "systemMs": 37.252,
+            "rssKb": 81484
+          },
+          {
+            "wallMs": 532.3497750000024,
+            "cpuMs": 188.202,
+            "userMs": 145.609,
+            "systemMs": 42.593,
+            "rssKb": 86276
+          },
+          {
+            "wallMs": 297.1594669999977,
+            "cpuMs": 187.64,
+            "userMs": 154.755,
+            "systemMs": 32.885,
+            "rssKb": 81764
+          },
+          {
+            "wallMs": 292.62321599999996,
+            "cpuMs": 182.118,
+            "userMs": 147.908,
+            "systemMs": 34.21,
+            "rssKb": 81112
+          },
+          {
+            "wallMs": 329.2321630000006,
+            "cpuMs": 186.153,
+            "userMs": 146.402,
+            "systemMs": 39.751,
+            "rssKb": 86180
+          }
+        ],
+        "functions-lazy": [
+          {
+            "wallMs": 361.96610299999884,
+            "cpuMs": 181.154,
+            "userMs": 143.122,
+            "systemMs": 38.032,
+            "rssKb": 83772
+          },
+          {
+            "wallMs": 313.36337600000115,
+            "cpuMs": 183.32,
+            "userMs": 148.45,
+            "systemMs": 34.87,
+            "rssKb": 84032
+          },
+          {
+            "wallMs": 357.31728699999803,
+            "cpuMs": 188.313,
+            "userMs": 148.876,
+            "systemMs": 39.437,
+            "rssKb": 84176
+          },
+          {
+            "wallMs": 314.8049630000023,
+            "cpuMs": 171.523,
+            "userMs": 138.388,
+            "systemMs": 33.135,
+            "rssKb": 79268
+          },
+          {
+            "wallMs": 375.53965099999914,
+            "cpuMs": 187.441,
+            "userMs": 147.881,
+            "systemMs": 39.56,
+            "rssKb": 84404
+          },
+          {
+            "wallMs": 441.4409839999935,
+            "cpuMs": 190.84,
+            "userMs": 155.966,
+            "systemMs": 34.874,
+            "rssKb": 84252
+          },
+          {
+            "wallMs": 449.3820760000017,
+            "cpuMs": 181.867,
+            "userMs": 138.845,
+            "systemMs": 43.022,
+            "rssKb": 84096
+          },
+          {
+            "wallMs": 478.3628269999972,
+            "cpuMs": 181.285,
+            "userMs": 139.293,
+            "systemMs": 41.992,
+            "rssKb": 83768
+          },
+          {
+            "wallMs": 413.9183899999989,
+            "cpuMs": 184.311,
+            "userMs": 152.602,
+            "systemMs": 31.709,
+            "rssKb": 84144
+          },
+          {
+            "wallMs": 254.26943100000062,
+            "cpuMs": 177.033,
+            "userMs": 138.026,
+            "systemMs": 39.007,
+            "rssKb": 84512
+          }
+        ]
+      }
+    }
+  }
+}

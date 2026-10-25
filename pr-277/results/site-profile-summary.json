@@ -1,0 +1,14 @@
+{
+  "captureMs": 747.597,
+  "weightedSampleMs": 746.04,
+  "samples": 494,
+  "programMs": 298.458,
+  "idleMs": 214.409,
+  "garbageCollectionMs": 9.48,
+  "reactDomSelfMs": 126.995,
+  "applicationSelfMs": 31.251,
+  "convexClientSelfMs": 29.854,
+  "sampleGapMedianMs": 1.077,
+  "sampleGapP95Ms": 4.121,
+  "limitation": "One short baseline capture, including automation. Sample weights are estimates, not invocation durations; unattributed program time is not evidence of removable application work."
+}

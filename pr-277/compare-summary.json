@@ -1,0 +1,982 @@
+{
+  "compare.json": {
+    "baseline": {
+      "blocks": 6,
+      "metrics": {
+        "startMs": {
+          "n": 6,
+          "median": 907.918872499984,
+          "p25": 837.966925249988,
+          "p75": 1060.0127112499947,
+          "iqr": 222.04578600000673,
+          "min": 742.8554259999946,
+          "max": 1398.5345269999962
+        },
+        "local.loadMs": {
+          "n": 6,
+          "median": 114.00000047683716,
+          "p25": 97.25,
+          "p75": 159.25000023841858,
+          "iqr": 62.00000023841858,
+          "min": 76,
+          "max": 235.10000038146973
+        },
+        "local.domContentMs": {
+          "n": 6,
+          "median": 112.90000009536743,
+          "p25": 96.27499985694885,
+          "p75": 158.92500019073486,
+          "iqr": 62.65000033378601,
+          "min": 74.89999961853027,
+          "max": 229.60000038146973
+        },
+        "local.gridVisibleMs": {
+          "n": 6,
+          "median": 550.7540109999941,
+          "p25": 444.66810650000684,
+          "p75": 655.0848367499784,
+          "iqr": 210.41673024997158,
+          "min": 369.2614020000037,
+          "max": 1295.6971589999885
+        },
+        "local.gridInteractiveMs": {
+          "n": 6,
+          "median": 741.9964514999901,
+          "p25": 584.7340577500008,
+          "p75": 831.0952609999877,
+          "iqr": 246.36120324998683,
+          "min": 492.7225610000023,
+          "max": 1951.1024130000005
+        },
+        "local.openMs": {
+          "n": 6,
+          "median": 1355.1611495000018,
+          "p25": 1247.3641019999995,
+          "p75": 1701.341806000014,
+          "iqr": 453.97770400001446,
+          "min": 1218.9965850000153,
+          "max": 2746.593538000001
+        },
+        "network.loadMs": {
+          "n": 6,
+          "median": 586.5999999046326,
+          "p25": 556.875,
+          "p75": 617.4499998092651,
+          "iqr": 60.57499980926514,
+          "min": 551.9000005722046,
+          "max": 802.5
+        },
+        "network.domContentMs": {
+          "n": 6,
+          "median": 586.4499998092651,
+          "p25": 556.8000004291534,
+          "p75": 616.6249997615814,
+          "iqr": 59.82499933242798,
+          "min": 551.9000005722046,
+          "max": 801.9000005722046
+        },
+        "network.gridVisibleMs": {
+          "n": 6,
+          "median": 971.6303634999954,
+          "p25": 926.3729755000022,
+          "p75": 1043.7928787499925,
+          "iqr": 117.41990324999028,
+          "min": 854.4780270000047,
+          "max": 2163.1353469999885
+        },
+        "network.gridInteractiveMs": {
+          "n": 6,
+          "median": 1254.86879,
+          "p25": 1105.2518312500033,
+          "p75": 1371.8652982499987,
+          "iqr": 266.61346699999535,
+          "min": 1011.6226679999963,
+          "max": 2741.7284299999883
+        },
+        "network.openMs": {
+          "n": 6,
+          "median": 1869.7206195000035,
+          "p25": 1704.6352932499867,
+          "p75": 2356.5416560000012,
+          "iqr": 651.9063627500145,
+          "min": 1202.1768659999943,
+          "max": 6416.973608999993
+        },
+        "cli.publishMs": {
+          "n": 12,
+          "median": 689.4892604999977,
+          "p25": 592.2841340000014,
+          "p75": 792.8473967499885,
+          "iqr": 200.5632627499872,
+          "min": 441.68886100000236,
+          "max": 1467.109504
+        },
+        "cli.openMs": {
+          "n": 12,
+          "median": 264.37489449998975,
+          "p25": 247.98708250001073,
+          "p75": 299.26081149998936,
+          "iqr": 51.27372899997863,
+          "min": 227.5881769999978,
+          "max": 483.099412999989
+        },
+        "cli.actionsMs": {
+          "n": 12,
+          "median": 200.670369999998,
+          "p25": 182.97513850000541,
+          "p75": 245.28757775000486,
+          "iqr": 62.31243924999944,
+          "min": 159.97747000001254,
+          "max": 342.0280950000015
+        },
+        "cli.waitTimeoutMs": {
+          "n": 12,
+          "median": 273.5150395000037,
+          "p25": 236.52505325001403,
+          "p75": 317.33999174999553,
+          "iqr": 80.81493849998151,
+          "min": 194.00519100000383,
+          "max": 436.6002940000035
+        },
+        "cli.waitReadyMs": {
+          "n": 12,
+          "median": 492.18919350000215,
+          "p25": 462.3680002500023,
+          "p75": 515.599199749995,
+          "iqr": 53.23119949999273,
+          "min": 331.48957399999927,
+          "max": 600.9619439999951
+        },
+        "memory.service.rssMiB": {
+          "n": 6,
+          "median": 97.76953125,
+          "p25": 94.1962890625,
+          "p75": 97.8916015625,
+          "iqr": 3.6953125,
+          "min": 92.76171875,
+          "max": 98.05078125
+        },
+        "memory.service.pssMiB": {
+          "n": 6,
+          "median": 45.298828125,
+          "p25": 45.1357421875,
+          "p75": 45.4765625,
+          "iqr": 0.3408203125,
+          "min": 45.078125,
+          "max": 46.2138671875
+        },
+        "memory.backend.rssMiB": {
+          "n": 6,
+          "median": 150.578125,
+          "p25": 143.1923828125,
+          "p75": 152.236328125,
+          "iqr": 9.0439453125,
+          "min": 137.734375,
+          "max": 195.54296875
+        },
+        "memory.backend.pssMiB": {
+          "n": 6,
+          "median": 96.4091796875,
+          "p25": 94.171630859375,
+          "p75": 98.782958984375,
+          "iqr": 4.611328125,
+          "min": 84.1181640625,
+          "max": 158.5732421875
+        },
+        "connectorProbeMs": {
+          "n": 30,
+          "median": 0.5445,
+          "p25": 0.38875000000000004,
+          "p75": 0.88675,
+          "iqr": 0.498,
+          "min": 0.262,
+          "max": 7.122
+        },
+        "hot.artifacts:list.wallMs": {
+          "n": 30,
+          "median": 4.016500000000001,
+          "p25": 3.50125,
+          "p75": 5.3685,
+          "iqr": 1.8672499999999999,
+          "min": 2.903,
+          "max": 12.599
+        },
+        "server.artifacts:list.executionMs": {
+          "n": 30,
+          "median": 0.035,
+          "p25": 0.03225,
+          "p75": 0.04075,
+          "iqr": 0.0085,
+          "min": 0.029,
+          "max": 0.055
+        },
+        "server.artifacts:list.cachedExecutionMs": {
+          "n": 30,
+          "median": 0.035,
+          "p25": 0.03225,
+          "p75": 0.04075,
+          "iqr": 0.0085,
+          "min": 0.029,
+          "max": 0.055
+        },
+        "hot.artifact_with_history.wallMs": {
+          "n": 30,
+          "median": 3.843,
+          "p25": 3.3297499999999998,
+          "p75": 5.0045,
+          "iqr": 1.6747500000000004,
+          "min": 2.612,
+          "max": 6.15
+        },
+        "server.artifact_with_history.executionMs": {
+          "n": 28,
+          "median": 0.034,
+          "p25": 0.032,
+          "p75": 0.038,
+          "iqr": 0.005999999999999998,
+          "min": 0.026,
+          "max": 0.044
+        },
+        "server.artifact_with_history.cachedExecutionMs": {
+          "n": 28,
+          "median": 0.034,
+          "p25": 0.032,
+          "p75": 0.038,
+          "iqr": 0.005999999999999998,
+          "min": 0.026,
+          "max": 0.044
+        },
+        "hot.artifact_without_history.wallMs": {
+          "n": 30,
+          "median": 3.349,
+          "p25": 2.945,
+          "p75": 4.109500000000001,
+          "iqr": 1.1645000000000008,
+          "min": 1.68,
+          "max": 8.706
+        },
+        "server.artifact_without_history.executionMs": {
+          "n": 26,
+          "median": 0.035500000000000004,
+          "p25": 0.029,
+          "p75": 0.03775,
+          "iqr": 0.008749999999999997,
+          "min": 0.02,
+          "max": 0.054
+        },
+        "server.artifact_without_history.cachedExecutionMs": {
+          "n": 26,
+          "median": 0.035500000000000004,
+          "p25": 0.029,
+          "p75": 0.03775,
+          "iqr": 0.008749999999999997,
+          "min": 0.02,
+          "max": 0.054
+        },
+        "hot.state:get.wallMs": {
+          "n": 30,
+          "median": 3.9545000000000003,
+          "p25": 3.4225,
+          "p75": 4.689,
+          "iqr": 1.2665000000000002,
+          "min": 2.707,
+          "max": 9.902
+        },
+        "server.state:get.executionMs": {
+          "n": 30,
+          "median": 0.035,
+          "p25": 0.033,
+          "p75": 0.03775,
+          "iqr": 0.004749999999999997,
+          "min": 0.026,
+          "max": 1.688
+        },
+        "server.state:get.cachedExecutionMs": {
+          "n": 30,
+          "median": 0.035,
+          "p25": 0.033,
+          "p75": 0.03775,
+          "iqr": 0.004749999999999997,
+          "min": 0.026,
+          "max": 1.688
+        },
+        "hot.delivery:waitingFor.wallMs": {
+          "n": 30,
+          "median": 3.4299999999999997,
+          "p25": 2.949,
+          "p75": 4.3149999999999995,
+          "iqr": 1.3659999999999997,
+          "min": 2.424,
+          "max": 10.401
+        },
+        "server.delivery:waitingFor.executionMs": {
+          "n": 30,
+          "median": 0.035500000000000004,
+          "p25": 0.029500000000000002,
+          "p75": 0.038,
+          "iqr": 0.008499999999999997,
+          "min": 0.025,
+          "max": 0.096
+        },
+        "server.delivery:waitingFor.cachedExecutionMs": {
+          "n": 30,
+          "median": 0.035500000000000004,
+          "p25": 0.029500000000000002,
+          "p75": 0.038,
+          "iqr": 0.008499999999999997,
+          "min": 0.025,
+          "max": 0.096
+        },
+        "hot.state:patch.wallMs": {
+          "n": 30,
+          "median": 79.225,
+          "p25": 65.27175,
+          "p75": 84.489,
+          "iqr": 19.217250000000007,
+          "min": 45.471,
+          "max": 109.14
+        },
+        "server.state:patch.executionMs": {
+          "n": 30,
+          "median": 11.933,
+          "p25": 10.347999999999999,
+          "p75": 14.43775,
+          "iqr": 4.08975,
+          "min": 8.14,
+          "max": 50.074
+        },
+        "server.state:patch.uncachedExecutionMs": {
+          "n": 30,
+          "median": 11.933,
+          "p25": 10.347999999999999,
+          "p75": 14.43775,
+          "iqr": 4.08975,
+          "min": 8.14,
+          "max": 50.074
+        }
+      },
+      "load": {
+        "1Minute": {
+          "n": 129,
+          "min": 6.58,
+          "max": 26.47
+        },
+        "5Minute": {
+          "n": 129,
+          "min": 3.69,
+          "max": 14.89
+        },
+        "15Minute": {
+          "n": 129,
+          "min": 2.52,
+          "max": 7.47
+        }
+      },
+      "warnings": [
+        "Round 3 has unmatched server timings for artifact_with_history.",
+        "Round 3 has unmatched server timings for artifact_without_history.",
+        "Round 4 has unmatched server timings for artifact_with_history."
+      ],
+      "freeGiB": {
+        "n": 129,
+        "min": 9.041423797607422,
+        "max": 14.150508880615234
+      },
+      "serverMatches": {
+        "artifacts:list": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 30,
+          "unmatched": 0,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 30,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 30,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "artifact_with_history": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 28,
+          "unmatched": 2,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 28,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 28,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "artifact_without_history": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 26,
+          "unmatched": 4,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 26,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 26,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "state:get": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 30,
+          "unmatched": 0,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 30,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 30,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "delivery:waitingFor": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 30,
+          "unmatched": 0,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 30,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 30,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "state:patch": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 30,
+          "unmatched": 0,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 30,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 0,
+          "uncached": 30,
+          "unknown": 0
+        }
+      },
+      "cpuBusy": {
+        "weightedPercent": 81.41609880749574,
+        "blockPercent": {
+          "n": 6,
+          "median": 81.59216783175273,
+          "p25": 78.97017700784224,
+          "p75": 86.12749589974236,
+          "iqr": 7.157318891900118,
+          "min": 57.668809435265366,
+          "max": 92.11170994610485
+        },
+        "intervalPercent": {
+          "n": 123,
+          "min": 35.350043215211755,
+          "max": 99.83319432860718
+        }
+      }
+    },
+    "candidate": {
+      "blocks": 6,
+      "metrics": {
+        "startMs": {
+          "n": 6,
+          "median": 1022.4015365000014,
+          "p25": 999.5888989999994,
+          "p75": 1065.5305467500148,
+          "iqr": 65.94164775001536,
+          "min": 826.3421149999995,
+          "max": 4187.310437999986
+        },
+        "local.loadMs": {
+          "n": 6,
+          "median": 133.05000019073486,
+          "p25": 126.82500052452087,
+          "p75": 193.50000071525574,
+          "iqr": 66.67500019073486,
+          "min": 121.30000019073486,
+          "max": 254
+        },
+        "local.domContentMs": {
+          "n": 6,
+          "median": 131.94999980926514,
+          "p25": 125.77500009536743,
+          "p75": 192.35000038146973,
+          "iqr": 66.5750002861023,
+          "min": 120.19999980926514,
+          "max": 244.9000005722046
+        },
+        "local.gridVisibleMs": {
+          "n": 6,
+          "median": 626.8840239999918,
+          "p25": 569.0321942499922,
+          "p75": 678.7947152499946,
+          "iqr": 109.76252100000238,
+          "min": 463.5183699999907,
+          "max": 733.0774570000067
+        },
+        "local.gridInteractiveMs": {
+          "n": 6,
+          "median": 813.0465264999948,
+          "p25": 751.1350972499968,
+          "p75": 876.1308304999984,
+          "iqr": 124.99573325000165,
+          "min": 697.4142349999893,
+          "max": 942.8259890000045
+        },
+        "local.openMs": {
+          "n": 6,
+          "median": 1781.5099114999975,
+          "p25": 1730.3516092499958,
+          "p75": 1849.759231,
+          "iqr": 119.40762175000418,
+          "min": 1529.157749999984,
+          "max": 2292.595973000003
+        },
+        "network.loadMs": {
+          "n": 6,
+          "median": 278.09999990463257,
+          "p25": 272.0750002861023,
+          "p75": 316.7500002384186,
+          "iqr": 44.674999952316284,
+          "min": 257.80000019073486,
+          "max": 404.3999996185303
+        },
+        "network.domContentMs": {
+          "n": 6,
+          "median": 277.0,
+          "p25": 269.97499990463257,
+          "p75": 315.6000003814697,
+          "iqr": 45.62500047683716,
+          "min": 256.30000019073486,
+          "max": 404.30000019073486
+        },
+        "network.gridVisibleMs": {
+          "n": 6,
+          "median": 656.0728244999918,
+          "p25": 576.8807759999963,
+          "p75": 743.1890804999966,
+          "iqr": 166.3083045000003,
+          "min": 567.495241000026,
+          "max": 1337.7677379999986
+        },
+        "network.gridInteractiveMs": {
+          "n": 6,
+          "median": 849.4858359999926,
+          "p25": 754.1252252500053,
+          "p75": 1026.7377722499878,
+          "iqr": 272.61254699998244,
+          "min": 691.3163369999966,
+          "max": 1538.3934719999997
+        },
+        "network.openMs": {
+          "n": 6,
+          "median": 1851.9220100000093,
+          "p25": 1781.5909205000207,
+          "p75": 1938.5804480000015,
+          "iqr": 156.9895274999808,
+          "min": 1766.8981290000083,
+          "max": 2215.518941000002
+        },
+        "cli.publishMs": {
+          "n": 12,
+          "median": 642.0059025000082,
+          "p25": 507.8931304999933,
+          "p75": 717.945433500001,
+          "iqr": 210.05230300000767,
+          "min": 474.72073400000227,
+          "max": 813.1013149999999
+        },
+        "cli.openMs": {
+          "n": 12,
+          "median": 248.38387099999454,
+          "p25": 233.42776600001525,
+          "p75": 278.9355540000179,
+          "iqr": 45.50778800000262,
+          "min": 201.76688399998238,
+          "max": 734.4979539999986
+        },
+        "cli.actionsMs": {
+          "n": 12,
+          "median": 179.56500799999776,
+          "p25": 166.06521850000354,
+          "p75": 205.89052499999525,
+          "iqr": 39.82530649999171,
+          "min": 156.07543799999985,
+          "max": 398.42900300000474
+        },
+        "cli.waitTimeoutMs": {
+          "n": 12,
+          "median": 249.4009209999931,
+          "p25": 220.8820397500058,
+          "p75": 269.5578312499965,
+          "iqr": 48.67579149999074,
+          "min": 187.83871599999839,
+          "max": 357.68282400000317
+        },
+        "cli.waitReadyMs": {
+          "n": 12,
+          "median": 472.0979134999943,
+          "p25": 385.6471762500005,
+          "p75": 542.656361500005,
+          "iqr": 157.00918525000452,
+          "min": 347.74361499998486,
+          "max": 746.0447310000018
+        },
+        "memory.service.rssMiB": {
+          "n": 6,
+          "median": 91.521484375,
+          "p25": 91.2783203125,
+          "p75": 91.8701171875,
+          "iqr": 0.591796875,
+          "min": 86.44921875,
+          "max": 92.390625
+        },
+        "memory.service.pssMiB": {
+          "n": 6,
+          "median": 39.4033203125,
+          "p25": 39.1044921875,
+          "p75": 39.7900390625,
+          "iqr": 0.685546875,
+          "min": 38.7080078125,
+          "max": 40.0361328125
+        },
+        "memory.backend.rssMiB": {
+          "n": 6,
+          "median": 147.67578125,
+          "p25": 145.7109375,
+          "p75": 150.4521484375,
+          "iqr": 4.7412109375,
+          "min": 144.953125,
+          "max": 154.8984375
+        },
+        "memory.backend.pssMiB": {
+          "n": 6,
+          "median": 96.69873046875,
+          "p25": 96.314453125,
+          "p75": 105.617919921875,
+          "iqr": 9.303466796875,
+          "min": 91.6064453125,
+          "max": 109.2119140625
+        },
+        "connectorProbeMs": {
+          "n": 30,
+          "median": 0.427,
+          "p25": 0.349,
+          "p75": 0.8955000000000001,
+          "iqr": 0.5465000000000001,
+          "min": 0.215,
+          "max": 10.954
+        },
+        "hot.artifacts:list.wallMs": {
+          "n": 30,
+          "median": 4.0195,
+          "p25": 3.20975,
+          "p75": 5.394500000000001,
+          "iqr": 2.1847500000000006,
+          "min": 2.621,
+          "max": 6.846
+        },
+        "server.artifacts:list.executionMs": {
+          "n": 30,
+          "median": 0.0345,
+          "p25": 0.032,
+          "p75": 0.03875,
+          "iqr": 0.006749999999999999,
+          "min": 0.025,
+          "max": 0.743
+        },
+        "server.artifacts:list.cachedExecutionMs": {
+          "n": 30,
+          "median": 0.0345,
+          "p25": 0.032,
+          "p75": 0.03875,
+          "iqr": 0.006749999999999999,
+          "min": 0.025,
+          "max": 0.743
+        },
+        "hot.artifact_with_history.wallMs": {
+          "n": 30,
+          "median": 3.398,
+          "p25": 2.386,
+          "p75": 4.779999999999999,
+          "iqr": 2.3939999999999992,
+          "min": 1.954,
+          "max": 13.126
+        },
+        "server.artifact_with_history.executionMs": {
+          "n": 22,
+          "median": 0.037,
+          "p25": 0.03125,
+          "p75": 0.039,
+          "iqr": 0.00775,
+          "min": 0.025,
+          "max": 0.057
+        },
+        "server.artifact_with_history.cachedExecutionMs": {
+          "n": 22,
+          "median": 0.037,
+          "p25": 0.03125,
+          "p75": 0.039,
+          "iqr": 0.00775,
+          "min": 0.025,
+          "max": 0.057
+        },
+        "hot.artifact_without_history.wallMs": {
+          "n": 30,
+          "median": 3.3655,
+          "p25": 2.4349999999999996,
+          "p75": 6.182,
+          "iqr": 3.7470000000000008,
+          "min": 1.786,
+          "max": 16.799
+        },
+        "server.artifact_without_history.executionMs": {
+          "n": 24,
+          "median": 0.0335,
+          "p25": 0.0305,
+          "p75": 0.04,
+          "iqr": 0.009500000000000001,
+          "min": 0.023,
+          "max": 0.789
+        },
+        "server.artifact_without_history.cachedExecutionMs": {
+          "n": 24,
+          "median": 0.0335,
+          "p25": 0.0305,
+          "p75": 0.04,
+          "iqr": 0.009500000000000001,
+          "min": 0.023,
+          "max": 0.789
+        },
+        "hot.state:get.wallMs": {
+          "n": 30,
+          "median": 3.876,
+          "p25": 2.807,
+          "p75": 4.8135,
+          "iqr": 2.0065000000000004,
+          "min": 2.155,
+          "max": 22.611
+        },
+        "server.state:get.executionMs": {
+          "n": 26,
+          "median": 0.037,
+          "p25": 0.034,
+          "p75": 0.04025,
+          "iqr": 0.006249999999999999,
+          "min": 0.026,
+          "max": 0.06
+        },
+        "server.state:get.cachedExecutionMs": {
+          "n": 26,
+          "median": 0.037,
+          "p25": 0.034,
+          "p75": 0.04025,
+          "iqr": 0.006249999999999999,
+          "min": 0.026,
+          "max": 0.06
+        },
+        "hot.delivery:waitingFor.wallMs": {
+          "n": 30,
+          "median": 4.2219999999999995,
+          "p25": 2.7920000000000003,
+          "p75": 5.49075,
+          "iqr": 2.69875,
+          "min": 1.486,
+          "max": 10.942
+        },
+        "server.delivery:waitingFor.executionMs": {
+          "n": 25,
+          "median": 0.037,
+          "p25": 0.035,
+          "p75": 0.044,
+          "iqr": 0.008999999999999994,
+          "min": 0.029,
+          "max": 0.07
+        },
+        "server.delivery:waitingFor.cachedExecutionMs": {
+          "n": 25,
+          "median": 0.037,
+          "p25": 0.035,
+          "p75": 0.044,
+          "iqr": 0.008999999999999994,
+          "min": 0.029,
+          "max": 0.07
+        },
+        "hot.state:patch.wallMs": {
+          "n": 30,
+          "median": 58.049,
+          "p25": 51.9255,
+          "p75": 72.19749999999999,
+          "iqr": 20.27199999999999,
+          "min": 40.237,
+          "max": 266.036
+        },
+        "server.state:patch.executionMs": {
+          "n": 30,
+          "median": 11.2055,
+          "p25": 8.942,
+          "p75": 13.669,
+          "iqr": 4.727,
+          "min": 7.563,
+          "max": 36.484
+        },
+        "server.state:patch.uncachedExecutionMs": {
+          "n": 30,
+          "median": 11.2055,
+          "p25": 8.942,
+          "p75": 13.669,
+          "iqr": 4.727,
+          "min": 7.563,
+          "max": 36.484
+        }
+      },
+      "load": {
+        "1Minute": {
+          "n": 124,
+          "min": 11.68,
+          "max": 25.69
+        },
+        "5Minute": {
+          "n": 124,
+          "min": 5.03,
+          "max": 14.95
+        },
+        "15Minute": {
+          "n": 124,
+          "min": 2.98,
+          "max": 7.37
+        }
+      },
+      "warnings": [
+        "Round 3 has unmatched server timings for artifact_with_history.",
+        "Round 3 has unmatched server timings for artifact_without_history.",
+        "Round 3 has unmatched server timings for delivery:waitingFor.",
+        "Round 4 has unmatched server timings for artifact_with_history.",
+        "Round 4 has unmatched server timings for state:get.",
+        "Round 5 has unmatched server timings for artifact_with_history.",
+        "Round 5 has unmatched server timings for artifact_without_history.",
+        "Round 5 has unmatched server timings for state:get.",
+        "Round 5 has unmatched server timings for delivery:waitingFor."
+      ],
+      "freeGiB": {
+        "n": 124,
+        "min": 10.039329528808594,
+        "max": 14.176769256591797
+      },
+      "serverMatches": {
+        "artifacts:list": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 30,
+          "unmatched": 0,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 30,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 30,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "artifact_with_history": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 22,
+          "unmatched": 8,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 22,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 22,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "artifact_without_history": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 24,
+          "unmatched": 6,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 24,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 24,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "state:get": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 26,
+          "unmatched": 4,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 26,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 26,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "delivery:waitingFor": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 25,
+          "unmatched": 5,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 25,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 25,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "state:patch": {
+          "availableBlocks": 6,
+          "unavailableBlocks": 0,
+          "matched": 30,
+          "unmatched": 0,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 30,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 0,
+          "uncached": 30,
+          "unknown": 0
+        }
+      },
+      "cpuBusy": {
+        "weightedPercent": 80.98109784209039,
+        "blockPercent": {
+          "n": 6,
+          "median": 78.31150255152576,
+          "p25": 76.57697730179827,
+          "p75": 83.79125737490793,
+          "iqr": 7.214280073109663,
+          "min": 75.64983015802687,
+          "max": 91.20740257622697
+        },
+        "intervalPercent": {
+          "n": 118,
+          "min": 49.743589743589745,
+          "max": 98.91666666666667
+        }
+      }
+    }
+  }
+}
