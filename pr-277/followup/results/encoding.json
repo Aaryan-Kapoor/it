@@ -1,0 +1,3602 @@
+{
+  "rows": [
+    {
+      "round": 0,
+      "encoding": "gzip",
+      "metrics": {
+        "gridVisibleMs": 317.9551330000031,
+        "gridInteractiveMs": 414.1579870000023,
+        "openMs": 1211.5241050000004,
+        "timeOrigin": 1792953362269.7,
+        "loadMs": 74.29999923706055,
+        "domContentMs": 73.39999961853027,
+        "resources": [
+          {
+            "bytes": 144450,
+            "duration": 5.40000057220459,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 920.7052770000009,
+          "preClickMs": 900.58154296875,
+          "postReadyMs": 49.442626953125,
+          "visibilityPollMs": 289.6456419999995,
+          "domClickToStateMs": 261.5,
+          "domClickToFrameMs": 241.400146484375,
+          "domClickToFrameLoadMs": 261.2001953125,
+          "domFrameToStateMs": 20.099853515625,
+          "domGridVisibleMs": 272,
+          "domGridSortedMs": 389.10009765625,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 123.11258100000123,
+              "durationMs": 35.081953000000794,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 165.24845800000185,
+              "durationMs": 59.97183099999893,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 158.89694299999974,
+              "durationMs": 95.64155400000163,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 165.21309100000144,
+              "durationMs": 183.1067640000001,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.06405900000027,
+              "durationMs": 37.58772900000258,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.07678300000043,
+              "durationMs": 67.8258100000021,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 415.6499900000017,
+              "durationMs": 54.821946000000025,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.0848790000018,
+              "durationMs": 114.04808499999854,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.1072110000023,
+              "durationMs": 143.0269159999989,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.1141540000026,
+              "durationMs": 170.93240199999855,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.1292730000023,
+              "durationMs": 198.8867599999976,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.13537500000166,
+              "durationMs": 229.27192099999957,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.1415870000019,
+              "durationMs": 259.0219219999999,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.1479790000012,
+              "durationMs": 291.40552200000093,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.2388280000014,
+              "durationMs": 278.7102760000016,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.25039000000106,
+              "durationMs": 308.6301310000017,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 696.0089480000024,
+              "durationMs": 55.8558469999989,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 725.9548830000022,
+              "durationMs": 62.91047199999957,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.25971800000116,
+              "durationMs": 411.25379299999986,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.268675000003,
+              "durationMs": 444.3046159999976,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 830.4358950000023,
+              "durationMs": 68.32058399999733,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.2774920000011,
+              "durationMs": 538.0144489999984,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 898.7152000000024,
+              "durationMs": 78.67577999999776,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 955.6866330000012,
+              "durationMs": 50.82376600000134,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.2862090000017,
+              "durationMs": 623.3683859999983,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.2948350000006,
+              "durationMs": 655.9094079999995,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1047.457311000002,
+              "durationMs": 49.96447799999805,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1073.2687560000013,
+              "durationMs": 63.609614000000875,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.31291000000056,
+              "durationMs": 764.1197769999999,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.38188100000116,
+              "durationMs": 801.1895199999999,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1182.784945000003,
+              "durationMs": 60.16318599999795,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1218.6626749999996,
+              "durationMs": 53.01879900000131,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 1349.8053720000025,
+              "durationMs": 145.70609499999773,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1495.6525560000046,
+              "durationMs": 63.072871999997005,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:36:02.104Z",
+          "load": [
+            2.37,
+            2.76,
+            6.99
+          ],
+          "freeGiB": 14.273574829101562,
+          "cpu": [
+            250729578,
+            5088165,
+            163730766,
+            5131650668,
+            8374950,
+            0,
+            1390906,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:36:03.105Z",
+          "load": [
+            2.37,
+            2.76,
+            6.99
+          ],
+          "freeGiB": 14.244285583496094,
+          "cpu": [
+            250729791,
+            5088165,
+            163730888,
+            5131651454,
+            8375005,
+            0,
+            1390908,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:36:03.927Z",
+          "load": [
+            2.74,
+            2.83,
+            6.99
+          ],
+          "freeGiB": 14.268409729003906,
+          "cpu": [
+            250729988,
+            5088165,
+            163730981,
+            5131652067,
+            8375060,
+            0,
+            1390909,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "round": 0,
+      "encoding": "identity",
+      "metrics": {
+        "gridVisibleMs": 346.20826499999384,
+        "gridInteractiveMs": 436.41108499999973,
+        "openMs": 1193.8003420000023,
+        "timeOrigin": 1792953380077.8,
+        "loadMs": 85.5,
+        "domContentMs": 84.5,
+        "resources": [
+          {
+            "bytes": 459224,
+            "duration": 8.300000190734863,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 399.6921130000046,
+          "preClickMs": 389.720947265625,
+          "postReadyMs": 466.9794921875,
+          "visibilityPollMs": 792.2509579999969,
+          "domClickToStateMs": 337.099853515625,
+          "domClickToFrameMs": 301.39990234375,
+          "domClickToFrameLoadMs": 329.60009765625,
+          "domFrameToStateMs": 35.699951171875,
+          "domGridVisibleMs": 246,
+          "domGridSortedMs": 412.5,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 151.69321999999374,
+              "durationMs": 70.0412490000017,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 222.46331799999462,
+              "durationMs": 28.037584000005154,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 227.99648499999603,
+              "durationMs": 47.29489099999773,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 227.98876099999325,
+              "durationMs": 148.24063800000295,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 400.0865649999978,
+              "durationMs": 35.53557600000204,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 400.09347799999523,
+              "durationMs": 67.0949030000047,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 437.25747799999954,
+              "durationMs": 63.93147299999691,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 400.0987279999972,
+              "durationMs": 136.42001699999673,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 400.10413799999515,
+              "durationMs": 167.3077540000013,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 400.1091279999964,
+              "durationMs": 200.46695000000182,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 400.11491899999965,
+              "durationMs": 235.29810299999372,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 400.11999799999467,
+              "durationMs": 274.73226100000466,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 400.1250379999983,
+              "durationMs": 302.82941800000117,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 400.13003699999535,
+              "durationMs": 333.0698410000041,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 438.87546199999633,
+              "durationMs": 323.63787199999933,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 438.88279599999805,
+              "durationMs": 356.50203599999804,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 762.5728179999933,
+              "durationMs": 57.30502200000046,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 795.4647750000004,
+              "durationMs": 64.39597799999319,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 438.88874699999724,
+              "durationMs": 439.49513399999705,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 438.89612099999795,
+              "durationMs": 469.52843199999916,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 438.90325499999744,
+              "durationMs": 505.1980130000011,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 438.9105789999958,
+              "durationMs": 536.7437350000037,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 438.9181329999992,
+              "durationMs": 573.1999359999973,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 438.92818299999635,
+              "durationMs": 603.3575710000005,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 438.93519599999854,
+              "durationMs": 632.6775300000008,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 861.2614829999948,
+              "durationMs": 239.6801689999993,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1101.0184279999958,
+              "durationMs": 33.39635899999848,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:36:19.936Z",
+          "load": [
+            2.66,
+            2.8,
+            6.91
+          ],
+          "freeGiB": 14.273368835449219,
+          "cpu": [
+            250730763,
+            5088165,
+            163731662,
+            5131669381,
+            8375193,
+            0,
+            1390914,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:36:20.936Z",
+          "load": [
+            2.66,
+            2.8,
+            6.91
+          ],
+          "freeGiB": 14.24453353881836,
+          "cpu": [
+            250731026,
+            5088165,
+            163731809,
+            5131670088,
+            8375248,
+            0,
+            1390915,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:36:21.743Z",
+          "load": [
+            2.66,
+            2.8,
+            6.91
+          ],
+          "freeGiB": 14.266761779785156,
+          "cpu": [
+            250731146,
+            5088165,
+            163731923,
+            5131670776,
+            8375267,
+            0,
+            1390916,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "round": 1,
+      "encoding": "identity",
+      "metrics": {
+        "gridVisibleMs": 325.4552609999955,
+        "gridInteractiveMs": 416.21994399999676,
+        "openMs": 727.1750949999987,
+        "timeOrigin": 1792953397902.2,
+        "loadMs": 77.29999923706055,
+        "domContentMs": 77.29999923706055,
+        "resources": [
+          {
+            "bytes": 459224,
+            "duration": 5.800000190734863,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 421.9889620000031,
+          "preClickMs": 412.606201171875,
+          "postReadyMs": 11.46875,
+          "visibilityPollMs": 303.826510999992,
+          "domClickToStateMs": 303.10009765625,
+          "domClickToFrameMs": 271.89990234375,
+          "domClickToFrameLoadMs": 302.699951171875,
+          "domFrameToStateMs": 31.2001953125,
+          "domGridVisibleMs": 212.699951171875,
+          "domGridSortedMs": 394.300048828125,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 123.88292699999874,
+              "durationMs": 54.25964999999269,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 178.91295600000012,
+              "durationMs": 40.94127899999148,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 189.14177599998948,
+              "durationMs": 67.79850000000442,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 189.09137999999803,
+              "durationMs": 95.36649499999476,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.64229999999225,
+              "durationMs": 38.86853800000972,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.6576689999929,
+              "durationMs": 72.15164900000673,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 422.49538700000267,
+              "durationMs": 49.79528899998695,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.6673779999983,
+              "durationMs": 117.24173700000392,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.6765149999992,
+              "durationMs": 155.40304799999285,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.6858829999983,
+              "durationMs": 183.13532600000326,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.69684399999096,
+              "durationMs": 214.4675270000007,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.70580099998915,
+              "durationMs": 243.8135820000025,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.71420699999726,
+              "durationMs": 289.17007900000317,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 377.7229129999905,
+              "durationMs": 327.03471400000853,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 428.338064999989,
+              "durationMs": 306.7456150000071,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 428.346360999989,
+              "durationMs": 337.9194940000016,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 735.1597949999996,
+              "durationMs": 54.78752600000007,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 766.5813970000017,
+              "durationMs": 61.09650299999339,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 428.3532839999971,
+              "durationMs": 425.15481799999543,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 428.35981699998956,
+              "durationMs": 449.95073799999955,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 428.3662590000022,
+              "durationMs": 486.7007079999894,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 428.3732420000015,
+              "durationMs": 517.7243009999947,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 428.3796449999936,
+              "durationMs": 548.684162000005,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 428.3866479999997,
+              "durationMs": 579.179317999995,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 428.4016569999949,
+              "durationMs": 609.9687339999946,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 883.7296760000027,
+              "durationMs": 187.67805699999735,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1071.4789380000002,
+              "durationMs": 37.5220219999901,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:36:37.745Z",
+          "load": [
+            2.73,
+            2.81,
+            6.85
+          ],
+          "freeGiB": 14.281883239746094,
+          "cpu": [
+            250732358,
+            5088165,
+            163733096,
+            5131687007,
+            8375509,
+            0,
+            1390924,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:36:38.745Z",
+          "load": [
+            3.31,
+            2.93,
+            6.86
+          ],
+          "freeGiB": 14.250545501708984,
+          "cpu": [
+            250732562,
+            5088165,
+            163733307,
+            5131687706,
+            8375557,
+            0,
+            1390926,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:36:39.095Z",
+          "load": [
+            3.31,
+            2.93,
+            6.86
+          ],
+          "freeGiB": 14.27584457397461,
+          "cpu": [
+            250732691,
+            5088165,
+            163733390,
+            5131687891,
+            8375570,
+            0,
+            1390926,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "round": 1,
+      "encoding": "gzip",
+      "metrics": {
+        "gridVisibleMs": 346.859540999998,
+        "gridInteractiveMs": 446.79116000000795,
+        "openMs": 1172.629952000003,
+        "timeOrigin": 1792953415234.5,
+        "loadMs": 64.60000038146973,
+        "domContentMs": 64.60000038146973,
+        "resources": [
+          {
+            "bytes": 144450,
+            "duration": 4.5,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 378.4717130000063,
+          "preClickMs": 371.9755859375,
+          "postReadyMs": 402.05419921875,
+          "visibilityPollMs": 792.9248479999951,
+          "domClickToStateMs": 398.60009765625,
+          "domClickToFrameMs": 357.199951171875,
+          "domClickToFrameLoadMs": 377.39990234375,
+          "domFrameToStateMs": 41.400146484375,
+          "domGridVisibleMs": 307.800048828125,
+          "domGridSortedMs": 420.699951171875,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 245.22651799999585,
+              "durationMs": 37.02583300000697,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 288.294670999996,
+              "durationMs": 89.01163000000815,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 282.82051400000637,
+              "durationMs": 115.95767499999783,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 288.28410099999746,
+              "durationMs": 112.59660600000643,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 406.20731300000625,
+              "durationMs": 33.72942799999146,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 406.2141859999974,
+              "durationMs": 76.86465000000317,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 446.7052859999967,
+              "durationMs": 75.70405700000993,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 406.89123700000346,
+              "durationMs": 143.13930899999104,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 406.89860100000806,
+              "durationMs": 172.7589420000004,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 406.9040010000026,
+              "durationMs": 202.726788999993,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 406.9096220000065,
+              "durationMs": 238.93546399999468,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 406.91468200000236,
+              "durationMs": 268.5162719999935,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 406.91954099999566,
+              "durationMs": 298.4625980000128,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 406.92424000000756,
+              "durationMs": 340.221795999998,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 449.283190999995,
+              "durationMs": 351.3187340000004,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 449.2935209999996,
+              "durationMs": 397.62989100000414,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 800.8905150000064,
+              "durationMs": 81.2700499999919,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 449.3015560000058,
+              "durationMs": 466.1994759999943,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 449.3105429999996,
+              "durationMs": 497.2726010000042,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 449.31895000000077,
+              "durationMs": 545.9932010000048,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 449.3267840000044,
+              "durationMs": 576.1686449999979,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 449.33418900000106,
+              "durationMs": 605.3710410000058,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 449.34338600000774,
+              "durationMs": 634.2978339999972,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 449.35096100000374,
+              "durationMs": 664.162593999994,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 838.1252470000036,
+              "durationMs": 304.8419949999952,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1143.0252219999966,
+              "durationMs": 33.406222999998135,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:36:55.098Z",
+          "load": [
+            2.95,
+            2.87,
+            6.78
+          ],
+          "freeGiB": 14.280364990234375,
+          "cpu": [
+            250733829,
+            5088165,
+            163735098,
+            5131703693,
+            8375786,
+            0,
+            1390937,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:36:56.098Z",
+          "load": [
+            2.95,
+            2.87,
+            6.78
+          ],
+          "freeGiB": 14.252017974853516,
+          "cpu": [
+            250734029,
+            5088165,
+            163735212,
+            5131704411,
+            8375918,
+            0,
+            1390939,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:36:56.882Z",
+          "load": [
+            2.95,
+            2.87,
+            6.78
+          ],
+          "freeGiB": 14.273319244384766,
+          "cpu": [
+            250734140,
+            5088165,
+            163735352,
+            5131705061,
+            8375937,
+            0,
+            1390940,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "encoding": "gzip",
+      "metrics": {
+        "gridVisibleMs": 326.499152999997,
+        "gridInteractiveMs": 416.19469600000593,
+        "openMs": 1192.1478020000068,
+        "timeOrigin": 1792953433027.4,
+        "loadMs": 69.59999942779541,
+        "domContentMs": 69.59999942779541,
+        "resources": [
+          {
+            "bytes": 144450,
+            "duration": 4.699999809265137,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 399.71773699999903,
+          "preClickMs": 393.47265625,
+          "postReadyMs": 411.875,
+          "visibilityPollMs": 791.3448050000006,
+          "domClickToStateMs": 386.800048828125,
+          "domClickToFrameMs": 359.5,
+          "domClickToFrameLoadMs": 380.800048828125,
+          "domFrameToStateMs": 27.300048828125,
+          "domGridVisibleMs": 195,
+          "domGridSortedMs": 391.300048828125,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 120.61822600000596,
+              "durationMs": 30.262294999993173,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 157.93228700000327,
+              "durationMs": 52.53722899999411,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 152.34895100000722,
+              "durationMs": 80.28987799999595,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 157.92519399999583,
+              "durationMs": 103.11707500000193,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 379.2688349999953,
+              "durationMs": 37.568356000003405,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 379.3211849999934,
+              "durationMs": 73.5708760000125,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 416.97999300000083,
+              "durationMs": 61.74350399999821,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 379.32650500000454,
+              "durationMs": 130.69132399999944,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 379.3311839999951,
+              "durationMs": 155.92037100000016,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 379.3356320000021,
+              "durationMs": 187.85589700000128,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 379.3403810000018,
+              "durationMs": 220.18019299999287,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 379.3453009999939,
+              "durationMs": 260.44018100001267,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 379.3496790000063,
+              "durationMs": 289.92543399998976,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 379.3540470000007,
+              "durationMs": 336.81645699999353,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 419.39237299999513,
+              "durationMs": 337.1309760000004,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 419.3995069999946,
+              "durationMs": 366.3019600000116,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 756.6103149999981,
+              "durationMs": 64.30574900000647,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 786.0797179999936,
+              "durationMs": 55.12690700001258,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 419.40537799999584,
+              "durationMs": 443.60815800000273,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 419.46163499999966,
+              "durationMs": 481.03406299999915,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 419.46832800000266,
+              "durationMs": 516.243650999997,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 419.47403899999335,
+              "durationMs": 555.5879330000025,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 419.979582999993,
+              "durationMs": 602.1197110000066,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 419.98771800000395,
+              "durationMs": 625.1570599999977,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 419.9932790000021,
+              "durationMs": 653.7780039999925,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 867.8896640000021,
+              "durationMs": 251.99157299999206,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1119.917146000007,
+              "durationMs": 47.67023899999913,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:37:12.885Z",
+          "load": [
+            2.86,
+            2.86,
+            6.71
+          ],
+          "freeGiB": 14.291893005371094,
+          "cpu": [
+            250735181,
+            5088165,
+            163736957,
+            5131721122,
+            8376083,
+            0,
+            1390947,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:37:13.885Z",
+          "load": [
+            3.6,
+            3.01,
+            6.74
+          ],
+          "freeGiB": 14.26346206665039,
+          "cpu": [
+            250735360,
+            5088165,
+            163737066,
+            5131721948,
+            8376135,
+            0,
+            1390948,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:37:14.663Z",
+          "load": [
+            3.6,
+            3.01,
+            6.74
+          ],
+          "freeGiB": 14.28256607055664,
+          "cpu": [
+            250735453,
+            5088165,
+            163737121,
+            5131722684,
+            8376169,
+            0,
+            1390949,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "encoding": "identity",
+      "metrics": {
+        "gridVisibleMs": 320.27990999999747,
+        "gridInteractiveMs": 414.025484999991,
+        "openMs": 1186.0883160000085,
+        "timeOrigin": 1792953450824.9,
+        "loadMs": 68.20000076293945,
+        "domContentMs": 67.40000057220459,
+        "resources": [
+          {
+            "bytes": 459224,
+            "duration": 5.90000057220459,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 397.10842600000615,
+          "preClickMs": 386.15380859375,
+          "postReadyMs": 471.534423828125,
+          "visibilityPollMs": 788.0581419999944,
+          "domClickToStateMs": 328.400146484375,
+          "domClickToFrameMs": 307.60009765625,
+          "domClickToFrameLoadMs": 328.199951171875,
+          "domFrameToStateMs": 20.800048828125,
+          "domGridVisibleMs": 229.39990234375,
+          "domGridSortedMs": 389.60009765625,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 127.20671499999298,
+              "durationMs": 80.99692299999879,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 208.98495800000092,
+              "durationMs": 27.744157999986783,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 214.3791649999912,
+              "durationMs": 46.211997000005795,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 214.37331299998914,
+              "durationMs": 66.58581100001174,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 375.73688799999945,
+              "durationMs": 39.329673000000184,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 375.74362100000144,
+              "durationMs": 69.0790149999957,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 415.17167099998915,
+              "durationMs": 53.45838599999843,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 375.74805899999046,
+              "durationMs": 115.78764000000956,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 375.7523569999903,
+              "durationMs": 143.4936660000094,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 375.7570759999944,
+              "durationMs": 171.84743799999706,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 375.76290699999663,
+              "durationMs": 200.1171289999911,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 375.7671960000007,
+              "durationMs": 232.28507299999183,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 375.771373999989,
+              "durationMs": 257.30226100000436,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 375.77549099999305,
+              "durationMs": 285.9520080000075,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.4163319999934,
+              "durationMs": 272.88714200000686,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.42457699999795,
+              "durationMs": 302.39233999999124,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 690.387784999999,
+              "durationMs": 62.47196599999734,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 719.8768009999912,
+              "durationMs": 74.92286000000604,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.43136999999115,
+              "durationMs": 409.80782400000317,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.43763200000103,
+              "durationMs": 437.8176089999906,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.44366399999126,
+              "durationMs": 466.84944299999916,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.4503459999978,
+              "durationMs": 508.26711899999646,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.4570289999974,
+              "durationMs": 554.2940129999915,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.4646439999924,
+              "durationMs": 592.1924960000033,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 417.4713769999944,
+              "durationMs": 621.1838730000018,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 818.6918839999998,
+              "durationMs": 255.11595300000045,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1073.8646349999908,
+              "durationMs": 35.03536300000269,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:37:30.669Z",
+          "load": [
+            3.54,
+            3.03,
+            6.69
+          ],
+          "freeGiB": 14.291736602783203,
+          "cpu": [
+            250736433,
+            5088165,
+            163737830,
+            5131739649,
+            8376433,
+            0,
+            1390955,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:37:31.669Z",
+          "load": [
+            3.54,
+            3.03,
+            6.69
+          ],
+          "freeGiB": 14.262184143066406,
+          "cpu": [
+            250736622,
+            5088165,
+            163737948,
+            5131740458,
+            8376489,
+            0,
+            1390956,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:37:32.453Z",
+          "load": [
+            3.54,
+            3.03,
+            6.69
+          ],
+          "freeGiB": 14.28493881225586,
+          "cpu": [
+            250736694,
+            5088165,
+            163738001,
+            5131741219,
+            8376522,
+            0,
+            1390957,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "encoding": "identity",
+      "metrics": {
+        "gridVisibleMs": 337.98036200000206,
+        "gridInteractiveMs": 442.4095320000197,
+        "openMs": 722.886159000016,
+        "timeOrigin": 1792953468602.7,
+        "loadMs": 75.19999980926514,
+        "domContentMs": 75.09999942779541,
+        "resources": [
+          {
+            "bytes": 459224,
+            "duration": 5.800000190734863,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 424.5862630000047,
+          "preClickMs": 409.335205078125,
+          "postReadyMs": 7.85107421875,
+          "visibilityPollMs": 296.7951560000074,
+          "domClickToStateMs": 305.699951171875,
+          "domClickToFrameMs": 284.300048828125,
+          "domClickToFrameLoadMs": 305.300048828125,
+          "domFrameToStateMs": 21.39990234375,
+          "domGridVisibleMs": 219.800048828125,
+          "domGridSortedMs": 413,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 126.57806200001505,
+              "durationMs": 68.09306899999501,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 195.29888800001936,
+              "durationMs": 35.831497999985004,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 201.4588760000188,
+              "durationMs": 63.83035799997742,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 201.25554800001555,
+              "durationMs": 89.57762399999774,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 399.4024180000124,
+              "durationMs": 43.66027999998187,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 399.41203599999426,
+              "durationMs": 103.10163800002192,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 443.1345250000013,
+              "durationMs": 73.5404480000143,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 399.41909900002065,
+              "durationMs": 141.22201299999142,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 399.42536100000143,
+              "durationMs": 170.8973410000035,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 399.43188400001964,
+              "durationMs": 204.9086069999903,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 399.4414120000147,
+              "durationMs": 234.6952969999984,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 399.4476040000154,
+              "durationMs": 263.58914399999776,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 399.45379600001615,
+              "durationMs": 292.6484669999918,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 399.45966700001736,
+              "durationMs": 322.62599099997897,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 448.1451609999931,
+              "durationMs": 303.91772100000526,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 448.15354699999443,
+              "durationMs": 334.61969600000884,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 752.1732020000054,
+              "durationMs": 54.52607399999397,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 782.8663110000198,
+              "durationMs": 61.833139999973355,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 448.16015999999945,
+              "durationMs": 439.21540400001686,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 448.1667219999945,
+              "durationMs": 469.08932100000675,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 448.17637100000866,
+              "durationMs": 499.76138899999205,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 448.2140519999957,
+              "durationMs": 528.8478140000079,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 448.2213660000125,
+              "durationMs": 560.9699679999903,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 448.23015300001134,
+              "durationMs": 590.6224320000038,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 448.2370660000015,
+              "durationMs": 626.4958110000007,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 872.9876530000183,
+              "durationMs": 231.24058799998602,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1104.4551039999933,
+              "durationMs": 34.82240400000592,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:37:48.461Z",
+          "load": [
+            2.62,
+            2.85,
+            6.55
+          ],
+          "freeGiB": 14.291656494140625,
+          "cpu": [
+            250737469,
+            5088165,
+            163738766,
+            5131758476,
+            8376653,
+            0,
+            1390962,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:37:49.462Z",
+          "load": [
+            2.62,
+            2.85,
+            6.55
+          ],
+          "freeGiB": 14.26236343383789,
+          "cpu": [
+            250737689,
+            5088165,
+            163738985,
+            5131759144,
+            8376713,
+            0,
+            1390964,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:37:49.802Z",
+          "load": [
+            2.62,
+            2.85,
+            6.55
+          ],
+          "freeGiB": 14.287479400634766,
+          "cpu": [
+            250737753,
+            5088165,
+            163739047,
+            5131759402,
+            8376731,
+            0,
+            1390965,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "encoding": "gzip",
+      "metrics": {
+        "gridVisibleMs": 348.3368619999965,
+        "gridInteractiveMs": 432.64104499999667,
+        "openMs": 1112.5210840000072,
+        "timeOrigin": 1792953485954.5,
+        "loadMs": 76.30000019073486,
+        "domContentMs": 75.5,
+        "resources": [
+          {
+            "bytes": 144450,
+            "duration": 4.699999809265137,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 922.1258300000045,
+          "preClickMs": 904.43359375,
+          "postReadyMs": 87.587158203125,
+          "visibilityPollMs": 188.85617900002399,
+          "domClickToStateMs": 120.500244140625,
+          "domClickToFrameMs": 100,
+          "domClickToFrameLoadMs": 120.199951171875,
+          "domFrameToStateMs": 20.500244140625,
+          "domGridVisibleMs": 259.60009765625,
+          "domGridSortedMs": 414.39990234375,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 133.93260500000906,
+              "durationMs": 44.2523869999859,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 186.90886200001114,
+              "durationMs": 57.11632499998086,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 180.86403200001223,
+              "durationMs": 92.06141999998363,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 186.897621000011,
+              "durationMs": 115.67851699999301,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 401.44806699999026,
+              "durationMs": 130.52593800000614,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 401.5146550000063,
+              "durationMs": 166.15934399998514,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 401.5230809999921,
+              "durationMs": 194.71031300001778,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 401.5302640000009,
+              "durationMs": 224.53037299998687,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 401.53773899999214,
+              "durationMs": 251.88345600001048,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 401.5462650000118,
+              "durationMs": 282.4870589999773,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 401.5529680000036,
+              "durationMs": 312.3168369999912,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 401.5604020000028,
+              "durationMs": 342.9098210000084,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 401.56754499999806,
+              "durationMs": 368.0643510000082,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 441.9872120000073,
+              "durationMs": 356.59341199998744,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 442.0017499999958,
+              "durationMs": 386.9241040000052,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 798.6632009999885,
+              "durationMs": 55.46892200000002,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 829.0119790000026,
+              "durationMs": 65.87161400000332,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 442.01227000000654,
+              "durationMs": 486.7554839999939,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 442.018562000012,
+              "durationMs": 527.1353859999799,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 928.9988050000102,
+              "durationMs": 74.63191399999778,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 969.270228999987,
+              "durationMs": 65.98853800000506,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 442.0691189999925,
+              "durationMs": 622.2907059999998,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 442.074369000009,
+              "durationMs": 667.6970849999925,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1064.6055040000065,
+              "durationMs": 69.81864300000598,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1109.856866999995,
+              "durationMs": 55.69376200000988,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 442.0810509999865,
+              "durationMs": 751.7676140000112,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 442.08756399998674,
+              "durationMs": 783.3675180000137,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1193.9586049999925,
+              "durationMs": 58.56267400001525,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1225.55486199999,
+              "durationMs": 57.950336000008974,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 442.09431700001005,
+              "durationMs": 921.804735999991,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 1371.2543930000102,
+              "durationMs": 32.61990999997943,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1403.946380999987,
+              "durationMs": 41.72630999999819,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:38:05.810Z",
+          "load": [
+            2.45,
+            2.8,
+            6.48
+          ],
+          "freeGiB": 14.291187286376953,
+          "cpu": [
+            250738709,
+            5088165,
+            163740757,
+            5131775383,
+            8376967,
+            0,
+            1390971,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:38:06.810Z",
+          "load": [
+            2.45,
+            2.8,
+            6.48
+          ],
+          "freeGiB": 14.262710571289062,
+          "cpu": [
+            250738964,
+            5088165,
+            163740943,
+            5131776051,
+            8377026,
+            0,
+            1390972,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:38:07.534Z",
+          "load": [
+            2.45,
+            2.8,
+            6.48
+          ],
+          "freeGiB": 14.2781982421875,
+          "cpu": [
+            250739163,
+            5088165,
+            163741062,
+            5131776541,
+            8377062,
+            0,
+            1390973,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "round": 4,
+      "encoding": "gzip",
+      "metrics": {
+        "gridVisibleMs": 336.779389000003,
+        "gridInteractiveMs": 422.59220600000117,
+        "openMs": 1208.4714380000078,
+        "timeOrigin": 1792953503673.3,
+        "loadMs": 80.90000057220459,
+        "domContentMs": 80.80000019073486,
+        "resources": [
+          {
+            "bytes": 144450,
+            "duration": 4.699999809265137,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 418.31411800000933,
+          "preClickMs": 405.8876953125,
+          "postReadyMs": 259.483642578125,
+          "visibilityPollMs": 788.9225649999862,
+          "domClickToStateMs": 543.10009765625,
+          "domClickToFrameMs": 527,
+          "domClickToFrameLoadMs": 542.900146484375,
+          "domFrameToStateMs": 16.10009765625,
+          "domGridVisibleMs": 234.5,
+          "domGridSortedMs": 403.699951171875,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 141.4610410000023,
+              "durationMs": 69.4870729999966,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 211.6303449999832,
+              "durationMs": 29.31962000002386,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 217.77020699999412,
+              "durationMs": 47.31091999998898,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 217.76156099999207,
+              "durationMs": 68.35277900000801,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.2298179999925,
+              "durationMs": 40.40135000000009,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.23666100000264,
+              "durationMs": 69.45232799998485,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.2413799999922,
+              "durationMs": 99.68453900000895,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.246129999985,
+              "durationMs": 125.98527000000468,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.2506080000021,
+              "durationMs": 155.3850429999875,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.2564790000033,
+              "durationMs": 186.09848299997975,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.26092800000333,
+              "durationMs": 215.44691699999385,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.26540599999134,
+              "durationMs": 245.12757700000657,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.27022499998566,
+              "durationMs": 276.39741700000013,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 424.0532729999977,
+              "durationMs": 288.86452899998403,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 424.06362199998694,
+              "durationMs": 329.46131199999945,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 713.0039359999937,
+              "durationMs": 65.32964300000458,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 753.6568160000024,
+              "durationMs": 66.34429799998179,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 424.07103600000846,
+              "durationMs": 421.2243699999817,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 424.0776590000023,
+              "durationMs": 468.041647999984,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 424.0844619999989,
+              "durationMs": 509.7278689999948,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 424.091064999986,
+              "durationMs": 545.4529380000022,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 424.09763699999894,
+              "durationMs": 599.4016309999861,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 424.10412999999244,
+              "durationMs": 817.2992830000003,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 424.11361800000304,
+              "durationMs": 851.6225280000072,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 846.6863989999983,
+              "durationMs": 478.3863919999858,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1325.1330359999847,
+              "durationMs": 30.64886600000318,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:38:23.536Z",
+          "load": [
+            2.9,
+            2.87,
+            6.42
+          ],
+          "freeGiB": 14.290580749511719,
+          "cpu": [
+            250740009,
+            5088165,
+            163741771,
+            5131793756,
+            8377206,
+            0,
+            1390980,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:38:24.536Z",
+          "load": [
+            2.9,
+            2.87,
+            6.42
+          ],
+          "freeGiB": 14.260414123535156,
+          "cpu": [
+            250740195,
+            5088165,
+            163741896,
+            5131794561,
+            8377260,
+            0,
+            1390982,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:38:25.334Z",
+          "load": [
+            2.9,
+            2.87,
+            6.42
+          ],
+          "freeGiB": 14.288288116455078,
+          "cpu": [
+            250740262,
+            5088165,
+            163741940,
+            5131795344,
+            8377311,
+            0,
+            1390982,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "round": 4,
+      "encoding": "identity",
+      "metrics": {
+        "gridVisibleMs": 339.93445899998187,
+        "gridInteractiveMs": 425.7351979999803,
+        "openMs": 1118.5659450000094,
+        "timeOrigin": 1792953521475.1,
+        "loadMs": 72.69999980926514,
+        "domContentMs": 72.60000038146973,
+        "resources": [
+          {
+            "bytes": 459224,
+            "duration": 4.199999809265137,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 932.1846490000025,
+          "preClickMs": 913.66455078125,
+          "postReadyMs": 90.1015625,
+          "visibilityPollMs": 185.15321300001233,
+          "domClickToStateMs": 114.7998046875,
+          "domClickToFrameMs": 96.300048828125,
+          "domClickToFrameLoadMs": 114.599853515625,
+          "domFrameToStateMs": 18.499755859375,
+          "domGridVisibleMs": 274.39990234375,
+          "domGridSortedMs": 402.800048828125,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 127.23612799998955,
+              "durationMs": 74.77010500000324,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 202.73642599998857,
+              "durationMs": 29.370402000000468,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 209.289878999989,
+              "durationMs": 48.0645160000131,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 209.2784269999829,
+              "durationMs": 75.19495500001358,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 390.7383719999925,
+              "durationMs": 38.292554000014206,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 390.74866199999815,
+              "durationMs": 67.40887099999236,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 390.75561500000185,
+              "durationMs": 97.01487299997825,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 390.964753999986,
+              "durationMs": 124.92304500000319,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 390.9733600000036,
+              "durationMs": 155.12978299998213,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 390.9819969999953,
+              "durationMs": 184.30904100000043,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.01608199998736,
+              "durationMs": 215.0717200000072,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.02387699999963,
+              "durationMs": 248.10142299998552,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 391.0308699999878,
+              "durationMs": 274.07700900000054,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 427.15626899999916,
+              "durationMs": 268.58129499998176,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 427.16416399998707,
+              "durationMs": 301.9706050000095,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 695.8162840000005,
+              "durationMs": 58.98177499999292,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 729.1959860000061,
+              "durationMs": 68.34749200000078,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 427.16919399998733,
+              "durationMs": 402.13294300000416,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 427.1751349999977,
+              "durationMs": 436.09988500000327,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 829.673294999986,
+              "durationMs": 60.881950000009965,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 863.3341429999855,
+              "durationMs": 65.02822999999626,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 427.18144699998084,
+              "durationMs": 537.9045670000196,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 427.18808999998146,
+              "durationMs": 569.5733940000064,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 965.176867000002,
+              "durationMs": 58.32064299998456,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 996.8973529999785,
+              "durationMs": 58.60186000002432,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 427.19501299998956,
+              "durationMs": 664.9703509999963,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 427.2020569999877,
+              "durationMs": 701.134653999994,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1092.3834299999871,
+              "durationMs": 66.44516299999668,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1128.4161129999848,
+              "durationMs": 67.17597700000624,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 427.2194899999886,
+              "durationMs": 795.2719790000119,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1222.8696599999967,
+              "durationMs": 39.59383699999307,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 1373.232159999985,
+              "durationMs": 30.394094999996014,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1403.6851579999784,
+              "durationMs": 32.62931899999967,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:38:41.337Z",
+          "load": [
+            2.34,
+            2.74,
+            6.32
+          ],
+          "freeGiB": 14.2901611328125,
+          "cpu": [
+            250741052,
+            5088165,
+            163742609,
+            5131812612,
+            8377486,
+            0,
+            1390988,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:38:42.337Z",
+          "load": [
+            2.34,
+            2.74,
+            6.32
+          ],
+          "freeGiB": 14.260749816894531,
+          "cpu": [
+            250741251,
+            5088165,
+            163742736,
+            5131813404,
+            8377539,
+            0,
+            1390989,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:38:43.046Z",
+          "load": [
+            2.34,
+            2.74,
+            6.32
+          ],
+          "freeGiB": 14.279048919677734,
+          "cpu": [
+            250741392,
+            5088165,
+            163742802,
+            5131813998,
+            8377572,
+            0,
+            1390991,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "round": 5,
+      "encoding": "identity",
+      "metrics": {
+        "gridVisibleMs": 323.3523620000051,
+        "gridInteractiveMs": 408.80110400001286,
+        "openMs": 1115.5475099999749,
+        "timeOrigin": 1792953539193,
+        "loadMs": 64.5,
+        "domContentMs": 64.5,
+        "resources": [
+          {
+            "bytes": 459224,
+            "duration": 4.600000381469727,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 926.7111969999969,
+          "preClickMs": 910.183837890625,
+          "postReadyMs": 89.263671875,
+          "visibilityPollMs": 187.42961900000228,
+          "domClickToStateMs": 116.10009765625,
+          "domClickToFrameMs": 94,
+          "domClickToFrameLoadMs": 115.7001953125,
+          "domFrameToStateMs": 22.10009765625,
+          "domGridVisibleMs": 201.699951171875,
+          "domGridSortedMs": 385.699951171875,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 108.21596100000897,
+              "durationMs": 68.25125000000116,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 177.45590800000355,
+              "durationMs": 34.94198800000595,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 183.99167799999123,
+              "durationMs": 52.84830199999851,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 183.98214000000735,
+              "durationMs": 80.07346600000164,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 373.3827769999916,
+              "durationMs": 38.44083400000818,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 373.72067199999583,
+              "durationMs": 67.30197900001076,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 373.72694399999455,
+              "durationMs": 97.25186200000462,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 373.73494900000514,
+              "durationMs": 129.762281000003,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 373.7395580000011,
+              "durationMs": 158.96764300001087,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 373.74434699999983,
+              "durationMs": 186.79232100001536,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 373.74882599999546,
+              "durationMs": 215.7447600000014,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 373.75329399999464,
+              "durationMs": 250.88277300001937,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 373.75765300000785,
+              "durationMs": 279.26566499998444,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 410.0507579999976,
+              "durationMs": 272.0101330000034,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 410.0601360000146,
+              "durationMs": 309.7911669999885,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 682.24132500001,
+              "durationMs": 83.5979309999966,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 719.9702099999995,
+              "durationMs": 54.139755999989575,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 410.1136279999919,
+              "durationMs": 394.9193780000205,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 410.12128300001496,
+              "durationMs": 419.951767999999,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 807.4298389999894,
+              "durationMs": 56.544284000003245,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 830.5980630000122,
+              "durationMs": 69.38536499999464,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 410.12763500001165,
+              "durationMs": 517.5603520000004,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 410.13338600000134,
+              "durationMs": 554.5528519999934,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 927.8931879999873,
+              "durationMs": 62.57573300000513,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 964.7785739999963,
+              "durationMs": 56.08027999999467,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 410.13970800000243,
+              "durationMs": 649.0419439999969,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 410.14686199999414,
+              "durationMs": 695.6151440000103,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1059.402363000001,
+              "durationMs": 69.30030299999635,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1105.8555040000065,
+              "durationMs": 52.979693000001134,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 410.15529799999786,
+              "durationMs": 780.497807000007,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1190.7202129999932,
+              "durationMs": 32.510097999998834,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 1341.3020069999911,
+              "durationMs": 37.40592000001925,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1378.7595150000125,
+              "durationMs": 34.81254099999205,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:38:59.050Z",
+          "load": [
+            2.64,
+            2.78,
+            6.25
+          ],
+          "freeGiB": 14.289813995361328,
+          "cpu": [
+            250742235,
+            5088165,
+            163743495,
+            5131831205,
+            8377780,
+            0,
+            1390996,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:39:00.050Z",
+          "load": [
+            2.64,
+            2.78,
+            6.25
+          ],
+          "freeGiB": 14.260326385498047,
+          "cpu": [
+            250742431,
+            5088165,
+            163743611,
+            5131832004,
+            8377838,
+            0,
+            1390997,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:39:00.744Z",
+          "load": [
+            2.64,
+            2.78,
+            6.25
+          ],
+          "freeGiB": 14.274242401123047,
+          "cpu": [
+            250742580,
+            5088165,
+            163743687,
+            5131832548,
+            8377876,
+            0,
+            1390998,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "round": 5,
+      "encoding": "gzip",
+      "metrics": {
+        "gridVisibleMs": 330.42154499999015,
+        "gridInteractiveMs": 417.42651099999784,
+        "openMs": 717.3749620000017,
+        "timeOrigin": 1792953556885.7,
+        "loadMs": 79.19999980926514,
+        "domContentMs": 79.19999980926514,
+        "resources": [
+          {
+            "bytes": 144450,
+            "duration": 5,
+            "file": "index-C34FAbAJ.js"
+          }
+        ],
+        "diagnostic": {
+          "clickCallMs": 420.7342840000056,
+          "preClickMs": 411.944580078125,
+          "postReadyMs": 7.5302734375,
+          "visibilityPollMs": 295.65016799999285,
+          "domClickToStateMs": 297.900146484375,
+          "domClickToFrameMs": 278.300048828125,
+          "domClickToFrameLoadMs": 297.699951171875,
+          "domFrameToStateMs": 19.60009765625,
+          "domGridVisibleMs": 201.800048828125,
+          "domGridSortedMs": 393.5,
+          "events": [
+            {
+              "kind": "Mutation",
+              "name": "displays:register",
+              "startMs": 129.26026399998227,
+              "durationMs": 30.020793000003323,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "displays:signOutToken",
+              "startMs": 165.38314099999843,
+              "durationMs": 47.53963099999237,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:reached",
+              "startMs": 160.23950599998352,
+              "durationMs": 73.2004860000161,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "displays:heartbeat",
+              "startMs": 165.37760000000708,
+              "durationMs": 93.24946199997794,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 381.1135919999797,
+              "durationMs": 36.86697600001935,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 381.1197830000019,
+              "durationMs": 67.37760499998694,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 418.1186319999979,
+              "durationMs": 53.955543999996735,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 381.12460300000384,
+              "durationMs": 115.02446099999361,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 381.16006999998353,
+              "durationMs": 145.51622300001327,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 381.16493999998784,
+              "durationMs": 172.05630500000552,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 381.1701089999988,
+              "durationMs": 223.07837199998903,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 381.1747080000059,
+              "durationMs": 256.97159399997327,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 381.17910700000357,
+              "durationMs": 285.9461509999819,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 381.18363499999396,
+              "durationMs": 315.9025719999918,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 420.2265639999823,
+              "durationMs": 305.1789100000169,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 420.2347000000009,
+              "durationMs": 334.2263049999892,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 725.4668810000003,
+              "durationMs": 54.429647999990266,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 754.5591129999957,
+              "durationMs": 63.97855900001014,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 420.2414629999839,
+              "durationMs": 424.3656619999965,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 420.2480449999857,
+              "durationMs": 453.87871799999266,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 420.2539959999849,
+              "durationMs": 482.3313290000078,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 420.26018799998565,
+              "durationMs": 519.3971250000177,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 420.26644999999553,
+              "durationMs": 565.9297150000057,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 420.27363399998285,
+              "durationMs": 596.0275350000011,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 420.28013599998667,
+              "durationMs": 624.4877010000055,
+              "success": true
+            },
+            {
+              "kind": "Mutation",
+              "name": "mounts:create",
+              "startMs": 851.3866219999909,
+              "durationMs": 222.17053900001338,
+              "success": true
+            },
+            {
+              "kind": "Action",
+              "name": "mounts:ticket",
+              "startMs": 1073.5930090000038,
+              "durationMs": 34.48640500000329,
+              "success": true
+            }
+          ]
+        }
+      },
+      "host": [
+        {
+          "at": "2026-10-25T18:39:16.748Z",
+          "load": [
+            2.71,
+            2.79,
+            6.2
+          ],
+          "freeGiB": 14.289295196533203,
+          "cpu": [
+            250743544,
+            5088165,
+            163745590,
+            5131848392,
+            8378029,
+            0,
+            1391004,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:39:17.748Z",
+          "load": [
+            2.71,
+            2.79,
+            6.2
+          ],
+          "freeGiB": 14.259296417236328,
+          "cpu": [
+            250743718,
+            5088165,
+            163745696,
+            5131849221,
+            8378082,
+            0,
+            1391005,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at": "2026-10-25T18:39:18.049Z",
+          "load": [
+            2.71,
+            2.79,
+            6.2
+          ],
+          "freeGiB": 14.280364990234375,
+          "cpu": [
+            250743771,
+            5088165,
+            163745734,
+            5131849468,
+            8378098,
+            0,
+            1391005,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  ]
+}

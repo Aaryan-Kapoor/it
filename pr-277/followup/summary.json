@@ -1,0 +1,1369 @@
+{
+  "followup.json": {
+    "baseline": {
+      "blocks": 12,
+      "metrics": {
+        "startMs": {
+          "n": 12,
+          "median": 775.6234610000101,
+          "p25": 635.3726142499982,
+          "p75": 864.4580912499313,
+          "iqr": 229.08547699993312,
+          "min": 616.5991449999856,
+          "max": 1005.6285760001047
+        },
+        "startupCpuMs": {
+          "n": 12,
+          "median": 270.0,
+          "p25": 257.5,
+          "p75": 272.5,
+          "iqr": 15.0,
+          "min": 240.0,
+          "max": 290.0
+        },
+        "local.loadMs": {
+          "n": 12,
+          "median": 75.90000057220459,
+          "p25": 74.74999952316284,
+          "p75": 77.34999990463257,
+          "iqr": 2.6000003814697266,
+          "min": 70,
+          "max": 86
+        },
+        "local.domContentMs": {
+          "n": 12,
+          "median": 75.09999990463257,
+          "p25": 73.90000009536743,
+          "p75": 76.49999976158142,
+          "iqr": 2.5999996662139893,
+          "min": 69.19999980926514,
+          "max": 85.09999942779541
+        },
+        "local.gridVisibleMs": {
+          "n": 12,
+          "median": 334.44800649996614,
+          "p25": 328.573591499975,
+          "p75": 340.90329375000147,
+          "iqr": 12.329702250026457,
+          "min": 318.5478619999999,
+          "max": 364.1332859999966
+        },
+        "local.gridInteractiveMs": {
+          "n": 12,
+          "median": 429.51391599999624,
+          "p25": 422.1365837499652,
+          "p75": 437.3419264999975,
+          "iqr": 15.205342750032287,
+          "min": 416.1355530000001,
+          "max": 471.2492659999989
+        },
+        "local.openMs": {
+          "n": 12,
+          "median": 1177.7547210000048,
+          "p25": 1008.0793380000396,
+          "p75": 1187.1876455000565,
+          "iqr": 179.10830750001696,
+          "min": 685.9833129999461,
+          "max": 1190.4660440000007
+        },
+        "local.domClickToStateMs": {
+          "n": 12,
+          "median": 353.5001220703125,
+          "p25": 300.77508544921875,
+          "p75": 382.2999267578125,
+          "iqr": 81.52484130859375,
+          "min": 124.400146484375,
+          "max": 455.099853515625
+        },
+        "local.clickCallMs": {
+          "n": 12,
+          "median": 397.7114719999954,
+          "p25": 393.45619699999804,
+          "p75": 400.3803827500051,
+          "iqr": 6.924185750007041,
+          "min": 386.2695850000018,
+          "max": 928.2339719999873
+        },
+        "local.preClickMs": {
+          "n": 12,
+          "median": 388.5950927734375,
+          "p25": 383.78662109375,
+          "p75": 392.55792236328125,
+          "iqr": 8.77130126953125,
+          "min": 380.118408203125,
+          "max": 908.865234375
+        },
+        "local.postReadyMs": {
+          "n": 12,
+          "median": 349.513427734375,
+          "p25": 55.4342041015625,
+          "p75": 426.3057861328125,
+          "iqr": 370.87158203125,
+          "min": 3.44091796875,
+          "max": 448.834228515625
+        },
+        "local.visibilityPollMs": {
+          "n": 12,
+          "median": 786.9054739999992,
+          "p25": 303.4673155000128,
+          "p75": 788.9542992499919,
+          "iqr": 485.4869837499791,
+          "min": 186.44804300001124,
+          "max": 792.1411940000003
+        },
+        "local.domGridVisibleMs": {
+          "n": 12,
+          "median": 261.050048828125,
+          "p25": 257.67498779296875,
+          "p75": 293.54998779296875,
+          "iqr": 35.875,
+          "min": 244.699951171875,
+          "max": 331.10009765625
+        },
+        "local.domGridSortedMs": {
+          "n": 12,
+          "median": 403.0,
+          "p25": 395.7999267578125,
+          "p75": 412.800048828125,
+          "iqr": 17.0001220703125,
+          "min": 386.10009765625,
+          "max": 440.5
+        },
+        "network.loadMs": {
+          "n": 12,
+          "median": 518.5000004768372,
+          "p25": 511.0000002384186,
+          "p75": 521.2500002384186,
+          "iqr": 10.25,
+          "min": 510,
+          "max": 527.8999996185303
+        },
+        "network.domContentMs": {
+          "n": 12,
+          "median": 518.5000004768372,
+          "p25": 511.0000002384186,
+          "p75": 521.2250001430511,
+          "iqr": 10.224999904632568,
+          "min": 509.8999996185303,
+          "max": 527.8000001907349
+        },
+        "network.gridVisibleMs": {
+          "n": 12,
+          "median": 695.2052004999714,
+          "p25": 682.5409732500011,
+          "p75": 701.2532275000003,
+          "iqr": 18.712254249999205,
+          "min": 675.412777000005,
+          "max": 902.3309069999959
+        },
+        "network.gridInteractiveMs": {
+          "n": 12,
+          "median": 796.5838815000025,
+          "p25": 787.5899295000017,
+          "p75": 805.0684424999911,
+          "iqr": 17.478512999989334,
+          "min": 774.0334670000011,
+          "max": 1004.5610089999973
+        },
+        "network.openMs": {
+          "n": 12,
+          "median": 1177.177864000012,
+          "p25": 1123.2062300000107,
+          "p75": 1193.2208727500001,
+          "iqr": 70.01464274998943,
+          "min": 1112.2251749999705,
+          "max": 1201.7316730000011
+        },
+        "network.domClickToStateMs": {
+          "n": 12,
+          "median": 349.85009765625,
+          "p25": 178.37493896484375,
+          "p75": 373.02490234375,
+          "iqr": 194.64996337890625,
+          "min": 146.800048828125,
+          "max": 564.10009765625
+        },
+        "network.clickCallMs": {
+          "n": 12,
+          "median": 406.60977800001956,
+          "p25": 395.4729132499924,
+          "p75": 925.0142190000042,
+          "iqr": 529.5413057500118,
+          "min": 381.78884400002426,
+          "max": 934.9184749999549
+        },
+        "network.preClickMs": {
+          "n": 12,
+          "median": 394.9805908203125,
+          "p25": 387.09661865234375,
+          "p75": 906.36376953125,
+          "iqr": 519.2671508789062,
+          "min": 375.665771484375,
+          "max": 914.996337890625
+        },
+        "network.postReadyMs": {
+          "n": 12,
+          "median": 366.668701171875,
+          "p25": 59.79742431640625,
+          "p75": 439.65252685546875,
+          "iqr": 379.8551025390625,
+          "min": 23.865966796875,
+          "max": 482.072021484375
+        },
+        "network.visibilityPollMs": {
+          "n": 12,
+          "median": 788.6176250000135,
+          "p25": 189.08827124997333,
+          "p75": 789.9600795000079,
+          "iqr": 600.8718082500345,
+          "min": 185.49387099999876,
+          "max": 794.8716380000005
+        },
+        "network.domGridVisibleMs": {
+          "n": 12,
+          "median": 693.7000732421875,
+          "p25": 680.7500610351562,
+          "p75": 697.1499633789062,
+          "iqr": 16.39990234375,
+          "min": 669.300048828125,
+          "max": 900.60009765625
+        },
+        "network.domGridSortedMs": {
+          "n": 12,
+          "median": 772.800048828125,
+          "p25": 762.0250244140625,
+          "p75": 779.699951171875,
+          "iqr": 17.6749267578125,
+          "min": 747.60009765625,
+          "max": 980.300048828125
+        },
+        "cli.publishMs": {
+          "n": 24,
+          "median": 351.02502899998217,
+          "p25": 342.86673699998937,
+          "p75": 362.30207850002625,
+          "iqr": 19.435341500036884,
+          "min": 328.7644619999992,
+          "max": 605.7163740000105
+        },
+        "cli.openMs": {
+          "n": 24,
+          "median": 180.0653880000027,
+          "p25": 176.96269150001172,
+          "p75": 185.6978052500026,
+          "iqr": 8.735113749990887,
+          "min": 172.22792799997842,
+          "max": 202.9068659999175
+        },
+        "cli.actionsMs": {
+          "n": 24,
+          "median": 148.05895200000668,
+          "p25": 145.38946475004195,
+          "p75": 152.15620624997973,
+          "iqr": 6.76674149993778,
+          "min": 142.58314899999823,
+          "max": 173.9606550000026
+        },
+        "cli.waitTimeoutMs": {
+          "n": 24,
+          "median": 180.90560349998123,
+          "p25": 171.87149750001845,
+          "p75": 183.98118925001472,
+          "iqr": 12.109691749996273,
+          "min": 162.51099599999725,
+          "max": 195.50789099995745
+        },
+        "cli.waitReadyMs": {
+          "n": 24,
+          "median": 286.37374100001944,
+          "p25": 283.0473937500142,
+          "p75": 297.7416022499965,
+          "iqr": 14.694208499982324,
+          "min": 279.255204999994,
+          "max": 400.2576419999823
+        },
+        "memory.service.rssMiB": {
+          "n": 12,
+          "median": 93.197265625,
+          "p25": 93.013671875,
+          "p75": 97.9560546875,
+          "iqr": 4.9423828125,
+          "min": 92.96484375,
+          "max": 98.1875
+        },
+        "memory.service.pssMiB": {
+          "n": 12,
+          "median": 67.22705078125,
+          "p25": 67.033935546875,
+          "p75": 69.60791015625,
+          "iqr": 2.573974609375,
+          "min": 66.9140625,
+          "max": 69.876953125
+        },
+        "memory.backend.rssMiB": {
+          "n": 12,
+          "median": 151.646484375,
+          "p25": 148.9423828125,
+          "p75": 152.3876953125,
+          "iqr": 3.4453125,
+          "min": 145.63671875,
+          "max": 159.21875
+        },
+        "memory.backend.pssMiB": {
+          "n": 12,
+          "median": 147.748046875,
+          "p25": 145.109375,
+          "p75": 148.548095703125,
+          "iqr": 3.438720703125,
+          "min": 141.802734375,
+          "max": 155.220703125
+        },
+        "connectorProbeMs": {
+          "n": 60,
+          "median": 0.2465,
+          "p25": 0.2115,
+          "p75": 0.348,
+          "iqr": 0.13649999999999998,
+          "min": 0.187,
+          "max": 0.791
+        },
+        "hot.artifacts:list.wallMs": {
+          "n": 60,
+          "median": 2.0935,
+          "p25": 1.792,
+          "p75": 2.5037499999999997,
+          "iqr": 0.7117499999999997,
+          "min": 1.426,
+          "max": 3.294
+        },
+        "server.artifacts:list.executionMs": {
+          "n": 23,
+          "median": 0.025,
+          "p25": 0.022,
+          "p75": 0.029,
+          "iqr": 0.007000000000000003,
+          "min": 0.018,
+          "max": 0.052
+        },
+        "server.artifacts:list.cachedExecutionMs": {
+          "n": 23,
+          "median": 0.025,
+          "p25": 0.022,
+          "p75": 0.029,
+          "iqr": 0.007000000000000003,
+          "min": 0.018,
+          "max": 0.052
+        },
+        "hot.artifact_with_history.wallMs": {
+          "n": 60,
+          "median": 1.7355,
+          "p25": 1.5379999999999998,
+          "p75": 2.076,
+          "iqr": 0.5380000000000003,
+          "min": 1.206,
+          "max": 11.766
+        },
+        "server.artifact_with_history.executionMs": {
+          "n": 12,
+          "median": 0.025500000000000002,
+          "p25": 0.02475,
+          "p75": 0.0275,
+          "iqr": 0.002749999999999999,
+          "min": 0.022,
+          "max": 0.035
+        },
+        "server.artifact_with_history.cachedExecutionMs": {
+          "n": 12,
+          "median": 0.025500000000000002,
+          "p25": 0.02475,
+          "p75": 0.0275,
+          "iqr": 0.002749999999999999,
+          "min": 0.022,
+          "max": 0.035
+        },
+        "hot.artifact_without_history.wallMs": {
+          "n": 60,
+          "median": 1.6305,
+          "p25": 1.42275,
+          "p75": 1.97025,
+          "iqr": 0.5475000000000001,
+          "min": 1.237,
+          "max": 2.616
+        },
+        "server.artifact_without_history.executionMs": {
+          "n": 9,
+          "median": 0.023,
+          "p25": 0.021,
+          "p75": 0.028,
+          "iqr": 0.006999999999999999,
+          "min": 0.018,
+          "max": 0.032
+        },
+        "server.artifact_without_history.cachedExecutionMs": {
+          "n": 9,
+          "median": 0.023,
+          "p25": 0.021,
+          "p75": 0.028,
+          "iqr": 0.006999999999999999,
+          "min": 0.018,
+          "max": 0.032
+        },
+        "hot.state:get.wallMs": {
+          "n": 60,
+          "median": 1.6444999999999999,
+          "p25": 1.3865,
+          "p75": 1.8045,
+          "iqr": 0.4179999999999999,
+          "min": 1.225,
+          "max": 3.02
+        },
+        "server.state:get.executionMs": {
+          "n": 8,
+          "median": 0.0225,
+          "p25": 0.019,
+          "p75": 0.02425,
+          "iqr": 0.005250000000000001,
+          "min": 0.017,
+          "max": 0.035
+        },
+        "server.state:get.cachedExecutionMs": {
+          "n": 8,
+          "median": 0.0225,
+          "p25": 0.019,
+          "p75": 0.02425,
+          "iqr": 0.005250000000000001,
+          "min": 0.017,
+          "max": 0.035
+        },
+        "hot.delivery:waitingFor.wallMs": {
+          "n": 60,
+          "median": 1.701,
+          "p25": 1.50325,
+          "p75": 1.90375,
+          "iqr": 0.4005000000000001,
+          "min": 1.257,
+          "max": 2.47
+        },
+        "hot.state:patch.wallMs": {
+          "n": 60,
+          "median": 32.617,
+          "p25": 31.153000000000002,
+          "p75": 38.53775,
+          "iqr": 7.38475,
+          "min": 22.482,
+          "max": 124.03
+        },
+        "server.state:patch.executionMs": {
+          "n": 56,
+          "median": 7.466,
+          "p25": 6.93275,
+          "p75": 7.99425,
+          "iqr": 1.0614999999999997,
+          "min": 6.592,
+          "max": 11.602
+        },
+        "server.state:patch.uncachedExecutionMs": {
+          "n": 56,
+          "median": 7.466,
+          "p25": 6.93275,
+          "p75": 7.99425,
+          "iqr": 1.0614999999999997,
+          "min": 6.592,
+          "max": 11.602
+        },
+        "server.delivery:waitingFor.executionMs": {
+          "n": 7,
+          "median": 0.024,
+          "p25": 0.019999999999999997,
+          "p75": 0.027,
+          "iqr": 0.007000000000000003,
+          "min": 0.017,
+          "max": 0.031
+        },
+        "server.delivery:waitingFor.cachedExecutionMs": {
+          "n": 7,
+          "median": 0.024,
+          "p25": 0.019999999999999997,
+          "p75": 0.027,
+          "iqr": 0.007000000000000003,
+          "min": 0.017,
+          "max": 0.031
+        }
+      },
+      "load": {
+        "1Minute": {
+          "n": 179,
+          "min": 1.2,
+          "max": 3.2
+        },
+        "5Minute": {
+          "n": 179,
+          "min": 2.09,
+          "max": 2.86
+        },
+        "15Minute": {
+          "n": 179,
+          "min": 3.89,
+          "max": 5.73
+        }
+      },
+      "warnings": [
+        "Round 0 has unmatched server timings for artifact_with_history.",
+        "Round 0 has unmatched server timings for artifact_without_history.",
+        "Round 0 has unmatched server timings for state:get.",
+        "Round 0 has unmatched server timings for delivery:waitingFor.",
+        "Round 1 has unmatched server timings for artifacts:list.",
+        "Round 1 has unmatched server timings for artifact_with_history.",
+        "Round 1 has unmatched server timings for artifact_without_history.",
+        "Round 1 has unmatched server timings for state:get.",
+        "Round 1 has unmatched server timings for delivery:waitingFor.",
+        "Round 2 has unmatched server timings for artifacts:list.",
+        "Round 2 has unmatched server timings for artifact_with_history.",
+        "Round 2 has unmatched server timings for artifact_without_history.",
+        "Round 2 has unmatched server timings for state:get.",
+        "Round 2 has unmatched server timings for delivery:waitingFor.",
+        "Round 3 has unmatched server timings for artifacts:list.",
+        "Round 3 has unmatched server timings for artifact_with_history.",
+        "Round 3 has unmatched server timings for artifact_without_history.",
+        "Round 3 has unmatched server timings for state:get.",
+        "Round 3 has unmatched server timings for delivery:waitingFor.",
+        "Round 4 has unmatched server timings for artifacts:list.",
+        "Round 4 has unmatched server timings for artifact_with_history.",
+        "Round 4 has unmatched server timings for artifact_without_history.",
+        "Round 4 has unmatched server timings for state:get.",
+        "Round 4 has unmatched server timings for delivery:waitingFor.",
+        "Round 5 has unmatched server timings for artifacts:list.",
+        "Round 5 has unmatched server timings for artifact_with_history.",
+        "Round 5 has unmatched server timings for artifact_without_history.",
+        "Round 5 has unmatched server timings for state:get.",
+        "Round 5 has unmatched server timings for delivery:waitingFor.",
+        "Round 5 has unmatched server timings for state:patch.",
+        "Round 6 has unmatched server timings for artifact_with_history.",
+        "Round 6 has unmatched server timings for artifact_without_history.",
+        "Round 6 has unmatched server timings for state:get.",
+        "Round 6 has unmatched server timings for delivery:waitingFor.",
+        "Round 7 has unmatched server timings for artifacts:list.",
+        "Round 7 has unmatched server timings for artifact_with_history.",
+        "Round 7 has unmatched server timings for artifact_without_history.",
+        "Round 7 has unmatched server timings for state:get.",
+        "Round 7 has unmatched server timings for delivery:waitingFor.",
+        "Round 7 has unmatched server timings for state:patch.",
+        "Round 8 has unmatched server timings for artifacts:list.",
+        "Round 8 has unmatched server timings for artifact_with_history.",
+        "Round 8 has unmatched server timings for artifact_without_history.",
+        "Round 8 has unmatched server timings for state:get.",
+        "Round 8 has unmatched server timings for delivery:waitingFor.",
+        "Round 8 has unmatched server timings for state:patch.",
+        "Round 9 has unmatched server timings for artifacts:list.",
+        "Round 9 has unmatched server timings for artifact_with_history.",
+        "Round 9 has unmatched server timings for artifact_without_history.",
+        "Round 9 has unmatched server timings for state:get.",
+        "Round 9 has unmatched server timings for delivery:waitingFor.",
+        "Round 10 has unmatched server timings for artifacts:list.",
+        "Round 10 has unmatched server timings for artifact_with_history.",
+        "Round 10 has unmatched server timings for artifact_without_history.",
+        "Round 10 has unmatched server timings for state:get.",
+        "Round 10 has unmatched server timings for delivery:waitingFor.",
+        "Round 11 has unmatched server timings for artifacts:list.",
+        "Round 11 has unmatched server timings for artifact_with_history.",
+        "Round 11 has unmatched server timings for artifact_without_history.",
+        "Round 11 has unmatched server timings for state:get.",
+        "Round 11 has unmatched server timings for delivery:waitingFor.",
+        "Round 11 has unmatched server timings for state:patch."
+      ],
+      "freeGiB": {
+        "n": 179,
+        "min": 14.237010955810547,
+        "max": 14.286685943603516
+      },
+      "serverMatches": {
+        "artifacts:list": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 23,
+          "unmatched": 37,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 23,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 23,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "artifact_with_history": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 12,
+          "unmatched": 48,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 12,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 12,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "artifact_without_history": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 9,
+          "unmatched": 51,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 9,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 9,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "state:get": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 8,
+          "unmatched": 52,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 8,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 8,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "delivery:waitingFor": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 7,
+          "unmatched": 53,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 7,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 7,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "state:patch": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 56,
+          "unmatched": 4,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 56,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 0,
+          "uncached": 56,
+          "unknown": 0
+        }
+      },
+      "cpuBusy": {
+        "weightedPercent": 18.575644200874745,
+        "blockPercent": {
+          "n": 12,
+          "median": 16.955097840704887,
+          "p25": 16.61827733700048,
+          "p75": 20.107380571134577,
+          "iqr": 3.4891032341340953,
+          "min": 15.83555859156679,
+          "max": 24.459008284901692
+        },
+        "intervalPercent": {
+          "n": 167,
+          "min": 6.265876375952582,
+          "max": 37.69230769230769
+        }
+      }
+    },
+    "candidate": {
+      "blocks": 12,
+      "metrics": {
+        "startMs": {
+          "n": 12,
+          "median": 756.3689024999621,
+          "p25": 606.6626825000048,
+          "p75": 825.4942252499895,
+          "iqr": 218.8315427499847,
+          "min": 592.023010999983,
+          "max": 2892.368092000019
+        },
+        "startupCpuMs": {
+          "n": 12,
+          "median": 230.0,
+          "p25": 230.0,
+          "p75": 240.0,
+          "iqr": 10.0,
+          "min": 220.0,
+          "max": 250.0
+        },
+        "local.loadMs": {
+          "n": 12,
+          "median": 73.25,
+          "p25": 70.90000033378601,
+          "p75": 76.9249997138977,
+          "iqr": 6.024999380111694,
+          "min": 65.69999980926514,
+          "max": 78.80000019073486
+        },
+        "local.domContentMs": {
+          "n": 12,
+          "median": 72.7000002861023,
+          "p25": 70.87500047683716,
+          "p75": 76.09999942779541,
+          "iqr": 5.224998950958252,
+          "min": 65,
+          "max": 78.80000019073486
+        },
+        "local.gridVisibleMs": {
+          "n": 12,
+          "median": 334.84504250001555,
+          "p25": 324.35256050004136,
+          "p75": 342.2172097500443,
+          "iqr": 17.864649250002913,
+          "min": 314.9415689999005,
+          "max": 3204.0565489999717
+        },
+        "local.gridInteractiveMs": {
+          "n": 12,
+          "median": 427.1641920000111,
+          "p25": 414.1840300000622,
+          "p75": 439.67043400002876,
+          "iqr": 25.48640399996657,
+          "min": 405.68817199999467,
+          "max": 3294.340032999986
+        },
+        "local.openMs": {
+          "n": 12,
+          "median": 1180.654555999994,
+          "p25": 719.8104257499981,
+          "p75": 1191.5474695000303,
+          "iqr": 471.73704375003217,
+          "min": 689.3055220000097,
+          "max": 2213.1772189999465
+        },
+        "local.domClickToStateMs": {
+          "n": 12,
+          "median": 366.0499267578125,
+          "p25": 305.7252197265625,
+          "p75": 390.64990234375,
+          "iqr": 84.9246826171875,
+          "min": 121.800048828125,
+          "max": 1051.599853515625
+        },
+        "local.clickCallMs": {
+          "n": 12,
+          "median": 399.6539894999878,
+          "p25": 398.0010797500072,
+          "p75": 411.3235912499895,
+          "iqr": 13.322511499982284,
+          "min": 386.67723699996714,
+          "max": 923.4567099999404
+        },
+        "local.preClickMs": {
+          "n": 12,
+          "median": 393.2252197265625,
+          "p25": 389.38934326171875,
+          "p75": 400.8621826171875,
+          "iqr": 11.47283935546875,
+          "min": 380.486328125,
+          "max": 917.751708984375
+        },
+        "local.postReadyMs": {
+          "n": 12,
+          "median": 264.7725830078125,
+          "p25": 18.81378173828125,
+          "p75": 407.555908203125,
+          "iqr": 388.74212646484375,
+          "min": 6.90869140625,
+          "max": 441.5947265625
+        },
+        "local.visibilityPollMs": {
+          "n": 12,
+          "median": 787.2310340000258,
+          "p25": 302.6105577499857,
+          "p75": 789.3853195000702,
+          "iqr": 486.7747617500845,
+          "min": 184.78231500001857,
+          "max": 1288.4876120000845
+        },
+        "local.domGridVisibleMs": {
+          "n": 12,
+          "median": 258.5,
+          "p25": 249.72503662109375,
+          "p75": 286.72491455078125,
+          "iqr": 36.9998779296875,
+          "min": 232,
+          "max": 3202.800048828125
+        },
+        "local.domGridSortedMs": {
+          "n": 12,
+          "median": 403.25,
+          "p25": 391.75,
+          "p75": 414.550048828125,
+          "iqr": 22.800048828125,
+          "min": 381,
+          "max": 3276.699951171875
+        },
+        "network.loadMs": {
+          "n": 12,
+          "median": 231.15000009536743,
+          "p25": 230.07500004768372,
+          "p75": 234.8499994277954,
+          "iqr": 4.774999380111694,
+          "min": 221.10000038146973,
+          "max": 239
+        },
+        "network.domContentMs": {
+          "n": 12,
+          "median": 230.30000019073486,
+          "p25": 229.27499985694885,
+          "p75": 233.87499952316284,
+          "iqr": 4.599999666213989,
+          "min": 220.30000019073486,
+          "max": 238.19999980926514
+        },
+        "network.gridVisibleMs": {
+          "n": 12,
+          "median": 423.8499700000102,
+          "p25": 407.5810109999875,
+          "p75": 428.6853572500131,
+          "iqr": 21.10434625002563,
+          "min": 405.50729099998716,
+          "max": 504.7038350000512
+        },
+        "network.gridInteractiveMs": {
+          "n": 12,
+          "median": 515.1777245000121,
+          "p25": 508.3178430000262,
+          "p75": 532.6929360000049,
+          "iqr": 24.375092999978733,
+          "min": 494.19505099998787,
+          "max": 593.475615000003
+        },
+        "network.openMs": {
+          "n": 12,
+          "median": 1158.1320025000277,
+          "p25": 1126.3912937499808,
+          "p75": 1192.854591750045,
+          "iqr": 66.46329800006424,
+          "min": 712.5761990000028,
+          "max": 1208.4126079999842
+        },
+        "network.domClickToStateMs": {
+          "n": 12,
+          "median": 262.7998046875,
+          "p25": 148.125,
+          "p75": 352.1500244140625,
+          "iqr": 204.0250244140625,
+          "min": 144.800048828125,
+          "max": 541.499755859375
+        },
+        "network.clickCallMs": {
+          "n": 12,
+          "median": 658.3844484999863,
+          "p25": 400.2112742500176,
+          "p75": 924.1511764999887,
+          "iqr": 523.939902249971,
+          "min": 386.60325699998066,
+          "max": 934.2765680000011
+        },
+        "network.preClickMs": {
+          "n": 12,
+          "median": 648.2462158203125,
+          "p25": 393.03668212890625,
+          "p75": 905.6303100585938,
+          "iqr": 512.5936279296875,
+          "min": 380.833740234375,
+          "max": 918.6123046875
+        },
+        "network.postReadyMs": {
+          "n": 12,
+          "median": 83.1866455078125,
+          "p25": 74.99755859375,
+          "p75": 366.33441162109375,
+          "iqr": 291.33685302734375,
+          "min": 14.090576171875,
+          "max": 487.823974609375
+        },
+        "network.visibilityPollMs": {
+          "n": 12,
+          "median": 299.07136850000825,
+          "p25": 206.3699892500008,
+          "p75": 788.6170194999722,
+          "iqr": 582.2470302499714,
+          "min": 187.10809500003234,
+          "max": 807.2802379999775
+        },
+        "network.domGridVisibleMs": {
+          "n": 12,
+          "median": 418.0,
+          "p25": 403.0250244140625,
+          "p75": 427.2000732421875,
+          "iqr": 24.175048828125,
+          "min": 395.89990234375,
+          "max": 495
+        },
+        "network.domGridSortedMs": {
+          "n": 12,
+          "median": 494.800048828125,
+          "p25": 483.7750244140625,
+          "p75": 506.32501220703125,
+          "iqr": 22.54998779296875,
+          "min": 469.800048828125,
+          "max": 570.199951171875
+        },
+        "cli.publishMs": {
+          "n": 24,
+          "median": 336.271871999983,
+          "p25": 330.79700025000056,
+          "p75": 349.3253647500096,
+          "iqr": 18.528364500009047,
+          "min": 316.885065999988,
+          "max": 447.25676200003363
+        },
+        "cli.openMs": {
+          "n": 24,
+          "median": 161.72640850002063,
+          "p25": 158.60538400003134,
+          "p75": 169.38248400000157,
+          "iqr": 10.777099999970233,
+          "min": 155.640235999992,
+          "max": 179.6782420000527
+        },
+        "cli.actionsMs": {
+          "n": 24,
+          "median": 132.58749950000492,
+          "p25": 129.19408300002397,
+          "p75": 136.4653174999985,
+          "iqr": 7.2712344999745255,
+          "min": 122.33365099999355,
+          "max": 140.58926799998153
+        },
+        "cli.waitTimeoutMs": {
+          "n": 24,
+          "median": 161.33016949999728,
+          "p25": 156.92012549997162,
+          "p75": 168.5406777499993,
+          "iqr": 11.620552250027686,
+          "min": 150.840383999981,
+          "max": 180.0595719999983
+        },
+        "cli.waitReadyMs": {
+          "n": 24,
+          "median": 275.01108649995876,
+          "p25": 264.00424175002263,
+          "p75": 311.6668547500449,
+          "iqr": 47.66261300002225,
+          "min": 257.41048500000034,
+          "max": 476.8357959999703
+        },
+        "memory.service.rssMiB": {
+          "n": 12,
+          "median": 86.71484375,
+          "p25": 86.0498046875,
+          "p75": 90.8974609375,
+          "iqr": 4.84765625,
+          "min": 85.97265625,
+          "max": 91.05859375
+        },
+        "memory.service.pssMiB": {
+          "n": 12,
+          "median": 60.7626953125,
+          "p25": 60.11083984375,
+          "p75": 62.65283203125,
+          "iqr": 2.5419921875,
+          "min": 60.05859375,
+          "max": 62.748046875
+        },
+        "memory.backend.rssMiB": {
+          "n": 12,
+          "median": 154.373046875,
+          "p25": 146.23828125,
+          "p75": 157.9013671875,
+          "iqr": 11.6630859375,
+          "min": 145.18359375,
+          "max": 159.9453125
+        },
+        "memory.backend.pssMiB": {
+          "n": 12,
+          "median": 150.53515625,
+          "p25": 142.461669921875,
+          "p75": 153.96337890625,
+          "iqr": 11.501708984375,
+          "min": 141.349609375,
+          "max": 155.951171875
+        },
+        "connectorProbeMs": {
+          "n": 60,
+          "median": 0.2685,
+          "p25": 0.22075,
+          "p75": 0.33325000000000005,
+          "iqr": 0.11250000000000004,
+          "min": 0.191,
+          "max": 1.945
+        },
+        "hot.artifacts:list.wallMs": {
+          "n": 60,
+          "median": 1.968,
+          "p25": 1.7189999999999999,
+          "p75": 2.25375,
+          "iqr": 0.5347500000000003,
+          "min": 1.366,
+          "max": 3.584
+        },
+        "server.artifacts:list.executionMs": {
+          "n": 18,
+          "median": 0.0225,
+          "p25": 0.021,
+          "p75": 0.026,
+          "iqr": 0.0049999999999999975,
+          "min": 0.018,
+          "max": 0.063
+        },
+        "server.artifacts:list.cachedExecutionMs": {
+          "n": 18,
+          "median": 0.0225,
+          "p25": 0.021,
+          "p75": 0.026,
+          "iqr": 0.0049999999999999975,
+          "min": 0.018,
+          "max": 0.063
+        },
+        "hot.artifact_with_history.wallMs": {
+          "n": 60,
+          "median": 1.6644999999999999,
+          "p25": 1.4155,
+          "p75": 1.8775,
+          "iqr": 0.46199999999999997,
+          "min": 1.285,
+          "max": 2.35
+        },
+        "server.artifact_with_history.executionMs": {
+          "n": 8,
+          "median": 0.022,
+          "p25": 0.0215,
+          "p75": 0.02325,
+          "iqr": 0.0017500000000000016,
+          "min": 0.019,
+          "max": 0.04
+        },
+        "server.artifact_with_history.cachedExecutionMs": {
+          "n": 8,
+          "median": 0.022,
+          "p25": 0.0215,
+          "p75": 0.02325,
+          "iqr": 0.0017500000000000016,
+          "min": 0.019,
+          "max": 0.04
+        },
+        "hot.artifact_without_history.wallMs": {
+          "n": 60,
+          "median": 1.5915,
+          "p25": 1.37925,
+          "p75": 1.76825,
+          "iqr": 0.389,
+          "min": 1.221,
+          "max": 2.875
+        },
+        "server.artifact_without_history.executionMs": {
+          "n": 5,
+          "median": 0.021,
+          "p25": 0.02,
+          "p75": 0.024,
+          "iqr": 0.004,
+          "min": 0.019,
+          "max": 0.026
+        },
+        "server.artifact_without_history.cachedExecutionMs": {
+          "n": 5,
+          "median": 0.021,
+          "p25": 0.02,
+          "p75": 0.024,
+          "iqr": 0.004,
+          "min": 0.019,
+          "max": 0.026
+        },
+        "hot.state:get.wallMs": {
+          "n": 60,
+          "median": 1.4975,
+          "p25": 1.36575,
+          "p75": 1.75975,
+          "iqr": 0.3939999999999999,
+          "min": 1.182,
+          "max": 3.41
+        },
+        "server.state:get.executionMs": {
+          "n": 7,
+          "median": 0.023,
+          "p25": 0.0215,
+          "p75": 0.024,
+          "iqr": 0.0025000000000000022,
+          "min": 0.011,
+          "max": 0.029
+        },
+        "server.state:get.cachedExecutionMs": {
+          "n": 7,
+          "median": 0.023,
+          "p25": 0.0215,
+          "p75": 0.024,
+          "iqr": 0.0025000000000000022,
+          "min": 0.011,
+          "max": 0.029
+        },
+        "hot.delivery:waitingFor.wallMs": {
+          "n": 60,
+          "median": 1.5705,
+          "p25": 1.4220000000000002,
+          "p75": 1.7235,
+          "iqr": 0.3014999999999999,
+          "min": 1.25,
+          "max": 2.865
+        },
+        "hot.state:patch.wallMs": {
+          "n": 60,
+          "median": 31.588,
+          "p25": 30.4555,
+          "p75": 33.75575,
+          "iqr": 3.3002499999999984,
+          "min": 23.337,
+          "max": 54.152
+        },
+        "server.state:patch.executionMs": {
+          "n": 47,
+          "median": 7.176,
+          "p25": 6.9879999999999995,
+          "p75": 7.712,
+          "iqr": 0.7240000000000002,
+          "min": 6.516,
+          "max": 14.037
+        },
+        "server.state:patch.uncachedExecutionMs": {
+          "n": 47,
+          "median": 7.176,
+          "p25": 6.9879999999999995,
+          "p75": 7.712,
+          "iqr": 0.7240000000000002,
+          "min": 6.516,
+          "max": 14.037
+        },
+        "server.delivery:waitingFor.executionMs": {
+          "n": 5,
+          "median": 0.023,
+          "p25": 0.022,
+          "p75": 0.023,
+          "iqr": 0.0010000000000000009,
+          "min": 0.021,
+          "max": 0.038
+        },
+        "server.delivery:waitingFor.cachedExecutionMs": {
+          "n": 5,
+          "median": 0.023,
+          "p25": 0.022,
+          "p75": 0.023,
+          "iqr": 0.0010000000000000009,
+          "min": 0.021,
+          "max": 0.038
+        }
+      },
+      "load": {
+        "1Minute": {
+          "n": 176,
+          "min": 1.31,
+          "max": 2.94
+        },
+        "5Minute": {
+          "n": 176,
+          "min": 2.02,
+          "max": 2.76
+        },
+        "15Minute": {
+          "n": 176,
+          "min": 3.94,
+          "max": 5.62
+        }
+      },
+      "warnings": [
+        "Round 0 has unmatched server timings for artifacts:list.",
+        "Round 0 has unmatched server timings for artifact_with_history.",
+        "Round 0 has unmatched server timings for artifact_without_history.",
+        "Round 0 has unmatched server timings for state:get.",
+        "Round 0 has unmatched server timings for delivery:waitingFor.",
+        "Round 1 has unmatched server timings for artifacts:list.",
+        "Round 1 has unmatched server timings for artifact_with_history.",
+        "Round 1 has unmatched server timings for artifact_without_history.",
+        "Round 1 has unmatched server timings for state:get.",
+        "Round 1 has unmatched server timings for delivery:waitingFor.",
+        "Round 2 has unmatched server timings for artifact_with_history.",
+        "Round 2 has unmatched server timings for artifact_without_history.",
+        "Round 2 has unmatched server timings for state:get.",
+        "Round 2 has unmatched server timings for delivery:waitingFor.",
+        "Round 2 has unmatched server timings for state:patch.",
+        "Round 3 has unmatched server timings for artifacts:list.",
+        "Round 3 has unmatched server timings for artifact_with_history.",
+        "Round 3 has unmatched server timings for artifact_without_history.",
+        "Round 3 has unmatched server timings for state:get.",
+        "Round 3 has unmatched server timings for delivery:waitingFor.",
+        "Round 3 has unmatched server timings for state:patch.",
+        "Round 4 has unmatched server timings for artifacts:list.",
+        "Round 4 has unmatched server timings for artifact_with_history.",
+        "Round 4 has unmatched server timings for artifact_without_history.",
+        "Round 4 has unmatched server timings for state:get.",
+        "Round 4 has unmatched server timings for delivery:waitingFor.",
+        "Round 4 has unmatched server timings for state:patch.",
+        "Round 5 has unmatched server timings for artifacts:list.",
+        "Round 5 has unmatched server timings for artifact_with_history.",
+        "Round 5 has unmatched server timings for artifact_without_history.",
+        "Round 5 has unmatched server timings for state:get.",
+        "Round 5 has unmatched server timings for delivery:waitingFor.",
+        "Round 5 has unmatched server timings for state:patch.",
+        "Round 6 has unmatched server timings for artifacts:list.",
+        "Round 6 has unmatched server timings for artifact_with_history.",
+        "Round 6 has unmatched server timings for artifact_without_history.",
+        "Round 6 has unmatched server timings for state:get.",
+        "Round 6 has unmatched server timings for delivery:waitingFor.",
+        "Round 7 has unmatched server timings for artifacts:list.",
+        "Round 7 has unmatched server timings for artifact_with_history.",
+        "Round 7 has unmatched server timings for artifact_without_history.",
+        "Round 7 has unmatched server timings for state:get.",
+        "Round 7 has unmatched server timings for delivery:waitingFor.",
+        "Round 7 has unmatched server timings for state:patch.",
+        "Round 8 has unmatched server timings for artifacts:list.",
+        "Round 8 has unmatched server timings for artifact_with_history.",
+        "Round 8 has unmatched server timings for artifact_without_history.",
+        "Round 8 has unmatched server timings for state:get.",
+        "Round 8 has unmatched server timings for delivery:waitingFor.",
+        "Round 9 has unmatched server timings for artifacts:list.",
+        "Round 9 has unmatched server timings for artifact_with_history.",
+        "Round 9 has unmatched server timings for artifact_without_history.",
+        "Round 9 has unmatched server timings for state:get.",
+        "Round 9 has unmatched server timings for delivery:waitingFor.",
+        "Round 9 has unmatched server timings for state:patch.",
+        "Round 10 has unmatched server timings for artifacts:list.",
+        "Round 10 has unmatched server timings for artifact_with_history.",
+        "Round 10 has unmatched server timings for artifact_without_history.",
+        "Round 10 has unmatched server timings for state:get.",
+        "Round 10 has unmatched server timings for delivery:waitingFor.",
+        "Round 10 has unmatched server timings for state:patch.",
+        "Round 11 has unmatched server timings for artifacts:list.",
+        "Round 11 has unmatched server timings for artifact_with_history.",
+        "Round 11 has unmatched server timings for artifact_without_history.",
+        "Round 11 has unmatched server timings for state:get.",
+        "Round 11 has unmatched server timings for delivery:waitingFor.",
+        "Round 11 has unmatched server timings for state:patch."
+      ],
+      "freeGiB": {
+        "n": 176,
+        "min": 14.238067626953125,
+        "max": 14.286773681640625
+      },
+      "serverMatches": {
+        "artifacts:list": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 18,
+          "unmatched": 42,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 18,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 18,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "artifact_with_history": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 8,
+          "unmatched": 52,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 8,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 8,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "artifact_without_history": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 5,
+          "unmatched": 55,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 5,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 5,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "state:get": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 7,
+          "unmatched": 53,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 7,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 7,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "delivery:waitingFor": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 5,
+          "unmatched": 55,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 5,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 5,
+          "uncached": 0,
+          "unknown": 0
+        },
+        "state:patch": {
+          "availableBlocks": 12,
+          "unavailableBlocks": 0,
+          "matched": 47,
+          "unmatched": 13,
+          "requestIdMatches": 0,
+          "timeWindowMatches": 47,
+          "unknownCacheEntries": 0,
+          "failed": 0,
+          "retryEntries": 0,
+          "cached": 0,
+          "uncached": 47,
+          "unknown": 0
+        }
+      },
+      "cpuBusy": {
+        "weightedPercent": 18.14695896473549,
+        "blockPercent": {
+          "n": 12,
+          "median": 17.403794329182638,
+          "p25": 16.556346619342325,
+          "p75": 18.152691781389567,
+          "iqr": 1.5963451620472426,
+          "min": 15.964935582414663,
+          "max": 24.990187099306556
+        },
+        "intervalPercent": {
+          "n": 164,
+          "min": 5.748098055790363,
+          "max": 40.97938144329897
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "bundles": {
+    "baseline": {
+      "commit": "71b888ac99290f8a5f939e7d58842896cbd3004f",
+      "bytes": 4936495,
+      "sha256": "fcdb4ba8c480138631a791e9b1a42103b1119ce07780ea96c695e2a135c1cf8b"
+    },
+    "candidate": {
+      "commit": "47d3489bef61f36706ae2febe4c976641ee83593",
+      "bytes": 2957030,
+      "sha256": "b4425147bf94c5fce0ba6966d704a1a5bbfec14fa848930c68deb1dab2ada70c"
+    }
+  },
+  "backendRelease": "precompiled-2026-09-28-5c7cb5b",
+  "deploymentTextSha256": "6e005b39683b197fad64c40ee0b1d56b44a413cd63758b5b88283a9936e31e6b",
+  "node": "24.22.1",
+  "bunValidation": "1.3.11+af24e281e",
+  "playwrightPackage": "1.61.0",
+  "chromium": {
+    "name": "chromium",
+    "revision": "1228",
+    "installByDefault": true,
+    "browserVersion": "149.0.7827.55",
+    "title": "Chrome for Testing"
+  },
+  "kernel": "7.0.0-30-generic",
+  "arch": "x86_64",
+  "cpu": "AMD Ryzen 5 3600 6-Core Processor",
+  "logicalCpus": 12,
+  "concurrentAgentsApproximate": 20,
+  "backendSha256": "7ebc6a4696499640c2f2255395990b4f8b901b045388a0ced2ac765b81ebadae",
+  "mainScriptTransferBytes": {
+    "baseline": 459276,
+    "candidate": 144450
+  },
+  "candidateProductBytesUnchangedFrom": "ced91a215b95a7f6bdc023ff6be0001fcf878663",
+  "primaryComparison": {
+    "file": "results/followup.json",
+    "pairs": 12,
+    "order": "baseline,candidate then candidate,baseline, repeated",
+    "minimumBlockStartIntervalSeconds": 30,
+    "allCompletedSamplesRetained": true
+  },
+  "controlledEncodingComparison": {
+    "pairs": 6,
+    "samplesPerEncoding": 6,
+    "initialIdleSeconds": 30,
+    "betweenSamplesIdleSeconds": 16
+  },
+  "diagnosticTrials": {
+    "diagnose.json": "Exploratory loop; four blocks exhausted the mount bucket. Not used in primary latency claims.",
+    "encoding-interrupted.json": "Two completed samples before user interruption. Not pooled into the complete comparison."
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "cards": 50,
+  "sortedFirst": "Page 00",
+  "siteStatus": 200,
+  "siteEncoding": "gzip",
+  "gotState": true,
+  "trustedActionReceived": true,
+  "errors": {
+    "page": 0,
+    "console": 0,
+    "http": {}
+  },
+  "assets": [
+    {
+      "path": "/",
+      "status": 200,
+      "encoding": "gzip"
+    },
+    {
+      "path": "/assets/index-DzGWbNNt.css",
+      "status": 200,
+      "encoding": "gzip"
+    },
+    {
+      "path": "/assets/index-C34FAbAJ.js",
+      "status": 200,
+      "encoding": "gzip"
+    }
+  ]
+}
