@@ -120,6 +120,10 @@ There is one person, so there is nothing to divide between screens. A screen tha
 
 A machine that is enrolled may ask for a code that pairs a browser as the person's own, which is what `it site` does. So may anything that runs as you on that machine, an agent included, and a machine that joined from another computer as much as the one It runs on. Join only computers that you would trust with everything It holds. What a machine let in is ended with it when the machine is revoked.
 
+### Your agents are not kept apart from each other
+
+Every agent on a machine runs as you and asks It with that machine's key, so It cannot tell one agent from another. `it actions` shows an agent only what you did on its own conversation's pages and on pages that no conversation has, so that it does not act on what you asked of another conversation. That is a convenience and not a protection: any agent can be shown everything with `it actions --all`, read any page and its state, and take any page as its own. Run on a machine only agents that you would let see and change everything It holds.
+
 ### Auto-wake runs an agent with nobody watching
 
 Auto-wake is on for an agent app from when you connect it on a machine, and stays on until you turn it off there, on the site's Machines page. Setup says so when it connects an app. With it on, whatever is done on a page whose conversation is closed starts that agent again by itself, where It can restore the recorded app profile and tell that reopening is allowed. It runs in the folder the conversation was in, and for most apps in the permission mode you last had it in. For Claude Code that includes the mode that asks about nothing.

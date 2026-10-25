@@ -26,6 +26,8 @@ It has add-ons for six agent apps, and they are not all proven alike.
 
 Any agent app without an add-on can still use the `it` command and the agent skill. A click then waits where the site shows it, and the agent takes it with `it wait`, or reads what is waiting with `it actions`.
 
+An agent that reads what is waiting with `it actions` is shown what you did on its own conversation's pages, including those it made before it was last cleared, and on pages that no conversation has, such as one published from a terminal. What you did on another conversation's page is left out, so that one agent does not take up what you asked of another. `it actions --all` shows everything that waits, and marks what is another conversation's by the page it is on. A person at a terminal is always shown everything, and so is an agent in an app that does not tell It which conversation it is in. This keeps each agent to its own work. It is not a protection, as [What It protects](what-it-protects.md#your-agents-are-not-kept-apart-from-each-other) says.
+
 Three things are worth knowing about connected apps.
 
 - **It listens for at most 40 conversations on one machine at a time.** Where more than that are open, it listens for the 40 it heard from most recently, and a click for any other waits, where the site shows it and `it wait` takes it, until that conversation is among them again.
