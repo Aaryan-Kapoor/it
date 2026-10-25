@@ -52,7 +52,7 @@ import { conversationFolder, conversationProfile, noteConversation } from './pub
 import { alone } from './serve/backend'
 import * as service from './service'
 import { detectAll, type HarnessStatus, newerProgramSeen, reconcile } from './setup'
-import { type T3, type T3Search, t3Send, t3Server, t3ThreadOf } from './t3'
+import { type T3, type T3Search, t3Running, t3Send, t3Server, t3ThreadOf } from './t3'
 import { fetchNewer, LOOKS_EVERY_MS, latest, watching as looksForNewer } from './upgrade'
 import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, timeBand } from './usage'
 import {
@@ -634,6 +634,90 @@ async function connecting(say: (line: string) => void): Promise<void> {
         soon(again)
       })
     return waiting() ? 'asking' : undefined
+  }
+  /**
+   * A person can switch a thread of T3 Code to another agent app, and the thread then runs
+   * another conversation, under another id, and lets go of the one it ran before. What the
+   * person does on that one's pages is for the thread, which is to say for the conversation the
+   * thread runs now. So when a conversation is heard from that T3 Code says a thread runs now,
+   * each conversation the thread ran before carries on as it: its pages on this machine go to
+   * this one in It, with the clicks waiting on them, and what is kept here for it is kept for
+   * this one. Only the thread's own conversations are, by what T3 Code says of that thread, and
+   * never one of another thread, however alike their folders. One that is listening or in the
+   * middle of a turn at that moment is in use, and keeps what it has until it is not.
+   *
+   * Asked when a conversation is heard from: no oftener than every minute while a thread runs
+   * it, and where none was found to, again a few times at first, since T3 Code may not yet have
+   * the conversation's id from its agent app, and then every ten minutes. Where T3 Code is not
+   * running nothing is asked, and what was handed over stays where it went.
+   */
+  const t3Follows = new Map<string, { at: number; misses: number }>()
+  /** The conversation each one carries on as, since It was told so by this connector. */
+  const carriedOn = new Map<string, string>()
+  const FOLLOW_AGAIN_MS = 60_000
+  const FOLLOW_SOON_MS = 20_000
+  const FOLLOW_SELDOM_MS = 10 * 60_000
+  function followThread(key: string, session: { harness: string; id: string }): void {
+    if (session.harness !== 'codex' && session.harness !== 'claude-code') return
+    if (unfitting || closing || over || recovery.erased) return
+    const last = t3Follows.get(key)
+    if (last && steady() < last.at) return
+    if (!t3Seen || Date.now() - t3Seen.at > 5000) t3Seen = { at: Date.now(), server: t3Server() }
+    const server = t3Seen.server
+    if (!server) return
+    if (t3Follows.size > 2000) t3Follows.clear()
+    const misses = last?.misses ?? 0
+    // Asked once at a time for each conversation
+    t3Follows.set(key, { at: Number.POSITIVE_INFINITY, misses })
+    const known = t3Known.get(key)
+    const thread = known !== undefined && known !== 'asking' ? (known.thread ?? undefined) : undefined
+    // By the id it has now and by those it had before, which T3 Code may still know it by
+    const ids = [session.id, ...[...aliases].filter(([, to]) => follow(to) === key).map(([from]) => threadOf(from))]
+    const live = (k: string) => {
+      const s = sessions.get(k)
+      return (s !== undefined && Date.now() - s.seen < LIVE_MS) || turnRunning(k, Date.now())
+    }
+    void t3Running(server, { harness: session.harness, ids, cwd: conversationFolder(session) }, thread)
+      .catch(() => undefined)
+      .then(async (found) => {
+        if (!found) return t3Follows.set(key, { at: steady() + (misses < 3 ? FOLLOW_SOON_MS : FOLLOW_SELDOM_MS), misses: misses + 1 })
+        // A click for it goes to that thread wherever its add-on is not there to take it
+        if (known !== 'asking' && !known?.thread) t3Known.set(key, { thread: found.thread, at: Date.now() })
+        // It is the thread's own conversation now, and carries on as nothing else
+        carriedOn.delete(key)
+        let again = FOLLOW_AGAIN_MS
+        for (const was of found.before) {
+          const latest = follow(keyOf(was.harness, was.id))
+          // Under any id it had: a conversation whose app gave it a new id made its later pages under that one
+          const under = new Set([keyOf(was.harness, was.id), latest, ...[...aliases].filter(([, to]) => follow(to) === latest).map(([from]) => from)])
+          under.delete(key)
+          const due = [...under].filter((k) => carriedOn.get(k) !== key)
+          if (!due.length) continue
+          if ([...under].some(live)) {
+            again = FOLLOW_SOON_MS
+            continue
+          }
+          let moved = 0
+          for (const k of due) {
+            const from = { harness: k.slice(0, k.indexOf(':')), id: threadOf(k) }
+            const done = await call<{ moved: number }>('mutation', api.artifacts.carryOn, { from, to: session }).catch(() => null)
+            if (done === null || over) {
+              again = FOLLOW_SOON_MS
+              continue
+            }
+            moved += done.moved
+            carriedOn.set(k, key)
+            // What waits here for it, a mark's words and a waiter's copy of a click, waits for this one
+            await recovery.session(key, k).catch(() => {})
+          }
+          if (moved)
+            say(
+              `${a(agentOf(was.harness))} conversation (${short(was.id)}) carries on as ${a(agentOf(session.harness))} conversation (${short(session.id)}) in their thread of T3 Code; ${moved} page${moved === 1 ? '' : 's'} went with it`,
+            )
+        }
+        t3Follows.set(key, { at: steady() + again, misses: 0 })
+        if (carriedOn.size > 500) carriedOn.delete(carriedOn.keys().next().value!)
+      })
   }
   /**
    * What each mark that was put into a conversation stands for, by the conversation: the
@@ -2518,6 +2602,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (isNew) say(`${a(agentOf(harness))} conversation is listening (${short(id)})`)
       if (changed && typeof body.was === 'string') say(`${a(agentOf(harness))} conversation carries on under a new id (${short(body.was)} is now ${short(id)})`)
       if (isNew || changed) watch()
+      // Where a thread of T3 Code runs it now, what that thread ran before carries on as it
+      followThread(key, { harness, id })
       // Heard from after a while: what was set aside for it, here and in It, is its to be given
       // again. Not where it is this machine's own reopening that is heard from: that is a try
       // like the ones before it, and forgetting them there would have it tried without end.
