@@ -160,18 +160,30 @@ describe('a card that leaves the screen', () => {
     expect(g.live()).toEqual(range(6, 12))
   })
 
-  test('lets go of its picture once more cards than a few are kept off the screen, the one seen longest ago first', () => {
-    const g = grid(30, { most: 64, loading: 4, keptAway: 4 })
-    g.scroll(range(0, 6))
+  test('lets go of its picture once more than a few cards are kept off the screen, the one seen longest ago first', () => {
+    // A small screen, two cards at a time, where the few that are kept are more than a screenful
+    const g = grid(12, { most: 64, loading: 4, keptAway: 4 })
+    for (let at = 0; at < 10; at += 2) {
+      g.scroll(range(at, at + 2))
+      g.settle()
+      vi.advanceTimersByTime(1000)
+    }
+    // Of the eight off the screen, the four that left it last are kept
+    expect(g.live()).toEqual(range(4, 10))
+  })
+
+  test('is kept while no more are kept than there are cards on the screen, where those are more than a few', () => {
+    // A large display: sixteen cards on the screen, where only four would be kept by the count alone
+    const g = grid(48, { most: 64, loading: 8, keptAway: 4 })
+    g.scroll(range(0, 16))
     g.settle()
-    vi.advanceTimersByTime(1000)
-    g.scroll(range(6, 12))
+    g.scroll(range(16, 32))
     g.settle()
-    vi.advanceTimersByTime(1000)
-    g.scroll(range(12, 18))
+    expect(g.live()).toEqual(range(0, 32))
+    // A screenful further on, the first sixteen are the ones that let go
+    g.scroll(range(32, 48))
     g.settle()
-    // Of the twelve off the screen, the four that left it last are kept
-    expect(g.live()).toEqual([...range(8, 12), ...range(12, 18)])
+    expect(g.live()).toEqual(range(16, 48))
   })
 
   test('gives its place to a card on the screen once the device bears no more, and a card on the screen is never let go for another', () => {

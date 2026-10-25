@@ -4,7 +4,7 @@
 // then the cards just above and below it, while there is room. Pictures are begun a few at a
 // time, so that a fast scroll does not begin dozens at once, and a card that has gone by before
 // its turn is never begun. A card that leaves the screen keeps its picture for a while, and while
-// only a few others do, so that scrolling back finds it as it was, without a new showing.
+// no more others do than a screenful, so that scrolling back finds it as it was, without a new showing.
 
 /** How far beyond the screen a card is near enough to be shown before it is on it. */
 const NEAR = '200px 0px'
@@ -58,7 +58,8 @@ const byPlace = (a: Card, b: Card) => (a.el.compareDocumentPosition(b.el) & Node
 
 /**
  * `most` cards show their page at once, `loading` of them are begun at a time, and a card off the
- * screen keeps its picture for `keptMs` while no more than `keptAway` do.
+ * screen keeps its picture for `keptMs` while no more than `keptAway` do, or than there are cards
+ * on the screen where those are more.
  */
 export function slots({ most, loading, keptAway, keptMs }: { most: number; loading: number; keptAway: number; keptMs: number }): Slots {
   const cards = new Map<Element, Card>()
@@ -103,7 +104,7 @@ export function slots({ most, loading, keptAway, keptMs }: { most: number; loadi
     // Off the screen, a card keeps its picture for a while, and while few enough others do: past
     // either, it lets go of it, the one seen longest ago first
     const away = all.filter((c) => c.live && !c.inView && !c.near).sort((a, b) => a.seenAt - b.seenAt)
-    const over = away.length - keptAway
+    const over = away.length - Math.max(keptAway, all.filter((c) => c.inView).length)
     const kept = away.filter((card, i) => {
       if (i >= over && now - card.seenAt < keptMs) return true
       drop(card)
