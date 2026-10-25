@@ -3279,7 +3279,7 @@ describe('showing a page', () => {
     const picture = () => alice.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: displayKey('alice'), picture: true })
     const pictures = []
     for (let i = 0; i < 121; i++) pictures.push(await code(picture))
-    // As many as two grids of the most pictures there are at once, and then no more for the moment
+    // A hundred and twenty at once, nearly two grids of the most cards that show their page together, and then no more for the moment
     expect([pictures.filter((r) => r === 'ok').length, pictures.at(-1)]).toEqual([120, 'rate_limited'])
     // The page itself still opens, as often as ever
     const opened = []
