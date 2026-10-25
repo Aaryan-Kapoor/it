@@ -5,6 +5,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { gzipSync } from 'node:zlib'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const given = (name) => process.argv.find((word) => word.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -50,12 +51,19 @@ const site = {}
 let size = 0
 for (const file of built ? walk(from) : []) {
   const bytes = readFileSync(path.join(from, file))
-  size += bytes.length
-  site[file] = { type: typeOf(file), bytes: bytes.toString('base64') }
+  const type = typeOf(file)
+  const text = /^(text\/|application\/(json|manifest\+json))/.test(type) || type === 'image/svg+xml'
+  const gzip = text ? gzipSync(bytes) : null
+  // Keep one representation, and only compress where its smaller literal pays for the flag.
+  // The service expands it only when a caller needs the original bytes.
+  const compressed = gzip !== null && gzip.length + 64 < bytes.length
+  const kept = compressed ? gzip : bytes
+  size += kept.length
+  site[file] = { type, bytes: kept.toString('base64'), ...(compressed ? { encoding: 'gzip' } : {}) }
 }
 writeFileSync(
   to,
-  `// Written by packages/cli/site.mjs. Do not edit.\n// Each file of the site by its path: its type, and its bytes in base64.\nexport const SITE: Record<string, { type: string; bytes: string }> = ${JSON.stringify(site, null, 1)}\n`,
+  `// Written by packages/cli/site.mjs. Do not edit.\n// Each file by its path: its type, its stored bytes in base64, and their encoding when compressed.\nexport const SITE: Record<string, { type: string; bytes: string; encoding?: 'gzip' }> = ${JSON.stringify(site, null, 1)}\n`,
 )
 console.log(
   built

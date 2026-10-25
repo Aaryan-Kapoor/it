@@ -14,6 +14,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { AUDIENCE, contentPort, LIMITS, SANDBOX } from '@it/protocol'
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose'
@@ -60,6 +61,7 @@ interface Answer {
   headers: Record<string, string>
   cookies: string[]
   body: string
+  bytes: Buffer
 }
 /** An answer as it was sent, or null while it has not all arrived. `ended` says the connection closed, which ends an answer that does not say how long it is. */
 function read(all: Buffer, bodiless: boolean, ended: boolean): Answer | null {
@@ -76,7 +78,7 @@ function read(all: Buffer, bodiless: boolean, ended: boolean): Answer | null {
     else headers[name] = line.slice(colon + 1).trim()
   }
   let rest = all.subarray(cut + 4)
-  const answer = (body: Buffer): Answer => ({ status, headers, cookies, body: body.toString('utf8') })
+  const answer = (body: Buffer): Answer => ({ status, headers, cookies, body: body.toString('utf8'), bytes: body })
   if (bodiless || status === 204 || status === 304) return answer(Buffer.alloc(0))
   if (/chunked/i.test(headers['transfer-encoding'] ?? '')) {
     const pieces: Buffer[] = []
@@ -374,9 +376,11 @@ const contentStandIn: Content = {
 }
 
 const file = (type: string, text: string) => ({ type, bytes: Buffer.from(text).toString('base64') })
+const compressedScript = 'console.log("a compressed file of the site");\n'.repeat(100)
 const siteStandIn: Site = {
   'index.html': file('text/html; charset=utf-8', '<!doctype html><title>It</title>'),
   'assets/app-1a2b3c4d.js': file('text/javascript; charset=utf-8', 'console.log("the site")'),
+  'assets/compressed.js': { type: 'text/javascript; charset=utf-8', bytes: gzipSync(compressedScript).toString('base64'), encoding: 'gzip' },
   'sw.js': file('text/javascript; charset=utf-8', '// the service worker'),
   'icon.svg': file('image/svg+xml', '<svg xmlns="http://www.w3.org/2000/svg"/>'),
   'LICENSE.md': file('text/plain; charset=utf-8', 'The terms.'),
@@ -2882,6 +2886,148 @@ describe('Pages', () => {
 
 describe('The site', () => {
   const page: [string, string] = ['Accept', 'text/html,application/xhtml+xml,*/*;q=0.8']
+
+  test('The packed site keeps compressible text only as gzip and leaves small files and pictures intact', () => {
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-site-'))
+    try {
+      const built = path.join(folder, 'dist')
+      mkdirSync(built)
+      const script = 'console.log("é");\n'.repeat(1000)
+      const picture = randomBytes(512)
+      writeFileSync(path.join(built, 'index.html'), '<title>It</title>')
+      writeFileSync(path.join(built, 'app.js'), script)
+      writeFileSync(path.join(built, 'icon.png'), picture)
+      const to = path.join(folder, 'site.generated.ts')
+      execFileSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'site.mjs'), `--from=${built}`, `--to=${to}`], { stdio: 'pipe' })
+      const written = readFileSync(to, 'utf8')
+      const table = JSON.parse(written.slice(written.indexOf(' = ') + 3))
+      const packed = table['app.js']
+      expect(packed.encoding).toBe('gzip')
+      expect(Object.keys(packed).sort()).toEqual(['bytes', 'encoding', 'type'])
+      const compressed = Buffer.from(packed.bytes, 'base64')
+      expect(compressed.byteLength).toBeLessThan(Buffer.byteLength(script) / 10)
+      expect(gunzipSync(compressed).toString()).toBe(script)
+      expect(table['index.html'].encoding).toBeUndefined()
+      expect(Buffer.from(table['index.html'].bytes, 'base64').toString()).toBe('<title>It</title>')
+      expect(table['icon.png'].encoding).toBeUndefined()
+      expect(Buffer.from(table['icon.png'].bytes, 'base64').equals(picture)).toBe(true)
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('A packed gzip file answers with gzip when accepted and with the original bytes otherwise', async () => {
+    const original = Buffer.from('console.log("é");\n'.repeat(1000))
+    const compressed = gzipSync(original)
+    const site: Site = { 'app.js': { type: 'text/javascript; charset=utf-8', bytes: compressed.toString('base64'), encoding: 'gzip' } }
+    const ask = (encoding?: string) => answerSite(site, 'GET', '/app.js', new Headers(encoding === undefined ? {} : { 'accept-encoding': encoding }))
+    const gzip = ask('gzip')
+    expect(gzip.headers.get('content-encoding')).toBe('gzip')
+    expect(gzip.headers.get('content-length')).toBe(String(compressed.byteLength))
+    expect(gzip.headers.get('vary')).toBe('Accept-Encoding')
+    expect(Buffer.from(await gzip.arrayBuffer()).equals(compressed)).toBe(true)
+    const identity = ask()
+    expect(identity.headers.get('content-encoding')).toBeNull()
+    expect(identity.headers.get('content-length')).toBe(String(original.byteLength))
+    expect(identity.headers.get('vary')).toBe('Accept-Encoding')
+    expect(Buffer.from(await identity.arrayBuffer()).equals(original)).toBe(true)
+    expect(identity.headers.get('etag')).not.toBe(gzip.headers.get('etag'))
+    expect(await ask('identity').text()).toBe(original.toString())
+  })
+
+  test('The site respects encoding preferences and refuses when none of its representations is acceptable', async () => {
+    const original = 'console.log("the site");\n'.repeat(100)
+    const site: Site = {
+      'app.js': { type: 'text/javascript', bytes: gzipSync(original).toString('base64'), encoding: 'gzip' },
+      'small.js': file('text/javascript', '1'),
+    }
+    for (const [encoding, chosen] of [
+      ['', 'identity'],
+      ['br, gzip, deflate', 'gzip'],
+      ['GZip ; Q=1', 'gzip'],
+      ['*', 'gzip'],
+      ['gzip;q=0', 'identity'],
+      ['gzip;q=0, *;q=1', 'identity'],
+      ['gzip;q=0.3, identity;q=0.8', 'identity'],
+      ['gzip;q=0.8, identity;q=0.3', 'gzip'],
+      ['*;q=0, gzip;q=1', 'gzip'],
+      ['*;q=0, identity;q=1', 'identity'],
+      ['br', 'identity'],
+      ['xgzip', 'identity'],
+      ['gzip;q=wrong', 'identity'],
+      ['gzip;q=2', 'identity'],
+      ['gzip;q=0, identity;q=0', 'none'],
+      ['br, identity;q=0', 'none'],
+      ['*;q=0', 'none'],
+    ]) {
+      const answer = answerSite(site, 'GET', '/app.js', new Headers({ 'accept-encoding': encoding! }))
+      expect([encoding, answer.status]).toEqual([encoding, chosen === 'none' ? 406 : 200])
+      expect([encoding, answer.headers.get('content-encoding')]).toEqual([encoding, chosen === 'gzip' ? 'gzip' : null])
+      expect(answer.headers.get('vary')).toBe('Accept-Encoding')
+      const bytes = Buffer.from(await answer.arrayBuffer())
+      expect(chosen === 'gzip' ? gunzipSync(bytes).toString() : bytes.toString()).toBe(chosen === 'none' ? '' : original)
+    }
+    const noIdentity = new Headers({ 'accept-encoding': 'gzip, identity;q=0' })
+    expect(answerSite(site, 'GET', '/small.js', noIdentity).status).toBe(406)
+    expect(await answerSite(site, 'GET', '/small.js', new Headers({ 'accept-encoding': 'gzip' })).text()).toBe('1')
+  })
+
+  test('The door sends each representation intact with its own length and tag, including HEAD and cache validation', async () => {
+    const pathname = '/assets/compressed.js'
+    const accepts: [string, string] = ['Accept-Encoding', 'gzip, deflate, br, zstd']
+    const gzip = await ask(door.base, { path: pathname, headers: [accepts] })
+    expect(gzip.status).toBe(200)
+    expect(gzip.headers).toMatchObject({
+      'content-encoding': 'gzip',
+      'content-type': 'text/javascript; charset=utf-8',
+      'content-length': String(gzip.bytes.byteLength),
+      'cache-control': 'public, max-age=31536000, immutable',
+      vary: 'Accept-Encoding',
+      'x-frame-options': 'DENY',
+      'x-content-type-options': 'nosniff',
+    })
+    expect(gunzipSync(gzip.bytes).toString()).toBe(compressedScript)
+    const identity = await ask(door.base, { path: pathname, headers: [['Accept-Encoding', 'gzip;q=0']] })
+    expect(identity.body).toBe(compressedScript)
+    expect(identity.headers['content-encoding']).toBeUndefined()
+    expect(identity.headers['content-length']).toBe(String(Buffer.byteLength(compressedScript)))
+    expect(identity.headers['content-security-policy']).toBe(gzip.headers['content-security-policy'])
+    expect(identity.headers.etag).not.toBe(gzip.headers.etag)
+    for (const [accept, get] of [
+      [accepts, gzip],
+      [['Accept-Encoding', 'identity'], identity],
+    ] as const) {
+      const head = await ask(door.base, { path: pathname, method: 'HEAD', headers: [[...accept]] })
+      expect(head.body).toBe('')
+      for (const name of ['content-encoding', 'content-length', 'etag', 'vary', 'content-security-policy'])
+        expect([accept[1], name, head.headers[name]]).toEqual([accept[1], name, get.headers[name]])
+      const cached = await ask(door.base, { path: pathname, headers: [[...accept], ['If-None-Match', get.headers.etag!]] })
+      expect([cached.status, cached.body, cached.headers.etag, cached.headers.vary]).toEqual([304, '', get.headers.etag, 'Accept-Encoding'])
+      expect(cached.headers['content-encoding']).toBe(get.headers['content-encoding'])
+    }
+    const other = await ask(door.base, { path: pathname, headers: [accepts, ['If-None-Match', identity.headers.etag!]] })
+    expect(other.status).toBe(200)
+    expect(other.bytes.equals(gzip.bytes)).toBe(true)
+  })
+
+  test('Encoding preferences do not turn missing assets, refused methods or a missing site into encoded pages', async () => {
+    const headers = new Headers({ 'accept-encoding': 'gzip, identity;q=0', accept: 'text/html', host: 'localhost' })
+    for (const [method, pathname, status] of [
+      ['GET', '/assets/missing.js', 404],
+      ['GET', '/%', 404],
+      ['POST', '/', 405],
+    ] as const) {
+      const answer = answerSite(siteStandIn, method, pathname, headers)
+      expect(answer.status).toBe(status)
+      expect(answer.headers.get('content-encoding')).toBeNull()
+      expect(answer.headers.get('content-security-policy')).toContain("default-src 'self'")
+      expect(await answer.text()).toBe('')
+    }
+    const missing = answerSite({}, 'GET', '/', headers)
+    expect(missing.status).toBe(503)
+    expect(missing.headers.get('content-encoding')).toBeNull()
+    expect(await missing.text()).toContain('built without its site')
+  })
 
   test('A file of the site is served as what it is, and an address that is one of the site’s pages is answered with index.html', async () => {
     const script = await ask(door.base, { path: '/assets/app-1a2b3c4d.js' })
