@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { version } from '../package.json'
 import { About } from './about'
 import { Dialog } from './dialog'
-import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow, useOpener } from './lib'
+import { ago, api, doneLeaving, forgetAll, type Id, navigate, noteErased, refusal, serverNow, startLeaving, useNow, useOpener } from './lib'
 import { NetworkSwitch, NoAddress, OtherAddresses, useNetwork, useWhere } from './network'
 import { thisPairing } from './outbox'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
@@ -477,6 +477,15 @@ export function Settings({ user, owner, display, onSignOut }: { user: string; ow
       <header className="list-head">
         <h2>Settings</h2>
       </header>
+      {/* A display locked to a page leads back to it from here, and to nowhere else */}
+      {display?.lockedTo && (
+        <p className="notice" role="status">
+          <span>This display is locked to “{display.lockedTo.title}”.</span>
+          <button type="button" onClick={() => navigate(`/p/${encodeURIComponent(display.lockedTo!.slug)}`)}>
+            Back to the page
+          </button>
+        </p>
+      )}
       {rowError && (
         <p className="error" role="alert">
           {rowError}

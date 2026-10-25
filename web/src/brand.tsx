@@ -51,6 +51,14 @@ export const IconLink = () => (
     <path d="M14 11a5 5 0 0 0-7.1-.1L4 13.8a5 5 0 0 0 7.1 7.1l1.5-1.5" />
   </svg>
 )
+export const IconSettings = () => (
+  <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" {...stroke} strokeWidth="2">
+    <path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1" />
+    <circle cx="15" cy="6" r="2" />
+    <circle cx="9" cy="12" r="2" />
+    <circle cx="17" cy="18" r="2" />
+  </svg>
+)
 export const IconLock = () => (
   <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" {...stroke} strokeWidth="2">
     <rect x="5" y="11" width="14" height="10" rx="2" />

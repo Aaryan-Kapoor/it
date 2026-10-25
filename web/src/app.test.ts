@@ -710,6 +710,52 @@ describe('a display locked to a page', () => {
     expect(names().filter((what) => what === 'mounts:create')).toHaveLength(1)
   })
 
+  test('a screen that is locked reaches its settings from the bar, and signs itself out there, and is led back to its page and to no other', async () => {
+    cookie = CODES.screencode0000000002!
+    watched['artifacts:get'] = PAGE
+    watched['displays:mine'] = locked
+    await start('/p/plan')
+    const toSettings = () => host.querySelector<HTMLButtonElement>('header button[aria-label="This display’s settings"]')!
+    // The screen cannot unlock itself: the mark says how, and beside it is the way to its settings
+    expect(host.querySelector('header .lock-mark')!.textContent).toBe('Locked hereUnlock it from your own browser')
+    await act(async () => {
+      toSettings().click()
+      await tick()
+    })
+    expect(location.pathname).toBe('/settings')
+    expect(host.textContent).toContain('Paired as a screen')
+    expect(host.querySelector('label.switch')!.textContent).toBe('Open to agents')
+    // Settings offers no other part of the site, nor any other page: no sections, no tour, and nothing to find
+    expect([host.querySelector('nav[aria-label="Sections"]'), button('Take the tour')]).toEqual([null, undefined])
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))
+      await tick()
+    })
+    expect(host.querySelector('.finder-overlay')).toBeNull()
+    // Whatever would lead elsewhere leads back to the page
+    const { navigate } = await import('./lib')
+    await act(async () => {
+      navigate('/p/another')
+      await tick()
+    })
+    expect(location.pathname).toBe('/p/plan')
+    // And from the settings, the way back is said in so many words
+    await act(async () => {
+      toSettings().click()
+      await tick()
+    })
+    expect(host.textContent).toContain('This display is locked to “Plan”.')
+    await press('Back to the page')
+    expect(location.pathname).toBe('/p/plan')
+    // The screen signs itself out from its settings
+    await act(async () => {
+      toSettings().click()
+      await tick()
+    })
+    await press('Sign out')
+    await vi.waitFor(() => expect(names()).toEqual(expect.arrayContaining(['displays:signOut', '/session/end'])), 10_000)
+  }, 20_000)
+
   test('says that its lock ended when the page it was locked to was deleted, until that is read', async () => {
     cookie = CODES.ownercode00000000001!
     watched['displays:mine'] = { ...DISPLAY, lockedTo: null, lockEnded: true }

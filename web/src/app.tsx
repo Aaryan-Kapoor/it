@@ -793,6 +793,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
           <TopBar
             display={display ?? null}
             owner={owner}
+            locked={lockedTo !== undefined}
             count={pages?.length}
             onSignOut={signOut}
             search={path === '/' && (pages?.length ?? 0) > 0 ? { query, onQuery: setQuery, onFind: () => setFinding(true) } : null}
@@ -802,7 +803,8 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
           {view}
         </Site>
       )}
-      {finding && pages && <Finder pages={pages} onClose={closeFinder} />}
+      {/* A display locked to a page is offered no other page to find */}
+      {finding && pages && lockedTo === undefined && <Finder pages={pages} onClose={closeFinder} />}
       {tour && <TourDialog onClose={closeTour} />}
       <Toasts />
     </div>
@@ -836,6 +838,7 @@ interface Search {
 function TopBar({
   display,
   owner,
+  locked = false,
   count,
   search,
   onSignOut,
@@ -843,6 +846,8 @@ function TopBar({
 }: {
   display: DisplayView | null
   owner: boolean
+  /** Whether this display is locked to a page: the bar then offers no other part of the site, and only the settings it is open on and signing out. */
+  locked?: boolean
   count: number | undefined
   search: Search | null
   onSignOut: () => void
@@ -889,11 +894,13 @@ function TopBar({
         >
           <Mark />
         </a>
-        <nav aria-label="Sections">
-          {tab('/', NOUN.Many)}
-          {owner && tab('/machines', 'Machines')}
-          {owner && tab('/displays', 'Displays')}
-        </nav>
+        {!locked && (
+          <nav aria-label="Sections">
+            {tab('/', NOUN.Many)}
+            {owner && tab('/machines', 'Machines')}
+            {owner && tab('/displays', 'Displays')}
+          </nav>
+        )}
       </div>
       <div className="grid-header-spacer" />
       {search && (
@@ -923,9 +930,11 @@ function TopBar({
       </div>
       <div className="grid-actions">
         <Bell />
-        <button type="button" className="grid-icon-btn" title="Take the tour" aria-label="Take the tour" onClick={onTour}>
-          <IconGuide />
-        </button>
+        {!locked && (
+          <button type="button" className="grid-icon-btn" title="Take the tour" aria-label="Take the tour" onClick={onTour}>
+            <IconGuide />
+          </button>
+        )}
         <div className="menu" ref={box}>
           <button
             type="button"

@@ -3,7 +3,7 @@
 import { ALIVE, LIMITS, NOUN, WAKE_BACK_MS } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { copy, IconBack, IconLink, IconLock, IconPin, IconSay, IconSend, IconStop, IconX, Mark } from './brand'
+import { copy, IconBack, IconLink, IconLock, IconPin, IconSay, IconSend, IconSettings, IconStop, IconX, Mark } from './brand'
 import { agentName, ago, api, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
@@ -309,8 +309,10 @@ export interface LockableDisplay {
 /**
  * Locking the display a page is shown on to that page, from the page itself, and what a locked
  * display shows of it: a small mark in the bar above the page, never over it, that says the
- * display is locked and how it is unlocked. The owner's browser unlocks it there. A screen may
- * lock itself and not unlock itself, and is asked first, since it cannot take it back.
+ * display is locked and how it is unlocked, and beside it the way to the display's settings,
+ * which is the one other place a locked display leads to. The owner's browser unlocks it there.
+ * A screen may lock itself and not unlock itself, and is asked first, since it cannot take it
+ * back: the settings are how it still signs itself out.
  */
 function Lock({ display, owner, page, here }: { display: LockableDisplay; owner: boolean; page: { id: string; title: string }; here: boolean }) {
   const lock = useMutation(api.displays.lock)
@@ -318,24 +320,36 @@ function Lock({ display, owner, page, here }: { display: LockableDisplay; owner:
   const failed = (err: unknown) => say(refusal(err).message)
   if (here)
     return (
-      <button
-        type="button"
-        className="lock-mark"
-        title={
-          owner
-            ? 'Agents cannot show another page on this display while it is locked. Press to unlock it.'
-            : 'Agents cannot show another page on this display while it is locked. The browser paired as yours unlocks it, under Displays.'
-        }
-        onClick={() =>
-          owner
-            ? void unlock({ displayId: display.id as Id<'displays'> }).catch(failed)
-            : say('The browser paired as yours unlocks this display, under Displays.')
-        }
-      >
-        <IconLock />
-        <span>Locked here</span>
-        <span className="lock-mark-how">{owner ? 'Unlock' : 'Unlock it from your own browser'}</span>
-      </button>
+      <>
+        <button
+          type="button"
+          className="lock-mark"
+          title={
+            owner
+              ? 'Agents cannot show another page on this display while it is locked. Press to unlock it.'
+              : 'Agents cannot show another page on this display while it is locked. The browser paired as yours unlocks it, under Displays.'
+          }
+          onClick={() =>
+            owner
+              ? void unlock({ displayId: display.id as Id<'displays'> }).catch(failed)
+              : say('The browser paired as yours unlocks this display, under Displays.')
+          }
+        >
+          <IconLock />
+          <span>Locked here</span>
+          <span className="lock-mark-how">{owner ? 'Unlock' : 'Unlock it from your own browser'}</span>
+        </button>
+        {/* This display's own settings, where a screen signs itself out, are the one other place a locked display leads to */}
+        <button
+          type="button"
+          className="nav-action"
+          title="This display’s settings: whether agents may use it, and signing out"
+          aria-label="This display’s settings"
+          onClick={() => navigate('/settings')}
+        >
+          <IconSettings />
+        </button>
+      </>
     )
   return (
     <button
