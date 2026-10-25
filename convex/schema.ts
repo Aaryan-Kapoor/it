@@ -417,6 +417,8 @@ export default defineSchema({
   })
     .index('by_artifact_client', ['artifactId', 'clientActionId'])
     .index('by_route', ['machineId', 'delivery', 'harness', 'sessionId', 'createdAt'])
+    // The same, in the order they were written: what a conversation has had since its last stop, without reading what the stop dropped
+    .index('by_route_sequence', ['machineId', 'delivery', 'harness', 'sessionId', 'sequence'])
     .index('by_harness', ['machineId', 'delivery', 'harness', 'createdAt'])
     .index('by_attended_route', ['machineId', 'delivery', 'harness', 'sessionId', 'attended', 'createdAt'])
     .index('by_artifact', ['artifactId', 'createdAt'])

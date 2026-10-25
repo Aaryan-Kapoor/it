@@ -7,10 +7,9 @@
 // which conversation. Who holds the lease is recorded separately, so a machine that borrows a
 // click and dies does not take it away from its owner.
 import { LEASE_MS, LIMITS, LISTENING_MOST, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKES, wakesOn } from '@it/protocol'
-import type { FilterBuilder, NamedTableInfo } from 'convex/server'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
-import type { DataModel, Doc, Id } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import { destination, dropStopped, madeBefore, noLongerWaiting, type Seen, stoppedSince } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
@@ -60,23 +59,52 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
 }
 
 /**
- * What of one conversation's clicks came after its last stop on this machine: as a test of a
- * click in hand, and as a filter for a read of them, so that what the stop dropped and its
- * steps have not yet come to stands in front of nothing that may be taken. By the stop's place
- * in the order the person's clicks and stops are written in, which no index on the clock can
- * read; by the clock only for a stop from before stops had a place, and only of the clicks of
- * that time.
+ * One conversation's clicks on this machine as an inbox reads them, oldest first, leaving out
+ * what its last stop here dropped and the stop's steps have not yet come to: such a click is
+ * given to nobody, and must stand in front of nothing that may be taken.
+ *
+ * Where the stop has a place in the order the person's clicks and stops are written in, and no
+ * moment is asked from, the clicks are read from after that place, and nothing the stop dropped
+ * is read at all. Otherwise (a stop from before stops had a place, or a read that only takes
+ * what was done from some moment on, which is an index on the clock) the few that are asked for
+ * are read as they come, every one counted against what may be read, and what the stop dropped
+ * is left out of them. While the stop's steps are still under way that leaves fewer than were
+ * asked for, for a moment, and never has more read than may be.
  */
-function afterStop(machine: Doc<'machines'>, harness: string, sessionId: string) {
+function conversationAfterStop(
+  ctx: QueryCtx,
+  machine: Doc<'machines'>,
+  harness: string,
+  sessionId: string,
+  /** Read only what was done after this moment, by the clock. */
+  since?: number,
+) {
   const stop = (machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)
+  const kept = (x: Doc<'actions'>) => !stop || !madeBefore(x, stop)
   return {
-    kept: (x: Doc<'actions'>) => !stop || !madeBefore(x, stop),
-    filter: (q: FilterBuilder<NamedTableInfo<DataModel, 'actions'>>) =>
-      !stop
-        ? q.eq(true, true)
-        : stop.sequence !== undefined
-          ? q.gt(q.field('sequence'), stop.sequence)
-          : q.or(q.neq(q.field('sequence'), undefined), q.gt(q.field('createdAt'), stop.at)),
+    kept,
+    take: async (n: number, read: (rows: Doc<'actions'>[]) => Doc<'actions'>[]): Promise<Doc<'actions'>[]> => {
+      if (n <= 0) return []
+      if (stop?.sequence !== undefined && since === undefined)
+        return read(
+          await ctx.db
+            .query('actions')
+            .withIndex('by_route_sequence', (q) =>
+              q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gt('sequence', stop.sequence!),
+            )
+            .take(n),
+        )
+      const rows = read(
+        await ctx.db
+          .query('actions')
+          .withIndex('by_route', (q) => {
+            const of = q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId)
+            return since === undefined ? of : of.gt('createdAt', since)
+          })
+          .take(n),
+      )
+      return rows.filter(kept)
+    },
   }
 }
 
@@ -127,17 +155,9 @@ async function listeningRows(
     // This machine's own, and those with no machine, are each read by themselves: read
     // together with everything else waiting for the conversation, a few clicks that are
     // another machine's, or were set aside, could stand in front of one this machine may take.
-    const route = (machineId: Id<'machines'>) =>
-      ctx.db
-        .query('actions')
-        .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id))
     // These come first and are at most four for each of forty conversations, which is within what may be read whatever they carry
     // (What a stop of the conversation here dropped, and its steps have not yet come to, stands in front of none of them)
-    const own = read(
-      await route(machine._id)
-        .filter(afterStop(machine, s.harness, s.id).filter)
-        .take(2),
-    )
+    const own = await conversationAfterStop(ctx, machine, s.harness, s.id).take(2, read)
     // Those with no machine are read as exactly the ones this machine may take: this
     // person's, and not set aside. One that a machine set aside has no machine either, and is
     // not offered again: it waits for `it wait` and the site, until its page changes hands.
@@ -259,7 +279,7 @@ export const inbox = query({
         if (rows.length >= BUDGET) break
         const want = Math.min(each, BUDGET - rows.length)
         const since = from - 1
-        const stopped = afterStop(machine, harness, sessionId)
+        const stopped = conversationAfterStop(ctx, machine, harness, sessionId, reopened ? since : undefined)
         // What was read of the queue's oldest holds this conversation's own oldest, in their
         // order. Where that is all the queue has, or as many as are wanted, it is what reading
         // the conversation would give, and the conversation is not read.
@@ -278,17 +298,7 @@ export const inbox = query({
           rows.push(...known)
           continue
         }
-        rows.push(
-          ...read(
-            await ctx.db
-              .query('actions')
-              .withIndex('by_route', (q) =>
-                q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gt('createdAt', since),
-              )
-              .filter(stopped.filter)
-              .take(now),
-          ),
-        )
+        rows.push(...(await stopped.take(now, read)))
       }
     }
     const seen = new Set<string>()
@@ -359,19 +369,11 @@ export const inboxPage = query({
       for (const [n, sessionId] of found.entries()) {
         const rest = found.length - n - 1
         const since = from - 1
-        const stopped = afterStop(machine, harness, sessionId)
+        const stopped = conversationAfterStop(ctx, machine, harness, sessionId, reopened ? since : undefined)
         // Leave four reads and two response places for each later conversation, and two
         // reads for this conversation's attended lookup. Extra places carry its oldest work.
         const want = Math.min(each, places - 2 * rest, may() - 4 * rest - 2)
-        const batch = read(
-          await ctx.db
-            .query('actions')
-            .withIndex('by_route', (q) =>
-              q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gt('createdAt', since),
-            )
-            .filter(stopped.filter)
-            .take(want),
-        )
+        const batch = await stopped.take(want, read)
         if (batch.length && batch.every((c) => c.attended === false)) {
           const attended: Doc<'actions'>[] = []
           for (const present of [true, undefined]) {
@@ -386,9 +388,9 @@ export const inboxPage = query({
                   .eq('attended', present)
                   .gt('createdAt', since),
               )
-              .filter(stopped.filter)
               .first()
-            if (first) attended.push(...read([first]))
+            // Counted whether or not it went with a stop whose steps have not come to it yet, and left out if it did
+            if (first) attended.push(...read([first]).filter(stopped.kept))
           }
           attended.sort((a, b) => a.createdAt - b.createdAt || a._creationTime - b._creationTime)
           if (attended[0]) {

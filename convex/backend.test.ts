@@ -2,7 +2,7 @@
 // The backend's own tests: who may do what, and that what is stored is what was meant.
 // They run against an in-memory copy of the backend; the service that runs it, with its content
 // service, is stood in for by a stub that records what the backend asked of it.
-import { ALIVE, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORE_KEY } from '@it/protocol'
+import { ALIVE, describeClick, LEASE_MS, LIMITS, PUBLICATION, QUOTA, STORE_KEY, WAKE_MOST } from '@it/protocol'
 import { type FunctionReturnType, getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest } from 'convex-test'
@@ -122,10 +122,13 @@ afterEach(async () => {
 
 /**
  * A database that notes every record read through it, for a function run by hand on it: the
- * stand-in backend counts nothing, and the real one refuses a function that reads too much.
+ * stand-in backend counts nothing, and the real one refuses a function that reads too much. A
+ * read that a filter narrows reads every record the filter passes over, which nothing here can
+ * see: how many such reads were asked is noted instead.
  */
-function watched(real: any): { db: any; read: any[] } {
+function watched(real: any): { db: any; read: any[]; filtered: { count: number } } {
   const read: any[] = []
+  const filtered = { count: 0 }
   const noted = (got: unknown) => {
     for (const row of Array.isArray(got) ? got : [got]) if (row && typeof row === 'object') read.push(row)
     return got
@@ -136,6 +139,7 @@ function watched(real: any): { db: any; read: any[] } {
         const value = target[name]
         if (typeof value !== 'function') return value
         return (...args: unknown[]) => {
+          if (name === 'filter') filtered.count++
           const out = value.apply(target, args)
           return ['take', 'first', 'unique', 'collect'].includes(String(name)) ? Promise.resolve(out).then(noted) : watching(out)
         }
@@ -149,7 +153,7 @@ function watched(real: any): { db: any; read: any[] } {
       return typeof value === 'function' ? value.bind(target) : value
     },
   })
-  return { db, read }
+  return { db, read, filtered }
 }
 
 const subjectOf = (who: string) => `user_${who}`
@@ -3021,7 +3025,10 @@ describe('clicks and their delivery', () => {
       // The clock is set back past that stop, and the person does something: it is after the stop all the same
       vi.setSystemTime(made - 60_000)
       const numbered = (await click('click-numbered')).actionId
-      expect((await inbox(m)).map((c) => c.id).sort()).toEqual([later, numbered].sort())
+      // What that stop dropped, and its steps have not come to yet, is offered to nobody
+      const offered = (await inbox(m)).map((c) => c.id)
+      expect(offered).toContain(numbered)
+      expect(offered).not.toContain(old)
       expect(await m.as.mutation(api.delivery.claim, { ids: [old, later, numbered], for: SESSION })).toEqual([later, numbered])
       expect(await row(t, old)).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
       expect((await row(t, old))!.stoppedSequence).toBeUndefined()
@@ -3032,6 +3039,83 @@ describe('clicks and their delivery', () => {
         id: numbered,
         sequence: expect.any(Number),
       })
+    })
+
+    test('an inbox asked while a stop is still dropping many of the largest clicks reads nothing it does not count, and none of them where it need not', async () => {
+      const { t, m, p } = await setup()
+      const now = Date.now()
+      // The person switched reopening on for Claude Code here; the listening conversation, a
+      // Codex conversation and a closed Claude Code conversation were each stopped, and the
+      // stop's steps have not yet come to the 120 of the largest clicks each had waiting
+      const codex = await publish(m, 'sketch', { session: { harness: 'codex', id: 'thread-1' } })
+      const closed = await publish(m, 'board', { session: { harness: 'claude-code', id: 'sess-closed' } })
+      const conversations = [
+        { artifactId: p.artifactId, harness: SESSION.harness, sessionId: SESSION.id },
+        { artifactId: codex.artifactId, harness: 'codex', sessionId: 'thread-1' },
+        { artifactId: closed.artifactId, harness: 'claude-code', sessionId: 'sess-closed' },
+      ]
+      const payload = JSON.stringify('x'.repeat(LIMITS.actionPayloadBytes - 2))
+      const { stoppedIds, after } = await t.run(async (ctx) => {
+        const tally = (await ctx.db.query('tallies').collect())[0]!
+        let sequence = tally.sequence ?? 0
+        const stoppedIds: string[] = []
+        const after: string[] = []
+        const one = async (c: (typeof conversations)[number], n: string) => {
+          const a = (await ctx.db.get(c.artifactId as never)) as Doc<'artifacts'>
+          return ctx.db.insert('actions', {
+            userId: a.userId,
+            title: a.title,
+            artifactId: a._id,
+            clientActionId: n,
+            name: 'press',
+            payload,
+            contentVersion: 1,
+            createdAt: now,
+            sequence: ++sequence,
+            delivery: 'pending',
+            machineId: m.id as never,
+            harness: c.harness,
+            sessionId: c.sessionId,
+          })
+        }
+        for (const c of conversations) for (let i = 0; i < 120; i++) stoppedIds.push(await one(c, `${c.sessionId}-before-${String(i).padStart(4, '0')}`))
+        const stop = ++sequence
+        for (const c of conversations) after.push(await one(c, `${c.sessionId}-after-0001`))
+        await ctx.db.patch(tally._id, { sequence })
+        await ctx.db.patch(m.id as never, {
+          wakes: [{ harness: 'claude-code', since: now }],
+          stops: conversations.map((c) => ({ harness: c.harness, sessionId: c.sessionId, at: now, sequence: stop })),
+        })
+        return { stoppedIds, after }
+      })
+      const asked = await t.run(async (ctx) => {
+        const { db, read, filtered } = watched(ctx.db)
+        const identity = { issuer: SITE, subject: m.id, kind: 'machine' }
+        const answer = await (inboxPageQuery as any)._handler(
+          { ...ctx, db, auth: { getUserIdentity: async () => identity } },
+          { listening: [SESSION], queues: ['codex', 'claude-code'], after: [] },
+        )
+        const clicks = read.filter((row) => typeof row.payload === 'string')
+        return {
+          offered: (answer.clicks as { id: string }[]).map((c) => c.id),
+          filtered: filtered.count,
+          bytes: clicks.reduce((sum, row) => sum + new TextEncoder().encode(row.payload).length + 2048, 0),
+          stoppedRead: clicks.filter((row) => stoppedIds.includes(row._id)).map((row) => row.sessionId),
+        }
+      })
+      // Every record read is one that is counted against what may be read, and that is within it
+      expect(asked.filtered).toBe(0)
+      expect(asked.bytes).toBeLessThanOrEqual(12 * 1024 * 1024)
+      // The listening conversation and Codex's are read from after the stop, and offered what was
+      // done after it. Of what the stop dropped, Codex's conversation is read only as far as finding
+      // it at all; a conversation that may be reopened is read by the clock, as many as one
+      // reopening carries, and every one of those is counted
+      const readOf = (sessionId: string) => asked.stoppedRead.filter((id) => id === sessionId).length
+      expect(readOf('thread-1')).toBeLessThanOrEqual(1)
+      for (const sessionId of [SESSION.id, 'sess-closed']) expect(readOf(sessionId)).toBeLessThanOrEqual(1 + WAKE_MOST)
+      expect(asked.offered).toEqual(expect.arrayContaining([after[0], after[1]]))
+      // Nothing a stop dropped is offered, however it was read
+      expect(asked.offered.filter((id) => stoppedIds.includes(id))).toEqual([])
     })
 
     test('a step of a stop from before stops had a place drops only the clicks of that time, also those the clock puts before it', async () => {
@@ -5481,11 +5565,21 @@ describe('cases at the edges', () => {
     await t.run((ctx) =>
       ctx.db.patch(m.id, { wakes: [{ harness: SESSION.harness, since: now }], stops: [{ harness: SESSION.harness, sessionId: SESSION.id, at: now - 100 }] }),
     )
-    await insertClicks(t, p.artifactId, 1, { attended }, now - 101)
+    const [stopped] = await insertClicks(t, p.artifactId, 1, { attended }, now - 101)
     const timers = await insertClicks(t, p.artifactId, 80, { attended: false }, now)
     const [attendedId] = await insertClicks(t, p.artifactId, 1, { attended }, now + 100)
-    const answer = await m.as.query(api.delivery.inboxPage, { listening: [], queues: [SESSION.harness], after: [] })
-    expect(answer.clicks.map((c) => c.id)).toEqual([...timers.slice(0, 7), attendedId])
+    const asked = async () => (await m.as.query(api.delivery.inboxPage, { listening: [], queues: [SESSION.harness], after: [] })).clicks.map((c) => c.id)
+    // What the stop dropped, and its steps have not come to yet, is offered to nobody, and is read
+    // as one of the few a conversation's read takes, which leaves room for fewer that moment
+    expect(await asked()).not.toContain(stopped)
+    // The stop's step comes to it, and the oldest attended click passes the timers again
+    await t.mutation(internal.artifacts.dropRest, {
+      userId: (await t.run((ctx) => ctx.db.get(p.artifactId)))!.userId,
+      machineId: m.id as never,
+      session: SESSION,
+      at: now - 100,
+    })
+    expect(await asked()).toEqual([...timers.slice(0, 7), attendedId])
   })
 
   test('a queue with large old clicks still offers a recent conversation in its original order on every asking', async () => {
