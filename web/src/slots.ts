@@ -175,6 +175,6 @@ let grid: Slots | undefined
 /** The grid's slots, as many as this device can bear, made the first time a card asks. */
 export function gridSlots(): Slots {
   const device = navigator as Navigator & { deviceMemory?: number }
-  grid ??= slots({ most: mostFor(device.deviceMemory, navigator.hardwareConcurrency), loading: 4, keptAway: 12, keptMs: 120_000 })
+  grid ??= slots({ most: mostFor(device.deviceMemory, navigator.hardwareConcurrency), loading: 8, keptAway: 12, keptMs: 120_000 })
   return grid
 }
