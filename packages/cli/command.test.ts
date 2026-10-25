@@ -1678,7 +1678,10 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
             { id: 'internal-2', slug: 'board', title: 'Tic-tac-toe', agent: 'claude-code', machine: 'the desk', pending: 0, updatedAt: now - 2 * 3_600_000 },
           ]
         : asked.path === 'displays:list'
-          ? [{ id: 'd1', name: 'Kitchen', paired: true, lastSeenAt: now - 10_000 }]
+          ? [
+              { id: 'd1', name: 'Kitchen', paired: true, lastSeenAt: now - 10_000, agents: true },
+              { id: 'd2', name: 'TV', paired: true, lastSeenAt: now - 7_200_000, agents: false },
+            ]
           : asked.path === 'machines:me'
             ? { id: 'machine-1', name: 'the desk', wanted: ['pi'], harnesses: [{ id: 'pi', addon: 'connected' }], wakes: [{ harness: 'pi', since: 1 }] }
             : null,
@@ -1690,7 +1693,12 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
         '  board    Tic-tac-toe  Claude Code on the desk  2 h ago',
         '',
       ])
-      expect((await atTerminal(m, ['displays'], b.env)).shown.split('\n')).toEqual(['1 display:', '  Kitchen  paired  seen just now', ''])
+      expect((await atTerminal(m, ['displays'], b.env)).shown.split('\n')).toEqual([
+        '2 displays:',
+        '  Kitchen  paired                    seen just now',
+        '  TV       paired, closed to agents  seen 2 h ago',
+        '',
+      ])
       expect((await atTerminal(m, ['whoami'], b.env)).shown.split('\n')).toEqual([
         'It knows this machine as “the desk”.',
         'Connected here: Pi.',
@@ -3604,6 +3612,107 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
           hint: `"Kitchen" and "Wall" are not paired any more: the pairing of their browsers was ended, and they show nothing until those browsers are paired again. ${AGAIN}`,
         },
       ])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('with no display named, it says which one display was chosen and why, and how to ask for another or for every one', async () => {
+    const m = machine()
+    const chosen: Record<string, unknown> = {
+      displays: ['Laptop'],
+      notShown: [
+        { display: 'TV', reason: 'not_chosen' },
+        { display: 'Phone', reason: 'agents_off' },
+      ],
+      chosen: 'open',
+    }
+    const b = await backend(m, (asked) => (asked.path === 'displays:show' ? chosen : null))
+    const ELSEWHERE = 'To show it elsewhere, run this again with `--on "<display>"`, or with `--on all` for every display agents may use.'
+    try {
+      const opened = await run(m, ['open', 'plan'], b.env)
+      expect([opened.code, printed(opened)]).toEqual([
+        0,
+        {
+          id: 'plan',
+          shownOn: ['Laptop'],
+          notShownOn: chosen.notShown,
+          hint: `No display was named, so it is shown on "Laptop" alone: of the displays with It’s site open, that is the one used most recently. ${ELSEWHERE}`,
+        },
+      ])
+      // No display is named to the backend, which chooses
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({ slug: 'plan' })
+      chosen.chosen = 'last_used'
+      expect(printed(await run(m, ['open', 'plan'], b.env)).hint).toBe(
+        `No display was named and none has It’s site open now, so it was sent to "Laptop" alone, the display used most recently. A display whose site is closed does not bring a page up by itself, so the user needs the link. ${ELSEWHERE}`,
+      )
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('every display is asked with `--on all`, and a display that agents may not use is said to be that, by name', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path !== 'displays:show'
+        ? null
+        : asked.args.display === 'all'
+          ? { displays: ['Laptop', 'TV'], notShown: [{ display: 'Phone', reason: 'agents_off' }] }
+          : { displays: [], notShown: [{ display: 'Phone', reason: 'agents_off' }] },
+    )
+    const OFF = 'the user turned that off for it, on the display itself or on the site under Displays, and only the user can turn it on again.'
+    try {
+      expect(printed(await run(m, ['open', 'plan', '--on', 'all'], b.env))).toEqual({
+        id: 'plan',
+        shownOn: ['Laptop', 'TV'],
+        notShownOn: [{ display: 'Phone', reason: 'agents_off' }],
+        hint: `Agents may not use "Phone": ${OFF}`,
+      })
+      expect(b.asked.find((x) => x.path === 'displays:show')!.args).toEqual({ slug: 'plan', display: 'all' })
+      const named = await run(m, ['open', 'plan', '--on', 'Phone'], b.env)
+      expect([named.code, printed(named)]).toEqual([
+        0,
+        { id: 'plan', shownOn: [], notShownOn: [{ display: 'Phone', reason: 'agents_off' }], hint: `Agents may not use "Phone": ${OFF}` },
+      ])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`it notify` says where the notification went, and a display named that takes nothing is refused by its name, with why', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path !== 'notifications:send'
+        ? null
+        : asked.args.display === 'Phone'
+          ? new Refusal({ code: 'forbidden', message: 'That display takes nothing from agents now.', notSent: 'agents_off' } as never)
+          : asked.args.display === 'Kitchen'
+            ? new Refusal({ code: 'forbidden', message: 'That display takes nothing from agents now.', notSent: 'not_paired' } as never)
+            : { id: 'n1', displays: ['Laptop'], notShown: [{ display: 'TV', reason: 'not_chosen' }], chosen: 'open' },
+    )
+    try {
+      expect(printed(await run(m, ['notify', 'Done'], b.env))).toEqual({
+        id: 'n1',
+        sentTo: ['Laptop'],
+        notSentTo: [{ display: 'TV', reason: 'not_chosen' }],
+        hint: 'No display was named, so it went to "Laptop" alone: of the displays with It’s site open, that is the one used most recently. To send it elsewhere, use `--on "<display>"`, or `--on all` for every display agents may use.',
+      })
+      const off = await run(m, ['notify', 'Done', '--on', 'Phone'], b.env)
+      expect([off.code, off.out, error(off)]).toEqual([
+        1,
+        '',
+        {
+          code: 'agents_off',
+          message: 'Agents may not use "Phone": the user turned that off for it, on the display itself or on the site under Displays. Nothing was sent.',
+          hint: 'Leave out --on to send it to the display in use. Only the user can let agents use that display again.',
+        },
+      ])
+      const ended = await run(m, ['notify', 'Done', '--on', 'Kitchen'], b.env)
+      expect(error(ended)).toEqual({
+        code: 'not_paired',
+        message: '"Kitchen" is not paired any more, and takes nothing until its browser is paired again. Nothing was sent.',
+        hint: 'Leave out --on to send it to the display in use.',
+      })
     } finally {
       await b.close()
     }

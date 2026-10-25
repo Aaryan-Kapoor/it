@@ -14,8 +14,8 @@ Decide before you answer. Whenever the user is to see, use, play, choose, fill i
 ## The loop
 
 1. **Write the page** in ordinary HTML, CSS and JavaScript: one file, or a folder. Make it look like the thing it is, and give it a place for your answers (step 5).
-2. **Publish and show it**: `it create "Deploy plan" --id deploy-plan --file plan.html --open`. That prints the page's `url`, and `shownOn`, the displays that were asked to bring it up.
-3. **Give the user the `url` in chat, every time you make a page**, in one short line that says what is on it. `shownOn` in what is printed names the displays that were asked. Asked is all it says: a display with the site open brings the page up at once, and one whose browser is closed does not open by itself, so the link is how they get there. Do not tell them that you can see the page on a screen. If `shownOn` is empty, or the command printed `notShown` or `notShownOn`, read `it help showing` before you say anything about displays.
+2. **Publish and show it**: `it create "Deploy plan" --id deploy-plan --file plan.html --open`. That prints the page's `url`, and `shownOn`, the display asked to bring it up: the one the user is on, or one `--on` names.
+3. **Give the user the `url` in chat, every time you make a page**, in one short line that says what is on it. Asked is all `shownOn` says: a display with the site open brings the page up at once, and one whose browser is closed does not open by itself, so the link is how they get there. Do not tell them that you can see the page on a screen. If `shownOn` is empty or the command printed `notShown`, read `it help showing` before you say anything about displays.
 4. **The user acts on the page.** What they did arrives here as a message that begins `[It]`, names the page and the action, and ends with `[action <id>]`. Where the message is `[It]` and nothing more, those words were handed to you beside it, out of the user's sight: act on them as on any action. If you cannot see what it carried, `it action <id>` prints it.
 5. **Answer on the page.** The user is looking at the page and not at this conversation, so that is where your answer goes: `it patch` or `it set` changes the page's state and the page shows it, `it update` publishes a new version when the page itself must change, and `it say deploy-plan "…"` puts a line of your own words above the page, for an answer that has no place on it. In chat, a few words at most, and never what the page already shows.
 
@@ -68,12 +68,12 @@ It does where It's add-on for your harness is connected and its connector is run
 
 | Command | What it does |
 |---|---|
-| `it create <title> --id <id> (--file f \| --dir d \| --html '<…>' \| pipe)` | Publish a page and print its `url`. The same id again publishes a new version. `--state '{…}'` sets its starting state, `--open` asks the displays to show it now, `--take` makes another conversation's page yours |
+| `it create <title> --id <id> (--file f \| --dir d \| --html '<…>' \| pipe)` | Publish a page and print its `url`. The same id again publishes a new version. `--state '{…}'` sets its starting state, `--open` shows it now as `it open` does, `--take` makes another conversation's page yours |
 | `it update <id> (--file …)` | Publish a new version of a page |
 | `it set <id> <key> <value>` · `it patch <id> '<json>' [--if-revision <n>]` · `it state <id>` | Change or read a page's state. Keys may be dotted (`steps.build`), and `null` in a patch deletes |
 | `it say <id> "<text>"` | A line of your own words above the page. With no text, it is taken away |
-| `it open <id> [--on "<display>"]` | Ask every paired display, or one by name, to bring a page up |
-| `it notify "<text>" [--id <id>] [--on "<display>"]` | A short message outside any page, which a display that is not open may get as a notification |
+| `it open <id> [--on "<display>"]` | Bring a page up on the display the user is on, or one by name. `--on all`: every one, if the user asks |
+| `it notify "<text>" [--id <id>] [--on "<display>"]` | A short message outside any page, which a closed display may get as a notification |
 | `it wait [--id <id>] [--follow] [--timeout <seconds>]` | Block until the user acts, then print the action |
 | `it actions [--id <id>]` · `it action <action-id>` · `it ack <action-id> [--failed]` | List the actions still waiting, print one in full, and mark one as handled |
 | `it list` · `it read <id>` · `it delete <id>` · `it displays` · `it status` | The pages, one page, removing one, the displays, and whether It is running and connected |
