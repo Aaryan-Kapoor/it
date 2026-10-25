@@ -4,7 +4,8 @@
 // then the cards just above and below it, while there is room. Pictures are begun a few at a
 // time, so that a fast scroll does not begin dozens at once, and a card that has gone by before
 // its turn is never begun. A card that leaves the screen keeps its picture for a while, and while
-// no more others do than a screenful, so that scrolling back finds it as it was, without a new showing.
+// no more than a screenful of others do, so that scrolling back finds it as it was, without a new
+// showing.
 
 /** How far beyond the screen a card is near enough to be shown before it is on it. */
 const NEAR = '200px 0px'
@@ -14,11 +15,14 @@ const LOAD_MS = 8000
 /**
  * How many cards may show their page at once, on a device with this much memory, in gigabytes,
  * and this many cores: eight to a gigabyte and six to a core, and never fewer than eight or
- * more than sixty-four. A browser that does not say what it has is taken by its cores alone.
+ * more than sixty-four. A browser says what memory it has only to a site it reached securely,
+ * which another screen on the network, over plain http, never is, and Firefox and Safari never
+ * say it. Such a browser is taken by its cores alone, at four to a core, since it may well be a
+ * television's.
  */
 export function mostFor(memory: number | undefined, cores: number | undefined): number {
-  const byCores = (cores && cores > 0 ? cores : 4) * 6
-  const most = memory && memory > 0 ? Math.min(memory * 8, byCores) : byCores
+  const known = cores && cores > 0 ? cores : 4
+  const most = memory && memory > 0 ? Math.min(memory * 8, known * 6) : known * 4
   return Math.max(8, Math.min(64, Math.round(most)))
 }
 

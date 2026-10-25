@@ -251,11 +251,13 @@ describe('without a way to tell what is on the screen', () => {
 })
 
 describe('how many the device bears', () => {
-  test('eight to a gigabyte and six to a core, between eight and sixty-four, and by the cores alone where the memory is not said', () => {
-    expect([mostFor(8, 12), mostFor(8, 8), mostFor(4, 8), mostFor(2, 4), mostFor(1, 2), mostFor(0.5, 8), mostFor(undefined, 8), mostFor(undefined, 2)]).toEqual(
-      [64, 48, 32, 16, 8, 8, 48, 12],
-    )
+  test('eight to a gigabyte and six to a core, between eight and sixty-four', () => {
+    expect([mostFor(8, 12), mostFor(8, 8), mostFor(4, 8), mostFor(2, 4), mostFor(1, 2), mostFor(0.5, 8)]).toEqual([64, 48, 32, 16, 8, 8])
+  })
+
+  test('four to a core where the memory is not said, as it is not to another screen over plain http', () => {
+    expect([mostFor(undefined, 12), mostFor(undefined, 8), mostFor(undefined, 4), mostFor(undefined, 2), mostFor(undefined, 32)]).toEqual([48, 32, 16, 8, 64])
     // A browser that says nothing of either is taken for four cores
-    expect(mostFor(undefined, undefined)).toBe(24)
+    expect(mostFor(undefined, undefined)).toBe(16)
   })
 })
