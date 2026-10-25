@@ -551,8 +551,12 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * not take a message for is not offered to it again for a while: `t3Refused`.
    */
   const t3Known = new Map<string, { thread: string | null; at: number } | 'asking'>()
-  /** When each conversation that is being asked for was first asked for, by the clock that only goes forward. */
-  const t3Asked = new Map<string, number>()
+  /**
+   * When each click first asked which thread holds its conversation, by the clock that only goes
+   * forward. A click waits for T3 Code from then, however many passes and searches follow one
+   * another meanwhile, and it is forgotten once the click is no longer offered here.
+   */
+  const t3Waits = new Map<string, number>()
   const t3Searches = new Map<string, T3Search>()
   const t3Pending = new Map<string, { harness: string; id: string }>()
   const t3Retries = new Map<string, { at: number; delay: number }>()
@@ -563,12 +567,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
   /** How long a conversation is kept from T3 Code after it could not take a message for it. */
   const T3_REFUSED_MS = 10 * 60_000
   /**
-   * How long T3 Code is given to say which thread holds a conversation, before a click for it
-   * goes the way it would without T3 Code. It says so in a fifth of a second to two seconds
-   * where it is well. Later batches keep their progress but do not restart this wait, and
-   * neither does a search that follows one that used its reads within it. What it says in
-   * the end is kept for the clicks that come after. A search that has used its reads once
-   * its click has gone another way is taken up by the next click, which waits as long again.
+   * How long a click waits, from when it first asks, for T3 Code to say which thread holds its
+   * conversation, before it goes the way it would without T3 Code. T3 Code says so in a fifth of
+   * a second to two seconds where it is well. Neither later batches nor later searches restart
+   * a click's wait, and what T3 Code says in the end is kept for the clicks that come after.
    */
   const T3_ASKED_MS = 5_000
   /**
@@ -576,7 +578,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
    * `T3_HELD_MOST`, by dropping first the searches that went on longest ago. The search that
    * has just gone on is not dropped, since it needs what it holds to go on. A search that is
    * dropped decides nothing: the next time its conversation is asked for, a search begins again
-   * from nothing. A click already waiting for it waits no longer for that.
+   * from nothing. A click waits no longer for that, since its wait is its own.
    */
   function t3Bound(going: string): void {
     let held = 0
@@ -589,17 +591,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
       if (t3Known.get(key) === 'asking') t3Known.delete(key)
       t3Pending.delete(key)
       t3Retries.delete(key)
-      if (steady() - (t3Asked.get(key) ?? 0) >= T3_ASKED_MS) t3Asked.delete(key)
     }
   }
   /**
    * The thread of T3 Code that a conversation is held in, with the server to send to:
-   * `asking` while that is being found out, and nothing where it is in none, where T3 Code
-   * is not running here, where it has just failed to take something for it, and where it has
-   * been asked for longer than it is given to say. Then the click goes the way it would
-   * without T3 Code.
+   * `asking` while that is being found out for the click that asks, and nothing where it is in
+   * none, where T3 Code is not running here, where it has just failed to take something for it,
+   * and where the click has waited as long as it is given. Then the click goes the way it would
+   * without T3 Code. Asked with no click, it only lets a search that is under way go on.
    */
-  function t3For(key: string, session: { harness: string; id: string }): { server: T3; thread: string } | 'asking' | undefined {
+  function t3For(key: string, session: { harness: string; id: string }, click?: string): { server: T3; thread: string } | 'asking' | undefined {
     const now = Date.now()
     const refused = t3Refused.get(key)
     if (refused !== undefined) {
@@ -611,20 +612,27 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const server = t3Seen.server
     if (!server) return undefined
     const known = t3Known.get(key)
-    if (known === 'asking') return steady() - (t3Asked.get(key) ?? 0) < T3_ASKED_MS ? 'asking' : undefined
-    if (known?.thread) return { server, thread: known.thread }
-    if (known && now - known.at < T3_AGAIN_MS) return undefined
-    const waiting = () => steady() - (t3Asked.get(key) ?? steady()) < T3_ASKED_MS
-    if (steady() < (t3Retries.get(key)?.at ?? 0)) return waiting() ? 'asking' : undefined
+    if (known !== undefined && known !== 'asking') {
+      if (known.thread) return { server, thread: known.thread }
+      if (now - known.at < T3_AGAIN_MS) return undefined
+    }
+    let until = 0
+    if (click !== undefined) {
+      if (!t3Waits.has(click)) t3Waits.set(click, steady())
+      until = t3Waits.get(click)! + T3_ASKED_MS
+    }
+    const waiting = steady() < until
+    if (known === 'asking') return waiting ? 'asking' : undefined
+    // A click waits for a search that is to go on only where it goes on before the click's wait is over
+    const retry = t3Retries.get(key)
+    if (retry && steady() < retry.at) return waiting && retry.at < until ? 'asking' : undefined
     if (t3Known.size + t3Searches.size > 2000) {
       t3Known.clear()
-      t3Asked.clear()
       t3Searches.clear()
       t3Pending.clear()
       t3Retries.clear()
     }
     t3Known.set(key, 'asking')
-    if (!t3Asked.has(key)) t3Asked.set(key, steady())
     const search = t3Searches.get(key) ?? t3Search()
     t3Searches.set(key, search)
     t3Pending.set(key, session)
@@ -635,26 +643,23 @@ async function connecting(say: (line: string) => void): Promise<void> {
       .then((result) => {
         if (t3Searches.get(key) !== search) return
         let again = 10
-        // A search that used its reads while its click still waits is followed at once by the next
-        if (result.status === 'incomplete' || (result.status === 'limited' && waiting())) {
+        if (result.status === 'incomplete') {
           // More candidates, unread answers and expired budgets are not evidence of absence.
-          // Keep the first deadline while continuing through later batches on subsequent passes.
+          // A click's wait is its own, and later batches do not restart it.
           t3Known.delete(key)
           // New batches keep moving. Repeated failures wait longer, up to a minute, until
           // another candidate is reached or read successfully. A later failure starts afresh.
-          const delay = result.status === 'incomplete' && !result.progressed ? Math.min((t3Retries.get(key)?.delay || 150) * 2, 60_000) : 0
+          const delay = result.progressed ? 0 : Math.min((t3Retries.get(key)?.delay || 150) * 2, 60_000)
           t3Retries.set(key, { at: steady() + (delay || 300), delay })
           again = (delay || 300) + 10
         } else if (result.status === 'limited') {
-          // Its click has gone another way. What the search has read is kept, and the next click
-          // that asks for the thread begins the next search, over the threads not yet read, and
-          // is given a wait of its own
+          // What the search has read is kept, and it goes on no further by itself. The next
+          // search begins when a click asks for the thread: at once, where a click that is still
+          // within its wait asks on the pass after this one, and otherwise with the next click
           t3Known.delete(key)
-          t3Asked.delete(key)
           t3Pending.delete(key)
           t3Retries.delete(key)
         } else {
-          t3Asked.delete(key)
           t3Searches.delete(key)
           t3Pending.delete(key)
           t3Retries.delete(key)
@@ -670,7 +675,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         soon(again)
       })
-    return waiting() ? 'asking' : undefined
+    return waiting ? 'asking' : undefined
   }
   /**
    * What each mark that was put into a conversation stands for, by the conversation: the
@@ -2278,7 +2283,9 @@ async function connecting(say: (line: string) => void): Promise<void> {
         }
         return Math.max(now - click.at, here - firstSeen.get(click.id)!)
       }
-      for (const click of [...new Map([...inbox, ...recoveredClicks.values()].map((c) => [c.id, c])).values()].sort((a, b) => a.at - b.at)) {
+      const offeredHere = new Map([...inbox, ...recoveredClicks.values()].map((c) => [c.id, c]))
+      for (const id of t3Waits.keys()) if (!offeredHere.has(id)) t3Waits.delete(id)
+      for (const click of [...offeredHere.values()].sort((a, b) => a.at - b.at)) {
         if (taken(click)) {
           recoveredClicks.delete(click.id)
           continue
@@ -2298,7 +2305,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const session = click.session
         let thread: ReturnType<typeof t3For>
         const heldInT3 = (): boolean => {
-          thread = connected(session.harness) && !reopenedNow.has(key) ? t3For(key, session) : undefined
+          thread = connected(session.harness) && !reopenedNow.has(key) ? t3For(key, session, click.id) : undefined
           return thread !== undefined
         }
         const s = sessions.get(key)

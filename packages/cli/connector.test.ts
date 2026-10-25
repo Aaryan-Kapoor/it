@@ -4013,6 +4013,37 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     expect(stand.codex).toEqual([])
   })
 
+  test('a search that used its reads just after its click’s wait ran out, before the click went another way, gives the click no second wait', async () => {
+    standIn(true)
+    withT3Code()
+    stand.t3.slow = true
+    await start()
+    let now = Date.now()
+    const wall = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      offered(click(3))
+      await until(() => stand.t3.asked.length === 1)
+      await settled()
+      expect(stand.codex).toEqual([])
+      // The wait runs out with no pass in between, and only then does the search say it used its reads
+      now += 5_001
+      stand.t3.asked[0]!.answer({ status: 'limited' })
+      await settled()
+      expect(stand.codex).toEqual([])
+      // The very next pass sends the click the way it would go without T3 Code, while the clock
+      // stands a moment past its wait. The conversation's next search begins with that pass, and
+      // the click does not wait for it
+      await vi.advanceTimersByTimeAsync(1000)
+      await settled()
+      await until(() => stand.codex.length === 1, 2000)
+      expect(stand.codex[0]!.args).toContain('--thread=thread-3')
+      expect(stand.t3.asked).toHaveLength(2)
+      expect(stand.t3.sent).toEqual([])
+    } finally {
+      wall.mockRestore()
+    }
+  })
+
   test('an incomplete thread search continues before using another route, also with Auto-wake off', async () => {
     withT3Code()
     stand.t3.slow = true
