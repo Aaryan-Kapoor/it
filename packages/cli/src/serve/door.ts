@@ -625,7 +625,13 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
   }
 
   /** A request for the content package, with the caller's address beside it. `over` is called once it has been answered, however that went. */
-  async function toContent(which: 'showing' | 'upload' | 'control', a: Arrival, url: URL, body: BodyInit | null, over?: () => void): Promise<Response> {
+  async function toContent(
+    which: 'showing' | 'upload' | 'download' | 'control',
+    a: Arrival,
+    url: URL,
+    body: BodyInit | null,
+    over?: () => void,
+  ): Promise<Response> {
     const request = new Request(url, {
       method: a.method,
       headers: a.headers,
@@ -713,6 +719,14 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       // A file is passed on as it arrives, for as many bytes as it said and no more
       const file = a.body ? held(a.body, length, (uploadBudgetMs(length) * patience) / PATIENCE_MS) : null
       return toContent('upload', a, url, file?.stream ?? null, file?.over)
+    }
+    if (path.startsWith('/download/')) {
+      // A machine of the person's reading a file that was sent with an action, under a grant the
+      // backend gave it, which a page of another site never has. Such a page is refused all the
+      // same, by the origin its browser names, before the grant is looked at
+      if (a.method !== 'GET') return refuse(405, 'download_method', { allow: 'GET' })
+      if (fromElsewhere(a)) return refuse(403, 'foreign_origin')
+      return toContent('download', a, url, null)
     }
     if (path.startsWith('/control/')) {
       if (a.method !== 'POST') return refuse(405, 'control_method', { allow: 'POST' })

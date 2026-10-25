@@ -134,6 +134,113 @@ describe('the script inside a page', () => {
     expect(port.sent.map((m) => m.envelope?.name ?? m.key)).toEqual(['first', 'draft', 'after'])
   })
 
+  describe('a file in what an action carries', () => {
+    /** The site's end of the channel, holding what it is given as it is: the file a page sends crosses as the file it is. */
+    const raw = (p: ReturnType<typeof load>) => {
+      const port: Port = { sent: [], postMessage: (m) => port.sent.push(m), onmessage: null, close: () => {} }
+      p.page.port = port
+      p.w.dispatchEvent(Object.assign(new p.w.Event('message'), { origin: APP, source: p.w.parent, data: { type: 'it:port' }, ports: [port] }))
+      return port
+    }
+    const settle = () => new Promise((r) => setImmediate(r))
+
+    test('goes to the site as the file it is, wherever the page put it, beside the rest of what the action carries', async () => {
+      const p = load()
+      const port = raw(p)
+      const photo = new p.w.File([new Uint8Array([1, 2, 3])], 'receipt.jpg', { type: 'image/jpeg' })
+      const notes = new p.w.Blob(['a,b'], { type: 'text/csv' })
+      const sent = p.It.action('receipt', { photo, more: [{ notes }], table: 4 })
+      await settle()
+      const payload = port.sent[0].envelope.payload
+      // A browser that cannot read the picture here sends it as it is, which this stand-in for one is
+      expect(payload.table).toBe(4)
+      expect(payload.photo).toBe(photo)
+      expect(payload.more[0].notes).toBe(notes)
+      p.fromSite({ type: 'it:result', requestId: port.sent[0].requestId, ok: true, actionId: 'a1' })
+      await expect(sent).resolves.toEqual({ ok: true, id: 'a1' })
+    })
+
+    test('is waited for by the actions made after it, which reach the site in the order they were made, and a click with none made while none is waits for nothing', async () => {
+      const p = load()
+      const port = raw(p)
+      // With no file anywhere, sent before the call has even returned, as it always was
+      void p.It.action('first', { n: 1 })
+      expect(port.sent.map((m) => m.envelope.name)).toEqual(['first'])
+      void p.It.action('photo', { photo: new p.w.File([new Uint8Array(10)], 'a.png', { type: 'image/png' }) })
+      void p.It.action('after', { n: 2 })
+      // The click made after the picture does not overtake it
+      expect(port.sent.map((m) => m.envelope.name)).toEqual(['first'])
+      await settle()
+      expect(port.sent.map((m) => m.envelope.name)).toEqual(['first', 'photo', 'after'])
+      // And with nothing being made smaller any more, a click is sent at once again
+      void p.It.action('later', {})
+      expect(port.sent.map((m) => m.envelope.name)).toEqual(['first', 'photo', 'after', 'later'])
+    })
+
+    test('is sent as it is, at once, where the page asks for the original, and a commit takes the same', async () => {
+      const p = load()
+      const port = raw(p)
+      const scan = new p.w.File([new Uint8Array(10)], 'scan.png', { type: 'image/png' })
+      void p.It.action('scan', { scan }, { original: true })
+      expect(port.sent[0].envelope.payload.scan).toBe(scan)
+      p.It.stage('page', scan)
+      void p.It.commit('pages', { count: 1 }, { original: true })
+      expect(port.sent[1].envelope.payload).toEqual({ page: scan, count: 1 })
+    })
+
+    test('sends what it carries as it was when the page sent it, and so does an action that waits behind it, whatever the page changes meanwhile', async () => {
+      const p = load()
+      const port = raw(p)
+      const answer = { choice: 'A', more: ['x'] }
+      const counter = { n: 1 }
+      void p.It.action('photo', { photo: new p.w.File([new Uint8Array(1)], 'a.jpg', { type: 'image/jpeg' }), answer })
+      void p.It.action('count', { counter })
+      p.It.stage('pick', answer)
+      void p.It.commit('picked')
+      // The page goes on, and changes what it sent
+      answer.choice = 'B'
+      answer.more.push('y')
+      counter.n = 2
+      await settle()
+      expect(port.sent.map((m) => m.envelope.payload.answer ?? m.envelope.payload.counter ?? m.envelope.payload.pick)).toEqual([
+        { choice: 'A', more: ['x'] },
+        { n: 1 },
+        { choice: 'A', more: ['x'] },
+      ])
+    })
+
+    test('is drawn one at a time, across actions sent at once as within one, so that a phone holds one photo drawn whole at a time', async () => {
+      let drawing = 0
+      let most = 0
+      const p = load('', (w) => {
+        // A browser that takes its time drawing a picture, and is watched for how many it draws at once
+        w.createImageBitmap = async () => {
+          most = Math.max(most, ++drawing)
+          await new Promise((r) => setImmediate(r))
+          drawing--
+          return { width: 100, height: 100, close() {} }
+        }
+      })
+      const port = raw(p)
+      const photo = (name: string) => new p.w.File([new Uint8Array(10)], name, { type: 'image/jpeg' })
+      void p.It.action('first', { a: photo('a.jpg'), b: photo('b.jpg') })
+      void p.It.action('second', { c: photo('c.jpg') })
+      for (let i = 0; i < 20; i++) await settle()
+      expect(port.sent.map((m) => m.envelope.name)).toEqual(['first', 'second'])
+      expect(most).toBe(1)
+    })
+
+    test('keeps what the person was looking at as it was when they acted, not when the file was ready', async () => {
+      const p = load()
+      const port = raw(p)
+      p.fromSite({ type: 'it:state', state: { a: 1 }, revision: 7 })
+      void p.It.action('photo', { photo: new p.w.File([new Uint8Array(1)], 'a.jpg', { type: 'image/jpeg' }) })
+      p.fromSite({ type: 'it:state', state: { a: 2 }, revision: 8 })
+      await settle()
+      expect(port.sent[0].envelope.baseStateRevision).toBe(7)
+    })
+  })
+
   test('a commit sends what was staged, and clears only that: choices made while it was on its way stay', async () => {
     const p = load()
     const port = p.answer()

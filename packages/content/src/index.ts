@@ -93,10 +93,18 @@ interface Service {
   swept: number
 }
 
-// Where bytes are kept: u/<person>/<page>/<version>/. Each part is a plain id, so a prefix can
-// never mean more than it says.
+// Where bytes are kept: u/<person>/<page>/<version>/ for a version of a page, and beside the
+// versions u/<person>/<page>/f<id>/ for the files that were sent with one action on the page,
+// which are declared, uploaded, checked and deleted as a version's are. Each part is a plain id,
+// so a prefix can never mean more than it says, and deleting a page or everything of a person's
+// takes both kinds with it.
 const VERSION_PREFIX = /^u\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/[0-9]+\/$/
-const ANY_PREFIX = /^u\/[A-Za-z0-9_-]+\/([A-Za-z0-9_-]+\/([0-9]+\/)?)?$/
+const FILE_PREFIX = /^u\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/f[A-Za-z0-9_-]+\/$/
+/** What may be declared and uploaded: a version, or a file sent with an action. */
+const UPLOADED_PREFIX = (prefix: string) => VERSION_PREFIX.test(prefix) || FILE_PREFIX.test(prefix)
+const ANY_PREFIX = /^u\/[A-Za-z0-9_-]+\/([A-Za-z0-9_-]+\/([0-9]+\/|f[A-Za-z0-9_-]+\/)?)?$/
+/** The names the files sent with one action are declared under, in their order: 1, 2 and so on. */
+const ATTACHED = /^[1-9][0-9]?$/
 /** Everything of one person's. */
 const PERSON_PREFIX = /^u\/([A-Za-z0-9_-]+)\/$/
 const MOUNT = /^[0-9a-f]{32}$/
@@ -545,7 +553,7 @@ async function upload(it: Service, request: Request): Promise<Response> {
   const grant = await fromBackend(it, bearer(request), AUDIENCE.upload, (code) => {
     reason = code
   })
-  if (!grant || typeof grant.p !== 'string' || grant.sub !== grant.p || !VERSION_PREFIX.test(grant.p)) {
+  if (!grant || typeof grant.p !== 'string' || grant.sub !== grant.p || !UPLOADED_PREFIX(grant.p)) {
     // Anyone can send an upload with no grant, or a made-up one, as often as they like
     it.log.seldom('upload.refused', `grant:${reason}`, { reason: `grant:${reason}` })
     return deny()
@@ -590,9 +598,18 @@ async function upload(it: Service, request: Request): Promise<Response> {
   // service. A deletion either precedes the move and refuses it, or follows it and finds the
   // file. An upload cannot put bytes back after deletion, even if another upload remade its
   // folder. Its grant must still be good, since deletion records are eventually forgotten.
+  // Which of the two it was where the file is not put in place: its version or its page deleted
+  // meanwhile, which is for good, or the grant run out while the bytes were arriving, which a
+  // fresh grant mends. A file is given a minute and its size at 20,000 bytes a second, and the
+  // files sent with one action share one grant, so a slow line can outlast it with a good file
+  let expired = false
   const allowed = (move: () => void) =>
     it.records.together(() => {
-      if (it.records.wasDeleted(prefix) || typeof grant.exp !== 'number' || grant.exp <= now() - 5) return false
+      if (it.records.wasDeleted(prefix)) return false
+      if (typeof grant.exp !== 'number' || grant.exp <= now() - 5) {
+        expired = true
+        return false
+      }
       move()
       return true
     })
@@ -601,13 +618,63 @@ async function upload(it: Service, request: Request): Promise<Response> {
   })
   // If the version was deleted while this was arriving, its declaration is gone, and what was
   // just written would be left behind with nothing pointing at it. It is taken out again.
-  if (written === 'no_folder') return refuse(403, 'version_deleted_meanwhile')
+  // Only where what was declared is still there does a fresh grant mend it: a version deleted
+  // since, whose record of that has been let go of, is gone all the same
+  if (written === 'no_folder')
+    return expired && (await it.files.declared(prefix)) ? refuse(401, 'grant_expired_meanwhile') : refuse(403, 'version_deleted_meanwhile')
   if (written !== 'ok') return refuse(400, written)
   if (!(await it.files.declared(prefix))) {
     await it.files.remove(prefix, file)
     return refuse(403, 'version_deleted_meanwhile')
   }
   return json(200, { ok: true })
+}
+
+// ---------- files sent with actions, for machines ----------
+
+/**
+ * One file that was sent with an action, for a machine of the person's that the backend gave a
+ * grant to read it. It is answered as bytes to be saved and never as something to be shown: a
+ * page chose them, and they leave from the site's port, so the answer says that it is no
+ * document, that nothing in it may run or be framed, and that it is not to be kept.
+ */
+async function download(it: Service, request: Request): Promise<Response> {
+  const named = new URL(request.url).pathname.match(/^\/download\/(.+)$/)
+  if (request.method !== 'GET' || !named) return deny(404)
+  let reason = 'shape'
+  const grant = await fromBackend(it, bearer(request), AUDIENCE.download, (code) => {
+    reason = code
+  })
+  if (!grant || typeof grant.p !== 'string' || grant.sub !== grant.p || !FILE_PREFIX.test(grant.p) || !ATTACHED.test(named[1]!)) {
+    // Anyone can ask with no grant, or a made-up one, as often as they like
+    it.log.seldom('download.refused', `grant:${reason}`, { reason: `grant:${reason}` })
+    return deny()
+  }
+  const prefix = grant.p
+  const person = prefix.split('/')[1]!
+  const refuse = (status: number, why: string) => {
+    if (erased(it, person)) it.log.seldom('download.refused', 'deleted', { reason: 'deleted' })
+    else it.log.seldom('download.refused', `${prefix}:${why}`, { prefix, reason: why })
+    return deny(status)
+  }
+  if (erased(it, person)) return refuse(404, 'deleted')
+  if (limited(it, 'DOWNLOADS_PERSON', `download:${person}`)) return deny(429)
+  // Deleted since the grant was made: its action, its page, or everything of the person's
+  if (it.records.wasDeleted(prefix)) return refuse(404, 'deleted')
+  const stored = await it.files.open(prefix, named[1]!).catch((err) => {
+    throw new Unavailable('storage', kind(err))
+  })
+  if (!stored) return refuse(404, 'not_there')
+  return new Response(stored.bytes(), {
+    status: 200,
+    headers: {
+      ...PLAIN,
+      'content-security-policy': "default-src 'none'; sandbox; frame-ancestors 'none'",
+      'content-type': 'application/octet-stream',
+      'content-disposition': 'attachment',
+      'content-length': String(stored.size),
+    },
+  })
 }
 
 // ---------- what the backend asks ----------
@@ -651,8 +718,15 @@ async function control(it: Service, request: Request, asked: Asked): Promise<Res
   const files = Array.isArray(body.files) ? (body.files as { path: unknown; size: unknown; sha256: unknown }[]) : []
 
   if (op === 'stage') {
-    // The backend declares a version's files before it gives anyone a grant to upload them
-    if (!VERSION_PREFIX.test(prefix) || files.length === 0 || files.length > LIMITS.filesPerVersion) return refuse(400, 'malformed')
+    // The backend declares a version's files before it gives anyone a grant to upload them. The
+    // files sent with one action are declared by their numbers in order, and held to what one
+    // action may carry
+    if (!UPLOADED_PREFIX(prefix) || files.length === 0 || files.length > LIMITS.filesPerVersion) return refuse(400, 'malformed')
+    if (FILE_PREFIX.test(prefix)) {
+      const total = files.reduce((n, f) => n + (Number.isInteger(f.size) ? (f.size as number) : 0), 0)
+      if (files.length > LIMITS.actionFiles || total > LIMITS.actionFilesBytes) return refuse(400, 'malformed')
+      if (files.some((f, i) => f.path !== String(i + 1) || (f.size as number) > LIMITS.actionFileBytes)) return refuse(400, 'malformed')
+    }
     const clean: { path: string; size: number; sha256: string }[] = []
     for (const f of files) {
       if (!isSafePath(f.path) || !Number.isInteger(f.size) || (f.size as number) < 0 || (f.size as number) > LIMITS.fileBytes) return refuse(400, 'malformed')
@@ -695,7 +769,7 @@ async function control(it: Service, request: Request, asked: Asked): Promise<Res
   }
 
   if (op === 'verify') {
-    if (!VERSION_PREFIX.test(prefix)) return refuse(400, 'malformed')
+    if (!UPLOADED_PREFIX(prefix)) return refuse(400, 'malformed')
     // What is stored under the version is read back from the disk: every file there, its size,
     // and the checksum of the bytes it holds now
     const stored = await it.files.stored(prefix)
@@ -743,7 +817,7 @@ const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PAT
 /** Answers a request, and whatever goes wrong while doing so. */
 async function answer(
   it: Service,
-  part: 'a showing' | 'upload' | 'control',
+  part: 'a showing' | 'upload' | 'download' | 'control',
   request: Request,
   work: () => Promise<Response>,
   /** The answer when it cannot be done: one that carries no bytes, in the headers of the port it is given on. */
@@ -769,13 +843,14 @@ async function answer(
 
 /**
  * The content service, for whoever listens on its ports. A request that came in on the pages'
- * port is `showing`'s; `PUT /upload/...` and `POST /control/...` on the site's port are
- * `upload`'s and `control`'s. Each is told the port the request came in on and the address it
+ * port is `showing`'s; `PUT /upload/...`, `GET /download/...` and `POST /control/...` on the
+ * site's port are `upload`'s, `download`'s and `control`'s. Each is told the port the request came in on and the address it
  * came from, which no header is trusted to say.
  */
 export function createContent(settings: ContentSettings): {
   showing(request: Request, asked: Asked): Promise<Response>
   upload(request: Request, asked: Asked): Promise<Response>
+  download(request: Request, asked: Asked): Promise<Response>
   control(request: Request, asked: Asked): Promise<Response>
   close(): Promise<void>
 } {
@@ -808,6 +883,7 @@ export function createContent(settings: ContentSettings): {
       return answer(it, 'a showing', request, () => showing(it, request, asked, bare, says, siteAt(settings.basePort, host, secure)), bare)
     },
     upload: (request) => answer(it, 'upload', request, () => upload(it, request)),
+    download: (request) => answer(it, 'download', request, () => download(it, request)),
     control: (request, asked) => answer(it, 'control', request, () => control(it, request, asked)),
     async close() {
       it.showings.clear()

@@ -5,7 +5,7 @@
 // no credential, and it cannot talk to the backend. Everything goes through the site that
 // framed it, over a message channel: actions and stored values go up, the page's state comes
 // down. The site decides who the person is.
-import type { ActionEnvelope, PageToSite, SiteToPage } from '@it/protocol'
+import { type ActionEnvelope, type PageToSite, SHRINK, type SiteToPage } from '@it/protocol'
 
 interface Config {
   app: string
@@ -336,11 +336,171 @@ window.addEventListener('unhandledrejection', (e) => {
   fault(why instanceof Error ? `${why.name}: ${why.message}` : typeof why === 'string' ? why : undefined)
 })
 
-/** Something the person did. Resolves once It has accepted it; rejects if it was refused. */
-function action(name: string, data?: unknown): Promise<unknown> {
+// A file put anywhere in what an action carries (a `File` from an input or a drop, a `Blob` a
+// canvas made) goes with the action, beside what it carries, and its agent saves it as a file.
+// A photo is made smaller first, to about what a model reads a picture at, unless the page asks
+// for the file as it is. That is done here, in the page's own frame, so that the site never
+// opens a file a page chose.
+
+/** What a page may say of an action beside its name and what it carries. */
+interface Sending {
+  /** Send every file as it is, a photo included, which is otherwise made smaller first. */
+  original?: boolean
+}
+
+/** A picture made smaller, as a JPEG of no more than so many pixels on its longer side, or the file as it was where it is no such picture, is small already, or cannot be read here. */
+async function smaller(file: Blob): Promise<Blob> {
+  if (!(SHRINK.types as readonly string[]).includes(file.type.toLowerCase()) || typeof createImageBitmap !== 'function') return file
+  let bitmap: ImageBitmap
+  try {
+    // Turned the way the camera said it was held, as a person sees it
+    bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' } as ImageBitmapOptions)
+  } catch {
+    return file
+  }
+  try {
+    const longer = Math.max(bitmap.width, bitmap.height)
+    if (longer <= SHRINK.side && file.size <= SHRINK.smallBytes) return file
+    const scale = Math.min(1, SHRINK.side / longer)
+    const width = Math.max(1, Math.round(bitmap.width * scale))
+    const height = Math.max(1, Math.round(bitmap.height * scale))
+    const canvas: OffscreenCanvas | HTMLCanvasElement =
+      typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(width, height) : Object.assign(document.createElement('canvas'), { width, height })
+    const draw = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null
+    if (!draw) return file
+    // On white, as on paper: what was clear would otherwise be black in a JPEG
+    draw.fillStyle = '#fff'
+    draw.fillRect(0, 0, width, height)
+    draw.drawImage(bitmap, 0, 0, width, height)
+    const made =
+      'convertToBlob' in canvas
+        ? await canvas.convertToBlob({ type: 'image/jpeg', quality: SHRINK.quality })
+        : await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', SHRINK.quality))
+    // Only where it is smaller in the end: a picture small enough in pixels may be one JPEG would make larger
+    if (!made || (made.size >= file.size && longer <= SHRINK.side)) return file
+    const named = typeof (file as File).name === 'string' && (file as File).name ? (file as File).name.replace(/\.[^.]*$/, '') : 'picture'
+    return new File([made], `${named}.jpg`, { type: 'image/jpeg' })
+  } catch {
+    return file
+  } finally {
+    bitmap.close()
+  }
+}
+
+/** Whether something is a plain object, as JSON has them, of this document or of another the page made. */
+const plain = (v: object): boolean => {
+  const kind = Object.getPrototypeOf(v)
+  return kind === null || Object.getPrototypeOf(kind) === null
+}
+/** Whether what an action carries holds a file, looked for within a fixed amount of work: past it, it is sent as it is, for the site to refuse. */
+function holdsFile(data: unknown): boolean {
+  let looks = 20_000
+  const look = (v: unknown, depth: number): boolean => {
+    if (--looks < 0 || depth > 40 || typeof v !== 'object' || v === null) return false
+    if (v instanceof Blob) return true
+    if (Array.isArray(v)) return v.some((x) => look(x, depth + 1))
+    if (!plain(v)) return false
+    return Object.values(v).some((x) => look(x, depth + 1))
+  }
+  return look(data, 0)
+}
+
+/**
+ * A copy of what an action carries as it is at this moment, within a fixed amount of work: its
+ * objects and lists are copied, and a file is the same file, which nothing can change. Anything
+ * else stands as it is, for the channel to copy or refuse. Past the work, it throws: what is
+ * that large is more than the site takes.
+ */
+function takenNow(data: unknown): unknown {
+  let looks = 40_000
+  const copy = (v: unknown, depth: number): unknown => {
+    if (--looks < 0) throw new Error('too much to look through')
+    if (v instanceof Blob || depth > 40 || typeof v !== 'object' || v === null) return v
+    if (Array.isArray(v)) return v.map((x) => copy(x, depth + 1))
+    if (!plain(v)) return v
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, copy(x, depth + 1)]))
+  }
+  return copy(data, 0)
+}
+
+/**
+ * What an action carries, with each picture in it made smaller: a copy, in which each file stands
+ * where the page put it. Within the same amount of work as the looking: past it, what the page
+ * gave is sent as it is.
+ */
+async function withSmallerPictures(data: unknown): Promise<unknown> {
+  const found = new Set<Blob>()
+  let looks = 40_000
+  const copy = (v: unknown, depth: number, swap: (file: Blob) => Blob): unknown => {
+    if (--looks < 0) throw new Error('too much to look through')
+    if (v instanceof Blob) return swap(v)
+    if (depth > 40 || typeof v !== 'object' || v === null) return v
+    if (Array.isArray(v)) return v.map((x) => copy(x, depth + 1, swap))
+    if (!plain(v)) return v
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, copy(x, depth + 1, swap)]))
+  }
+  try {
+    copy(data, 0, (file) => {
+      found.add(file)
+      return file
+    })
+  } catch {
+    return data
+  }
+  // Each file once, however often it is named, and one after another: a photo is drawn whole
+  // before it is made smaller, and a phone has room for so many of them at once
+  const done = new Map<Blob, Blob>()
+  for (const file of found) done.set(file, await smaller(file))
+  // The same walk again, which the first has shown to fit
+  looks = Number.POSITIVE_INFINITY
+  return copy(data, 0, (file) => done.get(file) ?? file)
+}
+
+// Actions reach the site in the order they were made, though a picture takes a moment to be made
+// smaller: while one is being made smaller, each made after it waits for it to be on its way.
+// What It answers is not waited for. An action with no picture to make smaller, made while none
+// is, is sent at once, as it always was.
+let line: Promise<unknown> = Promise.resolve()
+let preparing = 0
+
+/** Something the person did. Resolves once It has accepted it, files and all; rejects if it was refused. */
+function action(name: string, data?: unknown, sending?: Sending): Promise<unknown> {
   if (!name) return Promise.reject(new Error('action(name): a name is required'))
-  const envelope: ActionEnvelope = { v: 1, clientActionId: id(), name, payload: data ?? {}, contentVersion: config.version, baseStateRevision: revision }
-  return ask({ type: 'it:action', requestId: id(), envelope })
+  // What the person was looking at is as it was when they acted, not when the action leaves
+  const at = { clientActionId: id(), contentVersion: config.version, baseStateRevision: revision }
+  const carried = data ?? {}
+  const post = (payload: unknown) => {
+    const envelope: ActionEnvelope = { v: 1, ...at, name, payload }
+    return ask({ type: 'it:action', requestId: id(), envelope })
+  }
+  const shrinking = sending?.original !== true && holdsFile(carried)
+  if (!shrinking && preparing === 0) return post(carried)
+  // An action that waits is sent as it was when the person acted: what it carries is copied now,
+  // and a change the page makes to it afterwards is not sent with it
+  let taken: unknown
+  try {
+    taken = takenNow(carried)
+  } catch {
+    return Promise.reject(new Error('That is too large to send.'))
+  }
+  preparing++
+  // Its pictures are begun only once the action before it is on its way, so that a phone holds
+  // one photo drawn whole at a time, however many actions are sent at once
+  const turn = line.then(() => (shrinking ? withSmallerPictures(taken) : taken))
+  line = turn.then(
+    () => {},
+    () => {},
+  )
+  return turn.then(
+    (payload) => {
+      preparing--
+      return post(payload)
+    },
+    (err) => {
+      preparing--
+      throw err
+    },
+  )
 }
 
 // Stage and commit: clicks along the way (picking options, toggling) stay in the page, and one
@@ -361,11 +521,11 @@ function stage(key: string, value: unknown): Record<string, unknown> {
   }
   return { ...staged }
 }
-function commit(name: string, extra?: Record<string, unknown>): Promise<unknown> {
+function commit(name: string, extra?: Record<string, unknown>, sending?: Sending): Promise<unknown> {
   // What was sent is cleared only once the action is accepted, so a failure does not lose what
   // was chosen. Anything staged or changed while the answer was on its way was not sent, and stays.
   const sent = { ...stagedAt }
-  return action(name, { ...staged, ...(extra ?? {}) }).then((res) => {
+  return action(name, { ...staged, ...(extra ?? {}) }, sending).then((res) => {
     for (const key of Object.keys(sent)) {
       if (stagedAt[key] !== sent[key]) continue
       delete staged[key]

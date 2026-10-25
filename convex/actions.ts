@@ -28,6 +28,8 @@ export async function record(
     title?: string
     /** Typed by a person in the site's own box above the page, which only the function for that box says. */
     typed?: boolean
+    /** The files it carries beside its data, taken for this very click before it was sent (files.ts). */
+    attachment?: Id<'attachments'>
   },
 ): Promise<{ actionId: Id<'actions'>; duplicate: boolean }> {
   if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(input.clientActionId)) fail('invalid', 'That is not an action id.')
@@ -46,6 +48,19 @@ export async function record(
     .withIndex('by_artifact_client', (q) => q.eq('artifactId', artifact._id).eq('clientActionId', input.clientActionId))
     .first()
   if (again) return { actionId: again._id, duplicate: true }
+  // Its files were taken for this click on this page, and are all there whole: an agent is never
+  // told of a file that has not arrived. Where they have not all arrived yet the click is sent
+  // again, and its files with it, once they have
+  const attachment = input.attachment ? await ctx.db.get(input.attachment) : null
+  if (input.attachment) {
+    if (!attachment || attachment.artifactId !== artifact._id || attachment.clientActionId !== input.clientActionId || attachment.actionId)
+      fail('invalid', 'Those files were not sent with this action.')
+    if (!attachment.stored) fail('unavailable', 'The files of this action have not all arrived yet.')
+    // The list of its files is kept with what it carries, and counted in it, so that a click's
+    // record is never more than the most a click may come to
+    if (bytes + new TextEncoder().encode(JSON.stringify(attachment.files)).length > LIMITS.actionPayloadBytes)
+      fail('limit', `An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB, with the names of its files counted in.`)
+  }
   await rateLimit(ctx, 'submitActionPage', artifact._id)
   await rateLimit(ctx, 'submitAction', artifact.userId)
   await rateLimit(ctx, 'actionKilobytes', artifact.userId, Math.max(1, Math.ceil(bytes / 1024)))
@@ -88,7 +103,9 @@ export async function record(
     createdAt: Date.now(),
     delivery: 'pending',
     ...to,
+    ...(attachment ? { attachment: attachment._id, files: attachment.files } : {}),
   })
+  if (attachment) await ctx.db.patch(attachment._id, { actionId })
   await ctx.db.patch(artifact._id, { waiting: (artifact.waiting ?? 0) + 1 })
   await bump(ctx, artifact.userId, { waiting: 1 })
   return { actionId, duplicate: false }
@@ -200,7 +217,7 @@ export const replayGrant = mutation({
  * Old clients have no grant: an existing receipt can be confirmed, but an unknown old id
  * cannot safely be accepted because its previous receipt may already have expired.
  */
-async function replayAllowed(ctx: MutationCtx, c: Browser, artifactId: Id<'artifacts'>, clientActionId: string, until?: number) {
+export async function replayAllowed(ctx: MutationCtx, c: Browser, artifactId: Id<'artifacts'>, clientActionId: string, until?: number) {
   const existing = await ctx.db
     .query('actions')
     .withIndex('by_artifact_client', (q) => q.eq('artifactId', artifactId).eq('clientActionId', clientActionId))
@@ -223,6 +240,8 @@ export const submit = mutation({
     displayKey: v.string(),
     replayUntil: v.optional(v.number()),
     expectedSession: v.optional(v.string()),
+    /** The files the action carries beside its data, taken for it beforehand (files.ts). */
+    attachment: v.optional(v.id('attachments')),
     envelope: v.object({
       v: v.number(),
       clientActionId: v.string(),
@@ -234,7 +253,7 @@ export const submit = mutation({
       attended: v.optional(v.boolean()),
     }),
   },
-  handler: async (ctx, { artifactId, displayKey, envelope, replayUntil, expectedSession }) => {
+  handler: async (ctx, { artifactId, displayKey, envelope, replayUntil, expectedSession, attachment }) => {
     const c = await requireBrowser(ctx, expectedSession)
     if (envelope.v !== PROTOCOL_VERSION) fail('invalid', 'This page speaks a version of the protocol the site does not.')
     const artifact = await ownArtifact(ctx, c.user._id, artifactId)
@@ -243,7 +262,11 @@ export const submit = mutation({
     // its tab sleeps, and what the person did there before must not be lost for that.
     await replayAllowed(ctx, c, artifactId, envelope.clientActionId, replayUntil)
     const display = await findDisplay(ctx, c, displayKey)
-    const { actionId, duplicate } = await record(ctx, artifact, { ...envelope, ...(display ? { displayId: display._id } : {}) })
+    const { actionId, duplicate } = await record(ctx, artifact, {
+      ...envelope,
+      ...(display ? { displayId: display._id } : {}),
+      ...(attachment ? { attachment } : {}),
+    })
     // Counted: that something was sent from a page, and from what kind of screen. Never its name or what it carried
     if (!duplicate) await counted(ctx, 'answer.sent', { screen: display?.screen ?? 'computer', from: 'page' })
     return { actionId }

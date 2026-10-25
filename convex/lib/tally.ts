@@ -1,4 +1,5 @@
-// Running totals for one person: clicks still waiting, and publishes begun and not finished.
+// Running totals for one person: clicks still waiting, publishes begun and not finished, and the
+// bytes of the files sent with actions that It holds for them.
 // They are kept in a row of their own, read only by the mutations that change them. Were they
 // on the person's own record, every click would make every live query of that person run
 // again, because every query reads that record to know who is asking.
@@ -9,8 +10,9 @@ export interface Tally {
   waiting: number
   stagingCount: number
   stagingBytes: number
+  fileBytes: number
 }
-const ZERO: Tally = { waiting: 0, stagingCount: 0, stagingBytes: 0 }
+const ZERO: Tally = { waiting: 0, stagingCount: 0, stagingBytes: 0, fileBytes: 0 }
 
 async function row(ctx: MutationCtx, userId: Id<'users'>): Promise<Doc<'tallies'> | null> {
   return ctx.db
@@ -21,7 +23,7 @@ async function row(ctx: MutationCtx, userId: Id<'users'>): Promise<Doc<'tallies'
 
 export async function tally(ctx: MutationCtx, userId: Id<'users'>): Promise<Tally> {
   const t = await row(ctx, userId)
-  return t ? { waiting: t.waiting, stagingCount: t.stagingCount, stagingBytes: t.stagingBytes } : ZERO
+  return t ? { waiting: t.waiting, stagingCount: t.stagingCount, stagingBytes: t.stagingBytes, fileBytes: t.fileBytes ?? 0 } : ZERO
 }
 
 /** Adds to the person's totals (or takes away, with negative numbers). No total goes below nothing. */
@@ -31,6 +33,7 @@ export async function bump(ctx: MutationCtx, userId: Id<'users'>, by: Partial<Ta
     waiting: Math.max(0, (t?.waiting ?? 0) + (by.waiting ?? 0)),
     stagingCount: Math.max(0, (t?.stagingCount ?? 0) + (by.stagingCount ?? 0)),
     stagingBytes: Math.max(0, (t?.stagingBytes ?? 0) + (by.stagingBytes ?? 0)),
+    fileBytes: Math.max(0, (t?.fileBytes ?? 0) + (by.fileBytes ?? 0)),
   }
   if (t) await ctx.db.patch(t._id, next)
   else await ctx.db.insert('tallies', { userId, ...next })

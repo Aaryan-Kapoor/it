@@ -156,10 +156,12 @@
     });
 
     // A picture the agent can open, on paper and not on nothing, so that a dark line does not
-    // arrive as a black square. It rides inside an action, which holds 32 KB, so it is drawn small.
+    // arrive as a black square. It goes with the action as a file, beside what the action
+    // carries, as large as the board is drawn and no larger than a model reads a picture at.
     function picture() {
       var r = paper.getBoundingClientRect();
-      var w = Math.min(420, Math.round(r.width)) || 420, h = Math.round(w * (r.height / Math.max(1, r.width))) || 280;
+      var scale = Math.min(2, 1600 / Math.max(1, r.width, r.height));
+      var w = Math.max(1, Math.round((r.width || 900) * scale)), h = Math.max(1, Math.round((r.height || 600) * scale));
       var off = document.createElement("canvas");
       off.width = w; off.height = h;
       var g = off.getContext("2d");
@@ -169,7 +171,9 @@
       paint(ink.getContext("2d"), w, h);
       g.fillStyle = PAPER; g.fillRect(0, 0, w, h);
       g.drawImage(ink, 0, 0);
-      try { return off.toDataURL("image/png"); } catch (err) { return null; }
+      return new Promise((resolve) => {
+        try { off.toBlob((made) => resolve(made || null), "image/png"); } catch (err) { resolve(null); }
+      });
     }
     // The drawing as it goes to the agent: its picture, and each line with one point in every so many, and its two ends
     function snapshot(png, every) {
@@ -182,46 +186,37 @@
         }))
       };
     }
-    // An action holds 32 KB of what it carries, as that is written out, and what is sent is kept a little under it
+    // An action holds 32 KB of what it carries, as that is written out, and the lines are kept a
+    // little under it. The picture goes beside them, as a file, and takes none of that room.
     var ROOM = 30000;
     var fits = (data) => new TextEncoder().encode(JSON.stringify(data)).length <= ROOM;
-    // What of the drawing an action can hold, or nothing where it can hold none of it. What is
-    // measured is what is sent, whole: a line is more than its points, and many short lines are
-    // mostly what is not a point.
-    function fitted() {
-      var whole = picture(), longest = mine.reduce((n, s) => Math.max(n, s.points.length), 0);
-      // If even the ends do not fit, sampling the lines again cannot make them small enough.
-      var ends = snapshot(null, Math.max(1, longest));
-      if (fits(ends)) {
-        // Where the picture alone would fill the action, the lines go without it
-        var png = whole && whole.length <= 14000 ? whole : null;
-        for (;;) {
-          // Each trial keeps half as many points, so a long line takes only a few trials.
-          for (var every = 1; every < longest; every *= 2) {
-            var data = snapshot(png, every);
-            if (fits(data)) return data;
-          }
-          if (!png) return ends;
-          ends.png = png;
-          if (fits(ends)) return ends;
-          ends.png = null;
-          png = null;
-        }
+    // The lines an action can hold, with fewer points along them where it must, beside the
+    // picture. What is measured is what is sent, whole: a line is more than its points, and many
+    // short lines are mostly what is not a point. Where even their ends cannot fit, the picture
+    // goes by itself, and where there is no picture either, nothing does.
+    function fitted(png) {
+      var longest = mine.reduce((n, s) => Math.max(n, s.points.length), 0);
+      var ends = snapshot(png, Math.max(1, longest));
+      if (!fits(ends)) return png ? { png: png, strokes: [] } : null;
+      // Each trial keeps half as many points, so a long line takes only a few trials
+      for (var every = 1; every < longest; every *= 2) {
+        var data = snapshot(png, every);
+        if (fits(data)) return data;
       }
-      // More lines than fit even as their ends: the picture goes by itself, where it does
-      var alone = { png: whole, strokes: [] };
-      return whole && fits(alone) ? alone : null;
+      return ends;
     }
     sendBtn.addEventListener("click", () => {
       if (!mine.length) return;
       sent = true;
       redraw();
-      var data = fitted();
-      // Sent as it is, it would be refused, and again each time: so the person is told what
-      // would let it go, and sending is theirs again once the drawing is another
-      if (!data) return Tour.say("you", "That is too many lines to send at once. Undo some, or clear the board, and send it again.");
-      Tour.say("you", "drew something, and sent it");
-      Tour.act("snapshot", data).catch(() => { sent = false; redraw(); Tour.say("you", "That did not go through. Send it again."); });
+      picture().then((png) => {
+        var data = fitted(png);
+        // Sent as it is, it would be refused, and again each time: so the person is told what
+        // would let it go, and sending is theirs again once the drawing is another
+        if (!data) return Tour.say("you", "That is too many lines to send at once. Undo some, or clear the board, and send it again.");
+        Tour.say("you", "drew something, and sent it");
+        return Tour.act("snapshot", data);
+      }).catch(() => { sent = false; redraw(); Tour.say("you", "That did not go through. Send it again."); });
     });
 
     function lines(value) {

@@ -91,7 +91,7 @@ it tour show whiteboard
 
 **Then say:** "Draw something. Anything: a box, a face, an arrow. I'll look at it properly, and then draw on the same board."
 
-The `snapshot` action carries `png`, a picture of the drawing, and `strokes`, the same drawing as lines. The message that arrives leaves the picture out and cuts long data short, so have the picture written to a file, in the folder you are in:
+The `snapshot` action carries `strokes`, the drawing as lines, and beside them `png`, a picture of the drawing as a file, which its data names as `{"file": 1}`. The message that arrives says the file is there and cuts long data short, so have the picture written to a file, in the folder you are in:
 
 ```sh
 it action <the action's id> --save drawing.png
@@ -99,7 +99,7 @@ it action <the action's id> --save drawing.png
 
 If it says that `drawing.png` is there already, that file is the person's: save under another name, and use that name from here on.
 
-**Look at the picture.** Read that file with whatever you read images with, and delete it when you have: the one you saved is yours, and the person did not ask for a file in their folder. Do not decode the picture yourself and do not save it anywhere else, such as `/tmp`: your harness may stop to ask the person about either, and they are looking at the whiteboard, not at you. Where `png` is `null` the drawing was too large to send as a picture, and the strokes are all there is (`it action <the action's id>` prints them): each is `{ points: [[x, y], …], width, erase, color }`, with `x` and `y` from 0 to 1 and the origin at the top left. Where `strokes` is empty the drawing had more lines than an action holds, and the picture is all there is.
+**Look at the picture.** Read that file with whatever you read images with, and delete it when you have: the one you saved is yours, and the person did not ask for a file in their folder. Do not decode the picture yourself and do not save it anywhere else, such as `/tmp`: your harness may stop to ask the person about either, and they are looking at the whiteboard, not at you. Where `png` is `null` the person's browser could not make a picture, and the strokes are all there is (`it action <the action's id>` prints them): each is `{ points: [[x, y], …], width, erase, color }`, with `x` and `y` from 0 to 1 and the origin at the top left. Where `strokes` is empty the drawing had more lines than an action holds, and the picture is all there is.
 
 Then draw back, in the same form, adding to their drawing and not starting your own in a corner, and say on the board what you saw. Your lines are drawn in green. `agent_strokes` is the whole of what you have drawn, so give all of it each time:
 

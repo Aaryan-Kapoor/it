@@ -307,6 +307,7 @@ const asClick = (c: Offered): Click => ({
   ...(c.stateRevision === undefined ? {} : { stateRevision: c.stateRevision }),
   ...(c.nowVersion === undefined ? {} : { nowVersion: c.nowVersion }),
   ...(c.nowStateRevision === undefined ? {} : { nowStateRevision: c.nowStateRevision }),
+  ...(c.files?.length ? { files: c.files } : {}),
 })
 const asDelivered = (c: Offered): Delivered => ({ ...asClick(c), text: describeClick(asClick(c)), brief: briefClick(asClick(c)) })
 

@@ -196,6 +196,12 @@ async function backend(
   const joined: Record<string, unknown>[] = []
   const uploads: { path: string; bytes: number }[] = []
   const upload: { answer: () => number | Promise<number> } = { answer: () => 200 }
+  /** What the door answers a machine that reads a file an action carried: by the path and the grant it is asked with. */
+  /** `cutAfter`: how many bytes of the body are sent before the connection is dropped, as a phone's or a laptop's drops. */
+  const download: { asked: { path: string; grant: string }[]; answer: (path: string, grant: string) => [status: number, body: Buffer, cutAfter?: number] } = {
+    asked: [],
+    answer: () => [404, Buffer.alloc(0)],
+  }
   const live: string[] = []
   const token = { asked: 0, answer: (): [status: number, body: unknown] => [200, { token: 'a-token', expires_in: 300 }] }
   const server = http.createServer((req, res) => {
@@ -215,6 +221,15 @@ async function backend(
         if (req.method === 'PUT') {
           uploads.push({ path: req.url ?? '', bytes: Buffer.concat(chunks).length })
           return json({}, await upload.answer())
+        }
+        if (req.method === 'GET' && req.url?.startsWith('/download/')) {
+          const grant = (req.headers.authorization ?? '').replace(/^Bearer /, '')
+          download.asked.push({ path: req.url, grant })
+          const [status, body, cutAfter] = download.answer(req.url, grant)
+          res.writeHead(status, { 'content-type': 'application/octet-stream', 'content-length': body.length })
+          if (cutAfter === undefined) return res.end(body)
+          res.write(body.subarray(0, cutAfter))
+          return setTimeout(() => req.socket.destroy(), 50)
         }
         if (req.method === 'POST' && req.url === '/bridge/enroll') {
           const sent = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
@@ -247,6 +262,7 @@ async function backend(
     joined,
     uploads,
     upload,
+    download,
     live,
     token,
     env: { IT_URL: url, IT_SITE_URL: url },
@@ -2491,6 +2507,117 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
       const none = await run(m, ['action', 'k57', '--save', path.join(m.home, 'nothing.png')], b.env)
       expect([none.code, existsSync(path.join(m.home, 'nothing.png'))]).toEqual([2, false])
       expect(none.err).toContain('This action carried no picture or other file to save.')
+    } finally {
+      await b.close()
+    }
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('files an action carried beside its data', () => {
+  const PHOTO = Buffer.from(Array.from({ length: 70_000 }, (_, i) => (i * 13) % 256))
+  const SHEET = Buffer.from('item,amount\nsoup,4.50\n')
+  const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
+  const listed = {
+    id: 'k58',
+    artifact: 'bills',
+    title: 'Bills',
+    name: 'receipt',
+    payload: JSON.stringify({ photo: { file: 1 }, sheet: { file: 2 }, table: 4 }),
+    at: 1,
+    attended: true,
+    delivery: 'handed_off',
+    route: 'addon',
+    outcome: null,
+    files: [
+      { name: 'IMG_2041.jpg', type: 'image/jpeg', bytes: PHOTO.length },
+      { name: 'totals.csv', type: 'text/csv', bytes: SHEET.length },
+    ],
+  }
+  const kept = [PHOTO, SHEET]
+  const meta = [listed.files[0]!, listed.files[1]!]
+
+  test('are listed with the action by number, and `--save` writes the one asked for, read through the door this machine was told of and checked against what It took', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'delivery:get') return listed
+      if (asked.path !== 'files:read') return null
+      const n = (asked.args.number as number | undefined) ?? 1
+      if (!kept[n - 1]) return new Refusal({ code: 'not_found', message: 'That action carried 2 files: give a number from 1 to 2.' })
+      // The backend names its own door, on its own machine: a machine that joined reaches the door at the address it joined by
+      return { url: `http://127.0.0.1:9/download/${n}`, grant: `read-${n}`, number: n, ...meta[n - 1], sha256: sha(kept[n - 1]!) }
+    })
+    b.download.answer = (path, grant) => {
+      const n = Number(path.split('/').pop())
+      return grant === `read-${n}` && kept[n - 1] ? [200, kept[n - 1]!] : [401, Buffer.alloc(0)]
+    }
+    try {
+      const shown = printed(await run(m, ['action', 'k58'], b.env))
+      expect(shown).toMatchObject({
+        data: { photo: { file: 1 }, sheet: { file: 2 }, table: 4 },
+        files: [
+          { number: 1, name: 'IMG_2041.jpg', type: 'image/jpeg', bytes: PHOTO.length },
+          { number: 2, name: 'totals.csv', type: 'text/csv', bytes: SHEET.length },
+        ],
+        saveWith: 'it action k58 --save <file> --number <n>',
+      })
+      expect(shown.text).toContain('It carries 2 files beside that: 1. "IMG_2041.jpg" (image/jpeg, 68 KB); 2. "totals.csv" (text/csv, 22 bytes).')
+      const photo = path.join(m.home, 'receipt.jpg')
+      const saved = await run(m, ['action', 'k58', '--save', photo], b.env)
+      expect(saved.code).toBe(0)
+      expect(printed(saved).saved).toEqual({ file: photo, number: 1, name: 'IMG_2041.jpg', type: 'image/jpeg', bytes: PHOTO.length })
+      expect(sha(readFileSync(photo))).toBe(sha(PHOTO))
+      // What a page sent may be private: the file is for this user alone
+      expect(statSync(photo).mode & 0o777).toBe(0o600)
+      const sheet = path.join(m.home, 'totals.csv')
+      expect((await run(m, ['action', 'k58', '--save', sheet, '--number', '2'], b.env)).code).toBe(0)
+      expect(readFileSync(sheet, 'utf8')).toBe(SHEET.toString())
+      expect(b.download.asked.map((x) => x.path)).toEqual(['/download/1', '/download/2'])
+      // A number it did not carry, one that is no number, and a number with nothing to write it to
+      const third = await run(m, ['action', 'k58', '--save', path.join(m.home, 'third'), '--number', '3'], b.env)
+      expect([third.code, error(third).code, existsSync(path.join(m.home, 'third'))]).toEqual([1, 'not_found', false])
+      expect(error(await run(m, ['action', 'k58', '--save', path.join(m.home, 'x'), '--number', 'two'], b.env)).code).toBe('invalid')
+      expect(error(await run(m, ['action', 'k58', '--number', '2'], b.env)).message).toBe('--number says which file --save writes.')
+      // A file of that name that is there already is the person's
+      const over = await run(m, ['action', 'k58', '--save', photo], b.env)
+      expect([over.code, error(over).message]).toEqual([2, `${photo} is there already, and It does not write over a file.`])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('are not written where what arrives is not what It took, and say so once asking again has not mended it', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'delivery:get'
+        ? listed
+        : asked.path === 'files:read'
+          ? { url: `${'http://127.0.0.1:9'}/download/1`, grant: 'read-1', number: 1, ...meta[0], sha256: sha(PHOTO) }
+          : null,
+    )
+    try {
+      const photo = path.join(m.home, 'receipt.jpg')
+      // The connection drops part of the way through the file, once: it is asked for again, and written whole
+      let cut = 1
+      b.download.answer = () => (cut-- > 0 ? [200, PHOTO, 20_000] : [200, PHOTO])
+      const resumed = await run(m, ['action', 'k58', '--save', photo], b.env)
+      expect([resumed.code, b.download.asked.length, sha(readFileSync(photo))]).toEqual([0, 2, sha(PHOTO)])
+      rmSync(photo)
+      b.download.asked.length = 0
+      // Bytes of the right length that are not the file, as from a disk that went wrong
+      b.download.answer = () => [200, Buffer.alloc(PHOTO.length, 1)]
+      const damaged = await run(m, ['action', 'k58', '--save', photo], b.env)
+      expect([damaged.code, error(damaged).code, existsSync(photo)]).toEqual([1, 'unavailable', false])
+      expect(error(damaged).message).toBe('That file could not be read, because it did not arrive whole.')
+      expect(b.download.asked).toHaveLength(3)
+      // Gone with its action or its page: said at once, and nothing is asked again
+      b.download.asked.length = 0
+      b.download.answer = () => [404, Buffer.alloc(0)]
+      const gone = await run(m, ['action', 'k58', '--save', photo], b.env)
+      expect([error(gone).code, error(gone).message, b.download.asked.length]).toEqual([
+        'not_found',
+        'That file is not kept any more: it went with its action, or with its page.',
+        1,
+      ])
     } finally {
       await b.close()
     }

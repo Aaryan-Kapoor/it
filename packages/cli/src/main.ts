@@ -28,6 +28,7 @@ import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
 import { local } from './connector'
 import { deletePage, deletionStatus } from './delete'
+import { saveAttached } from './files'
 import * as flow from './flow'
 import { hook } from './hooks'
 import { checkInstallationFolder, checkInstallationRecord, legacyInstallation, markedInstallation, markInstallation } from './installation'
@@ -336,7 +337,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   displays: [0, 'displays'],
   wait: [0, 'wait [--id <id>] [--follow] [--timeout <seconds>]'],
   actions: [0, 'actions [--id <id>]'],
-  action: [1, 'action <action-id> [--save <file>]'],
+  action: [1, 'action <action-id> [--save <file> [--number <n>]]'],
   ack: [1, 'ack <action-id> [--failed]'],
 }
 /**
@@ -2418,9 +2419,10 @@ Displays
 What the person did
   it wait [--id <id>] [--follow] [--timeout <seconds>]
   it actions [--id <id>]
-  it action <action-id> [--save <file>]
+  it action <action-id> [--save <file> [--number <n>]]
                                  Print one action in full, by the id in its message. --save
-                                 writes a picture it carried to a file, to open as a picture.
+                                 writes a file it carried (a photo, a drawing, a document) to a
+                                 file you can open; --number says which, where it carried more.
   it ack <action-id> [--failed]
 
 This machine
@@ -3014,12 +3016,22 @@ async function main(argv: string[]): Promise<void> {
         ...(c.nowVersion === undefined ? {} : { nowVersion: c.nowVersion }),
         ...(c.stateRevision === undefined ? {} : { stateRevision: c.stateRevision }),
         ...(c.nowStateRevision === undefined ? {} : { nowStateRevision: c.nowStateRevision }),
+        ...(c.files?.length ? { files: c.files } : {}),
       }
       const all = { ...printed(c), delivery: c.delivery, route: c.route, outcome: c.outcome, text: describeClick(click, Number.MAX_SAFE_INTEGER) }
-      // A picture the action carried, written out as the file it is: an agent opens a file with
-      // what it reads pictures with, and need not write a program to decode one from text
+      // A file the action carried, written out as the file it is: an agent opens a file with what
+      // it reads pictures, documents and the rest with, and need not write a program to fetch or
+      // decode one
       const to = text(a, 'save')
+      const asked = text(a, 'number')
+      if (asked !== undefined && to === undefined)
+        throw new Problem('--number says which file --save writes.', 'invalid', `Usage: it action ${id} --save <file> --number <n>`)
+      const number = asked === undefined ? 1 : /^[1-9][0-9]?$/.test(asked) ? Number(asked) : 0
+      if (!number) throw new Problem('--number is the number of one of the files the action carried, from 1.', 'invalid')
       if (to === undefined) return out(all)
+      if (c.files?.length) return out({ ...all, saved: await saveAttached(id, number, to) })
+      // An action from a page that wrote a picture into what it carried, as text
+      if (number !== 1) throw new Problem('That action carried no files but a picture written into what it carried, which is number 1.', 'invalid')
       const file = firstFile(click.payload)
       if (!file) throw new Problem('This action carried no picture or other file to save.', 'invalid', 'Run it without --save to read what it carried.')
       const bytes = Buffer.from(file.base64, 'base64')

@@ -16,6 +16,8 @@ export interface Offered {
   stateRevision?: number
   nowVersion?: number
   nowStateRevision?: number
+  /** The files it carried beside its data. */
+  files?: { name: string; type: string; bytes: number }[]
 }
 export type Given = { who: string; at: number }
 export type WaitCopy = { click: Offered; key: string; given?: Given }

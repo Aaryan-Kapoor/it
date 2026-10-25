@@ -6,10 +6,20 @@
 // Each click is kept under a key of its own, named for the person and the page it belongs to.
 // So two tabs never overwrite each other's, two pages never overwrite each other's, and one
 // person's clicks are never sent, or thrown away, as someone else.
-import { type ActionEnvelope, LIMITS, MESSAGE } from '@it/protocol'
+//
+// What a click carries beside its data, the files a page sent with it, is kept apart from the
+// click, in the browser's IndexedDB (kept.ts), since a few photos would fill what `localStorage`
+// holds. Before such a click is sent, its files are taken by It and uploaded, and found there
+// whole: only then is the click itself sent, naming them. Each of those steps may be done
+// again, after a dropped connection, a closed tab or from another tab, and carries on from
+// where it stopped, so the click is still sent once.
+import { type ActionEnvelope, fileName, fileType, LIMITS, MESSAGE } from '@it/protocol'
 import type { ConvexReactClient } from 'convex/react'
+import { ConvexError } from 'convex/values'
+import { kept as kept_ } from './kept'
 import { api, displayKey, type Id, letGoOf, note, refusal, timesLetGo, whenLetGo } from './lib'
 import { discardPending, hasPending, holdPending, watchPending } from './pending'
+import { sha256Of } from './sha256'
 
 const PREFIX = 'it.outbox.'
 /** How many clicks may be kept unsent in this browser for one person, and how many of those for one page. */
@@ -23,8 +33,19 @@ const FRESH_MS = 10_000
 /** How long a tab's hold on a click it is sending lasts without being renewed, and how often it is renewed. */
 const HOLD_MS = 15_000
 const HOLD_EVERY_MS = 5_000
+/** How many bytes of files may be kept unsent in this browser for one person. */
+const MAX_FILE_BYTES = 100 * 1024 * 1024
+/** How long the bytes of a click may be kept with no click of their own, while that click is being saved. */
+const BYTES_ALONE_MS = 60_000
 /** What the site sends for a page: the page's envelope with its data as JSON text. */
 export type Sent = Omit<ActionEnvelope, 'payload'> & { payload: string }
+/** What a file a click carries is, as it is kept with the click and as It takes it: its bytes are kept apart. */
+interface Carried {
+  name: string
+  type: string
+  size: number
+  sha256: string
+}
 type Operation = { kind: 'message'; text: string } | { kind: 'answer'; id: string; action: string; display: string }
 interface Entry {
   operation?: Operation
@@ -36,6 +57,8 @@ interface Entry {
   user: string
   artifactId: string
   envelope: Sent
+  /** The files it carries beside its data, whose bytes are kept apart under its name. */
+  files?: Carried[]
   at: number
   /** Its page has finished with it and left it here to be sent when it can be. */
   left?: boolean
@@ -83,8 +106,49 @@ const put = (key: string, value: string): void => {
   changed()
 }
 const drop = (key: string): void => {
-  localStorage.removeItem(key)
+  forget(key)
   changed()
+}
+/** Lets go of a click and of its files with it, at once: no file stays behind a click that has gone, however lately it was kept. */
+function forget(key: string): void {
+  localStorage.removeItem(key)
+  letGoOfBytes(key)
+}
+
+// The files of the clicks this tab is sending at this moment, as the page gave them. Those of a
+// click that was kept are in IndexedDB as well, and read from there by whichever tab sends it later.
+const inHand = new Map<string, Blob[]>()
+/** Lets go of the files kept for a click, which has gone from here. */
+function letGoOfBytes(key: string): void {
+  inHand.delete(key)
+  void kept_()
+    .remove(key)
+    .catch(() => {})
+}
+/**
+ * Lets go of the files kept for clicks that are not kept any more: their click was answered,
+ * dropped, or let go of with the rest of what a person had here, in this tab or in another. The
+ * files of a click are kept a moment before the click is, so files that have been alone for only
+ * that moment are left. With `whose`, every file of that person's goes at once, and with `all`
+ * every file there is.
+ */
+export async function tidyBytes(whose?: { person: string } | 'all'): Promise<void> {
+  let listed: { key: string; at: number }[]
+  try {
+    listed = await kept_().list()
+  } catch {
+    return
+  }
+  for (const { key, at } of listed) {
+    const gone =
+      whose === 'all' ||
+      (whose !== undefined && key.startsWith(`${PREFIX}${whose.person}.`)) ||
+      (localStorage.getItem(key) === null && !inHand.has(key) && Date.now() - at > BYTES_ALONE_MS)
+    if (gone)
+      await kept_()
+        .remove(key)
+        .catch(() => {})
+  }
 }
 function entries(user: string): [string, Entry][] {
   const out: [string, Entry][] = []
@@ -95,7 +159,7 @@ function entries(user: string): [string, Entry][] {
       out.push([key, JSON.parse(localStorage.getItem(key) ?? '') as Entry])
     } catch {
       note('a saved click could not be read, and was dropped')
-      localStorage.removeItem(key)
+      forget(key)
     }
   }
   return out.sort((a, b) => a[1].at - b[1].at)
@@ -117,14 +181,21 @@ export function dropOld(): void {
     } catch {}
     old.push(key)
   }
-  for (const key of old) localStorage.removeItem(key)
+  for (const key of old) forget(key)
   if (old.length) {
     changed()
     note('saved clicks were too old to send, and were dropped', old.length)
   }
+  void tidyBytes()
 }
 
-async function send(convex: ConvexReactClient, e: Entry, key: string) {
+/**
+ * Sends one kept click. `waiting` says whether to wait out trouble on the way to It, such as no
+ * connection, for as long as it says so: a click is waited for in that way while its page is
+ * there to be told, as the connection itself waits to send a click until it is back. Otherwise
+ * trouble is answered at once, and what was kept is sent again later.
+ */
+async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: () => boolean = () => false) {
   if (e.format === 2 && e.session !== session) throw new Error('This browser’s pairing has ended.')
   const began = thisPairing()
   const mine = () => stillPairedFor(e.user, began)
@@ -160,6 +231,18 @@ async function send(convex: ConvexReactClient, e: Entry, key: string) {
   }
   if (!mine()) throw new Error('This browser’s pairing has ended.')
   const replay = { ...expected, ...(e.replayUntil === undefined ? {} : { replayUntil: e.replayUntil }) }
+  // Its files first, all of them, under the click's own id: the click is sent only once It has them
+  if (e.files?.length) {
+    const attachment = await attach(convex, e, key, replay, mine, waiting)
+    if (!mine()) throw new Error('This browser’s pairing has ended.')
+    return convex.mutation(api.actions.submit, {
+      artifactId: e.artifactId as Id<'artifacts'>,
+      displayKey: displayKey(),
+      envelope: e.envelope,
+      attachment,
+      ...replay,
+    })
+  }
   return e.operation?.kind === 'message'
     ? convex.mutation(api.actions.message, {
         artifactId: e.artifactId as Id<'artifacts'>,
@@ -169,6 +252,95 @@ async function send(convex: ConvexReactClient, e: Entry, key: string) {
         ...replay,
       })
     : convex.mutation(api.actions.submit, { artifactId: e.artifactId as Id<'artifacts'>, displayKey: displayKey(), envelope: e.envelope, ...replay })
+}
+
+/**
+ * Has It take the files of a click, and answers by what It keeps them under once every one of
+ * them has arrived whole. It asks, uploads what It says it does not have yet, and asks again,
+ * which finds them there: a file that arrived before a connection dropped is not sent again.
+ * An upload that is cut off is sent again from its start. Trouble on the way (no connection, It
+ * not answering) is waited out while `waiting` says so, a little longer each time.
+ */
+async function attach(
+  convex: ConvexReactClient,
+  e: Entry,
+  key: string,
+  replay: { expectedSession?: string; replayUntil?: number },
+  mine: () => boolean,
+  waiting: () => boolean,
+): Promise<Id<'attachments'>> {
+  const files = e.files ?? []
+  // How many rounds of uploading have been gone through to their end. One is all it usually
+  // takes, as the asking after it finds every file, and a second with a fresh grant where the
+  // first ran out on a slow line. A round more, as where the door keeps refusing the grant, is
+  // trouble, waited out as any is, and given up on in the same way. It is counted once a round
+  // is over, so that every round still uploads: an upload cut off by a dropped connection is no
+  // round, and does not use up what a round more is waited for
+  let rounds = 0
+  for (let tries = 0; ; tries++) {
+    try {
+      const taken = await convex.action(api.files.prepare, {
+        artifactId: e.artifactId as Id<'artifacts'>,
+        clientActionId: e.envelope.clientActionId,
+        files,
+        ...replay,
+      })
+      if (taken.stored) return taken.id
+      if (!mine()) throw new Error('This browser’s pairing has ended.')
+      const bytes = inHand.get(key) ?? (await kept_().get(key))
+      if (!bytes || bytes.length !== files.length)
+        throw new ConvexError({ code: 'invalid', message: 'The files of this action are not kept in this browser any more, so it cannot be sent.' })
+      // Only those It does not have whole yet
+      for (const n of taken.missing ?? files.map((_, i) => i + 1)) {
+        if (!mine()) throw new Error('This browser’s pairing has ended.')
+        if (!bytes[n - 1] || !files[n - 1]) continue
+        if ((await upload(n, bytes[n - 1]!, files[n - 1]!, taken.grant!)) === 'again') break
+      }
+      if (++rounds > 2) throw new ConvexError({ code: 'unavailable', message: 'The files were not all taken.' })
+    } catch (err) {
+      // A refusal that says something of the click, or the pairing's end, is the click's answer
+      if (!mine() || settled(err) || notNow(err)) throw err
+      if (!waiting() || tries >= 1000)
+        throw new ConvexError({ code: 'unavailable', message: 'The files could not be sent just now. They are kept, and sent again in a moment.' })
+      await sleep(Math.min(1000 * 2 ** Math.min(tries, 5), 30_000))
+    }
+  }
+}
+
+/** Sends one file to the door, under the grant It gave for exactly its bytes. 'again' where the grant has run out and another is to be asked for. */
+async function upload(n: number, file: Blob, what: Carried, grant: string): Promise<'done' | 'again'> {
+  let answered: Response
+  try {
+    answered = await fetch(`/upload/${n}`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${grant}`, 'x-it-sha256': what.sha256 },
+      body: file,
+      cache: 'no-store',
+      credentials: 'omit',
+    })
+  } catch {
+    throw new ConvexError({ code: 'unavailable', message: 'The file could not be sent. Check the connection: it is kept, and sent again when it can be.' })
+  }
+  if (answered.ok) return 'done'
+  if (answered.status === 401) return 'again'
+  if (answered.status === 429) throw new ConvexError({ code: 'rate_limited', message: 'Too many requests. Try again shortly.', retryAfterMs: 2000 })
+  if (answered.status >= 500 || answered.status === 408) throw new ConvexError({ code: 'unavailable', message: 'The file could not be sent just now.' })
+  // Not what It took, or nowhere to put it any more: its page was deleted, say
+  throw new ConvexError({ code: 'invalid', message: 'This file could not be sent as it was taken.' })
+}
+
+/** What each file a page gave is, as It is to take it: a name, a kind, a size and a checksum. */
+async function carried(files: Blob[]): Promise<Carried[]> {
+  const out: Carried[] = []
+  for (const file of files) out.push({ name: nameOf(file), type: fileType(file.type), size: file.size, sha256: await sha256Of(file) })
+  return out
+}
+/** The name a page gave a file, or one made from its kind where it gave none, as a picture drawn on a canvas has none. */
+function nameOf(file: Blob): string {
+  const given = typeof (file as File).name === 'string' ? (file as File).name : ''
+  if (given) return fileName(given)
+  const ending = /^image\/(png|jpeg|webp|gif)$/.exec(file.type)?.[1]
+  return ending ? `picture.${ending === 'jpeg' ? 'jpg' : ending}` : file.type === 'application/pdf' ? 'file.pdf' : 'file'
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -219,7 +391,7 @@ export function outboxBelongsTo(user: string | null, under: string | null = null
       if (!key.startsWith(PREFIX)) continue
       try {
         const entry = JSON.parse(localStorage.getItem(key) ?? '') as Entry
-        if (entry.format !== 2 || entry.session !== null) localStorage.removeItem(key)
+        if (entry.format !== 2 || entry.session !== null) forget(key)
       } catch {}
     }
     memoryGrants.clear()
@@ -231,14 +403,16 @@ export function outboxBelongsTo(user: string | null, under: string | null = null
     if (pairedFor !== null) {
       discardPending(pairedFor)
       for (const [key, entry] of entries(pairedFor)) {
-        if (entry.format !== 2 || entry.session !== null) localStorage.removeItem(key)
+        if (entry.format !== 2 || entry.session !== null) forget(key)
       }
     }
   }
   session = under
   if (user !== null) {
-    for (const [key, entry] of entries(user)) if (entry.format === 2 && entry.session !== under) localStorage.removeItem(key)
+    for (const [key, entry] of entries(user)) if (entry.format === 2 && entry.session !== under) forget(key)
   }
+  // And files whose click went some other way, such as with another tab's pairing, once they have been alone a while
+  void tidyBytes()
   if (!replaced) return
   pairedFor = user
   // Whatever was going to be tried again later was for whoever was here before
@@ -290,8 +464,9 @@ export function dismissMessage(user: string, artifactId: string, id: string): vo
 }
 export function abandonOutbox(user: string): void {
   if (pairedFor === user) outboxBelongsTo(null)
-  for (const [key] of entries(user)) localStorage.removeItem(key)
+  for (const [key] of entries(user)) forget(key)
   discardPending(user)
+  void tidyBytes({ person: user })
   changed()
 }
 export function message(convex: ConvexReactClient, user: string, artifactId: string, clientActionId: string, text: string) {
@@ -334,6 +509,8 @@ async function sendOperation(convex: ConvexReactClient, user: string, artifactId
 // theirs is tried again later, and no click of theirs is counted as on its way. Whatever shows
 // what became of a click is told, since none of those is kept any more.
 whenLetGo((person, whole) => {
+  // The files of what was let go of go with it, at once, whatever tab began it
+  void tidyBytes(whole ? 'all' : person !== null ? { person } : undefined)
   for (const [user, r] of retry) {
     if (!whole && user !== person) continue
     clearTimeout(r.timer)
@@ -365,12 +542,19 @@ export async function submit(
   /**
    * Whether the person was at the page, when that cannot be said at once. The click is saved
    * first, as one the page sent by itself, and this is waited for only then: nothing that takes
-   * time stands between a click and its being kept.
+   * time stands between a click and its being kept, but for what its files take to be read.
    */
   judge?: () => Promise<boolean>,
+  /** The files the page sent with it, in the order its data numbers them. */
+  files: Blob[] = [],
 ): Promise<{ actionId: string }> {
   if (new TextEncoder().encode(envelope.payload).length > LIMITS.actionPayloadBytes)
     throw new Error(`An action carries at most ${LIMITS.actionPayloadBytes / 1024} KB.`)
+  // The same rules the site's frame keeps, kept here too: this is what decides what is stored
+  if (files.length > LIMITS.actionFiles) throw new Error(`An action carries at most ${LIMITS.actionFiles} files.`)
+  if (files.some((f) => f.size > LIMITS.actionFileBytes)) throw new Error(`A file sent with an action is at most ${LIMITS.actionFileBytes / 1024 / 1024} MB.`)
+  if (files.reduce((n, f) => n + f.size, 0) > LIMITS.actionFilesBytes)
+    throw new Error(`The files sent with one action come to at most ${LIMITS.actionFilesBytes / 1024 / 1024} MB.`)
   // The same rules the backend applies, applied before anything is stored here
   if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(envelope.clientActionId) || !/^[A-Za-z0-9_.:-]{1,64}$/.test(envelope.name))
     throw new Error('That is not an action this page can send.')
@@ -382,7 +566,7 @@ export async function submit(
   const release = holdPending(user)
   const work = () => {
     if (!stillPairedFor(user, pairing)) throw new Error('This browser’s pairing has ended.')
-    return sendNow(convex, user, artifactId, envelope, key, stillThere, judge)
+    return sendNow(convex, user, artifactId, envelope, key, stillThere, judge, undefined, files)
   }
   // Waiting for another tab's lock remains pending work under the original pairing.
   try {
@@ -401,9 +585,14 @@ async function sendNow(
   stillThere: () => boolean,
   judge?: () => Promise<boolean>,
   operation?: Operation,
+  files: Blob[] = [],
 ): Promise<{ actionId: string | null }> {
   const pairing = thisPairing()
   const mine = () => stillPairedFor(user, pairing)
+  if (!mine()) throw new Error('This browser’s pairing has ended.')
+  // What its files are, which It takes them by, is read from them before anything is kept. Their
+  // bytes are kept apart from the click and before it: a click kept here always has its files
+  const what = files.length > 0 && !entries(user).some(([saved]) => saved === key) ? await carried(files) : undefined
   if (!mine()) throw new Error('This browser’s pairing has ended.')
   // What is kept here for the person may be let go of while the click is on its way, and from
   // then on nothing of it is kept again: not by the hold, not for later, whatever becomes of the click
@@ -412,7 +601,7 @@ async function sendNow(
   if (sending.has(key)) throw new Error('This request is already waiting for confirmation.')
   const prior = entries(user).find(([saved]) => saved === key)?.[1]
   // Reusing an identity also reuses its payload and deadline, including legacy entries.
-  const entry: Entry = prior ?? { user, artifactId, envelope, operation, format: 2, session, at: Date.now() }
+  const entry: Entry = prior ?? { user, artifactId, envelope, operation, format: 2, session, at: Date.now(), ...(what ? { files: what } : {}) }
   entry.held = Date.now() + HOLD_MS
   // Too many already unsent means something is wrong, and one more would only push an older one
   // out. One page may hold only part of what the browser keeps, so it cannot crowd out the rest.
@@ -422,7 +611,33 @@ async function sendNow(
   let kept = false
   // Noted as being sent before it is kept, so that whatever is told of the change finds it so
   sending.add(key)
+  if (what) inHand.set(key, files)
+  // The bytes first, where this browser will keep them. Where it will not, the click is not kept
+  // either, and is sent from this tab while it is open, as a click is that cannot be kept. Files
+  // take room of their own: past so many bytes of the person's unsent, counted with what every
+  // other tab keeps in the same step as these are kept, the person is told now
+  let bytesKept = !what
+  let room: 'kept' | 'full' = 'kept'
+  if (what)
+    try {
+      room = await kept_().put(key, files, { under: `${PREFIX}${user}.`, most: MAX_FILE_BYTES })
+      bytesKept = room === 'kept'
+    } catch {}
+  if (room === 'full') {
+    sending.delete(key)
+    inHand.delete(key)
+    throw new Error('Too many files are still waiting to be sent from this browser. Check the connection, and send this again once they have gone.')
+  }
+  // Keeping the bytes takes a moment, in which the pairing may have ended or what is kept here
+  // been let go of, and what was kept for the person cleared away with this click not yet among
+  // it. Then nothing of it is kept now: its bytes go again, and no record of it is written back
+  if (what && (!mine() || letGo())) {
+    sending.delete(key)
+    letGoOfBytes(key)
+    throw new Error('This browser’s pairing has ended.')
+  }
   try {
+    if (!bytesKept) throw new Error('its files could not be kept')
     put(key, JSON.stringify(entry))
     kept = true
   } catch {
@@ -432,6 +647,7 @@ async function sendNow(
     // answered the page's bar says that it is not saved here and the tab must stay open.
     if (!convex.connectionState().isWebSocketConnected) {
       sending.delete(key)
+      letGoOfBytes(key)
       throw new Error('This could not be saved or sent. Check the connection and try again.')
     }
     unkept.set(unkeptKey(user, artifactId), [...(unkept.get(unkeptKey(user, artifactId)) ?? []), entry.at])
@@ -465,7 +681,8 @@ async function sendNow(
         throw new Error('This browser’s pairing has ended.')
       }
       try {
-        const result = await send(convex, entry, key)
+        // Waited for while the page that sent it is there to be told, and it is still this person's
+        const result = await send(convex, entry, key, () => stillThere() && mine() && !letGo())
         memoryGrants.delete(key)
         return result
       } catch (err) {
@@ -492,6 +709,10 @@ async function sendNow(
     // Kept for later only while what is kept here is still kept: let go of meanwhile, the click went with the rest
     const stays = kept && keep && !letGo() && (mine() || entry.session === null)
     if (kept && !stays && !letGo() && (mine() || entry.session === null)) localStorage.removeItem(key)
+    // Its files go where it goes: they stay while it is kept here, for whoever sends it later
+    // to read from where they are kept, and go once it has
+    if (localStorage.getItem(key) === null && !stays) letGoOfBytes(key)
+    else inHand.delete(key)
     // Left behind for later: marked, so that the sending of what is left does not wait for a
     // page that has finished with it
     if (stays) {
