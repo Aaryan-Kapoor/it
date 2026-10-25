@@ -486,14 +486,41 @@ export const get = query({
 })
 
 /**
+ * A receipt: what one taking of a click to hand it over is known by. The machine that takes the
+ * click makes it, before it asks, so that the answer to a taking that was lost on its way can be
+ * asked for again under the same one. Every later step of that hand-over names it: keeping the
+ * hold, giving the click back, setting it aside, and saying it was handed over. A step that
+ * names another receipt, or none, does nothing to it.
+ */
+const receiptOf = v.string()
+const RECEIPT = /^[A-Za-z0-9_-]{16,64}$/
+/**
+ * A taking with no receipt is one made by an It from before receipts, on a machine that joined
+ * this It and has not been brought up to date. Such a machine is served as it was for one
+ * release: what it says without a receipt is taken of a click it took without one, and of no
+ * other. A click taken with a receipt is never given back, kept, set aside or said to be handed
+ * over by anything that does not name that receipt, but an `it ack`.
+ */
+const unreceipted = (x: Doc<'actions'>) => x.claim?.receipt === undefined
+/** Whether this machine's taking of a click, known by that receipt, is still the click's last one. */
+const holds = (x: Doc<'actions'>, receipt: string, machine: Doc<'machines'>) => x.claim?.receipt === receipt && x.claim.machineId === machine._id
+/** The receipt one of a list names, where it names one. */
+const receiptFor = (receipts: { id: Id<'actions'>; receipt: string }[] | undefined, id: Id<'actions'>) => receipts?.find((r) => r.id === id)?.receipt
+
+/**
  * Leases clicks for delivery. Returns the ones this caller now holds. A connector that is about
  * to deliver into a conversation says which (`for`): a click that has since been addressed to
  * another conversation or another machine, because its page changed hands, is then left alone.
+ *
+ * The taking is known by the receipt the caller made for it. Asked again with the same receipt,
+ * as after an answer that was lost, a click that taking still holds is held still; one it no
+ * longer holds is not taken afresh under it, since what was done under it is over.
  */
 export const claim = mutation({
-  args: { ids: v.array(v.id('actions')), for: v.optional(session) },
-  handler: async (ctx, { ids, for: expected }) => {
+  args: { ids: v.array(v.id('actions')), for: v.optional(session), receipt: v.optional(receiptOf) },
+  handler: async (ctx, { ids, for: expected, receipt }) => {
     const { user, machine } = await requireMachine(ctx)
+    if (receipt !== undefined && !RECEIPT.test(receipt)) fail('invalid', 'That is not a receipt.')
     const now = Date.now()
     const held = []
     const adopted = new Set<string>()
@@ -508,6 +535,11 @@ export const claim = mutation({
         const to = await destination(ctx, x.artifactId)
         if ((to.machineId !== undefined && to.machineId !== machine._id) || to.harness !== expected.harness || to.sessionId !== expected.id) continue
       }
+      if (receipt !== undefined && holds(x, receipt, machine)) {
+        // The same taking asked for again: held still where its hold has not run out, and otherwise over
+        if (x.delivery === 'leased' && (x.leaseExpiresAt ?? 0) >= now) held.push(id)
+        continue
+      }
       const free = x.delivery === 'pending' || (x.delivery === 'leased' && (x.leaseExpiresAt ?? 0) < now)
       if (!free) continue
       // Stopped with its conversation, and not yet marked so: it is marked now, and not given out
@@ -515,7 +547,12 @@ export const claim = mutation({
         await dropStopped(ctx, x)
         continue
       }
-      await ctx.db.patch(id, { delivery: 'leased', leaseMachineId: machine._id, leaseExpiresAt: now + LEASE_MS })
+      await ctx.db.patch(id, {
+        delivery: 'leased',
+        leaseMachineId: machine._id,
+        leaseExpiresAt: now + LEASE_MS,
+        claim: { ...(receipt === undefined ? {} : { receipt }), session: expected ?? null, machineId: machine._id },
+      })
       held.push(id)
       // A page whose machine is gone, taken for the conversation it belongs to, is this
       // machine's from now on: its conversation is here. Left with the machine that is gone, it
@@ -536,16 +573,24 @@ export const claim = mutation({
   },
 })
 
-/** Keeps hold of clicks this machine has leased and is still waiting to hand over. Returns the ones it still holds. */
+/** The receipts of the clicks a list names, each beside the click's id. */
+const receipts = v.optional(v.array(v.object({ id: v.id('actions'), receipt: receiptOf })))
+
+/**
+ * Keeps hold of clicks this machine has leased and is still waiting to hand over, each by the
+ * receipt of the taking that holds it. Returns the ones it still holds.
+ */
 export const renew = mutation({
-  args: { ids: v.array(v.id('actions')) },
-  handler: async (ctx, { ids }) => {
+  args: { ids: v.array(v.id('actions')), receipts },
+  handler: async (ctx, { ids, receipts: named }) => {
     const { user, machine } = await requireMachine(ctx)
     const now = Date.now()
     const held = []
     for (const id of ids.slice(0, 50)) {
       const x = await ctx.db.get(id)
       if (!x || x.userId !== user._id || x.delivery !== 'leased' || x.leaseMachineId !== machine._id || (x.leaseExpiresAt ?? 0) < now) continue
+      const receipt = receiptFor(named, id)
+      if (receipt === undefined ? !unreceipted(x) : !holds(x, receipt, machine)) continue
       await ctx.db.patch(id, { leaseExpiresAt: now + LEASE_MS })
       held.push(id)
     }
@@ -563,17 +608,20 @@ export const renew = mutation({
  * tell a click it has lost from one that is simply done with.
  */
 export const lost = query({
-  args: { ids: v.array(v.id('actions')) },
-  handler: async (ctx, { ids }) => {
+  args: { ids: v.array(v.id('actions')), receipts },
+  handler: async (ctx, { ids, receipts: named }) => {
     const { user, machine } = await requireMachine(ctx)
     const now = Date.now()
     const theirs = []
     for (const id of ids.slice(0, 50)) {
       const x = await ctx.db.get(id)
       if (!x || x.userId !== user._id) continue
+      // Held by another taking, also one of this machine's own
+      const receipt = receiptFor(named, id)
+      const another = receipt !== undefined && !holds(x, receipt, machine)
       if (
         x.delivery === 'pending' ||
-        (x.delivery === 'leased' && (x.leaseMachineId !== machine._id || (x.leaseExpiresAt ?? 0) < now)) ||
+        (x.delivery === 'leased' && (x.leaseMachineId !== machine._id || (x.leaseExpiresAt ?? 0) < now || another)) ||
         (x.delivery === 'handed_off' && x.route !== 'stopped' && x.handedBy !== undefined && x.handedBy !== machine._id)
       )
         theirs.push(id)
@@ -610,21 +658,45 @@ async function mine(ctx: QueryCtx, id: Doc<'actions'>['_id']) {
  * The click reached the agent. `route` says how: an add-on, the harness's own queue, a waiting CLI.
  * The answer says whether it had already been handed over, with when the click was made and
  * which harness it was for: what a machine needs to count a delivery once, and nothing of the click.
+ *
+ * A hand-over is said by the receipt of the taking that made it, and counts only while that
+ * taking is the click's last: one said late, after the click was given back and taken again,
+ * also on the same machine, says nothing of the taking after it. It counts too where the hold
+ * itself ran out or was given back meanwhile and nothing has taken the click since, as when
+ * the connector that handed it over was started again. And only while the click is still for
+ * the conversation it was taken for. `manual` is an agent or a person saying with `it ack`
+ * that they have it, which needs no receipt.
  */
 export const handedOff = mutation({
-  args: { id: v.id('actions'), route: v.string() },
-  handler: async (ctx, { id, route }) => {
+  args: { id: v.id('actions'), route: v.string(), receipt: v.optional(receiptOf) },
+  handler: async (ctx, { id, route, receipt }) => {
     const { x, machine } = await mine(ctx, id)
     const said = (already: boolean) => ({ already, at: x.createdAt, harness: x.harness ?? null })
-    if (x.delivery === 'handed_off') return said(true)
-    if (x.delivery === 'leased' && x.leaseMachineId !== machine._id && (x.leaseExpiresAt ?? 0) > Date.now())
-      fail('conflict', 'Another machine is delivering this.')
+    const manual = route === 'manual'
+    if (x.delivery === 'handed_off') {
+      // The same hand-over said again, an `it ack`, or a click a stop took: there is nothing more to do
+      if (manual || x.route === 'stopped' || (receipt === undefined ? unreceipted(x) : holds(x, receipt, machine))) return said(true)
+      fail('conflict', 'That receipt is of another hand-over of this click.')
+    }
     // Stopped with its conversation while it was on its way: it counts as stopped, and not as
     // something an agent was given, whatever way it was about to be handed over
     if (await stoppedSince(ctx, x)) {
       await dropStopped(ctx, x)
       return said(true)
     }
+    if (!manual && receipt !== undefined) {
+      if (!holds(x, receipt, machine)) fail('conflict', 'That receipt is of a hand-over that no longer holds this click.')
+      const to = await destination(ctx, x.artifactId)
+      const s = x.claim?.session
+      if (s && ((to.machineId !== undefined && to.machineId !== machine._id) || to.harness !== s.harness || to.sessionId !== s.id))
+        fail('conflict', 'This click belongs to another conversation now.')
+    }
+    // Said with no receipt by an It from before receipts, of a click taken with one: it is not
+    // this hand-over's to say, and that It is to be brought up to date
+    if (!manual && receipt === undefined && !unreceipted(x))
+      fail('conflict', 'This click was taken with a receipt, and this report has none. Update It on this machine.')
+    if (x.delivery === 'leased' && x.leaseMachineId !== machine._id && (x.leaseExpiresAt ?? 0) > Date.now())
+      fail('conflict', 'Another machine is delivering this.')
     await ctx.db.patch(id, {
       delivery: 'handed_off',
       leaseMachineId: undefined,
@@ -650,13 +722,13 @@ export const settle = mutation({
   },
 })
 
-/** Gives a leased click back, when it could not be delivered after all. */
+/** Gives a leased click back, when it could not be delivered after all: only the taking its receipt names, while it holds the click. */
 export const release = mutation({
-  args: { id: v.id('actions') },
-  handler: async (ctx, { id }) => {
+  args: { id: v.id('actions'), receipt: v.optional(receiptOf) },
+  handler: async (ctx, { id, receipt }) => {
     const { x, machine } = await mine(ctx, id)
     // Back in the queue, addressed to whoever owns the page now: it may have changed hands meanwhile
-    if (x.delivery === 'leased' && x.leaseMachineId === machine._id) {
+    if (x.delivery === 'leased' && x.leaseMachineId === machine._id && (receipt === undefined ? unreceipted(x) : holds(x, receipt, machine))) {
       // Stopped with its conversation while this machine had it: it goes back to nobody
       if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
       else await ctx.db.patch(id, await backToWaiting(ctx, x))
@@ -730,13 +802,20 @@ export const giveBackBatch = mutation({
 export const park = mutation({
   args: {
     id: v.id('actions'),
+    /** The receipt of the taking that gave up on it. Another taking since, also on this machine, has not given up on it. */
+    receipt: v.optional(receiptOf),
     /** The conversation the machine was trying to deliver it into. If the click is for another by now, it is left as it is. */
     for: v.optional(session),
     /** The conversation takes nothing at all (its thread is gone): everything else waiting for it is set aside with this click. */
     all: v.optional(v.boolean()),
   },
-  /** True once the click has stopped being this machine's to deliver: set aside, gone elsewhere, or handed over. False when another machine holds it now, and the asking has to be repeated. */
-  handler: async (ctx, { id, for: tried, all }): Promise<boolean> => {
+  /**
+   * True once the click has stopped being this machine's to deliver: set aside, gone elsewhere,
+   * or handed over. False when another machine holds it now, and the asking has to be repeated.
+   * `again` where it was not set aside and waits to be tried afresh: another taking has had it
+   * since the one that gave up on it.
+   */
+  handler: async (ctx, { id, for: tried, all, receipt }): Promise<boolean | 'again'> => {
     const { x, machine } = await mine(ctx, id)
     if (x.delivery === 'handed_off' || x.machineId !== machine._id) return true
     // Addressed to another conversation since this machine tried it (its page changed hands on
@@ -744,7 +823,12 @@ export const park = mutation({
     if (tried && (x.harness !== tried.harness || x.sessionId !== tried.id)) return true
     // Another machine may have taken it meanwhile (this one's lease ran out while its command
     // was still running). What that machine holds is left exactly as it is.
-    if (x.delivery === 'leased' && x.leaseMachineId !== machine._id && (x.leaseExpiresAt ?? 0) > Date.now()) return false
+    const live = x.delivery === 'leased' && (x.leaseExpiresAt ?? 0) > Date.now()
+    if (live && x.leaseMachineId !== machine._id) return false
+    // And so is what another taking on this machine holds, which has not given up on it: an
+    // asking with no receipt waits for that hold to end, and one that names an earlier taking is
+    // over, and the click is tried afresh
+    if (receipt !== undefined ? !holds(x, receipt, machine) : live && !unreceipted(x)) return receipt === undefined ? false : 'again'
     // Stopped with its conversation while this machine was trying: it is marked so, and not
     // set aside or sent on under another address, where the stop would not be found again
     if (await stoppedSince(ctx, x)) {

@@ -80,11 +80,12 @@ http.route({
 http.route({ path: '/health', method: 'GET', handler: httpAction(async () => json(200, { ok: true, it: true })) })
 
 // What the `it` command needs to know before it has a token: which protocol the backend speaks,
-// and the name it signs under, which a machine's proof is made out to. None of it is secret.
+// the name it signs under, which a machine's proof is made out to, and that it takes the
+// receipts a machine hands clicks over by (delivery.ts). None of it is secret.
 http.route({
   path: '/cli/config',
   method: 'GET',
-  handler: httpAction(async () => json(200, { protocol: PROTOCOL_VERSION, issuer: issuer() })),
+  handler: httpAction(async () => json(200, { protocol: PROTOCOL_VERSION, issuer: issuer(), receipts: true })),
 })
 
 // Enrolling another machine: a code that a machine already enrolled, or the owner's browser,

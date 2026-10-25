@@ -2561,6 +2561,110 @@ describe('clicks and their delivery', () => {
     expect((await alice.browser.query(api.artifacts.list, {})).map((x) => x.pending)).toEqual([0, 0, 0])
   })
 
+  describe('receipts, by which each taking of a click is told from every other', () => {
+    const A = 'receipt-of-the-first-taking'
+    const B = 'receipt-of-the-second-taking'
+    const row = (t: T, id: string) => t.run((ctx) => ctx.db.get(id as never) as Promise<Doc<'actions'> | null>)
+
+    test('a late receipt cannot keep, give back, set aside or confirm a newer taking of the same click on the same machine', async () => {
+      const { t, m, click } = await setup()
+      const { actionId: id } = await click('click-0001')
+      expect(await m.as.mutation(api.delivery.claim, { ids: [id], for: SESSION, receipt: A })).toEqual([id])
+      // The hold runs out and the same machine takes the click again, under a new receipt
+      await vi.advanceTimersByTimeAsync(LEASE_MS + 1000)
+      expect(await t.mutation(internal.delivery.reap, {})).toBe(1)
+      expect(await m.as.mutation(api.delivery.claim, { ids: [id], for: SESSION, receipt: B })).toEqual([id])
+      // What the first taking says now, late, does nothing to the second
+      expect(await m.as.mutation(api.delivery.renew, { ids: [id], receipts: [{ id, receipt: A }] })).toEqual([])
+      expect(await m.as.query(api.delivery.lost, { ids: [id], receipts: [{ id, receipt: A }] })).toEqual([id])
+      await m.as.mutation(api.delivery.release, { id, receipt: A })
+      expect(await m.as.mutation(api.delivery.park, { id, receipt: A, for: SESSION })).toBe('again')
+      expect(await code(m.as.mutation(api.delivery.handedOff, { id, route: 'addon', receipt: A }))).toBe('conflict')
+      expect(await row(t, id)).toMatchObject({ delivery: 'leased', claim: { receipt: B, session: SESSION, machineId: m.id } })
+      // The second taking is kept, and its own word counts once
+      expect(await m.as.mutation(api.delivery.renew, { ids: [id], receipts: [{ id, receipt: B }] })).toEqual([id])
+      expect(await m.as.query(api.delivery.lost, { ids: [id], receipts: [{ id, receipt: B }] })).toEqual([])
+      expect(await m.as.mutation(api.delivery.handedOff, { id, route: 'addon', receipt: B })).toMatchObject({ already: false })
+      expect(await m.as.mutation(api.delivery.handedOff, { id, route: 'addon', receipt: B })).toMatchObject({ already: true })
+      expect(await code(m.as.mutation(api.delivery.handedOff, { id, route: 'addon', receipt: A }))).toBe('conflict')
+    })
+
+    test('a taking asked for again under its receipt is held still, and one whose hold is over is not taken afresh under it', async () => {
+      const { t, m, click } = await setup()
+      const { actionId: id } = await click('click-0001')
+      expect(await m.as.mutation(api.delivery.claim, { ids: [id], for: SESSION, receipt: A })).toEqual([id])
+      // The answer was lost, and the connector asks again
+      expect(await m.as.mutation(api.delivery.claim, { ids: [id], for: SESSION, receipt: A })).toEqual([id])
+      await m.as.mutation(api.delivery.release, { id, receipt: A })
+      expect(await row(t, id)).toMatchObject({ delivery: 'pending' })
+      expect(await m.as.mutation(api.delivery.claim, { ids: [id], for: SESSION, receipt: A })).toEqual([])
+      expect(await m.as.mutation(api.delivery.claim, { ids: [id], for: SESSION, receipt: B })).toEqual([id])
+      expect(await code(m.as.mutation(api.delivery.claim, { ids: [id], receipt: 'short' }))).toBe('invalid')
+    })
+
+    test('a hand-over is confirmed only while the click is still for the conversation and the machine it was taken for', async () => {
+      const { t, m, click } = await setup()
+      const other = await machineOf(t, 'alice', 'desktop')
+      const first = (await click('click-0001')).actionId
+      const second = (await click('click-0002')).actionId
+      expect(await m.as.mutation(api.delivery.claim, { ids: [first, second], for: SESSION, receipt: A })).toEqual([first, second])
+      // The page is taken by another conversation before the hand-over of the first is confirmed
+      const next = { harness: 'claude-code', id: 'sess-2' }
+      expect(await m.as.mutation(api.artifacts.take, { slug: 'plan', session: next, agent: 'claude-code' })).toEqual({ took: true })
+      expect(await code(m.as.mutation(api.delivery.handedOff, { id: first, route: 'addon', receipt: A }))).toBe('conflict')
+      // The second's hold runs out, another machine takes it, and the first machine's receipt counts for nothing there
+      await vi.advanceTimersByTimeAsync(LEASE_MS + 1000)
+      await t.mutation(internal.delivery.reap, {})
+      await settle(t)
+      expect(await other.as.mutation(api.delivery.claim, { ids: [second], receipt: B })).toEqual([second])
+      expect(await code(m.as.mutation(api.delivery.handedOff, { id: second, route: 'addon', receipt: A }))).toBe('conflict')
+      expect(await code(other.as.mutation(api.delivery.handedOff, { id: second, route: 'waiter', receipt: A }))).toBe('conflict')
+      expect(await other.as.mutation(api.delivery.handedOff, { id: second, route: 'waiter', receipt: B })).toMatchObject({ already: false })
+      // The first goes to the conversation that has the page now
+      expect(await m.as.mutation(api.delivery.claim, { ids: [first], for: next, receipt: 'receipt-of-the-new-owner' })).toEqual([first])
+    })
+
+    test('a connector that starts again confirms what it handed over before, by its receipt, unless the click has been taken again since', async () => {
+      const { m, click } = await setup()
+      const delivered = (await click('click-0001')).actionId
+      const retaken = (await click('click-0002')).actionId
+      expect(await m.as.mutation(api.delivery.claim, { ids: [delivered, retaken], for: SESSION, receipt: A })).toEqual([delivered, retaken])
+      // Codex's queue took both, and the connector ended before it could say so. The one that starts gives back what its machine holds
+      expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [delivered, retaken], done: true })
+      // Before the receipt is confirmed, the second is taken again on this machine
+      expect(await m.as.mutation(api.delivery.claim, { ids: [retaken], for: SESSION, receipt: B })).toEqual([retaken])
+      expect(await m.as.mutation(api.delivery.handedOff, { id: delivered, route: 'queue', receipt: A })).toMatchObject({ already: false })
+      expect(await code(m.as.mutation(api.delivery.handedOff, { id: retaken, route: 'queue', receipt: A }))).toBe('conflict')
+      expect(await m.as.mutation(api.delivery.renew, { ids: [retaken], receipts: [{ id: retaken, receipt: B }] })).toEqual([retaken])
+    })
+
+    test('a machine from before receipts is served as before, for what it took without one, and touches nothing taken with one; an `it ack` needs none', async () => {
+      const { t, m, click } = await setup()
+      const old = await machineOf(t, 'alice', 'old laptop')
+      const theirs = (await click('click-0001')).actionId
+      const mine = (await click('click-0002')).actionId
+      // Its own taking, with no receipt, is kept, given back and handed over as it always was
+      expect(await old.as.mutation(api.delivery.claim, { ids: [theirs] })).toEqual([theirs])
+      expect(await old.as.mutation(api.delivery.renew, { ids: [theirs] })).toEqual([theirs])
+      expect(await old.as.mutation(api.delivery.handedOff, { id: theirs, route: 'waiter' })).toMatchObject({ already: false })
+      expect(await old.as.mutation(api.delivery.handedOff, { id: theirs, route: 'waiter' })).toMatchObject({ already: true })
+      // What this machine took with a receipt, nothing without one keeps, gives back, sets aside or says was handed over
+      expect(await m.as.mutation(api.delivery.claim, { ids: [mine], for: SESSION, receipt: A })).toEqual([mine])
+      expect(await m.as.mutation(api.delivery.renew, { ids: [mine] })).toEqual([])
+      await m.as.mutation(api.delivery.release, { id: mine })
+      expect(await m.as.mutation(api.delivery.park, { id: mine, for: SESSION })).toBe(false)
+      expect(await code(m.as.mutation(api.delivery.handedOff, { id: mine, route: 'queue' }))).toBe('conflict')
+      expect(await row(t, mine)).toMatchObject({ delivery: 'leased', claim: { receipt: A } })
+      // Nor does another machine that says nothing of a receipt, while that hold lasts
+      expect(await code(old.as.mutation(api.delivery.handedOff, { id: mine, route: 'waiter' }))).toBe('conflict')
+      // An agent or a person who says with `it ack` that it has the click is taken at their word
+      expect(await m.as.mutation(api.delivery.handedOff, { id: mine, route: 'manual' })).toMatchObject({ already: false })
+      expect(await m.as.mutation(api.delivery.handedOff, { id: mine, route: 'addon', receipt: A })).toMatchObject({ already: true })
+      // And told whatever became of it, say once more, an `it ack` is answered that it was handed over
+      expect(await old.as.mutation(api.delivery.handedOff, { id: mine, route: 'manual' })).toMatchObject({ already: true })
+    })
+  })
+
   describe('the order of clicks and stops, which the clock does not decide', () => {
     /** Reopens the conversation and stops it from the page, as a person does with Stop. */
     const stopNow = async (alice: Awaited<ReturnType<typeof person>>, m: Awaited<ReturnType<typeof machineOf>>, artifactId: string) => {
@@ -3738,7 +3842,7 @@ describe('displays and machines', () => {
   test('the first machine is enrolled by the service, on a backend that holds nothing, and that makes the one person', async () => {
     const t = backend()
     expect(await t.run(async (ctx) => [(await ctx.db.query('users').collect()).length, (await ctx.db.query('machines').collect()).length])).toEqual([0, 0])
-    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE })
+    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE, receipts: true })
     const key = await aKeyPair()
     const made = await t.mutation(internal.bridge.enroll, { subject: 'owner', name: 'this machine', publicKey: key.publicKey })
     if ('error' in made) throw new Error(made.error)

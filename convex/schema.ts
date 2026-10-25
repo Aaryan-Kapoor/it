@@ -371,6 +371,14 @@ export default defineSchema({
     /** The machine that gave up delivering it by itself. Until its page changes hands it is left out of what connectors are offered, and still waits for `it wait` and the site. */
     parkedBy: v.optional(v.id('machines')),
     leaseExpiresAt: v.optional(v.number()),
+    /**
+     * The last time it was taken to be handed over: the receipt that taking is known by, which
+     * the machine that took it made, the conversation it was taken for, where it was taken for
+     * one, and the machine. Kept when the hold ends, so that a hand-over that was done can still
+     * be confirmed by its receipt until the click is taken again. A taking with no receipt was
+     * made by an It from before receipts.
+     */
+    claim: v.optional(v.object({ receipt: v.optional(v.string()), session: v.union(session, v.null()), machineId: v.id('machines') })),
     route: v.optional(v.string()),
     /** The machine that said it was handed over, where a machine did: a machine that was at work on it and did not hand it over itself has lost it to that one. */
     handedBy: v.optional(v.id('machines')),
