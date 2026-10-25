@@ -206,7 +206,7 @@ describe('the agent skill', () => {
     expect(more.showing).toContain('use it only when the user asked for the page on all of their screens')
     // Each reason the skill names is one the backend gives, and `all` is the word the backend takes for every display
     const aim = source('../../convex/lib/aim.ts')
-    for (const reason of ['not_chosen', 'not_paired', 'agents_off']) {
+    for (const reason of ['not_chosen', 'not_paired', 'agents_off', 'locked']) {
       expect(more.showing).toContain(`\`${reason}\``)
       expect(aim, reason).toContain(`'${reason}'`)
     }

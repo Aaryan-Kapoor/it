@@ -1681,6 +1681,7 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
           ? [
               { id: 'd1', name: 'Kitchen', paired: true, lastSeenAt: now - 10_000, agents: true },
               { id: 'd2', name: 'TV', paired: true, lastSeenAt: now - 7_200_000, agents: false },
+              { id: 'd3', name: 'Hall', paired: true, lastSeenAt: now - 7_200_000, agents: true, lockedTo: { id: 'a1', slug: 'calendar', title: 'Calendar' } },
             ]
           : asked.path === 'machines:me'
             ? { id: 'machine-1', name: 'the desk', wanted: ['pi'], harnesses: [{ id: 'pi', addon: 'connected' }], wakes: [{ harness: 'pi', since: 1 }] }
@@ -1694,9 +1695,10 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
         '',
       ])
       expect((await atTerminal(m, ['displays'], b.env)).shown.split('\n')).toEqual([
-        '2 displays:',
-        '  Kitchen  paired                    seen just now',
-        '  TV       paired, closed to agents  seen 2 h ago',
+        '3 displays:',
+        '  Kitchen  paired                      seen just now',
+        '  TV       paired, closed to agents    seen 2 h ago',
+        '  Hall     paired, locked to calendar  seen 2 h ago',
         '',
       ])
       expect((await atTerminal(m, ['whoami'], b.env)).shown.split('\n')).toEqual([
@@ -3674,6 +3676,28 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
         0,
         { id: 'plan', shownOn: [], notShownOn: [{ display: 'Phone', reason: 'agents_off' }], hint: `Agents may not use "Phone": ${OFF}` },
       ])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a display locked to another page is said to be that, by name, with who can unlock it', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show'
+        ? {
+            displays: ['Laptop'],
+            notShown: [
+              { display: 'Hall', reason: 'locked' },
+              { display: 'Kitchen', reason: 'locked' },
+            ],
+          }
+        : null,
+    )
+    try {
+      expect(printed(await run(m, ['open', 'plan', '--on', 'all'], b.env)).hint).toBe(
+        '"Hall" and "Kitchen" are locked to another page: the user locked them to it, and only the user’s own browser can unlock them, under Displays on the site.',
+      )
     } finally {
       await b.close()
     }
