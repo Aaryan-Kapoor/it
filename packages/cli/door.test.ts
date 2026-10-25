@@ -3182,7 +3182,13 @@ describe('The site', () => {
       console.log('  skip  the test of the site as it is built: it has not been built here, which `npm run generate` does')
       return
     }
-    const page = Buffer.from(built.bytes, 'base64').toString('utf8')
+    // Ask the serving path for decoded text, whatever format each file was packed in.
+    const source = async (pathname: string) => {
+      const answer = answerSite(BUILT, 'GET', pathname, new Headers({ 'accept-encoding': 'identity' }))
+      expect([pathname, answer.status, answer.headers.get('content-encoding')]).toEqual([pathname, 200, null])
+      return answer.text()
+    }
+    const page = await source('/')
     const scripts = [...page.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
     expect(scripts.length).toBeGreaterThan(0)
     for (const [, attributes, inside] of scripts) expect([/\bsrc="\/[^/"][^"]*"/.test(attributes!), inside!.trim()]).toEqual([true, ''])
@@ -3190,8 +3196,8 @@ describe('The site', () => {
     // Whatever it names, it names by a path of the site's own
     for (const [, address] of page.matchAll(/\b(?:src|href)="([^"]*)"/g)) expect([address, /^\/[^/]/.test(address!)]).toEqual([address, true])
     // And nothing in its scripts is made into script from text
-    for (const [name, file] of Object.entries(BUILT))
-      if (name.endsWith('.js')) expect([name, /\beval\(|new Function\(/.test(Buffer.from(file.bytes, 'base64').toString('utf8'))]).toEqual([name, false])
+    for (const name of Object.keys(BUILT))
+      if (name.endsWith('.js')) expect([name, /\beval\(|new Function\(/.test(await source(`/${name}`))]).toEqual([name, false])
   })
 
   test('That a window the site opens can do nothing to it is said where a browser takes it: by this machine’s own name, and not at an address on the network, where a browser would write it down as a fault', async () => {
