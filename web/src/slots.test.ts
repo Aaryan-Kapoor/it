@@ -25,8 +25,8 @@ class Watcher {
 }
 
 /** A grid of cards in a row, each with what it was told: whether it is to show its page now. */
-function grid(count: number, options: { most: number; loading: number; keptAway: number }) {
-  const s = slots(options)
+function grid(count: number, options: { most: number; loading: number; keptAway: number; keptMs?: number }) {
+  const s = slots({ keptMs: 120_000, ...options })
   const cards = Array.from({ length: count }, (_, i) => {
     const el = document.body.appendChild(document.createElement('span'))
     const card = { i, el, live: false, told: 0, slot: undefined as unknown as Slot }
@@ -142,6 +142,22 @@ describe('a card that leaves the screen', () => {
     g.settle()
     // Each was told once that it was to be shown, and never that it was not
     expect(g.cards.map((c) => c.told)).toEqual(g.cards.map(() => 1))
+  })
+
+  test('lets go of its picture two minutes after it left the screen, and not before', () => {
+    const g = grid(12, { most: 64, loading: 4, keptAway: 12, keptMs: 120_000 })
+    g.scroll(range(0, 6))
+    g.settle()
+    g.scroll(range(6, 12))
+    g.settle()
+    vi.advanceTimersByTime(60_000)
+    // Back to the first six for a moment, and away from them again: they left the screen once more just now
+    g.scroll(range(0, 6))
+    g.scroll(range(6, 12))
+    vi.advanceTimersByTime(119_999)
+    expect(g.live()).toEqual(range(0, 12))
+    vi.advanceTimersByTime(1)
+    expect(g.live()).toEqual(range(6, 12))
   })
 
   test('lets go of its picture once more cards than a few are kept off the screen, the one seen longest ago first', () => {

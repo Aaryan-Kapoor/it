@@ -3,8 +3,8 @@
 // device can bear. Every card on the screen comes first, in the order a person reads them, and
 // then the cards just above and below it, while there is room. Pictures are begun a few at a
 // time, so that a fast scroll does not begin dozens at once, and a card that has gone by before
-// its turn is never begun. A card that leaves the screen keeps its picture while only a few
-// others do, so that scrolling back finds it as it was, without a new showing.
+// its turn is never begun. A card that leaves the screen keeps its picture for a while, and while
+// only a few others do, so that scrolling back finds it as it was, without a new showing.
 
 /** How far beyond the screen a card is near enough to be shown before it is on it. */
 const NEAR = '200px 0px'
@@ -56,10 +56,16 @@ interface Card {
 /** The order cards are read in: the grid's own order, row by row. */
 const byPlace = (a: Card, b: Card) => (a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
 
-export function slots({ most, loading, keptAway }: { most: number; loading: number; keptAway: number }): Slots {
+/**
+ * `most` cards show their page at once, `loading` of them are begun at a time, and a card off the
+ * screen keeps its picture for `keptMs` while no more than `keptAway` do.
+ */
+export function slots({ most, loading, keptAway, keptMs }: { most: number; loading: number; keptAway: number; keptMs: number }): Slots {
   const cards = new Map<Element, Card>()
   let pausedUntil = 0
   let resume: ReturnType<typeof setTimeout> | undefined
+  /** When the card kept off the screen longest is to let go of its picture. */
+  let expire: ReturnType<typeof setTimeout> | undefined
 
   const seen = (which: 'inView' | 'near') => (entries: IntersectionObserverEntry[]) => {
     const now = Date.now()
@@ -93,10 +99,19 @@ export function slots({ most, loading, keptAway }: { most: number; loading: numb
 
   function arrange(): void {
     const all = [...cards.values()]
-    // Off the screen, a card keeps its picture while few enough others do: past that, the one seen longest ago lets go
+    const now = Date.now()
+    // Off the screen, a card keeps its picture for a while, and while few enough others do: past
+    // either, it lets go of it, the one seen longest ago first
     const away = all.filter((c) => c.live && !c.inView && !c.near).sort((a, b) => a.seenAt - b.seenAt)
-    for (const card of away.slice(0, Math.max(0, away.length - keptAway))) drop(card)
-    if (Date.now() < pausedUntil) return
+    const over = away.length - keptAway
+    const kept = away.filter((card, i) => {
+      if (i >= over && now - card.seenAt < keptMs) return true
+      drop(card)
+      return false
+    })
+    clearTimeout(expire)
+    if (kept[0]) expire = setTimeout(arrange, kept[0].seenAt + keptMs - now)
+    if (now < pausedUntil) return
     let begun = all.filter((c) => c.loading).length
     let live = all.filter((c) => c.live).length
     const wanted = all.filter((c) => !c.live && !c.failed && (c.inView || c.near)).sort((a, b) => Number(b.inView) - Number(a.inView) || byPlace(a, b))
@@ -160,6 +175,6 @@ let grid: Slots | undefined
 /** The grid's slots, as many as this device can bear, made the first time a card asks. */
 export function gridSlots(): Slots {
   const device = navigator as Navigator & { deviceMemory?: number }
-  grid ??= slots({ most: mostFor(device.deviceMemory, navigator.hardwareConcurrency), loading: 4, keptAway: 12 })
+  grid ??= slots({ most: mostFor(device.deviceMemory, navigator.hardwareConcurrency), loading: 4, keptAway: 12, keptMs: 120_000 })
   return grid
 }
