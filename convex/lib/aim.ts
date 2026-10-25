@@ -17,9 +17,10 @@ export const EVERY_DISPLAY = 'all'
 
 /**
  * Why something was not put on a display: its browser's pairing has ended, the person said that
- * agents may not use it, or another display was chosen for it when the agent named none.
+ * agents may not use it, the person locked it to another page, or another display was chosen
+ * for it when the agent named none.
  */
-export type NotShownReason = 'not_paired' | 'agents_off' | 'not_chosen'
+export type NotShownReason = 'not_paired' | 'agents_off' | 'locked' | 'not_chosen'
 
 export interface Aimed {
   to: Doc<'displays'>[]
@@ -75,14 +76,28 @@ export async function stillPaired(ctx: QueryCtx | MutationCtx, d: Doc<'displays'
  * person is most likely looking at. A name no display has is refused, without the name: a
  * refusal is kept in the backend's own record of what failed, and a display's name is the
  * person's. The machine that asked knows what it asked, and reads the names with `it displays`.
+ *
+ * `page` is the page to be shown, where it is one: a display locked to another page is not
+ * asked, and one locked to this very page is. A display that is locked is never the one chosen
+ * where no display was named, whatever is sent, since it is kept for the page it shows. A
+ * notification is not a page, and goes to a locked display that is named, or with `all`.
  */
-export async function aim(ctx: QueryCtx | MutationCtx, userId: Id<'users'>, display: string | undefined, pushed = false): Promise<Aimed> {
+export async function aim(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<'users'>,
+  display: string | undefined,
+  { pushed = false, page }: { pushed?: boolean; page?: Id<'artifacts'> } = {},
+): Promise<Aimed> {
   const all = await ctx.db
     .query('displays')
     .withIndex('by_user', (q) => q.eq('userId', userId))
     .take(QUOTA.displays)
   const away = new Map<Id<'displays'>, NotShownReason | null>()
-  for (const d of all) away.set(d._id, !(await stillPaired(ctx, d)) ? 'not_paired' : d.agentsOff ? 'agents_off' : null)
+  for (const d of all)
+    away.set(
+      d._id,
+      !(await stillPaired(ctx, d)) ? 'not_paired' : d.agentsOff ? 'agents_off' : page && d.lockedTo && d.lockedTo.artifactId !== page ? 'locked' : null,
+    )
   const wanted = display?.trim().toLowerCase()
   if (wanted) {
     const asked = wanted === EVERY_DISPLAY ? all : all.filter((d) => nameOf(d).toLowerCase() === wanted)
@@ -97,13 +112,13 @@ export async function aim(ctx: QueryCtx | MutationCtx, userId: Id<'users'>, disp
   }
   const now = Date.now()
   const chosen = likeliest(
-    all.filter((d) => away.get(d._id) === null),
+    all.filter((d) => away.get(d._id) === null && !d.lockedTo),
     now,
     pushed,
   )
   return {
     to: chosen ? [chosen] : [],
-    notShown: all.filter((d) => d !== chosen).map((d) => ({ display: nameOf(d), reason: away.get(d._id) ?? 'not_chosen' })),
+    notShown: all.filter((d) => d !== chosen).map((d) => ({ display: nameOf(d), reason: away.get(d._id) ?? (d.lockedTo ? 'locked' : 'not_chosen') })),
     ...(chosen ? { chosen: openNow(chosen, now) ? ('open' as const) : ('last_used' as const) } : {}),
   }
 }

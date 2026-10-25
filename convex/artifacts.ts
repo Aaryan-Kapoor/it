@@ -184,6 +184,12 @@ export async function removeArtifact(ctx: MutationCtx, a: Doc<'artifacts'>) {
     .order('desc')
     .take(300)
   for (const n of told) if (n.artifactId === a._id && !n.dismissedAt) await ctx.db.patch(n._id, { dismissedAt: Date.now() })
+  // A display locked to the page is locked no more, and says so to whoever is at it
+  const displays = await ctx.db
+    .query('displays')
+    .withIndex('by_user', (q) => q.eq('userId', a.userId))
+    .take(QUOTA.displays)
+  for (const d of displays) if (d.lockedTo?.artifactId === a._id) await ctx.db.patch(d._id, { lockedTo: undefined, lockEnded: Date.now() })
   const job = await ctx.db.insert('deletions', { userId: a.userId, artifactId: a._id, slug: a.slug, title: a.title, requestedAt: Date.now(), attempts: 0 })
   await ctx.db.delete(a._id)
   await ctx.scheduler.runAfter(0, internal.retention.purgeArtifact, { artifactId: a._id, deletionId: job })
