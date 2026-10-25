@@ -3501,6 +3501,13 @@ describe('which display an agent’s page goes to', () => {
       ['TV', false],
       ['Phone', true],
     ])
+    // The records the person downloads say it too, with when each display was last used
+    const exported = await laptop.browser.mutation(api.account.exportStart, {})
+    expect(exported.displays.map((d) => [d.name, d.agents, typeof d.usedAt])).toEqual([
+      ['Laptop', false, 'number'],
+      ['TV', false, 'number'],
+      ['Phone', true, 'number'],
+    ])
   })
 
   test('a display named is the only one asked, whatever the others are doing, and every display is asked with all', async () => {
