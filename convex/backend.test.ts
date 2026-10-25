@@ -4399,6 +4399,11 @@ describe('notifications', () => {
     await vi.advanceTimersByTimeAsync(200_000)
     const later = await m.as.mutation(api.notifications.send, { text: 'later', display: 'all' })
     expect((await t.query(internal.push._targets, { notificationId: later.id }))?.targets.map((x) => x.displayId)).toEqual([alice.display.id])
+    // The laptop is closed to agents after it was chosen and before its push is sent: the push is not sent
+    const still = () => t.query(internal.push._still, { notificationId: later.id, displayId: alice.display.id, endpoint: PUSH('laptop') })
+    expect(await still()).toBe(true)
+    await alice.browser.mutation(api.displays.allowAgents, { displayId: alice.display.id, allowed: false })
+    expect(await still()).toBe(false)
   })
 
   test('with no display open, a notification goes first to one that takes notifications, which is how it reaches a closed one', async () => {
