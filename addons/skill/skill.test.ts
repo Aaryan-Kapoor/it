@@ -482,9 +482,8 @@ describe('the agent skill', () => {
   test('says that a page is a conversation’s to keep or to take only where the harness names the conversation, and what to do where it does not', () => {
     // With no conversation named, the command does not ask for the page as its own, nothing is taken by opening it, and taking it is refused
     expect(source('../../packages/cli/src/publish.ts')).toContain('...(input.own && !input.take && session ? { own: true } : {})')
-    expect(main).toMatch(
-      /const mine = asked\?\.session[\s\S]{0,900}api\.displays\.show[\s\S]{0,300}\.\.\.\(mine \? \{ session: mine, agent: mine\.harness \} : \{\}\)/,
-    )
+    expect(main).toMatch(/const mine = asked\?\.session[\s\S]{0,900}await show<[^>]*>\(slug, a, mine \? \{ session: mine, agent: mine\.harness \} : \{\}\)/)
+    expect(main).toMatch(/call<T>\('mutation', api\.displays\.show, \{ slug, \.\.\.\(display \? \{ display \} : \{\}\), \.\.\.also \}\)/)
     expect(source('../../convex/displays.ts')).toMatch(
       /const took = mine && shown\.length \? \(await takePage\(ctx, artifact, machine, mine, agent\)\)\.took : false/,
     )
