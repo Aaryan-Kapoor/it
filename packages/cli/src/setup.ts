@@ -1255,17 +1255,20 @@ const found: Partial<Record<Harness, string>> = {}
 /**
  * What a person who has just connected Hermes is told. It depends on the Hermes that was found:
  * up to 0.21.5 a plugin's message reaches the plain terminal and nowhere else. A later Hermes
- * has a setting by which the person allows one in the TUI and the desktop app as well. Not
- * every later Hermes is known to take it, so the person is told what happens where one does not.
+ * has a setting by which the person allows one in the TUI and the desktop app as well, where a
+ * conversation listens from the moment it is open. Not every later Hermes is known to take it,
+ * so the person is told what happens where one does not. The plain terminal tells the add-on
+ * nothing when a saved conversation is resumed, so the person is told to send a message there.
  */
 export function afterHermes(version: string | undefined): string {
   // The one thing everyone has to do comes first and by itself. What follows is for those who
   // use Hermes elsewhere than its plain terminal, a line to a thought, with the command on a
   // line of its own so that no terminal breaks it in the middle of a word.
   const first = 'If Hermes is open, restart it. What you do on a page then arrives by itself in the plain `hermes` terminal.'
+  const resumed = 'A saved conversation you resume in the terminal starts listening once you send a message in it.'
   if (!version || !older('0.21.5', version))
-    return `${first}\nIn this Hermes${version ? ` (${version})` : ''} that is the only place it does: in its TUI, its desktop app and its messaging gateway it waits on the page until the agent runs \`it wait\`.`
-  return `${first}\nFor the Hermes TUI or desktop app, also run this once, which lets It put what you do into those conversations:\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\nIf this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`
+    return `${first}\nIn this Hermes${version ? ` (${version})` : ''} that is the only place it does: in its TUI, its desktop app and its messaging gateway it waits on the page until the agent runs \`it wait\`.\n${resumed}`
+  return `${first}\n${resumed}\nFor the Hermes TUI or desktop app, also run this once, which lets It put what you do into a conversation there from the moment it is open:\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\nIf this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`
 }
 
 export { CODEX_RULE, CODEX_RULE_FILE, CODEX_SHUT, codexGivesNetwork, codexLetsItOut, codexRuleLetsItOut } from './codex-settings'
@@ -1275,7 +1278,8 @@ export const AFTER: Partial<Record<Harness, string>> = {
   get hermes() {
     return afterHermes(found.hermes)
   },
-  opencode: 'If OpenCode is open, restart it: it reads its plugins when it starts.',
+  opencode:
+    'If OpenCode is open, restart it: it reads its plugins when it starts.\nA saved conversation you open in OpenCode starts listening once you send a message in it.',
   pi: 'If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.',
   codex: 'Start Codex once and choose "Trust all and continue" when it says the hooks need review.',
 }
