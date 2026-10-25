@@ -17,7 +17,7 @@ import { statSync } from 'node:fs'
 import { AGENTS, type AgentState } from '@it/protocol'
 import { type AgentSession, appName, type Launch, type SessionEvents, sessionFor } from './agent-session'
 import { type AgentSettings, agentsFile, folderOf, offerOf, readAgents } from './agents'
-import { inHome, readJson, writePrivate } from './lib'
+import { inHome, readJson, why, writePrivate } from './lib'
 import { bootId, endTree, fromAnotherStart, processes, SINCE_TOLD } from './wake'
 
 /** An agent as It says the person wants it. */
@@ -225,7 +225,7 @@ export class AgentKeeper {
     if (!force && seen === this.settingsSeen) return
     this.settingsSeen = seen
     this.settings = readAgents(this.settingsFile)
-    if (this.settings === 'unread') this.d.say('project agents: agents.json could not be read, so this machine offers none')
+    if (this.settings === 'unread') this.d.say('project agents: their note on this machine could not be read (record_unread), so it offers none')
     this.offered = null
   }
 
@@ -252,8 +252,7 @@ export class AgentKeeper {
           () => {
             this.offered = offerText
           },
-          (err) =>
-            this.sayOnce('offer', `project agents: It could not be told what this machine offers (${String((err as Error)?.message ?? err).slice(0, 80)})`),
+          (err) => this.sayOnce('offer', `project agents: It could not be told what this machine offers (${why(err)})`),
         )
       }
       const ids = new Set(this.wanted.map((w) => w.id))
