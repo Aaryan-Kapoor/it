@@ -30,6 +30,7 @@ import {
   claudeResume,
   claudeWroteAt,
   codexHeld,
+  codexHolder,
   codexWroteAt,
   endTree,
   identity,
@@ -591,6 +592,62 @@ describe('whether some Codex has a conversation open', () => {
     // An id that is not one Codex makes names no file at all
     expect(codexHeld('../thread-open', codexHome)).toBe(false)
   })
+
+  test.skipIf(process.platform === 'win32')(
+    'tells a Codex that It started to carry the conversation on from any other, by the marks every run It starts carries',
+    async () => {
+      const codexHome = path.join(scratch, 'codex-home-holders')
+      const locks = path.join(codexHome, 'thread-writer-locks')
+      mkdirSync(locks, { recursive: true })
+      const lock = (thread: string) => path.join(locks, `${thread}.lock`)
+      // A program that has a conversation's lock open until it is ended, started with what it is told
+      const running: ReturnType<typeof spawn>[] = []
+      const holding = async (thread: string, marks: Record<string, string>) => {
+        writeFileSync(lock(thread), '')
+        const child = spawn(
+          process.execPath,
+          ['-e', `require('fs').openSync(${JSON.stringify(lock(thread))}, 'r'); console.log('open'); setInterval(() => {}, 1000)`],
+          {
+            env: { ...process.env, ...marks },
+            stdio: ['ignore', 'pipe', 'ignore'],
+          },
+        )
+        running.push(child)
+        await new Promise<void>((resolve) => child.stdout!.once('data', () => resolve()))
+        return child
+      }
+      try {
+        // A run that It started for this very conversation: it holds the conversation, and is It's
+        const ours = await holding('thread-ours', { IT_HARNESS: 'codex', IT_SESSION: 'thread-ours', IT_RUN: 'run-1' })
+        const t = Date.now()
+        expect(codexHolder('thread-ours', codexHome, t)).toBe('it')
+        expect(codexHeld('thread-ours', codexHome, t + 2000)).toBe(true)
+        // A run It started for another conversation is not this one's, and nor is a Codex with no marks at all
+        await holding('thread-theirs', { IT_HARNESS: 'codex', IT_SESSION: 'thread-ours' })
+        expect(codexHolder('thread-theirs', codexHome, t)).toBe('elsewhere')
+        await holding('thread-open', {})
+        expect(codexHolder('thread-open', codexHome, t)).toBe('elsewhere')
+        // Held by It's run and by some other program as well: that other one is no run of It's
+        const beside = openSync(lock('thread-ours'), 'r')
+        try {
+          expect(codexHolder('thread-ours', codexHome, t + 4000)).toBe('elsewhere')
+        } finally {
+          closeSync(beside)
+        }
+        expect(codexHolder('thread-ours', codexHome, t + 6000)).toBe('it')
+        // It's run ends. A look from a moment ago still finds the conversation held, as a look is
+        // good for that long, and a look taken afresh finds nobody
+        const gone = new Promise((resolve) => ours.once('exit', resolve))
+        ours.kill()
+        await gone
+        expect(codexHolder('thread-ours', codexHome, t + 6500)).toBe('it')
+        expect(codexHolder('thread-ours', codexHome, t + 6500, true)).toBe(false)
+        expect(codexHolder('thread-ours', codexHome, t + 7000)).toBe(false)
+      } finally {
+        for (const child of running) child.kill()
+      }
+    },
+  )
 })
 
 describe('how often a conversation is reopened', () => {

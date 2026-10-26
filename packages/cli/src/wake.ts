@@ -784,42 +784,73 @@ export class Budget {
   }
 }
 
-const heldAsked = new Map<string, { at: number; held: boolean | null }>()
+const heldAsked = new Map<string, { at: number; held: 'elsewhere' | 'it' | false | null }>()
 /**
- * Whether some Codex on this machine has a conversation open: in its window, in an editor or
- * another app that runs Codex, or for the minute after it was closed. Such a Codex takes a
- * message from Codex's queue by itself, at once when it is idle and after its turn when it is
- * not. One that nobody has open takes nothing until it is opened, and then only when a turn
- * of it ends, so a message put in its queue would wait for that, and be cut off if the turn
- * that ended was one this program ran.
+ * Who has a Codex conversation open, as its writer lock says:
+ *
+ * - `elsewhere`: some Codex that It did not start, in its window, in an editor or another app
+ *   that runs Codex (T3 Code among them), or for the minute after it was closed. Such a Codex
+ *   takes a message from Codex's queue by itself, at once when it is idle and after its turn
+ *   when it is not.
+ * - `it`: only a Codex that It started to carry the conversation on, with `codex exec resume`,
+ *   which runs one turn and ends. It takes a message from the queue when that turn ends and is
+ *   gone a moment later, so a message put in its queue is cut off unanswered, or waits until
+ *   something opens the conversation again.
+ * - false: nobody. A Codex that nobody has open takes nothing until it is opened, and then only
+ *   when a turn of it ends, so a message put in its queue would wait for that.
+ * - null: that cannot be told.
  *
  * Codex lets one program at a time write a conversation, and says which conversations are
  * being written with a file each: `thread-writer-locks/<id>.lock` in its folder, there for as
  * long as the conversation is open in some Codex. A Codex that was ended without warning
- * leaves its file behind, so where the system says who has a file open, that is asked too.
+ * leaves its file behind, so where the system says who has a file open, that is asked too, and
+ * each program that has it open is asked whose it is, by the marks every run It starts carries
+ * (see `carryOn`). One whose marks cannot be read is not taken for It's.
+ *
+ * What is found is good for a moment, since this is asked for every click that waits, on every
+ * pass. `fresh` asks again all the same: whoever has just seen It's own run of the
+ * conversation end knows that what was found while it ran is over.
  */
-export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), now = Date.now()): boolean | null {
+export function codexHolder(
+  thread: string,
+  codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
+  now = Date.now(),
+  fresh = false,
+): 'elsewhere' | 'it' | false | null {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(thread)) return false
   const lock = path.join(codexHome, 'thread-writer-locks', `${thread}.lock`)
-  // Asked for every action that waits, on every pass: what was found is good for a moment
   const asked = heldAsked.get(lock)
-  if (asked && now - asked.at < 1500) return asked.held
-  const held = existsSync(lock) ? openSomewhere(lock) : false
+  if (!fresh && asked && now - asked.at < 1500) return asked.held
+  const by = existsSync(lock) ? openBy(lock) : []
+  const held =
+    by === null
+      ? null
+      : by.length === 0
+        ? false
+        : by.every((pid) => belongs(pid, { harness: 'codex', session: thread }) === true)
+          ? ('it' as const)
+          : ('elsewhere' as const)
   if (heldAsked.size > 500) heldAsked.clear()
   heldAsked.set(lock, { at: now, held })
   return held
 }
 
+/** Whether any Codex has a conversation open, It's own run of it among them: see `codexHolder`. */
+export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), now = Date.now()): boolean | null {
+  const holder = codexHolder(thread, codexHome, now)
+  return holder === null ? null : holder !== false
+}
+
 /**
- * Whether any program of this person's has a file open, as the system tells it. Null where it
- * cannot be asked: the file being there is then all that is known.
+ * The processes of this person's that have a file open, as the system tells it: none where
+ * nobody has. Null where it cannot be asked: the file being there is then all that is known.
  */
-export function openSomewhere(file: string): boolean | null {
+export function openBy(file: string): number[] | null {
   let real: string
   try {
     real = realpathSync(file)
   } catch {
-    return false
+    return []
   }
   if (process.platform === 'linux') {
     let pids: string[]
@@ -830,6 +861,7 @@ export function openSomewhere(file: string): boolean | null {
     }
     const me = process.getuid?.()
     let looked = 0
+    const found: number[] = []
     for (const pid of pids) {
       try {
         if (me !== undefined && statSync(`/proc/${pid}`).uid !== me) continue
@@ -837,20 +869,31 @@ export function openSomewhere(file: string): boolean | null {
         for (const fd of readdirSync(dir)) {
           looked++
           try {
-            if (readlinkSync(`${dir}/${fd}`) === real) return true
+            if (readlinkSync(`${dir}/${fd}`) === real) {
+              found.push(Number(pid))
+              break
+            }
           } catch {}
         }
       } catch {}
     }
     // Nothing of this person's could be looked into at all: that is not knowing, and is not "nobody"
-    return looked === 0 ? null : false
+    return looked === 0 ? null : found
   }
   if (process.platform === 'darwin') {
     try {
-      return execFileSync('lsof', ['-t', '--', real], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() !== ''
+      const said = execFileSync('lsof', ['-t', '--', real], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
+      return [
+        ...new Set(
+          said
+            .split('\n')
+            .filter((line) => /^\d+$/.test(line.trim()))
+            .map((line) => Number(line.trim())),
+        ),
+      ]
     } catch (err) {
       // lsof ends with 1 and prints nothing when nobody has the file open
-      return (err as { status?: number }).status === 1 ? false : null
+      return (err as { status?: number }).status === 1 ? [] : null
     }
   }
   return null
