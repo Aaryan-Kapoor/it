@@ -29,7 +29,6 @@ import {
   claudeModeOf,
   claudeResume,
   claudeWroteAt,
-  codexHeld,
   codexHolder,
   codexWroteAt,
   endTree,
@@ -567,30 +566,30 @@ describe('whether some Codex has a conversation open', () => {
     mkdirSync(locks, { recursive: true })
     const lock = (thread: string) => path.join(locks, `${thread}.lock`)
     // No Codex has ever had it open, or Codex has put its file away again
-    expect(codexHeld('thread-none', codexHome)).toBe(false)
+    expect(codexHolder('thread-none', codexHome)).toBe(false)
     // Open in some Codex: the file is there, and a program has it open (this one stands in for Codex)
     writeFileSync(lock('thread-open'), '')
     const held = openSync(lock('thread-open'), 'r')
     try {
-      expect(codexHeld('thread-open', codexHome)).toBe(process.platform === 'win32' ? null : true)
+      expect(codexHolder('thread-open', codexHome)).toBe(process.platform === 'win32' ? null : 'elsewhere')
     } finally {
       closeSync(held)
     }
     // Left behind by a Codex that was ended without warning: where the system says who has a file
     // open, that is not taken for an open conversation. Elsewhere the file is all there is to go by.
     writeFileSync(lock('thread-left'), '')
-    expect(codexHeld('thread-left', codexHome)).toBe(process.platform === 'linux' || process.platform === 'darwin' ? false : null)
+    expect(codexHolder('thread-left', codexHome)).toBe(process.platform === 'linux' || process.platform === 'darwin' ? false : null)
     // What was found is good for a moment only: closed a moment later, it is found closed
     const t = Date.now()
     writeFileSync(lock('thread-then'), '')
     const then = openSync(lock('thread-then'), 'r')
-    expect(codexHeld('thread-then', codexHome, t)).toBe(process.platform === 'win32' ? null : true)
+    expect(codexHolder('thread-then', codexHome, t)).toBe(process.platform === 'win32' ? null : 'elsewhere')
     closeSync(then)
     rmSync(lock('thread-then'))
-    expect(codexHeld('thread-then', codexHome, t + 500)).toBe(process.platform === 'win32' ? null : true)
-    expect(codexHeld('thread-then', codexHome, t + 2000)).toBe(false)
+    expect(codexHolder('thread-then', codexHome, t + 500)).toBe(process.platform === 'win32' ? null : 'elsewhere')
+    expect(codexHolder('thread-then', codexHome, t + 2000)).toBe(false)
     // An id that is not one Codex makes names no file at all
-    expect(codexHeld('../thread-open', codexHome)).toBe(false)
+    expect(codexHolder('../thread-open', codexHome)).toBe(false)
   })
 
   test.skipIf(process.platform === 'win32')(
@@ -621,7 +620,6 @@ describe('whether some Codex has a conversation open', () => {
         const ours = await holding('thread-ours', { IT_HARNESS: 'codex', IT_SESSION: 'thread-ours', IT_RUN: 'run-1' })
         const t = Date.now()
         expect(codexHolder('thread-ours', codexHome, t)).toBe('it')
-        expect(codexHeld('thread-ours', codexHome, t + 2000)).toBe(true)
         // A run It started for another conversation is not this one's, and nor is a Codex with no marks at all
         await holding('thread-theirs', { IT_HARNESS: 'codex', IT_SESSION: 'thread-ours' })
         expect(codexHolder('thread-theirs', codexHome, t)).toBe('elsewhere')

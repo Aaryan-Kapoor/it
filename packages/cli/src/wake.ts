@@ -822,23 +822,13 @@ export function codexHolder(
   const asked = heldAsked.get(lock)
   if (!fresh && asked && now - asked.at < 1500) return asked.held
   const by = existsSync(lock) ? openBy(lock) : []
-  const held =
-    by === null
-      ? null
-      : by.length === 0
-        ? false
-        : by.every((pid) => belongs(pid, { harness: 'codex', session: thread }) === true)
-          ? ('it' as const)
-          : ('elsewhere' as const)
+  const whose = (by ?? []).map((pid) => [pid, belongs(pid, { harness: 'codex', session: thread }) === true] as const)
+  // One that has gone since it was listed holds nothing. One that cannot be looked for is kept
+  const others = whose.filter(([pid, its]) => !its && processes([pid])?.size !== 0)
+  const held = by === null ? null : others.length ? ('elsewhere' as const) : whose.some(([, its]) => its) ? ('it' as const) : false
   if (heldAsked.size > 500) heldAsked.clear()
   heldAsked.set(lock, { at: now, held })
   return held
-}
-
-/** Whether any Codex has a conversation open, It's own run of it among them: see `codexHolder`. */
-export function codexHeld(thread: string, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), now = Date.now()): boolean | null {
-  const holder = codexHolder(thread, codexHome, now)
-  return holder === null ? null : holder !== false
 }
 
 /**
