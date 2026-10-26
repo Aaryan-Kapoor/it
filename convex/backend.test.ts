@@ -2059,22 +2059,25 @@ describe('what a page keeps for itself, and how its displays are told of it', ()
     // its revision says nothing of how much the page keeps
     await t.run(async (ctx) => {
       const [s] = await ctx.db.query('states').collect()
-      await ctx.db.patch(s!._id, { json: JSON.stringify({ status: 'draft', [STORE_KEY]: { draft: 'd', n: 1, 'not a name': 2 } }), revision: 7 })
+      // An agent could keep a value there under any name, and a page could read it by that name
+      await ctx.db.patch(s!._id, { json: JSON.stringify({ status: 'draft', [STORE_KEY]: { draft: 'd', n: 1, 'a name of the agent’s': 2 } }), revision: 7 })
       for (const r of await ctx.db.query('revisions').collect()) await ctx.db.replace(r._id, { artifactId: r.artifactId, revision: 7 })
     })
-    expect(await stateOf(m.as, 'plan')).toEqual({ status: 'draft', [STORE_KEY]: { draft: 'd', n: 1 } })
+    expect(await stateOf(m.as, 'plan')).toEqual({ status: 'draft', [STORE_KEY]: { draft: 'd', n: 1, 'a name of the agent’s': 2 } })
     const shown = await live(alice.browser, p.artifactId, 7)
     expect(shown).toMatchObject({ revision: 7 })
     const whole = await live(alice.browser, p.artifactId)
     expect(whole).toMatchObject({ revision: 7, whole: true, state: '{"status":"draft"}' })
     expect(sorted(whole.kept)).toEqual([
+      ['a name of the agent’s', '2'],
       ['draft', '"d"'],
       ['n', '1'],
     ])
     // The first write moves it out, at the write's revision, and changes what it says it changes
     expect(await keep(alice.browser, p.artifactId, { n: 2 })).toEqual({ revision: 8 })
-    expect(await stateOf(m.as, 'plan')).toEqual({ status: 'draft', [STORE_KEY]: { draft: 'd', n: 2 } })
+    expect(await stateOf(m.as, 'plan')).toEqual({ status: 'draft', [STORE_KEY]: { draft: 'd', n: 2, 'a name of the agent’s': 2 } })
     expect(sorted((await live(alice.browser, p.artifactId, 7)).kept)).toEqual([
+      ['a name of the agent’s', '2'],
       ['draft', '"d"'],
       ['n', '2'],
     ])

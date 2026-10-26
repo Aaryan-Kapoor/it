@@ -67,9 +67,17 @@ function split(json: string | undefined): { agent: State; inside?: State } {
   return { agent, inside: isObject(inside) ? inside : {} }
 }
 
-/** What a page keeps for itself, by name, as JSON text: from its records, or from inside the agent's part where it is still there. */
+/** The names that would reach into what every object has, which nothing is kept under. */
+const NOT_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
+
+/**
+ * What a page keeps for itself, by name, as JSON text: from its records, or from inside the
+ * agent's part where it is still there. What is inside the agent's part was kept under any name
+ * an agent gave it, and a page could read it under that name, so every name is kept but those
+ * that reach into what every object has.
+ */
 async function keptBy(ctx: QueryCtx | MutationCtx, artifactId: Id<'artifacts'>, inside: State | undefined): Promise<[string, string][]> {
-  if (inside) return Object.entries(inside).flatMap(([k, value]) => (isStoreKey(k) ? [[k, JSON.stringify(value)] as [string, string]] : []))
+  if (inside) return Object.entries(inside).flatMap(([k, value]) => (k && !NOT_NAMES.has(k) ? [[k, JSON.stringify(value)] as [string, string]] : []))
   return (await keptNow(ctx, artifactId, false)).map((r) => [r.key, r.json ?? 'null'])
 }
 
@@ -169,7 +177,7 @@ interface Standing {
  * Reads where a page's state stands, for a change. A state whose page's values are still inside
  * the agent's part has them moved out into records of their own first, at the revision of the
  * change; and a record of the revision that does not count what the page keeps has it counted
- * afresh. A value whose name could never have been stored by the page is not moved.
+ * afresh.
  */
 async function standing(ctx: MutationCtx, artifactId: Id<'artifacts'>): Promise<Standing> {
   const r = await revisionRecord(ctx, artifactId)
