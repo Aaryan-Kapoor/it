@@ -1,6 +1,8 @@
 // The script inside every page, as it is built and served, run in a stand-in for a browser:
 // a fresh page for every test. The site that frames the page is stood in for by hand: it
 // receives the hello, hands over a port, and answers on it.
+
+import { CHANNEL_VERSION, STORE_EVERY_MS } from '@it/protocol'
 import { JSDOM } from 'jsdom'
 import { describe, expect, test } from 'vitest'
 import { RUNTIME } from '../content/src/runtime.generated'
@@ -59,12 +61,13 @@ function load(html = '', before: (w: any) => void = () => {}) {
       }
       now = until
     },
-    /** The site answers the hello, as mount.tsx does: from the window that framed the page. */
-    answer(origin = APP, source: unknown = w.parent) {
+    /** The site answers the hello, as mount.tsx does: from the window that framed the page. A site whose channel says no version (`null`) is one from before it said any. */
+    answer(origin = APP, source: unknown = w.parent, v: number | null = CHANNEL_VERSION) {
       // A port sends a copy of what it is given, and refuses what cannot be copied: the stand-in does as a real one does
       const port: Port = { sent: [], postMessage: (m) => port.sent.push(structuredClone(m)), onmessage: null, close: () => {} }
       page.port = port
-      w.dispatchEvent(Object.assign(new w.Event('message'), { origin, source, data: { type: 'it:port' }, ports: [port] }))
+      const data = v === null ? { type: 'it:port' } : { type: 'it:port', v }
+      w.dispatchEvent(Object.assign(new w.Event('message'), { origin, source, data, ports: [port] }))
       return port
     },
     fromSite: (data: unknown) => page.port?.onmessage?.({ data }),
@@ -121,7 +124,7 @@ describe('the script inside a page', () => {
     const bad = p.It.action('bad', { fn() {} })
     const stored = p.It.store.set('draft', 'kept')
     const port = p.answer()
-    expect(port.sent.map((m) => m.envelope?.name ?? m.key)).toEqual(['first', 'draft'])
+    expect(port.sent.map((m) => m.envelope?.name ?? m.changes?.[0]?.[0])).toEqual(['first', 'draft'])
     await expect(bad).rejects.toThrow(/could not be sent/)
     // The two that were sent are answered as any are
     p.fromSite({ type: 'it:result', requestId: port.sent[0].requestId, ok: true, actionId: 'a1' })
@@ -131,7 +134,7 @@ describe('the script inside a page', () => {
     // Asked once the port is there, it is refused in the same way, and the next thing asked goes
     await expect(p.It.action('bad again', { fn() {} })).rejects.toThrow(/could not be sent/)
     void p.It.action('after', {})
-    expect(port.sent.map((m) => m.envelope?.name ?? m.key)).toEqual(['first', 'draft', 'after'])
+    expect(port.sent.map((m) => m.envelope?.name ?? m.changes?.[0]?.[0])).toEqual(['first', 'draft', 'after'])
   })
 
   describe('a file in what an action carries', () => {
@@ -422,7 +425,8 @@ describe('the script inside a page', () => {
     expect(p.It.store.get('a.b')).toBe('dotted')
     expect(p.It.store.get('missing')).toBeUndefined()
     void p.It.store.set('draft', { text: 'new' })
-    expect(port.sent[0]).toMatchObject({ type: 'it:store', key: 'draft', value: { text: 'new' } })
+    await p.advance(0)
+    expect(port.sent[0]).toMatchObject({ type: 'it:store', changes: [['draft', '{"text":"new"}']] })
     // A name that reaches into what every object has is neither read nor sent
     expect(p.It.store.get('constructor')).toBeUndefined()
     expect(p.It.store.get('__proto__')).toBeUndefined()
@@ -540,6 +544,209 @@ describe('the script inside a page', () => {
     expect(inner.answer('null').sent).toEqual([])
     void inner.It.action('approve', {})
     expect(inner.page.port!.sent).toEqual([])
+  })
+})
+
+describe('what the page keeps for itself', () => {
+  /** The writes the page sent the site of what it keeps, each as its names and values. */
+  const writes = (port: Port) =>
+    port.sent.filter((m) => m.type === 'it:store').map((m) => Object.fromEntries(m.changes.map(([k, v]: string[]) => [k, JSON.parse(v!)])))
+  const lastWrite = (port: Port) => port.sent.filter((m) => m.type === 'it:store').at(-1)
+
+  test('what is set together goes as one write, with the last value under each name, and the next waits for it and for a moment after', async () => {
+    const p = load()
+    const port = p.answer()
+    p.fromSite({ type: 'it:state', state: {}, revision: 1 })
+    const answers = [p.It.store.set('a', 1), p.It.store.set('b', 2), p.It.store.set('a', 3)]
+    await p.advance(0)
+    expect(writes(port)).toEqual([{ a: 3, b: 2 }])
+    // Set while that one is on its way: held, and gathered
+    void p.It.store.set('c', 4)
+    void p.It.store.set('c', 5)
+    void p.It.store.set('a', 6)
+    await p.advance(0)
+    expect(writes(port)).toHaveLength(1)
+    p.fromSite({ type: 'it:result', requestId: port.sent[0].requestId, ok: true, revision: 2 })
+    await p.advance(0)
+    for (const answer of answers) await expect(answer).resolves.toEqual({ ok: true })
+    // Answered at once, it is still sent no sooner than a moment after the one before
+    expect(writes(port)).toHaveLength(1)
+    await p.advance(STORE_EVERY_MS)
+    expect(writes(port)).toEqual([
+      { a: 3, b: 2 },
+      { c: 5, a: 6 },
+    ])
+    // Once a moment has passed with nothing on its way, what is set goes at once
+    p.fromSite({ type: 'it:result', requestId: lastWrite(port).requestId, ok: true, revision: 3 })
+    await p.advance(STORE_EVERY_MS * 2)
+    void p.It.store.set('d', 7)
+    await p.advance(0)
+    expect(writes(port).at(-1)).toEqual({ d: 7 })
+  })
+
+  test('the page sees what it set at once, over any state that does not have it yet, and no handler of its is called for it', async () => {
+    const p = load('<p data-it-bind="_page.draft"></p>')
+    const port = p.answer()
+    const told: unknown[] = []
+    p.It.onState((s: any) => told.push(s._page?.draft))
+    p.fromSite({ type: 'it:state', state: { status: 'open', _page: { draft: 'old', other: 'o' } }, revision: 1 })
+    expect(told).toEqual(['old'])
+    void p.It.store.set('draft', 'new')
+    void p.It.store.set('other', null)
+    // Seen in It.store.get and in It.state at once, and nothing was called for it
+    expect(p.It.store.get('draft')).toBe('new')
+    expect(p.It.store.get('other')).toBeUndefined()
+    expect(p.It.state).toEqual({ status: 'open', _page: { draft: 'new' } })
+    expect(told).toEqual(['old'])
+    await p.advance(0)
+    // A state that does not have it yet, from someone else's change, is shown with it
+    p.fromSite({ type: 'it:changed', revision: 2, state: { status: 'busy' }, kept: [] })
+    expect(told).toEqual(['old', 'new'])
+    expect(p.w.document.querySelector('p').textContent).toBe('new')
+    expect(p.It.state.status).toBe('busy')
+    // Kept, at revision 3: shown as it is until the state of revision 3 arrives, which has it
+    p.fromSite({ type: 'it:result', requestId: lastWrite(port).requestId, ok: true, revision: 3 })
+    await p.advance(0)
+    p.fromSite({ type: 'it:changed', revision: 2, kept: [['draft', 'stale']] })
+    expect(p.It.store.get('draft')).toBe('new')
+    p.fromSite({
+      type: 'it:changed',
+      revision: 3,
+      kept: [
+        ['draft', 'new'],
+        ['other', null],
+      ],
+    })
+    expect(p.It.state).toEqual({ status: 'busy', _page: { draft: 'new' } })
+    expect(p.It.revision).toBe(3)
+    // And from then on it shows what It sends, another display's change included
+    p.fromSite({ type: 'it:changed', revision: 4, kept: [['draft', 'theirs']] })
+    expect(p.It.store.get('draft')).toBe('theirs')
+    expect(told.at(-1)).toBe('theirs')
+  })
+
+  test('a write refused for coming too fast is sent again when It says, with what was set meanwhile, and nothing set is lost', async () => {
+    const p = load()
+    const port = p.answer()
+    p.fromSite({ type: 'it:state', state: {}, revision: 1 })
+    const first = p.It.store.set('a', 1)
+    const second = p.It.store.set('b', 1)
+    await p.advance(0)
+    void p.It.store.set('b', 2)
+    p.fromSite({ type: 'it:result', requestId: lastWrite(port).requestId, ok: false, error: 'Too many requests.', retryAfterMs: 900 })
+    await p.advance(0)
+    // Still shown, still waiting, and not sent again before the wait is over
+    expect(p.It.store.get('a')).toBe(1)
+    expect(p.It.store.get('b')).toBe(2)
+    await p.advance(800)
+    expect(writes(port)).toHaveLength(1)
+    await p.advance(100)
+    expect(writes(port).at(-1)).toEqual({ b: 2, a: 1 })
+    p.fromSite({ type: 'it:result', requestId: lastWrite(port).requestId, ok: true, revision: 2 })
+    await expect(first).resolves.toEqual({ ok: true })
+    await expect(second).resolves.toEqual({ ok: true })
+  })
+
+  test('a write refused for good is not kept: its promises reject, and the page sees what It has again', async () => {
+    const p = load()
+    const port = p.answer()
+    const told: unknown[] = []
+    p.It.onState((s: any) => told.push(s._page?.draft))
+    p.fromSite({ type: 'it:state', state: { _page: { draft: 'kept' } }, revision: 1 })
+    const refused = p.It.store.set('draft', 'too much')
+    await p.advance(0)
+    expect(p.It.store.get('draft')).toBe('too much')
+    p.fromSite({ type: 'it:result', requestId: lastWrite(port).requestId, ok: false, error: "A page's state is at most 512 KB." })
+    await expect(refused).rejects.toThrow("A page's state is at most 512 KB.")
+    expect(p.It.store.get('draft')).toBe('kept')
+    expect(told).toEqual(['kept', 'kept'])
+  })
+
+  test('a value It would not take is refused when it is set, by itself, and one taken as it was then', async () => {
+    const p = load()
+    const port = p.answer()
+    p.fromSite({ type: 'it:state', state: {}, revision: 1 })
+    await expect(p.It.store.set('photo', new p.w.Blob(['x']))).rejects.toThrow('A file cannot be kept with It.store.')
+    await expect(p.It.store.set('big', 'x'.repeat(40 * 1024))).rejects.toThrow('That is too large to send.')
+    await expect(p.It.store.set('fn', { go() {} })).rejects.toThrow('That cannot be sent.')
+    await expect(p.It.store.set('when', new p.w.Date())).rejects.toThrow('That cannot be sent.')
+    const value = { points: [1, 2] }
+    const fine = p.It.store.set('fine', value)
+    value.points.push(3)
+    await p.advance(0)
+    expect(writes(port)).toEqual([{ fine: { points: [1, 2] } }])
+    expect(p.It.store.get('fine')).toEqual({ points: [1, 2] })
+    p.fromSite({ type: 'it:result', requestId: lastWrite(port).requestId, ok: true, revision: 2 })
+    await expect(fine).resolves.toEqual({ ok: true })
+  })
+
+  test('what is set before the site has answered is held, and sent as one write once it has', async () => {
+    const p = load()
+    void p.It.store.set('a', 1)
+    void p.It.store.set('b', 2)
+    await p.advance(0)
+    expect(p.It.store.get('a')).toBe(1)
+    const port = p.answer()
+    expect(writes(port)).toEqual([{ a: 1, b: 2 }])
+  })
+
+  test('a site whose channel takes one value at a time is sent one at a time, and what it refuses is not kept', async () => {
+    const p = load()
+    const port = p.answer(APP, p.w.parent, null)
+    p.fromSite({ type: 'it:state', state: { _page: { b: 'was' } }, revision: 1 })
+    const a = p.It.store.set('a', { n: 1 })
+    const b = p.It.store.set('b', 'new')
+    await p.advance(0)
+    expect(port.sent.filter((m) => m.type === 'it:store').map((m) => [m.key, m.value])).toEqual([
+      ['a', { n: 1 }],
+      ['b', 'new'],
+    ])
+    const [first, second] = port.sent.filter((m) => m.type === 'it:store')
+    p.fromSite({ type: 'it:result', requestId: first.requestId, ok: true })
+    p.fromSite({ type: 'it:result', requestId: second.requestId, ok: false, error: 'Too many requests.' })
+    await expect(a).resolves.toEqual({ ok: true })
+    await expect(b).rejects.toThrow('Too many requests.')
+    expect(p.It.store.get('b')).toBe('was')
+    // Such a site sends the whole state each time, which is taken as it is
+    p.fromSite({ type: 'it:state', state: { _page: { a: { n: 1 }, b: 'was' } }, revision: 2 })
+    expect(p.It.state).toEqual({ _page: { a: { n: 1 }, b: 'was' } })
+  })
+
+  test('what changed is put together with the state that came before, and anything older is passed over', async () => {
+    const p = load('<p data-it-bind="status"></p>')
+    p.answer()
+    const told: any[] = []
+    p.It.onState((s: any) => told.push(s))
+    // Before the whole state, what changed has nothing to be put with
+    p.fromSite({ type: 'it:changed', revision: 4, kept: [['x', 1]] })
+    expect(told).toEqual([])
+    p.fromSite({ type: 'it:state', state: { status: 'one', _page: { a: 1, b: 2 } }, revision: 5 })
+    const before = p.It.state
+    p.fromSite({
+      type: 'it:changed',
+      revision: 6,
+      kept: [
+        ['a', null],
+        ['c', 3],
+      ],
+    })
+    expect(p.It.state).toEqual({ status: 'one', _page: { b: 2, c: 3 } })
+    // A new state each time: what the page was given before is as it was
+    expect(before).toEqual({ status: 'one', _page: { a: 1, b: 2 } })
+    p.fromSite({ type: 'it:changed', revision: 7, state: { status: 'two' }, kept: [] })
+    expect(p.It.state).toEqual({ status: 'two', _page: { b: 2, c: 3 } })
+    expect(p.w.document.querySelector('p').textContent).toBe('two')
+    p.fromSite({ type: 'it:changed', revision: 7, kept: [['b', 'late']] })
+    p.fromSite({
+      type: 'it:changed',
+      revision: 8,
+      kept: [
+        ['b', null],
+        ['c', null],
+      ],
+    })
+    expect(p.It.state).toEqual({ status: 'two' })
+    expect(told.map((s) => p.It.revision && s.status)).toEqual(['one', 'one', 'two', 'two'])
   })
 })
 

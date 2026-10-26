@@ -5,7 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 import { describe, expect, onTestFinished, test } from 'vitest'
 import { RUNTIME } from '../../packages/content/src/runtime.generated'
-import { LIMITS, QUOTA, SHRINK } from '../../packages/protocol/src/index'
+import { CHANNEL_VERSION, LIMITS, QUOTA, SHRINK, STORE_EVERY_MS } from '../../packages/protocol/src/index'
 
 const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8')
 /** What an agent reads whole each time it uses It. */
@@ -46,9 +46,20 @@ const draftPage = () => {
   w.eval(script)
   const sent: any[] = []
   const port = { postMessage: (m: unknown) => sent.push(m), onmessage: null as ((e: { data: unknown }) => void) | null }
-  w.dispatchEvent(Object.assign(new w.Event('message'), { origin: 'http://app.test', source: w.parent, data: { type: 'it:port' }, ports: [port] }))
+  w.dispatchEvent(
+    Object.assign(new w.Event('message'), { origin: 'http://app.test', source: w.parent, data: { type: 'it:port', v: CHANNEL_VERSION }, ports: [port] }),
+  )
   const box = w.document.getElementById('draft')
   const stores = () => sent.filter((m) => m.type === 'it:store')
+  /** Time goes by long enough for the runtime's pause between two writes of what the page keeps, and what it holds is sent. */
+  const settled = async () => {
+    for (const [id, { fn, ms }] of [...later]) {
+      if (ms !== STORE_EVERY_MS) continue
+      later.delete(id)
+      fn()
+    }
+    await new Promise(setImmediate)
+  }
   return {
     box,
     retry: w.document.getElementById('draft-retry'),
@@ -58,19 +69,22 @@ const draftPage = () => {
       box.dispatchEvent(new w.Event('input'))
     },
     arrives: (state: unknown, revision: number) => port.onmessage!({ data: { type: 'it:state', state, revision } }),
-    /** Run only the documented debounce, not the runtime's connection retry. */
-    aMomentLater() {
+    settled,
+    /** Run only the documented debounce, and the runtime's pause between writes, which is shorter, and not its connection retry. */
+    async aMomentLater() {
+      await settled()
       for (const [id, { fn, ms }] of [...later]) {
         if (ms !== 800) continue
         later.delete(id)
         fn()
       }
+      await new Promise(setImmediate)
     },
-    stored: () => stores().map((m) => m.value),
+    stored: () => stores().flatMap((m) => m.changes.map(([, text]: [string, string]) => JSON.parse(text))),
     async answer(index: number, ok: boolean) {
       const requestId = stores()[index].requestId
-      port.onmessage!({ data: { type: 'it:result', requestId, ok, ...(ok ? {} : { error: 'The save was refused.' }) } })
-      await new Promise(setImmediate)
+      port.onmessage!({ data: { type: 'it:result', requestId, ok, ...(ok ? { revision: 10 + index } : { error: 'The save was refused.' }) } })
+      await settled()
     },
   }
 }
@@ -270,9 +284,12 @@ describe('the agent skill', () => {
     expect(skill).toContain(`one page may write ${state.burst / 1024} MB of it at once, and then ${state.perMinute / 1024} MB a minute`)
     const frame = source('../../web/src/mount.tsx')
     expect(/const PER_SECOND = (\d+)/.exec(frame)![1]).toBe('5')
-    expect(skill).toContain(
-      `The site takes ${/const BURST = (\d+)/.exec(frame)![1]} messages from a page at once, actions and stored values together, and then five a second`,
-    )
+    expect(skill).toContain(`The site takes ${/const BURST = (\d+)/.exec(frame)![1]} actions from a page at once, and then five a second`)
+    // What the page keeps: how often the script in a page writes it, how many values, and that a write coming too fast waits
+    expect(1000 / STORE_EVERY_MS).toBe(20)
+    expect(skill).toContain('It sends no more than twenty writes a second from one display')
+    expect(skill).toContain(`a page keeps at most ${LIMITS.storeKeys.toLocaleString('en-US')} values with \`It.store\``)
+    expect(source('../../packages/runtime/src/it.ts')).toMatch(/result\.retryAfterMs !== undefined[\s\S]{0,400}toSend\.set\(key, setting\)/)
     // How often a page may ask for its own files, and how many conversations a machine listens for
     const reads = /READS: limit\((\d+)\)/.exec(source('../../packages/content/src/limits.ts'))![1]!
     expect(skill).toContain(`The files of one showing may be asked for ${Number(reads).toLocaleString('en-US')} times in a minute.`)
@@ -345,18 +362,19 @@ describe('the agent skill', () => {
     expect(skill).not.toMatch(/are showing it/)
     // The state begins empty, what a page stored is read from it at that moment, and a listener is told when it arrives
     const runtime = source('../../packages/runtime/src/it.ts')
-    expect(runtime).toMatch(/let state: Record<string, unknown> = \{\}/)
-    expect(runtime).toMatch(/get: \(key: string\) => \{\s+const kept = state\[STORE_KEY\]/)
+    expect(runtime).toMatch(/let state: State = \{\}/)
+    expect(runtime).toMatch(/get: \(key: string\) => \{\s+const kept = keptIn\(state\)/)
     expect(runtime).toMatch(/if \(message\.type === 'it:state'\) \{[\s\S]{0,160}emit\(\)/)
     expect(skill).toContain("It is not there yet when the page's scripts first run")
     expect(skill).toContain('so as the page starts it returns `undefined` even for something that was saved')
-    // The example reads what was saved where the state arrives, and saves no faster than a page may send
+    // The example reads what was saved where the state arrives, and saves at every letter, which the script in the page gathers
     const example = /```html\n[\s\S]*?```/.exec(more.page!)![0]
     expect(example).toMatch(/It\.onState\(\(\) => \{[\s\S]{0,80}box\.value = It\.store\.get\('draft'\) \?\? ''/)
-    expect(example).toContain('setTimeout(save, 800)')
+    expect(example).toMatch(/box\.addEventListener\('input', \(\) => \{[\s\S]{0,40}save\(\)/)
+    expect(example).not.toContain('setTimeout')
   })
 
-  test('its example of a draft, run as it is written, puts back what was saved once and never over what was typed, before the state came or after', () => {
+  test('its example of a draft, run as it is written, puts back what was saved once and never over what was typed, before the state came or after', async () => {
     // Opened with nothing typed: what was saved is put back, and what is typed after it stays through every later change of the state
     const opened = draftPage()
     opened.arrives({ _page: { draft: 'what was saved' } }, 3)
@@ -364,26 +382,44 @@ describe('the agent skill', () => {
     opened.types('what was saved, and more')
     opened.arrives({ _page: { draft: 'what was saved' }, status: 'Working' }, 4)
     expect(opened.box.value).toBe('what was saved, and more')
-    opened.aMomentLater()
+    await opened.settled()
     expect(opened.stored()).toEqual(['what was saved, and more'])
     // Typed into before the state came, which takes a moment: what was typed stays, and it is what is saved
     const early = draftPage()
     early.types('typed before the state came')
     early.arrives({ _page: { draft: 'what was saved' } }, 3)
     expect(early.box.value).toBe('typed before the state came')
-    early.aMomentLater()
+    await early.settled()
     expect(early.stored()).toEqual(['typed before the state came'])
+  })
+
+  test('the draft example saves at every letter, and what is typed within a moment goes as one write with the last text', async () => {
+    const p = draftPage()
+    p.arrives({}, 0)
+    expect(p.said()).toBe('No unsaved changes.')
+    p.types('f')
+    p.types('fi')
+    p.types('first')
+    expect(p.said()).toBe('Saving...')
+    await p.settled()
+    expect(p.stored()).toEqual(['first'])
+    // Typed while that is on its way: sent once it is answered, and only then is the draft saved
+    p.types('first words')
+    await p.settled()
+    expect(p.stored()).toEqual(['first'])
+    await p.answer(0, true)
+    expect(p.said()).toBe('Saving...')
+    expect(p.stored()).toEqual(['first', 'first words'])
+    await p.answer(1, true)
+    expect(p.said()).toBe('Saved.')
   })
 
   test('the draft example reports a failed save, preserves its text and retries without another edit', async () => {
     const p = draftPage()
     p.arrives({}, 0)
-    expect(p.said()).toBe('No unsaved changes.')
     p.types('first letter')
     p.types('the whole draft')
-    expect(p.said()).toBe('Changes not saved yet.')
-    expect(p.stored()).toEqual([])
-    p.aMomentLater()
+    await p.settled()
     expect(p.stored()).toEqual(['the whole draft'])
     expect(p.said()).toBe('Saving...')
     await p.answer(0, false)
@@ -391,10 +427,11 @@ describe('the agent skill', () => {
     expect(p.said()).toMatch(/^Not saved\. Keep this page open and try again\./)
     expect(p.retry.hidden).toBe(false)
     // A failure does not start an endless retry loop.
-    p.aMomentLater()
+    await p.aMomentLater()
     expect(p.stored()).toHaveLength(1)
     p.retry.click()
     p.retry.click()
+    await p.settled()
     expect(p.stored()).toEqual(['the whole draft', 'the whole draft'])
     expect(p.said()).toBe('Saving...')
     expect(p.retry.hidden).toBe(true)
@@ -407,24 +444,24 @@ describe('the agent skill', () => {
   test.each([true, false])('the draft example keeps newer text unsaved when an older request finishes with ok=%s', async (ok) => {
     const p = draftPage()
     p.types('older draft')
-    p.aMomentLater()
-    // Typing and its debounce both happen before the older request is answered.
+    await p.settled()
+    // Typed before the older request is answered
     p.types('newest draft')
-    p.aMomentLater()
+    await p.settled()
     expect(p.stored()).toEqual(['older draft'])
     await p.answer(0, ok)
     expect(p.box.value).toBe('newest draft')
-    expect(p.said()).toBe('Changes not saved yet.')
+    expect(p.said()).toBe('Saving...')
     expect(p.retry.hidden).toBe(true)
-    p.aMomentLater()
     expect(p.stored()).toEqual(['older draft', 'newest draft'])
     await p.answer(1, false)
     expect(p.said()).toMatch(/^Not saved\./)
-    // Even a repeated answer for the old request cannot clear this revision's failure.
+    // Even a repeated answer for the old request cannot clear this edit's failure.
     await p.answer(0, true)
     expect(p.said()).toMatch(/^Not saved\./)
     expect(p.retry.hidden).toBe(false)
     p.retry.click()
+    await p.settled()
     await p.answer(2, true)
     expect(p.said()).toBe('Saved.')
     expect(p.box.value).toBe('newest draft')
@@ -433,14 +470,14 @@ describe('the agent skill', () => {
   test('the draft example saves an edit made during a retry before saying it is saved', async () => {
     const p = draftPage()
     p.types('a draft')
-    p.aMomentLater()
+    await p.settled()
     await p.answer(0, false)
     p.retry.click()
+    await p.settled()
     p.types('a draft with another sentence')
-    // The retry finishes before the new edit's debounce.
+    // The retry finishes before the new edit is sent
     await p.answer(1, true)
-    expect(p.said()).toBe('Changes not saved yet.')
-    p.aMomentLater()
+    expect(p.said()).toBe('Saving...')
     expect(p.stored()).toEqual(['a draft', 'a draft', 'a draft with another sentence'])
     await p.answer(2, true)
     expect(p.said()).toBe('Saved.')
