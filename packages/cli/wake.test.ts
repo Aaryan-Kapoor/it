@@ -1202,7 +1202,10 @@ describe('a reopened run on Windows, as it is put to the system', () => {
 
 describe.skipIf(process.platform !== 'win32')('a reopened run on Windows, kept in a job of its own', () => {
   // A stand-in for an agent app: it writes down what it was given and how, starts something
-  // that runs until it is ended, and then ends as it is told, or waits
+  // that runs until it is ended, and then ends as it is told, or waits. What it starts is
+  // started apart from it, as a command an agent leaves running in the background is: Node puts
+  // what it starts otherwise in a job of its own, which ends it with Node, and only the run's job
+  // is to be what ends it here
   const AGENT = `const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
@@ -1211,7 +1214,7 @@ let input = ''
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', (piece) => { input += piece })
 process.stdin.on('end', () => {
-  const left = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true })
+  const left = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true, detached: true })
   left.unref()
   const ran = { input, pid: process.pid, left: left.pid, cwd: process.cwd(), run: process.env.IT_RUN || null, told: Object.keys(process.env).filter((k) => /^IT_JOB/i.test(k)), modules: process.env.PSModulePath === undefined ? null : process.env.PSModulePath }
   fs.writeFileSync(path.join(dir, 'ran.part'), JSON.stringify(ran))
