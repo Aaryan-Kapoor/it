@@ -990,6 +990,30 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   )
 
   test.skipIf(process.platform === 'win32')(
+    'a hand-over that hands nothing over is not followed at once by another: what kept the click back is asked about again at the next second, and not without pause',
+    async () => {
+      const bin = holdingCodex()
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(folder)
+      standIn()
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      // Its hook was heard a moment ago, as a Codex that has just been closed says it was: a
+      // reopening of it is got ready and then not started, and the click goes back to waiting
+      await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(onFirst(1))
+      await until(() => called('delivery:release').includes('click-1'))
+      await pause(500)
+      expect(stand.calls.filter((c) => c.name === 'machines:runBegan')).toHaveLength(1)
+      expect(given(bin, 0)).toBe('')
+      // The next second's pass tries it again
+      await pass()
+      await until(() => stand.calls.filter((c) => c.name === 'machines:runBegan').length === 2)
+    },
+  )
+
+  test.skipIf(process.platform === 'win32')(
     'a reopening that fails after its own add-on was heard from counts as a try, says the app’s last line on the page alone, and is not tried without end',
     async () => {
       // Codex's own command, as a program of its own: it says that it began, waits to be let go, prints why it cannot go on, and fails

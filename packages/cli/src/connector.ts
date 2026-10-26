@@ -1608,7 +1608,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: thread }), harnessEnv())
     return typeof env === 'string' ? Promise.resolve(env) : codexQueue(thread, text, env)
   }
-  async function queueNow(click: Offered, reopening: boolean, offered: Offered[], t3?: { server: T3; thread: string }): Promise<void> {
+  async function queueNow(
+    click: Offered,
+    reopening: boolean,
+    offered: Offered[],
+    t3?: { server: T3; thread: string },
+    /** Said, for whoever put it in line, once the click was handed over. */
+    done: { handed: boolean } = { handed: false },
+  ): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
     const receiptSlots: string[] = []
     /** This hand-over is finished: what its renewals are answered from now on is about nothing that is running. */
@@ -1925,6 +1932,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // waiter has it and says so to It itself, so there is nothing to try again or set aside
       if (!handed && sent.toWaiter) return
       if (handed) {
+        done.handed = true
         // The app has already taken these clicks. A failed receipt write must not turn
         // that handoff into a refusal or release the rest of its batch for redelivery.
         if (!recovery.stopped) {
@@ -2062,13 +2070,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // offers with it, especially the attended click that permits this turn. Claims still
     // check ownership and whether each click is pending when the command gets its place.
     const offered = inbox.filter((c) => c.session?.harness === click.session!.harness && c.session?.id === click.session!.id)
-    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening, offered, t3)))
+    const done = { handed: false }
+    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening, offered, t3, done)))
     queues.set(key, next)
     void next.then(() => {
       if (queues.get(key) === next) queues.delete(key)
-      // What waited for this hand-over to be over, as what was done while a reopened run of the
-      // conversation was finishing does, is looked at again at once, and not at the next second
-      soon(0)
+      // What waited for a hand-over that handed its click over, as what was done while a reopened
+      // run of the conversation was finishing does, is looked at again at once, and not at the
+      // next second. One that handed nothing over leaves its click as it was, and what kept it
+      // back is asked about again at the next second: asked again at once, it is asked without pause.
+      if (done.handed) soon(0)
     })
     return true
   }
