@@ -286,7 +286,12 @@ export const inboxPage = query({
       const on = wakesOn(machine.system) ? (machine.wakes ?? []).find((w) => w.harness === harness) : undefined
       if (reopened && !on) continue
       const from = reopened ? on!.since - WAKE_BACK_MS : 0
-      const each = reopened ? WAKE_MOST : 2
+      // A conversation that may be reopened is offered as many clicks as one reopening carries:
+      // a reopening takes everything waiting for its conversation in one message, and can take
+      // only what it was offered. Codex's queue takes one at a time, and two let the next be seen
+      // while the first is on its way, so a Codex conversation is offered more only where
+      // Auto-wake is on for Codex.
+      const each = on ? WAKE_MOST : 2
       // Every app keeps a share of both the response and the read allowance. A conversation
       // reserves five reads: discovery, its two oldest clicks, and the oldest attended click in
       // each of the two forms stored by current and older clients. It reserves two response

@@ -4939,6 +4939,21 @@ describe('cases at the edges', () => {
     expect((await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['claude-code'], after: [] })).clicks.map((c) => c.id)).toEqual([timers[7]])
   })
 
+  test('a Codex conversation is offered as many clicks as one reopening carries where Auto-wake is on for Codex, and two where Codex’s queue alone takes them', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const thread = { harness: 'codex', id: 'thread-studio' }
+    const p = await publish(m, 'studio', { session: thread })
+    const made = await insertClicks(t, p.artifactId, 5, { attended: true }, Date.now() - 1000)
+    const offered = async () => (await m.as.query(api.delivery.inboxPage, { listening: [], queues: ['codex'], after: [] })).clicks.map((c) => c.id)
+    await t.run((ctx) => ctx.db.patch(m.id, { wanted: ['codex'], harnesses: [{ id: 'codex', addon: 'connected' }], wakesOff: ['codex'] }))
+    expect(await offered()).toEqual(made.slice(0, 2))
+    // Three things done in the last seconds of a reopened turn, and two more, go in the one reopening that follows it
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: true })
+    expect(await offered()).toEqual(made)
+  })
+
   test('a deleted cursor and new earlier conversations do not reset discovery before it rolls over', async () => {
     const t = backend()
     await person(t, 'alice')
