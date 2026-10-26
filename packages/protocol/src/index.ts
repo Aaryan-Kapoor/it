@@ -85,6 +85,10 @@ export const LIMITS = {
   stateBytes: 512 * 1024,
   /** One value a page keeps for itself with It.store. */
   storeValueBytes: 32 * 1024,
+  /** How many names a page may keep a value under with It.store. */
+  storeKeys: 5000,
+  /** How many of them one write of the page's may change: the script in a page sends more as several. */
+  storeKeysAtOnce: 500,
   actionPayloadBytes: 32 * 1024,
   /** One file sent with an action, beside what it carries. */
   actionFileBytes: 25 * 1024 * 1024,

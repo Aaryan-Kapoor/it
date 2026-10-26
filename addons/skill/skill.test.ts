@@ -332,7 +332,7 @@ describe('the agent skill', () => {
     // The revision `it state` prints is the one `--if-revision` is held to, and a state that has moved on is refused as a conflict
     expect(main).toMatch(/out\(\{ state: parseJson\(s\.json\) \?\? \{\}, revision: s\.revision \}\)/)
     expect(main).toMatch(/const base = text\(a, 'if-revision'\)[\s\S]{0,400}baseRevision: Number\(base\)/)
-    expect(source('../../convex/state.ts')).toMatch(/baseRevision !== \(s\?\.revision \?\? 0\)\) \{\s+fail\('conflict'/)
+    expect(source('../../convex/state.ts')).toMatch(/baseRevision !== at\.revision\) fail\('conflict'/)
     expect(skill).toContain('`it patch deploy-plan \'{"total":42}\' --if-revision 7`')
     expect(skill).toContain('refused with the code `conflict`')
   })

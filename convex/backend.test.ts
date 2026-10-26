@@ -1932,6 +1932,214 @@ describe('state', () => {
   })
 })
 
+describe('what a page keeps for itself, and how its displays are told of it', () => {
+  type Who = ReturnType<T['withIdentity']>
+  const live = (who: Who, artifactId: Id<'artifacts'>, since?: number) => who.query(api.state.live, { artifactId, ...(since === undefined ? {} : { since }) })
+  const keep = (who: Who, artifactId: Id<'artifacts'>, changes: Record<string, unknown>) =>
+    who.mutation(api.state.store, { artifactId, changes: Object.entries(changes).map(([key, value]) => ({ key, value: JSON.stringify(value) })) })
+  /** What a display is sent of what the page keeps, in the order of the names. */
+  const sorted = (kept: [string, string | null][] | undefined) => [...(kept ?? [])].sort(([a], [b]) => a.localeCompare(b))
+  const keptRecords = (t: T) => t.run((ctx) => ctx.db.query('stored').collect())
+
+  test('several values are kept in one write, and a display is sent only what changed since the revision it has', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan', { state: '{"status":"draft"}' })
+    const first = await live(alice.browser, p.artifactId)
+    expect(first).toEqual({ revision: first.revision, whole: true, state: '{"status":"draft"}', kept: [] })
+    const one = await keep(alice.browser, p.artifactId, { a: 1, b: { x: 1 } })
+    expect(one.revision).toBe(first.revision + 1)
+    // Only the page's own values changed, and only they are sent
+    const since = await live(alice.browser, p.artifactId, first.revision)
+    expect(since.state).toBeUndefined()
+    expect(sorted(since.kept)).toEqual([
+      ['a', '1'],
+      ['b', '{"x":1}'],
+    ])
+    // Asked again with the revision it was given, it is given that revision alone
+    expect(await live(alice.browser, p.artifactId, one.revision)).toEqual({ revision: one.revision })
+    // A value taken away is sent as nothing, beside one that was set
+    const two = await keep(alice.browser, p.artifactId, { a: null, c: 'c' })
+    expect(sorted((await live(alice.browser, p.artifactId, one.revision)).kept)).toEqual([
+      ['a', null],
+      ['c', '"c"'],
+    ])
+    // A value set again to what it is changes nothing, and moves the revision on not at all
+    expect(await keep(alice.browser, p.artifactId, { c: 'c' })).toEqual({ revision: two.revision })
+    expect(await live(alice.browser, p.artifactId, two.revision)).toEqual({ revision: two.revision })
+    // What the agent changes is sent whole, and alone
+    await m.as.mutation(api.state.patch, { slug: 'plan', patch: '{"status":"done"}' })
+    const agent = await live(alice.browser, p.artifactId, two.revision)
+    expect(agent).toEqual({ revision: two.revision + 1, state: '{"status":"done"}', kept: [] })
+    // The agent reads the state whole, with what the page keeps under its own key, and an export holds it the same
+    const whole = { status: 'done', [STORE_KEY]: { b: { x: 1 }, c: 'c' } }
+    expect(await stateOf(m.as, 'plan')).toEqual(whole)
+    expect((await m.as.query(api.state.get, { slug: 'plan' })).revision).toBe(agent.revision)
+    expect(JSON.parse((await alice.browser.query(api.account.exportPage, { artifactId: p.artifactId })).state)).toEqual(whole)
+    // A display that says it has a revision the page never reached is sent the whole state
+    const ahead = await live(alice.browser, p.artifactId, agent.revision + 5)
+    expect(ahead).toMatchObject({ revision: agent.revision, whole: true, state: '{"status":"done"}' })
+    expect(sorted(ahead.kept)).toEqual([
+      ['b', '{"x":1}'],
+      ['c', '"c"'],
+    ])
+    // The agent's part of the record holds nothing of what the page keeps
+    const [record] = await t.run((ctx) => ctx.db.query('states').collect())
+    expect(JSON.parse(record!.json)).toEqual({ status: 'done' })
+  })
+
+  test('a write that would hold more than a page may is refused and changes nothing, and one that holds less goes through', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan')
+    await keep(alice.browser, p.artifactId, { k0: 1, k1: 1 })
+    // As many names as a page may keep a value under, as the page's record counts them (the stand-in
+    // backend these tests run on takes too long to be given five thousand), and one more
+    await t.run(async (ctx) => {
+      for (const r of await ctx.db.query('revisions').collect()) if (r.artifactId === p.artifactId) await ctx.db.patch(r._id, { keys: LIMITS.storeKeys })
+    })
+    const full = (await live(alice.browser, p.artifactId)).revision
+    expect(await code(keep(alice.browser, p.artifactId, { over: 1 }))).toBe('limit')
+    expect((await live(alice.browser, p.artifactId)).revision).toBe(full)
+    // A write that sets more at once than one write may is refused before anything is read
+    const tooMany = Object.fromEntries(Array.from({ length: LIMITS.storeKeysAtOnce + 1 }, (_, i) => [`k${i}`, 2]))
+    expect(await code(keep(alice.browser, p.artifactId, tooMany))).toBe('invalid')
+    // Changing a value that is there, and taking one away, still go through
+    expect(await code(keep(alice.browser, p.artifactId, { k0: 2, k1: null }))).toBe('ok')
+    expect(await code(keep(alice.browser, p.artifactId, { over: 1 }))).toBe('ok')
+
+    // And by size: values of nearly the most a value may be, until the state is full
+    const q = await publish(m, 'big')
+    const big = (i: number) => `${i}`.padEnd(LIMITS.storeValueBytes - 100, 'z')
+    let i = 0
+    while ((await code(keep(alice.browser, q.artifactId, { [`v${i}`]: big(i) }))) === 'ok') i++
+    expect(i).toBe(Math.floor((LIMITS.stateBytes - 12) / (LIMITS.storeValueBytes - 100 + 8)))
+    const revision = (await live(alice.browser, q.artifactId)).revision
+    expect(await code(keep(alice.browser, q.artifactId, { [`v${i}`]: big(i) }))).toBe('limit')
+    expect((await live(alice.browser, q.artifactId)).revision).toBe(revision)
+    expect(await code(keep(alice.browser, q.artifactId, { v0: 'small' }))).toBe('ok')
+    // Nor may the agent's part grow past what is left
+    expect(await code(m.as.mutation(api.state.patch, { slug: 'big', patch: JSON.stringify({ text: 'x'.repeat(64 * 1024) }) }))).toBe('limit')
+  })
+
+  test('names taken away are kept a while, and past that a display further behind is sent the whole state', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan')
+    const names = (from: number, count: number, value: unknown) => Object.fromEntries(Array.from({ length: count }, (_, i) => [`n${from + i}`, value]))
+    for (const from of [0, 500, 1000]) await keep(alice.browser, p.artifactId, names(from, 500, 1))
+    // Taken away, a thousand of them are kept with no value, and a display that is behind is told which went
+    const before = (await live(alice.browser, p.artifactId)).revision
+    await keep(alice.browser, p.artifactId, names(0, 500, null))
+    await keep(alice.browser, p.artifactId, names(500, 500, null))
+    const told = await live(alice.browser, p.artifactId, before)
+    expect(told.whole).toBeUndefined()
+    expect(told.kept?.filter(([, json]) => json === null)).toHaveLength(1000)
+    expect((await keptRecords(t)).filter((r) => r.gone)).toHaveLength(1000)
+    // One more and they all go: a display from before then is sent the whole state, which has none of them
+    const now = await keep(alice.browser, p.artifactId, names(1000, 1, null))
+    expect((await keptRecords(t)).filter((r) => r.gone)).toHaveLength(0)
+    const behind = await live(alice.browser, p.artifactId, before)
+    expect(behind).toMatchObject({ revision: now.revision, whole: true })
+    expect(behind.kept).toHaveLength(499)
+    // A display that was up to date is sent what changed after, as before
+    await keep(alice.browser, p.artifactId, { n1001: null })
+    expect(await live(alice.browser, p.artifactId, now.revision)).toEqual({ revision: now.revision + 1, kept: [['n1001', null]] })
+  })
+
+  test('what a page kept inside a state written before each value had a record of its own is moved out, and nothing of it is lost', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan', { state: '{"status":"draft"}' })
+    // A state as one was written before: what the page kept is inside it, and the record of
+    // its revision says nothing of how much the page keeps
+    await t.run(async (ctx) => {
+      const [s] = await ctx.db.query('states').collect()
+      await ctx.db.patch(s!._id, { json: JSON.stringify({ status: 'draft', [STORE_KEY]: { draft: 'd', n: 1, 'not a name': 2 } }), revision: 7 })
+      for (const r of await ctx.db.query('revisions').collect()) await ctx.db.replace(r._id, { artifactId: r.artifactId, revision: 7 })
+    })
+    expect(await stateOf(m.as, 'plan')).toEqual({ status: 'draft', [STORE_KEY]: { draft: 'd', n: 1 } })
+    const shown = await live(alice.browser, p.artifactId, 7)
+    expect(shown).toMatchObject({ revision: 7 })
+    const whole = await live(alice.browser, p.artifactId)
+    expect(whole).toMatchObject({ revision: 7, whole: true, state: '{"status":"draft"}' })
+    expect(sorted(whole.kept)).toEqual([
+      ['draft', '"d"'],
+      ['n', '1'],
+    ])
+    // The first write moves it out, at the write's revision, and changes what it says it changes
+    expect(await keep(alice.browser, p.artifactId, { n: 2 })).toEqual({ revision: 8 })
+    expect(await stateOf(m.as, 'plan')).toEqual({ status: 'draft', [STORE_KEY]: { draft: 'd', n: 2 } })
+    expect(sorted((await live(alice.browser, p.artifactId, 7)).kept)).toEqual([
+      ['draft', '"d"'],
+      ['n', '2'],
+    ])
+    const [record] = await t.run((ctx) => ctx.db.query('states').collect())
+    expect(JSON.parse(record!.json)).toEqual({ status: 'draft' })
+    // The same is so where the agent is the first to write
+    const q = await publish(m, 'other', { state: '{"a":1}' })
+    await t.run(async (ctx) => {
+      const s = (await ctx.db.query('states').collect()).find((x) => x.artifactId === q.artifactId)!
+      await ctx.db.patch(s._id, { json: JSON.stringify({ a: 1, [STORE_KEY]: { kept: true } }) })
+      for (const r of await ctx.db.query('revisions').collect())
+        if (r.artifactId === q.artifactId) await ctx.db.replace(r._id, { artifactId: r.artifactId, revision: r.revision })
+    })
+    await m.as.mutation(api.state.patch, { slug: 'other', patch: '{"a":2}' })
+    expect(await stateOf(m.as, 'other')).toEqual({ a: 2, [STORE_KEY]: { kept: true } })
+  })
+
+  test('an agent can change what the page keeps value by value, take all of it away, or put all of it in place', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan', { state: '{"status":"draft"}' })
+    await keep(alice.browser, p.artifactId, { draft: { a: 1 }, other: 'o' })
+    const agentPatch = (patch: unknown, replace = false) =>
+      m.as.mutation(api.state.patch, { slug: 'plan', patch: JSON.stringify(patch), ...(replace ? { replace } : {}) })
+    // Merged into a value, as any patch is merged
+    await agentPatch({ [STORE_KEY]: { draft: { b: 2 } } })
+    expect((await stateOf(m.as, 'plan'))[STORE_KEY]).toEqual({ draft: { a: 1, b: 2 }, other: 'o' })
+    await agentPatch({ [STORE_KEY]: { draft: null } })
+    expect((await stateOf(m.as, 'plan'))[STORE_KEY]).toEqual({ other: 'o' })
+    // What it does not name stays as it is
+    await agentPatch({ status: 'working' })
+    expect(await stateOf(m.as, 'plan')).toEqual({ status: 'working', [STORE_KEY]: { other: 'o' } })
+    // `null` takes all of it away
+    await agentPatch({ [STORE_KEY]: null })
+    expect(await stateOf(m.as, 'plan')).toEqual({ status: 'working' })
+    // A replacement puts in place what it names, and leaves nothing where it names nothing
+    await keep(alice.browser, p.artifactId, { x: 1 })
+    await agentPatch({ status: 'new', [STORE_KEY]: { y: 2 } }, true)
+    expect(await stateOf(m.as, 'plan')).toEqual({ status: 'new', [STORE_KEY]: { y: 2 } })
+    await agentPatch({ status: 'plain' }, true)
+    expect(await stateOf(m.as, 'plan')).toEqual({ status: 'plain' })
+    // What the page keeps is an object of values under names it could store them under
+    expect(await code(agentPatch({ [STORE_KEY]: 5 }))).toBe('invalid')
+    expect(await code(agentPatch({ [STORE_KEY]: { 'a.b': 1 } }))).toBe('invalid')
+    // A display is sent what the agent changed of the page's values beside its own part
+    const before = (await live(alice.browser, p.artifactId)).revision
+    await agentPatch({ status: 'both', [STORE_KEY]: { z: 3 } })
+    expect(await live(alice.browser, p.artifactId, before)).toEqual({ revision: before + 1, state: '{"status":"both"}', kept: [['z', '3']] })
+  })
+
+  test('a page that is deleted takes what it kept with it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan')
+    await keep(alice.browser, p.artifactId, Object.fromEntries(Array.from({ length: 450 }, (_, i) => [`k${i}`, i])))
+    await keep(alice.browser, p.artifactId, { k0: null })
+    expect((await keptRecords(t)).length).toBe(450)
+    await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    await settle(t)
+    expect(await keptRecords(t)).toEqual([])
+  })
+})
+
 describe('clicks and their delivery', () => {
   async function setup() {
     const t = backend()
@@ -5636,10 +5844,19 @@ describe('cases at the edges', () => {
     const alice = await person(t, 'alice')
     const m = await machineOf(t, 'alice')
     const p = await publish(m, 'plan', { state: JSON.stringify({ blob: 'x'.repeat(400 * 1024) }) })
-    const results = []
-    for (let i = 0; i < 30; i++)
-      results.push(await code(alice.browser.mutation(api.state.storeSet, { artifactId: p.artifactId, key: 'draft', value: `"${i}"` })))
-    expect(results.at(-1)).toBe('rate_limited')
+    // A write of the page's is counted by what it changes, and the agent's large part is none of that
+    const small = []
+    for (let i = 0; i < 100; i++)
+      small.push(await code(alice.browser.mutation(api.state.storeSet, { artifactId: p.artifactId, key: 'draft', value: `"${i}"` })))
+    expect(small.every((r) => r === 'ok')).toBe(true)
+    // Large values, written over and over, use up what the page may write
+    const large = []
+    for (let i = 0; i < 400 && large.at(-1) !== 'rate_limited'; i++)
+      large.push(
+        await code(alice.browser.mutation(api.state.storeSet, { artifactId: p.artifactId, key: 'draft', value: JSON.stringify(`${i}`.padEnd(30_000, 'y')) })),
+      )
+    expect(large.at(-1)).toBe('rate_limited')
+    dropWhatAFailedCallScheduled()
     expect(await code(m.as.mutation(api.state.patch, { slug: 'plan', patch: '{"status":"still writable"}' }))).toBe('ok')
   })
 
