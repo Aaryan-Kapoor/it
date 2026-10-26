@@ -2,6 +2,7 @@
 // run, how the click is given to it, and the note of each conversation's folder that says where.
 
 import childProcess, { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import fs, {
   chmodSync,
   closeSync,
@@ -31,8 +32,13 @@ import {
   claudeWroteAt,
   codexHeld,
   codexWroteAt,
+  endJob,
   endTree,
+  IN_JOB,
   identity,
+  jobName,
+  KEPT_NOT,
+  keeper,
   lastWords,
   listsProcesses,
   mayWake,
@@ -42,6 +48,8 @@ import {
   WAS_CUT_OFF,
   WAS_STOPPED,
   WOKEN,
+  windowsLine,
+  windowsProgram,
 } from './src/wake'
 
 test('macOS reads the run marks once and checks all identities together on each Stop tick', async () => {
@@ -239,6 +247,22 @@ describe('the command each agent app is carried on with', () => {
       for (const id of ids) expect(carrying(harness, id, 'x', has), `${harness} ${id}`).toMatch(/conversation id is not one/)
     expect(carrying('openclaw', 'main', 'x', has)).toMatch(/no way to reopen/)
     expect(carrying('codex', 'thr-1', 'x', { codex: null, itHome: '/x' })).toBe('Codex was not found')
+  })
+
+  test('where an app is started by where its program is, as on Windows, it is started from there, and where none was found it is not started at all', () => {
+    const at = { ...has, start: ['C:\\Program Files\\nodejs\\node.exe', 'C:\\npm\\node_modules\\pi\\cli.js'] }
+    expect((carrying('pi', UUID, 'x', at) as { argv: string[] }).argv).toEqual([...at.start, '--print', '--session', UUID])
+    expect((carrying('claude-code', UUID, 'x', { ...has, start: ['C:\\bin\\claude.exe'] }) as { argv: string[] }).argv.slice(0, 2)).toEqual([
+      'C:\\bin\\claude.exe',
+      '--resume',
+    ])
+    for (const [harness, id, app] of [
+      ['claude-code', UUID, 'Claude Code'],
+      ['pi', UUID, 'Pi'],
+      ['opencode', 'ses_6f2a9c01ffe4', 'OpenCode'],
+      ['hermes', '20261006_005959_a9a014', 'Hermes'],
+    ])
+      expect(carrying(harness!, id!, 'x', { ...has, start: null })).toBe(`${app} was not found`)
   })
 })
 
@@ -1004,4 +1028,371 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       }
     },
   )
+})
+
+describe('a reopened run on Windows, as it is put to the system', () => {
+  const decoded = (args: string[]) => Buffer.from(args.at(-1)!, 'base64').toString('utf16le')
+
+  test('words are put on one line as a Windows program reads them back', () => {
+    expect(windowsLine(['C:\\Program Files\\nodejs\\node.exe', 'C:\\npm\\cli.js', '--session', 'ses_1', '-'])).toBe(
+      '"C:\\Program Files\\nodejs\\node.exe" C:\\npm\\cli.js --session ses_1 -',
+    )
+    // Nothing at all, a quote, and backslashes before a quote and before the closing quote
+    expect(windowsLine(['', 'say "hi"', 'a\\\\"b', 'two words\\', 'C:\\dir\\', 'Bash(it:*)'])).toBe(
+      '"" "say \\"hi\\"" "a\\\\\\\\\\"b" "two words\\\\" C:\\dir\\ Bash(it:*)',
+    )
+  })
+
+  test('a run is started by a keeper that is told its job, its command line and who started it in its environment, with nothing of the app on its own command line', () => {
+    const run = randomUUID()
+    const started = keeper(['C:\\Users\\a b\\.local\\bin\\claude.exe', '--resume', 'x', '--allowedTools', 'Bash(it:*)'], run, {
+      PSModulePath: 'C:\\mods',
+      KEY: 'v',
+    })
+    if (typeof started === 'string') throw new Error(started)
+    expect(started.file).toMatch(/[\\/]System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/)
+    expect(started.args.slice(0, -1)).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand'])
+    const script = decoded(started.args)
+    expect(script).toContain("Add-Type -TypeDefinition @'")
+    expect(script).toContain('$kept = [ItJob]::Keep()')
+    expect(script).toContain(`exit ${KEPT_NOT}`)
+    expect(script).not.toContain('claude')
+    expect(started.env).toMatchObject({
+      KEY: 'v',
+      PSModulePath: 'C:\\mods',
+      IT_JOB: `Global\\it-run-${run}`,
+      IT_JOB_LINE: '"C:\\Users\\a b\\.local\\bin\\claude.exe" --resume x --allowedTools Bash(it:*)',
+      IT_JOB_PARENT: String(process.pid),
+      IT_JOB_MODULES: '+C:\\mods',
+    })
+    // An environment without the folders of PowerShell's modules has none given to the app either
+    expect((keeper(['C:\\x.exe'], run, {}) as { env: NodeJS.ProcessEnv }).env.IT_JOB_MODULES).toBe('-')
+  })
+
+  test('nothing is started by a keeper for a program that is not named in full, a command script, a word Windows cannot be given, or a run with no name a job can have', () => {
+    const run = randomUUID()
+    expect(keeper(['claude', '--resume'], run, {})).toBe('where its program is on this machine is not known')
+    for (const script of ['C:\\npm\\pi.cmd', 'C:\\npm\\PI.BAT'])
+      expect(keeper([script, '--print'], run, {})).toBe('its program is a command script, which It does not start with nobody watching')
+    expect(keeper(['C:\\x.exe', 'a\0b'], run, {})).toBe('a word of its command cannot be given on Windows')
+    for (const name of ['', 'a b', 'x\\y', 'r'.repeat(65)]) {
+      expect(keeper(['C:\\x.exe'], name, {})).toBe('its run has no name a job can be given')
+      expect(jobName(name)).toBeNull()
+    }
+  })
+
+  test('on Windows a run noted before is ended by its job and by nothing else, and only the job says whether anything of it is left', async () => {
+    const platform = process.platform
+    const execFile = childProcess.execFile
+    const asked: { file: string; script: string; job?: string }[] = []
+    let answer = 'ended'
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      childProcess.execFile = new Proxy(execFile, {
+        apply(_target, _self, [file, args, opts, done]) {
+          asked.push({ file, script: decoded(args), job: opts.env.IT_JOB })
+          setImmediate(() => (answer === 'fails' ? done(new Error('it could not be run'), '', '') : done(null, `WARNING: something\r\n${answer}\r\n`, '')))
+          return {}
+        },
+      })
+      syncBuiltinESMExports()
+      const run = randomUUID()
+      const of = { harness: 'pi', session: 's-1', run, told: SINCE_TOLD }
+      expect(await endTree(4242, IN_JOB, of)).toBe('ended')
+      expect(asked.at(-1)!.file).toMatch(/[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/)
+      expect(asked.at(-1)!.script).toContain('[ItJob]::End($env:IT_JOB, 5000)')
+      expect(asked.at(-1)!.job).toBe(`Global\\it-run-${run}`)
+      answer = 'gone'
+      expect(await endTree(4242, IN_JOB, of)).toBe('gone')
+      for (answer of ['unknown', 'something else', '', 'fails']) expect(await endTree(4242, IN_JOB, of), answer).toBe('unknown')
+      // A note that names no run, or that does not say it was kept in a job, says nothing by which to find it, and nothing is asked
+      const before = asked.length
+      expect(await endTree(4242, IN_JOB, { harness: 'pi', session: 's-1' })).toBe('unknown')
+      expect(await endTree(4242, 'tick 100', of)).toBe('unknown')
+      expect(await endJob('not a name')).toBe('unknown')
+      expect(asked.length).toBe(before)
+      // And no process was ever signalled by its number
+      expect(kill).not.toHaveBeenCalled()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform })
+      childProcess.execFile = execFile
+      syncBuiltinESMExports()
+      kill.mockRestore()
+    }
+  })
+
+  describe('where an agent app is on Windows', () => {
+    /** A person's disk as a map of files, read as Windows reads names: with no case. */
+    const disk = (files: Record<string, string>) => {
+      const kept = new Map(Object.entries(files).map(([file, text]) => [file.toLowerCase(), text]))
+      return {
+        exists: (file: string) => kept.has(file.toLowerCase()),
+        read: (file: string) => {
+          const text = kept.get(file.toLowerCase())
+          if (text === undefined) throw Object.assign(new Error('no such file'), { code: 'ENOENT' })
+          return text
+        },
+      }
+    }
+    // As npm writes it for a package whose command is a script for Node
+    const npmScript = (target: string) =>
+      `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\${target}" %*\r\n`
+    const NODE = 'C:\\Program Files\\nodejs\\node.exe'
+
+    test('a program of the name is started itself, from the first folder of the PATH that has one, and only folders named in full are looked in', () => {
+      const { exists, read } = disk({ 'C:\\Users\\a\\.local\\bin\\claude.exe': '', 'C:\\Tools\\claude.exe': '', 'claude.exe': '', '.\\claude.exe': '' })
+      expect(windowsProgram('claude', '.;bin;C:\\Users\\a\\.local\\bin;C:\\Tools', exists, read)).toEqual(['C:\\Users\\a\\.local\\bin\\claude.exe'])
+      expect(windowsProgram('claude', '"C:\\Tools";C:\\Users\\a\\.local\\bin', exists, read)).toEqual(['C:\\Tools\\claude.exe'])
+      expect(windowsProgram('claude', '.;bin', exists, read)).toBeNull()
+      expect(windowsProgram('hermes', 'C:\\Tools', exists, read)).toBeNull()
+    })
+
+    test('a command script that npm or pnpm wrote is read for what it starts, which is started without the script', () => {
+      const pi = 'node_modules\\@mariozechner\\pi-coding-agent\\dist\\cli.js'
+      // npm's, with the Node on the PATH, and with a Node beside it
+      let { exists, read } = disk({ 'C:\\npm\\pi.cmd': npmScript(pi), [`C:\\npm\\${pi}`]: '', [NODE]: '' })
+      expect(windowsProgram('pi', 'C:\\npm;C:\\Program Files\\nodejs', exists, read)).toEqual([NODE, `C:\\npm\\${pi}`])
+      ;({ exists, read } = disk({ 'C:\\npm\\pi.cmd': npmScript(pi), [`C:\\npm\\${pi}`]: '', 'C:\\npm\\node.exe': '', [NODE]: '' }))
+      expect(windowsProgram('pi', 'C:\\npm;C:\\Program Files\\nodejs', exists, read)).toEqual(['C:\\npm\\node.exe', `C:\\npm\\${pi}`])
+      // A script with no extension, as OpenCode's is
+      ;({ exists, read } = disk({
+        'C:\\npm\\opencode.cmd': npmScript('node_modules\\opencode-ai\\bin\\opencode'),
+        'C:\\npm\\node_modules\\opencode-ai\\bin\\opencode': '',
+        [NODE]: '',
+      }))
+      expect(windowsProgram('opencode', 'C:\\npm;C:\\Program Files\\nodejs', exists, read)).toEqual([NODE, 'C:\\npm\\node_modules\\opencode-ai\\bin\\opencode'])
+      // pnpm's, which names the script from a folder beside its own
+      const pnpm = `@SETLOCAL\r\n@IF NOT DEFINED NODE_PATH (\r\n  @SET "NODE_PATH=C:\\pnpm\\global\\5\\node_modules"\r\n)\r\n@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"  "%~dp0\\..\\pnpm\\global\\5\\node_modules\\pi\\dist\\cli.js" %*\r\n) ELSE (\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node  "%~dp0\\..\\pnpm\\global\\5\\node_modules\\pi\\dist\\cli.js" %*\r\n)\r\n`
+      ;({ exists, read } = disk({
+        'C:\\Users\\a\\AppData\\Local\\bin\\pi.CMD': pnpm,
+        'C:\\Users\\a\\AppData\\Local\\pnpm\\global\\5\\node_modules\\pi\\dist\\cli.js': '',
+        [NODE]: '',
+      }))
+      expect(windowsProgram('pi', 'C:\\Users\\a\\AppData\\Local\\bin;C:\\Program Files\\nodejs', exists, read)).toEqual([
+        NODE,
+        'C:\\Users\\a\\AppData\\Local\\pnpm\\global\\5\\node_modules\\pi\\dist\\cli.js',
+      ])
+      // One that starts a program, which is started itself
+      const exe = `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*\r\n`
+      ;({ exists, read } = disk({ 'C:\\npm\\claude.cmd': exe, 'C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe': '' }))
+      expect(windowsProgram('claude', 'C:\\npm', exists, read)).toEqual(['C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe'])
+    })
+
+    test('a command script whose program is not there, that starts something other than Node, or that cannot be read, starts nothing, and a later folder is not looked in for another', () => {
+      const pi = 'node_modules\\pi\\cli.js'
+      for (const files of <Record<string, string>[]>[
+        { 'C:\\npm\\pi.cmd': npmScript(pi), [NODE]: '' },
+        { 'C:\\npm\\pi.cmd': npmScript(pi), [`C:\\npm\\${pi}`]: '' },
+        { 'C:\\npm\\pi.cmd': '@ECHO off\r\n"%dp0%\\pi.sh" %*\r\nsh', 'C:\\npm\\pi.sh': '', [NODE]: '' },
+        { 'C:\\npm\\pi.cmd': '@ECHO off\r\ncall something-else %*\r\n', [NODE]: '' },
+      ]) {
+        const { exists, read } = disk({ ...files, 'C:\\Tools\\pi.exe': '' })
+        expect(windowsProgram('pi', 'C:\\npm;C:\\Program Files\\nodejs;C:\\Tools', exists, read)).toBeNull()
+      }
+      const { exists } = disk({ 'C:\\npm\\pi.cmd': '' })
+      expect(
+        windowsProgram('pi', 'C:\\npm', exists, () => {
+          throw new Error('it cannot be read')
+        }),
+      ).toBeNull()
+    })
+  })
+})
+
+describe.skipIf(process.platform !== 'win32')('a reopened run on Windows, kept in a job of its own', () => {
+  // A stand-in for an agent app: it writes down what it was given and how, starts something
+  // that runs until it is ended, and then ends as it is told, or waits
+  const AGENT = `const fs = require('fs')
+const path = require('path')
+const { spawn } = require('child_process')
+const [dir, mode] = process.argv.slice(2)
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (piece) => { input += piece })
+process.stdin.on('end', () => {
+  const left = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true })
+  left.unref()
+  const ran = { input, pid: process.pid, left: left.pid, cwd: process.cwd(), run: process.env.IT_RUN || null, told: Object.keys(process.env).filter((k) => /^IT_JOB/i.test(k)), modules: process.env.PSModulePath === undefined ? null : process.env.PSModulePath }
+  fs.writeFileSync(path.join(dir, 'ran.part'), JSON.stringify(ran))
+  fs.renameSync(path.join(dir, 'ran.part'), path.join(dir, 'ran.json'))
+  if (mode === 'wait') setInterval(() => {}, 1000)
+  else {
+    console.log('a last line')
+    setTimeout(() => process.exit(mode === 'fail' ? 3 : 0), 50)
+  }
+})
+`
+  // A stand-in for It's service: it starts the keeper as the service does, and then waits until it is ended
+  const SERVICE = `const fs = require('fs')
+const { spawn } = require('child_process')
+const how = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+const keeper = spawn(how.file, how.args, { cwd: how.cwd, env: { ...how.env, IT_JOB_PARENT: how.parent ?? String(process.pid) }, stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true })
+keeper.on('exit', (code) => fs.writeFileSync(how.ended, String(code)))
+keeper.stdin.end(how.input)
+setInterval(() => {}, 1000)
+`
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const until = async (ok: () => boolean, ms = 90_000) => {
+    const by = Date.now() + ms
+    while (!ok()) {
+      if (Date.now() > by) throw new Error('it did not come to be in time')
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  }
+  type Ran = { input: string; pid: number; left: number; cwd: string; run: string | null; told: string[]; modules: string | null }
+  const ranIn = (dir: string): Ran => JSON.parse(readFileSync(path.join(dir, 'ran.json'), 'utf8'))
+  const agentIn = (dir: string) => {
+    mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, 'agent.js')
+    writeFileSync(file, AGENT)
+    return file
+  }
+  const standIn = (dir: string, mode: 'done' | 'fail' | 'wait') => ({
+    argv: [process.execPath, agentIn(dir), dir, mode],
+    input: 'what was done on the page',
+    app: 'Stand-in',
+  })
+  const left: number[] = []
+  afterEach(() => {
+    for (const pid of left.splice(0))
+      try {
+        process.kill(pid)
+      } catch {}
+  })
+
+  test('is given its message on its input, in its folder, with the name of its run and with nothing the keeper was told by, and what it left running when it ended by itself is let be', async () => {
+    const run = randomUUID()
+    const noted: [number, string | undefined][] = []
+    const said: string[] = []
+    const ended = await carryOn(
+      standIn(scratch, 'done'),
+      scratch,
+      { harness: 'pi', session: 's-1', run },
+      { env: process.env, keepIn: path.join(scratch, 'logs'), said: (words) => said.push(words), began: (pid, since) => noted.push([pid, since]) },
+    )
+    expect(ended).toBeNull()
+    const ran = ranIn(scratch)
+    left.push(ran.left)
+    expect(ran.input).toBe('what was done on the page')
+    expect(realpathSync(ran.cwd).toLowerCase()).toBe(scratch.toLowerCase())
+    expect(ran.run).toBe(run)
+    expect(ran.told).toEqual([])
+    expect(ran.modules).toBe(process.env.PSModulePath ?? null)
+    expect(noted).toEqual([[expect.any(Number), IN_JOB]])
+    expect(said).toEqual([])
+    expect(alive(ran.pid)).toBe(false)
+    expect(alive(ran.left)).toBe(true)
+    process.kill(ran.left)
+    await until(() => !alive(ran.left))
+    expect(await endJob(run)).toBe('gone')
+  }, 180_000)
+
+  test('that ends badly by itself says so, with its code and the last line it printed', async () => {
+    const said: string[] = []
+    const ended = await carryOn(
+      standIn(scratch, 'fail'),
+      scratch,
+      { harness: 'pi', session: 's-1', run: randomUUID() },
+      { env: process.env, keepIn: path.join(scratch, 'logs'), said: (words) => said.push(words) },
+    )
+    left.push(ranIn(scratch).left)
+    expect(ended).toBe('Stand-in exited with 3')
+    expect(said).toEqual(['a last line'])
+  }, 180_000)
+
+  test('that is stopped is ended with everything it started, and its job is gone after', async () => {
+    const run = randomUUID()
+    const stop = new AbortController()
+    const unsure = vi.fn()
+    const ending = carryOn(standIn(scratch, 'wait'), scratch, { harness: 'pi', session: 's-1', run }, { env: process.env, signal: stop.signal, unsure })
+    await until(() => existsSync(path.join(scratch, 'ran.json')))
+    const ran = ranIn(scratch)
+    left.push(ran.left, ran.pid)
+    expect([alive(ran.pid), alive(ran.left)]).toEqual([true, true])
+    stop.abort()
+    expect(await ending).toBe(STOPPED)
+    expect(unsure).not.toHaveBeenCalled()
+    await until(() => !alive(ran.pid) && !alive(ran.left), 5_000)
+    expect(await endJob(run)).toBe('gone')
+  }, 180_000)
+
+  test('that was noted by a connector which started again is found by its job and ended with everything it started, by no number', async () => {
+    const run = randomUUID()
+    const ending = carryOn(standIn(scratch, 'wait'), scratch, { harness: 'pi', session: 's-1', run }, { env: process.env })
+    await until(() => existsSync(path.join(scratch, 'ran.json')))
+    const ran = ranIn(scratch)
+    left.push(ran.left, ran.pid)
+    // As a connector that started again does with what it finds noted: by a number that is nobody's, which is never signalled
+    expect(await endTree(2_000_000_000, IN_JOB, { harness: 'pi', session: 's-1', run, told: SINCE_TOLD })).toBe('ended')
+    expect([alive(ran.pid), alive(ran.left)]).toEqual([false, false])
+    expect(await ending).toMatch(/^Stand-in exited with /)
+    expect(await endTree(2_000_000_000, IN_JOB, { harness: 'pi', session: 's-1', run, told: SINCE_TOLD })).toBe('gone')
+  }, 180_000)
+
+  test('ends with the program that started it, however that ended', async () => {
+    const run = randomUUID()
+    const started = keeper(standIn(scratch, 'wait').argv, run, { ...process.env })
+    if (typeof started === 'string') throw new Error(started)
+    const how = path.join(scratch, 'how.json')
+    writeFileSync(how, JSON.stringify({ ...started, cwd: scratch, input: 'hello', ended: path.join(scratch, 'keeper-ended') }))
+    writeFileSync(path.join(scratch, 'service.js'), SERVICE)
+    const service = spawn(process.execPath, [path.join(scratch, 'service.js'), how], { stdio: 'ignore', windowsHide: true })
+    left.push(service.pid!)
+    await until(() => existsSync(path.join(scratch, 'ran.json')))
+    const ran = ranIn(scratch)
+    left.push(ran.left, ran.pid)
+    expect(ran.input).toBe('hello')
+    expect([alive(ran.pid), alive(ran.left)]).toEqual([true, true])
+    // Ended from outside, with no word to anything it started
+    service.kill()
+    await until(() => !alive(ran.pid) && !alive(ran.left), 15_000)
+    expect(await endJob(run)).toBe('gone')
+  }, 180_000)
+
+  test('starts nothing where the program that started it cannot be made sure of, or a job of its name is there already', async () => {
+    // Told of a program that is not there
+    const run = randomUUID()
+    const started = keeper(standIn(scratch, 'done').argv, run, { ...process.env })
+    if (typeof started === 'string') throw new Error(started)
+    const how = path.join(scratch, 'how.json')
+    const ended = path.join(scratch, 'keeper-ended')
+    writeFileSync(how, JSON.stringify({ ...started, cwd: scratch, input: 'hello', ended, parent: '2000000000' }))
+    writeFileSync(path.join(scratch, 'service.js'), SERVICE)
+    const service = spawn(process.execPath, [path.join(scratch, 'service.js'), how], { stdio: 'ignore', windowsHide: true })
+    left.push(service.pid!)
+    await until(() => existsSync(ended))
+    expect(Number(readFileSync(ended, 'utf8'))).toBe(KEPT_NOT)
+    expect(existsSync(path.join(scratch, 'ran.json'))).toBe(false)
+    // And a run whose job's name another run has
+    const first = new AbortController()
+    const running = carryOn(standIn(scratch, 'wait'), scratch, { harness: 'pi', session: 's-1', run }, { env: process.env, signal: first.signal })
+    await until(() => existsSync(path.join(scratch, 'ran.json')))
+    left.push(ranIn(scratch).left, ranIn(scratch).pid)
+    const other = path.join(scratch, 'other')
+    expect(await carryOn(standIn(other, 'done'), other, { harness: 'pi', session: 's-2', run }, { env: process.env })).toBe(
+      'Stand-in could not be started: Windows would not keep it in a job of its own, which It needs to be able to end it',
+    )
+    expect(existsSync(path.join(other, 'ran.json'))).toBe(false)
+    first.abort()
+    expect(await running).toBe(STOPPED)
+  }, 180_000)
+
+  test('whose program is not there says so', async () => {
+    expect(
+      await carryOn(
+        { argv: [path.join(scratch, 'nowhere.exe'), '--print'], input: 'x', app: 'Stand-in' },
+        scratch,
+        { harness: 'pi', session: 's-1', run: randomUUID() },
+        { env: process.env },
+      ),
+    ).toBe('Stand-in was not found')
+  }, 180_000)
 })

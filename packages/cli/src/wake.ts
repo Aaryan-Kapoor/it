@@ -3,6 +3,7 @@
 // conversation may be reopened. None of it is done for an app the person has not switched
 // Auto-wake on for, which is the connector's to see to.
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import {
   closeSync,
   existsSync,
@@ -39,6 +40,8 @@ export function mayWake(switched: ReadonlyMap<string, number>, harness: string, 
 
 /** What each app is called where something is said of it. */
 const APP: Record<string, string> = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi', opencode: 'OpenCode', hermes: 'Hermes', openclaw: 'OpenClaw' }
+/** The name each app's own command is run by. */
+export const PROGRAM: Record<string, string> = { 'claude-code': 'claude', codex: 'codex', pi: 'pi', opencode: 'opencode', hermes: 'hermes' }
 
 /**
  * What a conversation is told when It reopens it, before what was done on its page: that it can
@@ -109,17 +112,28 @@ export function carrying(
   harness: string,
   session: string,
   text: string,
-  has: { codex?: string[] | null; itHome: string; command?: string; mode?: string | null; itAt?: string[] },
+  has: {
+    codex?: string[] | null
+    itHome: string
+    command?: string
+    mode?: string | null
+    itAt?: string[]
+    /** The words that start the app where its name alone does not, as on Windows (see `windowsProgram`), and null where it was not found. */
+    start?: string[] | null
+  },
 ): Carrying | string {
   const app = APP[harness] ?? harness
   const odd = `its conversation id is not one ${app} would have made`
+  const starting = (name: string): string[] | null => (has.command ? [has.command] : has.start === undefined ? [name] : has.start)
   if (harness === 'claude-code') {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(session)) return odd
+    const claude = starting('claude')
+    if (!claude) return `${app} was not found`
     // `it` by its name, and by each place it is installed: an agent that learned to run it by
     // its whole path, when its window had no PATH for it, is not refused for that
     const it = ['Bash(it:*)', ...(has.itAt ?? []).filter((p) => /^[^\s()*]+$/.test(p)).map((p) => `Bash(${p}:*)`)]
     const mode = has.mode && (CLAUDE_MODES as readonly string[]).includes(has.mode) ? ['--permission-mode', has.mode] : []
-    return { argv: [has.command ?? 'claude', '--resume', session, '--print', ...mode, '--allowedTools', ...it], input: text, app }
+    return { argv: [...claude, '--resume', session, '--print', ...mode, '--allowedTools', ...it], input: text, app }
   }
   if (harness === 'codex') {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/.test(session)) return odd
@@ -147,17 +161,23 @@ export function carrying(
   if (harness === 'pi') {
     // Pi names a conversation with a UUID, and takes the whole of one or its beginning
     if (!/^[0-9a-f][0-9a-f-]{7,63}$/i.test(session)) return odd
-    return { argv: [has.command ?? 'pi', '--print', '--session', session], input: text, app }
+    const pi = starting('pi')
+    if (!pi) return `${app} was not found`
+    return { argv: [...pi, '--print', '--session', session], input: text, app }
   }
   if (harness === 'opencode') {
     if (!/^ses_[A-Za-z0-9]{1,120}$/.test(session)) return odd
-    return { argv: [has.command ?? 'opencode', 'run', '--session', session], input: text, app }
+    const opencode = starting('opencode')
+    if (!opencode) return `${app} was not found`
+    return { argv: [...opencode, 'run', '--session', session], input: text, app }
   }
   if (harness === 'hermes') {
     // Hermes names a conversation by when it began and a few hex digits. Any other word is not
     // put there: it would be read as a title to look for, or as `latest`.
     if (!/^[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}$/.test(session)) return odd
-    return { argv: [has.command ?? 'hermes', 'chat', '--resume', session, '--query-file', '-'], input: text, app }
+    const hermes = starting('hermes')
+    if (!hermes) return `${app} was not found`
+    return { argv: [...hermes, 'chat', '--resume', session, '--query-file', '-'], input: text, app }
   }
   return `It has no way to reopen a conversation of ${app}`
 }
@@ -217,7 +237,8 @@ export function carryOn(
     signal?: AbortSignal
     said?: (words: string) => void
     keepIn?: string
-    began?: (pid: number) => void
+    /** `since` is how the run is known again, to go into its note: when it began, or on Windows `IN_JOB`. Undefined where that could not be told. */
+    began?: (pid: number, since: string | undefined) => void
     /** Called where the run was ended and the system would not say what of it was left: whoever noted it keeps the note. */
     unsure?: () => void
     /** Called where the run is being ended because its time is over: it was at work, and did not finish. */
@@ -244,24 +265,35 @@ export function carryOn(
           rmSync(printed, { force: true })
         } catch {}
     }
+    const windows = process.platform === 'win32'
+    // On Windows what the run starts is kept in a job of the system's, named by the run: see `keeper`
+    const job = windows ? (marks.run ?? randomUUID()) : ''
+    const env: NodeJS.ProcessEnv = {
+      ...Object.fromEntries(Object.entries(opts.env ?? harnessEnv()).filter(([k]) => k !== 'OLDPWD')),
+      // The folder is said in the environment as well. This program's own PWD is wherever it
+      // was started, and an app that believes PWD over the folder it is in (OpenCode does)
+      // would hold the conversation in one folder and wait for it in another, and never end.
+      PWD: cwd,
+      IT_HARNESS: marks.harness,
+      IT_SESSION: marks.session,
+      ...(marks.run ? { IT_RUN: marks.run } : {}),
+    }
+    const start = windows ? keeper(how.argv, job, env) : { file: how.argv[0]!, args: how.argv.slice(1), env }
+    if (typeof start === 'string') {
+      if (into !== null) closeSync(into)
+      forget()
+      return resolve(`${how.app} could not be started: ${start}`)
+    }
     try {
-      child = spawn(how.argv[0]!, how.argv.slice(1), {
+      child = spawn(start.file, start.args, {
         cwd,
-        // The folder is said in the environment as well. This program's own PWD is wherever it
-        // was started, and an app that believes PWD over the folder it is in (OpenCode does)
-        // would hold the conversation in one folder and wait for it in another, and never end.
-        env: {
-          ...Object.fromEntries(Object.entries(opts.env ?? harnessEnv()).filter(([k]) => k !== 'OLDPWD')),
-          PWD: cwd,
-          IT_HARNESS: marks.harness,
-          IT_SESSION: marks.session,
-          ...(marks.run ? { IT_RUN: marks.run } : {}),
-        },
+        env: start.env,
         stdio: ['pipe', into ?? 'ignore', into ?? 'ignore'],
         windowsHide: true,
         // In a group of its own, so that stopping it stops what it started as well: a command
-        // an agent is in the middle of does not run on after the agent is gone
-        detached: process.platform !== 'win32',
+        // an agent is in the middle of does not run on after the agent is gone. On Windows the
+        // job does that, and the keeper shares this program's console, as any program it starts does
+        detached: !windows,
       })
     } catch {
       if (into !== null) closeSync(into)
@@ -286,34 +318,42 @@ export function carryOn(
     }
     let stopped = false
     // The identity is captured while this child is ours. Every later signal checks it again.
-    const since = child.pid ? identity([child.pid]).get(child.pid) : undefined
+    // On Windows the run is known by its job, and its number is never signalled once it is not ours.
+    const since = windows ? IN_JOB : child.pid ? identity([child.pid]).get(child.pid) : undefined
     let ending = false
+    const exited = new Promise<boolean>((done) => child.once('exit', () => done(true)))
     const quit = (why: string | null) => {
       if (ending) return
       ending = true
-      if (process.platform === 'win32') {
-        // Windows cannot inspect inherited marks. Keep the record if its tree command fails.
-        if (!child.pid) return end(why)
-        execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, (err) => {
-          if (err) opts.unsure?.()
-          end(why)
-        })
-        return
-      }
       if (!child.pid || since === undefined) {
         opts.unsure?.()
         return end(why)
       }
-      void endTree(child.pid, since, { ...marks, told: SINCE_TOLD }).then(
-        (outcome) => {
-          if (outcome === 'unknown') opts.unsure?.()
-          end(why)
-        },
-        () => {
-          opts.unsure?.()
-          end(why)
-        },
-      )
+      // On Windows the keeper is ended first, while it is still this program's child, and is
+      // waited for, so that it starts nothing more: a keeper that was between making its job
+      // and going into it would otherwise go on once the job had been found empty. The job
+      // then ends everything in it, and is asked to have done so.
+      if (windows)
+        try {
+          child.kill()
+        } catch {}
+      const first = windows ? Promise.race([exited, new Promise<boolean>((done) => setTimeout(() => done(false), 10_000).unref())]) : Promise.resolve(true)
+      void first
+        .then(async (gone) => {
+          const outcome = await endTree(child.pid!, since, { ...marks, run: windows ? job : marks.run, told: SINCE_TOLD })
+          // A keeper that did not end when it was ended may still start something
+          return gone ? outcome : 'unknown'
+        })
+        .then(
+          (outcome) => {
+            if (outcome === 'unknown') opts.unsure?.()
+            end(why)
+          },
+          () => {
+            opts.unsure?.()
+            end(why)
+          },
+        )
     }
     const stop = () => {
       stopped = true
@@ -325,9 +365,27 @@ export function carryOn(
       if (!ending && !stopped) opts.overtime?.()
       quit(`${how.app} had not finished in fifteen minutes`)
     }, patience)
-    child.once('error', (err) => end((err as NodeJS.ErrnoException).code === 'ENOENT' ? `${how.app} was not found` : `${how.app} could not be started`))
+    child.once('error', (err) =>
+      end(
+        (err as NodeJS.ErrnoException).code !== 'ENOENT'
+          ? `${how.app} could not be started`
+          : windows
+            ? `${how.app} could not be started: Windows PowerShell, which It starts it with, was not found`
+            : `${how.app} was not found`,
+      ),
+    )
     child.once('exit', (code, signal) =>
-      ending ? undefined : stopped ? end(STOPPED) : code === 0 ? end(null) : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),
+      ending
+        ? undefined
+        : stopped
+          ? end(STOPPED)
+          : code === 0
+            ? end(null)
+            : windows && code === KEPT_MISSING
+              ? end(`${how.app} was not found`)
+              : windows && code === KEPT_NOT
+                ? end(`${how.app} could not be started: Windows would not keep it in a job of its own, which It needs to be able to end it`)
+                : end(`${how.app} exited with ${signal ?? code ?? 'an error'}`, signal === null),
     )
     child.stdin?.on('error', () => {})
     // Whoever started it is told which process it is, to write down, before it is given
@@ -336,7 +394,7 @@ export function carryOn(
     // having done nothing: a run that nobody could find again is not left to run.
     if (child.pid && opts.began)
       try {
-        opts.began(child.pid)
+        opts.began(child.pid, since)
       } catch {
         return quit(`${how.app} was started and could not be noted down, so it was ended before it was given anything to do`)
       }
@@ -364,14 +422,17 @@ export function carryOn(
  * carries none is left alone, and while it is there the answer is `unknown`: it may be a
  * command of the run's that was started with nothing handed on, or something else altogether.
  *
- * Nothing is done on Windows, where none of this can be told: the answer there is `unknown`.
+ * On Windows none of that is asked. A run there was started in a job of the system's, named by
+ * the run (`since` is then `IN_JOB`), and everything in the job is ended at once: see `endJob`.
+ * No process is signalled there by its number. A note that does not name its run says nothing
+ * by which to find it, and the answer is `unknown`.
  */
 export async function endTree(
   pid: number,
   since: string,
   of?: { harness: string; session: string; boot?: string; told?: number; run?: string },
 ): Promise<'ended' | 'gone' | 'unknown'> {
-  if (process.platform === 'win32') return 'unknown'
+  if (process.platform === 'win32') return since === IN_JOB && of?.run ? endJob(of.run) : 'unknown'
   // Noted before the machine was last started: nothing of it is left, whatever has its number now
   if (fromAnotherStart(of?.boot)) return 'gone'
   const now = processes([pid])
@@ -487,6 +548,316 @@ export async function endTree(
 }
 
 /**
+ * How a reopened run is known again on Windows, where this goes into the run's note in place of
+ * when it began: by the job it was started in, which is named by the run's own name with It.
+ */
+export const IN_JOB = 'job'
+/**
+ * What the keeper ends with where nothing was started: Windows would not give the run a job of
+ * its own, or the program that started the keeper could not be made sure of, or was gone.
+ */
+export const KEPT_NOT = 0x49540001
+/** And where the app's program was not there to be started. */
+export const KEPT_MISSING = 0x49540002
+/**
+ * The job a run is kept in on Windows, by the run's own name. It is in the namespace of the whole
+ * machine, so that it is found from whichever session of Windows asks: in a session's own, a
+ * service that asked from another would not find a job that is there, and take it for gone.
+ */
+export const jobName = (run: string): string | null => (/^[A-Za-z0-9-]{1,64}$/.test(run) ? `Global\\it-run-${run}` : null)
+
+/**
+ * What Windows is asked through: a job of the system's that ends everything in it when the last
+ * hold on it is let go, the program that holds it, and the asking whether one is still there.
+ * It is compiled by Windows PowerShell, which every Windows has, in the C# that the .NET
+ * Framework under it compiles, which is C# 5.
+ *
+ * `Keep` takes what it is to do from its environment, and takes that out again before it starts
+ * anything: the job's name, the app's command line, and the program that started it, which it
+ * makes sure of by when that began. It puts itself in the job before it starts the app, so that
+ * everything the app starts is in it from its first moment. It then waits for the app and for
+ * the program that started it, whichever ends first. The app ending by itself, the job is told
+ * to end nothing more when it is let go, and what the app left running is let be, as it is on
+ * Linux and macOS. The program that started it ending, the job is ended at once. A job is never
+ * made where one of that name is there already. Breaking away from the job is not allowed, so a
+ * program the app starts that asks to be started outside it is refused.
+ *
+ * `End` ends everything in a job and waits until nothing is left of it. A job of that name not
+ * being there says that nothing of it is left: nobody holds it, so the system ended what was in it.
+ */
+const JOB_CODE = String.raw`
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+
+public static class ItJob {
+  public const int Not = 0x49540001;
+  public const int Missing = 0x49540002;
+  const string Named = @"^Global\\it-run-[A-Za-z0-9-]{1,64}$";
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct Basic {
+    public long PerProcessUserTimeLimit, PerJobUserTimeLimit;
+    public uint LimitFlags;
+    public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize;
+    public uint ActiveProcessLimit;
+    public UIntPtr Affinity;
+    public uint PriorityClass, SchedulingClass;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct Extended {
+    public Basic Basic;
+    public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount, ReadTransferCount, WriteTransferCount, OtherTransferCount;
+    public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct Accounting {
+    public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime;
+    public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses;
+  }
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct StartupInfo {
+    public int cb;
+    public string lpReserved, lpDesktop, lpTitle;
+    public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+    public short wShowWindow, cbReserved2;
+    public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct ProcessInfo {
+    public IntPtr hProcess, hThread;
+    public int dwProcessId, dwThreadId;
+  }
+
+  [DllImport("kernel32.dll")] static extern void SetLastError(uint code);
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern IntPtr CreateJobObjectW(IntPtr attributes, string name);
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern IntPtr OpenJobObjectW(uint access, bool inherit, string name);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetInformationJobObject(IntPtr job, int kind, ref Extended info, int size);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool QueryInformationJobObject(IntPtr job, int kind, out Accounting info, int size, IntPtr returned);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateJobObject(IntPtr job, uint code);
+  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetProcessTimes(IntPtr process, out long began, out long ended, out long kernel, out long user);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr GetStdHandle(int which);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  static extern bool CreateProcessW(string application, StringBuilder line, IntPtr processAttributes, IntPtr threadAttributes, bool inherit, uint flags, IntPtr environment, string folder, ref StartupInfo startup, out ProcessInfo info);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern uint WaitForMultipleObjects(uint count, IntPtr[] handles, bool all, uint ms);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern uint WaitForSingleObject(IntPtr handle, uint ms);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr handle);
+
+  static bool Ended(IntPtr process) { return WaitForSingleObject(process, 0) == 0; }
+
+  public static int Keep() {
+    string name = Environment.GetEnvironmentVariable("IT_JOB");
+    string line = Environment.GetEnvironmentVariable("IT_JOB_LINE");
+    string parentWord = Environment.GetEnvironmentVariable("IT_JOB_PARENT");
+    string modules = Environment.GetEnvironmentVariable("IT_JOB_MODULES");
+    foreach (string word in new string[] { "IT_JOB", "IT_JOB_LINE", "IT_JOB_PARENT", "IT_JOB_MODULES" }) Environment.SetEnvironmentVariable(word, null);
+    int parent;
+    if (name == null || !Regex.IsMatch(name, Named) || string.IsNullOrEmpty(line) || modules == null || !(modules == "-" || modules.StartsWith("+")) || !int.TryParse(parentWord, out parent)) return Not;
+    // Windows PowerShell puts folders of its own in front of this, and the app would have them
+    Environment.SetEnvironmentVariable("PSModulePath", modules == "-" ? null : modules.Substring(1));
+    // The program that started this one, made sure of by when it began: one that was given its number since began after this one did
+    IntPtr service = OpenProcess(0x00101000, false, parent);
+    if (service == IntPtr.Zero) return Not;
+    long serviceBegan, began, a, b, c;
+    if (!GetProcessTimes(service, out serviceBegan, out a, out b, out c) || !GetProcessTimes(GetCurrentProcess(), out began, out a, out b, out c) || serviceBegan > began || Ended(service)) return Not;
+    SetLastError(0);
+    IntPtr job = CreateJobObjectW(IntPtr.Zero, name);
+    if (job == IntPtr.Zero || Marshal.GetLastWin32Error() == 183) return Not;
+    Extended limits = new Extended();
+    limits.Basic.LimitFlags = 0x2000;
+    int size = Marshal.SizeOf(typeof(Extended));
+    if (!SetInformationJobObject(job, 9, ref limits, size) || !AssignProcessToJobObject(job, GetCurrentProcess()) || Ended(service)) return Not;
+    StartupInfo start = new StartupInfo();
+    start.cb = Marshal.SizeOf(typeof(StartupInfo));
+    start.dwFlags = 0x100;
+    start.hStdInput = GetStdHandle(-10);
+    start.hStdOutput = GetStdHandle(-11);
+    start.hStdError = GetStdHandle(-12);
+    foreach (IntPtr handle in new IntPtr[] { start.hStdInput, start.hStdOutput, start.hStdError })
+      if (handle != IntPtr.Zero && handle != new IntPtr(-1)) SetHandleInformation(handle, 1, 1);
+    ProcessInfo run;
+    // With no window, in a console of its own that has none, which is then what everything it starts has as well
+    if (!CreateProcessW(null, new StringBuilder(line), IntPtr.Zero, IntPtr.Zero, true, 0x08000000, IntPtr.Zero, null, ref start, out run)) {
+      int why = Marshal.GetLastWin32Error();
+      return why == 2 || why == 3 ? Missing : Not;
+    }
+    CloseHandle(run.hThread);
+    uint woke = WaitForMultipleObjects(2, new IntPtr[] { run.hProcess, service }, false, 0xFFFFFFFF);
+    if (woke != 0) {
+      TerminateJobObject(job, 1);
+      return Not;
+    }
+    uint code;
+    if (!GetExitCodeProcess(run.hProcess, out code)) code = 1;
+    limits.Basic.LimitFlags = 0;
+    SetInformationJobObject(job, 9, ref limits, size);
+    return unchecked((int)code);
+  }
+
+  public static string End(string name, int patience) {
+    if (name == null || !Regex.IsMatch(name, Named)) return "unknown";
+    SetLastError(0);
+    IntPtr job = OpenJobObjectW(0x000C, false, name);
+    if (job == IntPtr.Zero) return Marshal.GetLastWin32Error() == 2 ? "gone" : "unknown";
+    try {
+      Accounting now;
+      int size = Marshal.SizeOf(typeof(Accounting));
+      if (!QueryInformationJobObject(job, 1, out now, size, IntPtr.Zero)) return "unknown";
+      bool was = now.ActiveProcesses > 0;
+      if (was && !TerminateJobObject(job, 1)) return "unknown";
+      for (int waited = 0; ; waited += 100) {
+        if (!QueryInformationJobObject(job, 1, out now, size, IntPtr.Zero)) return "unknown";
+        if (now.ActiveProcesses == 0) return was ? "ended" : "gone";
+        if (waited >= patience) return "unknown";
+        Thread.Sleep(100);
+      }
+    } finally {
+      CloseHandle(job);
+    }
+  }
+}
+`
+/** A script for Windows PowerShell that has `ItJob` compiled first: `body` follows it, inside the `try` that it ends with `fails`. */
+const withJob = (body: string, fails: string): string =>
+  [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    'try {',
+    "Add-Type -TypeDefinition @'",
+    JOB_CODE.trim(),
+    "'@",
+    body,
+    `} catch { ${fails} }`,
+  ].join('\n')
+const encoded = (script: string): string => Buffer.from(script, 'utf16le').toString('base64')
+const KEEP = encoded(`${withJob('$kept = [ItJob]::Keep()', `exit ${KEPT_NOT}`)}\nexit $kept`)
+const END = encoded(withJob('[ItJob]::End($env:IT_JOB, 5000)', "'unknown'"))
+/** Windows PowerShell, where Windows keeps it, and never as whatever a PATH finds first by that name. */
+export const powershellExe = (): string =>
+  path.win32.join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+const POWERSHELL = ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand']
+
+/**
+ * How a run is started on Windows: by Windows PowerShell, as the keeper of a job of the system's
+ * named by the run (see `JOB_CODE`), which starts the app inside it and holds it for as long as
+ * the app runs. The app is given the keeper's own input and output, which are what this program
+ * gives the keeper, and its environment without what the keeper was told by. A run there ends
+ * with the program that started it, however that program ended: on Linux and macOS it goes on
+ * until the next one ends it. Why it cannot be started this way, as a string.
+ */
+export function keeper(argv: string[], run: string, env: NodeJS.ProcessEnv): { file: string; args: string[]; env: NodeJS.ProcessEnv } | string {
+  const name = jobName(run)
+  if (!name) return 'its run has no name a job can be given'
+  const program = argv[0]
+  if (!program || !path.win32.isAbsolute(program)) return 'where its program is on this machine is not known'
+  // Windows would start a command script through cmd.exe, which reads the words after it as commands of its own
+  if (/\.(bat|cmd)$/i.test(program)) return 'its program is a command script, which It does not start with nobody watching'
+  if (argv.some((word) => word.includes('\0'))) return 'a word of its command cannot be given on Windows'
+  const modules = Object.entries(env).find(([k]) => k.toUpperCase() === 'PSMODULEPATH')?.[1]
+  return {
+    file: powershellExe(),
+    args: [...POWERSHELL, KEEP],
+    env: {
+      ...env,
+      IT_JOB: name,
+      IT_JOB_LINE: windowsLine(argv),
+      IT_JOB_PARENT: String(process.pid),
+      IT_JOB_MODULES: modules === undefined ? '-' : `+${modules}`,
+    },
+  }
+}
+
+/**
+ * Ends everything in the job a run was kept in on Windows, and answers as `endTree` does: `ended`
+ * where something of it was there and is not any more, `gone` where there was nothing of it,
+ * and `unknown` where Windows could not be asked, or something of it is still there.
+ */
+export function endJob(run: string): Promise<'ended' | 'gone' | 'unknown'> {
+  const name = jobName(run)
+  if (!name || process.platform !== 'win32') return Promise.resolve('unknown')
+  return new Promise((resolve) => {
+    execFile(
+      powershellExe(),
+      [...POWERSHELL, END],
+      { env: { ...process.env, IT_JOB: name }, timeout: 60_000, windowsHide: true, encoding: 'utf8' },
+      (err, out) => {
+        const said = String(out ?? '')
+          .trim()
+          .split(/\r?\n/)
+          .at(-1)
+          ?.trim()
+        resolve(!err && (said === 'ended' || said === 'gone') ? said : 'unknown')
+      },
+    )
+  })
+}
+
+/**
+ * Words as one line for a program on Windows, which reads its own line back into words: a word
+ * with a space, a tab or a quote in it, or with nothing in it, is put in quotes, with a backslash
+ * before each quote in it and the backslashes before a quote, or before the closing one,
+ * doubled. That is how the C runtime and `CommandLineToArgvW` read a line.
+ */
+export const windowsLine = (argv: string[]): string =>
+  argv.map((word) => (word && !/[\s"]/.test(word) ? word : `"${word.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`)).join(' ')
+
+/**
+ * The words that start an agent app on Windows, by the name it is run by, as a person's PATH
+ * finds it: in each folder of the PATH in turn, a program of that name, or else the command
+ * script a package manager writes for one (npm, pnpm and yarn write the same kind). A script is
+ * never started itself, since Windows would have cmd.exe read the words after it: what it would
+ * start is read out of it, a program, or a script that Node runs, with the Node beside the
+ * script or else the one on the PATH. Only folders named in full are looked in, and never the
+ * folder the conversation is in, where a program of that name would be whatever its files put
+ * there. Null where nothing is found that can be started so.
+ */
+export function windowsProgram(name: string, pathVar: string, exists: (file: string) => boolean, read: (file: string) => string): string[] | null {
+  const dirs = pathVar
+    .split(';')
+    .map((dir) => dir.trim().replace(/^"(.*)"$/, '$1'))
+    .filter((dir) => path.win32.isAbsolute(dir))
+  for (const dir of dirs) {
+    for (const ext of ['.com', '.exe']) {
+      const program = path.win32.join(dir, `${name}${ext}`)
+      if (exists(program)) return [program]
+    }
+    for (const ext of ['.bat', '.cmd']) {
+      const script = path.win32.join(dir, `${name}${ext}`)
+      if (exists(script)) return throughScript(script, dirs, exists, read)
+    }
+  }
+  return null
+}
+/** What a package manager's command script starts, as words: see `windowsProgram`. */
+function throughScript(script: string, dirs: string[], exists: (file: string) => boolean, read: (file: string) => string): string[] | null {
+  let text: string
+  try {
+    text = read(script)
+  } catch {
+    return null
+  }
+  const here = path.win32.dirname(script)
+  // The file it hands the words it was given on to, named from the script's own folder
+  const target = [...text.matchAll(/"%(?:~dp0|dp0%)\\?([^"%*\r\n]+)"\s+%\*/gi)]
+    .map((m) => path.win32.resolve(here, m[1]!))
+    .filter((file) => !/[\\/]node\.exe$/i.test(file))
+    .at(-1)
+  if (!target || !exists(target)) return null
+  if (/\.(com|exe)$/i.test(target)) return [target]
+  // A script, which these run with Node, and only then
+  if (!/\bnode(\.exe)?\b/i.test(text)) return null
+  const node = [here, ...dirs].map((dir) => path.win32.join(dir, 'node.exe')).find(exists)
+  return node ? [node, target] : null
+}
+
+/**
  * How this program tells when a process was started, as a number that goes into each note of
  * a run. On Linux it is the tick at which the system itself says the process started, which no
  * setting of the clock alters. On macOS it is `ps`'s own words for the time, in English and by
@@ -551,12 +922,16 @@ function ps(args: string[], ok: number[] = [0]): string | null {
 /**
  * Whether this machine has a `ps` that lists processes as this program asks it to. Without one
  * a reopened conversation can be started and cannot be looked after: what it left running when
- * it was stopped or cut off cannot be found. A small container often has none.
+ * it was stopped or cut off cannot be found. A small container often has none. On Windows, whether
+ * it has Windows PowerShell, through which its jobs are made and ended instead.
  */
-export const listsProcesses = (): boolean => process.platform === 'win32' || ps(['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=']) !== null
-/** What to do where it has none. */
+export const listsProcesses = (): boolean =>
+  process.platform === 'win32' ? existsSync(powershellExe()) : ps(['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=']) !== null
+/** What to do where it has none. On Windows what It looks after them with is Windows PowerShell, which is a part of Windows. */
 export const NO_PS =
-  'This machine has no `ps` command that It can list processes with, which it needs to look after the conversations it reopens. Install it (the package is called procps on most Linux systems, and procps-ng on some), then restart It.'
+  process.platform === 'win32'
+    ? 'This machine has no Windows PowerShell where Windows keeps it, which It needs to look after the conversations it reopens. Turn it on again among the optional features of Windows, then restart It.'
+    : 'This machine has no `ps` command that It can list processes with, which it needs to look after the conversations it reopens. Install it (the package is called procps on most Linux systems, and procps-ng on some), then restart It.'
 
 /** The processes in the group of this number, and null where the system could not be asked. */
 function inGroup(group: number): number[] | null {

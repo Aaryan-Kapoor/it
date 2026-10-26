@@ -2600,6 +2600,11 @@ async function main(argv: string[]): Promise<void> {
       ])
     }
     case 'runs': {
+      // Where a person looks at what is running on this machine
+      const LOOK_AT_PROCESSES =
+        process.platform === 'win32'
+          ? 'in Task Manager, or with `Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate, CommandLine`'
+          : '`ps -u "$USER" -o pid,lstart,args`'
       // The conversations It is not reopening, because a turn of theirs from before could not be checked on or ended
       type Held = {
         unread: boolean
@@ -2657,8 +2662,8 @@ async function main(argv: string[]): Promise<void> {
         ...(now.unread || now.held.length
           ? [
               now.unread
-                ? 'To let them be reopened again, look that no agent It started is still running here (`ps -u "$USER" -o pid,lstart,args`), and then run `it runs clear`. Starting this machine again does not do it where the note could not be read.'
-                : 'They are reopened again once this machine has been started again. To let them be reopened sooner, look that no agent It started is still running here (`ps -u "$USER" -o pid,lstart,args`), and then run `it runs clear`.',
+                ? `To let them be reopened again, look that no agent It started is still running here (${LOOK_AT_PROCESSES}), and then run \`it runs clear\`. Starting this machine again does not do it where the note could not be read.`
+                : `They are reopened again once this machine has been started again. To let them be reopened sooner, look that no agent It started is still running here (${LOOK_AT_PROCESSES}), and then run \`it runs clear\`.`,
             ]
           : ['Nothing is held back.']),
       ])

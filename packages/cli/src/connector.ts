@@ -65,15 +65,16 @@ import {
   codexHeld,
   endTree,
   fromAnotherStart,
-  identity,
   listsProcesses,
   mayWake,
   NO_PS,
+  PROGRAM,
   SINCE_TOLD,
   STOPPED,
   WAS_CUT_OFF,
   WAS_STOPPED,
   WOKEN,
+  windowsProgram,
 } from './wake'
 
 /** A click as an add-on receives it: its data as a value, the one wording agents read, and the few words a person is shown where an app has another place for the rest. */
@@ -1396,6 +1397,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
     if (typeof env === 'string') return env
     const how = carrying(now.harness, now.id, text, {
       codex: codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync),
+      // On Windows an app is started by where its program is, which its name alone does not say there
+      ...(process.platform === 'win32'
+        ? { start: windowsProgram(PROGRAM[now.harness] ?? now.harness, env.PATH ?? env.Path ?? '', existsSync, (f) => readFileSync(f, 'utf8')) }
+        : {}),
       itHome: home(),
       // The mode the person last had the conversation in, and where `it` is installed
       mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd, env.CLAUDE_CONFIG_DIR) ?? claudeModeOf(session.id, cwd, env.CLAUDE_CONFIG_DIR)) : null,
@@ -1480,8 +1485,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
           keepIn: inHome('logs'),
           said: (words) => saidLast.set(key, words),
           // Written down before it is given anything to do, or it is not to run: see `carryOn`
-          began: (pid) => {
-            const since = identity([pid]).get(pid)
+          began: (pid, since) => {
             if (since === undefined) throw new Error('which process it is could not be told')
             const boot = bootId()
             // This conservative copy predates every signal and every possible disk failure.
