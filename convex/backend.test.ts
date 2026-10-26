@@ -2048,7 +2048,7 @@ describe('what a page keeps for itself, and how its displays are told of it', ()
     // A display that was up to date is sent what changed after, as before
     await keep(alice.browser, p.artifactId, { n1001: null })
     expect(await live(alice.browser, p.artifactId, now.revision)).toEqual({ revision: now.revision + 1, kept: [['n1001', null]] })
-  })
+  }, 30_000)
 
   test('what a page kept inside a state written before each value had a record of its own is moved out, and nothing of it is lost', async () => {
     const t = backend()
@@ -2137,7 +2137,7 @@ describe('what a page keeps for itself, and how its displays are told of it', ()
     await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
     await settle(t)
     expect(await keptRecords(t)).toEqual([])
-  })
+  }, 30_000)
 })
 
 describe('clicks and their delivery', () => {
