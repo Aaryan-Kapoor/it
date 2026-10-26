@@ -1263,12 +1263,16 @@ setInterval(() => {}, 1000)
     input: 'what was done on the page',
     app: 'Stand-in',
   })
+  // What a run left running is ended after each test, and waited for: Windows keeps a folder
+  // that a program is in from being removed, and the scratch folder is the run's own
   const left: number[] = []
-  afterEach(() => {
-    for (const pid of left.splice(0))
+  afterEach(async () => {
+    const pids = left.splice(0)
+    for (const pid of pids)
       try {
         process.kill(pid)
       } catch {}
+    await until(() => !pids.some(alive), 15_000)
   })
 
   test('is given its message on its input, in its folder, with the name of its run and with nothing the keeper was told by, and what it left running when it ended by itself is let be', async () => {
