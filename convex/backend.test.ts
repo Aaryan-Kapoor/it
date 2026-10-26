@@ -3724,6 +3724,59 @@ describe('displays and machines', () => {
     expect((await unknown.as.query(api.machines.me, {})).wakes.map((w) => w.harness)).toEqual(['claude-code'])
   })
 
+  test('a machine on Windows has closed conversations reopened only where its own It says it does them there, and an It of another version that does not say takes that away', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const onPage = async (slug: string) => (await alice.browser.query(api.artifacts.get, { slug })).wake
+    const wakes = async (m: { as: ReturnType<T['withIdentity']> }) => (await m.as.query(api.machines.me, {})).wakes.map((w) => w.harness).sort()
+    // A new Windows machine whose setup says so: on for the apps it connects, as on any other system, and setup is told which
+    const apps = ['claude-code', 'codex'].map((id) => ({ id, addon: 'connected' }))
+    const pc = await machineOf(t, 'alice', 'pc')
+    await t.run((ctx) => ctx.db.patch(pc.id, { system: undefined }))
+    await pc.as.mutation(api.machines.inventory, { harnesses: apps })
+    expect(await pc.as.mutation(api.machines.choose, { harnesses: ['claude-code', 'codex'], system: 'win32', reopens: true })).toEqual({
+      wakes: ['claude-code', 'codex'],
+    })
+    expect(await wakes(pc)).toEqual(['claude-code', 'codex'])
+    expect((await alice.browser.query(api.machines.list, {})).find((x) => x.id === pc.id)).toMatchObject({ system: 'win32', reopens: true })
+    await publish(pc, 'plan', { session: { harness: 'claude-code', id: 'c-1' } })
+    expect(await onPage('plan')).toEqual({ machineId: pc.id, harness: 'claude-code', on: true })
+    // Its connector's reports say so too. One of the same version that does not say, as the plainer report does not, leaves it as it was
+    await pc.as.mutation(api.machines.report, { connectorVersion: '0.2.0', harnesses: apps, system: 'win32', reopens: true })
+    await pc.as.mutation(api.machines.report, { connectorVersion: '0.2.0', harnesses: apps })
+    expect(await wakes(pc)).toEqual(['claude-code', 'codex'])
+    // Put back to an It that does not say: nothing is reopened there, and the switch is refused with why
+    await pc.as.mutation(api.machines.report, { connectorVersion: '0.1.0', harnesses: apps, system: 'win32' })
+    expect(await wakes(pc)).toEqual([])
+    expect(await onPage('plan')).toBeNull()
+    expect((await alice.browser.query(api.machines.list, {})).find((x) => x.id === pc.id)).toMatchObject({ reopens: false, wakes: [] })
+    await alice.browser.mutation(api.machines.wake, { machineId: pc.id, harness: 'claude-code', on: false })
+    await expect(alice.browser.mutation(api.machines.wake, { machineId: pc.id, harness: 'claude-code', on: true })).rejects.toThrow(
+      'This Windows machine runs an It that does not reopen closed conversations there.',
+    )
+    // Nor is anything handed to that machine to be reopened for: a closed conversation's click waits
+    const runBegan = await pc.as.mutation(api.machines.runBegan, { for: { harness: 'codex', id: 'x-1' }, run: 'r-1', ids: [] })
+    expect(runBegan).toEqual({ stopped: false, off: true })
+    // Updated again, it says so once more, and what the person switched off stays off: only the switch puts it back
+    await pc.as.mutation(api.machines.report, { connectorVersion: '0.2.0', harnesses: apps, system: 'win32', reopens: true })
+    expect(await wakes(pc)).toEqual(['codex'])
+    await alice.browser.mutation(api.machines.wake, { machineId: pc.id, harness: 'claude-code', on: true })
+    expect(await wakes(pc)).toEqual(['claude-code', 'codex'])
+    // A Windows machine set up with an It from before one said so keeps its apps as they were when an update says it: nothing comes on by itself
+    const old = await machineOf(t, 'alice', 'laptop')
+    await t.run((ctx) => ctx.db.patch(old.id, { system: 'win32' }))
+    await old.as.mutation(api.machines.inventory, { harnesses: [{ id: 'claude-code', addon: 'connected' }] })
+    expect(await old.as.mutation(api.machines.choose, { harnesses: ['claude-code'], system: 'win32' })).toEqual({ wakes: [] })
+    expect(await old.as.mutation(api.machines.choose, { harnesses: ['claude-code'], system: 'win32', reopens: true })).toEqual({ wakes: [] })
+    await old.as.mutation(api.machines.report, { connectorVersion: '0.2.0', harnesses: apps, system: 'win32', reopens: true })
+    expect(await wakes(old)).toEqual([])
+    await alice.browser.mutation(api.machines.wake, { machineId: old.id, harness: 'claude-code', on: true })
+    expect(await wakes(old)).toEqual(['claude-code'])
+    // On Linux and macOS the system is enough, whatever is said
+    const box = await machineOf(t, 'alice', 'box')
+    expect(await box.as.mutation(api.machines.choose, { harnesses: ['claude-code'], system: 'linux' })).toEqual({ wakes: ['claude-code'] })
+  })
+
   test('a computer that is enrolled again keeps reopening switched off for the apps the person switched it off for there, and setup connecting them does not switch it on', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
@@ -3797,7 +3850,7 @@ describe('displays and machines', () => {
     // On a machine that runs Windows, or that has not said what it runs, reopening is not to be had:
     // the switch is refused with why, what was switched on before says nothing, and nothing is offered for reopening
     for (const [system, why] of [
-      ['win32', 'It does not reopen closed conversations on a Windows machine yet.'],
+      ['win32', 'This Windows machine runs an It that does not reopen closed conversations there.'],
       [undefined, 'This machine has not said which system it runs'],
     ] as const) {
       await t.run((ctx) => ctx.db.patch(m.id as never, { system }))

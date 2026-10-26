@@ -416,11 +416,21 @@ describe('what is said of an agent app on a machine', () => {
     expect(switches()).toEqual([])
     await act(async () => root.unmount())
     host.remove()
-    // On a machine that runs Windows the switch is not there, and why is said in its place
+    // On a machine that runs Windows with an It that does not reopen conversations there, the switch is not there, and why is said in its place
     watched['machines:list'] = [{ ...machine(Date.now(), found, ['claude-code', 'codex']), system: 'win32' }]
     await show(createElement(Machines))
     expect(switches()).toEqual([])
-    expect(host.textContent).toContain('It does not reopen closed conversations on a Windows machine yet.')
+    expect(host.textContent).toContain('This Windows machine runs an It that does not reopen closed conversations there. Update It on it')
+    await act(async () => root.unmount())
+    host.remove()
+    // And with one that says it does, the switch is there as on any other system
+    watched['machines:list'] = [{ ...machine(Date.now(), found, ['claude-code', 'codex']), system: 'win32', reopens: true }]
+    await show(createElement(Machines))
+    expect(switches()).toEqual([
+      ['Auto-wake Claude Code', false],
+      ['Auto-wake Codex', false],
+    ])
+    expect(host.textContent).not.toContain('does not reopen closed conversations')
   })
 })
 

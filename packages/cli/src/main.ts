@@ -26,7 +26,7 @@ import readline from 'node:readline/promises'
 import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
-import { local } from './connector'
+import { choices, local } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
 import * as flow from './flow'
@@ -132,15 +132,20 @@ function codexShut(found: HarnessStatus[]): string | null {
 /** What a person is told of the agent apps on this machine: each one that was found, and whether It is connected to it. */
 /**
  * Tells It which agent apps were chosen on this machine, and what system the machine runs,
- * which no connector has reported yet when setup is first run. Answers with the apps of them
- * that It reopens closed conversations of here. An It from before it took the system is told
- * the choice alone, and says nothing of that.
+ * which no connector has reported yet when setup is first run, and on Windows that It reopens
+ * closed conversations there. Answers with the apps of them that It reopens closed
+ * conversations of here. An It from before it took the system is told the choice alone, and
+ * says nothing of that, and one from before it took the word from Windows is told the rest.
  */
 async function chosen(wanted: string[]): Promise<string[]> {
-  const said = await call<{ wakes?: string[] } | null>('mutation', api.machines.choose, { harnesses: wanted, system: process.platform }).catch(() =>
-    call<{ wakes?: string[] } | null>('mutation', api.machines.choose, { harnesses: wanted }),
-  )
-  return said?.wakes ?? []
+  const tries = choices(process.platform, wanted)
+  for (const [n, args] of tries.entries())
+    try {
+      return (await call<{ wakes?: string[] } | null>('mutation', api.machines.choose, args))?.wakes ?? []
+    } catch (err) {
+      if (n === tries.length - 1) throw err
+    }
+  return []
 }
 /**
  * The apps It reopens closed conversations of on this machine as things stand, asked before a

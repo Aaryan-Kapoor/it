@@ -215,6 +215,27 @@ function claimedAndLeft(): string[] {
 }
 
 /**
+ * What a machine tells It of itself in a report, fullest first, each to be made in turn where It
+ * refuses the one before, as an It older than this program does. On Windows the fullest says as
+ * well that the machine reopens closed conversations there (see `wakesOn`). Where It refused the
+ * fuller report lately (`plain`), it is given the plainest alone, and where it refused the word
+ * from Windows lately (`unsaid`), it is given the rest.
+ */
+export function reports<T extends object, U extends object>(platform: string, full: T, plainest: U, lately: { plain: boolean; unsaid: boolean }): (T | U)[] {
+  if (lately.plain) return [plainest]
+  return platform === 'win32' && !lately.unsaid ? [{ ...full, reopens: true }, full, plainest] : [full, plainest]
+}
+/**
+ * What setup tells It it chose, in the same way: the fullest says what system the machine runs,
+ * and on Windows that it reopens closed conversations there, and the plainest says the choice alone.
+ */
+export const choices = (platform: string, harnesses: string[]) => [
+  ...(platform === 'win32' ? [{ harnesses, system: platform, reopens: true }] : []),
+  { harnesses, system: platform },
+  { harnesses },
+]
+
+/**
  * The words that start Codex with no shell in between. Elsewhere that is just `codex`. On
  * Windows, Codex installed through npm is a .cmd file, which only a shell can start, and a
  * shell would read a page's title as part of the command. So the program behind the .cmd file
@@ -441,7 +462,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // It says. Until It has said, none is.
   let wakesNow = new Map<string, number>()
   // And never on a system It does not reopen conversations on, whatever It says is switched on
-  const wakes = (harness: string, at: number) => wakesOn(process.platform) && mayWake(wakesNow, harness, at)
+  const wakes = (harness: string, at: number) => wakesOn(process.platform, true) && mayWake(wakesNow, harness, at)
 
   const sessions = new Map<string, { seen: number; busy: boolean; busyAt: number }>()
   // A conversation that was cleared carries on under a new id; its pages follow it
@@ -2857,7 +2878,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         agent: agentOf(h.id),
         addon: h.addon,
         version: /^\d{1,4}\.\d{1,4}\.\d{1,4}/.exec(h.version ?? '')?.[0] ?? 'unknown',
-        wake: wakesOn(process.platform) && wakesNow.has(h.id),
+        wake: wakesOn(process.platform, true) && wakesNow.has(h.id),
       })
   }
 
@@ -2973,6 +2994,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
   // so that a refusal which was something else (a moment without a connection) does not
   // leave the machine saying less for as long as it runs
   let plainUntil = 0
+  /** And until when a machine on Windows leaves out of its report that it reopens conversations there, for the same reason. */
+  let unsaidUntil = 0
   const lookForNewer = async () => {
     if (!looksForNewer()) latestKnown = ''
     else {
@@ -3070,35 +3093,33 @@ async function connecting(say: (line: string) => void): Promise<void> {
     const told = { connectorVersion: VERSION, harnesses: found.map((h) => ({ ...h, runtime: runtimes.status(h.id) })) }
     const legacy = { connectorVersion: VERSION, harnesses: found }
     // And with the system it runs on, which an It of the same age takes too
-    const fuller = Date.now() >= plainUntil
-    await call(
-      'mutation',
-      api.machines.report,
-      fuller
-        ? {
-            ...told,
-            system: process.platform,
-            // Whether it hands nothing over for now, so that the site says so beside the machine and on its pages
-            paused: unfitting ? (unfitting === NOT_ASKED ? 'unchecked' : 'unfit') : '',
-            ...(latestKnown !== undefined ? { latest: latestKnown } : {}),
-          }
-        : legacy,
-    )
-      .catch(async (err) => {
-        if (fuller && (err as { code?: string }).code !== 'unauthenticated') {
-          plainUntil = Date.now() + 10 * 60_000
-          await call('mutation', api.machines.report, legacy)
+    const full = {
+      ...told,
+      system: process.platform,
+      // Whether it hands nothing over for now, so that the site says so beside the machine and on its pages
+      paused: unfitting ? (unfitting === NOT_ASKED ? 'unchecked' : 'unfit') : '',
+      ...(latestKnown !== undefined ? { latest: latestKnown } : {}),
+    }
+    // And on Windows that it reopens closed conversations there, which an It from before one did
+    // takes nothing of: each report that It refuses is made again with less, down to the plainest
+    const tries = reports(process.platform, full, legacy, { plain: Date.now() < plainUntil, unsaid: Date.now() < unsaidUntil })
+    await (async () => {
+      for (const [n, args] of tries.entries())
+        try {
+          await call('mutation', api.machines.report, args)
           return
+        } catch (err) {
+          if ((err as { code?: string }).code === 'unauthenticated' || n === tries.length - 1) throw err
+          if ('reopens' in args) unsaidUntil = Date.now() + 10 * 60_000
+          else plainUntil = Date.now() + 10 * 60_000
         }
-        throw err
-      })
-      .catch((err) => {
-        // The bridge would give this machine no token, even a fresh one: it has been revoked.
-        // Found out here within half a minute, where the live connection would take until its own
-        // token ran out.
-        if ((err as { code?: string }).code === 'unauthenticated') notOursNow()
-        else say(`report: ${why(err)}`)
-      })
+    })().catch((err) => {
+      // The bridge would give this machine no token, even a fresh one: it has been revoked.
+      // Found out here within half a minute, where the live connection would take until its own
+      // token ran out.
+      if ((err as { code?: string }).code === 'unauthenticated') notOursNow()
+      else say(`report: ${why(err)}`)
+    })
   }
   lookAgain = () => report(true)
   client.onUpdate(
@@ -3197,12 +3218,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // Said to It at once, so that the site says it beside the machine and on its pages: in
       // full, whatever plainer report this machine had fallen back on for a while
       plainUntil = 0
+      unsaidUntil = 0
       void report()
     } else if (!wrong && unfitting) {
       const waited = unfitting !== NOT_ASKED
       unfitting = null
       if (waited) say('this machine and the It it joined fit again: what is done on a page is handed over again')
       plainUntil = 0
+      unsaidUntil = 0
       void report()
       void route()
     }

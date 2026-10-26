@@ -27,7 +27,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
 import { agentApp, agentAppsAbove, appsFrom, linuxProc, type Proc, psAbove, psTable, psWords } from './src/ancestry'
 import { loose, nested, parse } from './src/args'
-import { codexCommand, codexQueue, local, mac } from './src/connector'
+import { choices, codexCommand, codexQueue, local, mac, reports } from './src/connector'
 import {
   backend,
   changeWhole,
@@ -741,6 +741,35 @@ describe('starting Codex to queue a click', () => {
     expect(codexCommand('win32', PATH, having(cmd, script))).toBeNull()
     expect(codexCommand('win32', PATH, having(cmd, node))).toBeNull()
     expect(codexCommand('win32', '', having(cmd, script, node))).toBeNull()
+  })
+})
+
+describe('what a machine tells It of itself, to an It that may be older', () => {
+  const full = { connectorVersion: '0.2.0', harnesses: [], system: 'win32', paused: '' }
+  const plainest = { connectorVersion: '0.2.0', harnesses: [] }
+
+  test('on Windows the fullest report says too that the machine reopens closed conversations there, and each refused is made again with less', () => {
+    expect(reports('win32', full, plainest, { plain: false, unsaid: false })).toEqual([{ ...full, reopens: true }, full, plainest])
+    // An It that refused the word from Windows lately is given the rest, and one that refused the fuller report the plainest
+    expect(reports('win32', full, plainest, { plain: false, unsaid: true })).toEqual([full, plainest])
+    expect(reports('win32', full, plainest, { plain: true, unsaid: false })).toEqual([plainest])
+  })
+
+  test('on Linux and macOS it says nothing of it, since the system is enough there', () => {
+    for (const platform of ['linux', 'darwin']) {
+      const said = { ...full, system: platform }
+      expect(reports(platform, said, plainest, { plain: false, unsaid: false })).toEqual([said, plainest])
+      expect(reports(platform, said, plainest, { plain: true, unsaid: false })).toEqual([plainest])
+    }
+  })
+
+  test('setup tells It what it chose in the same way, with the system, and on Windows the word that the machine reopens conversations', () => {
+    expect(choices('win32', ['pi'])).toEqual([
+      { harnesses: ['pi'], system: 'win32', reopens: true },
+      { harnesses: ['pi'], system: 'win32' },
+      { harnesses: ['pi'] },
+    ])
+    expect(choices('linux', ['pi'])).toEqual([{ harnesses: ['pi'], system: 'linux' }, { harnesses: ['pi'] }])
   })
 })
 
