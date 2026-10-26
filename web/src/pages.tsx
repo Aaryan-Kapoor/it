@@ -160,10 +160,7 @@ export function Grid({ pages, owner, query, onQuery }: { pages: Card[] | undefin
                     className="card-action card-action--danger"
                     title="Delete"
                     aria-label="Delete"
-                    onClick={() =>
-                      confirm(`Delete “${p.title}”? It will leave every display. Its files may still answer until deletion is confirmed.`) &&
-                      act(remove({ artifactId: p.id as Id<'artifacts'> }))
-                    }
+                    onClick={() => confirm(`Delete “${p.title}”? It will leave every display.`) && act(remove({ artifactId: p.id as Id<'artifacts'> }))}
                   >
                     <IconX />
                   </button>
@@ -206,71 +203,41 @@ export class DeletionStatus extends Component<{ empty?: boolean }, { error: unkn
     if (!this.state.error) return <DeletionReceipts empty={this.props.empty} />
     // Structured refusals still belong to the site's existing error and pairing flows.
     if (refusal(this.state.error).code !== 'error') throw this.state.error
-    const notice = (
-      <section className="deletion-status" aria-label="Page deletions">
-        <p className="deletion-line" role="status">
-          Deletion status is unavailable. Completion cannot be confirmed.
-        </p>
-        <button type="button" className="grid-empty-reset" onClick={() => this.setState({ error: null })}>
-          Try again
-        </button>
-      </section>
-    )
-    // A backend can retain earlier functions while the site is newer. A missing receipt
-    // query must not replace the page grid with an error or claim that cleanup finished.
-    return this.props.empty ? (
-      <main className="grid-view">
-        {notice}
-        <p className="grid-empty">No pages to show. Ask your agent to make a page.</p>
-      </main>
-    ) : (
-      notice
-    )
+    // A backend can retain earlier functions while the site is newer. Without the receipt
+    // query there is nothing to tell of a failing deletion, and the grid goes on as it is.
+    return this.props.empty ? <Empty owner={true} /> : null
   }
 }
 
+/**
+ * How many tries in a row a deletion fails before the person is told of it. The tries are
+ * five, ten and twenty seconds apart, so a deletion named here has gone on failing for most
+ * of a minute. One that fails once and goes through at the next try is nothing to be told of.
+ */
+const FAILING_AFTER = 3
+
+/**
+ * A deletion that goes through says nothing: the page has already left every list. Only one
+ * that keeps failing is named, since until it goes through its files may still answer to
+ * whoever has the address.
+ */
 function DeletionReceipts({ empty = false }: { empty?: boolean }) {
   const deletions = useQuery(api.deletions.list)
-  const [showCompleted, setShowCompleted] = useState(false)
   if (empty && deletions === undefined) return <main className="grid-view" role="status" />
-  if (!deletions?.length) return empty ? <Empty owner={true} /> : null
-  const pending = deletions.filter((d) => d.state !== 'completed')
-  const completed = deletions.filter((d) => d.state === 'completed')
+  const failing = (deletions ?? []).filter((d) => d.state === 'retrying' && d.attempts >= FAILING_AFTER)
+  if (!failing.length) return empty ? <Empty owner={true} /> : null
   const status = (
     <section className="deletion-status" aria-label="Page deletions">
       <div aria-live="polite">
-        {pending.length === 100 && <p className="deletion-line">Showing the oldest 100 unfinished deletions.</p>}
-        {pending.map((d) => (
+        {failing.map((d) => (
           <p className="deletion-line" key={d.job}>
-            <strong>{d.title}</strong> {d.state === 'retrying' ? 'could not be fully deleted yet. It will retry.' : 'is being deleted.'}{' '}
-            <span className="muted">Its files may still answer until deletion is confirmed.</span>
+            <strong>{d.title}</strong> could not be deleted yet. It keeps trying, and until it goes through, anyone with its link may still open its files.
           </p>
         ))}
       </div>
-      {completed.length > 0 && (
-        <>
-          <button type="button" className="grid-empty-reset" aria-expanded={showCompleted} onClick={() => setShowCompleted((show) => !show)}>
-            {showCompleted ? 'Hide completed deletions' : `Completed deletions (${completed.length})`}
-          </button>
-          {showCompleted &&
-            completed.map((d) => (
-              <p className="deletion-line" key={d.job}>
-                {d.title}: deletion confirmed.
-              </p>
-            ))}
-        </>
-      )}
     </section>
   )
-  if (empty && pending.length === 0) return <Empty owner={true} notice={status} />
-  return empty ? (
-    <main className="grid-view">
-      {status}
-      <p className="grid-empty">No pages to show. Ask your agent to make a page.</p>
-    </main>
-  ) : (
-    status
-  )
+  return empty ? <Empty owner={true} notice={status} /> : status
 }
 
 /**
