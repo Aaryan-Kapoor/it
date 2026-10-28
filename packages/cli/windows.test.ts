@@ -1,10 +1,10 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { psQuote, WINDOWS_CLEANUP, windowsDeletionCommand } from './src/lib'
+import { psQuote, RUN_ONCE, WINDOWS_CLEANUP, WINDOWS_PATH_MOST, windowsDeletionCommand } from './src/lib'
 import { startOf } from './src/serve/backend'
 import {
   PS_QUIET,
@@ -16,6 +16,7 @@ import {
   windowsScript,
   windowsTask,
 } from './src/service'
+import { deleteAtSignIn } from './src/uninstall-files'
 
 const powershell = (script: string) =>
   spawnSync(
@@ -25,12 +26,26 @@ const powershell = (script: string) =>
   )
 
 test('deferred deletion carries a queue entry and refuses names that cannot fit RunOnce', () => {
-  const line = windowsDeletionCommand('ItRemoved12345-abcdefgh')!
+  const file = 'C:\\Users\\%USERNAME%\\it.exe'
+  const line = windowsDeletionCommand('ItRemoved12345-abcdefgh', file)!
   expect(line.length).toBeLessThanOrEqual(260)
   expect(line).toContain('-LiteralPath')
   expect(line).not.toContain('cmd.exe')
-  expect(windowsDeletionCommand(`ItRemoved1${'x'.repeat(260)}`)).toBeUndefined()
-  expect(windowsDeletionCommand("ItRemoved1'; throw 'injected")).toBeUndefined()
+  // Nothing in the line is a name Windows could put something else in place of
+  expect(line).not.toContain('%')
+  expect(windowsDeletionCommand(`ItRemoved1${'x'.repeat(260)}`, file)).toBeUndefined()
+  expect(windowsDeletionCommand("ItRemoved1'; throw 'injected", file)).toBeUndefined()
+})
+
+test('deferred deletion refuses a path longer than Windows PowerShell can be counted on to delete, counted as Windows counts it', () => {
+  const longest = `C:\\${'x'.repeat(WINDOWS_PATH_MOST - 3)}`
+  expect(longest.length).toBe(259)
+  expect(windowsDeletionCommand('ItRemoved1-a', longest)).toBeDefined()
+  expect(windowsDeletionCommand('ItRemoved1-a', `${longest}x`)).toBeUndefined()
+  // A letter outside the Basic Multilingual Plane is two UTF-16 code units, and Windows counts both
+  const wide = `C:\\${'𝒳'.repeat((WINDOWS_PATH_MOST - 3) / 2)}`
+  expect(windowsDeletionCommand('ItRemoved1-a', wide)).toBeDefined()
+  expect(windowsDeletionCommand('ItRemoved1-a', `${wide}x`)).toBeUndefined()
 })
 
 test('the launcher repairs a missing standalone program before attempting to start it', () => {
@@ -58,27 +73,117 @@ test('task discovery reads every folder, deduplicates Windows spellings and refu
 })
 
 describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows PowerShell', () => {
-  test('deferred deletion reads percent signs, quotes, Unicode and long paths as literal registry data', () => {
-    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-remove-'))
+  /** Runs a line as Windows starts what it was left to run: the whole line, as it is, is the new program's command line. */
+  const asLeft = (line: string) =>
+    spawnSync('powershell.exe', [], { argv0: line, windowsVerbatimArguments: true, encoding: 'utf8', windowsHide: true, timeout: 60_000 })
+  /** A registry value as it is kept, with its kind, and with nothing in it expanded. */
+  const kept = (key: string, name: string) => {
+    const at = psQuote(key.replace(/^HKCU\\/, 'HKCU:\\'))
+    const ran = powershell(
+      `$k = Get-Item -LiteralPath ${at}; $k.GetValueKind(${psQuote(name)}).ToString(); [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes([string]$k.GetValue(${psQuote(name)}, $null, 'DoNotExpandEnvironmentNames')))`,
+    )
+    const [kind, value] = ran.stdout.trim().split(/\r?\n/)
+    return { kind, value: value === undefined ? undefined : Buffer.from(value, 'base64').toString('utf16le') }
+  }
+  /** Puts a path in the queue as uninstall does, and gives back the line RunOnce would have been given, which it is not given. */
+  const queued = (file: string, entry: string) => {
+    let line: string | undefined
+    const asked = deleteAtSignIn(file, entry, (args) => {
+      if (args[1] !== RUN_ONCE) return spawnSync('reg.exe', args, { windowsHide: true, timeout: 15_000 }).status === 0
+      line = args[7]
+      return true
+    })
+    return asked ? line : undefined
+  }
+  const everything = (folder: string) => readdirSync(folder, { recursive: true, encoding: 'utf8' }).sort()
+
+  test('deferred deletion reads percent signs, carets, ampersands, parentheses, quotes and Unicode as literal registry data', () => {
+    const folder = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'it-remove-')))
     const entry = `ItRemoved${process.pid}-${Date.now().toString(36)}`
-    const line = windowsDeletionCommand(entry)!
-    const nested = path.join(folder, 'x'.repeat(80))
+    // A backslash before a 0 is how reg.exe writes the null between the strings of a list
+    const nested = path.join(folder, '0 %PATH% ^ & (x86)')
     mkdirSync(nested)
-    const file = path.join(nested, "%USERNAME% O'Neil 漢字 [literal].exe")
-    const other = path.join(nested, `${process.env.USERNAME} O'Neil 漢字 [literal].exe`)
-    writeFileSync(file, 'remove this')
-    writeFileSync(other, 'keep this')
+    const file = path.join(nested, "%USERNAME% O'Neil ^& (copy) 漢字 [literal].exe")
+    // What a shell would have deleted in its place: the name with what %USERNAME% stands for, the name without its caret, and a program beside the folder
+    const others = [
+      path.join(nested, `${process.env.USERNAME} O'Neil ^& (copy) 漢字 [literal].exe`),
+      path.join(nested, "%USERNAME% O'Neil & (copy) 漢字 [literal].exe"),
+      path.join(folder, 'it.exe'),
+    ]
+    for (const at of [file, ...others]) writeFileSync(at, 'a program')
+    const before = everything(folder)
     try {
-      expect(spawnSync('reg.exe', ['add', WINDOWS_CLEANUP, '/v', entry, '/t', 'REG_SZ', '/d', file, '/f']).status).toBe(0)
-      // RunOnce starts the process directly. A shell here would add parsing Windows does not do.
-      const ran = powershell(
-        `$p = [Diagnostics.Process]::Start('powershell.exe', ${psQuote(line.slice('powershell.exe '.length))}); $p.WaitForExit(); exit $p.ExitCode`,
-      )
+      const line = queued(file, entry)!
+      expect(line).toBeDefined()
+      expect(kept(WINDOWS_CLEANUP, entry)).toEqual({ kind: 'String', value: file })
+      const ran = asLeft(line)
       expect(ran.status, ran.stderr).toBe(0)
-      expect(existsSync(file)).toBe(false)
-      expect(readFileSync(other, 'utf8')).toBe('keep this')
+      expect(everything(folder)).toEqual(before.filter((name) => path.join(folder, name) !== file))
       expect(spawnSync('reg.exe', ['query', WINDOWS_CLEANUP, '/v', entry]).status).not.toBe(0)
     } finally {
+      spawnSync('reg.exe', ['delete', WINDOWS_CLEANUP, '/v', entry, '/f'])
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  test('deferred deletion deletes a path as long as It allows, and a path one longer only where long paths are on', () => {
+    const folder = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'it-longest-')))
+    const entry = `ItRemoved${process.pid}-${Date.now().toString(36)}`
+    const name = `it-removed-${process.pid}-${Date.now().toString(36)}.exe`
+    // Each in a folder whose name makes the whole path as long as It allows, or one longer
+    const [longest, longer] = [0, 1].map((more) => path.join(folder, 'x'.repeat(WINDOWS_PATH_MOST - folder.length - name.length - 2 + more), name))
+    for (const at of [longest!, longer!]) {
+      mkdirSync(path.dirname(at))
+      writeFileSync(at, 'a program')
+    }
+    try {
+      expect(longest!.length).toBe(WINDOWS_PATH_MOST)
+      expect(queued(longer!, entry)).toBeUndefined()
+      expect(spawnSync('reg.exe', ['query', WINDOWS_CLEANUP, '/v', entry]).status).not.toBe(0)
+      const line = queued(longest!, entry)!
+      const ran = asLeft(line)
+      expect(ran.status, ran.stderr).toBe(0)
+      expect(existsSync(longest!)).toBe(false)
+      // The same line, with the longer path put in the queue by hand. What decides it is the
+      // LongPathsEnabled policy, which GitHub's runners turn on and which is off unless someone
+      // turned it on: Windows PowerShell deletes the longer path where it is on, and not where it is off
+      expect(spawnSync('reg.exe', ['add', WINDOWS_CLEANUP, '/v', entry, '/t', 'REG_SZ', '/d', longer!, '/f']).status).toBe(0)
+      const over = asLeft(line)
+      const policy = spawnSync('reg.exe', ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem', '/v', 'LongPathsEnabled'], {
+        encoding: 'utf8',
+      }).stdout
+      const longPaths = /LongPathsEnabled\s+REG_DWORD\s+0x1\s/.test(policy)
+      expect(over.status === 0, over.stderr).toBe(longPaths)
+      expect(existsSync(longer!)).toBe(!longPaths)
+    } finally {
+      spawnSync('reg.exe', ['delete', WINDOWS_CLEANUP, '/v', entry, '/f'])
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  // Only on a runner, which is made for one run and never signed in to again: on a person's own
+  // machine a value the test could not take out would run the next time they signed in
+  test.skipIf(!process.env.CI)('a RunOnce value left as uninstall leaves it, read back and run as it was kept, deletes its file and nothing else', () => {
+    const folder = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'it-runonce-')))
+    // A name uninstall never makes, so that nothing but this test takes it out
+    const entry = `ItRemoved${process.pid}-test-${Date.now().toString(36)}`
+    const file = path.join(folder, '%USERNAME% %PATH% ^& (it) 漢字.exe')
+    const other = path.join(folder, `${process.env.USERNAME} %PATH% ^& (it) 漢字.exe`)
+    for (const at of [file, other]) writeFileSync(at, 'a program')
+    try {
+      expect(deleteAtSignIn(file, entry)).toBe(true)
+      const left = kept(RUN_ONCE, entry)
+      expect(left).toEqual({ kind: 'String', value: windowsDeletionCommand(entry, file) })
+      expect(kept(WINDOWS_CLEANUP, entry)).toEqual({ kind: 'String', value: file })
+      // Windows takes a RunOnce value out before it runs what the value says
+      expect(spawnSync('reg.exe', ['delete', RUN_ONCE, '/v', entry, '/f']).status).toBe(0)
+      const ran = asLeft(left.value!)
+      expect(ran.status, ran.stderr).toBe(0)
+      expect(existsSync(file)).toBe(false)
+      expect(readFileSync(other, 'utf8')).toBe('a program')
+      expect(spawnSync('reg.exe', ['query', WINDOWS_CLEANUP, '/v', entry]).status).not.toBe(0)
+    } finally {
+      spawnSync('reg.exe', ['delete', RUN_ONCE, '/v', entry, '/f'])
       spawnSync('reg.exe', ['delete', WINDOWS_CLEANUP, '/v', entry, '/f'])
       rmSync(folder, { recursive: true, force: true })
     }

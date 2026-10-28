@@ -53,9 +53,30 @@ const link = async () => {
 
 const underBun = 'Bun' in globalThis
 const hasBun = underBun || spawnSync('bun', ['--version'], { stdio: 'ignore' }).status === 0
+/**
+ * What the site does to download the records, run by the page itself when it is opened with
+ * `?download` in its address: it asks for a link, and follows it as a download. A test begins a
+ * download by opening that address, and never by evaluating script in the page: after a
+ * navigation Firefox can leave Playwright's evaluation unanswered, with nothing of it run.
+ */
+const DOWNLOAD = `if (new URLSearchParams(location.search).has('download'))
+  addEventListener('load', async () => {
+    const response = await fetch('/session/export/start', { method: 'POST', headers: { 'x-it-site': '1' }, body: JSON.stringify({ session: 'owner' }) })
+    const { download } = await response.json()
+    const link = Object.assign(document.createElement('a'), { href: download, download: '' })
+    document.body.append(link)
+    link.click()
+  })
+`
 async function browserDoor(runtime: 'Node' | 'Bun') {
   const parts = {
-    site: { 'index.html': { type: 'text/html', bytes: Buffer.from('<!doctype html><title>Download test</title>').toString('base64') } },
+    site: {
+      'index.html': {
+        type: 'text/html',
+        bytes: Buffer.from('<!doctype html><title>Download test</title><script src="/download.js"></script>').toString('base64'),
+      },
+      'download.js': { type: 'text/javascript', bytes: Buffer.from(DOWNLOAD).toString('base64') },
+    },
   }
   if (runtime === 'Node') return startDoor(config, { site: upstream, api: upstream } as never, () => {}, { ...parts, content })
   const child = spawn(
@@ -371,19 +392,10 @@ describe('streamed record downloads', () => {
           const page = await context.newPage()
           await page.goto(origin)
           slow = true
+          let downloads = 0
           const begin = async () => {
             const download = page.waitForEvent('download')
-            await page.evaluate(async () => {
-              const response = await fetch('/session/export/start', {
-                method: 'POST',
-                headers: { 'x-it-site': '1' },
-                body: JSON.stringify({ session: 'owner' }),
-              })
-              const { download } = await response.json()
-              const link = Object.assign(document.createElement('a'), { href: download, download: '' })
-              document.body.append(link)
-              link.click()
-            })
+            await page.goto(`${origin}/?download=${++downloads}`)
             return download
           }
           const file = await begin()
