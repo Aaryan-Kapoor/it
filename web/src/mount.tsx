@@ -303,8 +303,11 @@ export function Mount({
           const done = await submit(convex, user, artifactId, envelope, () => live && port.current === from, typeof was === 'function' ? was : undefined, files)
           toPage(from, { type: 'it:result', requestId, ok: true, actionId: done.actionId })
         } else {
-          // The same rules the backend keeps, kept here so that nothing long is sent only to be refused
-          const changes = 'changes' in message ? message.changes : undefined
+          // The same rules the backend keeps, kept here so that nothing long is sent only to be refused.
+          // A page's script that takes the site for one taking a value at a time sends one by itself,
+          // as it is: it is written out here, as the site always wrote such a value out
+          const changes =
+            'changes' in message ? message.changes : 'key' in message ? [[message.key, jsonText(message.value, LIMITS.storeValueBytes)]] : undefined
           if (!Array.isArray(changes) || changes.length === 0 || changes.length > LIMITS.storeKeysAtOnce)
             throw new Error(`One write keeps 1 to ${LIMITS.storeKeysAtOnce} values.`)
           const sent: { key: string; value: string }[] = []

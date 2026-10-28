@@ -537,6 +537,29 @@ describe('the frame around a page', () => {
     expect(asked('state:store').length).toBe(before)
   })
 
+  test('one value sent by itself, as a page’s script sends it to a site that takes one at a time, is kept as one write', async () => {
+    const page = await show()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
+    const port = page.ports()[0]!
+    const heard = await page.send(port, { type: 'it:store', requestId: 'r-one', key: 'draft', value: { text: 'hello' } })
+    expect(heard.find((m) => m.requestId === 'r-one')).toEqual({ type: 'it:result', requestId: 'r-one', ok: true, revision: 4 })
+    // Written out as JSON here, as the value it is, and not taken for JSON text already
+    const said = await page.send(port, { type: 'it:store', requestId: 'r-text', key: 'note', value: 'plain words' })
+    expect(said.find((m) => m.requestId === 'r-text')).toMatchObject({ ok: true })
+    expect(asked('state:store').map((c) => c.args.changes)).toEqual([[{ key: 'draft', value: '{"text":"hello"}' }], [{ key: 'note', value: '"plain words"' }]])
+    // And held to the same rules as several
+    const before = asked('state:store').length
+    for (const [key, value, error] of [
+      ['a.b', 1, /store key/],
+      ['k', new Date(), 'That cannot be sent.'],
+      ['k', 'x'.repeat(LIMITS.storeValueBytes), 'A stored value is at most 32 KB.'],
+    ] as const) {
+      const refused = await page.send(port, { type: 'it:store', requestId: 'r-bad', key, value })
+      expect(refused.find((m) => m.requestId === 'r-bad')).toMatchObject({ ok: false, error })
+    }
+    expect(asked('state:store').length).toBe(before)
+  })
+
   test('what a page may keep at once is counted apart from its actions, and a page past it is told how long to wait', async () => {
     const page = await show()
     await page.fromFrame({ type: 'it:hello', doc: 'doc-1' })
