@@ -63,7 +63,7 @@ export class AddonRuntimes {
                 detail:
                   v.idle === true
                     ? 'The loaded add-on reports the required delivery APIs. Each conversation must still listen for its own clicks.'
-                    : 'The loaded add-on cannot discover a saved idle conversation. Open it and send a message to start listening. Auto-wake waits while this app is open.',
+                    : 'This app does not always tell the add-on which saved conversation is open. Open the conversation and send a message in it to start listening. Auto-wake waits while this app is open.',
               }
     this.loaded.set(`${harness}:${instance}`, { at: now, runtime, idle: v.idle === true })
     for (const [key, entry] of this.loaded) if (now - entry.at >= RECENT_MS) this.loaded.delete(key)
