@@ -460,17 +460,46 @@ export const waitingFor = query({
   },
 })
 
-/** Everything still waiting, across all the person's pages, newest first: what `it actions` lists. */
+/**
+ * What is still waiting across the person's pages, newest first: what `it actions` lists.
+ *
+ * Asked `for` a conversation, it is that conversation's alone, and what waits on pages that no
+ * conversation has, which are everyone's to see. A conversation's are what `it wait` takes for
+ * it: the ones addressed to this machine, to no machine, or set aside by this machine. Each is
+ * read by itself, and newest first, so that no number of other conversations' clicks stands in
+ * front of one of its own. Asked for no conversation, it is every click that waits: the
+ * person's own view. This keeps an agent from being shown, and acting on, a click that another
+ * conversation is to answer. It is no wall between agents: any agent on a machine can ask for
+ * every click, as the person can.
+ */
 export const allWaiting = query({
-  args: {},
-  handler: async (ctx) => {
-    const { user } = await requireMachine(ctx)
-    const rows = await ctx.db
+  args: { for: v.optional(session) },
+  handler: async (ctx, { for: s }) => {
+    const { user, machine } = await requireMachine(ctx)
+    if (!s) {
+      const rows = await ctx.db
+        .query('actions')
+        .withIndex('by_user_delivery', (q) => q.eq('userId', user._id).eq('delivery', 'pending'))
+        .order('desc')
+        .take(50)
+      return asClicks(ctx, rows)
+    }
+    // Four lists of at most 50 each, which is within what a query may read however much each click carries
+    const of = (machineId: Id<'machines'> | undefined, aside: Id<'machines'> | undefined) =>
+      ctx.db
+        .query('actions')
+        .withIndex('by_user_route', (q) =>
+          q.eq('userId', user._id).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id).eq('machineId', machineId).eq('parkedBy', aside),
+        )
+        .order('desc')
+        .take(50)
+    const nobodys = ctx.db
       .query('actions')
-      .withIndex('by_user_delivery', (q) => q.eq('userId', user._id).eq('delivery', 'pending'))
+      .withIndex('by_user_session', (q) => q.eq('userId', user._id).eq('delivery', 'pending').eq('harness', undefined).eq('sessionId', undefined))
       .order('desc')
       .take(50)
-    return asClicks(ctx, rows)
+    const rows = [...(await of(machine._id, undefined)), ...(await of(undefined, undefined)), ...(await of(undefined, machine._id)), ...(await nobodys)]
+    return asClicks(ctx, rows.sort((a, b) => b.createdAt - a.createdAt || b._creationTime - a._creationTime).slice(0, 50))
   },
 })
 

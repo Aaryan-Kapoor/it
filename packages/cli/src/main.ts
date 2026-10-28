@@ -14,7 +14,6 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  renameSync,
   rmdirSync,
   rmSync,
   statSync,
@@ -23,10 +22,10 @@ import {
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
-import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
+import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, TAKES, withoutFiles } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
-import { local } from './connector'
+import { conversationIds, local } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
 import * as flow from './flow'
@@ -39,6 +38,7 @@ import {
   askShell,
   backend,
   backendAt,
+  backendTakes,
   basePort,
   call,
   changeWhole,
@@ -70,9 +70,7 @@ import {
   siteAddress,
   textOf,
   VERSION,
-  WINDOWS_CLEANUP,
   why,
-  windowsDeletionCommand,
   windowsPathCommand,
   windowsPathHas,
   windowsPathRemoval,
@@ -111,7 +109,7 @@ import {
 import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, STEPS as TOUR_STEPS, tourPage } from './tour'
-import { finishInstallationRemoval, installationFile, removeInstallationFiles, withInstallationLock } from './uninstall-files'
+import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
 import * as usage from './usage'
 import { type Listed, printed, wait } from './wait'
@@ -438,11 +436,13 @@ function anothers(slug: string, theirs: Made | null): Problem {
  * exists by now whatever becomes of showing it, so it is always said, with what went wrong
  * beside it: an agent told only "no such display" would publish the same page a second time.
  */
-async function published(done: { slug: string; version: number; url: string; note?: string }, a: Args, fresh = false): Promise<void> {
+async function published(done: { slug: string; version: number; url: string; note?: string; urlNote?: string }, a: Args, fresh = false): Promise<void> {
   const result = {
     id: done.slug,
     version: done.version,
     url: done.url,
+    // Why the url is not at the place the owner chose for links, where It cannot be reached there just now
+    ...(done.urlNote ? { urlNote: done.urlNote } : {}),
     ...(done.note ? { note: done.note } : {}),
     // A page that was just made is one the person has no way to yet, but for a display that
     // happens to be open: the agent is told, each time, to put its address in the chat. Said
@@ -865,49 +865,6 @@ function offWindowsPath(folder: string): 'off' | 'absent' | undefined {
   const said = inPowerShell(windowsPathRemoval(folder))
   return said === 'off' || said === 'absent' ? said : undefined
 }
-/** Where Windows keeps what it runs once, the next time this person signs in. */
-const RUN_ONCE = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'
-/**
- * On Windows a program that is running cannot delete its own file, and can move it. So that
- * It's folder can be deleted whole by the program that is in it, this program is moved out of
- * the folder first, to where the system keeps what may be thrown away, or beside the folder
- * where that is on another disk. It cannot delete itself from there either, and nothing it
- * starts can be counted on to outlive it and do so: on the Windows runner, a program started
- * for that was gone when this one was. So Windows is left one line to run the next time this
- * person signs in, which deletes the file. Where the program went, and whether Windows was
- * left that line; nothing where it did not move, and the folder is then found still to be
- * there, which is said.
- */
-function stepOutOf(folder: string): { at: string; deletedLater: boolean } | undefined {
-  const me = process.execPath
-  const inside = path.relative(path.resolve(folder), path.resolve(me))
-  // Run as a script, the program is Node's and is not in the folder
-  if (!inside || inside.startsWith('..') || path.isAbsolute(inside)) return undefined
-  const name = `it-removed-${process.pid}-${Date.now().toString(36)}.exe`
-  for (const where of [os.tmpdir(), path.dirname(path.resolve(folder))]) {
-    const at = path.join(where, name)
-    try {
-      renameSync(me, at)
-    } catch {
-      continue
-    }
-    let deletedLater = false
-    try {
-      const entry = `ItRemoved${process.pid}-${Date.now().toString(36)}`
-      const line = windowsDeletionCommand(entry)
-      if (line !== undefined) {
-        const reg = (args: string[]) => spawnSync('reg.exe', args, { windowsHide: true, timeout: 15_000 }).status === 0
-        if (reg(['add', WINDOWS_CLEANUP, '/v', entry, '/t', 'REG_SZ', '/d', at, '/f'])) {
-          deletedLater = reg(['add', RUN_ONCE, '/v', entry, '/t', 'REG_SZ', '/d', line, '/f'])
-          if (!deletedLater) reg(['delete', WINDOWS_CLEANUP, '/v', entry, '/f'])
-        }
-      }
-    } catch {}
-    return { at, deletedLater }
-  }
-  return undefined
-}
-
 /** Whether this command has taken It off the machine. Nothing is counted after that: the folder a count is kept in is gone, or holds only what taking an add-on out later needs. */
 let takenOff = false
 
@@ -1033,11 +990,8 @@ async function uninstall(a: Args) {
           // 5. Whole owned folders and recognised top-level files. Windows moves the running executable out first. An add-on
           // that remains keeps the program and its ownership record so removal can be retried.
           const stepped = process.platform === 'win32' && !kept ? stepOutOf(folder) : undefined
-          if (stepped?.deletedLater)
-            say(
-              `The program moved itself to ${stepped.at} to do this, and Windows was asked to delete it from there the next time you sign in. If it remains, delete it yourself.`,
-            )
-          else if (stepped) left.push(`The program moved itself to ${stepped.at} to do this. Delete it to finish.`)
+          if (stepped && 'said' in stepped) say(stepped.said)
+          else if (stepped) left.push(stepped.left)
           takenOff = true
           const settingsAt = path.join(real, 'service.json')
           const settings = existsSync(settingsAt) ? readFileSync(settingsAt, 'utf8') : undefined
@@ -1143,7 +1097,7 @@ async function onPathLater(bin: string): Promise<boolean> {
  */
 async function unlisted(bin: string, say: (line: string) => void): Promise<{ changed: string[]; failed: { file: string; why: string }[] }> {
   const files = await profileLines(bin, false, () =>
-    say('Zsh did not report its startup folder within five seconds. Check the .zshrc it reads and remove the It PATH line there if it remains.'),
+    say('Zsh did not say which folder it reads .zshrc from. Check the .zshrc it reads and remove the It PATH line there if it remains.'),
   )
   const changed: string[] = []
   const failed: { file: string; why: string }[] = []
@@ -2418,7 +2372,11 @@ Displays
 
 What the person did
   it wait [--id <id>] [--follow] [--timeout <seconds>]
-  it actions [--id <id>]
+  it actions [--id <id>] [--all]
+                                 List the actions still waiting. An agent is listed those on
+                                 its own conversation's ${NOUN.many} and on ${NOUN.many} that no
+                                 conversation has. --all lists every one, and so does a command
+                                 that no conversation ran. --id lists those on one ${NOUN.one}.
   it action <action-id> [--save <file> [--number <n>]]
                                  Print one action in full, by the id in its message. --save
                                  writes a file it carried (a photo, a drawing, a document) to a
@@ -2500,7 +2458,8 @@ async function main(argv: string[]): Promise<void> {
   }
   if (cmd === 'shell-profile') {
     const dir = await zshDirectory()
-    if (!dir) throw new Problem('Zsh did not report an absolute startup folder within five seconds. Its PATH file was left alone.')
+    if (!dir)
+      throw new Problem('Zsh did not say which folder it reads .zshrc from, within five seconds and without running a .zshrc. Its PATH file was left alone.')
     process.stdout.write(`${dir}\n`)
     return
   }
@@ -2937,7 +2896,6 @@ async function main(argv: string[]): Promise<void> {
       const mine = asked?.session
       // Which conversation this is was a choice among the apps that had marked this command: said, so that an agent that is another one knows
       const guessed = sessionNote(asked, `This ${NOUN.one} was shown for`, `run \`it open ${slug}\` again with IT_HARNESS and IT_SESSION set to your own.`)
-      if (mine) await noteConversation(mine)
       const result = await onDisplay(a, () =>
         call<Shown & { took?: boolean }>('mutation', api.displays.show, {
           slug,
@@ -2945,6 +2903,9 @@ async function main(argv: string[]): Promise<void> {
           ...(mine ? { session: mine, agent: mine.harness } : {}),
         }),
       )
+      // Noted only once It has answered, since it is as the page is shown that it becomes this
+      // conversation's: a page It refuses to show leaves no note of the conversation
+      if (mine) await noteConversation(mine)
       const took = result.took === true
       const shown = shownAs(result)
       const taken = `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
@@ -2997,8 +2958,48 @@ async function main(argv: string[]): Promise<void> {
       return wait(a, counted)
     case 'actions': {
       const slug = text(a, 'id')
-      const clicks = await call<Listed[]>('query', slug ? api.delivery.waiting : api.delivery.allWaiting, slug ? { slug } : {})
-      return out(clicks.map(printed))
+      if (slug && a.flags.all) throw new Problem(`--id lists what waits on one ${NOUN.one}, and --all what waits on every one: give one of them.`, 'invalid')
+      if (slug) return out((await call<Listed[]>('query', api.delivery.waiting, { slug })).map(printed))
+      // An agent is listed what waits on its own conversation's pages, under every id the
+      // conversation has had, and on pages no conversation has: what is done on another
+      // conversation's page is that conversation's to answer. The backend reads each
+      // conversation's by itself, so no number of others' stands in front of one of its own.
+      const asked = sessionAsked()
+      const ids = asked ? conversationIds(asked.session) : []
+      /** What waits for this conversation and for none, newest first, and whether It could list all of it. */
+      const own = async (): Promise<{ clicks: Listed[]; whole: boolean }> => {
+        try {
+          const each = await Promise.all(ids.map((s) => call<Listed[]>('query', api.delivery.allWaiting, { for: s })))
+          return { clicks: [...new Map(each.flat().map((c) => [c.id, c])).values()].sort((x, y) => y.at - x.at).slice(0, 50), whole: true }
+        } catch (err) {
+          // This machine may be a version ahead of the It it asks, whose list takes no
+          // conversation. Such an It fails the call and keeps why to itself, so it is asked what
+          // it takes. Only on its word that it does not take this is the newest of everyone's read
+          // here for this conversation's. Any other failure is said as it is.
+          if ((await backendTakes(TAKES.conversationsWaiting)) !== false) throw err
+          const ours = (c: Listed) => !c.session || ids.some((s) => s.harness === c.session!.harness && s.id === c.session!.id)
+          return { clicks: (await call<Listed[]>('query', api.delivery.allWaiting, {})).filter(ours), whole: false }
+        }
+      }
+      if (ids.length && !a.flags.all) {
+        // Whose pages these are was a choice among the apps that had marked this command: said apart from what is printed
+        const unsure = sessionNote(asked, 'These are the actions on the pages of', 'run it again with IT_HARNESS and IT_SESSION set to your own.')
+        if (unsure) say(JSON.stringify({ note: unsure }))
+        const { clicks, whole } = await own()
+        if (!whole)
+          say(
+            JSON.stringify({
+              note: `The It this machine asked is of an earlier version than this command, and lists only the newest 50 actions across every conversation. These are the ones among them on this conversation’s ${NOUN.many} and on ${NOUN.many} that no conversation has, so they may not be all of them until that It is updated: with \`it upgrade\` on the machine it runs on, or the Update button on its Machines page.`,
+            }),
+          )
+        return out(clicks.map(printed))
+      }
+      // A person at a terminal or a script, with no conversation, is listed everything, and so is
+      // whoever asks for it with --all. An agent is told which are another conversation's by the
+      // page each is on, and never by that conversation's own id.
+      const [clicks, mine] = await Promise.all([call<Listed[]>('query', api.delivery.allWaiting, {}), ids.length ? own().then((o) => o.clicks) : null])
+      const theirs = (c: Listed) => mine !== null && !mine.some((m) => m.id === c.id)
+      return out(clicks.map((c) => ({ ...printed(c), ...(theirs(c) ? { forAnotherConversation: true } : {}) })))
     }
     case 'action': {
       // One action in full, by the id an agent was given: for data too long to have been shown, or to check a repeat

@@ -2,7 +2,7 @@
 // credential is turned into something the backend believes: it checks the credential itself,
 // strictly, and mints a five-minute token for one audience. A machine's credential is the key
 // it enrolled with, and a browser's is the session it was paired into.
-import { AUDIENCE, PROTOCOL_VERSION } from '@it/protocol'
+import { AUDIENCE, PROTOCOL_VERSION, TAKES } from '@it/protocol'
 import { httpRouter } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { base64url, createLocalJWKSet, importJWK, type JWK, jwtVerify } from 'jose'
@@ -80,12 +80,13 @@ http.route({
 http.route({ path: '/health', method: 'GET', handler: httpAction(async () => json(200, { ok: true, it: true })) })
 
 // What the `it` command needs to know before it has a token: which protocol the backend speaks,
-// the name it signs under, which a machine's proof is made out to, and that it takes the
-// receipts a machine hands clicks over by (delivery.ts). None of it is secret.
+// and the name it signs under, which a machine's proof is made out to. And the later forms of a
+// call it takes, which a machine a version ahead of it asks about when such a call fails: among
+// them the receipts a machine hands clicks over by (delivery.ts). None of it is secret.
 http.route({
   path: '/cli/config',
   method: 'GET',
-  handler: httpAction(async () => json(200, { protocol: PROTOCOL_VERSION, issuer: issuer(), receipts: true })),
+  handler: httpAction(async () => json(200, { protocol: PROTOCOL_VERSION, issuer: issuer(), takes: Object.values(TAKES) })),
 })
 
 // Enrolling another machine: a code that a machine already enrolled, or the owner's browser,
