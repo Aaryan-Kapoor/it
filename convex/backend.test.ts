@@ -1381,6 +1381,58 @@ describe('publishing', () => {
     expect(await code(theirs.as.mutation(api.artifacts.take, { slug: 'board', session: today }))).toBe('not_found')
   })
 
+  test('a conversation that carries on as another hands every page it has on this machine to that one, with what was waiting on them, and none it has elsewhere', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice', 'laptop')
+    const server = await machineOf(t, 'alice', 'server')
+    const claude = { harness: 'claude-code', id: 'claude-in-the-thread' }
+    const codex = { harness: 'codex', id: 'codex-in-the-thread' }
+    const board = await publish(laptop, 'board', { session: claude, agent: 'claude-code' })
+    await publish(laptop, 'named', { session: claude, agent: 'Planner', agentExplicit: true })
+    await publish(laptop, 'someone-else', { session: { harness: 'claude-code', id: 'another-conversation' } })
+    // The same id on another machine is another conversation
+    await publish(server, 'elsewhere', { session: claude })
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: board.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    const owners = async () =>
+      Object.fromEntries(
+        await Promise.all(
+          ['board', 'named', 'someone-else', 'elsewhere'].map(async (slug) => {
+            const a = await alice.browser.query(api.artifacts.get, { slug })
+            return [slug, [a.session, a.agent]] as const
+          }),
+        ),
+      )
+    expect(await laptop.as.mutation(api.artifacts.carryOn, { from: claude, to: codex })).toEqual({ moved: 2 })
+    await settle(t)
+    expect(await owners()).toEqual({
+      board: [codex, 'codex'],
+      // A name the agent gave the page is kept
+      named: [codex, 'Planner'],
+      'someone-else': [{ harness: 'claude-code', id: 'another-conversation' }, null],
+      elsewhere: [claude, null],
+    })
+    // What was done on the page before it went is the later conversation's to answer
+    expect((await inbox(laptop, [codex])).map((c) => c.id)).toEqual([actionId])
+    expect((await inbox(laptop, [claude])).map((c) => c.id)).toEqual([])
+    // Asked again, or of a conversation that carries on as itself, nothing more moves
+    expect(await laptop.as.mutation(api.artifacts.carryOn, { from: claude, to: codex })).toEqual({ moved: 0 })
+    expect(await laptop.as.mutation(api.artifacts.carryOn, { from: codex, to: codex })).toEqual({ moved: 0 })
+    // A browser cannot say so, nor can it be said of a conversation whose name no publishing could have
+    expect(await code(alice.browser.mutation(api.artifacts.carryOn, { from: codex, to: claude }))).toBe('forbidden')
+    expect(await code(laptop.as.mutation(api.artifacts.carryOn, { from: codex, to: { harness: 'codex', id: 's'.repeat(201) } }))).toBe('invalid')
+    expect((await owners()).board).toEqual([codex, 'codex'])
+    // And switched back, the pages go back with the thread
+    expect(await laptop.as.mutation(api.artifacts.carryOn, { from: codex, to: claude })).toEqual({ moved: 2 })
+    await settle(t)
+    expect((await owners()).board).toEqual([claude, 'claude-code'])
+    expect((await inbox(laptop, [claude])).map((c) => c.id)).toEqual([actionId])
+  })
+
   test('a page is not taken for a conversation whose name is longer than one that publishes may have, and stays with the one it had', async () => {
     const t = backend()
     const alice = await person(t, 'alice')

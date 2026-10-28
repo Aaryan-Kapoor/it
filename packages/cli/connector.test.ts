@@ -51,6 +51,9 @@ const stand = vi.hoisted(() => ({
     /** What T3 Code says where it will not take a message, and what it refused. */
     refusing: null as string | null,
     refused: [] as { thread: string; text: string }[],
+    /** By each thread, the conversation it runs now and those it ran before, and every time it was asked which thread runs one. */
+    runs: new Map<string, { now: { harness: string; id: string }; before: { harness: string; id: string }[] }>(),
+    looked: [] as { harness: string; ids: string[]; known?: string }[],
   },
 }))
 // T3 Code is asked over its own server and its own command (t3.test.ts tries what is read from
@@ -67,6 +70,11 @@ vi.mock('./src/t3', () => ({
       if (typeof thread === 'object' && thread !== null) return thread
       return thread === undefined ? { status: 'incomplete', progressed } : thread === null ? { status: 'absent' } : { status: 'found', thread }
     }),
+  t3Running: async (_t3: unknown, of: { harness: string; ids: readonly string[] }, known?: string) => {
+    stand.t3.looked.push({ harness: of.harness, ids: [...of.ids], ...(known === undefined ? {} : { known }) })
+    for (const [thread, run] of stand.t3.runs) if (run.now.harness === of.harness && of.ids.includes(run.now.id)) return { thread, before: run.before }
+    return undefined
+  },
   t3Send: async (_t3: unknown, thread: string, text: string) => {
     if (stand.t3.refusing !== null) {
       stand.t3.refused.push({ thread, text })
@@ -267,6 +275,8 @@ afterEach(async () => {
   stand.t3.asked.length = 0
   stand.t3.sent.length = 0
   stand.t3.refused.length = 0
+  stand.t3.runs.clear()
+  stand.t3.looked.length = 0
   if (home) rmSync(home, { recursive: true, force: true })
   home = ''
   for (const k of Object.keys(process.env)) if (!(k in before)) delete process.env[k]
@@ -4180,6 +4190,241 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     // And one that waits for whatever its conversation has is given the other, once
     expect((await waitingFor(4))?.clicks?.map((c) => c.id)).toEqual(['click-4'])
     expect((await waitingFor(4))?.clicks).toBeUndefined()
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('a thread of T3 Code that is switched to another agent app', () => {
+  const claude = { harness: 'claude-code', id: 'claude-in-the-thread' }
+  const codex = { harness: 'codex', id: 'codex-in-the-thread' }
+  /** The person has chosen Claude Code and Codex, and both have It's add-on in them. */
+  const BOTH = {
+    wanted: ['claude-code', 'codex'],
+    found: [
+      { id: 'claude-code', version: '1.0.0', addon: 'connected' },
+      { id: 'codex', version: '1.0.0', addon: 'connected' },
+    ],
+  }
+  /** What the connector told It carries on as what. */
+  const carried = () => stand.calls.filter((c) => c.name === 'artifacts:carryOn').map((c) => c.args)
+  /** It answers as the backend does, with how many pages went. */
+  const handing = (pages: number) => {
+    stand.answer = (name) => (name === 'artifacts:carryOn' ? { moved: pages } : undefined)
+  }
+  const codexTurn = (busy: boolean, id = codex.id) => local('/session', { method: 'POST', body: { harness: 'codex', session: id, busy } })
+  /** Claude Code's add-on asks for its clicks, as it does every second while its program runs. */
+  const claudeAsks = (id = claude.id) => local<{ clicks: { id: string }[] }>(`/clicks?harness=claude-code&session=${id}`)
+  const click = (session: { harness: string; id: string }) => ({
+    id: 'click-1',
+    artifact: 'board',
+    title: 'Board',
+    name: 'approve',
+    payload: '{}',
+    at: Date.now() - 10_000,
+    attended: true,
+    session,
+  })
+  /** The time that passes for the connector, which goes by the system's clock. */
+  const realNow = Date.now.bind(Date)
+  let ahead = 0
+  const later = (ms: number) => {
+    ahead += ms
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + ahead)
+  }
+  afterEach(() => {
+    ahead = 0
+    vi.restoreAllMocks()
+  })
+
+  test('a switch from Claude Code to Codex in one thread hands the Claude conversation’s pages, and what waits here for it, to the Codex conversation', async () => {
+    stand.t3.running = true
+    const mark = { id: 'mark-1', texts: ['[It] The page "Board" (board) sent this just after someone used it: approve [action click-0]'], at: Date.now() }
+    await start('socket', BOTH, (folder) =>
+      writeFileSync(
+        path.join(folder, 'delivery-recovery.json'),
+        JSON.stringify({ version: 1, waiters: [], marks: [[`claude-code:${claude.id}`, [mark]]], accepted: [], returning: [] }),
+      ),
+    )
+    handing(1)
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    // The Codex conversation's first hook, as the first turn after the switch begins
+    expect(await codexTurn(true)).toEqual({ ok: true })
+    await until(() => carried().length === 1)
+    expect(carried()).toEqual([{ from: claude, to: codex }])
+    await until(() => said.some((line) => line.includes('carries on as a codex conversation')))
+    // What a mark put into the thread for the Claude conversation stands for is handed to the Codex conversation's hook
+    expect((await local<{ texts: string[] }>('/marked', { method: 'POST', body: { harness: 'codex', session: codex.id } }))?.texts).toEqual(mark.texts)
+    // The click that waited on the page is offered for the Codex conversation from then on, and the running turn's next hook is handed it
+    stand.watching.get('delivery:inboxPage')!([click(codex)])
+    await until(() => stand.calls.some((c) => c.name === 'delivery:claim'))
+    expect((await local<{ clicks: { id: string }[] }>(`/clicks?harness=codex&session=${codex.id}`))?.clicks.map((c) => c.id)).toEqual(['click-1'])
+    // Heard from again, nothing more is asked of T3 Code for a minute, and nothing more is told to It
+    await codexTurn(false)
+    await settled()
+    expect([stand.t3.looked.length, carried().length]).toEqual([1, 1])
+  })
+
+  test('a conversation that is in use keeps its pages until it is quiet, and switched back and forth the pages follow the thread', async () => {
+    stand.t3.running = true
+    await start('socket', BOTH)
+    handing(2)
+    // Claude Code's program is still running when the Codex conversation is first heard from
+    await claudeAsks()
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    await codexTurn(true)
+    await until(() => stand.t3.looked.some((l) => l.harness === 'codex'))
+    await settled()
+    expect(carried()).toEqual([])
+    // Once it has gone quiet, the next hook of the Codex conversation has its pages handed over
+    later(25_000)
+    await codexTurn(false)
+    await until(() => carried().length === 1)
+    expect(carried()).toEqual([{ from: claude, to: codex }])
+    // Switched back to Claude Code, the thread runs the first conversation again, and its pages go back to it
+    stand.t3.runs.set('t3-thread', { now: claude, before: [codex] })
+    later(10_000)
+    await claudeAsks()
+    await until(() => carried().length === 2)
+    expect(carried()[1]).toEqual({ from: codex, to: claude })
+    // And switched to Codex once more, they go to Codex once more
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    later(65_000)
+    await codexTurn(true)
+    await until(() => carried().length === 3)
+    expect(carried()[2]).toEqual({ from: claude, to: codex })
+  })
+
+  test('switched from Codex to Claude Code and back to the same Codex conversation within a minute, a short returning turn takes the pages back', async () => {
+    stand.t3.running = true
+    await start('socket', BOTH)
+    handing(1)
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    await codexTurn(true)
+    await until(() => carried().length === 1)
+    await codexTurn(false)
+    // Switched to Claude Code a few seconds after that turn: the pages go to the Claude conversation
+    stand.t3.runs.set('t3-thread', { now: claude, before: [codex] })
+    later(10_000)
+    await claudeAsks()
+    await until(() => carried().length === 2)
+    expect(carried()[1]).toEqual({ from: codex, to: claude })
+    // And back to the same Codex conversation, well within a minute of its last look, for one short turn
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    later(10_000)
+    await codexTurn(true)
+    await codexTurn(false)
+    await until(() => carried().length === 3)
+    expect(carried()[2]).toEqual({ from: claude, to: codex })
+  })
+
+  test('where the first look cannot see the new conversation yet and nothing more is heard from it, its pages go when the connector looks again by itself', async () => {
+    stand.t3.running = true
+    standIn(true)
+    await start('socket', BOTH)
+    handing(1)
+    // T3 Code has switched the thread to Codex, and has not yet been told the Codex conversation's id
+    stand.t3.runs.set('t3-thread', { now: { harness: 'codex', id: 'not-told-yet' }, before: [claude] })
+    expect(await codexTurn(true)).toEqual({ ok: true })
+    await until(() => stand.t3.looked.length === 1)
+    await settled()
+    // The turn is over before the next look is due, and its last hook is the last thing heard
+    await codexTurn(false)
+    await settled()
+    expect([stand.t3.looked.length, carried()]).toEqual([1, []])
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    vi.advanceTimersByTime(20_000)
+    await until(() => carried().length === 1)
+    expect(carried()).toEqual([{ from: claude, to: codex }])
+    expect(stand.t3.looked).toHaveLength(2)
+    // Followed, the conversation is not looked for again until it is heard from
+    vi.advanceTimersByTime(70_000)
+    await settled()
+    expect(stand.t3.looked).toHaveLength(2)
+  })
+
+  test('an earlier conversation still in use when the new one is first heard from hands its pages over at the look the connector has again by itself', async () => {
+    stand.t3.running = true
+    standIn(true)
+    await start('socket', BOTH)
+    handing(1)
+    await claudeAsks()
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    await codexTurn(true)
+    await until(() => stand.t3.looked.some((l) => l.harness === 'codex'))
+    await settled()
+    expect(carried()).toEqual([])
+    // Claude Code's program has gone and asks no more, and nothing is heard from Codex either
+    later(25_000)
+    vi.advanceTimersByTime(20_000)
+    await until(() => carried().length === 1)
+    expect(carried()).toEqual([{ from: claude, to: codex }])
+  })
+
+  test('a conversation in no thread is looked for again by the connector itself three times at most, and not at all once the connector has stopped', async () => {
+    stand.t3.running = true
+    standIn(true)
+    await start('socket', BOTH)
+    await codexTurn(true, 'in-no-thread')
+    await until(() => stand.t3.looked.length === 1)
+    await settled()
+    for (let i = 0; i < 6; i++) {
+      vi.advanceTimersByTime(20_000)
+      await settled()
+    }
+    expect(stand.t3.looked).toHaveLength(4)
+    // Another is to be looked for again when the connector stops: it is not
+    await codexTurn(true, 'another-in-no-thread')
+    await until(() => stand.t3.looked.length === 5)
+    await settled()
+    await stop!()
+    stop = null
+    vi.advanceTimersByTime(60_000)
+    await settled()
+    expect(stand.t3.looked).toHaveLength(5)
+  })
+
+  test('a conversation of another thread, in the same folder or not, is handed nothing, and nor is one the thread no longer runs', async () => {
+    stand.t3.running = true
+    await start('socket', BOTH)
+    handing(1)
+    const neighbour = { harness: 'codex', id: 'codex-next-door' }
+    const neighboursClaude = { harness: 'claude-code', id: 'claude-next-door' }
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    stand.t3.runs.set('t3-next-door', { now: neighbour, before: [neighboursClaude] })
+    await codexTurn(true, neighbour.id)
+    await until(() => carried().length === 1)
+    expect(carried()).toEqual([{ from: neighboursClaude, to: neighbour }])
+    // The Claude conversation the first thread ran before, heard from again outside T3 Code, runs in no thread: nothing goes to it
+    await claudeAsks()
+    await until(() => stand.t3.looked.some((l) => l.harness === 'claude-code'))
+    await settled()
+    expect(carried()).toEqual([{ from: neighboursClaude, to: neighbour }])
+    // Asked by every id It knows the conversation by, and of no thread in particular
+    expect(stand.t3.looked).toEqual([
+      { harness: 'codex', ids: [neighbour.id] },
+      { harness: 'claude-code', ids: [claude.id] },
+    ])
+    // A click for the conversation, while no turn of it runs, goes to the thread found for it, with no search for one
+    await codexTurn(false, neighbour.id)
+    stand.watching.get('delivery:inboxPage')!([click(neighbour)])
+    await until(() => stand.t3.sent.length === 1)
+    expect([stand.t3.sent[0]!.thread, stand.t3.asked]).toEqual(['t3-next-door', []])
+  })
+
+  test('where T3 Code is not running nothing is asked of it and nothing changes hands, and a click on a page that went goes where the page went', async () => {
+    await start('socket', BOTH)
+    handing(1)
+    stand.t3.runs.set('t3-thread', { now: codex, before: [claude] })
+    await codexTurn(true)
+    await codexTurn(false)
+    await claudeAsks()
+    await settled()
+    expect([stand.t3.looked, carried()]).toEqual([[], []])
+    // The pages handed over while T3 Code was running are the Codex conversation's still: a click
+    // on one goes to Codex, here through its own queue, since some Codex has the conversation open
+    stand.watching.get('delivery:inboxPage')!([click(codex)])
+    await until(() => stand.codex.length === 1)
+    expect(stand.codex[0]!.args).toContain(`--thread=${codex.id}`)
+    expect(carried()).toEqual([])
   })
 })
 
