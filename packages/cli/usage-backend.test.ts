@@ -23,7 +23,10 @@ beforeEach(async () => {
   vi.stubEnv('IT_HOME', home)
   vi.stubEnv('IT_TELEMETRY_ENABLED', '')
   vi.stubEnv('DO_NOT_TRACK', '')
-  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  // The sender does not send on a decision that took it longer than a quarter of a second by the
+  // clock `performance` keeps, which a busy machine's disk can take. These tests are about which
+  // notes are sent, so that clock is theirs as well.
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] })
   vi.resetModules()
   usage = await import('./src/usage')
   usage.begin()

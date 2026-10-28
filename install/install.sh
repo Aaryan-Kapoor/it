@@ -11,8 +11,8 @@
 # What it installs goes in ~/.it, or in the folder IT_HOME names instead, and that folder is set
 # so that only you can look inside it. Outside that folder it changes one thing: the file your
 # shell reads when it starts, so that the program's folder is on your PATH. For zsh that is
-# .zshrc, in the folder zsh reports after reading .zshenv. For bash it is .bashrc and whichever of
-# .bash_profile, .bash_login and .profile a login shell reads. For fish it is
+# the .zshrc that a new zsh reads, which the installed program asks zsh for. For bash it is
+# .bashrc and whichever of .bash_profile, .bash_login and .profile a login shell reads. For fish it is
 # $XDG_CONFIG_HOME/fish/conf.d/it.fish, or ~/.config/fish/conf.d/it.fish. For another shell
 # it is .profile. Each of those is given a blank line, a comment and one line, once, and is made if
 # it is not there.
@@ -131,6 +131,41 @@ if [ "${os}" = linux ]; then
         exit 1
       fi ;;
   esac
+fi
+
+# A program for an Intel or AMD processor needs what the runtime inside it is built for: SSE4.2
+# and POPCNT on Linux, and AVX and AVX2 on a Mac. The backend program needs no more. A processor
+# without them is told so before anything is downloaded or made, and so is one in a virtual
+# machine that is not given them. On Linux what it has is read from the flags the system lists
+# for it, and on a Mac from the features the Mac reports. Where neither can be read nothing is
+# refused here, and the program is still started once below before it is put in place.
+if [ "${arch}" = x64 ]; then
+  lacks=""
+  if [ "${os}" = linux ]; then
+    features="$(sed -n 's/^flags[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -n 1 || true)"
+    if [ -n "${features}" ]; then
+      case " ${features} " in *" sse4_2 "*) ;; *) lacks="SSE4.2" ;; esac
+      case " ${features} " in *" popcnt "*) ;; *) lacks="${lacks:+${lacks} and }POPCNT" ;; esac
+    fi
+    needs="On an Intel or AMD processor It needs SSE4.2 and POPCNT, which Intel's Core i3, i5 and i7 have from their first generation on, and AMD's processors from Bulldozer on."
+  else
+    # The Mac lists AVX among the processor's features, and AVX2 in a second list. A Mac whose
+    # processor has AVX gives that list too, empty where the processor has nothing it would hold,
+    # so a second list without AVX2 is a processor without it
+    features="$(sysctl -n machdep.cpu.features 2>/dev/null || true)"
+    if [ -n "${features}" ]; then
+      case " ${features} " in
+        *" AVX1.0 "*)
+          case " $(sysctl -n machdep.cpu.leaf7_features 2>/dev/null || true) " in *" AVX2 "*) ;; *) lacks="AVX2" ;; esac ;;
+        *) lacks="AVX and AVX2" ;;
+      esac
+    fi
+    needs="On an Intel Mac It needs AVX and AVX2, which Intel's Core processors have from their fourth generation (Haswell) on."
+  fi
+  if [ -n "${lacks}" ]; then
+    say "It cannot run on this computer: its processor does not have ${lacks}. ${needs} Nothing was installed." >&2
+    exit 1
+  fi
 fi
 
 # Only over https, and a redirect may only lead to https. The one exception is a base on this
@@ -512,7 +547,7 @@ if [ "$(basename -- "${SHELL:-sh}")" = zsh ] && [ -z "${IT_INSTALL_NO_PATH:-}" ]
     case "${zsh_dir}" in /*) : ;; *) zsh_dir="" ;; esac
   fi
   if [ -z "${zsh_dir}" ]; then
-    say "Zsh did not report its startup folder within five seconds. Its PATH file was left alone. Add ${DIR} to the PATH in the .zshrc your zsh reads." >&2
+    say "Zsh did not say which folder it reads .zshrc from, so its PATH file was left alone. Add ${DIR} to the PATH in the .zshrc your zsh reads." >&2
     zsh_dir=""
   fi
 fi

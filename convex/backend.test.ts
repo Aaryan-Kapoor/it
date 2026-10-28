@@ -1055,6 +1055,31 @@ describe('publishing', () => {
     expect(verify.body.prefix).toMatch(/^u\/[^/]+\/[^/]+\/2\/$/)
   })
 
+  test('a machine is given the link at the place the owner chose for links where It can be reached there, and otherwise which place and why, as the network stands when it asks', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const named = 'http://studio.tail1234.ts.net:39000'
+    // Nothing chosen: the site's own address on this computer, and nothing beside it
+    const plain = await publish(m, 'plan')
+    expect([plain.url, 'link' in plain, 'unlinked' in plain]).toEqual(['http://localhost:39000/p/plan', false, false])
+    await t.mutation(internal.network.report, {
+      on: true,
+      wanted: true,
+      addresses: [named, 'http://100.101.102.103:39000'],
+      tailnet: true,
+      canTailnet: true,
+      tailnetName: 'studio.tail1234.ts.net',
+    })
+    await alice.browser.mutation(api.network.link, { to: 'tailnet' })
+    const linked = await publish(m, 'plan')
+    expect([linked.url, linked.link, 'unlinked' in linked]).toEqual(['http://localhost:39000/p/plan', `${named}/p/plan`, false])
+    // The network is turned off: the same publish, finished again, says where the links were to be and why It cannot be reached there now
+    await t.mutation(internal.network.report, { on: false, wanted: false, addresses: [], tailnet: false, canTailnet: true })
+    const again = await m.as.action(api.publish.finish, { artifactId: linked.artifactId, version: linked.version })
+    expect([again.url, 'link' in again, again.unlinked]).toEqual(['http://localhost:39000/p/plan', false, { to: 'tailnet', why: 'off' }])
+  })
+
   test('the content service is told exactly which files to expect before a grant is given, and the grant names only the folder', async () => {
     const t = backend()
     await person(t, 'alice')
@@ -1354,6 +1379,58 @@ describe('publishing', () => {
     await person(t, 'bob')
     const theirs = await machineOf(t, 'bob', 'desk')
     expect(await code(theirs.as.mutation(api.artifacts.take, { slug: 'board', session: today }))).toBe('not_found')
+  })
+
+  test('a conversation that carries on as another hands every page it has on this machine to that one, with what was waiting on them, and none it has elsewhere', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const laptop = await machineOf(t, 'alice', 'laptop')
+    const server = await machineOf(t, 'alice', 'server')
+    const claude = { harness: 'claude-code', id: 'claude-in-the-thread' }
+    const codex = { harness: 'codex', id: 'codex-in-the-thread' }
+    const board = await publish(laptop, 'board', { session: claude, agent: 'claude-code' })
+    await publish(laptop, 'named', { session: claude, agent: 'Planner', agentExplicit: true })
+    await publish(laptop, 'someone-else', { session: { harness: 'claude-code', id: 'another-conversation' } })
+    // The same id on another machine is another conversation
+    await publish(server, 'elsewhere', { session: claude })
+    const { actionId } = await alice.browser.mutation(api.actions.submit, {
+      artifactId: board.artifactId,
+      displayKey: displayKey('alice'),
+      envelope: envelope('click-0001'),
+    })
+    const owners = async () =>
+      Object.fromEntries(
+        await Promise.all(
+          ['board', 'named', 'someone-else', 'elsewhere'].map(async (slug) => {
+            const a = await alice.browser.query(api.artifacts.get, { slug })
+            return [slug, [a.session, a.agent]] as const
+          }),
+        ),
+      )
+    expect(await laptop.as.mutation(api.artifacts.carryOn, { from: claude, to: codex })).toEqual({ moved: 2 })
+    await settle(t)
+    expect(await owners()).toEqual({
+      board: [codex, 'codex'],
+      // A name the agent gave the page is kept
+      named: [codex, 'Planner'],
+      'someone-else': [{ harness: 'claude-code', id: 'another-conversation' }, null],
+      elsewhere: [claude, null],
+    })
+    // What was done on the page before it went is the later conversation's to answer
+    expect((await inbox(laptop, [codex])).map((c) => c.id)).toEqual([actionId])
+    expect((await inbox(laptop, [claude])).map((c) => c.id)).toEqual([])
+    // Asked again, or of a conversation that carries on as itself, nothing more moves
+    expect(await laptop.as.mutation(api.artifacts.carryOn, { from: claude, to: codex })).toEqual({ moved: 0 })
+    expect(await laptop.as.mutation(api.artifacts.carryOn, { from: codex, to: codex })).toEqual({ moved: 0 })
+    // A browser cannot say so, nor can it be said of a conversation whose name no publishing could have
+    expect(await code(alice.browser.mutation(api.artifacts.carryOn, { from: codex, to: claude }))).toBe('forbidden')
+    expect(await code(laptop.as.mutation(api.artifacts.carryOn, { from: codex, to: { harness: 'codex', id: 's'.repeat(201) } }))).toBe('invalid')
+    expect((await owners()).board).toEqual([codex, 'codex'])
+    // And switched back, the pages go back with the thread
+    expect(await laptop.as.mutation(api.artifacts.carryOn, { from: codex, to: claude })).toEqual({ moved: 2 })
+    await settle(t)
+    expect((await owners()).board).toEqual([claude, 'claude-code'])
+    expect((await inbox(laptop, [claude])).map((c) => c.id)).toEqual([actionId])
   })
 
   test('a page is not taken for a conversation whose name is longer than one that publishes may have, and stays with the one it had', async () => {
@@ -3055,6 +3132,38 @@ describe('clicks and their delivery', () => {
     void p
   })
 
+  test('what is listed for a conversation is what waits on its own pages and on pages no conversation has, and with no conversation named, everything', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const another = { harness: 'codex', id: 'thread-2' }
+    const pages = {
+      mine: await publish(m, 'workout', { session: SESSION }),
+      theirs: await publish(m, 'creatine', { session: another }),
+      nobodys: await publish(m, 'shopping'),
+    }
+    const clicked: Record<string, string> = {}
+    for (const [whose, p] of Object.entries(pages)) {
+      vi.setSystemTime(Date.now() + 1000)
+      const made = await alice.browser.mutation(api.actions.submit, {
+        artifactId: p.artifactId,
+        displayKey: displayKey('alice'),
+        envelope: envelope(`click-${whose}`),
+      })
+      clicked[whose] = made.actionId
+    }
+    const listed = async (asking?: { harness: string; id: string }) =>
+      (await m.as.query(api.delivery.allWaiting, asking ? { for: asking } : {})).map((c) => c.id)
+    expect(await listed(SESSION)).toEqual([clicked.nobodys, clicked.mine])
+    expect(await listed(another)).toEqual([clicked.nobodys, clicked.theirs])
+    expect(await listed()).toEqual([clicked.nobodys, clicked.theirs, clicked.mine])
+    // A page that another conversation takes takes what waits on it along
+    await publish(m, 'creatine', { session: SESSION, take: true })
+    await settle(t)
+    expect(await listed(SESSION)).toEqual([clicked.nobodys, clicked.theirs, clicked.mine])
+    expect(await listed(another)).toEqual([clicked.nobodys])
+  })
+
   test('clicks are rate limited for one page, so that one page cannot use up what the others need', async () => {
     const { alice, m, click } = await setup()
     const results = []
@@ -3571,7 +3680,8 @@ describe('displays and machines', () => {
   test('the first machine is enrolled by the service, on a backend that holds nothing, and that makes the one person', async () => {
     const t = backend()
     expect(await t.run(async (ctx) => [(await ctx.db.query('users').collect()).length, (await ctx.db.query('machines').collect()).length])).toEqual([0, 0])
-    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE })
+    // And it names the later forms of a call it takes, which a machine a version ahead of it asks about when it is refused one
+    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE, takes: ['delivery.allWaiting.for'] })
     const key = await aKeyPair()
     const made = await t.mutation(internal.bridge.enroll, { subject: 'owner', name: 'this machine', publicKey: key.publicKey })
     if ('error' in made) throw new Error(made.error)
@@ -5125,6 +5235,8 @@ describe('cases at the edges', () => {
     await insertClicks(t, other.artifactId, 60, {}, Date.now() + 1000)
     expect((await m.as.query(api.delivery.allWaiting, {})).some((c) => c.id === actionId)).toBe(false)
     expect((await m.as.query(api.delivery.waitingFor, { session: SESSION })).map((c) => c.id)).toEqual([actionId])
+    // Nor is what `it actions` lists for the conversation
+    expect((await m.as.query(api.delivery.allWaiting, { for: SESSION })).map((c) => c.id)).toEqual([actionId])
   })
 
   test('nor by any number waiting for a conversation of the same name on another of the person’s machines, which are that machine’s to take', async () => {
@@ -5148,6 +5260,8 @@ describe('cases at the edges', () => {
     expect(await waiting()).toEqual([aside, loose, here])
     // The desk's own waiter has the desk's, and no more than one asking gives
     expect((await desk.as.query(api.delivery.waitingFor, { session: SESSION })).length).toBe(50)
+    // What is listed for the conversation on the laptop is those same three, newest first, and none of the desk's
+    expect((await laptop.as.query(api.delivery.allWaiting, { for: SESSION })).map((c) => c.id)).toEqual([here, loose, aside])
   })
 
   test('more than a batch of expired leases is put back in one go', async () => {
