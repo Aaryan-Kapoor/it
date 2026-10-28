@@ -18,7 +18,7 @@ import { mint } from './lib/signing'
 import { bump, tally } from './lib/tally'
 import { adoptTourPage, isTourPage, startTourPage } from './lib/tourPages'
 import { expectedOwner, fileEntry, session } from './schema'
-import { checkKept, pageRevision, startState } from './state'
+import { checkKept, revisionNow, startState } from './state'
 
 const beginArgs = {
   /** Only the built-in tour asks for this. A matching legacy page may be adopted once. */
@@ -299,7 +299,7 @@ export const _begin = internalMutation({
               name: args.tour,
               identity: artifact.tour!.identity,
               version: artifact.currentVersion,
-              revision: await pageRevision(ctx, artifact._id),
+              revision: await revisionNow(ctx, artifact._id),
             },
           }),
       publicationId,
@@ -556,7 +556,7 @@ export const _finish = internalMutation({
       (!isTourPage(a, ver.tour.name) ||
         a.tour?.identity !== ver.tour.identity ||
         a.currentVersion !== ver.tour.version ||
-        (await pageRevision(ctx, a._id)) !== ver.tour.revision)
+        (await revisionNow(ctx, a._id)) !== ver.tour.revision)
     ) {
       await takeStart(ctx, ver._id)
       await ctx.db.delete(ver._id)

@@ -78,8 +78,16 @@ async function keptBy(ctx: QueryCtx | MutationCtx, artifactId: Id<'artifacts'>, 
   return (await keptNow(ctx, artifactId, false)).map((r) => [r.key, r.json ?? 'null'])
 }
 
-/** The page's revision: the record of it, or the state's own where there is no record. */
+/** The page's revision: the later of the record of it and the state's own, either of which may be missing. */
 const revisionOf = (r: Doc<'revisions'> | null, s: Doc<'states'> | null) => Math.max(r?.revision ?? 0, s?.revision ?? 0)
+/**
+ * The page's revision, from the small record of it where that counts what the page keeps, which
+ * is written with every change, and without reading the state, which can be half a megabyte.
+ * A record written before It counted that, or none at all, is read with the state, and the later
+ * of the two is the page's: so the revision is the same however it is asked for.
+ */
+const revisionFrom = async (r: Doc<'revisions'> | null, state: () => Promise<Doc<'states'> | null>) =>
+  r?.keys !== undefined ? r.revision : revisionOf(r, await state())
 
 /** A page's whole state, as the agent and the page itself wrote it, and its revision. */
 export async function wholeState(ctx: QueryCtx | MutationCtx, artifactId: Id<'artifacts'>): Promise<{ state: State; revision: number }> {
@@ -131,7 +139,7 @@ export const live = query({
       if (s === undefined) s = await stateRecord(ctx, a._id)
       return s
     }
-    const revision = r ? r.revision : ((await state())?.revision ?? 0)
+    const revision = await revisionFrom(r, state)
     if (since === revision) return { revision }
     const whole = async () => {
       const { agent, inside } = split((await state())?.json)
@@ -399,17 +407,12 @@ export async function startState(ctx: MutationCtx, userId: Id<'users'>, artifact
   await noteStanding(ctx, at)
 }
 
-/** The revision a page's state is at, where the record of it may be from before it was kept: read from the state too. */
-export async function pageRevision(ctx: QueryCtx | MutationCtx, artifactId: Id<'artifacts'>): Promise<number> {
-  return revisionOf(await revisionRecord(ctx, artifactId), await stateRecord(ctx, artifactId))
-}
 /**
- * The revision a page's state is at, read from the small record of it and without reading the
- * state. A page with no state at all is at revision 0, which is where the script in a page
- * starts counting too.
+ * The revision a page's state is at, as `revisionFrom` reads it. A page with no state at all is
+ * at revision 0, which is where the script in a page starts counting too.
  */
 export async function revisionNow(ctx: QueryCtx | MutationCtx, artifactId: Id<'artifacts'>): Promise<number> {
-  return (await revisionRecord(ctx, artifactId))?.revision ?? 0
+  return revisionFrom(await revisionRecord(ctx, artifactId), () => stateRecord(ctx, artifactId))
 }
 
 /** Removes every value a page keeps for itself, a batch at a time, for a page that is going. True when there may be more. */

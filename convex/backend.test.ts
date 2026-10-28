@@ -2134,6 +2134,41 @@ describe('what a page keeps for itself, and how its displays are told of it', ()
     expect(await stateOf(m.as, 'plan')).toEqual({ status: 'plain' })
   })
 
+  test('a page whose record of its revision is from before It counted what the page keeps, or missing, is at the later of that record and its state, however the revision is asked for', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan', { title: 'Approve the plan', state: '{"plan":"A"}', session: SESSION })
+    const click = (id: string, baseStateRevision: number) =>
+      alice.browser.mutation(api.actions.submit, {
+        artifactId: p.artifactId,
+        displayKey: displayKey('alice'),
+        envelope: envelope(id, { contentVersion: 1, baseStateRevision }),
+      })
+    // A record behind its state, which no It writes and data from elsewhere can hold
+    await t.run(async (ctx) => {
+      const [s] = await ctx.db.query('states').collect()
+      await ctx.db.patch(s!._id, { revision: 9 })
+      for (const r of await ctx.db.query('revisions').collect()) await ctx.db.replace(r._id, { artifactId: r.artifactId, revision: 7 })
+    })
+    // A display that has the record's revision is sent the later state, whole
+    expect(await live(alice.browser, p.artifactId, 7)).toMatchObject({ revision: 9, whole: true, state: '{"plan":"A"}' })
+    expect(await live(alice.browser, p.artifactId, 9)).toEqual({ revision: 9 })
+    expect((await m.as.query(api.state.get, { slug: 'plan' })).revision).toBe(9)
+    // And a click made on that state is not said to have been made on an older one
+    await click('click-0001', 9)
+    expect((await inbox(m))[0]).not.toHaveProperty('nowStateRevision')
+    // With no record at all, the state's own revision is the page's
+    await t.run(async (ctx) => {
+      for (const r of await ctx.db.query('revisions').collect()) await ctx.db.delete(r._id)
+    })
+    await click('click-0002', 9)
+    expect((await inbox(m))[1]).not.toHaveProperty('nowStateRevision')
+    expect(await live(alice.browser, p.artifactId, 9)).toEqual({ revision: 9 })
+    // The page's first write goes on from there
+    expect(await keep(alice.browser, p.artifactId, { a: 1 })).toEqual({ revision: 10 })
+  })
+
   test('an agent can change what the page keeps value by value, take all of it away, or put all of it in place', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
