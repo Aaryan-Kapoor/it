@@ -3383,6 +3383,33 @@ describe('showing a page', () => {
     expect(rows.every((r) => r.ticketGiven)).toBe(true)
   })
 
+  test('the pictures of pages on the grid are counted apart from the showings a person opens, so that a grid opened again and again never stands in the way of opening a page', async () => {
+    const { alice, p, show } = await showing()
+    const picture = () => alice.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: displayKey('alice'), picture: true })
+    const pictures = []
+    for (let i = 0; i < 121; i++) pictures.push(await code(picture))
+    // A hundred and twenty at once, nearly two grids of the most cards that show their page together, and then no more for the moment
+    expect([pictures.filter((r) => r === 'ok').length, pictures.at(-1)]).toEqual([120, 'rate_limited'])
+    // The page itself still opens, as often as ever
+    const opened = []
+    for (let i = 0; i < 61; i++) opened.push(await code(show))
+    expect([opened.filter((r) => r === 'ok').length, opened.at(-1)]).toEqual([60, 'rate_limited'])
+    // And the pictures come back at four a second, whatever was opened meanwhile
+    await vi.advanceTimersByTimeAsync(1000)
+    const again = []
+    for (let i = 0; i < 5; i++) again.push(await code(picture))
+    expect(again).toEqual(['ok', 'ok', 'ok', 'ok', 'rate_limited'])
+  })
+
+  test('a picture of a page on the grid is not noted as a page shown, and opening the page is', async () => {
+    const { t, alice, p, show } = await showing()
+    await t.mutation(internal.network.report, { on: false, wanted: false, addresses: [], usage: true })
+    await alice.browser.mutation(api.mounts.create, { artifactId: p.artifactId, displayKey: displayKey('alice'), picture: true })
+    await show()
+    const notes = await t.run((ctx) => ctx.db.query('counted').collect())
+    expect(notes.map((n) => [n.name, JSON.parse(n.properties)])).toEqual([['page.shown', { screen: 'computer', by: 'person' }]])
+  })
+
   test('the cleanup removes a showing’s record once it is a day old, and not before', async () => {
     const { t, show, open } = await showing()
     const old = await show()

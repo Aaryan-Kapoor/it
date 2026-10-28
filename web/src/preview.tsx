@@ -6,18 +6,11 @@ import { contentPort, parseJson, SANDBOX, type SiteToPage } from '@it/protocol'
 import { useConvex, useQuery } from 'convex/react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
-import { api, displayKey, type Id } from './lib'
+import { api, displayKey, type Id, refusal } from './lib'
+import { gridSlots, type Slot } from './slots'
 
-/** How many cards show their page at once. The rest show their cover until one of these leaves the screen. */
-const AT_ONCE = 9
 /** How long after a picture was shown afresh, because its showing ran out, before it is shown afresh for that again. */
 const AFRESH_EVERY_MS = 60_000
-const showing = new Set<symbol>()
-const waiting = new Set<() => void>()
-const letGo = (me: symbol) => {
-  if (!showing.delete(me)) return
-  for (const next of waiting) next()
-}
 
 const pages = () => `${location.protocol}//${location.hostname}:${contentPort(Number(location.port) || (location.protocol === 'https:' ? 443 : 80))}`
 
@@ -34,8 +27,8 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
   const convex = useConvex()
   const box = useRef<HTMLSpanElement>(null)
   const frame = useRef<HTMLIFrameElement>(null)
-  const [near, setNear] = useState(false)
   const [mine, setMine] = useState(false)
+  const slot = useRef<Slot | null>(null)
   const [address, setAddress] = useState<string | null>(null)
   const [port, setPort] = useState<MessagePort | null>(null)
   // The picture's showing ran out (the browser slept, or It was started again): it is shown
@@ -43,33 +36,17 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
   const [again, setAgain] = useState(0)
   const lapsedAt = useRef(0)
 
-  // Only a card that is on screen, or about to be, shows its page
+  // Whether this card shows its page now is the grid's to say, by what is on the screen (`slots.ts`)
   useEffect(() => {
     const el = box.current
-    if (!el || !('IntersectionObserver' in window)) return setNear(true)
-    const seen = new IntersectionObserver((entries) => setNear(entries.some((e) => e.isIntersecting)), { rootMargin: '200px 0px' })
-    seen.observe(el)
-    return () => seen.disconnect()
-  }, [])
-
-  // And only so many at once
-  useEffect(() => {
-    if (!near) return
-    const me = Symbol()
-    const take = () => {
-      if (showing.size >= AT_ONCE) return
-      waiting.delete(take)
-      showing.add(me)
-      setMine(true)
-    }
-    waiting.add(take)
-    take()
+    if (!el) return
+    const taken = gridSlots().join(el, setMine)
+    slot.current = taken
     return () => {
-      waiting.delete(take)
-      setMine(false)
-      letGo(me)
+      slot.current = null
+      taken.leave()
     }
-  }, [near])
+  }, [])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `again` is counted up to have the picture shown afresh, and is read by nothing
   useEffect(() => {
@@ -78,7 +55,7 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
     askTwice(
       convex,
       async (calls) => {
-        const m = await calls.mutation(api.mounts.create, { artifactId, displayKey: displayKey() })
+        const m = await calls.mutation(api.mounts.create, { artifactId, displayKey: displayKey(), picture: true })
         if (!live) return null
         const { ticket } = await calls.action(api.mounts.ticket, { mountId: m.mountId })
         return `${pages()}/open/${ticket}`
@@ -86,8 +63,14 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
       () => live,
     ).then(
       (at) => live && at && setAddress(at),
-      // A picture that cannot be had is no fault to tell anyone of: the cover stays
-      () => {},
+      // A picture asked for too fast is asked for again once the backend's moment has passed. One
+      // that cannot be had is no fault to tell anyone of: the cover stays
+      (err) => {
+        if (!live) return
+        const said = refusal(err) as { code: string; retryAfterMs?: unknown }
+        if (said.code === 'rate_limited') slot.current?.later(typeof said.retryAfterMs === 'number' ? said.retryAfterMs : 1000)
+        else slot.current?.failed()
+      },
     )
     return () => {
       live = false
@@ -132,6 +115,7 @@ export function Preview({ artifactId, title, cover }: { artifactId: Id<'artifact
       }
       ;(e.source as Window).postMessage({ type: 'it:port' }, '*', [channel.port2])
       setPort(mine)
+      slot.current?.shown()
     }
     window.addEventListener('message', onMessage)
     return () => {
