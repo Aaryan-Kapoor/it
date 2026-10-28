@@ -7,6 +7,7 @@ import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { type MutationCtx, mutation, query } from './_generated/server'
 import { record } from './actions'
+import { aim, EVERY_DISPLAY, nameOf } from './lib/aim'
 import { artifactBySlug, type Browser, displayByKey, findDisplay, requireBrowser, requireMachine } from './lib/authz'
 import { counted } from './lib/counted'
 import { fail } from './lib/errors'
@@ -44,15 +45,22 @@ export const send = mutation({
         if (b.action === MESSAGE) fail('invalid', `A button may not send an action named ${MESSAGE}, which is what a person types above a page.`)
       }
     }
-    let displayId: Id<'displays'> | undefined
-    if (display) {
-      const all = await ctx.db
-        .query('displays')
-        .withIndex('by_user', (q) => q.eq('userId', user._id))
-        .take(50)
-      const hit = all.find((d) => (d.name ?? d.generatedName).toLowerCase() === display.trim().toLowerCase())
-      displayId = hit?._id ?? fail('not_found', 'No display has that name.', { noSuchDisplay: true })
-    }
+    // To the display named, to every display with `all`, or else to the one display the person
+    // is most likely looking at, as a page is shown. Where nothing is open, that is first of all
+    // a display that takes notifications, which is how one reaches a closed display
+    const aimed = await aim(ctx, user._id, display, true)
+    const every = display?.trim().toLowerCase() === EVERY_DISPLAY
+    const sent = { displays: aimed.to.map(nameOf), notShown: aimed.notShown, ...(aimed.chosen ? { chosen: aimed.chosen } : {}) }
+    // A display that was named and cannot take it is sent nothing, and the refusal says why: its
+    // pairing ended, or agents may not use it. Without the display's name, which is the person's
+    if (display && !every && aimed.to.length === 0)
+      fail('forbidden', 'That display takes nothing from agents now.', { notSent: aimed.notShown[0]?.reason ?? 'not_paired' })
+    // Where none was named and none can take it, nothing is sent either. Kept for every display,
+    // it would reach the very displays that were left out, as soon as one was paired again or
+    // opened to agents: only an agent that asks for every display in so many words is given that
+    if (!every && aimed.to.length === 0) fail('forbidden', 'No display can take this notification now.', { notSent: 'nowhere' })
+    // With `all`, it is for every display: those that cannot take it now have it once they can
+    const displayId: Id<'displays'> | undefined = every ? undefined : aimed.to[0]!._id
     const id = await ctx.db.insert('notifications', {
       userId: user._id,
       text: clean,
@@ -70,7 +78,7 @@ export const send = mutation({
     // been closed, so a second look a few minutes on pushes to it if nobody has seen this yet.
     await ctx.scheduler.runAfter(0, internal.push.deliver, { notificationId: id })
     await ctx.scheduler.runAfter(LATE_PUSH_MS, internal.push.deliver, { notificationId: id })
-    return { id }
+    return { id, ...sent }
   },
 })
 
@@ -83,14 +91,17 @@ export const list = query({
     const display = await findDisplay(ctx, c, key)
     // Read by who it is for, so that what is addressed to another display, or was dismissed,
     // never stands in front of what belongs here: the newest for every display, the newest for
-    // this one, and then the newest of the two together.
+    // this one, and then the newest of the two together. A display that agents may not use is
+    // shown none of what went to every display.
     const forTarget = (displayId: Id<'displays'> | undefined) =>
       ctx.db
         .query('notifications')
         .withIndex('by_user_target', (q) => q.eq('userId', user._id).eq('displayId', displayId).eq('dismissedAt', undefined))
         .order('desc')
         .take(TRAY)
-    const recent = [...(await forTarget(undefined)), ...(display ? await forTarget(display._id) : [])].sort((a, b) => b.createdAt - a.createdAt)
+    const recent = [...(display?.agentsOff ? [] : await forTarget(undefined)), ...(display ? await forTarget(display._id) : [])].sort(
+      (a, b) => b.createdAt - a.createdAt,
+    )
     const slugs = new Map<string, string | null>()
     const out = []
     for (const n of recent) {
@@ -121,7 +132,7 @@ async function shownOn(ctx: MutationCtx, c: Browser, key: string, ids: Id<'notif
   const out = []
   for (const id of ids.slice(0, 100)) {
     const n = await ctx.db.get(id)
-    if (n && n.userId === c.user._id && (!n.displayId || n.displayId === display._id)) out.push(n)
+    if (n && n.userId === c.user._id && (n.displayId ? n.displayId === display._id : !display.agentsOff)) out.push(n)
   }
   return out
 }
@@ -160,10 +171,11 @@ export const answer = mutation({
     const n = await ctx.db.get(id)
     if (!n || n.userId !== user._id) fail('not_found', 'No such notification.')
     const display = await displayByKey(ctx, c, displayKey)
-    // Like the tray it is pressed in, a display answers what is for every display or for itself.
+    // Like the tray it is pressed in, a display answers what is for every display or for itself,
+    // and one that agents may not use answers only what is for itself.
     // This comes before anything is said of the notification: one that is for another display
     // is, to this one, no notification, whatever has become of it.
-    if (n.displayId && n.displayId !== display._id) fail('not_found', 'No such notification.')
+    if (n.displayId ? n.displayId !== display._id : display.agentsOff) fail('not_found', 'No such notification.')
     if (n.answeredAt) return { actionId: null }
     if (expectedSession === undefined)
       fail('conflict', 'Reload It before answering this notification, so the request belongs to your current pairing.', { reload: true })

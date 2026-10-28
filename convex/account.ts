@@ -35,7 +35,13 @@ export const exportStart = mutation({
       /** Whose export this is. The pieces that belong to no one page are asked for by this, so that an export never mixes two people's. */
       owner: user._id,
       pages: artifacts.map((a) => a._id),
-      displays: displays.map((d) => ({ name: d.name ?? d.generatedName, createdAt: d.createdAt, lastSeenAt: d.lastSeenAt })),
+      displays: displays.map((d) => ({
+        name: d.name ?? d.generatedName,
+        createdAt: d.createdAt,
+        lastSeenAt: d.lastSeenAt,
+        ...(d.usedAt === undefined ? {} : { usedAt: d.usedAt }),
+        agents: d.agentsOff !== true,
+      })),
     }
   },
 })

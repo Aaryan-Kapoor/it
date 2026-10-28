@@ -3501,6 +3501,175 @@ describe('showing a page', () => {
   })
 })
 
+describe('which display an agent’s page goes to', () => {
+  const TV = 'Mozilla/5.0 (SMART-TV; Linux; Tizen 8.0) AppleWebKit/537.36 Chrome/120.0'
+  const PHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/605'
+  /**
+   * Alice with three displays, each a browser of its own and named by itself: her laptop, which
+   * was paired as hers, and a TV and a phone paired as screens. A machine of hers, and a page.
+   */
+  async function household() {
+    const t = backend()
+    const laptop = { ...(await person(t, 'alice')), key: displayKey('alice') }
+    const tv = { ...(await paired(t, 'alice', 'screen', 'alice-tv-display-key-01', TV)), key: 'alice-tv-display-key-01' }
+    const phone = { ...(await paired(t, 'alice', 'screen', 'alice-phone-display-key', PHONE)), key: 'alice-phone-display-key' }
+    for (const [d, name] of [
+      [laptop, 'Laptop'],
+      [tv, 'TV'],
+      [phone, 'Phone'],
+    ] as const)
+      await d.browser.mutation(api.displays.rename, { displayId: d.display.id, name })
+    const m = await machineOf(t, 'alice')
+    await publish(m, 'plan')
+    /** What the site on a display says of itself, as its presence does. */
+    const says = (d: { browser: typeof laptop.browser; key: string }, said: { visible?: boolean; used?: boolean }) =>
+      d.browser.mutation(api.displays.heartbeat, { key: d.key, ...said })
+    const show = (display?: string) => m.as.mutation(api.displays.show, { slug: 'plan', ...(display === undefined ? {} : { display }) })
+    /** The displays that have been asked to bring the page up, by name. */
+    const asked = async () => (await t.run((ctx) => ctx.db.query('displays').collect())).filter((d) => d.showing !== undefined).map((d) => d.name)
+    const clear = () =>
+      t.run(async (ctx) => {
+        for (const d of await ctx.db.query('displays').collect()) await ctx.db.patch(d._id, { showing: undefined })
+      })
+    return { t, m, laptop, tv, phone, says, show, asked, clear }
+  }
+
+  test('with no display named, it goes to the one that is open and was used last, then to the one open, and with none open to the one used last', async () => {
+    const { laptop, tv, phone, says, show, asked, clear } = await household()
+    await vi.advanceTimersByTimeAsync(600_000)
+    // The laptop is open and was used a moment ago. The TV is open and nobody has touched it since
+    // it was paired. The phone was used after the laptop, and was then locked, which hides the site
+    await says(laptop, { visible: true, used: true })
+    await says(tv, { visible: true })
+    await vi.advanceTimersByTimeAsync(30_000)
+    await says(phone, { visible: true, used: true })
+    await says(phone, { visible: false })
+    expect(await show()).toEqual({
+      displays: ['Laptop'],
+      notShown: [
+        { display: 'TV', reason: 'not_chosen' },
+        { display: 'Phone', reason: 'not_chosen' },
+      ],
+      took: false,
+      chosen: 'open',
+    })
+    expect(await asked()).toEqual(['Laptop'])
+    // The laptop's site goes into a background tab: the TV is the one display open now
+    await clear()
+    await says(laptop, { visible: false })
+    expect(await show()).toMatchObject({ displays: ['TV'], chosen: 'open' })
+    expect(await asked()).toEqual(['TV'])
+    // Five minutes on, nothing has said it is open since: the phone is the display used last
+    await clear()
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(await show()).toMatchObject({ displays: ['Phone'], chosen: 'last_used' })
+    expect(await asked()).toEqual(['Phone'])
+  })
+
+  test('a display that agents may not use is never chosen, and is refused by name with why, and left out of every display', async () => {
+    const { m, laptop, tv, phone, says, show, asked, clear } = await household()
+    await vi.advanceTimersByTimeAsync(600_000)
+    await says(phone, { visible: true, used: true })
+    // The person at the phone says that agents may not use it
+    await phone.browser.mutation(api.displays.allowAgents, { displayId: phone.display.id, allowed: false })
+    expect((await phone.browser.query(api.displays.mine, { key: phone.key }))?.agents).toBe(false)
+    await says(laptop, { visible: true })
+    expect(await show()).toMatchObject({
+      displays: ['Laptop'],
+      notShown: [
+        { display: 'TV', reason: 'not_chosen' },
+        { display: 'Phone', reason: 'agents_off' },
+      ],
+    })
+    await clear()
+    expect(await show('phone')).toEqual({ displays: [], notShown: [{ display: 'Phone', reason: 'agents_off' }], took: false })
+    expect(await asked()).toEqual([])
+    expect(await show('all')).toEqual({ displays: ['Laptop', 'TV'], notShown: [{ display: 'Phone', reason: 'agents_off' }], took: false })
+    expect(await asked()).toEqual(['Laptop', 'TV'])
+    // A screen says it for itself and for no other display. The owner's browser says it for any
+    expect(await code(tv.browser.mutation(api.displays.allowAgents, { displayId: laptop.display.id, allowed: false }))).toBe('not_found')
+    await laptop.browser.mutation(api.displays.allowAgents, { displayId: tv.display.id, allowed: false })
+    await laptop.browser.mutation(api.displays.allowAgents, { displayId: laptop.display.id, allowed: false })
+    // With every display closed to agents, the page is shown nowhere, the answer says why of each, and the page stays whose it was
+    await clear()
+    expect(await m.as.mutation(api.displays.show, { slug: 'plan', session: SESSION })).toEqual({
+      displays: [],
+      notShown: [
+        { display: 'Laptop', reason: 'agents_off' },
+        { display: 'TV', reason: 'agents_off' },
+        { display: 'Phone', reason: 'agents_off' },
+      ],
+      took: false,
+    })
+    expect(await asked()).toEqual([])
+    // Let agents use it again, the phone is the one display they may use
+    await phone.browser.mutation(api.displays.allowAgents, { displayId: phone.display.id, allowed: true })
+    expect(await show()).toMatchObject({ displays: ['Phone'] })
+    expect((await m.as.query(api.displays.list, {})).map((d) => [d.name, d.agents])).toEqual([
+      ['Laptop', false],
+      ['TV', false],
+      ['Phone', true],
+    ])
+    // The records the person downloads say it too, with when each display was last used
+    const exported = await laptop.browser.mutation(api.account.exportStart, {})
+    expect(exported.displays.map((d) => [d.name, d.agents, typeof d.usedAt])).toEqual([
+      ['Laptop', false, 'number'],
+      ['TV', false, 'number'],
+      ['Phone', true, 'number'],
+    ])
+  })
+
+  test('a display named is the only one asked, whatever the others are doing, and every display is asked with all', async () => {
+    const { laptop, says, show, asked, clear } = await household()
+    await says(laptop, { visible: true, used: true })
+    expect(await show('tv')).toEqual({ displays: ['TV'], notShown: [], took: false })
+    expect(await asked()).toEqual(['TV'])
+    await clear()
+    expect(await show(' ALL ')).toEqual({ displays: ['Laptop', 'TV', 'Phone'], notShown: [], took: false })
+    expect(await asked()).toEqual(['Laptop', 'TV', 'Phone'])
+    expect(await code(show('Garage'))).toBe('not_found')
+    // So no display may be called what asks for every display
+    expect(await code(laptop.browser.mutation(api.displays.rename, { displayId: laptop.display.id, name: 'All' }))).toBe('invalid')
+  })
+
+  test('with no display open and none used since it was paired, the one seen open last is chosen, and the answer says it was not open', async () => {
+    const { t, show } = await household()
+    // As displays registered before It noted when each was used: none says it, and only when each was last seen open is known
+    await t.run(async (ctx) => {
+      const seen = { Laptop: 3, TV: 1, Phone: 2 } as Record<string, number>
+      for (const d of await ctx.db.query('displays').collect())
+        await ctx.db.patch(d._id, { usedAt: undefined, lastSeenAt: Date.now() - seen[d.name!]! * 3_600_000 })
+    })
+    expect(await show()).toMatchObject({ displays: ['TV'], chosen: 'last_used' })
+  })
+
+  test('a display says whether its site is visible and when it was used, and it is written only as that changes', async () => {
+    const { t, laptop, says } = await household()
+    const record = async () => (await t.run((ctx) => ctx.db.query('displays').collect())).find((d) => d.name === 'Laptop')!
+    const first = await record()
+    // Paired a moment ago, there: that counts as used
+    expect([first.usedAt, first.hidden]).toEqual([first.createdAt, undefined])
+    await vi.advanceTimersByTimeAsync(120_000)
+    await says(laptop, { visible: false })
+    // Hidden, it is not seen open, so when it was last seen stays as it was
+    expect(await record()).toMatchObject({ hidden: true, lastSeenAt: first.lastSeenAt })
+    await says(laptop, { visible: true, used: true })
+    const shown = await record()
+    expect([shown.hidden, shown.lastSeenAt, shown.usedAt]).toEqual([undefined, Date.now(), Date.now()])
+    // Used again three seconds on is not written; ten seconds on it is
+    await vi.advanceTimersByTimeAsync(3000)
+    await says(laptop, { visible: true, used: true })
+    expect((await record()).usedAt).toBe(shown.usedAt)
+    await vi.advanceTimersByTimeAsync(7000)
+    await says(laptop, { visible: true, used: true })
+    expect((await record()).usedAt).toBe(Date.now())
+    // A site that says neither is taken to be visible, as it says so only while it is
+    await says(laptop, { visible: false })
+    await laptop.browser.mutation(api.displays.heartbeat, { key: laptop.key })
+    expect((await record()).hidden).toBeUndefined()
+  })
+})
+
 describe('displays and machines', () => {
   test('a new browser is registered on the spot with a generated name, once', async () => {
     const t = backend()
@@ -4303,6 +4472,97 @@ describe('notifications', () => {
     expect(await alice.browser.query(api.notifications.list, { key: phoneKey })).toMatchObject([{ text: 'for the phone', seen: false }])
   })
 
+  test('a notification goes to the display in use, to every display agents may use with all, and a display named that they may not use refuses it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const phoneKey = 'alice-phone-key-0001'
+    const phone = await paired(t, 'alice', 'screen', phoneKey, 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/605')
+    await alice.browser.mutation(api.displays.rename, { displayId: alice.display.id, name: 'Laptop' })
+    await phone.browser.mutation(api.displays.rename, { displayId: phone.display.id, name: 'Phone' })
+    const tray = async (who: { browser: typeof alice.browser }, key: string) => (await who.browser.query(api.notifications.list, { key })).map((n) => n.text)
+    await vi.advanceTimersByTimeAsync(60_000)
+    await alice.browser.mutation(api.displays.heartbeat, { key: displayKey('alice'), visible: true, used: true })
+    expect(await m.as.mutation(api.notifications.send, { text: 'to the laptop' })).toMatchObject({
+      displays: ['Laptop'],
+      notShown: [{ display: 'Phone', reason: 'not_chosen' }],
+      chosen: 'open',
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(await m.as.mutation(api.notifications.send, { text: 'to every display', display: 'all' })).toMatchObject({
+      displays: ['Laptop', 'Phone'],
+      notShown: [],
+    })
+    expect([await tray(alice, displayKey('alice')), await tray(phone, phoneKey)]).toEqual([['to every display', 'to the laptop'], ['to every display']])
+    // The phone is closed to agents: what went to every display is not in its tray, and one sent to it by name is refused with why
+    await phone.browser.mutation(api.displays.allowAgents, { displayId: phone.display.id, allowed: false })
+    expect(await tray(phone, phoneKey)).toEqual([])
+    const refused = await m.as.mutation(api.notifications.send, { text: 'to the phone', display: 'phone' }).then(
+      () => null,
+      (e) => (e instanceof ConvexError ? JSON.parse(typeof e.data === 'string' ? e.data : JSON.stringify(e.data)) : String(e)),
+    )
+    expect(refused).toMatchObject({ code: 'forbidden', notSent: 'agents_off' })
+    expect(await t.run(async (ctx) => (await ctx.db.query('notifications').collect()).map((n) => n.text))).toEqual(['to the laptop', 'to every display'])
+    // Nor is it pushed what goes to every display, once both are closed
+    await alice.browser.mutation(api.push.subscribe, { key: displayKey('alice'), endpoint: PUSH('laptop'), p256dh: 'p', auth: 'a' })
+    await phone.browser.mutation(api.push.subscribe, { key: phoneKey, endpoint: PUSH('phone'), p256dh: 'p', auth: 'a' })
+    await vi.advanceTimersByTimeAsync(200_000)
+    const later = await m.as.mutation(api.notifications.send, { text: 'later', display: 'all' })
+    expect((await t.query(internal.push._targets, { notificationId: later.id }))?.targets.map((x) => x.displayId)).toEqual([alice.display.id])
+    // The laptop is closed to agents after it was chosen and before its push is sent: the push is not sent
+    const still = () => t.query(internal.push._still, { notificationId: later.id, displayId: alice.display.id, endpoint: PUSH('laptop') })
+    expect(await still()).toBe(true)
+    await alice.browser.mutation(api.displays.allowAgents, { displayId: alice.display.id, allowed: false })
+    expect(await still()).toBe(false)
+  })
+
+  test('with no display named and none that can take it, a notification is refused and kept for no display, so that none left out is sent it later', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const key = { key: displayKey('alice') }
+    const refusal = (args: { text: string; display?: string }) =>
+      m.as.mutation(api.notifications.send, args).then(
+        () => null,
+        (e) => (e instanceof ConvexError ? JSON.parse(typeof e.data === 'string' ? e.data : JSON.stringify(e.data)) : String(e)),
+      )
+    const kept = () => t.run(async (ctx) => (await ctx.db.query('notifications').collect()).map((n) => [n.text, n.displayId ?? 'every display']))
+    // Its one display is closed to agents
+    await alice.browser.mutation(api.displays.allowAgents, { displayId: alice.display.id, allowed: false })
+    expect(await refusal({ text: 'to nobody' })).toMatchObject({ code: 'forbidden', notSent: 'nowhere' })
+    expect(await kept()).toEqual([])
+    // Opened to agents again, it has nothing of that in its tray, and nothing was pushed to it
+    await alice.browser.mutation(api.displays.allowAgents, { displayId: alice.display.id, allowed: true })
+    expect(await alice.browser.query(api.notifications.list, key)).toEqual([])
+    // Asked for every display in so many words, it is kept for every display, as it was asked
+    await alice.browser.mutation(api.displays.allowAgents, { displayId: alice.display.id, allowed: false })
+    expect(await m.as.mutation(api.notifications.send, { text: 'to every display', display: 'all' })).toMatchObject({ displays: [] })
+    expect(await kept()).toEqual([['to every display', 'every display']])
+    // A display whose pairing has ended takes nothing either: with no other, a notification is refused as well
+    await alice.browser.mutation(api.displays.allowAgents, { displayId: alice.display.id, allowed: true })
+    await t.run((ctx) => ctx.db.patch(alice.session as never, { endedAt: Date.now() }))
+    expect(await refusal({ text: 'to nobody' })).toMatchObject({ code: 'forbidden', notSent: 'nowhere' })
+    expect(await kept()).toEqual([['to every display', 'every display']])
+  })
+
+  test('with no display open, a notification goes first to one that takes notifications, which is how it reaches a closed one', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const phoneKey = 'alice-phone-key-0001'
+    const phone = await paired(t, 'alice', 'screen', phoneKey, 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/605')
+    await phone.browser.mutation(api.displays.rename, { displayId: phone.display.id, name: 'Phone' })
+    await phone.browser.mutation(api.push.subscribe, { key: phoneKey, endpoint: PUSH('phone'), p256dh: 'p', auth: 'a' })
+    // The laptop was used after the phone, and neither is open now
+    await vi.advanceTimersByTimeAsync(60_000)
+    await alice.browser.mutation(api.displays.heartbeat, { key: displayKey('alice'), visible: true, used: true })
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(await m.as.mutation(api.notifications.send, { text: 'away' })).toMatchObject({ displays: ['Phone'], chosen: 'last_used' })
+    // A page is not something to push: it goes to the display used last
+    await publish(m, 'plan')
+    expect(await m.as.mutation(api.displays.show, { slug: 'plan' })).toMatchObject({ displays: ['Chrome on Linux'], chosen: 'last_used' })
+  })
+
   test('only a real push service is accepted as a subscription', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
@@ -4335,7 +4595,7 @@ describe('notifications', () => {
     await alice.browser.mutation(api.push.subscribe, { key: displayKey('alice'), endpoint: PUSH('alive'), p256dh: 'p', auth: 'a' })
     await alice.browser.mutation(api.push.subscribe, { key: 'alice-phone-key-0001', endpoint: PUSH('gone'), p256dh: 'p', auth: 'a' })
     await vi.advanceTimersByTimeAsync(200_000)
-    const later = await m.as.mutation(api.notifications.send, { text: 'later' })
+    const later = await m.as.mutation(api.notifications.send, { text: 'later', display: 'all' })
     expect(await t.action(internal.push.deliver, { notificationId: later.id })).toBe(1)
     // The second look, a few minutes on, does not push it a second time
     expect(await t.action(internal.push.deliver, { notificationId: later.id })).toBe(0)

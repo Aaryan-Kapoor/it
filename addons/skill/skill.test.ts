@@ -135,6 +135,8 @@ describe('the agent skill', () => {
       'shownOn',
       'notShown',
       'notShownOn',
+      'sentTo',
+      'notSentTo',
       'hint',
       'revision',
       'timedOut',
@@ -197,6 +199,26 @@ describe('the agent skill', () => {
     expect(skill).toContain('`it wait --id deploy-plan --timeout 100`')
     expect(skill).toContain('`{"timedOut": true}`')
     expect(skill).toMatch(/`it ack <action-id>` is for an action you took from `it actions`\./)
+  })
+
+  test('tells an agent to show a page on the one display the user is on, unless the user asked for another or for every one', () => {
+    expect(short).toContain('the display asked to bring it up: the one the user is on, or one `--on` names')
+    expect(short).toContain('`--on all`: every one, if the user asks')
+    expect(more.showing).toContain('leave `--on` out unless the user named a display')
+    expect(more.showing).toContain('use it only when the user asked for the page on all of their screens')
+    // Each reason the skill names is one the backend gives, and `all` is the word the backend takes for every display
+    const aim = source('../../convex/lib/aim.ts')
+    for (const reason of ['not_chosen', 'not_paired', 'agents_off']) {
+      expect(more.showing).toContain(`\`${reason}\``)
+      expect(aim, reason).toContain(`'${reason}'`)
+    }
+    expect(aim).toContain("EVERY_DISPLAY = 'all'")
+    // And the codes a display named for a notification is refused with are the program's own
+    for (const refused of ['agents_off', 'not_paired', 'nowhere']) {
+      expect(more.showing).toContain(`\`${refused}\``)
+      expect(main).toContain(`'${refused}'`)
+    }
+    expect(source('../../convex/notifications.ts')).toContain("notSent: 'nowhere'")
   })
 
   test('says that a page which was published and could not be shown is published all the same, and what to read before saying anything of the displays', () => {
@@ -324,11 +346,11 @@ describe('the agent skill', () => {
   })
 
   test('tells an agent what a display that is not paired means, and how to change state only while it is as it was read', () => {
-    // What the command prints of a display it was asked onto and that shows nothing, and the one reason there is
+    // What the command prints of a display that shows nothing, and why
     expect(main).toMatch(/notShownOn\?: \{ display: string; reason: string \}\[\]/)
-    expect(main).toContain("d.reason === 'not_paired'")
-    expect(skill).toContain('If `notShownOn` is there, it lists each display the page was asked onto and is not shown on, with a `reason`.')
-    expect(skill).toContain('The one reason is `not_paired`')
+    expect(main).toContain("of('not_paired')")
+    expect(skill).toContain('If `notShownOn` is there, it lists each display the page is not shown on, with a `reason`:')
+    expect(skill).toContain('- `not_paired`: the pairing of that display')
     expect(source('../../convex/displays.ts')).toMatch(/paired: await stillPaired\(ctx, d\)/)
     expect(skill).toContain("Each display has `paired`, which is `false` for one whose browser's pairing was ended")
     // The revision `it state` prints is the one `--if-revision` is held to, and a state that has moved on is refused as a conflict
@@ -482,9 +504,8 @@ describe('the agent skill', () => {
   test('says that a page is a conversation’s to keep or to take only where the harness names the conversation, and what to do where it does not', () => {
     // With no conversation named, the command does not ask for the page as its own, nothing is taken by opening it, and taking it is refused
     expect(source('../../packages/cli/src/publish.ts')).toContain('...(input.own && !input.take && session ? { own: true } : {})')
-    expect(main).toMatch(
-      /const mine = asked\?\.session[\s\S]{0,900}api\.displays\.show[\s\S]{0,300}\.\.\.\(mine \? \{ session: mine, agent: mine\.harness \} : \{\}\)/,
-    )
+    expect(main).toMatch(/const mine = asked\?\.session[\s\S]{0,900}await show<[^>]*>\(slug, a, mine \? \{ session: mine, agent: mine\.harness \} : \{\}\)/)
+    expect(main).toMatch(/call<T>\('mutation', api\.displays\.show, \{ slug, \.\.\.\(display \? \{ display \} : \{\}\), \.\.\.also \}\)/)
     expect(source('../../convex/displays.ts')).toMatch(
       /const took = mine && shown\.length \? \(await takePage\(ctx, artifact, machine, mine, agent\)\)\.took : false/,
     )

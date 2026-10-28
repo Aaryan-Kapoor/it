@@ -2,7 +2,7 @@
 
 It connects the agents you already run, and brings none of its own. It reaches each one as a plugin to the unmodified program. The one thing it starts by itself is a conversation of yours that was closed, when you use a page it made, and only for an agent app that has Auto-wake on, as each has from when you connect it until you turn it off: [add-ons](add-ons.md#a-conversation-that-has-been-closed) says how.
 
-An agent drives It with one command, `it`, and learns how from the agent skill, which every add-on carries and `it skill` prints. The skill is read whole each time an agent uses It, so it holds what every page needs and no more, and names four parts it leaves for when they are needed, which `it help showing`, `it help page`, `it help waiting` and `it help actions` print. It writes a page, publishes it with `it create`, and asks your displays to show it. What you do on the page goes back to the conversation that made it.
+An agent drives It with one command, `it`, and learns how from the agent skill, which every add-on carries and `it skill` prints. The skill is read whole each time an agent uses It, so it holds what every page needs and no more, and names four parts it leaves for when they are needed, which `it help showing`, `it help page`, `it help waiting` and `it help actions` print. It writes a page, publishes it with `it create`, and asks the display you are using to show it, as [Screens](screens.md#where-an-agent-shows-a-page) describes. What you do on the page goes back to the conversation that made it.
 
 ## Connecting agents
 
