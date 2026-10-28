@@ -2904,6 +2904,66 @@ test('a wait that follows keeps only the latest receipt ids, and acknowledges an
 })
 
 describe.skipIf(process.platform === 'win32')('the note of which folder each conversation works in', () => {
+  test('is written for a publication only once It has accepted it, so that one It refuses, as after everything was erased, leaves none', async () => {
+    const m = machine()
+    const record = path.join(m.it, 'conversations.json')
+    let refuse: 'begin' | 'finish' | null = 'begin'
+    let lose = 0
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin' || fn === 'publish:resume') {
+        if (refuse === 'begin') return new Refusal({ code: 'unauthenticated', message: 'This browser is not paired with It, or this machine is not enrolled.' })
+        return { artifactId: 'artifact-1', slug: args.slug ?? 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      }
+      if (fn === 'publish:finish') {
+        if (refuse === 'finish') return new Refusal({ code: 'invalid', message: 'One file did not arrive intact. Publish again.' })
+        if (lose-- > 0) return Symbol.for('drop-answer')
+        return { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      }
+      return null
+    })
+    const publish = (session: string) =>
+      run(m, ['create', 'Plan', '--id', 'plan', '--html', `<p>${session}</p>`], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: session })
+    try {
+      // Refused as it begins, and refused once its files are up
+      expect((await publish('refused-at-once')).code).toBe(1)
+      refuse = 'finish'
+      expect((await publish('refused-at-the-end')).code).toBe(2)
+      expect(existsSync(record)).toBe(false)
+      // Accepted, it is noted
+      refuse = null
+      expect((await publish('accepted')).code).toBe(0)
+      expect(Object.keys(JSON.parse(readFileSync(record, 'utf8')))).toEqual(['pi:accepted'])
+      expect(JSON.parse(readFileSync(record, 'utf8'))['pi:accepted'].cwd).toBe(realpathSync(m.home))
+      // One whose answer was lost is not known to be accepted until the same command recovers it
+      lose = 3
+      expect((await publish('recovered')).code).toBe(1)
+      expect(Object.keys(JSON.parse(readFileSync(record, 'utf8')))).toEqual(['pi:accepted'])
+      expect((await publish('recovered')).code).toBe(0)
+      expect(b.asked.some((x) => x.path === 'publish:resume')).toBe(true)
+      expect(Object.keys(JSON.parse(readFileSync(record, 'utf8'))).sort()).toEqual(['pi:accepted', 'pi:recovered'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('is written for a page brought up only once It has shown it', async () => {
+    const m = machine()
+    const record = path.join(m.it, 'conversations.json')
+    let shown = false
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show' ? (shown ? { displays: ['Desk'] } : new Refusal({ code: 'not_found', message: 'No such page.' })) : null,
+    )
+    try {
+      expect((await run(m, ['open', 'board'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'refused' })).code).not.toBe(0)
+      expect(existsSync(record)).toBe(false)
+      shown = true
+      expect((await run(m, ['open', 'board'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'shown' })).code).toBe(0)
+      expect(Object.keys(JSON.parse(readFileSync(record, 'utf8')))).toEqual(['pi:shown'])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('a writer suspended for more than ten seconds keeps its lock and another command leaves its record alone', async () => {
     const m = machine()
     const b = await backend(m, (asked) => (asked.path === 'artifacts:take' ? { took: false } : asked.path === 'displays:show' ? { displays: ['Desk'] } : null))

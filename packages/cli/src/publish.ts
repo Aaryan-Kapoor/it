@@ -171,12 +171,20 @@ export function projectKey(remote: string): string | undefined {
 
 /** Where the note of each conversation's folder is kept: in It's folder on this machine, and nowhere else. */
 export const conversationsFile = () => inHome('conversations.json')
-/** How many conversations' folders are remembered. */
+/** How many conversations' folders are remembered: the ones whose notes were written last. */
 const CONVERSATIONS = 300
 /**
- * Notes the folder a conversation is working in, when it publishes a page. A conversation that
- * has been closed is reopened from the folder it was held in, and only this machine knows which
- * that was. The note is kept here and sent nowhere.
+ * How old a conversation's note may grow before using it again in the same folder writes it
+ * again with the time now. Hooks report the folder on every event, so most of them write
+ * nothing, and a conversation in use is forgotten only if three hundred others are noted
+ * within an hour of its own note.
+ */
+const NOTED_FOR_MS = 60 * 60_000
+/**
+ * Notes the folder a conversation is working in: once It has accepted a page it published or
+ * brought up, and whenever its add-on says which folder it is in. A conversation that has been
+ * closed is reopened from the folder it was held in, and only this machine knows which that
+ * was. The note is kept here and sent nowhere.
  */
 export async function noteConversation(
   session: { harness: string; id: string },
@@ -187,7 +195,9 @@ export async function noteConversation(
     const key = `${session.harness}:${session.id}`
     type Note = { cwd: string; at: number; profile?: Profile }
     const read = () => readJson<Record<string, Note>>(conversationsFile()) ?? {}
-    const unchanged = (noted: Note | undefined) => noted?.cwd === cwd && JSON.stringify(noted?.profile) === JSON.stringify(profile ?? noted?.profile)
+    // A note an hour or more from the clock, either way, is written again with the time now
+    const unchanged = (noted: Note | undefined) =>
+      noted?.cwd === cwd && JSON.stringify(noted.profile) === JSON.stringify(profile ?? noted.profile) && Math.abs(Date.now() - noted.at) < NOTED_FOR_MS
     // Hooks report the folder on every event. An unchanged note needs no lock or disk flush.
     if (unchanged(read()[key])) return
     // Preserve the command's three-second chance to keep its note under contention, but
@@ -332,7 +342,6 @@ export async function publish(input: {
   if (bytes > LIMITS.versionBytes) throw new Problem(`A ${NOUN.one} is at most ${LIMITS.versionBytes / 1024 / 1024} MB.`, 'limit')
   const asked = sessionAsked()
   const session = asked?.session
-  if (session) await noteConversation(session)
   const request = {
     slug: input.slug,
     title: input.title,
@@ -470,6 +479,11 @@ export async function publish(input: {
       }
       const done = await finish()
       clear()
+      // The conversation's folder is noted only now that It has the page, so that a publication
+      // It refuses, after everything was erased say, leaves no note of a conversation behind.
+      // None is needed sooner: a page becomes this conversation's, and its clicks come here,
+      // only as it is finished.
+      if (session) await noteConversation(session)
       // Counted: which agent app, new or not, how large and of how many files in a few bands, and
       // four things that are each so or not: whether it was given a state to start with, whether it
       // sends anything back, whether it carries a picture, and whether it was brought up at once.

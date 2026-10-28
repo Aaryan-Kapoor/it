@@ -893,6 +893,25 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     await until(() => conversationFolder(session) === home)
   })
 
+  test('writes nothing for the hooks of a conversation noted in the same folder within the hour, and notes its time again once the note is an hour old', async () => {
+    await start()
+    const file = path.join(home, 'conversations.json')
+    const report = () => local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-busy', folder: home } })
+    await report()
+    const noted = readFileSync(file, 'utf8')
+    const written = fs.statSync(file).ino
+    for (let n = 0; n < 50; n++) await report()
+    expect(readFileSync(file, 'utf8')).toBe(noted)
+    expect(fs.statSync(file).ino).toBe(written)
+    expect(existsSync(`${file}.lock`)).toBe(false)
+    // The same note an hour old, as it is once the conversation has been at work for an hour
+    const hourAgo = Date.now() - 60 * 60_000
+    writeFileSync(file, JSON.stringify({ 'codex:thread-busy': { ...JSON.parse(noted)['codex:thread-busy'], at: hourAgo } }))
+    await report()
+    await until(() => JSON.parse(readFileSync(file, 'utf8'))['codex:thread-busy'].at > hourAgo)
+    expect(conversationFolder({ harness: 'codex', id: 'thread-busy' })).toBe(home)
+  })
+
   test('what the connector before it wrote down of the turns it cut off is kept until each conversation has been told, however often the connector is started again', async () => {
     const noted = () => JSON.parse(readFileSync(path.join(home, 'cut-off.json'), 'utf8'))
     await start('socket', {}, (home) => writeFileSync(path.join(home, 'cut-off.json'), JSON.stringify(['pi:conversation-1'])))
