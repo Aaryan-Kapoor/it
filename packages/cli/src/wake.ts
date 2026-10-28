@@ -816,9 +816,8 @@ const heldAsked = new Map<string, { at: number; held: 'elsewhere' | 'it' | false
  * is asked whose it is, by the marks every run It starts carries (see `carryOn`): one whose
  * marks cannot be read is not taken for It's, and one that has gone since it was listed holds
  * nothing. On Windows it says whether a program holds that lock, and not which, so a lock that
- * is held there is taken for some other Codex's. It's own run is not told by its lock there,
- * and need not be: the connector knows its own run while it runs, and once the run has ended
- * Windows has let go of its lock.
+ * is held there is taken for some other Codex's. It reopens no conversation on Windows, so no
+ * run of its own holds one there, and one that did could not be told apart by its lock.
  *
  * What is found is good for a moment, since this is asked for every click that waits, on every
  * pass. `fresh` asks again all the same: whoever has just seen It's own run of the
