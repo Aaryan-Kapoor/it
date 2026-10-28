@@ -5022,10 +5022,9 @@ try {
       (await three.page.locator('.hello').count()) === 0,
     `on the menu: ${onTourMenu}; now at ${new URL(three.page.url()).pathname}`,
   )
-  await three.page.getByRole('button', { name: /^Completed deletions/ }).click()
   check(
-    'the completed tour deletion can still be opened beside the suggestions',
-    (await three.page.locator('.deletion-line').filter({ hasText: 'deletion confirmed.' }).count()) > 0,
+    'the tour’s pages, deleted and gone through, say nothing beside the suggestions',
+    (await three.page.locator('[aria-label="Page deletions"]').count()) === 0,
   )
   // Ending every other browser never ends the one that asks. That browser adds a machine, and
   // the browser everything was erased from is paired again with a code that machine asks for,
