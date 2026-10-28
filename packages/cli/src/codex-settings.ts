@@ -9,8 +9,10 @@
  * `default_permissions`, Codex reads all of it the older way, and a folder that is not a git
  * repository is then read-only: the two lines `[sandbox_workspace_write]` and
  * `network_access = true`, added to settings that had neither, give a git folder the network
- * and take from a plain folder the writing it had. A profile that is chosen wins over
- * everything of the older way. A file that defines a profile and chooses none, or has the
+ * and take from a plain folder the writing it had. Within one file, a profile that is chosen
+ * wins over everything of the older way. Between the person's settings, a project's and the
+ * command line, the one that ranks highest and says either decides, so a `sandbox_mode` given
+ * with `-c`, as Auto-wake gives it, wins over a profile chosen in a file. A file that defines a profile and chooses none, or has the
  * choosing line below a table, is one Codex will not start with, and so is a table that is in
  * it twice. All of this is as Codex 0.160 was seen to behave in its own window.
  *

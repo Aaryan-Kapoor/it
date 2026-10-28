@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, test } from 'vitest'
-import { holds, likeliest, type T3Search, t3Held, t3Search, t3Server, t3ThreadOf } from './src/t3'
+import { conversationsOf, holds, likeliest, type T3Search, t3Held, t3Running, t3Search, t3Server, t3ThreadOf } from './src/t3'
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'it-t3-'))
 afterAll(() => rmSync(scratch, { recursive: true, force: true }))
@@ -134,8 +134,168 @@ describe('the thread a conversation is held in', () => {
   })
 })
 
+/**
+ * What T3 Code says of a thread that has run Claude Code and then Codex, as its snapshot of the
+ * thread has it: each conversation the thread ran, by the id its agent app gave it, and the one
+ * it runs now.
+ */
+function switched(
+  thread: string,
+  conversations: { provider: string; driver: string; nativeId: string | null; owner?: string; of?: string; strength?: string }[],
+  active: string | null,
+) {
+  return {
+    projection: {
+      thread: { id: thread, activeProviderThreadId: active },
+      providerThreads: conversations.map((c) => ({
+        id: c.provider,
+        driver: c.driver,
+        providerInstanceId: c.driver,
+        appThreadId: c.of ?? thread,
+        ownerNodeId: c.owner ?? null,
+        nativeThreadRef: { driver: c.driver, nativeId: c.nativeId, strength: c.strength ?? 'strong' },
+      })),
+    },
+  }
+}
+
+describe('the conversations a thread has run', () => {
+  const claude = { provider: 'provider-thread:claude', driver: 'claudeAgent', nativeId: 'claude-conversation' }
+  const codex = { provider: 'provider-thread:codex', driver: 'codex', nativeId: 'codex-conversation' }
+  test('are the one it runs now, and those it ran before it was switched to another agent app', () => {
+    expect(conversationsOf(switched('thread-a', [claude, codex], codex.provider), 'thread-a')).toEqual({
+      now: { harness: 'codex', id: 'codex-conversation' },
+      before: [{ harness: 'claude-code', id: 'claude-conversation' }],
+    })
+    // Switched back, the first is the one it runs, and the second is one it ran
+    expect(conversationsOf(switched('thread-a', [claude, codex], claude.provider), 'thread-a')).toEqual({
+      now: { harness: 'claude-code', id: 'claude-conversation' },
+      before: [{ harness: 'codex', id: 'codex-conversation' }],
+    })
+  })
+  test('are only the thread’s own: not a helper’s that one of its turns started, not another thread’s, and none whose id or agent app It cannot be sure of', () => {
+    const others = [
+      // A helper that a turn of the thread started has a conversation of its own
+      { provider: 'provider-thread:helper', driver: 'codex', nativeId: 'helper-conversation', owner: 'node-1' },
+      { provider: 'provider-thread:elsewhere', driver: 'claudeAgent', nativeId: 'another-threads-conversation', of: 'thread-b' },
+      // One T3 Code has not yet been told the id of, one it only guessed, and one of an agent app It does not know
+      { provider: 'provider-thread:pending', driver: 'claudeAgent', nativeId: null },
+      { provider: 'provider-thread:weak', driver: 'claudeAgent', nativeId: 'a-guess', strength: 'weak' },
+      { provider: 'provider-thread:opencode', driver: 'opencode', nativeId: 'opencode-conversation' },
+      { provider: 'provider-thread:odd', driver: 'constructor', nativeId: 'odd-conversation' },
+    ]
+    expect(conversationsOf(switched('thread-a', [claude, ...others, codex], codex.provider), 'thread-a')).toEqual({
+      now: { harness: 'codex', id: 'codex-conversation' },
+      before: [{ harness: 'claude-code', id: 'claude-conversation' }],
+    })
+    // Where the thread runs one of those now, it runs none It knows
+    for (const active of others) expect(conversationsOf(switched('thread-a', [claude, ...others], active.provider), 'thread-a').now).toBeNull()
+    expect(conversationsOf(switched('thread-a', [claude, codex], null), 'thread-a').now).toBeNull()
+  })
+  test('are none of what T3 Code says of another thread, or of anything that is not what it says of a thread', () => {
+    expect(conversationsOf(switched('thread-b', [claude, codex], codex.provider), 'thread-a')).toEqual({ now: null, before: [] })
+    for (const not of [null, undefined, 'a thread', {}, { projection: {} }, { projection: { thread: { id: 'thread-a' }, providerThreads: 'none' } }])
+      expect(conversationsOf(not, 'thread-a')).toEqual({ now: null, before: [] })
+  })
+})
+
 // T3 Code's own command, which issues the session, and its server are stood in for: what is
 // tried is what It makes of the answers
+describe.skipIf(process.platform === 'win32')('the thread that runs a conversation that is heard from, asked of a server', () => {
+  async function server(listed: Record<string, unknown>[], snapshots: Record<string, unknown>) {
+    const folder = mkdtempSync(path.join(scratch, 'heard-'))
+    const program = path.join(folder, 't3')
+    writeFileSync(program, '#!/bin/sh\necho \'{"token":"a-session"}\'\n')
+    chmodSync(program, 0o755)
+    const read: string[] = []
+    const answers = http.createServer((req, res) => {
+      const json = (status: number, body: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+      if (req.url === '/api/orchestration/shell') return json(200, { projects: [{ id: 'site', workspaceRoot: '/work/site' }], threads: listed })
+      const id = decodeURIComponent(/^\/api\/orchestration\/threads\/([^/]+)\/bounded$/.exec(req.url ?? '')?.[1] ?? '')
+      read.push(id)
+      return id in snapshots ? json(200, snapshots[id]) : json(404, {})
+    })
+    await new Promise<void>((r) => answers.listen(0, '127.0.0.1', r))
+    return {
+      t3: { origin: `http://127.0.0.1:${(answers.address() as AddressInfo).port}`, home: folder, program },
+      read,
+      close: () => {
+        answers.closeAllConnections()
+        answers.close()
+      },
+    }
+  }
+  const claude = { provider: 'provider-thread:claude', driver: 'claudeAgent', nativeId: 'claude-conversation' }
+  const codex = { provider: 'provider-thread:codex', driver: 'codex', nativeId: 'codex-conversation' }
+  const neighbour = { provider: 'provider-thread:neighbour', driver: 'codex', nativeId: 'neighbour-conversation' }
+  const recently = () => new Date(Date.now() - 60_000).toISOString()
+
+  test('is the thread that runs it now, with what that thread ran before, and never a neighbour in the same folder', async () => {
+    const found = await server(
+      [
+        // In the same folder, running Codex, and changed last: read first, and not the one
+        { id: 'neighbour', projectId: 'site', providerInstanceId: 'codex', activeRunId: 'run-9', updatedAt: recently() },
+        { id: 'switched', projectId: 'site', providerInstanceId: 'codex', activeRunId: 'run-2', updatedAt: new Date(Date.now() - 120_000).toISOString() },
+      ],
+      {
+        // The neighbour once ran a conversation too, which is its own and not the switched thread's
+        neighbour: switched(
+          'neighbour',
+          [{ ...claude, provider: 'provider-thread:neighbours-claude', nativeId: 'neighbours-claude' }, neighbour],
+          neighbour.provider,
+        ),
+        switched: switched('switched', [claude, codex], codex.provider),
+      },
+    )
+    try {
+      expect(await t3Running(found.t3, { harness: 'codex', ids: ['codex-conversation'], cwd: '/work/site' })).toEqual({
+        thread: 'switched',
+        before: [{ harness: 'claude-code', id: 'claude-conversation' }],
+      })
+      expect(await t3Running(found.t3, { harness: 'codex', ids: ['neighbour-conversation'], cwd: '/work/site' })).toEqual({
+        thread: 'neighbour',
+        before: [{ harness: 'claude-code', id: 'neighbours-claude' }],
+      })
+      // A conversation the thread ran before is not one it runs now: nothing is found for it
+      expect(await t3Running(found.t3, { harness: 'claude-code', ids: ['claude-conversation'], cwd: '/work/site' })).toBeUndefined()
+      // Nor for one with the same id under another agent app
+      expect(await t3Running(found.t3, { harness: 'claude-code', ids: ['codex-conversation'], cwd: '/work/site' })).toBeUndefined()
+    } finally {
+      found.close()
+    }
+  })
+
+  test('is asked of the thread It knows the conversation is in, and otherwise only of a few threads that are running or changed lately', async () => {
+    const quiet = Array.from({ length: 20 }, (_, i) => ({
+      id: `quiet-${i}`,
+      projectId: 'site',
+      providerInstanceId: 'codex',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }))
+    const lively = Array.from({ length: 20 }, (_, i) => ({ id: `lively-${i}`, projectId: 'site', providerInstanceId: 'codex', updatedAt: recently() }))
+    const snapshots = Object.fromEntries([...quiet, ...lively].map((t) => [t.id, switched(t.id, [{ ...codex, nativeId: `other-${t.id}` }], codex.provider)]))
+    snapshots['quiet-3'] = switched('quiet-3', [claude, codex], codex.provider)
+    const found = await server([...quiet, ...lively], snapshots)
+    try {
+      // A quiet thread is not looked into, and no more than eight of the lively ones are
+      expect(await t3Running(found.t3, { harness: 'codex', ids: ['codex-conversation'], cwd: '/work/site' })).toBeUndefined()
+      expect(found.read).toHaveLength(8)
+      expect(found.read.every((id) => id.startsWith('lively-'))).toBe(true)
+      // The thread It already knows of is the one read, and only that one
+      found.read.length = 0
+      expect(await t3Running(found.t3, { harness: 'codex', ids: ['an-id-it-has-since', 'codex-conversation'] }, 'quiet-3')).toEqual({
+        thread: 'quiet-3',
+        before: [{ harness: 'claude-code', id: 'claude-conversation' }],
+      })
+      expect(found.read).toEqual(['quiet-3'])
+      // And a thread that cannot be read says nothing
+      expect(await t3Running(found.t3, { harness: 'codex', ids: ['codex-conversation'] }, 'gone')).toBeUndefined()
+    } finally {
+      found.close()
+    }
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('which thread holds a conversation, asked of a server', () => {
   /** A server that lists threads and answers with a native id, an HTTP status, or no answer. */
   async function server(

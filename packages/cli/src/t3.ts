@@ -19,6 +19,10 @@
 //   for issuing one (`t3 auth session issue`). It is kept in memory and never written down;
 // - which thread a conversation is: T3 Code keeps, for each thread, the id the agent app gave
 //   the conversation, and the thread whose conversation has this id is the one;
+// - which conversation a thread runs now, and which it ran before: a thread can be switched to
+//   another agent app, and runs another conversation from then on, under another id. When a
+//   conversation is heard from that a thread runs now, the thread's earlier conversations carry
+//   on as it, and their pages go to it;
 // - and that a message be put to that thread, which is what a person typing into it does.
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -162,6 +166,12 @@ async function ask<T>(t3: T3, method: 'GET' | 'POST', pathname: string, signal?:
 
 /** The agent app's name for itself in T3 Code, where It knows it. Only how likely a thread is goes by this. */
 const DRIVER: Record<string, string> = { 'claude-code': 'claudeAgent', codex: 'codex' }
+/** The agent app It knows by each of those names, which T3 Code gives the program it runs a conversation with. */
+const HARNESS = new Map(Object.entries(DRIVER).map(([harness, driver]) => [driver, harness]))
+/** How lately a thread that is not in the middle of a run has to have changed to be looked into for a conversation that is heard from. */
+const LIVELY_MS = 10 * 60_000
+/** How many threads are looked into, at most, for a conversation that is heard from. */
+const LOOKED_INTO_HEARD = 8
 
 interface ShellThread {
   id?: unknown
@@ -223,6 +233,76 @@ export function holds(snapshot: unknown, ids: readonly string[]): boolean {
       return typeof id === 'string' && ids.includes(id)
     })
   )
+}
+
+/** A conversation as It names it: the agent app, and the id the app gave it. */
+export interface Conversation {
+  harness: string
+  id: string
+}
+
+/**
+ * The conversations a thread has run, as T3 Code's snapshot of the thread says: the one it runs
+ * now, and those it ran before it was switched to another agent app. Only the thread's own
+ * count: one that a helper runs for one of its turns is the helper's, and one of another thread
+ * is that thread's. Nor does one of an agent app It does not know, or one whose id T3 Code has
+ * not had from the app itself.
+ */
+export function conversationsOf(snapshot: unknown, thread: string): { now: Conversation | null; before: Conversation[] } {
+  const projection = (snapshot as { projection?: { thread?: { id?: unknown; activeProviderThreadId?: unknown }; providerThreads?: unknown } } | null)
+    ?.projection
+  if (projection?.thread?.id !== thread || !Array.isArray(projection.providerThreads)) return { now: null, before: [] }
+  const own: { provider: unknown; conversation: Conversation }[] = []
+  for (const p of projection.providerThreads as {
+    id?: unknown
+    driver?: unknown
+    appThreadId?: unknown
+    ownerNodeId?: unknown
+    nativeThreadRef?: { nativeId?: unknown; strength?: unknown } | null
+  }[]) {
+    if (p?.appThreadId !== thread || p.ownerNodeId !== null) continue
+    const harness = typeof p.driver === 'string' ? HARNESS.get(p.driver) : undefined
+    const id = p.nativeThreadRef?.nativeId
+    if (harness && typeof id === 'string' && id && p.nativeThreadRef?.strength === 'strong') own.push({ provider: p.id, conversation: { harness, id } })
+  }
+  const active = projection.thread.activeProviderThreadId
+  const now = (typeof active === 'string' && own.find((o) => o.provider === active)?.conversation) || null
+  const before = new Map<string, Conversation>()
+  for (const { conversation: c } of own) if (c.harness !== now?.harness || c.id !== now.id) before.set(JSON.stringify([c.harness, c.id]), c)
+  return { now, before: [...before.values()] }
+}
+
+/**
+ * The thread that runs a conversation at this moment, and the conversations that thread ran
+ * before, as asked when the conversation is heard from. Most conversations that are heard from
+ * are in no thread at all, so few threads are read for this: the one It knows the conversation
+ * to be in, where it knows one, and otherwise those in the middle of a run or changed in the last
+ * few minutes, the likeliest first, and no more than eight of them. Nothing where none of them
+ * runs this very conversation now, by any of the ids it is known by, or T3 Code could not say.
+ */
+export async function t3Running(
+  t3: T3,
+  of: { harness: string; ids: readonly string[]; cwd?: string },
+  known?: string,
+  signal: AbortSignal = AbortSignal.timeout(DISCOVERY_MS),
+): Promise<{ thread: string; before: Conversation[] } | undefined> {
+  let candidates = known === undefined ? [] : [known]
+  if (known === undefined) {
+    const shell = await ask<{ threads?: unknown; projects?: unknown }>(t3, 'GET', '/api/orchestration/shell', signal)
+    if (!shell || !Array.isArray(shell.threads)) return undefined
+    const lately = Date.now() - LIVELY_MS
+    const lively = (shell.threads as { activeRunId?: unknown; updatedAt?: unknown }[]).filter(
+      (t) => typeof t?.activeRunId === 'string' || (typeof t?.updatedAt === 'string' && Date.parse(t.updatedAt) > lately),
+    )
+    candidates = likeliest({ threads: lively, projects: shell.projects }, of, LOOKED_INTO_HEARD)
+  }
+  for (const thread of candidates) {
+    if (signal.aborted) return undefined
+    const snapshot = await ask(t3, 'GET', `/api/orchestration/threads/${encodeURIComponent(thread)}/bounded`, signal)
+    const { now, before } = conversationsOf(snapshot, thread)
+    if (now?.harness === of.harness && of.ids.includes(now.id)) return { thread, before }
+  }
+  return undefined
 }
 
 /**

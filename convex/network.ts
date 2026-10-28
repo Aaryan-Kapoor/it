@@ -8,10 +8,16 @@
 // can know: whether It is registered there to start by itself, and whether counts of its use
 // are being sent. The owner's settings say them as they are, and say neither as a fact while
 // the service has not said.
+//
+// The owner also chooses here where the links that agents give are: at this computer's own
+// name, at the machine's name on the tailnet, or at its address on the network. Only a place It
+// can be reached at as the network stands is offered, and a link is never given at one It cannot
+// be reached at.
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
+import type { Doc } from './_generated/dataModel'
 import { internalMutation, internalQuery, mutation, type QueryCtx, query } from './_generated/server'
-import { basePort } from './config'
+import { basePort, site } from './config'
 import { requireOwner } from './lib/authz'
 import { forgetNoted } from './lib/counted'
 import { fail } from './lib/errors'
@@ -27,6 +33,43 @@ export const ASKED_FOR_MS = 60_000
 const ADDRESS = /^http:\/\/(\[[0-9a-f:.]{2,45}\]|[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?):[0-9]{1,5}$/
 /** The most addresses that are kept. */
 const MOST = 16
+/** A machine's name on a tailnet as the service gives one: parts of letters, digits and hyphens, joined by dots, as Tailscale's own command says it. */
+const TAILNET_NAME = /^[a-z0-9-]{1,63}(\.[a-z0-9-]{1,63})+$/
+
+/** Where the links that agents give can be: at this computer's own name, at the machine's name on its tailnet, or at its first address on the network. */
+const linkWay = v.union(v.literal('local'), v.literal('tailnet'), v.literal('network'))
+type LinkWay = 'local' | 'tailnet' | 'network'
+/** Why the links cannot be at a place just now, in a word: It answers its own machine alone, that machine is on no tailnet, Tailscale does not say its name there, It is kept to the tailnet, or the machine has no address on a network. */
+export type Unlinked = 'off' | 'no_tailnet' | 'no_name' | 'kept_to_tailnet' | 'no_address'
+
+/**
+ * The address It can be reached at for each place the links can be, as the service last said
+ * how its door stands: this computer's own always, the machine's name on the tailnet where the
+ * door answers to it, and its first address on the network where the door answers every
+ * network. That first address is the one another device is given to open the site at.
+ */
+function linkable(row: Doc<'network'> | null): { local: string; tailnet?: string; network?: string } {
+  return {
+    local: site(),
+    ...(row?.on && row.tailnetName ? { tailnet: `http://${row.tailnetName}:${basePort()}` } : {}),
+    ...(row?.on && !row.tailnet && row.addresses[0] ? { network: row.addresses[0] } : {}),
+  }
+}
+/** Why the links cannot be at a place as the network stands, or nothing where they can. */
+function unlinkable(row: Doc<'network'> | null, to: LinkWay): Unlinked | undefined {
+  if (linkable(row)[to]) return undefined
+  if (!row?.on) return 'off'
+  if (to === 'tailnet') return row.canTailnet === false ? 'no_tailnet' : 'no_name'
+  return row.tailnet ? 'kept_to_tailnet' : 'no_address'
+}
+/** What the owner is told of a place the links cannot be at, by why. */
+const NOT_LINKABLE: Record<Unlinked, string> = {
+  off: 'It answers only the machine it runs on, so no other device could open a link there. Choose who else can reach It first.',
+  no_tailnet: 'The machine It runs on is on no tailnet.',
+  no_name: 'Tailscale has not said the machine’s name on the tailnet, so there is no name to give links at.',
+  kept_to_tailnet: 'It is kept to your tailnet, and answers nothing at its address on the network.',
+  no_address: 'The machine It runs on has no address on a network just now.',
+}
 
 async function said(ctx: QueryCtx): Promise<{ on: boolean; wanted: boolean; addresses: string[]; tailnet?: boolean }> {
   const row = await ctx.db.query('network').first()
@@ -58,10 +101,13 @@ export const report = internalMutation({
     tailnet: v.optional(v.boolean()),
     canTailnet: v.optional(v.boolean()),
     exposed: v.optional(v.string()),
+    // The machine's name on the tailnet, where the door answers to it: a link an agent gives can be at it
+    tailnetName: v.optional(v.string()),
   },
-  handler: async (ctx, { on, wanted, addresses, background, usage, tailnet, canTailnet, exposed }) => {
+  handler: async (ctx, { on, wanted, addresses, background, usage, tailnet, canTailnet, exposed, tailnetName }) => {
     const kept = on ? [...new Set(addresses.filter((a) => a.length <= 300 && ADDRESS.test(a)))].slice(0, MOST) : []
     const why = exposed?.slice(0, 300)
+    const named = on && tailnetName !== undefined && tailnetName.length <= 253 && TAILNET_NAME.test(tailnetName) ? tailnetName : undefined
     const row = await ctx.db.query('network').first()
     if (
       row &&
@@ -72,12 +118,13 @@ export const report = internalMutation({
       row.tailnet === tailnet &&
       row.canTailnet === canTailnet &&
       row.exposed === why &&
+      row.tailnetName === named &&
       JSON.stringify(row.addresses) === JSON.stringify(kept)
     )
       return null
     const stopped = row?.usage === true && usage !== true
     const usageGeneration = (row?.usageGeneration ?? 0) + (stopped ? 1 : 0)
-    const stands = { on, wanted, addresses: kept, background, usage, usageGeneration, tailnet, canTailnet, exposed: why }
+    const stands = { on, wanted, addresses: kept, background, usage, usageGeneration, tailnet, canTailnet, exposed: why, tailnetName: named }
     if (row) await ctx.db.patch(row._id, stands)
     else await ctx.db.insert('network', stands)
     // Counts were being sent and are no more. What was noted for them goes now, and is not left
@@ -191,7 +238,48 @@ export const get = query({
       exposed: row?.exposed ?? null,
       asked: row?.asked ?? null,
       answered: row?.answered ?? null,
+      // Where the links agents give are to be, and each place they can be at as the network stands, by its address
+      link: row?.link ?? 'local',
+      links: linkable(row),
     }
+  },
+})
+
+/**
+ * The owner chooses, on the site, where the links that agents give are. Only a place It can be
+ * reached at as the network stands is taken: a link anywhere else would open nothing, and the
+ * owner is told why in a sentence. This computer's own name is always taken.
+ */
+export const link = mutation({
+  args: { to: linkWay },
+  handler: async (ctx, { to }) => {
+    const { user } = await requireOwner(ctx)
+    await rateLimit(ctx, 'network', user._id)
+    const row = await ctx.db.query('network').first()
+    const why = unlinkable(row, to)
+    if (why) fail('invalid', NOT_LINKABLE[why])
+    // This computer, chosen where nothing is said yet, is where the links already are
+    if (row) await ctx.db.patch(row._id, { link: to === 'local' ? undefined : to })
+    log('network.linked', { to })
+    return null
+  },
+})
+
+/**
+ * Where the link to a page that an agent is given is, for publishing: at the place the owner
+ * chose, where It can be reached at it. Nothing where that is this computer, whose address each
+ * machine has for itself: the machine It runs on calls it localhost, and one that joined from
+ * another computer reaches it at the door it joined at. Where It cannot be reached at the place
+ * chosen, which place that is and why not, so that the agent can say why its link is the other.
+ */
+export const linkFor = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<{ at: string } | { unlinked: { to: 'tailnet' | 'network'; why: Unlinked } } | null> => {
+    const row = await ctx.db.query('network').first()
+    const to = row?.link
+    if (!to) return null
+    const why = unlinkable(row, to)
+    return why ? { unlinked: { to, why } } : { at: linkable(row)[to]! }
   },
 })
 
