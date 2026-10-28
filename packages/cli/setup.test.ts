@@ -656,22 +656,30 @@ describe('an add-on whose files It copies into an app’s folder', () => {
     }
   })
 
-  test('thirty successive updates of an unchanged owned file leave no recovery folders', async () => {
-    const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
-    await connect('opencode', () => {})
-    for (let release = 1; release <= 30; release++) {
-      const text = `the installed plugin at release ${release}`
-      writeFileSync(plugin, text)
-      const before = noted('opencode')
-      before.installs[0]!.version = `release-${release}`
-      before.installs[0]!.files!.find((f) => f.path === plugin)!.sha256 = sha(text)
-      writeFileSync(stampFile('opencode'), JSON.stringify(before))
-      expect((await connect('opencode', () => {})).addon).toBe('connected')
+  test(
+    'thirty successive updates of an unchanged owned file leave no recovery folders',
+    async () => {
+      const plugin = path.join(folderOf('opencode'), 'plugins/it-bridge.js')
+      await connect('opencode', () => {})
+      for (let release = 1; release <= 30; release++) {
+        const text = `the installed plugin at release ${release}`
+        writeFileSync(plugin, text)
+        const before = noted('opencode')
+        before.installs[0]!.version = `release-${release}`
+        before.installs[0]!.files!.find((f) => f.path === plugin)!.sha256 = sha(text)
+        writeFileSync(stampFile('opencode'), JSON.stringify(before))
+        expect((await connect('opencode', () => {})).addon).toBe('connected')
+        expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
+      }
+      expect(await disconnect('opencode', () => {})).toBe(true)
       expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
-    }
-    expect(await disconnect('opencode', () => {})).toBe(true)
-    expect(existsSync(`${plugin}.it-recovery`)).toBe(false)
-  })
+    },
+    // Thirty is more updates than there are recovery slots, and each one writes, flushes and
+    // renames files. On Windows a program that looks into every new file can keep a rename
+    // waiting for a while, which It tries again for up to three seconds, so on CI's Windows
+    // runners the thirty have taken from three seconds to past thirty
+    process.platform === 'win32' ? 120_000 : 30_000,
+  )
 
   test.each([false, true])('removal clears leftover owned originals and keeps a personal recovery edit when present is %s', async (edited) => {
     await connect('opencode', () => {})
