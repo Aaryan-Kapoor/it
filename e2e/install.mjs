@@ -42,6 +42,34 @@ const check = (name, ok, detail = '') => {
 }
 const windows = process.platform === 'win32'
 const zshBinary = [process.env.IT_TEST_ZSH, '/bin/zsh', '/usr/bin/zsh'].find((file) => file && existsSync(file))
+// What Linux lists of an Intel processor of the first Core i7 generation (Nehalem), which has
+// what the program for Linux needs, of a Core 2 (Penryn), which has neither SSE4.2 nor POPCNT,
+// and of an AMD Phenom II (K10), which has POPCNT and no SSE4.2
+const LINUX_NEHALEM =
+  'fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ht tm pbe syscall nx rdtscp lm constant_tsc arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf pni dtes64 monitor ds_cpl vmx est tm2 ssse3 cx16 xtpr pdcm sse4_1 sse4_2 popcnt lahf_lm pti tpr_shadow vnmi flexpriority ept vpid dtherm ida'
+const LINUX_PENRYN =
+  'fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ht tm pbe syscall nx lm constant_tsc arch_perfmon pebs bts rep_good nopl cpuid aperfmperf pni dtes64 monitor ds_cpl vmx smx est tm2 ssse3 cx16 xtpr pdcm sse4_1 xsave lahf_lm pti tpr_shadow vnmi flexpriority vpid dtherm'
+const LINUX_K10 =
+  'fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm 3dnowext 3dnow constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf pni monitor cx16 popcnt lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt hw_pstate vmmcall npt lbrv svm_lock nrip_save'
+// What an Intel Mac says of its processor, in its two lists, with an eighth-generation Core
+// (Coffee Lake), which has what the program for an Intel Mac needs, with a third-generation one
+// (Ivy Bridge), which has AVX and no AVX2, and with a Core 2 (Penryn), which has neither
+const MAC_COFFEE_LAKE = {
+  features:
+    'FPU VME DE PSE TSC MSR PAE MCE CX8 APIC SEP MTRR PGE MCA CMOV PAT PSE36 CLFSH DS ACPI MMX FXSR SSE SSE2 SS HTT TM PBE SSE3 PCLMULQDQ DTES64 MON DSCPL VMX SMX EST TM2 SSSE3 FMA CX16 TPR PDCM SSE4.1 SSE4.2 x2APIC MOVBE POPCNT AES PCID XSAVE OSXSAVE SEGLIM64 TSCTMR AVX1.0 RDRAND F16C',
+  leaf7:
+    'RDWRFSGS TSC_THREAD_OFFSET SGX BMI1 HLE AVX2 SMEP BMI2 ERMS INVPCID RTM FPU_CSDS MPX RDSEED ADX SMAP CLFSOPT IPT SGXLC MDCLEAR TSXFA IBRS STIBP L1DF SSBD',
+}
+const MAC_IVY_BRIDGE = {
+  features:
+    'FPU VME DE PSE TSC MSR PAE MCE CX8 APIC SEP MTRR PGE MCA CMOV PAT PSE36 CLFSH DS ACPI MMX FXSR SSE SSE2 SS HTT TM PBE SSE3 PCLMULQDQ DTES64 MON DSCPL VMX EST TM2 SSSE3 CX16 TPR PDCM SSE4.1 SSE4.2 x2APIC POPCNT AES PCID XSAVE OSXSAVE TSCTMR AVX1.0 RDRAND F16C',
+  leaf7: 'RDWRFSGS SMEP ERMS',
+}
+const MAC_PENRYN = {
+  features:
+    'FPU VME DE PSE TSC MSR PAE MCE CX8 APIC SEP MTRR PGE MCA CMOV PAT PSE36 CLFSH DS ACPI MMX FXSR SSE SSE2 SS HTT TM PBE SSE3 DTES64 MON DSCPL VMX SMX EST TM2 SSSE3 CX16 TPR PDCM SSE4.1 XSAVE',
+  leaf7: '',
+}
 const program = windows ? 'it-windows-x64.exe' : `it-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
 if (!existsSync(path.join(built, program)) || !existsSync(path.join(built, 'SHA256SUMS'))) {
   console.error(`no ${program} in ${built}: build the programs first with node packages/cli/release.mjs`)
@@ -212,7 +240,8 @@ async function install(
     started,
     terminal = false,
     piped = false,
-    script = path.join(root, 'install/install.sh'),
+    // The script for this system, or a copy of it that a test has changed
+    script = path.join(root, windows ? 'install/install.ps1' : 'install/install.sh'),
     // What is given after the script, as `sh -s -- login ...` gives it to one read from a pipe
     args = [],
   } = {},
@@ -229,7 +258,7 @@ async function install(
     ...extraEnv,
   }
   for (const [k, v] of Object.entries(env)) if (v === undefined) delete env[k]
-  const ps1 = path.join(root, 'install/install.ps1')
+  const ps1 = script
   // `piped` hands PowerShell the script as one piece of text to run, which is what
   // `irm ... | iex` does, and then asks what running it left behind in the session
   const pipedIn = [
@@ -1149,12 +1178,17 @@ try {
 
     // ---------- a Mac whose shell is run for the other kind of chip ----------
     // A shell started under translation on an Apple chip says the chip is Intel's. Stand-ins
-    // for the two commands that are asked say what they say there
-    const mac = (name, translated) => {
+    // for the two commands that are asked say what they say there, and sysctl says of the
+    // processor what a Mac with an eighth-generation Core says, unless it is given another
+    const mac = (name, translated, processor = MAC_COFFEE_LAKE) => {
       const dir = path.join(tmp, name)
       mkdirSync(dir)
       writeFileSync(path.join(dir, 'uname'), '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo x86_64 ;; esac\n', { mode: 0o755 })
-      writeFileSync(path.join(dir, 'sysctl'), `#!/bin/sh\necho ${translated}\n`, { mode: 0o755 })
+      writeFileSync(
+        path.join(dir, 'sysctl'),
+        `#!/bin/sh\ncase "$2" in\n  sysctl.proc_translated) echo ${translated} ;;\n  machdep.cpu.features) echo '${processor.features}' ;;\n  machdep.cpu.leaf7_features) echo '${processor.leaf7}' ;;\nesac\n`,
+        { mode: 0o755 },
+      )
       return { PATH: `${dir}${path.delimiter}${process.env.PATH}` }
     }
     asked.length = 0
@@ -1222,6 +1256,58 @@ try {
       'on a Linux with another C library it says that there is no program for it, and makes nothing',
       musl.code !== 0 && /has musl, as Alpine does/.test(musl.said) && !existsSync(musl.folder),
       musl.said,
+    )
+
+    // ---------- a processor without what the program for it needs ----------
+    // On Linux the script reads the processor's flags from /proc/cpuinfo, which a test cannot
+    // stand in for. So it is given a copy of the script that reads a file of the test's in its
+    // place, with stand-ins that say it is on a Linux with an Intel chip. On an Intel Mac the
+    // script asks sysctl, whose stand-in answers as that Mac would
+    const shText = readFileSync(path.join(root, 'install/install.sh'), 'utf8')
+    const reading = (name, flags) => {
+      const cpuinfo = path.join(tmp, `${name}.cpuinfo`)
+      if (flags !== undefined) writeFileSync(cpuinfo, `processor\t: 0\nflags\t\t: ${flags}\n\nprocessor\t: 1\nflags\t\t: ${flags}\n`)
+      const script = path.join(tmp, `install-${name}.sh`)
+      writeFileSync(script, shText.replaceAll('/proc/cpuinfo', cpuinfo))
+      return script
+    }
+    const onIntelLinux = libc('an-intel-linux', 'echo "glibc 2.39"', 'echo "ldd (GNU libc) 2.39"')
+    /** An install, and what it asked this machine's stand-in for the releases for */
+    const askingFor = async (...how) => {
+      asked.length = 0
+      const r = await install(...how)
+      return { ...r, asked: [...asked] }
+    }
+    const refused = (r, lacks) =>
+      r.code !== 0 && r.said.includes(`It cannot run on this computer: its processor does not have ${lacks}. `) && !existsSync(r.folder) && r.asked.length === 0
+    const wentOn = (r, file) => !/its processor does not have/.test(r.said) && r.asked.some((a) => a.endsWith(`/latest/download/${file}`))
+    const penryn = await askingFor('cpu-penryn', onIntelLinux, { script: reading('penryn', LINUX_PENRYN) })
+    const k10 = await askingFor('cpu-k10', onIntelLinux, { script: reading('k10', LINUX_K10) })
+    check(
+      'on a Linux whose processor lacks SSE4.2 or POPCNT it says which it lacks, and downloads and makes nothing',
+      shText.includes('/proc/cpuinfo') &&
+        refused(penryn, 'SSE4.2 and POPCNT') &&
+        /On an Intel or AMD processor It needs SSE4\.2 and POPCNT/.test(penryn.said) &&
+        refused(k10, 'SSE4.2'),
+      `${penryn.said}\n${k10.said}`,
+    )
+    const nehalem = await askingFor('cpu-nehalem', onIntelLinux, { script: reading('nehalem', LINUX_NEHALEM) })
+    const unreadable = await askingFor('cpu-unread', onIntelLinux, { script: reading('unread') })
+    check(
+      'and on one that has both, or whose flags cannot be read, it goes on to download the program',
+      wentOn(nehalem, 'it-linux-x64') && wentOn(unreadable, 'it-linux-x64'),
+      `${nehalem.said}\n${unreadable.said}`,
+    )
+    const oldMac = await askingFor('cpu-mac-penryn', mac('a-mac-with-a-penryn', 0, MAC_PENRYN))
+    const avxMac = await askingFor('cpu-mac-ivy-bridge', mac('a-mac-with-an-ivy-bridge', 0, MAC_IVY_BRIDGE))
+    const translatedOld = await askingFor('cpu-translated', mac('a-translated-shell-told-of-no-avx', 1, MAC_PENRYN))
+    check(
+      'on an Intel Mac whose processor lacks AVX, or has AVX and not AVX2, it says which it lacks and makes nothing, and a shell run under translation is given the program for its own chip whatever it is told',
+      refused(oldMac, 'AVX and AVX2') &&
+        /On an Intel Mac It needs AVX and AVX2/.test(oldMac.said) &&
+        refused(avxMac, 'AVX2') &&
+        wentOn(translatedOld, 'it-darwin-arm64'),
+      `${oldMac.said}\n${avxMac.said}\n${translatedOld.said}`,
     )
 
     // ---------- a script that did not all arrive ----------
@@ -1322,6 +1408,28 @@ try {
     } finally {
       await new Promise((resolve) => host.close(resolve))
     }
+
+    // ---------- a processor without SSE4.2 ----------
+    // Windows is asked through IsProcessorFeaturePresent, which cannot be made to say no for
+    // SSE4.2 on a processor that has it. So a copy of the script asks instead for 3DNow!, which
+    // Windows reports on none of Intel's processors and on none of AMD's from Bulldozer on, and
+    // is otherwise as it is: the type it asks through is made, and the kind of processor read
+    const ps1Text = readFileSync(path.join(root, 'install/install.ps1'), 'utf8')
+    const asking3dNow = path.join(tmp, 'install-asks-for-3dnow.ps1')
+    writeFileSync(asking3dNow, ps1Text.replace('IsProcessorFeaturePresent(38)', 'IsProcessorFeaturePresent(7)'))
+    asked.length = 0
+    const oldProcessor = await install('windows-old-processor', {}, { script: asking3dNow })
+    check(
+      'on a processor that Windows says has no SSE4.2, it says so, and downloads and makes nothing',
+      ps1Text.includes('IsProcessorFeaturePresent(38)') &&
+        oldProcessor.code !== 0 &&
+        /It cannot run on this computer: its processor does not have SSE4\.2\. On an Intel or AMD processor It needs SSE4\.2 and POPCNT/.test(
+          oldProcessor.flat,
+        ) &&
+        !existsSync(oldProcessor.folder) &&
+        asked.length === 0,
+      `${oldProcessor.said}\nasked: ${asked.join(' ')}`,
+    )
 
     // ---------- a folder whose name PowerShell would read as more than a name ----------
     // Run as printed, the name would write a file where the command was run
