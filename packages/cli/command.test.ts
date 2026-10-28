@@ -24,7 +24,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { behindMark, MARK, PORTS, WHEN } from '@it/protocol'
+import { behindMark, MARK, PORTS, TAKES, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
@@ -174,6 +174,8 @@ interface Asked {
   path: string
   args: Record<string, unknown>
 }
+/** What the stand-in backend answers with for a call that failed and was not refused by It's own code. */
+const SERVER_ERROR = Symbol.for('server-error')
 /** What the stand-in backend answers with when it refuses a call, as the backend's own code refuses one. */
 class Refusal {
   constructor(readonly data: { code: string; message: string }) {}
@@ -205,13 +207,18 @@ async function backend(
   }
   const live: string[] = []
   const token = { asked: 0, answer: (): [status: number, body: unknown] => [200, { token: 'a-token', expires_in: 300 }] }
+  /** What it says at `/cli/config`, and how often it was asked. Unless a test says otherwise, it names no later form of a call, as a backend of an earlier version does. */
+  const config = { asked: 0, answer: (): Record<string, unknown> => ({ protocol: 1, issuer: 'http://127.0.0.1:23001' }) }
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = []
     req
       .on('data', (c: Buffer) => chunks.push(c))
       .on('end', async () => {
         const json = (value: unknown, status = 200) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
-        if (req.method === 'GET' && req.url === '/cli/config') return json({ protocol: 1, issuer: 'http://127.0.0.1:23001' })
+        if (req.method === 'GET' && req.url === '/cli/config') {
+          config.asked++
+          return json(config.answer())
+        }
         // Asked how it is, it says that it is It, as the backend does
         if (req.method === 'GET' && req.url === '/health') return json({ ok: true, it: true })
         if (req.method === 'POST' && req.url === '/bridge/token') {
@@ -247,6 +254,9 @@ async function backend(
           return
         }
         if (said instanceof Refusal) return json({ status: 'error', errorMessage: 'refused', errorData: said.data, logLines: [] })
+        // A call that failed for any reason but a refusal of It's own, a call whose arguments are not of the shape the
+        // function takes among them, as the backend program answers it: it keeps why from its callers, and says this alone
+        if (said === SERVER_ERROR) return json({ status: 'error', errorMessage: '[Request ID: 5f3c0a9e1b2d4c6a] Server Error', logLines: [] }, 560)
         json({ status: 'success', value: said ?? null, logLines: [] })
       })
   })
@@ -266,6 +276,7 @@ async function backend(
     download,
     live,
     token,
+    config,
     env: { IT_URL: url, IT_SITE_URL: url },
     close: () =>
       new Promise<void>((r) => {
@@ -3046,6 +3057,131 @@ syncBuiltinESMExports();
       await b.close()
     }
   }, 90_000)
+})
+
+describe('what is waiting, listed', () => {
+  const now = { harness: 'pi', id: 'after-it-was-cleared' }
+  const earlier = { harness: 'pi', id: 'before-it-was-cleared' }
+  const another = { harness: 'codex', id: 'thread-2' }
+  const click = (artifact: string, at: number, session: { harness: string; id: string } | null) => ({
+    id: `on-${artifact}`,
+    artifact,
+    title: `Title of ${artifact}`,
+    name: 'approve',
+    payload: '{}',
+    at,
+    attended: true,
+    session,
+  })
+  const waiting = [click('creatine', 4, another), click('workout', 3, now), click('plan', 2, earlier), click('shopping', 1, null)]
+  /** The backend as it answers: for a conversation, what waits on its pages and on pages no conversation has, and for none, everything, newest first. */
+  const answer = ({ path: fn, args }: Asked) => {
+    if (fn !== 'delivery:allWaiting') return null
+    const s = args.for as { harness: string; id: string } | undefined
+    return s ? waiting.filter((c) => !c.session || (c.session.harness === s.harness && c.session.id === s.id)) : waiting
+  }
+  const listed = (b: { asked: Asked[] }) => b.asked.filter((x) => x.path === 'delivery:allWaiting').map((x) => JSON.stringify(x.args))
+  const agent = (s: { harness: string; id: string }) => ({ IT_HARNESS: s.harness, IT_SESSION: s.id })
+
+  test('an agent is listed the actions on its own conversation’s pages, under every id it has had, and on pages no conversation has, and never another’s', async () => {
+    const m = machine()
+    // The connector's record of a conversation that was cleared and carries on under a new id
+    writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ [`pi:${earlier.id}`]: `pi:${now.id}` }))
+    const b = await backend(m, answer)
+    try {
+      const ran = await run(m, ['actions'], { ...b.env, ...agent(now) })
+      expect(printed(ran).map((c: { page: string }) => c.page)).toEqual(['workout', 'plan', 'shopping'])
+      // Each id is asked for by itself, and every click that waits is asked for by nobody
+      expect(listed(b).sort()).toEqual([JSON.stringify({ for: now }), JSON.stringify({ for: earlier })].sort())
+      const other = await run(m, ['actions'], { ...b.env, ...agent(another) })
+      expect(printed(other).map((c: { page: string }) => c.page)).toEqual(['creatine', 'shopping'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a command that no conversation ran is listed everything, and so is one given --all, which says which are another conversation’s by their page alone', async () => {
+    const m = machine()
+    writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ [`pi:${earlier.id}`]: `pi:${now.id}` }))
+    const b = await backend(m, answer)
+    try {
+      const ran = await run(m, ['actions'], b.env)
+      expect(printed(ran).map((c: { page: string }) => c.page)).toEqual(['creatine', 'workout', 'plan', 'shopping'])
+      expect(listed(b)).toEqual([JSON.stringify({})])
+      expect(printed(ran).some((c: Record<string, unknown>) => 'forAnotherConversation' in c)).toBe(false)
+      const all = await run(m, ['actions', '--all'], { ...b.env, ...agent(now) })
+      expect(printed(all).map((c: { page: string; forAnotherConversation?: true }) => [c.page, c.forAnotherConversation ?? false])).toEqual([
+        ['creatine', true],
+        ['workout', false],
+        ['plan', false],
+        ['shopping', false],
+      ])
+      // And no conversation is named by its own id in what is printed
+      for (const s of [now, earlier, another]) expect(all.out).not.toContain(s.id)
+    } finally {
+      await b.close()
+    }
+  })
+
+  /** A backend of an earlier version, whose list takes no conversation: it fails a call that names one, as the backend program fails a call whose arguments are not of the function's shape. */
+  const older = (asked: Asked) => (asked.path === 'delivery:allWaiting' && 'for' in asked.args ? SERVER_ERROR : answer(asked))
+
+  test('against an It of an earlier version, whose list takes no conversation, an agent is listed what of the newest there is its own or no conversation’s, and told that may not be all', async () => {
+    const m = machine()
+    writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ [`pi:${earlier.id}`]: `pi:${now.id}` }))
+    const b = await backend(m, older)
+    try {
+      const ran = await run(m, ['actions'], { ...b.env, ...agent(now) })
+      expect([ran.code, printed(ran).map((c: { page: string }) => c.page)]).toEqual([0, ['workout', 'plan', 'shopping']])
+      // That It was asked what it takes once it had failed the call, and then asked for everything, which it does take
+      expect(b.config.asked).toBe(1)
+      expect(listed(b).at(-1)).toBe(JSON.stringify({}))
+      // The note says plainly why the list may be short, and what makes it whole
+      const notes = ran.err
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line).note as string)
+      expect(notes).toEqual([expect.stringContaining('lists only the newest 50 actions across every conversation')])
+      expect(notes[0]).toContain('may not be all of them until that It is updated')
+      for (const s of [now, earlier, another]) expect(ran.out + ran.err).not.toContain(s.id)
+      // --all lists everything the newest there are, as anywhere, and marks the other conversation's by its page
+      const all = await run(m, ['actions', '--all'], { ...b.env, ...agent(now) })
+      expect(printed(all).map((c: { page: string; forAnotherConversation?: true }) => [c.page, c.forAnotherConversation ?? false])).toEqual([
+        ['creatine', true],
+        ['workout', false],
+        ['plan', false],
+        ['shopping', false],
+      ])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('against an It that says it takes a conversation for its list, a failed call is said as it is, and nothing is listed in its place', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'delivery:allWaiting' ? SERVER_ERROR : null))
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.conversationsWaiting] })
+    try {
+      const ran = await run(m, ['actions'], { ...b.env, ...agent(now) })
+      expect([ran.code, ran.out, error(ran).message]).toEqual([1, '', expect.stringContaining('Server Error')])
+      expect(b.config.asked).toBe(1)
+      expect(listed(b)).toEqual([JSON.stringify({ for: now })])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('--id and --all together are refused, before It is asked anything', async () => {
+    const m = machine()
+    const b = await backend(m, answer)
+    try {
+      const ran = await run(m, ['actions', '--id', 'plan', '--all'], b.env)
+      expect([ran.code, error(ran).code]).toEqual([2, 'invalid'])
+      expect(b.asked.filter((x) => x.path.startsWith('delivery:'))).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('a wait', () => {

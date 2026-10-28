@@ -3055,6 +3055,38 @@ describe('clicks and their delivery', () => {
     void p
   })
 
+  test('what is listed for a conversation is what waits on its own pages and on pages no conversation has, and with no conversation named, everything', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const another = { harness: 'codex', id: 'thread-2' }
+    const pages = {
+      mine: await publish(m, 'workout', { session: SESSION }),
+      theirs: await publish(m, 'creatine', { session: another }),
+      nobodys: await publish(m, 'shopping'),
+    }
+    const clicked: Record<string, string> = {}
+    for (const [whose, p] of Object.entries(pages)) {
+      vi.setSystemTime(Date.now() + 1000)
+      const made = await alice.browser.mutation(api.actions.submit, {
+        artifactId: p.artifactId,
+        displayKey: displayKey('alice'),
+        envelope: envelope(`click-${whose}`),
+      })
+      clicked[whose] = made.actionId
+    }
+    const listed = async (asking?: { harness: string; id: string }) =>
+      (await m.as.query(api.delivery.allWaiting, asking ? { for: asking } : {})).map((c) => c.id)
+    expect(await listed(SESSION)).toEqual([clicked.nobodys, clicked.mine])
+    expect(await listed(another)).toEqual([clicked.nobodys, clicked.theirs])
+    expect(await listed()).toEqual([clicked.nobodys, clicked.theirs, clicked.mine])
+    // A page that another conversation takes takes what waits on it along
+    await publish(m, 'creatine', { session: SESSION, take: true })
+    await settle(t)
+    expect(await listed(SESSION)).toEqual([clicked.nobodys, clicked.theirs, clicked.mine])
+    expect(await listed(another)).toEqual([clicked.nobodys])
+  })
+
   test('clicks are rate limited for one page, so that one page cannot use up what the others need', async () => {
     const { alice, m, click } = await setup()
     const results = []
@@ -3544,7 +3576,8 @@ describe('displays and machines', () => {
   test('the first machine is enrolled by the service, on a backend that holds nothing, and that makes the one person', async () => {
     const t = backend()
     expect(await t.run(async (ctx) => [(await ctx.db.query('users').collect()).length, (await ctx.db.query('machines').collect()).length])).toEqual([0, 0])
-    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE })
+    // And it names the later forms of a call it takes, which a machine a version ahead of it asks about when it is refused one
+    expect(await (await t.fetch('/cli/config')).json()).toEqual({ protocol: 1, issuer: SITE, takes: ['delivery.allWaiting.for'] })
     const key = await aKeyPair()
     const made = await t.mutation(internal.bridge.enroll, { subject: 'owner', name: 'this machine', publicKey: key.publicKey })
     if ('error' in made) throw new Error(made.error)
@@ -5098,6 +5131,8 @@ describe('cases at the edges', () => {
     await insertClicks(t, other.artifactId, 60, {}, Date.now() + 1000)
     expect((await m.as.query(api.delivery.allWaiting, {})).some((c) => c.id === actionId)).toBe(false)
     expect((await m.as.query(api.delivery.waitingFor, { session: SESSION })).map((c) => c.id)).toEqual([actionId])
+    // Nor is what `it actions` lists for the conversation
+    expect((await m.as.query(api.delivery.allWaiting, { for: SESSION })).map((c) => c.id)).toEqual([actionId])
   })
 
   test('nor by any number waiting for a conversation of the same name on another of the person’s machines, which are that machine’s to take', async () => {
@@ -5121,6 +5156,8 @@ describe('cases at the edges', () => {
     expect(await waiting()).toEqual([aside, loose, here])
     // The desk's own waiter has the desk's, and no more than one asking gives
     expect((await desk.as.query(api.delivery.waitingFor, { session: SESSION })).length).toBe(50)
+    // What is listed for the conversation on the laptop is those same three, newest first, and none of the desk's
+    expect((await laptop.as.query(api.delivery.allWaiting, { for: SESSION })).map((c) => c.id)).toEqual([here, loose, aside])
   })
 
   test('more than a batch of expired leases is put back in one go', async () => {

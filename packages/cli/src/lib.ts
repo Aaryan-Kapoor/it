@@ -1317,6 +1317,19 @@ async function issuerAt(door: string, ending?: AbortSignal): Promise<string | un
   return typeof said?.issuer === 'string' ? said.issuer : undefined
 }
 
+/**
+ * Whether the It this machine asks takes a later form of a call (one of `TAKES`), as it says at
+ * its door. False only on its own word that it does not: an It of an earlier version names none
+ * there. Nothing when it could not be asked.
+ */
+export async function backendTakes(form: string): Promise<boolean | undefined> {
+  const said = (await direct(`${backend().site}/cli/config`, { signal: within(15_000) })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)) as { issuer?: unknown; takes?: unknown } | null
+  if (typeof said?.issuer !== 'string') return undefined
+  return Array.isArray(said.takes) && said.takes.includes(form)
+}
+
 /** What a machine is told when It does not take it for one of the person's machines any more, with how it becomes one again. */
 export const notKnown = (m: Pick<Machine, 'at'>) =>
   new Problem(

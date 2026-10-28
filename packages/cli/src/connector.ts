@@ -145,6 +145,33 @@ export const infoFile = () => inHome('connector.json')
 const socketFile = () => inHome('connector.sock')
 const journalFile = () => inHome('journal.jsonl')
 const aliasFile = () => inHome('aliases.json')
+/**
+ * The ids a conversation is known by, as keys: the one it carries on under now, and the latest
+ * few it had before it was cleared, under which the pages it made then are still recorded.
+ * `aliases` leads each earlier id to the one that came after it.
+ */
+export function knownAs(aliases: ReadonlyMap<string, string>, key: string): string[] {
+  const follow = (k: string) => {
+    for (let hops = 0; hops < 10 && aliases.has(k); hops++) k = aliases.get(k)!
+    return k
+  }
+  const now = follow(key)
+  return [
+    now,
+    ...[...aliases]
+      .filter(([, to]) => follow(to) === now)
+      .map(([from]) => from)
+      .slice(-5),
+  ]
+}
+/** The conversations a conversation on this machine is known by, as the connector has written them down: itself, where nothing is written. */
+export function conversationIds(s: { harness: string; id: string }): { harness: string; id: string }[] {
+  const written = readJson<Record<string, unknown>>(aliasFile())
+  const aliases = new Map<string, string>()
+  if (written && typeof written === 'object' && !Array.isArray(written))
+    for (const [from, to] of Object.entries(written)) if (typeof to === 'string') aliases.set(from, to)
+  return knownAs(aliases, keyOf(s.harness, s.id)).map((k) => ({ harness: k.slice(0, k.indexOf(':')), id: k.slice(k.indexOf(':') + 1) }))
+}
 /** The conversations whose hooks have been heard from, so that it is known across a restart where a hook of It's runs. */
 const heardFile = () => inHome('heard.json')
 /** Where a connector that is stopping writes down which conversations it cut off in the middle of a turn. */
@@ -2645,15 +2672,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
         const s = body.session as { harness?: unknown; id?: unknown } | undefined
         const session =
           slug === null && typeof s?.harness === 'string' && typeof s?.id === 'string' ? follow(keyOf(s.harness.slice(0, 40), s.id.slice(0, 200))) : null
-        const watched = session
-          ? [
-              session,
-              ...[...aliases]
-                .filter(([, to]) => follow(to) === session)
-                .map(([from]) => from)
-                .slice(-5),
-            ]
-          : []
+        const watched = session ? knownAs(aliases, session) : []
         const waiter = { slug, sessions: new Set(watched), seen: Date.now() }
         waiters.set(who, waiter)
         // A machine that does not fit the It it joined hands nothing over, to a waiter either, and nor does a connector that is stopping

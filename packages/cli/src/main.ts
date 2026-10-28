@@ -22,10 +22,10 @@ import {
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline/promises'
-import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, withoutFiles } from '@it/protocol'
+import { describeClick, firstFile, HARNESSES, type Harness, isSlug, LIMITS, NOUN, newer, PROTOCOL_VERSION, parseJson, TAKES, withoutFiles } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
 import { type Args, json, loose, need, nested, optionsFor, outputArgs, parse, text } from './args'
-import { local } from './connector'
+import { conversationIds, local } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
 import * as flow from './flow'
@@ -38,6 +38,7 @@ import {
   askShell,
   backend,
   backendAt,
+  backendTakes,
   basePort,
   call,
   changeWhole,
@@ -2369,7 +2370,11 @@ Displays
 
 What the person did
   it wait [--id <id>] [--follow] [--timeout <seconds>]
-  it actions [--id <id>]
+  it actions [--id <id>] [--all]
+                                 List the actions still waiting. An agent is listed those on
+                                 its own conversation's ${NOUN.many} and on ${NOUN.many} that no
+                                 conversation has. --all lists every one, and so does a command
+                                 that no conversation ran. --id lists those on one ${NOUN.one}.
   it action <action-id> [--save <file> [--number <n>]]
                                  Print one action in full, by the id in its message. --save
                                  writes a file it carried (a photo, a drawing, a document) to a
@@ -2951,8 +2956,48 @@ async function main(argv: string[]): Promise<void> {
       return wait(a, counted)
     case 'actions': {
       const slug = text(a, 'id')
-      const clicks = await call<Listed[]>('query', slug ? api.delivery.waiting : api.delivery.allWaiting, slug ? { slug } : {})
-      return out(clicks.map(printed))
+      if (slug && a.flags.all) throw new Problem(`--id lists what waits on one ${NOUN.one}, and --all what waits on every one: give one of them.`, 'invalid')
+      if (slug) return out((await call<Listed[]>('query', api.delivery.waiting, { slug })).map(printed))
+      // An agent is listed what waits on its own conversation's pages, under every id the
+      // conversation has had, and on pages no conversation has: what is done on another
+      // conversation's page is that conversation's to answer. The backend reads each
+      // conversation's by itself, so no number of others' stands in front of one of its own.
+      const asked = sessionAsked()
+      const ids = asked ? conversationIds(asked.session) : []
+      /** What waits for this conversation and for none, newest first, and whether It could list all of it. */
+      const own = async (): Promise<{ clicks: Listed[]; whole: boolean }> => {
+        try {
+          const each = await Promise.all(ids.map((s) => call<Listed[]>('query', api.delivery.allWaiting, { for: s })))
+          return { clicks: [...new Map(each.flat().map((c) => [c.id, c])).values()].sort((x, y) => y.at - x.at).slice(0, 50), whole: true }
+        } catch (err) {
+          // This machine may be a version ahead of the It it asks, whose list takes no
+          // conversation. Such an It fails the call and keeps why to itself, so it is asked what
+          // it takes. Only on its word that it does not take this is the newest of everyone's read
+          // here for this conversation's. Any other failure is said as it is.
+          if ((await backendTakes(TAKES.conversationsWaiting)) !== false) throw err
+          const ours = (c: Listed) => !c.session || ids.some((s) => s.harness === c.session!.harness && s.id === c.session!.id)
+          return { clicks: (await call<Listed[]>('query', api.delivery.allWaiting, {})).filter(ours), whole: false }
+        }
+      }
+      if (ids.length && !a.flags.all) {
+        // Whose pages these are was a choice among the apps that had marked this command: said apart from what is printed
+        const unsure = sessionNote(asked, 'These are the actions on the pages of', 'run it again with IT_HARNESS and IT_SESSION set to your own.')
+        if (unsure) say(JSON.stringify({ note: unsure }))
+        const { clicks, whole } = await own()
+        if (!whole)
+          say(
+            JSON.stringify({
+              note: `The It this machine asked is of an earlier version than this command, and lists only the newest 50 actions across every conversation. These are the ones among them on this conversation’s ${NOUN.many} and on ${NOUN.many} that no conversation has, so they may not be all of them until that It is updated: with \`it upgrade\` on the machine it runs on, or the Update button on its Machines page.`,
+            }),
+          )
+        return out(clicks.map(printed))
+      }
+      // A person at a terminal or a script, with no conversation, is listed everything, and so is
+      // whoever asks for it with --all. An agent is told which are another conversation's by the
+      // page each is on, and never by that conversation's own id.
+      const [clicks, mine] = await Promise.all([call<Listed[]>('query', api.delivery.allWaiting, {}), ids.length ? own().then((o) => o.clicks) : null])
+      const theirs = (c: Listed) => mine !== null && !mine.some((m) => m.id === c.id)
+      return out(clicks.map((c) => ({ ...printed(c), ...(theirs(c) ? { forAnotherConversation: true } : {}) })))
     }
     case 'action': {
       // One action in full, by the id an agent was given: for data too long to have been shown, or to check a repeat
