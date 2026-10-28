@@ -1,7 +1,7 @@
 // Publishing a page, in two steps so that a crash in the middle leaves the old version live:
 // `begin` records what is about to be uploaded and returns a grant to upload it; `finish`
 // checks the upload with the content service and then switches the page to the new version.
-import { AUDIENCE, isSafePath, isSlug, LIMITS, PUBLICATION, parseJson, QUOTA, RETENTION, TOUR, TOUR_NAMES } from '@it/protocol'
+import { AUDIENCE, isSafePath, isSlug, LIMITS, PUBLICATION, parseJson, QUOTA, RETENTION, STORE_KEY, TOUR, TOUR_NAMES } from '@it/protocol'
 import { ConvexError, v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -18,7 +18,7 @@ import { mint } from './lib/signing'
 import { bump, tally } from './lib/tally'
 import { adoptTourPage, isTourPage, startTourPage } from './lib/tourPages'
 import { expectedOwner, fileEntry, session } from './schema'
-import { pageRevision, startState } from './state'
+import { checkKept, pageRevision, startState } from './state'
 
 const beginArgs = {
   /** Only the built-in tour asks for this. A matching legacy page may be adopted once. */
@@ -177,6 +177,8 @@ export const _begin = internalMutation({
       if (new TextEncoder().encode(args.state).length > LIMITS.stateBytes) fail('limit', 'The starting state is too large.')
       const parsed = parseJson(args.state)
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) fail('invalid', 'State is a JSON object.')
+      // What it says the page keeps is held to what a page could keep, as a patch's is
+      if (Object.hasOwn(parsed, STORE_KEY)) checkKept((parsed as Record<string, unknown>)[STORE_KEY])
     }
     if (args.session && (args.session.harness.length > 40 || args.session.id.length > 200)) fail('invalid', 'That is not a session.')
     // Taking a page over means its clicks come to the conversation that said so, so there has to be one

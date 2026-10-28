@@ -234,6 +234,12 @@ function ask(message: PageToSite & { requestId: string }): Promise<Result> {
 const isObject = (x: unknown): x is State => typeof x === 'object' && x !== null && !Array.isArray(x)
 /** What a state says the page keeps for itself. */
 const keptIn = (s: State): State => (isObject(s[STORE_KEY]) ? (s[STORE_KEY] as State) : {})
+/**
+ * Puts a value under a name as the object's own, whatever the name. A plain assignment under
+ * `__proto__` would change what the object is made from instead, and a state written before It
+ * held names to its rules can hold one.
+ */
+const putOwn = (o: State, key: string, value: unknown) => Object.defineProperty(o, key, { value, writable: true, enumerable: true, configurable: true })
 /** A state with what the page keeps put in place of what it said: under its own key, where the page keeps anything. */
 function withKept(s: State, kept: State): State {
   const { [STORE_KEY]: _, ...rest } = s
@@ -253,7 +259,7 @@ function receive(message: SiteToPage): void {
     const kept = { ...keptIn(sent) }
     for (const [key, value] of message.kept) {
       if (value === null) delete kept[key]
-      else kept[key] = value
+      else putOwn(kept, key, value)
     }
     sent = withKept(message.state === undefined ? sent : isObject(message.state) ? message.state : {}, kept)
     revision = message.revision
@@ -306,7 +312,7 @@ function shown(): void {
   const kept = { ...keptIn(sent) }
   const over = (key: string, value: unknown) => {
     if (value === null) delete kept[key]
-    else kept[key] = value
+    else putOwn(kept, key, value)
   }
   for (const [key, at] of keptAt) over(key, at.value)
   if (sending) for (const [key, setting] of sending) over(key, setting.value)

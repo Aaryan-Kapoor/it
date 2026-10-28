@@ -67,17 +67,14 @@ function split(json: string | undefined): { agent: State; inside?: State } {
   return { agent, inside: isObject(inside) ? inside : {} }
 }
 
-/** The names that would reach into what every object has, which nothing is kept under. */
-const NOT_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
-
 /**
  * What a page keeps for itself, by name, as JSON text: from its records, or from inside the
  * agent's part where it is still there. What is inside the agent's part was kept under any name
- * an agent gave it, and a page could read it under that name, so every name is kept but those
- * that reach into what every object has.
+ * an agent gave it, and a page could read it under that name, so every name is kept as it is.
+ * The rules for a name hold for what is written from now on, and are kept where it is written.
  */
 async function keptBy(ctx: QueryCtx | MutationCtx, artifactId: Id<'artifacts'>, inside: State | undefined): Promise<[string, string][]> {
-  if (inside) return Object.entries(inside).flatMap(([k, value]) => (k && !NOT_NAMES.has(k) ? [[k, JSON.stringify(value)] as [string, string]] : []))
+  if (inside) return Object.entries(inside).map(([k, value]) => [k, JSON.stringify(value)])
   return (await keptNow(ctx, artifactId, false)).map((r) => [r.key, r.json ?? 'null'])
 }
 
@@ -349,9 +346,7 @@ export async function write(
   if (kept) {
     const changes = new Map<string, string | null>()
     const given = 'merge' in kept ? kept.merge : kept.replace
-    for (const key of Object.keys(given))
-      if (!isStoreKey(key))
-        fail('invalid', `"${STORE_KEY}" holds what the page keeps for itself, under names of 1 to 64 letters, digits, dashes or underscores.`)
+    namesTheKept(given)
     if ('replace' in kept) {
       for (const row of await keptNow(ctx, artifactId, false)) if (!Object.hasOwn(given, row.key)) changes.set(row.key, null)
       for (const [key, value] of Object.entries(given)) changes.set(key, value === null ? null : JSON.stringify(value))
@@ -427,6 +422,22 @@ export async function forgetKept(ctx: MutationCtx, artifactId: Id<'artifacts'>, 
   return rows.length === most
 }
 
+/** Refuses names of what a page keeps that a page could never store under. */
+function namesTheKept(given: State): void {
+  for (const key of Object.keys(given))
+    if (!isStoreKey(key)) fail('invalid', `"${STORE_KEY}" holds what the page keeps for itself, under names of 1 to 64 letters, digits, dashes or underscores.`)
+}
+/**
+ * Refuses what an agent says, in a patch or a starting state, that the page keeps for itself,
+ * unless it is what a page could keep: an object of values under names a page may store under,
+ * or null, which takes all of it away.
+ */
+export function checkKept(given: unknown): void {
+  if (given === null) return
+  if (!isObject(given)) fail('invalid', `"${STORE_KEY}" holds what the page keeps for itself: an object of its values by name, or null to take them all away.`)
+  namesTheKept(given)
+}
+
 /** An agent changes a page's state: a merge by default, a replacement when asked. Never republishes anything. */
 export const patch = mutation({
   args: { slug: v.string(), /** JSON text of an object. */ patch: v.string(), replace: v.optional(v.boolean()), baseRevision: v.optional(v.number()) },
@@ -442,8 +453,7 @@ export const patch = mutation({
     // and a replacement that does not name it leaves the page keeping nothing
     const { agent, inside } = split(patch)
     const named = Object.hasOwn(change, STORE_KEY)
-    if (named && change[STORE_KEY] !== null && !isObject(change[STORE_KEY]))
-      fail('invalid', `"${STORE_KEY}" holds what the page keeps for itself: an object of its values by name, or null to take them all away.`)
+    if (named) checkKept(change[STORE_KEY])
     const kept: KeptChange | undefined =
       replace || (named && change[STORE_KEY] === null) ? { replace: inside ?? {} } : named ? { merge: inside ?? {} } : undefined
     return write(ctx, user._id, a._id, (current) => (replace ? agent : deepMerge(current, agent)), { baseRevision, kept })

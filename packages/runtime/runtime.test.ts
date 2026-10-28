@@ -712,6 +712,23 @@ describe('what the page keeps for itself', () => {
     expect(p.It.state).toEqual({ _page: { a: { n: 1 }, b: 'was' } })
   })
 
+  test('a value kept under a name every object has, as a state written before can hold, is the page’s own value and changes nothing else', async () => {
+    const p = load()
+    p.answer()
+    p.fromSite({ type: 'it:state', state: JSON.parse('{"_page":{"__proto__":{"x":1},"prototype":2}}'), revision: 1 })
+    expect(p.It.store.get('__proto__')).toEqual({ x: 1 })
+    expect(p.It.store.get('prototype')).toBe(2)
+    p.fromSite({ type: 'it:changed', revision: 2, kept: [['__proto__', null]] })
+    expect(p.It.store.get('__proto__')).toBeUndefined()
+    expect(p.It.state).toEqual({ _page: { prototype: 2 } })
+    // Put back by a change, where the object has no such value of its own to change
+    p.fromSite({ type: 'it:changed', revision: 3, kept: [['__proto__', { x: 2 }]] })
+    const kept = p.It.state._page
+    expect(p.It.store.get('__proto__')).toEqual({ x: 2 })
+    expect(Object.getPrototypeOf(kept)).toBe(p.w.Object.prototype)
+    expect(Object.keys(kept).sort()).toEqual(['__proto__', 'prototype'])
+  })
+
   test('what changed is put together with the state that came before, and anything older is passed over', async () => {
     const p = load('<p data-it-bind="status"></p>')
     p.answer()

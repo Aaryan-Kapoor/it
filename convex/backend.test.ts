@@ -2095,6 +2095,45 @@ describe('what a page keeps for itself, and how its displays are told of it', ()
     expect(await stateOf(m.as, 'other')).toEqual({ a: 2, [STORE_KEY]: { kept: true } })
   })
 
+  test('a value an older state kept for its page under a name no page may store under now is kept all the same, and only what is written from now on is held to the rules', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const p = await publish(m, 'plan', { state: '{"status":"draft"}' })
+    // Written whole, as a replacing patch or a starting state wrote it before: names that every object has among them
+    const older = '{"status":"draft","_page":{"prototype":1,"constructor":{"c":2},"__proto__":{"x":3},"draft":"d"}}'
+    await t.run(async (ctx) => {
+      const [s] = await ctx.db.query('states').collect()
+      await ctx.db.patch(s!._id, { json: older, revision: 7 })
+      for (const r of await ctx.db.query('revisions').collect()) await ctx.db.replace(r._id, { artifactId: r.artifactId, revision: 7 })
+    })
+    /** The names of what the page keeps, as the agent reads it, and that each is a value of the page's own and not what its object is made from. */
+    const read = async () => {
+      const kept = JSON.parse((await m.as.query(api.state.get, { slug: 'plan' })).json)[STORE_KEY]
+      return {
+        names: Object.keys(kept).sort(),
+        own: Object.getPrototypeOf(kept) === Object.prototype && Object.getOwnPropertyDescriptor(kept, '__proto__')?.value?.x === 3,
+      }
+    }
+    expect(await read()).toEqual({ names: ['__proto__', 'constructor', 'draft', 'prototype'], own: true })
+    expect((await live(alice.browser, p.artifactId)).kept?.map(([key]) => key).sort()).toEqual(['__proto__', 'constructor', 'draft', 'prototype'])
+    // Moved out by the first write, and nothing of it lost
+    await keep(alice.browser, p.artifactId, { n: 2 })
+    expect(await read()).toEqual({ names: ['__proto__', 'constructor', 'draft', 'n', 'prototype'], own: true })
+    expect((await keptRecords(t)).map((r) => r.key).sort()).toEqual(['__proto__', 'constructor', 'draft', 'n', 'prototype'])
+    // What is written from now on, by the page, by the agent or as a page's starting state, is held to the names a page may store under
+    expect(await code(keep(alice.browser, p.artifactId, { prototype: 2 }))).toBe('invalid')
+    expect(await code(m.as.mutation(api.state.patch, { slug: 'plan', patch: '{"_page":{"constructor":1}}' }))).toBe('invalid')
+    for (const state of ['{"_page":{"prototype":1}}', '{"_page":{"a b":1}}', '{"_page":5}'])
+      expect(await code(m.as.action(api.publish.begin, { slug: 'next', title: 'Title of next', files: page, state }))).toBe('invalid')
+    const fine = await publish(m, 'next', { state: '{"status":"new","_page":{"a":1}}' })
+    expect(await stateOf(m.as, 'next')).toEqual({ status: 'new', [STORE_KEY]: { a: 1 } })
+    expect(fine.version).toBe(1)
+    // And the agent can still take them away
+    await m.as.mutation(api.state.patch, { slug: 'plan', patch: '{"status":"plain"}', replace: true })
+    expect(await stateOf(m.as, 'plan')).toEqual({ status: 'plain' })
+  })
+
   test('an agent can change what the page keeps value by value, take all of it away, or put all of it in place', async () => {
     const t = backend()
     const alice = await person(t, 'alice')
