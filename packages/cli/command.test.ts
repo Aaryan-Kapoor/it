@@ -4718,11 +4718,15 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
   /**
    * A stand-in for whatever opens an address in a browser on this system: it writes down what
    * it was given. With `each`, it writes down every address it is ever given, one to a line.
+   * A single address is written under another name and then given the one the test reads, since
+   * the shell makes a file before it writes to it: a test that finds the file finds all of it.
    */
   const opener = (m: { home: string; bin: string }, each = false) => {
     const opened = path.join(m.home, 'opened')
+    const write = each ? `printf '%s\\n' "$1" >> '${opened}'` : `printf '%s' "$1" > '${opened}.part' && mv '${opened}.part' '${opened}'`
     for (const name of ['xdg-open', 'open']) {
-      writeFileSync(path.join(m.bin, name), `#!/bin/sh\nprintf '${each ? '%s\\n' : '%s'}' "$1" ${each ? '>>' : '>'} '${opened}'\n`)
+      // The command is given no PATH but the test's own folder, and `mv` is the system's
+      writeFileSync(path.join(m.bin, name), `#!/bin/sh\nPATH=/bin:/usr/bin\n${write}\n`)
       chmodSync(path.join(m.bin, name), 0o755)
     }
     return opened

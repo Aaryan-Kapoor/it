@@ -1004,4 +1004,41 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
       }
     },
   )
+
+  test.skipIf(process.platform !== 'linux')(
+    'a command carrying the run’s name is ended though another process of the same person’s cannot be read, and the run stays uncertain',
+    async () => {
+      const candidate = process.pid
+      const list = fs.readdirSync
+      const read = fs.readFileSync
+      // The run's own command, in a group of its own, which nothing but the run's name says is the run's
+      const command = spawn('sleep', ['300'], { detached: true, stdio: 'ignore', env: { ...process.env, IT_RUN: 'a-run-with-company' } })
+      command.unref()
+      await until(() => identity([command.pid!]).has(command.pid!))
+      try {
+        fs.readdirSync = new Proxy(list, {
+          apply(target, self, args) {
+            return args[0] === '/proc' ? [String(candidate), String(command.pid)] : Reflect.apply(target, self, args)
+          },
+        })
+        // And a process of the same person's, begun since, whose environment cannot be read
+        fs.readFileSync = new Proxy(read, {
+          apply(target, self, args) {
+            if (args[0] === `/proc/${candidate}/stat`) return `${candidate} (tool) ${['S', ...Array(18).fill('0'), '1'].join(' ')}`
+            if (args[0] === `/proc/${candidate}/environ`) throw Object.assign(new Error('the environment cannot be read'), { code: 'EACCES' })
+            return Reflect.apply(target, self, args)
+          },
+        })
+        syncBuiltinESMExports()
+        const of = { harness: 'pi', session: 'with-company', run: 'a-run-with-company', told: SINCE_TOLD }
+        expect(await endTree(process.pid, 'tick 0', of)).toBe('unknown')
+        await until(() => !identity([command.pid!]).has(command.pid!))
+      } finally {
+        fs.readdirSync = list
+        fs.readFileSync = read
+        syncBuiltinESMExports()
+        if (identity([command.pid!]).has(command.pid!)) process.kill(command.pid!, 'SIGKILL')
+      }
+    },
+  )
 })

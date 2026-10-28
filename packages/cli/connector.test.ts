@@ -527,6 +527,54 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     session: { harness: 'codex', id: `thread-${n}` },
   })
   const offered = (...clicks: ReturnType<typeof click>[]) => stand.watching.get('delivery:inboxPage')!(clicks)
+  // The connector tells that a run it reopened has ended by looking at every process on the
+  // machine, and a process of the same person's that began after the run and cannot be read
+  // may be a command the run started and let go of. While one is there the run is not known to
+  // be over, so the connector keeps it noted and does not tell It that it ended. On a machine
+  // that runs other things at the same time such processes come and go by themselves: a crash
+  // reporter, an `ssh`, another test's program as it starts. So the processes these tests'
+  // connector finds on Linux are this test process and the ones it started, however far down,
+  // and none of whatever else the machine runs. A test that makes the look fail still can.
+  const readdir = fs.readdirSync
+  /** This process and every process it started, by the names /proc gives them. */
+  const ours = (): Set<string> => {
+    const parents = new Map<string, string>()
+    for (const name of readdir('/proc')) {
+      if (!/^\d+$/.test(name)) continue
+      try {
+        const stat = readFileSync(`/proc/${name}/stat`, 'utf8')
+        // After the name, which stands in brackets and may hold anything, the second word is the parent
+        parents.set(name, stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]!)
+      } catch {}
+    }
+    const tree = new Set([String(process.pid)])
+    for (let grew = true; grew; ) {
+      grew = false
+      for (const [pid, parent] of parents)
+        if (!tree.has(pid) && tree.has(parent)) {
+          tree.add(pid)
+          grew = true
+        }
+    }
+    return tree
+  }
+  beforeEach(() => {
+    if (process.platform !== 'linux') return
+    fs.readdirSync = ((where: unknown, ...args: unknown[]) => {
+      const listed = (readdir as (...a: unknown[]) => (string | fs.Dirent)[])(where, ...args)
+      if (where !== '/proc') return listed
+      const tree = ours()
+      return listed.filter((entry) => {
+        const name = typeof entry === 'string' ? entry : entry.name
+        return !/^\d+$/.test(name) || tree.has(name)
+      })
+    }) as typeof fs.readdirSync
+    syncBuiltinESMExports()
+  })
+  afterEach(() => {
+    fs.readdirSync = readdir
+    syncBuiltinESMExports()
+  })
   test('Unknown Codex liveness never queues or reopens a conversation, and a waiter can still take its click.', async () => {
     standIn()
     await start()
@@ -1129,7 +1177,8 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       stand.failedWrites.add('stopped.json')
       if (failRun) stand.failedWrites.add('runs.json')
       stand.watching.get('machines:me')!({ ...on, runs: [{ harness: 'codex', sessionId: 'thread-1', stop: true, run }] })
-      await until(async () => (await local<{ held: unknown[] }>('/runs'))!.held.length === 1)
+      // An answer that did not come in time, on a busy machine, is asked for again
+      await until(async () => (await local<{ held: unknown[] }>('/runs'))?.held.length === 1)
       expect(stand.calls.filter((c) => c.name === 'machines:runEnded')).toEqual([])
       expect(readJson<Record<string, unknown>>(path.join(home, 'runs.json'))?.['codex:thread-1']).toMatchObject(failRun ? { unsure: true } : { stopped: true })
       const previousHome = home
