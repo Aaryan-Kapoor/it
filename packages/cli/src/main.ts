@@ -1094,7 +1094,7 @@ async function onPathLater(bin: string): Promise<boolean> {
  */
 async function unlisted(bin: string, say: (line: string) => void): Promise<{ changed: string[]; failed: { file: string; why: string }[] }> {
   const files = await profileLines(bin, false, () =>
-    say('Zsh did not report its startup folder within five seconds. Check the .zshrc it reads and remove the It PATH line there if it remains.'),
+    say('Zsh did not say which folder it reads .zshrc from. Check the .zshrc it reads and remove the It PATH line there if it remains.'),
   )
   const changed: string[] = []
   const failed: { file: string; why: string }[] = []
@@ -2451,7 +2451,8 @@ async function main(argv: string[]): Promise<void> {
   }
   if (cmd === 'shell-profile') {
     const dir = await zshDirectory()
-    if (!dir) throw new Problem('Zsh did not report an absolute startup folder within five seconds. Its PATH file was left alone.')
+    if (!dir)
+      throw new Problem('Zsh did not say which folder it reads .zshrc from, within five seconds and without running a .zshrc. Its PATH file was left alone.')
     process.stdout.write(`${dir}\n`)
     return
   }
