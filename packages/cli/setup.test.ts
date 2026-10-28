@@ -3073,6 +3073,8 @@ describe('what a person is told about an app', () => {
     expect(afterHermes('0.21.5').split('\n')).toEqual([
       'If Hermes is open, restart it. What you do on a page then arrives by itself in the plain `hermes` terminal.',
       'In this Hermes (0.21.5) that is the only place it does: in its TUI, its desktop app and its messaging gateway it waits on the page until the agent runs `it wait`.',
+      // The terminal tells the add-on nothing when a saved conversation is resumed in it
+      'A saved conversation you resume in the terminal starts listening once you send a message in it.',
     ])
     expect(afterHermes('0.21.5')).not.toContain('allow_gateway_injection')
     expect(afterHermes('0.20.1')).not.toContain('allow_gateway_injection')
@@ -3084,9 +3086,20 @@ describe('what a person is told about an app', () => {
       // The command stands on a line of its own, so that no terminal breaks it in the middle of a word
       expect(AFTER.hermes!.split('\n')).toContain('    hermes config set plugins.entries.it-bridge.allow_gateway_injection true')
       expect(AFTER.hermes).toContain('If this Hermes (0.22.0) does not take that setting, what you do waits on the page until the agent runs `it wait`')
+      // The TUI and the desktop app say when a conversation is open, and the terminal does not
+      expect(AFTER.hermes).toContain('from the moment it is open')
+      expect(AFTER.hermes!.split('\n')).toContain('A saved conversation you resume in the terminal starts listening once you send a message in it.')
     } finally {
       VERSIONS.hermes = 'Hermes Agent v0.21.5'
     }
+  })
+
+  test('after connecting OpenCode says that a saved conversation listens once a message is sent in it', () => {
+    // No event an OpenCode plugin is given says which saved conversation is open
+    expect(AFTER.opencode!.split('\n')).toEqual([
+      'If OpenCode is open, restart it: it reads its plugins when it starts.',
+      'A saved conversation you open in OpenCode starts listening once you send a message in it.',
+    ])
   })
 })
 
