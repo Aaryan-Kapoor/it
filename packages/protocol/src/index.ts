@@ -241,6 +241,45 @@ export const WAKE_BACK_MS = 24 * 60 * 60_000
 /** How many clicks one reopening carries at most: everything waiting for the conversation goes in one message, up to this many. */
 export const WAKE_MOST = 8
 
+/**
+ * The agent apps that It can start an agent with in a folder of the person's, which is an
+ * experiment that a machine offers only once someone at it has run `it agents on`. These are
+ * the apps with an interface of their own for keeping one conversation open from turn to turn:
+ * Claude Code's print mode, written to and read as a stream of JSON, and Codex's app server.
+ * Each is offered only where the person has connected it, on a machine of a system where It
+ * reopens conversations (`wakesOn`), since an agent that nobody watches has to be one that It
+ * can find again and end.
+ */
+export const AGENT_APPS: readonly Harness[] = ['claude-code', 'codex']
+/** What It holds project agents to. */
+export const AGENTS = {
+  /** How many may run on one machine at once, where the machine does not say, and the most it may say. */
+  most: 3,
+  mostAllowed: 8,
+  /** How many a person may have at all, running or stopped. */
+  perPerson: 30,
+  /** How many folders one machine may offer to start them in. */
+  projects: 50,
+  /** A message the person sends one, in characters, and how many may wait for it. */
+  messageText: 16_000,
+  waiting: 20,
+  /** What one last said, as it is kept to be shown, in characters. */
+  saidText: 4000,
+  /** Why one is stopped or could not run, in characters. */
+  whyText: 300,
+  /** How long an agent's program is kept open with nothing to do. Past that it is let go, and the same conversation is resumed the moment there is something for it. */
+  idleMs: 30 * 60_000,
+} as const
+/**
+ * How a project agent stands. `starting` while its program is started or resumed, `ready` while
+ * it is open and waiting, `working` while a turn runs, `resting` while it is on and its program
+ * has been let go (it is resumed the moment there is something for it), `stopping` and
+ * `stopped` once the person has stopped it, and `failed` where it could not start or ended by
+ * itself, with why.
+ */
+export const AGENT_STATES = ['starting', 'ready', 'working', 'resting', 'stopping', 'stopped', 'failed'] as const
+export type AgentState = (typeof AGENT_STATES)[number]
+
 /** The conversation that made a page and should hear about clicks on it. */
 export interface AgentSession {
   harness: Harness | 'unknown'

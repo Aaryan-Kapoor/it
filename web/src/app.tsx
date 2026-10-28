@@ -4,6 +4,7 @@ import { NOUN } from '@it/protocol'
 import { useConvex, useConvexAuth, useMutation, useQuery } from 'convex/react'
 import { Component, type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { version } from '../package.json'
+import { Agents, agentsShown, useAgents } from './agents'
 import { askTwice } from './backend'
 import { IconGuide, IconMore, Mark } from './brand'
 import { Copyable } from './dialog'
@@ -724,6 +725,8 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
         <PageView slug={slug} user={user} owner={owner} />
       ) : owner && path === '/machines' ? (
         <Machines />
+      ) : owner && path === '/agents' ? (
+        <Agents />
       ) : owner && path === '/displays' ? (
         <Displays thisDisplay={display?.id} />
       ) : path === '/settings' ? (
@@ -821,6 +824,8 @@ function TopBar({
   const convex = useConvex()
   const path = usePath()
   const [menu, setMenu] = useState(false)
+  // Project agents are an experiment that a machine offers only once someone at it turns them on: until then they have no tab
+  const agents = useAgents(owner)
   // Whether the connection to It is up, which is what the dot says
   const live = useSyncExternalStore(
     useCallback((fn: () => void) => convex.subscribeToConnectionState(fn), [convex]),
@@ -862,6 +867,7 @@ function TopBar({
         <nav aria-label="Sections">
           {tab('/', NOUN.Many)}
           {owner && tab('/machines', 'Machines')}
+          {owner && agentsShown(agents) && tab('/agents', 'Agents')}
           {owner && tab('/displays', 'Displays')}
         </nav>
       </div>

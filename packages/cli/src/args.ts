@@ -44,6 +44,7 @@ export const VALUED = new Set([
   'param',
   'save',
   'number',
+  'most',
 ])
 export interface Args {
   _: string[]
@@ -87,6 +88,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   upgrade: ['check'],
   runs: [],
   'runs clear': ['yes'],
+  agents: ['most'],
   updates: [],
   version: [],
   '--version': [],

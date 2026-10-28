@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { ADDONS } from './src/addons.generated'
 import { conversationFolder, conversationProfile, noteConversation } from './src/publish'
 import * as wake from './src/wake'
+import { CODEX } from './stand-in-agents'
 
 const stand = vi.hoisted(() => ({
   /** What the connector watches the backend for, by the name of the function, and how to tell it something new. */
@@ -4456,4 +4457,87 @@ describe('the way a click goes when no add-on is there to take it', () => {
   test('and otherwise it goes no way: it waits, in view', () => {
     expect(way({ inT3: false, codexOpen: false, reopens: false }).way).toBeUndefined()
   })
+})
+
+describe.skipIf(process.platform === 'win32')('a project agent’s clicks', () => {
+  const click = {
+    id: 'click-1',
+    artifact: 'garden',
+    title: 'Garden',
+    name: 'water',
+    payload: '{}',
+    at: Date.now() - 1000,
+    attended: true,
+    session: { harness: 'codex', id: 'thread-1' },
+  }
+  const called = (name: string) => stand.calls.filter((c) => c.name === name).flatMap((c) => c.args.ids ?? [c.args.id])
+
+  test('go to its keeper alone, which resumes the agent and gives them to it, and never to Codex’s queue or to an add-on', async () => {
+    let folder = ''
+    await start('socket', {}, (home) => {
+      folder = path.join(home, 'garden')
+      mkdirSync(folder)
+      writeFileSync(path.join(home, 'agents.json'), JSON.stringify({ on: true, most: 2, projects: [{ id: 'p-one', path: folder }] }))
+      // Codex as a stand-in that speaks its app server's JSON lines, first on the PATH
+      const bin = path.join(home, 'bin')
+      mkdirSync(bin)
+      writeFileSync(path.join(bin, 'codex'), `#!${process.execPath}\n${CODEX}`, { mode: 0o755 })
+      process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+      process.env.SEEN = path.join(home, 'seen.json')
+    })
+    await until(() => stand.watching.has('agents:mine'))
+    // Offered to It, by the folder's word, as soon as the connector starts
+    expect(stand.calls.find((c) => c.name === 'agents:offer')?.args).toEqual({
+      offer: { most: 2, projects: [{ id: 'p-one', name: 'garden', where: expect.any(String) }] },
+    })
+    // An agent that rests, with a conversation of its own: nothing of it is running yet
+    stand.watching.get('agents:mine')!({
+      agents: [{ id: 'agent-1', project: 'p-one', app: 'codex', want: 'run', round: 1, state: 'resting', session: 'thread-1', messages: [] }],
+    })
+    // Its keeper asks for its clicks every second, and so it is listening, though it is Codex's
+    await until(async () => ((await local<{ sessions: string[] }>('/health'))?.sessions ?? []).includes('codex:thread-1'))
+    stand.watching.get('delivery:inboxPage')!([click])
+    await until(() => called('delivery:handedOff').includes('click-1'))
+    const seen = JSON.parse(readFileSync(process.env.SEEN!, 'utf8')) as { asked: { method: string; params: any }[] }
+    expect(seen.asked.map((a) => a.method)).toEqual(['initialize', 'initialized', 'thread/resume', 'turn/start'])
+    expect(seen.asked[3]!.params.input[0].text).toContain('[action click-1]')
+    // Some Codex has the thread open (its app server does), and still nothing went into Codex's queue
+    expect(stand.codex).toEqual([])
+    // How it went, said to It: resumed, at work, and done, with what it said
+    await until(() => stand.calls.some((c) => c.name === 'agents:report' && c.args.said?.startsWith('did:')))
+    // (At work is not said where the turn was over before it could be)
+    const states = stand.calls.filter((c) => c.name === 'agents:report').map((c) => c.args.state)
+    expect(states.filter((s) => s !== 'working')).toEqual(['starting', 'ready', 'ready'])
+    expect(states.at(-1)).toBe('ready')
+  }, 20_000)
+
+  test('are given to no add-on that asks in the agent’s conversation, while its keeper holds them', async () => {
+    let folder = ''
+    await start('socket', {}, (home) => {
+      folder = path.join(home, 'garden')
+      mkdirSync(folder)
+      writeFileSync(path.join(home, 'agents.json'), JSON.stringify({ on: true, most: 2, projects: [{ id: 'p-one', path: folder }] }))
+      // A Codex that cannot be started, so that the click stays with the keeper
+      process.env.PATH = path.join(home, 'nothing-here')
+    })
+    await until(() => stand.watching.has('agents:mine'))
+    stand.watching.get('agents:mine')!({
+      agents: [{ id: 'agent-1', project: 'p-one', app: 'codex', want: 'run', round: 1, state: 'resting', session: 'thread-1', messages: [] }],
+    })
+    await until(async () => ((await local<{ sessions: string[] }>('/health'))?.sessions ?? []).includes('codex:thread-1'))
+    stand.watching.get('delivery:inboxPage')!([click])
+    await until(() => called('delivery:claim').includes('click-1'))
+    // Asked as It's add-on asks, from inside the agent's own program: nothing
+    const asked = await local<{ clicks: unknown[] }>('/clicks?harness=codex&session=thread-1', {
+      method: 'POST',
+      body: { harness: 'codex', session: 'thread-1', busy: true },
+    })
+    expect(asked?.clicks).toEqual([])
+    // And the agent could not be resumed, which It is told, with why
+    await until(() => stand.calls.some((c) => c.name === 'agents:report' && c.args.state === 'failed'))
+    expect(stand.calls.find((c) => c.name === 'agents:report' && c.args.state === 'failed')?.args.why).toMatch(
+      /Codex could not resume its conversation: Codex was not found/,
+    )
+    expect(stand.codex).toEqual([])
+  }, 20_000)
 })

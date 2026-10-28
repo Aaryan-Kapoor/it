@@ -52,6 +52,8 @@ const RULES = {
   remove: { perMinute: 120, burst: 60 },
   // A page changing hands because a conversation showed it: as often as pages are shown
   take: { perMinute: 120, burst: 60 },
+  /** Starting a project agent, starting one again, and sending one a message, from the site. */
+  agents: { perMinute: 30, burst: 15 },
 } as const
 export type Rule = keyof typeof RULES
 

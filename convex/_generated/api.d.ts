@@ -10,6 +10,7 @@
 
 import type * as account from "../account.js";
 import type * as actions from "../actions.js";
+import type * as agents from "../agents.js";
 import type * as artifacts from "../artifacts.js";
 import type * as bridge from "../bridge.js";
 import type * as config from "../config.js";
@@ -53,6 +54,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   account: typeof account;
   actions: typeof actions;
+  agents: typeof agents;
   artifacts: typeof artifacts;
   bridge: typeof bridge;
   config: typeof config;

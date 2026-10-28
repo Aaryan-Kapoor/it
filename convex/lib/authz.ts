@@ -121,6 +121,11 @@ export async function ownSession(ctx: Ctx, userId: Id<'users'>, id: Id<'sessions
   others(userId, 'session', s)
   return s && s.userId === userId ? s : fail('not_found', 'No such paired browser.')
 }
+export async function ownAgent(ctx: Ctx, userId: Id<'users'>, id: Id<'agents'>): Promise<Doc<'agents'>> {
+  const a = await ctx.db.get(id)
+  others(userId, 'agent', a)
+  return a && a.userId === userId ? a : fail('not_found', 'No such agent.')
+}
 export async function ownMachine(ctx: Ctx, userId: Id<'users'>, id: Id<'machines'>): Promise<Doc<'machines'>> {
   const m = await ctx.db.get(id)
   others(userId, 'machine', m)
