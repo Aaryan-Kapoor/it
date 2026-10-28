@@ -436,11 +436,13 @@ function anothers(slug: string, theirs: Made | null): Problem {
  * exists by now whatever becomes of showing it, so it is always said, with what went wrong
  * beside it: an agent told only "no such display" would publish the same page a second time.
  */
-async function published(done: { slug: string; version: number; url: string; note?: string }, a: Args, fresh = false): Promise<void> {
+async function published(done: { slug: string; version: number; url: string; note?: string; urlNote?: string }, a: Args, fresh = false): Promise<void> {
   const result = {
     id: done.slug,
     version: done.version,
     url: done.url,
+    // Why the url is not at the place the owner chose for links, where It cannot be reached there just now
+    ...(done.urlNote ? { urlNote: done.urlNote } : {}),
     ...(done.note ? { note: done.note } : {}),
     // A page that was just made is one the person has no way to yet, but for a display that
     // happens to be open: the agent is told, each time, to put its address in the chat. Said

@@ -1244,6 +1244,54 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
     }
   })
 
+  test.each([
+    ['the machine It runs on', true],
+    ['a machine that joined', false],
+  ])(
+    'on %s, the url printed is at the place the owner chose for links, and where It cannot be reached there it is this machine’s own, with a note that says why',
+    async (_, here) => {
+      const m = machine(true, here)
+      const chosen = 'http://studio.tail1234.ts.net:21000/p/plan'
+      let finished: Record<string, unknown> = {}
+      const b = await backend(m, ({ path: fn, args }) => {
+        if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+        // The backend names the site as the machine It runs on reaches it
+        if (fn === 'publish:finish') return { slug: 'plan', version: 1, url: `${SITE}/p/plan`, ...finished }
+        return null
+      })
+      /** Where this machine reaches the site: by its own name on the machine It runs on, and at the door it was told of on one that joined. */
+      const own = here ? `${SITE}/p/plan` : `${b.url}/p/plan`
+      const made = async () => printed(await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], b.env))
+      try {
+        // Nothing chosen: this machine's own, as ever, and nothing said of it
+        expect(await made()).toMatchObject({ url: own })
+        expect(await made()).not.toHaveProperty('urlNote')
+        // Chosen, and It can be reached there: the link is there on either machine, and is not taken for the site's on this one
+        finished = { link: chosen }
+        const linked = await made()
+        expect([linked.url, 'urlNote' in linked]).toEqual([chosen, false])
+        // Chosen, and It cannot be reached there just now: this machine's own, and why
+        finished = { unlinked: { to: 'tailnet', why: 'off' } }
+        const fell = await made()
+        expect(fell.url).toBe(own)
+        expect(fell.urlNote).toBe(
+          'Links are set to be at It’s name on the tailnet, and It cannot be reached there now: it answers only the machine it runs on. So this url is the one this machine reaches It by. Tell the user that when you give it.',
+        )
+        finished = { unlinked: { to: 'network', why: 'kept_to_tailnet' } }
+        expect((await made()).urlNote).toContain(
+          'Links are set to be at It’s address on the network, and It cannot be reached there now: it is kept to the tailnet.',
+        )
+        // What is no page's link on the site is not given as one
+        for (const link of ['javascript:alert(1)', 'http://studio.tail1234.ts.net:21000/elsewhere', 'https://example.com/p/plan']) {
+          finished = { link }
+          expect([link, (await made()).url]).toEqual([link, own])
+        }
+      } finally {
+        await b.close()
+      }
+    },
+  )
+
   test('an explicit publishing label is distinguished from the inferred app name', async () => {
     const m = machine()
     const b = await backend(m, ({ path: fn }) =>

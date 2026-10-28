@@ -319,6 +319,27 @@ function sendsBack(files: Gathered[]): boolean {
   return files.some((f) => /\.(html?|m?js)$/i.test(f.entry.path) && f.data.length <= 2_000_000 && /\bIt\.action\s*\(/.test(f.data.toString('utf8')))
 }
 
+/** The place the owner chose for links, as the agent is told of it. */
+const LINK_PLACE: Record<string, string> = { tailnet: 'It’s name on the tailnet', network: 'It’s address on the network' }
+/** Why It cannot be reached at that place just now, by the backend's word for it. */
+const UNLINKED_WHY: Record<string, string> = {
+  off: 'it answers only the machine it runs on',
+  no_tailnet: 'that machine is on no tailnet',
+  no_name: 'Tailscale does not say the machine’s name there',
+  kept_to_tailnet: 'it is kept to the tailnet',
+  no_address: 'that machine has no address on a network just now',
+}
+/**
+ * What the agent is told where the owner chose another place for the links agents give and It
+ * cannot be reached there, so that the person, who may open It only that way, is told why the
+ * link is not there, and is not left with a link they cannot open and no word of it.
+ */
+export function unlinkedNote(unlinked: { to: string; why: string }): string {
+  const place = LINK_PLACE[unlinked.to] ?? 'another address'
+  const why = UNLINKED_WHY[unlinked.why]
+  return `Links are set to be at ${place}, and It cannot be reached there now${why ? `: ${why}` : ''}. So this url is the one this machine reaches It by. Tell the user that when you give it.`
+}
+
 export async function publish(input: {
   slug?: string
   title: string
@@ -456,7 +477,15 @@ export async function publish(input: {
         clear()
         throw err
       }
-      type Finished = { slug: string; version: number; url: string; elsewhere?: boolean; took?: boolean }
+      type Finished = {
+        slug: string
+        version: number
+        url: string
+        elsewhere?: boolean
+        took?: boolean
+        link?: string
+        unlinked?: { to: string; why: string }
+      }
       const finish = async (): Promise<Finished> => {
         for (let attempt = 0; ; attempt++) {
           try {
@@ -517,8 +546,17 @@ export async function publish(input: {
           ? `This ${NOUN.one} was another conversation’s, and is this one’s now: what is done on it comes here.`
           : undefined
       const said = [stays, note].filter(Boolean).join(' ')
-      // The page's address is the site's as this machine reaches it
-      return { slug: done.slug, version: done.version, url: throughDoor(done.url), ...(said ? { note: said } : {}) }
+      // The page's address is where the owner chose for links, where It can be reached there, and
+      // is otherwise the site's as this machine reaches it. A link at another place says so beside it
+      const link = typeof done.link === 'string' && /^http:\/\/[^/?#]+\/p\//.test(done.link) ? done.link : undefined
+      const urlNote = done.unlinked ? unlinkedNote(done.unlinked) : undefined
+      return {
+        slug: done.slug,
+        version: done.version,
+        url: link ?? throughDoor(done.url),
+        ...(said ? { note: said } : {}),
+        ...(urlNote ? { urlNote } : {}),
+      }
     },
     0,
   )

@@ -214,6 +214,20 @@ describe('what the service tells the backend of how it stands', () => {
     expect(standsAs({ network: false, tailnet: true }, false, 21000).tailnet).toBe(false)
   })
 
+  test('it says the machine’s name on the tailnet only where the door answers to it, and asks Tailscale for it nowhere else', () => {
+    const named = vi.fn(() => 'studio.tail1234.ts.net')
+    // Shut, the door answers to no name of the tailnet's, and Tailscale is not asked
+    expect(standsAs({ network: false, tailnet: true }, true, 21000, named)).not.toHaveProperty('tailnetName')
+    expect(named).not.toHaveBeenCalled()
+    // Kept to the tailnet, it answers to the name
+    expect(standsAs({ network: true, tailnet: true }, true, 21000, named).tailnetName).toBe('studio.tail1234.ts.net')
+    // Open to every network, it answers to the name where this machine is on a tailnet, and has none to answer to where it is on none
+    const open = standsAs({ network: true }, true, 21000, named)
+    expect('tailnetName' in open).toBe(open.canTailnet)
+    // Where Tailscale does not say the name, nothing is said of one
+    expect(standsAs({ network: true, tailnet: true }, true, 21000, () => undefined)).not.toHaveProperty('tailnetName')
+  })
+
   test.skipIf(process.platform === 'win32')(
     'whether It starts by itself and whether usage counts are sent are each said as they are at that moment, and differently as soon as they are different',
     () => {

@@ -131,6 +131,7 @@ describe('the agent skill', () => {
     const commands = main + source('../../packages/cli/src/wait.ts')
     for (const field of [
       'url',
+      'urlNote',
       'shownOn',
       'notShown',
       'notShownOn',
