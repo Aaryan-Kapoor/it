@@ -1467,9 +1467,10 @@ try {
         ([, name, line]) => ({ name, line }),
       )
     const queue = 'HKCU\\Software\\It\\PendingRemoval'
+    // The queue keeps the path as the system names it, with no short 8.3 name in it
     const mine = leftToRun().filter(({ name }) => {
       const value = spawnSync('reg.exe', ['query', queue, '/v', name], { encoding: 'utf8' }).stdout
-      return aside.length === 1 && value.includes(path.join(os.tmpdir(), aside[0]))
+      return aside.length === 1 && value.includes(path.join(realpathSync.native(os.tmpdir()), aside[0]))
     })
     check(
       'the program it moved out of the folder to do that is where it said, and Windows is left one line that deletes it the next time the person signs in',
