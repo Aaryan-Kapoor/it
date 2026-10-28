@@ -62,7 +62,7 @@ import {
   carryOn,
   claudeModeOf,
   claudeWroteAt,
-  codexHeld,
+  codexHolder,
   endTree,
   fromAnotherStart,
   identity,
@@ -564,7 +564,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // with no hook to say so. No Codex holds its conversation from then on, so no turn is
     // running there. Taken for running, each click of the next half hour was kept a minute
     // for a hook that could not come, while the page said the agent was busy.
-    if (key.startsWith('codex:') && codexOpen(key) === false) {
+    if (key.startsWith('codex:') && codexHold(key) === false) {
       s.busy = false
       return false
     }
@@ -1678,6 +1678,10 @@ async function connecting(say: (line: string) => void): Promise<void> {
       reopenedNow.delete(key)
       runNames.delete(key)
       stoppedRun.delete(key)
+      // Who holds the conversation is looked at again now that this run has gone. What was found
+      // while it held the conversation is over: taken for some other Codex that has it open, it
+      // would send what was done in the run's last seconds into Codex's queue, where nothing reads it.
+      if (now.harness === 'codex') codexHold(key, true)
       // Its turn was cut off, and the word of that could not be written down (a disk that is
       // full): the note of the run itself is kept on, which says as much to whichever
       // connector starts next, where letting go of it would leave no sign of the turn at all
@@ -1740,15 +1744,33 @@ async function connecting(say: (line: string) => void): Promise<void> {
   }
   /** The id Codex knows a conversation by now: the one it carries on under, if it was cleared. */
   const threadOf = (key: string) => key.slice(key.indexOf(':') + 1)
-  const codexOpen = (key: string) => {
+  /** Who has a Codex conversation open, in the profile it was held in: see `codexHolder`. */
+  const codexHold = (key: string, fresh = false) => {
     const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: threadOf(key) }), harnessEnv())
-    return typeof env === 'string' ? null : codexHeld(threadOf(key), env.CODEX_HOME)
+    return typeof env === 'string' ? null : codexHolder(threadOf(key), env.CODEX_HOME, Date.now(), fresh)
+  }
+  /**
+   * Whether some Codex that takes a message from Codex's queue has a conversation open: one that
+   * It did not start. A run that It started to carry the conversation on runs one turn and ends,
+   * and what is put in the queue while it holds the conversation is cut off unanswered or waits
+   * for whatever opens the conversation next, so the conversation is not open for the queue then.
+   */
+  const codexOpen = (key: string) => {
+    const holder = codexHold(key)
+    return holder === null ? null : holder === 'elsewhere'
   }
   const codexPut = (thread: string, text: string) => {
     const env = profileEnvironment('codex', conversationProfile({ harness: 'codex', id: thread }), harnessEnv())
     return typeof env === 'string' ? Promise.resolve(env) : codexQueue(thread, text, env)
   }
-  async function queueNow(click: Offered, reopening: boolean, offered: Offered[], t3?: { server: T3; thread: string }): Promise<void> {
+  async function queueNow(
+    click: Offered,
+    reopening: boolean,
+    offered: Offered[],
+    t3?: { server: T3; thread: string },
+    /** Said, for whoever put it in line, once the click was handed over. */
+    done: { handed: boolean } = { handed: false },
+  ): Promise<void> {
     let keeping: ReturnType<typeof setInterval> | undefined
     const receiptSlots: string[] = []
     /** This hand-over is finished: what its renewals are answered from now on is about nothing that is running. */
@@ -2065,6 +2087,7 @@ async function connecting(say: (line: string) => void): Promise<void> {
       // waiter has it and says so to It itself, so there is nothing to try again or set aside
       if (!handed && sent.toWaiter) return
       if (handed) {
+        done.handed = true
         // The app has already taken these clicks. A failed receipt write must not turn
         // that handoff into a refusal or release the rest of its batch for redelivery.
         if (!recovery.stopped) {
@@ -2202,10 +2225,16 @@ async function connecting(say: (line: string) => void): Promise<void> {
     // offers with it, especially the attended click that permits this turn. Claims still
     // check ownership and whether each click is pending when the command gets its place.
     const offered = inbox.filter((c) => c.session?.harness === click.session!.harness && c.session?.id === click.session!.id)
-    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening, offered, t3)))
+    const done = { handed: false }
+    const next = Promise.all(before).then(() => (reopening ? withRunSlot : withSlot)(() => queueNow(click, reopening, offered, t3, done)))
     queues.set(key, next)
     void next.then(() => {
       if (queues.get(key) === next) queues.delete(key)
+      // What waited for a hand-over that handed its click over, as what was done while a reopened
+      // run of the conversation was finishing does, is looked at again at once, and not at the
+      // next second. One that handed nothing over leaves its click as it was, and what kept it
+      // back is asked about again at the next second: asked again at once, it is asked without pause.
+      if (done.handed) soon(0)
     })
     return true
   }
@@ -2222,6 +2251,8 @@ async function connecting(say: (line: string) => void): Promise<void> {
     soonerAt = at
     sooner = setTimeout(() => {
       sooner = undefined
+      // A pass that is under way may have looked before what this is for: another follows it
+      if (routing) return soon(50)
       void route()
     }, ms)
     sooner.unref?.()
@@ -2441,8 +2472,14 @@ async function connecting(say: (line: string) => void): Promise<void> {
           : wayOf({
               inT3: heldInT3,
               codexOpen: () => codex && connected('codex') && !reopenedNow.has(key) && codexOpen(key) === true,
+              // Only once nothing holds a Codex conversation: Codex lets one program at a time
+              // write it, and refuses another. A run of It's own that is ending holds it until it
+              // has gone, which is a moment, and the click is reopened for then.
               reopens: () =>
-                wakes(session.harness, click.at) && connected(session.harness) && (!codex || codexOpen(key) === false) && !runtimes.blocksWake(session.harness),
+                wakes(session.harness, click.at) &&
+                connected(session.harness) &&
+                (!codex || (!reopenedNow.has(key) && codexHold(key) === false)) &&
+                !runtimes.blocksWake(session.harness),
             })
         if (forAddOn) {
           // Route 1: the add-on will ask for it, or the running turn's next hook will

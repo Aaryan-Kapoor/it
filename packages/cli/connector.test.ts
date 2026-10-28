@@ -32,6 +32,16 @@ const stand = vi.hoisted(() => ({
   codex: [] as { args: string[]; env?: NodeJS.ProcessEnv; end: (err?: unknown) => void }[],
   /** The Codex conversations that no Codex has open. Every other one is open somewhere, as it is in a window. */
   closed: new Set<string>(),
+  /**
+   * The folder where a test's own stand-in for Codex's command says, with a file named
+   * `holding-<conversation>`, that it holds a conversation, as a run that It started does while
+   * it runs. Such a conversation is held by It's own run, whatever else the test says of it.
+   */
+  holding: '',
+  /** Whether a look at who holds a conversation is good for a moment, as it is in `codexHolder` itself, unless it is asked for afresh. */
+  lagging: false,
+  /** The last look at each conversation, for `lagging`. */
+  looked: new Map<string, { at: number; holder: 'elsewhere' | 'it' | false | null }>(),
   failedWrites: new Set<string>(),
   savedRuns: [] as Record<string, unknown>[],
   unknown: new Set<string>(),
@@ -84,11 +94,24 @@ vi.mock('./src/t3', () => ({
     return null
   },
 }))
-// Whether some Codex has a conversation open is read from Codex's own folder and from the system
-// (wake.test.ts tries that against real files). Here the test says which are closed.
+// Who has a Codex conversation open is read from Codex's own folder and from the system
+// (wake.test.ts tries that against real files and programs). Here the test says which are
+// closed, and its stand-in for Codex's command says which it holds.
 vi.mock('./src/wake', async (original) => ({
   ...(await original<typeof import('./src/wake')>()),
-  codexHeld: (thread: string) => (stand.unknown.has(thread) ? null : !stand.closed.has(thread)),
+  codexHolder: (thread: string, _codexHome?: string, now = Date.now(), fresh = false) => {
+    const before = stand.looked.get(thread)
+    if (stand.lagging && !fresh && before && now - before.at < 1500) return before.holder
+    const holder = stand.unknown.has(thread)
+      ? null
+      : stand.holding && existsSync(path.join(stand.holding, `holding-${thread}`))
+        ? ('it' as const)
+        : stand.closed.has(thread)
+          ? false
+          : ('elsewhere' as const)
+    stand.looked.set(thread, { at: now, holder })
+    return holder
+  },
 }))
 vi.mock('node:child_process', async (original) => ({
   ...(await original<typeof import('node:child_process')>()),
@@ -263,6 +286,9 @@ afterEach(async () => {
   said.length = 0
   stand.codex.length = 0
   stand.closed.clear()
+  stand.holding = ''
+  stand.lagging = false
+  stand.looked.clear()
   stand.failedWrites.clear()
   stand.savedRuns.length = 0
   stand.unknown.clear()
@@ -947,6 +973,122 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(stand.codex).toEqual([])
     expect(said.some((line) => line.includes('was not taken by the reopening of its conversation'))).toBe(true)
   })
+
+  /** A click on the page of the conversation thread-1, made a moment after click(n) would be. */
+  const onFirst = (n: number) => ({ ...click(n), session: { harness: 'codex', id: 'thread-1' } })
+  /**
+   * Codex's own command, as a program of its own: it keeps what it was given, holds its
+   * conversation while it runs, as Codex's writer lock says of a run that It started, and ends
+   * when the test lets it go, having let go of the conversation a moment before.
+   */
+  const holdingCodex = () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
+    writeFileSync(
+      path.join(bin, 'codex'),
+      `#!/bin/sh\nn=$(ls ${bin} | grep -c given)\ncat > ${bin}/given-$n\ntouch ${bin}/holding-thread-1\nwhile [ ! -f ${bin}/go-$n ]; do sleep 0.05; done\nrm -f ${bin}/holding-thread-1\n`,
+      { mode: 0o755 },
+    )
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    made.push(bin)
+    stand.holding = bin
+    return bin
+  }
+  const given = (bin: string, n: number) => {
+    const file = path.join(bin, `given-${n}`)
+    return existsSync(file) ? readFileSync(file, 'utf8') : ''
+  }
+
+  test.skipIf(process.platform === 'win32')(
+    'clicks made while It’s own reopened run of a Codex conversation is finishing are never put in Codex’s queue: the conversation is reopened for them the moment that run has gone, together and in order',
+    async () => {
+      const bin = holdingCodex()
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(folder)
+      // The connector's pass of every second never comes in this test: what is done here is done without it
+      standIn()
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      // A look at who holds a conversation is good for a moment, as Codex's own is
+      stand.lagging = true
+      stand.closed.add('thread-1')
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(onFirst(1))
+      await until(() => existsSync(path.join(bin, 'holding-thread-1')) && given(bin, 0).length > 0)
+      // The run's own hook says that its turn has begun, as Codex's does, and the turn runs for
+      // longer than a look at who holds the conversation is good for
+      const hook = (busy: boolean) => local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy } })
+      await hook(true)
+      await pause(1600)
+      // Two more things are done on the page in the run's last seconds. Codex's lock says that a
+      // Codex holds the conversation, and that Codex is It's own run: nothing goes into Codex's
+      // queue, and nothing is kept for the turn's next hook ahead of what the run is doing
+      offered(onFirst(2), onFirst(3))
+      await pass(3)
+      expect(stand.codex).toEqual([])
+      expect(given(bin, 1)).toBe('')
+      expect(stand.calls.filter((c) => c.name === 'delivery:claim').map((c) => c.args.ids)).toEqual([['click-1']])
+      // The turn ends, and the run with it. Without a pass of the clock, and though the look taken
+      // a moment ago while the run held the conversation is still what a look finds, it is
+      // reopened for both at once, in the order they were made
+      await hook(false)
+      writeFileSync(path.join(bin, 'go-0'), '')
+      await until(() => given(bin, 1).length > 0)
+      const second = given(bin, 1)
+      expect(second).not.toContain('[action click-1]')
+      expect(second.indexOf('[action click-2]')).toBeGreaterThan(-1)
+      expect(second.indexOf('[action click-3]')).toBeGreaterThan(second.indexOf('[action click-2]'))
+      expect(stand.calls.filter((c) => c.name === 'machines:runBegan').map((c) => c.args.ids)).toEqual([['click-1'], ['click-2', 'click-3']])
+      writeFileSync(path.join(bin, 'go-1'), '')
+      await until(() => ['click-1', 'click-2', 'click-3'].every((id) => called('delivery:handedOff').includes(id)))
+      expect(stand.codex).toEqual([])
+    },
+  )
+
+  test.skipIf(process.platform === 'win32')(
+    'a conversation that a run It started holds is neither put in Codex’s queue nor reopened beside that run, though this connector did not start it, and is reopened once it is free',
+    async () => {
+      const bin = holdingCodex()
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(folder)
+      standIn()
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      // Held by a run of another It's on this machine, say: Codex would refuse a second writer
+      writeFileSync(path.join(bin, 'holding-thread-1'), '')
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(onFirst(1))
+      await pass(3)
+      expect(stand.codex).toEqual([])
+      expect(stand.calls.filter((c) => c.name === 'delivery:claim' || c.name === 'machines:runBegan')).toEqual([])
+      rmSync(path.join(bin, 'holding-thread-1'))
+      await pass()
+      await until(() => given(bin, 0).includes('[action click-1]'))
+      expect(stand.codex).toEqual([])
+    },
+  )
+
+  test.skipIf(process.platform === 'win32')(
+    'a hand-over that hands nothing over is not followed at once by another: what kept the click back is asked about again at the next second, and not without pause',
+    async () => {
+      const bin = holdingCodex()
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(folder)
+      standIn()
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      // Its hook was heard a moment ago, as a Codex that has just been closed says it was: a
+      // reopening of it is got ready and then not started, and the click goes back to waiting
+      await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1' } })
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(onFirst(1))
+      await until(() => called('delivery:release').includes('click-1'))
+      await pause(500)
+      expect(stand.calls.filter((c) => c.name === 'machines:runBegan')).toHaveLength(1)
+      expect(given(bin, 0)).toBe('')
+      // The next second's pass tries it again
+      await pass()
+      await until(() => stand.calls.filter((c) => c.name === 'machines:runBegan').length === 2)
+    },
+  )
 
   test.skipIf(process.platform === 'win32')(
     'a reopening that fails after its own add-on was heard from counts as a try, says the app’s last line on the page alone, and is not tried without end',
@@ -3802,7 +3944,7 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     const profile = path.join(home, 'conversation-profile')
     mkdirSync(profile)
     await noteConversation({ harness: 'codex', id: 'thread-11' }, home, { version: 1, paths: { CODEX_HOME: profile } })
-    const held = vi.spyOn(wake, 'codexHeld').mockImplementation((_thread, folder) => folder === profile)
+    const held = vi.spyOn(wake, 'codexHolder').mockImplementation((_thread, folder) => (folder === profile ? 'elsewhere' : false))
     try {
       await heard(11)
       offered(click(11))

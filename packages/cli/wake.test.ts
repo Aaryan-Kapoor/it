@@ -29,7 +29,7 @@ import {
   claudeModeOf,
   claudeResume,
   claudeWroteAt,
-  codexHeld,
+  codexHolder,
   codexWroteAt,
   endTree,
   identity,
@@ -566,14 +566,14 @@ describe('whether some Codex has a conversation open', () => {
     mkdirSync(locks, { recursive: true })
     const lock = (thread: string) => path.join(locks, `${thread}.lock`)
     // No Codex has ever had it open, or Codex has put its file away again
-    expect(codexHeld('thread-none', codexHome)).toBe(false)
+    expect(codexHolder('thread-none', codexHome)).toBe(false)
     // Open in some Codex: the file is there, and a program has it open (this one stands in for
     // Codex). Windows is asked for the lock Codex holds on the file, which this program does not
     // take, and a file that is only open is not held there: the tests that follow hold that.
     writeFileSync(lock('thread-open'), '')
     const held = openSync(lock('thread-open'), 'r')
     try {
-      expect(codexHeld('thread-open', codexHome)).toBe(process.platform !== 'win32')
+      expect(codexHolder('thread-open', codexHome)).toBe(process.platform === 'win32' ? false : 'elsewhere')
     } finally {
       closeSync(held)
     }
@@ -581,19 +581,74 @@ describe('whether some Codex has a conversation open', () => {
     // open, or who holds a lock on it, that is not taken for an open conversation. Elsewhere the
     // file is all there is to go by.
     writeFileSync(lock('thread-left'), '')
-    expect(codexHeld('thread-left', codexHome)).toBe(['linux', 'darwin', 'win32'].includes(process.platform) ? false : null)
+    expect(codexHolder('thread-left', codexHome)).toBe(['linux', 'darwin', 'win32'].includes(process.platform) ? false : null)
     // What was found is good for a moment only: closed a moment later, it is found closed
     const t = Date.now()
     writeFileSync(lock('thread-then'), '')
     const then = openSync(lock('thread-then'), 'r')
-    expect(codexHeld('thread-then', codexHome, t)).toBe(process.platform !== 'win32')
+    expect(codexHolder('thread-then', codexHome, t)).toBe(process.platform === 'win32' ? false : 'elsewhere')
     closeSync(then)
     rmSync(lock('thread-then'))
-    expect(codexHeld('thread-then', codexHome, t + 500)).toBe(process.platform !== 'win32')
-    expect(codexHeld('thread-then', codexHome, t + 2000)).toBe(false)
+    expect(codexHolder('thread-then', codexHome, t + 500)).toBe(process.platform === 'win32' ? false : 'elsewhere')
+    expect(codexHolder('thread-then', codexHome, t + 2000)).toBe(false)
     // An id that is not one Codex makes names no file at all
-    expect(codexHeld('../thread-open', codexHome)).toBe(false)
+    expect(codexHolder('../thread-open', codexHome)).toBe(false)
   })
+
+  test.skipIf(process.platform === 'win32')(
+    'tells a Codex that It started to carry the conversation on from any other, by the marks every run It starts carries',
+    async () => {
+      const codexHome = path.join(scratch, 'codex-home-holders')
+      const locks = path.join(codexHome, 'thread-writer-locks')
+      mkdirSync(locks, { recursive: true })
+      const lock = (thread: string) => path.join(locks, `${thread}.lock`)
+      // A program that has a conversation's lock open until it is ended, started with what it is told
+      const running: ReturnType<typeof spawn>[] = []
+      const holding = async (thread: string, marks: Record<string, string>) => {
+        writeFileSync(lock(thread), '')
+        const child = spawn(
+          process.execPath,
+          ['-e', `require('fs').openSync(${JSON.stringify(lock(thread))}, 'r'); console.log('open'); setInterval(() => {}, 1000)`],
+          {
+            env: { ...process.env, ...marks },
+            stdio: ['ignore', 'pipe', 'ignore'],
+          },
+        )
+        running.push(child)
+        await new Promise<void>((resolve) => child.stdout!.once('data', () => resolve()))
+        return child
+      }
+      try {
+        // A run that It started for this very conversation: it holds the conversation, and is It's
+        const ours = await holding('thread-ours', { IT_HARNESS: 'codex', IT_SESSION: 'thread-ours', IT_RUN: 'run-1' })
+        const t = Date.now()
+        expect(codexHolder('thread-ours', codexHome, t)).toBe('it')
+        // A run It started for another conversation is not this one's, and nor is a Codex with no marks at all
+        await holding('thread-theirs', { IT_HARNESS: 'codex', IT_SESSION: 'thread-ours' })
+        expect(codexHolder('thread-theirs', codexHome, t)).toBe('elsewhere')
+        await holding('thread-open', {})
+        expect(codexHolder('thread-open', codexHome, t)).toBe('elsewhere')
+        // Held by It's run and by some other program as well: that other one is no run of It's
+        const beside = openSync(lock('thread-ours'), 'r')
+        try {
+          expect(codexHolder('thread-ours', codexHome, t + 4000)).toBe('elsewhere')
+        } finally {
+          closeSync(beside)
+        }
+        expect(codexHolder('thread-ours', codexHome, t + 6000)).toBe('it')
+        // It's run ends. A look from a moment ago still finds the conversation held, as a look is
+        // good for that long, and a look taken afresh finds nobody
+        const gone = new Promise((resolve) => ours.once('exit', resolve))
+        ours.kill()
+        await gone
+        expect(codexHolder('thread-ours', codexHome, t + 6500)).toBe('it')
+        expect(codexHolder('thread-ours', codexHome, t + 6500, true)).toBe(false)
+        expect(codexHolder('thread-ours', codexHome, t + 7000)).toBe(false)
+      } finally {
+        for (const child of running) child.kill()
+      }
+    },
+  )
 
   test('on Windows, a read refused for a lock says that the conversation is open, and no other refusal says anything either way', () => {
     const platform = process.platform
@@ -624,11 +679,12 @@ describe('whether some Codex has a conversation open', () => {
         },
       })
       syncBuiltinESMExports()
-      const said: [Refusal, boolean | null][] = [
+      const said: [Refusal, 'elsewhere' | false | null][] = [
         // Read, so that nothing holds a lock on it: a Codex that held it has gone
         [null, false],
-        // The read refused for the lock that a Codex holds while it writes the conversation
-        [{ at: 'read', code: 'EBUSY' }, true],
+        // The read refused for the lock that a Codex holds while it writes the conversation. Windows
+        // does not say which program holds it, so it is taken for some Codex other than It's own run
+        [{ at: 'read', code: 'EBUSY' }, 'elsewhere'],
         [{ at: 'read', code: 'EIO' }, null],
         // Refused at the opening, EBUSY is another program's having the file to itself, or its being removed: not a lock
         [{ at: 'open', code: 'EBUSY' }, null],
@@ -639,7 +695,7 @@ describe('whether some Codex has a conversation open', () => {
       said.forEach(([how, held], n) => {
         writeFileSync(path.join(locks, `thread-${n}.lock`), '')
         refused = how
-        expect(codexHeld(`thread-${n}`, codexHome), JSON.stringify(how)).toBe(held)
+        expect(codexHolder(`thread-${n}`, codexHome), JSON.stringify(how)).toBe(held)
       })
     } finally {
       Object.defineProperty(process, 'platform', { value: platform })
@@ -726,24 +782,24 @@ Start-Sleep -Seconds 600
     // that keeps a Codex from opening the conversation and taking the lock after
     writeFileSync(lock, '')
     let t = Date.now()
-    expect(codexHeld(thread, codexHome(), t)).toBe(false)
+    expect(codexHolder(thread, codexHome(), t)).toBe(false)
     const codex = await holding(lock, 'lock')
     // Codex writes nothing into the file: Windows refuses to read it while the lock is held
     expect(readFirst(lock)).toBe('EBUSY')
     t += 2000
-    expect(codexHeld(thread, codexHome(), t)).toBe(true)
+    expect(codexHolder(thread, codexHome(), t)).toBe('elsewhere')
     // Asking does not take the lock, nor loosen it: it is held all the same after
     t += 2000
-    expect(codexHeld(thread, codexHome(), t)).toBe(true)
+    expect(codexHolder(thread, codexHome(), t)).toBe('elsewhere')
     await codex.end()
     // Ended as a crash ends it, Codex leaves the file. The system lets go of the lock as it closes
     // what the program had open, which may be a moment after the program has gone.
     expect(existsSync(lock)).toBe(true)
     const until = Date.now() + 10_000
-    let held: boolean | null
+    let held: 'elsewhere' | 'it' | false | null
     do {
       t += 2000
-      held = codexHeld(thread, codexHome(), t)
+      held = codexHolder(thread, codexHome(), t)
       if (held !== false) await new Promise((r) => setTimeout(r, 200))
     } while (held !== false && Date.now() < until)
     expect(held).toBe(false)
@@ -755,9 +811,9 @@ Start-Sleep -Seconds 600
     const lock = lockOf(thread)
     const other = await holding(lock, 'alone')
     // Nothing can be read of the file, so nothing is known of a lock on it: the click waits, as for a conversation that may be open
-    expect(codexHeld(thread, codexHome())).toBeNull()
+    expect(codexHolder(thread, codexHome())).toBeNull()
     await other.end()
-    expect(codexHeld(thread, codexHome(), Date.now() + 2000)).toBe(false)
+    expect(codexHolder(thread, codexHome(), Date.now() + 2000)).toBe(false)
   }, 120_000)
 })
 
