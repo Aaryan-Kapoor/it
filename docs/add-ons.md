@@ -149,13 +149,13 @@ A click arrives as a message from you. When Pi is idle the message starts a turn
 
 ### OpenCode
 
-After opening a saved conversation, send one message in it to start listening. OpenCode's supported plugin events do not identify a selected saved conversation before a turn. It does not choose the newest session or substitute the default agent. While that loaded app reports this discovery limit, Auto-wake waits for its closed conversations too, to avoid opening a second copy of an idle one.
+After opening a saved conversation, send one message in it to start listening. OpenCode tells the plugin It installs nothing when you select a conversation, in its terminal interface or in its desktop app: none of the events that plugin receives names the conversation you selected, and no call it can make says which one is on screen. So the add-on learns of a conversation from its first message. It does not guess by choosing the newest conversation, and it never sends a click under OpenCode's default agent in place of the conversation's own. While that loaded app reports this limit, Auto-wake waits for its closed conversations too, so that It never opens a second copy of a conversation that is open and idle.
 
 A click starts a turn when the conversation is idle, and joins the running turn at its next step otherwise. One OpenCode holds many conversations, and a click goes to the conversation that made the page, whichever one is on screen.
 
 ### Hermes Agent
 
-After opening or switching to a saved conversation, send one message in it to start listening. Hermes's session-start hook runs on a first turn, not on selecting a saved idle session. The add-on reports that limit without guessing the selected conversation. While the loaded app is heard from, Auto-wake waits for its closed conversations too, to avoid opening a second copy of an idle one.
+In the TUI and the desktop app, a conversation listens as soon as it is open, whether it is new or a saved one opened again, so a click on one of its pages starts a turn before you have sent anything in it. That takes a Hermes later than 0.21.5, once you have allowed it, as the list below says. In the plain `hermes` terminal, send one message in a saved conversation after resuming it, to start listening there: Hermes tells a plugin nothing when a saved conversation is resumed in the terminal, and its hook for a new session runs only on a new conversation's first turn. The add-on does not guess which conversation is open. While any Hermes with the add-on is heard from, Auto-wake waits for its closed conversations too, so that It never opens a second copy of a conversation that is open and idle.
 
 Where a click can arrive depends on where Hermes runs:
 

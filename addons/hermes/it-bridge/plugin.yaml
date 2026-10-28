@@ -9,6 +9,7 @@ author: "It"
 requires_hermes: ">=0.20.1"
 provides_hooks:
   - pre_llm_call
+  - on_session_reset
   - on_session_end
   - on_session_finalize
   - subagent_start

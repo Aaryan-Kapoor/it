@@ -340,6 +340,39 @@ class _Bridge:
             talk.running = False
             talk.idle_since = time.monotonic()
 
+    def conversation_opened(self, session_id="", **said):
+        """Hermes's TUI or desktop app has a conversation open, before anything is written in it.
+
+        The TUI fires this hook once it has built a conversation's agent, whether the
+        conversation is new or saved and opened again, and names the conversation by its
+        lasting name, the id it was opened under (tui_gateway/session_registry.py,
+        _start_session_services). A message by that name reaches that conversation and no other
+        (tui_gateway/plugin_inject.py), so from now on it is asked about, and its first click can
+        start a turn before the person has sent anything.
+
+        The plain terminal fires the hook only for /new, and nothing when a saved conversation
+        is resumed, so a conversation there is still asked about from its first turn. The
+        messaging gateway fires it with a conversation's id where a message needs the chat's
+        name, which no hook is handed. Neither is taken.
+        """
+        if not isinstance(session_id, str) or not session_id:
+            return
+        # The gateway's shape. The id it gives is not a name a message could go by.
+        if "old_session_id" in said or "new_session_id" in said:
+            return
+        if not self._holds_by_name():
+            return
+        with self._lock:
+            if session_id in self._helpers:
+                return
+            talk = self._talks.get(session_id)
+            if talk is None:
+                talk = self._talks[session_id] = _Talk(session_id, session_id)
+            # Opened afresh, it can take a message now, whatever Hermes said of one before
+            talk.refused = 0
+            talk.wait_until = 0.0
+            self._heard(talk)
+
     def conversation_closed(self, session_id="", **_):
         with self._lock:
             for talk in self._talks.values():
@@ -386,17 +419,21 @@ class _Bridge:
                     # this one, and its clicks wait until it is open again.
                     talk = self._talks[key] = _Talk(session, key)
         with self._lock:
-            talk.closed = False
-            talk.seen = time.monotonic()
-            if len(self._talks) > MOST_TALKS:
-                oldest = min(self._talks.values(), key=lambda t: t.seen)
-                del self._talks[oldest.key]
-            if self._thread is None and not self._stop.is_set():
-                # Started inside a context of its own, so that it never carries along the
-                # bindings of whichever conversation's hook happened to start it
-                self._thread = threading.Thread(target=contextvars.Context().run, args=(self._run,), name="it-bridge", daemon=True)
-                self._thread.start()
+            self._heard(talk)
         return talk
+
+    def _heard(self, talk):
+        """A hook has just spoken for this conversation, which is asked about from now on. Called with the lock held."""
+        talk.closed = False
+        talk.seen = time.monotonic()
+        if len(self._talks) > MOST_TALKS:
+            oldest = min(self._talks.values(), key=lambda t: t.seen)
+            del self._talks[oldest.key]
+        if self._thread is None and not self._stop.is_set():
+            # Started inside a context of its own, so that it never carries along the
+            # bindings of whichever conversation's hook happened to start it
+            self._thread = threading.Thread(target=contextvars.Context().run, args=(self._run,), name="it-bridge", daemon=True)
+            self._thread.start()
 
     # ---------- what can be seen of Hermes ----------
     #
@@ -413,6 +450,15 @@ class _Bridge:
             return self._ctx._manager._cli_ref
         except Exception:
             return _CANNOT_TELL
+
+    def _holds_by_name(self):
+        """Whether this process is Hermes's TUI or desktop app, which holds its open conversations by name. No if that cannot be told."""
+        if self._terminal() is not None:
+            return False  # the plain terminal, or a Hermes that does not show whether it is one
+        try:
+            return getattr(self._ctx._manager, "has_tui_message_injector", False) is True
+        except Exception:
+            return False
 
     def _reachable(self, talk):
         """Whether a message handed to Hermes now would reach this conversation."""
@@ -610,10 +656,12 @@ def register(ctx):
     except Exception:
         pass
     bridge = _Bridge(ctx)
-    # Report the loaded host even before a turn. Hermes has no supported saved-session selection hook.
+    # Report the loaded host even before a turn. The TUI and the desktop app say when a
+    # conversation is open, and the plain terminal says so only of a conversation's first turn.
     bridge._thread = threading.Thread(target=contextvars.Context().run, args=(bridge._run,), name="it-bridge", daemon=True)
     bridge._thread.start()
     ctx.register_hook("pre_llm_call", bridge.turn_started)
+    ctx.register_hook("on_session_reset", bridge.conversation_opened)
     ctx.register_hook("on_session_end", bridge.turn_ended)
     ctx.register_hook("on_session_finalize", bridge.conversation_closed)
     ctx.register_hook("subagent_start", bridge.helper_started)

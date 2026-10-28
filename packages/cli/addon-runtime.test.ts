@@ -21,7 +21,7 @@ test('An open host without idle discovery blocks reopening without inventing a s
   const seen = new AddonRuntimes()
   for (const app of ['hermes', 'opencode']) {
     seen.hear(app, 'one', { api: ADDON_API, version: ADDONS[app]!.version, delivery: true, idle: false }, 0)
-    expect(seen.status(app, 0).detail).toMatch(/Open it and send a message/)
+    expect(seen.status(app, 0).detail).toMatch(/Open the conversation and send a message in it to start listening/)
     expect(seen.blocksWake(app, 0)).toBe(true)
     expect(seen.blocksWake(app, 30_000)).toBe(false)
   }
