@@ -17,6 +17,7 @@ import { kind, log } from './lib/log'
 import { mint } from './lib/signing'
 import { bump, tally } from './lib/tally'
 import { adoptTourPage, isTourPage, startTourPage } from './lib/tourPages'
+import type { Unlinked } from './network'
 import { expectedOwner, fileEntry, session } from './schema'
 import { checkKept, revisionNow, startState } from './state'
 
@@ -665,12 +666,29 @@ export const _finish = internalMutation({
   },
 })
 
+/**
+ * What the agent is given as the page's link, beside the `url` that is the site's on this
+ * computer: `link`, where the owner chose another place for links and It can be reached there,
+ * and `unlinked`, which place was chosen and why It cannot be reached there, where it cannot.
+ * Asked as the publish ends, so that it is as the network stands then, and never kept with what
+ * was published.
+ */
+type Linked = { link?: string; unlinked?: { to: 'tailnet' | 'network'; why: Unlinked } }
+async function linked(ctx: ActionCtx, slug: string): Promise<Linked> {
+  const at = await ctx.runQuery(internal.network.linkFor, {})
+  if (!at) return {}
+  return 'at' in at ? { link: `${at.at}/p/${slug}` } : { unlinked: at.unlinked }
+}
+
 /** Step two, after the uploads: check them, then switch the page to the new version. */
 export const finish = action({
   args: { artifactId: v.id('artifacts'), version: v.number() },
-  handler: async (ctx, args): Promise<{ slug: string; version: number; url: string; elsewhere?: boolean; took?: boolean }> => {
+  handler: async (ctx, args): Promise<{ slug: string; version: number; url: string; elsewhere?: boolean; took?: boolean } & Linked> => {
     const gate = await overClashes(() => ctx.runMutation(internal.publish._gate, args))
-    if (gate.result) return outcome(gate.result)
+    if (gate.result) {
+      const done = outcome(gate.result)
+      return { ...done, ...(await linked(ctx, done.slug)) }
+    }
     const waiting = gate.waiting!
     let checked: { ok: boolean; missing: string[] }
     try {
@@ -683,8 +701,8 @@ export const finish = action({
       log('publish.refused', { reason: 'not_intact', artifactId: args.artifactId, version: args.version, files: checked.missing.length }, 'warn')
       fail('invalid', `${checked.missing.length === 1 ? 'One file' : `${checked.missing.length} files`} did not arrive intact. Publish again.`)
     }
-    const done = await overClashes(() => ctx.runMutation(internal.publish._finish, args))
-    return outcome(done)
+    const done = outcome(await overClashes(() => ctx.runMutation(internal.publish._finish, args)))
+    return { ...done, ...(await linked(ctx, done.slug)) }
   },
 })
 

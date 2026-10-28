@@ -145,6 +145,7 @@ describe('the agent skill', () => {
     const commands = main + source('../../packages/cli/src/wait.ts')
     for (const field of [
       'url',
+      'urlNote',
       'shownOn',
       'notShown',
       'notShownOn',
@@ -155,6 +156,7 @@ describe('the agent skill', () => {
       'typedByTheUser',
       'pageIsNowAtVersion',
       'stateIsNowAtRevision',
+      'forAnotherConversation',
       'files',
       'harnesses',
       'connector',
@@ -495,6 +497,23 @@ describe('the agent skill', () => {
     expect(more.waiting).toContain('at most 50 at once: read every line, and where 50 came, run it again, since more may be waiting.')
     expect(more.actions).toContain('only lists what is waiting, 50 at most: where it lists 50, run it again once you have run `it ack` for those')
     expect(skill).not.toContain('they are all printed')
+  })
+
+  test('says that `it actions` lists what is this conversation’s and what is no conversation’s, that --all lists the rest marked as another’s, and that none of it is a wall between agents', () => {
+    expect(more.actions).toContain("`it actions` lists what waits on this conversation's pages, and on pages that no conversation has")
+    expect(more.actions).toContain(
+      '`it actions --all` lists every action that waits, and marks each that is another conversation\'s with `"forAnotherConversation": true`',
+    )
+    expect(more.actions).toContain('is not a wall between agents: any agent on the machine can list every action')
+    // The program asks for the conversation the command is in, under every id the connector has
+    // written down for it, and asks for everything only with --all or where no conversation is named
+    expect(main).toMatch(/const ids = asked \? conversationIds\(asked\.session\) : \[\][\s\S]{0,300}api\.delivery\.allWaiting, \{ for: s \}/)
+    expect(main).toMatch(/if \(ids\.length && !a\.flags\.all\)/)
+    // And the backend reads a conversation's by itself, with what is no conversation's
+    expect(source('../../convex/delivery.ts')).toMatch(/export const allWaiting = query\(\{\s+args: \{ for: v\.optional\(session\) \}/)
+    expect(source('../../convex/delivery.ts')).toMatch(/\.eq\('harness', undefined\)\.eq\('sessionId', undefined\)/)
+    // Where the harness names no conversation, everything is listed, which the skill says
+    expect(more.actions).toContain('Where your harness does not tell `it` which conversation this is, `it actions` lists every action')
   })
 
   test('says that a page is a conversation’s to keep or to take only where the harness names the conversation, and what to do where it does not', () => {

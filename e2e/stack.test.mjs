@@ -5,11 +5,11 @@
 // not, as each test tells it to.
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, test } from 'vitest'
+import { bases } from '../packages/cli/test-ports.ts'
 import { reachesAnApp } from './lib.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -78,34 +78,20 @@ const until = async (fn, ms = 20_000) => {
   }
   return undefined
 }
-/** Whether nothing listens on a port of this machine. */
-const free = (port) =>
-  new Promise((resolve) => {
-    const tried = net.createServer()
-    tried.once('error', () => resolve(false))
-    tried.listen(port, '127.0.0.1', () => tried.close(() => resolve(true)))
-  })
-/** A port the system has free, whose forty-first after it is free too: the two the stack waits for an answer on. */
-async function freeBase() {
-  for (let n = 0; n < 20; n++) {
-    const port = await new Promise((resolve) => {
-      const asked = net.createServer()
-      asked.listen(0, '127.0.0.1', () => {
-        const { port } = asked.address()
-        asked.close(() => resolve(port))
-      })
-    })
-    if (port < 60_000 && (await free(port + 41))) return port
-  }
-  throw new Error('no two free ports were found for the stand-in to answer on')
-}
+// The stand-in answers on a base port and the forty-first after it, which is where the stack
+// waits for an answer. Each stack is given a base that is held as the service's own tests hold
+// theirs, from blocks of this file's own below the ports a system hands to whatever asks for
+// one. Those differ from system to system: on macOS they run from 49152 up, and a run of them
+// can all lie too high for a base.
+const ports = bases(19_500, 20)
 
 const started = []
 /** The made-up folders for the agent apps that the stacks of a test were given: a stack removes its own when it stops, and one that was ended before it could leaves it. */
 const madeUp = []
-afterEach(() => {
+afterEach(async () => {
   for (const pid of started.splice(0)) if (alive(pid)) process.kill(pid, 'SIGKILL')
   for (const apps of madeUp.splice(0)) rmSync(apps, { recursive: true, force: true })
+  await ports.release()
 })
 
 /** What a stack is started with here: nothing of whoever runs the tests, a stand-in for the program, and a second in place of a minute to wait for it to stop. */
@@ -121,7 +107,7 @@ const surroundings = (logs) => ({
 async function startStack(how, more = {}, tries = 3) {
   const folder = mkdtempSync(path.join(dir, 'stack-'))
   const [logs, home] = [path.join(folder, 'logs'), path.join(folder, 'home')]
-  const port = await freeBase()
+  const port = await ports.next()
   const child = spawn(process.execPath, [path.join(here, 'stack.mjs')], {
     env: { ...surroundings(logs), IT_CLI: standIn, IT_HOME: home, IT_PORT: String(port), E2E_STAND_IN: how, E2E_STAND_IN_BACKEND: backendStandIn, ...more },
     stdio: ['ignore', 'pipe', 'pipe'],
