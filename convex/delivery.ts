@@ -10,11 +10,12 @@ import { LEASE_MS, LIMITS, LISTENING_MOST, QUEUES, WAKE_BACK_MS, WAKE_MOST, WAKE
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { internalMutation, mutation, type QueryCtx, query } from './_generated/server'
-import { destination, dropStopped, noLongerWaiting, stoppedSince } from './actions'
+import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
+import { destination, dropStopped, madeBefore, noLongerWaiting, type Seen, stoppedSince } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
 import { log } from './lib/log'
+import { nextSequence } from './lib/tally'
 import { session } from './schema'
 import { revisionNow } from './state'
 
@@ -58,6 +59,68 @@ async function asClicks(ctx: QueryCtx, rows: Doc<'actions'>[]) {
 }
 
 /**
+ * One conversation's clicks on this machine as an inbox reads them, oldest first, leaving out
+ * what its last stop here dropped and the stop's steps have not yet come to: such a click is
+ * given to nobody, and must stand in front of nothing that may be taken.
+ *
+ * Where the stop has a place in the order the person's clicks and stops are written in, and no
+ * moment is asked from, the clicks are read from after that place, and nothing the stop dropped
+ * is read at all. Otherwise (a stop from before stops had a place, or a read that only takes
+ * what was done from some moment on, which is an index on the clock) the few that are asked for
+ * are read as they come, every one counted against what may be read, and what the stop dropped
+ * is left out of them. While the stop's steps are still under way that leaves fewer than were
+ * asked for, for a moment, and never has more read than may be.
+ */
+function conversationAfterStop(
+  ctx: QueryCtx,
+  machine: Doc<'machines'>,
+  harness: string,
+  sessionId: string,
+  /** Read only what was done after this moment, by the clock. */
+  since?: number,
+) {
+  const stop = (machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)
+  const kept = (x: Doc<'actions'>) => !stop || !madeBefore(x, stop)
+  return {
+    kept,
+    take: async (n: number, read: (rows: Doc<'actions'>[]) => Doc<'actions'>[]): Promise<Doc<'actions'>[]> => {
+      if (n <= 0) return []
+      if (stop?.sequence !== undefined && since === undefined)
+        return read(
+          await ctx.db
+            .query('actions')
+            .withIndex('by_route_sequence', (q) =>
+              q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gt('sequence', stop.sequence!),
+            )
+            .take(n),
+        )
+      const rows = read(
+        await ctx.db
+          .query('actions')
+          .withIndex('by_route', (q) => {
+            const of = q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId)
+            return since === undefined ? of : of.gt('createdAt', since)
+          })
+          .take(n),
+      )
+      return rows.filter(kept)
+    },
+  }
+}
+
+/**
+ * Leaves out what was made before a stop of its conversation, which the stop's steps drop and
+ * may not have come to yet: it is offered to nobody. Each page and machine is read once, however
+ * many clicks name it.
+ */
+async function notStopped(ctx: QueryCtx, rows: Doc<'actions'>[]) {
+  const seen: Seen = new Map()
+  const out = []
+  for (const x of rows) if (!(await stoppedSince(ctx, x, seen))) out.push(x)
+  return out
+}
+
+/**
  * How much one asking for the inbox may read of clicks, in bytes. The backend lets a query read
  * 16 MB and past that refuses it whole, which to a connector is no inbox at all, for any of its
  * conversations. Every click that is read counts, also one that is read a second time, and
@@ -92,12 +155,9 @@ async function listeningRows(
     // This machine's own, and those with no machine, are each read by themselves: read
     // together with everything else waiting for the conversation, a few clicks that are
     // another machine's, or were set aside, could stand in front of one this machine may take.
-    const route = (machineId: Id<'machines'>) =>
-      ctx.db
-        .query('actions')
-        .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id))
     // These come first and are at most four for each of forty conversations, which is within what may be read whatever they carry
-    const own = read(await route(machine._id).take(2))
+    // (What a stop of the conversation here dropped, and its steps have not yet come to, stands in front of none of them)
+    const own = await conversationAfterStop(ctx, machine, s.harness, s.id).take(2, read)
     // Those with no machine are read as exactly the ones this machine may take: this
     // person's, and not set aside. One that a machine set aside has no machine either, and is
     // not offered again: it waits for `it wait` and the site, until its page changes hands.
@@ -174,7 +234,6 @@ export const inbox = query({
         from = on.since - WAKE_BACK_MS
       }
       const each = reopened ? WAKE_MOST : 2
-      const stoppedAt = (sessionId: string) => (reopened ? ((machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)?.at ?? 0) : 0)
       const found: string[] = []
       // How many clicks this queue may read now, of the `n` wanted, each taken to be as large as a click can be
       const until = left - left / (asked.length - nth)
@@ -219,11 +278,12 @@ export const inbox = query({
       for (const [foundAt, sessionId] of found.entries()) {
         if (rows.length >= BUDGET) break
         const want = Math.min(each, BUDGET - rows.length)
-        const since = Math.max(from - 1, stoppedAt(sessionId))
+        const since = from - 1
+        const stopped = conversationAfterStop(ctx, machine, harness, sessionId, reopened ? since : undefined)
         // What was read of the queue's oldest holds this conversation's own oldest, in their
         // order. Where that is all the queue has, or as many as are wanted, it is what reading
         // the conversation would give, and the conversation is not read.
-        const known = oldest.filter((x) => x.sessionId === sessionId && x.createdAt > since)
+        const known = oldest.filter((x) => x.sessionId === sessionId && x.createdAt > since && stopped.kept(x))
         if (all || known.length >= want) {
           rows.push(...known.slice(0, want))
           continue
@@ -238,22 +298,16 @@ export const inbox = query({
           rows.push(...known)
           continue
         }
-        rows.push(
-          ...read(
-            await ctx.db
-              .query('actions')
-              .withIndex('by_route', (q) =>
-                q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gt('createdAt', since),
-              )
-              .take(now),
-          ),
-        )
+        rows.push(...(await stopped.take(now, read)))
       }
     }
     const seen = new Set<string>()
     return asClicks(
       ctx,
-      rows.filter((x) => !seen.has(x._id) && seen.add(x._id)),
+      await notStopped(
+        ctx,
+        rows.filter((x) => !seen.has(x._id) && seen.add(x._id)),
+      ),
     )
   },
 })
@@ -314,19 +368,12 @@ export const inboxPage = query({
       next.push({ harness, id: cursor })
       for (const [n, sessionId] of found.entries()) {
         const rest = found.length - n - 1
-        const stopped = reopened ? ((machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)?.at ?? 0) : 0
-        const since = Math.max(from - 1, stopped)
+        const since = from - 1
+        const stopped = conversationAfterStop(ctx, machine, harness, sessionId, reopened ? since : undefined)
         // Leave four reads and two response places for each later conversation, and two
         // reads for this conversation's attended lookup. Extra places carry its oldest work.
         const want = Math.min(each, places - 2 * rest, may() - 4 * rest - 2)
-        const batch = read(
-          await ctx.db
-            .query('actions')
-            .withIndex('by_route', (q) =>
-              q.eq('machineId', machine._id).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId).gt('createdAt', since),
-            )
-            .take(want),
-        )
+        const batch = await stopped.take(want, read)
         if (batch.length && batch.every((c) => c.attended === false)) {
           const attended: Doc<'actions'>[] = []
           for (const present of [true, undefined]) {
@@ -342,7 +389,8 @@ export const inboxPage = query({
                   .gt('createdAt', since),
               )
               .first()
-            if (first) attended.push(...read([first]))
+            // Counted whether or not it went with a stop whose steps have not come to it yet, and left out if it did
+            if (first) attended.push(...read([first]).filter(stopped.kept))
           }
           attended.sort((a, b) => a.createdAt - b.createdAt || a._creationTime - b._creationTime)
           if (attended[0]) {
@@ -360,7 +408,10 @@ export const inboxPage = query({
     return {
       clicks: await asClicks(
         ctx,
-        rows.filter((x) => !seen.has(x._id) && seen.add(x._id)),
+        await notStopped(
+          ctx,
+          rows.filter((x) => !seen.has(x._id) && seen.add(x._id)),
+        ),
       ),
       after: next,
     }
@@ -467,17 +518,65 @@ export const get = query({
 })
 
 /**
+ * A receipt: what one taking of a click to hand it over is known by. The machine that takes the
+ * click makes it, before it asks, so that the answer to a taking that was lost on its way can be
+ * asked for again under the same one. Every later step of that hand-over names it: keeping the
+ * hold, giving the click back, setting it aside, and saying it was handed over. A step that
+ * names another receipt, or none, does nothing to it.
+ */
+const receiptOf = v.string()
+const RECEIPT = /^[A-Za-z0-9_-]{16,64}$/
+/**
+ * A taking with no receipt is one made by an It from before receipts, on a machine that joined
+ * this It and has not been brought up to date. Such a machine is served as it was for one
+ * release: what it says without a receipt is taken of a click it took without one, and of no
+ * other. A click taken with a receipt is never given back, kept, set aside or said to be handed
+ * over by anything that does not name that receipt, but an `it ack`.
+ */
+const unreceipted = (x: Doc<'actions'>) => x.claim?.receipt === undefined
+/** Whether this machine's taking of a click, known by that receipt, is still the click's last one. */
+const holds = (x: Doc<'actions'>, receipt: string, machine: Doc<'machines'>) => x.claim?.receipt === receipt && x.claim.machineId === machine._id
+/**
+ * When a conversation was last heard from again on a machine, as its place in the order the
+ * person's clicks and stops are written in: nothing where it never has been, or not for a month.
+ */
+async function generationOf(ctx: QueryCtx, machineId: Id<'machines'>, harness: string | undefined, sessionId: string | undefined): Promise<number> {
+  if (harness === undefined || sessionId === undefined) return 0
+  return (await returnOf(ctx, machineId, harness, sessionId))?.generation ?? 0
+}
+const returnOf = (ctx: QueryCtx, machineId: Id<'machines'>, harness: string, sessionId: string) =>
+  ctx.db
+    .query('deliveryReturns')
+    .withIndex('by_machine_session', (q) => q.eq('machineId', machineId).eq('harness', harness).eq('sessionId', sessionId))
+    .unique()
+
+/** The receipt one of a list names, where it names one. */
+const receiptFor = (receipts: { id: Id<'actions'>; receipt: string }[] | undefined, id: Id<'actions'>) => receipts?.find((r) => r.id === id)?.receipt
+
+/**
  * Leases clicks for delivery. Returns the ones this caller now holds. A connector that is about
  * to deliver into a conversation says which (`for`): a click that has since been addressed to
  * another conversation or another machine, because its page changed hands, is then left alone.
+ *
+ * The taking is known by the receipt the caller made for it. Asked again with the same receipt,
+ * as after an answer that was lost, a click that taking still holds is held still; one it no
+ * longer holds is not taken afresh under it, since what was done under it is over.
  */
 export const claim = mutation({
-  args: { ids: v.array(v.id('actions')), for: v.optional(session) },
-  handler: async (ctx, { ids, for: expected }) => {
+  args: { ids: v.array(v.id('actions')), for: v.optional(session), receipt: v.optional(receiptOf) },
+  handler: async (ctx, { ids, for: expected, receipt }) => {
     const { user, machine } = await requireMachine(ctx)
+    if (receipt !== undefined && !RECEIPT.test(receipt)) fail('invalid', 'That is not a receipt.')
     const now = Date.now()
     const held = []
     const adopted = new Set<string>()
+    // Which time of its conversation's being heard from again each taking is made in: a setting aside it ends in counts only if that is still the last
+    const generations = new Map<string, number>()
+    const generation = async (harness: string | undefined, sessionId: string | undefined) => {
+      const key = `${harness}:${sessionId}`
+      if (!generations.has(key)) generations.set(key, await generationOf(ctx, machine._id, harness, sessionId))
+      return generations.get(key)!
+    }
     for (const id of ids.slice(0, 50)) {
       const x = await ctx.db.get(id)
       if (!x || x.userId !== user._id) continue
@@ -489,6 +588,18 @@ export const claim = mutation({
         const to = await destination(ctx, x.artifactId)
         if ((to.machineId !== undefined && to.machineId !== machine._id) || to.harness !== expected.harness || to.sessionId !== expected.id) continue
       }
+      if (receipt !== undefined && holds(x, receipt, machine)) {
+        // The same taking asked for again: held still where its hold has not run out, and otherwise over
+        if (x.delivery !== 'leased' || (x.leaseExpiresAt ?? 0) < now) continue
+        // Unless its conversation was stopped since it was taken, and the stop's steps have not
+        // come to it yet: it goes with the stop now, and is given out no more
+        if (await stoppedSince(ctx, x)) {
+          await dropStopped(ctx, x)
+          continue
+        }
+        held.push(id)
+        continue
+      }
       const free = x.delivery === 'pending' || (x.delivery === 'leased' && (x.leaseExpiresAt ?? 0) < now)
       if (!free) continue
       // Stopped with its conversation, and not yet marked so: it is marked now, and not given out
@@ -496,7 +607,17 @@ export const claim = mutation({
         await dropStopped(ctx, x)
         continue
       }
-      await ctx.db.patch(id, { delivery: 'leased', leaseMachineId: machine._id, leaseExpiresAt: now + LEASE_MS })
+      await ctx.db.patch(id, {
+        delivery: 'leased',
+        leaseMachineId: machine._id,
+        leaseExpiresAt: now + LEASE_MS,
+        claim: {
+          ...(receipt === undefined ? {} : { receipt }),
+          session: expected ?? null,
+          machineId: machine._id,
+          generation: await generation(expected?.harness ?? x.harness, expected?.id ?? x.sessionId),
+        },
+      })
       held.push(id)
       // A page whose machine is gone, taken for the conversation it belongs to, is this
       // machine's from now on: its conversation is here. Left with the machine that is gone, it
@@ -517,16 +638,30 @@ export const claim = mutation({
   },
 })
 
-/** Keeps hold of clicks this machine has leased and is still waiting to hand over. Returns the ones it still holds. */
+/** The receipts of the clicks a list names, each beside the click's id. */
+const receipts = v.optional(v.array(v.object({ id: v.id('actions'), receipt: receiptOf })))
+
+/**
+ * Keeps hold of clicks this machine has leased and is still waiting to hand over, each by the
+ * receipt of the taking that holds it. Returns the ones it still holds.
+ */
 export const renew = mutation({
-  args: { ids: v.array(v.id('actions')) },
-  handler: async (ctx, { ids }) => {
+  args: { ids: v.array(v.id('actions')), receipts },
+  handler: async (ctx, { ids, receipts: named }) => {
     const { user, machine } = await requireMachine(ctx)
     const now = Date.now()
     const held = []
     for (const id of ids.slice(0, 50)) {
       const x = await ctx.db.get(id)
       if (!x || x.userId !== user._id || x.delivery !== 'leased' || x.leaseMachineId !== machine._id || (x.leaseExpiresAt ?? 0) < now) continue
+      const receipt = receiptFor(named, id)
+      if (receipt === undefined ? !unreceipted(x) : !holds(x, receipt, machine)) continue
+      // Stopped with its conversation while this machine held it: it goes with the stop, and the
+      // machine, told it does not hold it, gives it out no more
+      if (await stoppedSince(ctx, x)) {
+        await dropStopped(ctx, x)
+        continue
+      }
       await ctx.db.patch(id, { leaseExpiresAt: now + LEASE_MS })
       held.push(id)
     }
@@ -544,17 +679,20 @@ export const renew = mutation({
  * tell a click it has lost from one that is simply done with.
  */
 export const lost = query({
-  args: { ids: v.array(v.id('actions')) },
-  handler: async (ctx, { ids }) => {
+  args: { ids: v.array(v.id('actions')), receipts },
+  handler: async (ctx, { ids, receipts: named }) => {
     const { user, machine } = await requireMachine(ctx)
     const now = Date.now()
     const theirs = []
     for (const id of ids.slice(0, 50)) {
       const x = await ctx.db.get(id)
       if (!x || x.userId !== user._id) continue
+      // Held by another taking, also one of this machine's own
+      const receipt = receiptFor(named, id)
+      const another = receipt !== undefined && !holds(x, receipt, machine)
       if (
         x.delivery === 'pending' ||
-        (x.delivery === 'leased' && (x.leaseMachineId !== machine._id || (x.leaseExpiresAt ?? 0) < now)) ||
+        (x.delivery === 'leased' && (x.leaseMachineId !== machine._id || (x.leaseExpiresAt ?? 0) < now || another)) ||
         (x.delivery === 'handed_off' && x.route !== 'stopped' && x.handedBy !== undefined && x.handedBy !== machine._id)
       )
         theirs.push(id)
@@ -591,21 +729,45 @@ async function mine(ctx: QueryCtx, id: Doc<'actions'>['_id']) {
  * The click reached the agent. `route` says how: an add-on, the harness's own queue, a waiting CLI.
  * The answer says whether it had already been handed over, with when the click was made and
  * which harness it was for: what a machine needs to count a delivery once, and nothing of the click.
+ *
+ * A hand-over is said by the receipt of the taking that made it, and counts only while that
+ * taking is the click's last: one said late, after the click was given back and taken again,
+ * also on the same machine, says nothing of the taking after it. It counts too where the hold
+ * itself ran out or was given back meanwhile and nothing has taken the click since, as when
+ * the connector that handed it over was started again. And only while the click is still for
+ * the conversation it was taken for. `manual` is an agent or a person saying with `it ack`
+ * that they have it, which needs no receipt.
  */
 export const handedOff = mutation({
-  args: { id: v.id('actions'), route: v.string() },
-  handler: async (ctx, { id, route }) => {
+  args: { id: v.id('actions'), route: v.string(), receipt: v.optional(receiptOf) },
+  handler: async (ctx, { id, route, receipt }) => {
     const { x, machine } = await mine(ctx, id)
     const said = (already: boolean) => ({ already, at: x.createdAt, harness: x.harness ?? null })
-    if (x.delivery === 'handed_off') return said(true)
-    if (x.delivery === 'leased' && x.leaseMachineId !== machine._id && (x.leaseExpiresAt ?? 0) > Date.now())
-      fail('conflict', 'Another machine is delivering this.')
+    const manual = route === 'manual'
+    if (x.delivery === 'handed_off') {
+      // The same hand-over said again, an `it ack`, or a click a stop took: there is nothing more to do
+      if (manual || x.route === 'stopped' || (receipt === undefined ? unreceipted(x) : holds(x, receipt, machine))) return said(true)
+      fail('conflict', 'That receipt is of another hand-over of this click.')
+    }
     // Stopped with its conversation while it was on its way: it counts as stopped, and not as
     // something an agent was given, whatever way it was about to be handed over
     if (await stoppedSince(ctx, x)) {
       await dropStopped(ctx, x)
       return said(true)
     }
+    if (!manual && receipt !== undefined) {
+      if (!holds(x, receipt, machine)) fail('conflict', 'That receipt is of a hand-over that no longer holds this click.')
+      const to = await destination(ctx, x.artifactId)
+      const s = x.claim?.session
+      if (s && ((to.machineId !== undefined && to.machineId !== machine._id) || to.harness !== s.harness || to.sessionId !== s.id))
+        fail('conflict', 'This click belongs to another conversation now.')
+    }
+    // Said with no receipt by an It from before receipts, of a click taken with one: it is not
+    // this hand-over's to say, and that It is to be brought up to date
+    if (!manual && receipt === undefined && !unreceipted(x))
+      fail('conflict', 'This click was taken with a receipt, and this report has none. Update It on this machine.')
+    if (x.delivery === 'leased' && x.leaseMachineId !== machine._id && (x.leaseExpiresAt ?? 0) > Date.now())
+      fail('conflict', 'Another machine is delivering this.')
     await ctx.db.patch(id, {
       delivery: 'handed_off',
       leaseMachineId: undefined,
@@ -631,13 +793,13 @@ export const settle = mutation({
   },
 })
 
-/** Gives a leased click back, when it could not be delivered after all. */
+/** Gives a leased click back, when it could not be delivered after all: only the taking its receipt names, while it holds the click. */
 export const release = mutation({
-  args: { id: v.id('actions') },
-  handler: async (ctx, { id }) => {
+  args: { id: v.id('actions'), receipt: v.optional(receiptOf) },
+  handler: async (ctx, { id, receipt }) => {
     const { x, machine } = await mine(ctx, id)
     // Back in the queue, addressed to whoever owns the page now: it may have changed hands meanwhile
-    if (x.delivery === 'leased' && x.leaseMachineId === machine._id) {
+    if (x.delivery === 'leased' && x.leaseMachineId === machine._id && (receipt === undefined ? unreceipted(x) : holds(x, receipt, machine))) {
       // Stopped with its conversation while this machine had it: it goes back to nobody
       if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
       else await ctx.db.patch(id, await backToWaiting(ctx, x))
@@ -711,13 +873,21 @@ export const giveBackBatch = mutation({
 export const park = mutation({
   args: {
     id: v.id('actions'),
+    /** The receipt of the taking that gave up on it. Another taking since, also on this machine, has not given up on it. */
+    receipt: v.optional(receiptOf),
     /** The conversation the machine was trying to deliver it into. If the click is for another by now, it is left as it is. */
     for: v.optional(session),
     /** The conversation takes nothing at all (its thread is gone): everything else waiting for it is set aside with this click. */
     all: v.optional(v.boolean()),
   },
-  /** True once the click has stopped being this machine's to deliver: set aside, gone elsewhere, or handed over. False when another machine holds it now, and the asking has to be repeated. */
-  handler: async (ctx, { id, for: tried, all }): Promise<boolean> => {
+  /**
+   * True once the click has stopped being this machine's to deliver: set aside, gone elsewhere,
+   * or handed over. False when another machine holds it now, and the asking has to be repeated.
+   * `again` where it was not set aside and waits to be tried afresh: another taking has had it
+   * since the one that gave up on it, or its conversation has been heard from again since that
+   * one began.
+   */
+  handler: async (ctx, { id, for: tried, all, receipt }): Promise<boolean | 'again'> => {
     const { x, machine } = await mine(ctx, id)
     if (x.delivery === 'handed_off' || x.machineId !== machine._id) return true
     // Addressed to another conversation since this machine tried it (its page changed hands on
@@ -725,25 +895,43 @@ export const park = mutation({
     if (tried && (x.harness !== tried.harness || x.sessionId !== tried.id)) return true
     // Another machine may have taken it meanwhile (this one's lease ran out while its command
     // was still running). What that machine holds is left exactly as it is.
-    if (x.delivery === 'leased' && x.leaseMachineId !== machine._id && (x.leaseExpiresAt ?? 0) > Date.now()) return false
+    const live = x.delivery === 'leased' && (x.leaseExpiresAt ?? 0) > Date.now()
+    if (live && x.leaseMachineId !== machine._id) return false
+    // And so is a click whose last taking is not the one that gave up on it: one that names an
+    // earlier taking is over, and the click is tried afresh. One that names none comes from an It
+    // from before receipts, and changes nothing of a taking made with a receipt, whether that
+    // taking still holds the click or its hold has run out or been given back.
+    if (receipt !== undefined ? !holds(x, receipt, machine) : !unreceipted(x)) return 'again'
     // Stopped with its conversation while this machine was trying: it is marked so, and not
     // set aside or sent on under another address, where the stop would not be found again
     if (await stoppedSince(ctx, x)) {
       await dropStopped(ctx, x)
       return true
     }
+    // The conversation has been heard from again since this machine's last taking of the click
+    // began: it came back while that taking was ending. What stood in the way may well be over,
+    // so the click is not set aside, and goes back to be tried afresh. A click this machine has
+    // not taken since these times were counted is taken to have been tried before the first.
+    // One that another machine took last, and let go of, was tried here before that, and is set
+    // aside again as it was: what this machine heard since tells nothing of that machine's taking.
+    const current = await generationOf(ctx, machine._id, x.harness, x.sessionId)
+    const began = x.claim === undefined ? 0 : x.claim.machineId === machine._id ? (x.claim.generation ?? 0) : current
+    if (began !== current) {
+      if (x.delivery === 'leased' && x.leaseMachineId === machine._id) await ctx.db.patch(id, await backToWaiting(ctx, x))
+      return 'again'
+    }
     // The page may have changed hands while this machine was trying. Then the click is not
     // set aside at all: it goes to whoever owns the page now, who has not tried it yet.
     const to = await destination(ctx, x.artifactId)
     const moved = to.machineId !== machine._id || to.harness !== x.harness || to.sessionId !== x.sessionId
     await ctx.db.patch(id, {
-      ...(moved ? { ...to, parkedBy: undefined } : { machineId: undefined, parkedBy: machine._id }),
+      ...(moved ? { ...to, parkedBy: undefined, parkedGeneration: undefined } : { machineId: undefined, parkedBy: machine._id, parkedGeneration: current }),
       delivery: 'pending',
       leaseMachineId: undefined,
       leaseExpiresAt: undefined,
     })
     if (all && !moved && x.harness && x.sessionId)
-      await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId: machine._id, harness: x.harness, sessionId: x.sessionId })
+      await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId: machine._id, harness: x.harness, sessionId: x.sessionId, generation: current })
     return true
   },
 })
@@ -760,46 +948,88 @@ export const unpark = mutation({
   args: { for: session },
   handler: async (ctx, { for: s }): Promise<number> => {
     const { user, machine } = await requireMachine(ctx)
-    const aside = await ctx.db
-      .query('actions')
-      .withIndex('by_user_route', (q) =>
-        q
-          .eq('userId', user._id)
-          .eq('delivery', 'pending')
-          .eq('harness', s.harness)
-          .eq('sessionId', s.id)
-          .eq('machineId', undefined)
-          .eq('parkedBy', machine._id),
-      )
-      .take(50)
-    // This machine's again, as they were before it set them aside
-    for (const x of aside) await ctx.db.patch(x._id, { machineId: machine._id, parkedBy: undefined })
+    // This time of its being heard from again, numbered in the order the person's clicks and
+    // stops are written in, so that it comes after every setting aside that was written before
+    // it and before every one written after it
+    const generation = await nextSequence(ctx, user._id)
+    const was = await returnOf(ctx, machine._id, s.harness, s.id)
+    if (was) await ctx.db.patch(was._id, { generation, at: Date.now() })
+    else
+      await ctx.db.insert('deliveryReturns', {
+        userId: user._id,
+        machineId: machine._id,
+        harness: s.harness,
+        sessionId: s.id,
+        generation,
+        at: Date.now(),
+      })
+    const given = await giveBackAside(ctx, user._id, machine._id, s, generation)
     // However many there are: the rest follow a batch at a time, by themselves
-    if (aside.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.unparkRest, { userId: user._id, machineId: machine._id, for: s })
-    return aside.length
+    if (given === 50) await ctx.scheduler.runAfter(0, internal.delivery.unparkRest, { userId: user._id, machineId: machine._id, for: s, generation })
+    return given
   },
 })
 
-/** The rest of what a machine had set aside for a conversation that is back, a batch at a time. */
+/**
+ * Gives back one batch of what a machine set aside for a conversation before the time it was
+ * heard from again that `generation` names: this machine's again, as they were before it set
+ * them aside. What was set aside after that time is left as it is. With no time named, as a
+ * step scheduled before these were counted asks, what was set aside before they were counted.
+ */
+async function giveBackAside(
+  ctx: MutationCtx,
+  userId: Id<'users'>,
+  machineId: Id<'machines'>,
+  s: { harness: string; id: string },
+  generation: number | undefined,
+): Promise<number> {
+  const aside = await ctx.db
+    .query('actions')
+    .withIndex('by_user_parked', (q) => {
+      const of = q
+        .eq('userId', userId)
+        .eq('delivery', 'pending')
+        .eq('harness', s.harness)
+        .eq('sessionId', s.id)
+        .eq('machineId', undefined)
+        .eq('parkedBy', machineId)
+      return generation === undefined ? of.eq('parkedGeneration', undefined) : of.lt('parkedGeneration', generation)
+    })
+    .take(50)
+  for (const x of aside) {
+    // What a stop dropped is not given back to be delivered, whatever was set aside
+    if (await stoppedSince(ctx, x)) await dropStopped(ctx, x)
+    else await ctx.db.patch(x._id, { machineId, parkedBy: undefined, parkedGeneration: undefined })
+  }
+  return aside.length
+}
+
+/**
+ * The rest of what a machine had set aside for a conversation that is back, a batch at a time.
+ * A later time of its being heard from again gives back all that this one would, and goes on by
+ * itself: this one stops there.
+ */
 export const unparkRest = internalMutation({
-  args: { userId: v.id('users'), machineId: v.id('machines'), for: session },
-  handler: async (ctx, { userId, machineId, for: s }) => {
-    const aside = await ctx.db
-      .query('actions')
-      .withIndex('by_user_route', (q) =>
-        q.eq('userId', userId).eq('delivery', 'pending').eq('harness', s.harness).eq('sessionId', s.id).eq('machineId', undefined).eq('parkedBy', machineId),
-      )
-      .take(50)
-    for (const x of aside) await ctx.db.patch(x._id, { machineId, parkedBy: undefined })
-    if (aside.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.unparkRest, { userId, machineId, for: s })
+  args: { userId: v.id('users'), machineId: v.id('machines'), for: session, generation: v.optional(v.number()) },
+  handler: async (ctx, { userId, machineId, for: s, generation }) => {
+    if (generation !== undefined && (await generationOf(ctx, machineId, s.harness, s.id)) !== generation) return null
+    if ((await giveBackAside(ctx, userId, machineId, s, generation)) === 50)
+      await ctx.scheduler.runAfter(0, internal.delivery.unparkRest, { userId, machineId, for: s, generation })
     return null
   },
 })
 
-/** Sets aside everything else waiting for a conversation that takes nothing, a batch at a time, however much there is. */
+/**
+ * Sets aside everything else waiting for a conversation that takes nothing, a batch at a time,
+ * however much there is: only for as long as the conversation has not been heard from again
+ * since the click that took nothing was set aside. A step that comes after it has been, late,
+ * sets nothing aside, and leaves what is waiting to be tried afresh. A step scheduled before
+ * these times were counted is taken to be of the time before the first.
+ */
 export const parkRest = internalMutation({
-  args: { machineId: v.id('machines'), harness: v.string(), sessionId: v.string() },
-  handler: async (ctx, { machineId, harness, sessionId }) => {
+  args: { machineId: v.id('machines'), harness: v.string(), sessionId: v.string(), generation: v.optional(v.number()) },
+  handler: async (ctx, { machineId, harness, sessionId, generation }) => {
+    if ((await generationOf(ctx, machineId, harness, sessionId)) !== (generation ?? 0)) return null
     const rest = await ctx.db
       .query('actions')
       .withIndex('by_route', (q) => q.eq('machineId', machineId).eq('delivery', 'pending').eq('harness', harness).eq('sessionId', sessionId))
@@ -813,11 +1043,11 @@ export const parkRest = internalMutation({
       // hands since has had its clicks addressed afresh, and they are gone from this list
       const to = await destination(ctx, other.artifactId)
       if (to.machineId === machineId && to.harness === harness && to.sessionId === sessionId)
-        await ctx.db.patch(other._id, { machineId: undefined, parkedBy: machineId })
-      else await ctx.db.patch(other._id, { ...to, parkedBy: undefined })
+        await ctx.db.patch(other._id, { machineId: undefined, parkedBy: machineId, parkedGeneration: generation ?? 0 })
+      else await ctx.db.patch(other._id, { ...to, parkedBy: undefined, parkedGeneration: undefined })
     }
     // Each batch takes what it read out of the list it reads from, so the next starts afresh
-    if (rest.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId, harness, sessionId })
+    if (rest.length === 50) await ctx.scheduler.runAfter(0, internal.delivery.parkRest, { machineId, harness, sessionId, generation })
     return null
   },
 })
@@ -843,8 +1073,28 @@ export const orphan = internalMutation({
     if (!batch.isDone) await ctx.scheduler.runAfter(0, internal.delivery.orphan, { machineId })
     // What the machine had set aside is addressed to no machine, and is not among the above: it
     // is found by the pages the machine owned, whose waiting clicks are each addressed afresh,
-    // which lets go of what a machine that is gone had set aside
-    else await ctx.scheduler.runAfter(0, internal.delivery.orphanPages, { machineId })
+    // which lets go of what a machine that is gone had set aside. And when the machine heard
+    // each conversation from again is of no more use.
+    else {
+      await ctx.scheduler.runAfter(0, internal.delivery.orphanPages, { machineId })
+      await ctx.scheduler.runAfter(0, internal.delivery.forgetReturns, { machineId })
+    }
+    return null
+  },
+})
+
+/** Lets go of when a machine that is gone heard each of its conversations from again, a batch at a time. */
+export const forgetReturns = internalMutation({
+  args: { machineId: v.id('machines') },
+  handler: async (ctx, { machineId }) => {
+    const machine = await ctx.db.get(machineId)
+    if (machine && !machine.revoked) return null
+    const rows = await ctx.db
+      .query('deliveryReturns')
+      .withIndex('by_machine_session', (q) => q.eq('machineId', machineId))
+      .take(100)
+    for (const r of rows) await ctx.db.delete(r._id)
+    if (rows.length === 100) await ctx.scheduler.runAfter(0, internal.delivery.forgetReturns, { machineId })
     return null
   },
 })

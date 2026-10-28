@@ -197,7 +197,7 @@ async function tick(seconds = 1) {
   }
 }
 const acks = () => asked.filter((a) => a.path === '/ack').flatMap((a) => a.body.ids as string[])
-const clicksPath = (session: string) => `/clicks?harness=openclaw&session=${encodeURIComponent(session)}`
+const clicksPath = (session: string) => `/clicks?receipts=1&harness=openclaw&session=${encodeURIComponent(session)}`
 
 beforeEach(async () => {
   // Only the plugin's once-a-second clock and the time of day are stand-ins. The connector is asked for real.
@@ -367,6 +367,22 @@ describe('the OpenClaw add-on', () => {
     expect(plan.record).toEqual({ createIfMissing: false })
     expect(await plan.delivery.deliver({ text: 'an answer' }, { kind: 'final' })).toEqual({ visibleReplySent: false })
     expect(JSON.stringify(plan)).not.toContain(MAIN)
+  })
+
+  test('says it has a click by the receipt it was offered with, also when it is offered again in a later taking', async () => {
+    const host = await start()
+    host.runsCommand(GROUP)
+    const reports = () => asked.filter((a) => a.path === '/ack').map((a) => a.body)
+    offered[GROUP] = [{ id: 'click-1', text: 'one', receipt: 'the-first-taking-0001' } as Click]
+    await tick()
+    host.turns[0]!.begin()
+    await settle()
+    expect(reports()).toEqual([{ ids: ['click-1'], receipts: [{ id: 'click-1', receipt: 'the-first-taking-0001' }] }])
+    // Offered again in a later taking: the conversation has it already, which is said by the receipt it is offered with now
+    offered[GROUP] = [{ id: 'click-1', text: 'one', receipt: 'the-second-taking-0001' } as Click]
+    await tick()
+    expect(reports().at(-1)).toEqual({ ids: ['click-1'], receipts: [{ id: 'click-1', receipt: 'the-second-taking-0001' }] })
+    expect(host.turns).toHaveLength(1)
   })
 
   test('a conversation held in OpenClaw’s own window is given the click with no address to answer to', async () => {

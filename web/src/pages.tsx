@@ -400,6 +400,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               harness={page.session?.harness ?? page.agent}
               agent={agentName(page.agent)}
               stoppedAt={page.stoppedAt}
+              stoppedSequence={(page as { stoppedSequence?: number | null }).stoppedSequence ?? null}
               wakeFailed={page.wakeFailed}
               answeredAt={page.answeredAt ?? null}
             />
@@ -791,6 +792,7 @@ function ActionStatus({
   harness,
   agent,
   stoppedAt,
+  stoppedSequence,
   wakeFailed,
   answeredAt,
 }: {
@@ -815,6 +817,8 @@ function ActionStatus({
   agent: string | null
   /** When a person last stopped the page's agent, if they have. */
   stoppedAt: number | null
+  /** Where that stop stands in the order the person's clicks and stops were written in. Null where it is from before stops had a place in it, or the backend does not say. */
+  stoppedSequence: number | null
   /** Why the page's conversation could not be reopened, the last time that was tried and did not work. */
   wakeFailed: { at: number; why: string } | null
   /** When the page's agent last changed the page, by publishing it or writing its state. */
@@ -914,13 +918,23 @@ function ActionStatus({
   // (Not of something its agent had already said was done, or could not be done: a stop that
   // came after that, on this page or another of the conversation's, changed nothing about it)
   const settled = last.delivery === 'handed_off' && last.route !== 'stopped' && (last.outcome === 'succeeded' || last.outcome === 'failed')
-  if (stoppedAt !== null && last.at <= stoppedAt && !settled) {
+  // Whether something was done before the stop is told by where each stands in the order the
+  // person's clicks and stops were written in, which a clock that is set back does not change.
+  // A stop with no place in it is from before stops had one: it is told by the clock, and only
+  // of what was done then, since everything that has a place came after it.
+  const placed = (x: { sequence?: number | null }) => x.sequence !== undefined && x.sequence !== null
+  const beforeStop = (x: { at: number; sequence?: number | null }) =>
+    stoppedSequence !== null ? !placed(x) || x.sequence! <= stoppedSequence : stoppedAt !== null && !placed(x) && x.at <= stoppedAt
+  if (beforeStop(last) && !settled) {
     // Everything of that conversation's that was waiting went with the stop, and is said to have.
-    // Each is counted by when it was dropped: what an earlier stop of the same conversation
-    // dropped was done before this one too, and is none of this one's. (Functions from before
-    // they said when leave only the hour before the stop to go by)
-    const dropped = (recent ?? []).filter(
-      (x) => x.route === 'stopped' && x.at <= stoppedAt && (x.handedAt == null ? stoppedAt - x.at < 3_600_000 : x.handedAt >= stoppedAt),
+    // Each is counted by the stop it went with: what an earlier stop of the same conversation
+    // dropped was done before this one too, and is none of this one's. (A stop from before
+    // stops had a place is told by when each was dropped, and functions from before they said
+    // when leave only the hour before the stop to go by)
+    const dropped = (recent ?? []).filter((x) =>
+      stoppedSequence !== null
+        ? x.route === 'stopped' && (x as { stoppedSequence?: number | null }).stoppedSequence === stoppedSequence
+        : stoppedAt !== null && x.route === 'stopped' && x.at <= stoppedAt && (x.handedAt == null ? stoppedAt - x.at < 3_600_000 : x.handedAt >= stoppedAt),
     ).length
     return <span className="status">{dropped > 1 ? `Stopped, with ${dropped - 1} more that ${dropped === 2 ? 'was' : 'were'} waiting` : 'Stopped'}</span>
   }

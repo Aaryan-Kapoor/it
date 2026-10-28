@@ -7,6 +7,8 @@
 // (lib/clash.ts). So every caller is to be answered: with what it asked for, or with a refusal
 // that says why. The stand-in backend the other tests here run on never gives up on a write,
 // which is why these start the program itself, in a folder and on ports of their own.
+// With them is one thing more that only the program itself can show: how it orders a field
+// that a record does not have, which the order of clicks and stops leans on (actions.ts).
 // The 120 calls run in bursts of 40 because the backend program admits 64 concurrent actions
 // and answers with an uncoded error beyond that limit. Each burst still exceeds the largest
 // allowance of 30, so callers contend for the same record without exhausting action capacity.
@@ -333,4 +335,78 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
   /** A token for the session a cookie is. */
   const token = async (cookie: string) =>
     ((await (await fetch(`${origin}/session/token`, { method: 'POST', headers: { ...site(), cookie } })).json()) as { token: string }).token
+
+  /**
+   * The backend program's own ordering of a field a record does not have, which the order of
+   * clicks and stops leans on: a click or a setting aside from before these had a number has
+   * none, and a range up to a number is to take it in, as Convex says it orders a missing field
+   * below every number. The stand-in backend the other tests run on orders it so too; this asks
+   * the program itself. Such records are written as a backup would bring them back, by the
+   * backend program's own way of adding records, since no function of It's writes one any more.
+   */
+  test('a numbered stop drops the clicks that have no number, and a numbered return gives back what was set aside with none', async () => {
+    const { adminKey } = JSON.parse(readFileSync(path.join(folder, 'it/service.json'), 'utf8')) as { adminKey: string }
+    const { api } = backendAt(Number(new URL(origin).port))
+    const asAdmin = async (kind: 'query' | 'mutation', name: string, args: Record<string, unknown>) => {
+      const response = await fetch(`${api}/api/${kind}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Convex ${adminKey}` },
+        body: JSON.stringify({ path: name, args, format: 'json' }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      const result = (await response.json()) as { status: string; value?: unknown; errorMessage?: string }
+      if (result.status !== 'success') throw new Error(`${name} was refused: ${result.errorMessage}`)
+      return result.value
+    }
+    const rows = async (table: string) =>
+      ((await asAdmin('query', '_system/cli/tableData', { table, order: 'asc', paginationOpts: { numItems: 100, cursor: null } })) as { page: any[] }).page
+    const add = async (table: string, documents: Record<string, unknown>[]) => {
+      const said = (await asAdmin('mutation', '_system/frontend/addDocument', { table, documents })) as { success?: boolean } | null
+      expect(said?.success ?? true).toBe(true)
+    }
+    const [user] = await rows('users')
+    const [machine] = await rows('machines')
+    const now = Date.now()
+    const stopped = { harness: 'codex', id: 'thread-stopped' }
+    const aside = { harness: 'codex', id: 'thread-aside' }
+    await add('artifacts', [{ userId: user._id, slug: 'ordering', title: 'Ordering', lastVersion: 1, bytes: 0, createdAt: now, updatedAt: now, waiting: 6 }])
+    const page = (await rows('artifacts')).find((a) => a.slug === 'ordering')
+    const click = (clientActionId: string, more: Record<string, unknown>) => ({
+      userId: user._id,
+      artifactId: page._id,
+      clientActionId,
+      name: 'press',
+      payload: '{}',
+      contentVersion: 1,
+      title: 'Ordering',
+      createdAt: now,
+      delivery: 'pending',
+      harness: 'codex',
+      ...more,
+    })
+    await add('actions', [
+      click('ordering-unnumbered', { machineId: machine._id, sessionId: stopped.id }),
+      click('ordering-before', { machineId: machine._id, sessionId: stopped.id, sequence: 5 }),
+      click('ordering-after', { machineId: machine._id, sessionId: stopped.id, sequence: 50 }),
+      click('ordering-aside-unnumbered', { parkedBy: machine._id, sessionId: aside.id }),
+      click('ordering-aside-before', { parkedBy: machine._id, sessionId: aside.id, parkedGeneration: 0 }),
+      click('ordering-aside-after', { parkedBy: machine._id, sessionId: aside.id, parkedGeneration: 60 }),
+    ])
+    await add('deliveryReturns', [{ userId: user._id, machineId: machine._id, harness: aside.harness, sessionId: aside.id, generation: 55, at: now }])
+    // A step of a stop that has its place, 10, in the order: what has no place came before it
+    await asAdmin('mutation', 'artifacts:dropRest', { userId: user._id, machineId: machine._id, session: stopped, at: 0, sequence: 10 })
+    // A step of giving back what was set aside before the conversation was heard from again at 55
+    await asAdmin('mutation', 'delivery:unparkRest', { userId: user._id, machineId: machine._id, for: aside, generation: 55 })
+    const after = new Map((await rows('actions')).filter((x) => x.clientActionId.startsWith('ordering-')).map((x) => [x.clientActionId, x]))
+    expect([...after.keys()].sort()).toHaveLength(6)
+    expect(after.get('ordering-unnumbered')).toMatchObject({ delivery: 'handed_off', route: 'stopped', stoppedSequence: 10 })
+    expect(after.get('ordering-before')).toMatchObject({ delivery: 'handed_off', route: 'stopped', stoppedSequence: 10 })
+    expect(after.get('ordering-after')).toMatchObject({ delivery: 'pending' })
+    for (const given of ['ordering-aside-unnumbered', 'ordering-aside-before']) {
+      expect(after.get(given)).toMatchObject({ delivery: 'pending', machineId: machine._id })
+      expect(after.get(given)).not.toHaveProperty('parkedBy')
+    }
+    expect(after.get('ordering-aside-after')).toMatchObject({ parkedBy: machine._id, parkedGeneration: 60 })
+    expect(after.get('ordering-aside-after')).not.toHaveProperty('machineId')
+  })
 })

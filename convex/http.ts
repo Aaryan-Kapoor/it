@@ -81,8 +81,8 @@ http.route({ path: '/health', method: 'GET', handler: httpAction(async () => jso
 
 // What the `it` command needs to know before it has a token: which protocol the backend speaks,
 // and the name it signs under, which a machine's proof is made out to. And the later forms of a
-// call it takes, which a machine a version ahead of it asks about when such a call fails. None of
-// it is secret.
+// call it takes, which a machine a version ahead of it asks about when such a call fails: among
+// them the receipts a machine hands clicks over by (delivery.ts). None of it is secret.
 http.route({
   path: '/cli/config',
   method: 'GET',

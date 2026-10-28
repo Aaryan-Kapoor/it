@@ -280,6 +280,21 @@ describe('the Pi add-on', () => {
     expect(acks()[0]).toMatchObject({ method: 'POST', token: TOKEN, body: { ids: [c.id] } })
   })
 
+  it('says it has a click by the receipt it was offered with, also when it is offered again in a later taking', async () => {
+    await connect()
+    acksArrive = false
+    const c = { ...click('approve'), receipt: 'the-first-taking-0001' }
+    offered = [c]
+    const p = pi('session-receipts')
+    p.start()
+    await until(() => acks().length > 0)
+    expect(acks()[0]!.body).toEqual({ ids: [c.id], receipts: [{ id: c.id, receipt: 'the-first-taking-0001' }] })
+    // Offered again in a later taking: Pi has it already, and says so by the receipt it is offered with now
+    offered = [{ ...c, receipt: 'the-second-taking-0001' }]
+    await until(() => acks().some((a) => a.body.receipts?.[0]?.receipt === 'the-second-taking-0001'))
+    expect(p.sent).toHaveLength(1)
+  })
+
   it('gives several clicks as one message, one line each', async () => {
     await connect()
     const [a, b] = [click('approve'), click('reject')]
@@ -555,7 +570,7 @@ describe('the Pi add-on', () => {
     expect(p.conversation).toEqual([])
     honest = true
     await until(() => seen.some((s) => s.startsWith('POST /ack')))
-    expect(seen[0]).toBe('POST /clicks?harness=pi&session=session-port undefined true')
+    expect(seen[0]).toBe('POST /clicks?receipts=1&harness=pi&session=session-port undefined true')
     expect(p.conversation).toEqual([c.text])
   })
 
@@ -791,7 +806,7 @@ describe.skipIf(process.platform === 'win32')('the Pi add-on, in a Pi started wi
           const end = performance.now() + 15_000
           while (!seen.some((s) => s.startsWith('POST /ack')) && !proxy.seen.length && performance.now() < end) await new Promise((r) => really(r, 20))
           expect(proxy.seen).toEqual([])
-          expect(seen[0]).toBe('POST /clicks?harness=pi&session=the-persons-own-session true')
+          expect(seen[0]).toBe('POST /clicks?receipts=1&harness=pi&session=the-persons-own-session true')
           expect(handed.trim()).toBe(c.text)
           expect(seen).toContain('POST /ack true')
         } finally {

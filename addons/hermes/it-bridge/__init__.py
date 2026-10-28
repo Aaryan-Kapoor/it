@@ -204,6 +204,14 @@ def _session_key():
         return ""
 
 
+def _had(clicks):
+    """What the connector is told of clicks the agent has: each by the receipt it was offered with,
+    which names the one taking of it that this is about, and by its id for a connector that gives
+    no receipts."""
+    receipts = [{"id": c["id"], "receipt": c["receipt"]} for c in clicks if isinstance(c.get("receipt"), str)]
+    return {"ids": [c["id"] for c in clicks], **({"receipts": receipts} if receipts else {})}
+
+
 class _Bridge:
     def __init__(self, ctx):
         self._ctx = ctx
@@ -583,7 +591,8 @@ class _Bridge:
                 if talk.was[:1] == [old]:
                     talk.was.pop(0)
 
-        answer = self._ask("/clicks?harness=%s&session=%s" % (HARNESS, quote(session, safe="")))
+        # With receipts: each click comes with the one its taking is known by, and is said to be had by that
+        answer = self._ask("/clicks?receipts=1&harness=%s&session=%s" % (HARNESS, quote(session, safe="")))
         offered = answer.get("clicks") if isinstance(answer, dict) else None
         if not isinstance(offered, list):
             return
@@ -591,11 +600,12 @@ class _Bridge:
         # what it offers now is all there is to hand over, and nothing is kept here between askings.
         clicks = [c for c in offered if isinstance(c, dict) and isinstance(c.get("id"), str) and c["id"] and isinstance(c.get("text"), str) and c["text"]]
         with self._lock:
-            again = [c["id"] for c in clicks if c["id"] in self._given]
+            again = [c for c in clicks if c["id"] in self._given]
             fresh = [c for c in clicks if c["id"] not in self._given]
-        # Offered something the agent already has: the earlier report of it was lost, so it is sent again
+        # Offered something the agent already has: the earlier report of it was lost, or it is offered
+        # in a later taking, so it is said again, by the receipt it is offered with now
         if again:
-            self._ask("/ack", {"ids": again})
+            self._ask("/ack", _had(again))
         if not fresh or self._busy(talk):
             return
         # This calls into Hermes and may read its configuration. A hook can replace the
@@ -636,7 +646,7 @@ class _Bridge:
                 for old in list(self._given)[: REMEMBERED // 2]:
                     del self._given[old]
         # The agent has these now. If this report is lost, the connector offers them again and is told again.
-        self._ask("/ack", {"ids": [c["id"] for c in fresh]})
+        self._ask("/ack", _had(fresh))
 
 
 def register(ctx):

@@ -490,11 +490,22 @@ function askConnector(h, p, body, { token } = {}) {
   })
 }
 const sealedAnswers = []
-/** Stands in for an add-on: asks the connector for one conversation's clicks, as the real ones do. */
+/**
+ * Stands in for an add-on: asks the connector for one conversation's clicks, as the real ones do,
+ * with receipts, and says it has a click by the receipt it was last offered with.
+ */
 function addon(h, harness, session) {
+  const receipts = new Map()
   return {
-    clicks: () => askConnector(h, `/clicks?harness=${harness}&session=${encodeURIComponent(session)}`),
-    ack: (ids) => askConnector(h, '/ack', { ids }),
+    clicks: async () => {
+      const answer = await askConnector(h, `/clicks?receipts=1&harness=${harness}&session=${encodeURIComponent(session)}`)
+      for (const c of answer?.clicks ?? []) if (typeof c.receipt === 'string') receipts.set(c.id, c.receipt)
+      return answer
+    },
+    ack: (ids) => {
+      const named = ids.flatMap((id) => (receipts.has(id) ? [{ id, receipt: receipts.get(id) }] : []))
+      return askConnector(h, '/ack', { ids, ...(named.length ? { receipts: named } : {}) })
+    },
     became: (next) => askConnector(h, '/session', { harness, session: next, was: session }),
     health: () => askConnector(h, '/health'),
   }

@@ -138,6 +138,16 @@ The Hermes add-on checks that a click still belongs to the conversation in its c
 
 Browser retries of a page click or typed message share its original identity and a server deadline of at most seven days. After that deadline, a missing receipt is refused rather than treated as new work. A saved request with no deadline can only confirm a receipt It still holds. A notification accepts one answer, and Stop names the run shown when it was pressed. Signing out or pairing again discards pending requests from the old pairing; queued requests cannot execute under the replacement pairing.
 
+### A machine or an add-on from the release before is held to less
+
+Every hand-over of a click has a receipt of its own, so a word about one hand-over that comes late cannot count for a later one of the same click, and a hand-over counts only for the conversation the click was taken for. A machine that joined this It and still runs the It from before receipts, and an add-on of that It that is still loaded in an agent app, are served without receipts for one release, and are held to less:
+
+- Between such a machine's own takings of the same click that protection is missing: a late word about one of them can still count for the next. An add-on of that release is believed by a click's id alone, for a click it was given in the taking that holds the click now, so between two takings that were both given to such an add-on it is missing too.
+- Apart from `it ack`, nothing such a machine says without a receipt keeps, gives back, sets aside or confirms a taking that was made with a receipt, whether that taking still holds the click or is over. Once nothing holds the click, the machine can take it afresh, as any machine can.
+- Where a delivery of such a machine's gives up just as the click's conversation is heard from again, It sets nothing aside and answers so, and the It of the release before takes that answer for the click having been set aside. On that machine the click then waits, in view on the site and for `it wait`, until its conversation is heard from again after a minute and a half of quiet.
+
+`it ack`, on any of your machines, needs no receipt and is taken at its word. Update It on every joined machine, and start agent apps again after an update.
+
 ### It is not made for the public internet
 
 Do not forward a port to It, give it a public address, or put it where strangers can reach it. It has no encryption, it answers only to the machine's own names, and its limits on how fast a caller may try things are sized for one household.

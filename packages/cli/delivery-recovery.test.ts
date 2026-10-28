@@ -356,3 +356,26 @@ test('a recovered click that changes conversation replaces its earlier waiter co
   await store.keepWaiters([moved], 'codex:new-thread')
   expect(open().waiters.get('action')).toEqual({ click: moved, key: 'codex:new-thread' })
 })
+
+test('the receipt of each taking is kept with its claim until It has been told what became of it, and a record from before receipts is read as one with none', async () => {
+  const file = path.join(folder, 'delivery-recovery.json')
+  writeFileSync(file, JSON.stringify({ version: 1, waiters: [], marks: [], accepted: ['before'], returning: ['before'], targets: [] }))
+  const store = open()
+  expect(store.accepted.has('before')).toBe(true)
+  expect(store.receipts.size).toBe(0)
+  await store.claim(['queued', 'given-back'], 'codex:thread', 'a-receipt-of-one-taking')
+  await store.accept(['queued'], { id: 'queued' })
+  // A claim retired while its click waits to be confirmed keeps the receipt it is to be confirmed by
+  await store.retire(['queued', 'given-back'])
+  expect([...open().receipts]).toEqual([['queued', 'a-receipt-of-one-taking']])
+  // A copy handed on to a waiter keeps the receipt it is held by, and a malformed one is not read
+  await store.keepWaiters([{ ...copy.click, receipt: 'a-receipt-of-one-taking' }], copy.key)
+  expect(open().waiters.get('action')?.click.receipt).toBe('a-receipt-of-one-taking')
+  await store.confirm('queued', () => true)
+  expect(open().receipts.size).toBe(0)
+  const kept = JSON.parse(readFileSync(file, 'utf8'))
+  writeFileSync(file, JSON.stringify({ ...kept, receipts: [['queued', 7]] }))
+  const said = vi.fn()
+  expect(open(said).receipts.size).toBe(0)
+  expect(said).toHaveBeenCalledWith(expect.stringContaining('could not be read'))
+})

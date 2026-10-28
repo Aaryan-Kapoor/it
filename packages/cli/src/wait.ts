@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { MESSAGE, NOUN, parseJson } from '@it/protocol'
 import { type Args, text } from './args'
 import { local } from './connector'
@@ -25,7 +26,11 @@ export interface Listed {
   nowStateRevision?: number
   /** The files it carried beside its data. */
   files?: { name: string; type: string; bytes: number }[]
+  /** The receipt of the taking the connector holds it by, where the connector handed it on while it held it. */
+  receipt?: string
 }
+/** A receipt for a taking about to be asked for: nobody else's, and nothing anyone could guess. */
+const newReceipt = () => randomBytes(16).toString('base64url')
 /** A click as this program prints it for an agent. */
 export const printed = (c: Listed) => ({
   id: c.id,
@@ -115,7 +120,8 @@ export async function wait(a: Args, counted: (code?: string) => void) {
   const announce = () =>
     local<{ sessions?: { harness: string; id: string }[]; clicks?: Listed[] }>('/waiting', {
       method: 'POST',
-      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }), ...got() },
+      // It says it hands clicks over by the receipt each was given with, so that the connector hands it what it holds under one
+      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }), receipts: true, ...got() },
     })
   // The connector knows the ids this conversation had before it was last cleared: pages made
   // then are still recorded under them
@@ -156,6 +162,12 @@ export async function wait(a: Args, counted: (code?: string) => void) {
    * offered, and not by comparing this machine's clock with the backend's.
    */
   const made = new Map<string, { at: number; harness: string | undefined; wasWaiting: boolean }>()
+  /**
+   * The receipt of the taking each printed click was handed over in: this wait's own, or the
+   * connector's where the connector handed it on. It is said to It with that, and counts for that
+   * taking alone. Let go of once It has been told.
+   */
+  const receipts = new Map<string, string>()
   /** Whether the first list of what is waiting has been looked at. What is in it was made before this began. */
   let looked = false
   let busy = false
@@ -191,7 +203,8 @@ export async function wait(a: Args, counted: (code?: string) => void) {
   }
   const report = async () => {
     for (const id of unreported) {
-      const ok = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route: 'waiter' }).then(
+      const receipt = receipts.get(id)
+      const ok = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route: 'waiter', ...(receipt ? { receipt } : {}) }).then(
         (done) => {
           const c = made.get(id)
           // Counted or not, it is finished with: a wait that goes on for days keeps nothing of it
@@ -208,7 +221,10 @@ export async function wait(a: Args, counted: (code?: string) => void) {
         },
         (err) => /conflict|not_found/.test(String((err as Problem).code)),
       )
-      if (ok) unreported.delete(id)
+      if (ok) {
+        unreported.delete(id)
+        receipts.delete(id)
+      }
     }
   }
   /** Prints what the connector handed back and has not been printed yet, and tells It of it. */
@@ -225,6 +241,7 @@ export async function wait(a: Args, counted: (code?: string) => void) {
       printedIds.add(c.id)
       if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
       unreported.add(c.id)
+      if (c.receipt) receipts.set(c.id, c.receipt)
       made.set(c.id, { at: c.at, harness: c.session?.harness, wasWaiting: false })
     }
     await report()
@@ -251,15 +268,23 @@ export async function wait(a: Args, counted: (code?: string) => void) {
       await report()
       const fresh = clicks.filter((c) => !printedIds.has(c.id) && mine(c))
       if (fresh.length) {
-        const got = new Set<string>()
-        if (slug) for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: fresh.map((c) => c.id) })) got.add(id)
+        const got = new Map<string, string>()
+        // Each taking with a receipt of its own, by which the click is said to be handed over, or given back
+        if (slug) {
+          const receipt = newReceipt()
+          for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: fresh.map((c) => c.id), receipt })) got.set(id, receipt)
+        }
         // Waiting for its own conversation's clicks, each is claimed for the conversation it
         // was offered for: a page that has changed hands meanwhile keeps its click for its new owner
-        else for (const c of fresh) for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: [c.id], for: c.session! })) got.add(id)
+        else
+          for (const c of fresh) {
+            const receipt = newReceipt()
+            for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: [c.id], for: c.session!, receipt })) got.set(id, receipt)
+          }
         for (const c of fresh.filter((x) => got.has(x.id))) {
           // The wait ended while this was being asked for: it is given back, and not printed after the last word
           if (ending || over) {
-            await call('mutation', api.delivery.release, { id: c.id }).catch(() => {})
+            await call('mutation', api.delivery.release, { id: c.id, receipt: got.get(c.id) }).catch(() => {})
             continue
           }
           // Out of this process first, and only then reported as handed over
@@ -268,6 +293,7 @@ export async function wait(a: Args, counted: (code?: string) => void) {
           printedIds.add(c.id)
           if (printedIds.size > 5000) printedIds.delete(printedIds.values().next().value!)
           unreported.add(c.id)
+          receipts.set(c.id, got.get(c.id)!)
           made.set(c.id, { at: c.at, harness: c.session?.harness, wasWaiting: !looked })
         }
         await report()

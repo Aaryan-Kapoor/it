@@ -482,6 +482,20 @@ describe('the OpenCode add-on', () => {
     expect(c.polls()[0]).toMatchObject({ harness: 'opencode', session: 'ses_one' })
   })
 
+  it('says it has a click by the receipt it was offered with, also when it is offered again in a later taking', async () => {
+    const c = await connector()
+    c.state.deaf = true
+    c.state.offered = [{ ...click('k1'), receipt: 'the-first-taking-0001' } as Click]
+    const { hooks, prompts } = await load()
+    await begin(hooks, 'ses_one')
+    const reports = () => c.state.asked.filter((a) => a.path === '/ack').map((a) => a.body)
+    await vi.waitFor(() => expect(reports()[0]).toEqual({ ids: ['k1'], receipts: [{ id: 'k1', receipt: 'the-first-taking-0001' }] }), within)
+    // Offered again in a later taking: the conversation has it already, which is said by the receipt it is offered with now
+    c.state.offered = [{ ...click('k1'), receipt: 'the-second-taking-0001' } as Click]
+    await vi.waitFor(() => expect(reports().some((r) => r.receipts?.[0]?.receipt === 'the-second-taking-0001')).toBe(true), within)
+    expect(prompts).toHaveLength(1)
+  })
+
   it("hands the connector's text to the conversation word for word, then says it has", async () => {
     const c = await connector()
     c.state.offered = [click('k1')]

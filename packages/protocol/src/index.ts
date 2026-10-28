@@ -9,7 +9,11 @@ export const PROTOCOL_VERSION = 1
  * does not take without saying why: a command that is refused such a call asks there, and where
  * the form is not named it asks in the way that backend takes.
  */
-export const TAKES = { conversationsWaiting: 'delivery.allWaiting.for' } as const
+export const TAKES = {
+  conversationsWaiting: 'delivery.allWaiting.for',
+  /** The receipt each taking of a click is known by, which every step of a hand-over names (delivery.ts). */
+  receipts: 'delivery.receipts',
+} as const
 
 /** The word the interface uses for a thing shown on a display. It is said in one place so that it can be changed in one. */
 export const NOUN = { one: 'page', many: 'pages', One: 'Page', Many: 'Pages' } as const

@@ -87,7 +87,8 @@ async function codex(): Promise<void> {
     if (await handed(process.stdout, said)) await behind.taken()
     return
   }
-  const got = await local<{ clicks: Delivered[] }>(`/clicks?harness=codex&session=${encodeURIComponent(session)}`, {
+  // Asked with receipts: each click comes with the receipt of the taking it is given in, and the agent having it is said by that
+  const got = await local<{ clicks: Delivered[] }>(`/clicks?receipts=1&harness=codex&session=${encodeURIComponent(session)}`, {
     method: 'POST',
     body: { ...from, busy: true },
   })
@@ -116,7 +117,9 @@ async function codex(): Promise<void> {
   )
   if (!out) return
   await behind.taken()
-  if (clicks.length) await local('/ack', { method: 'POST', body: { ids: clicks.map((c) => c.id), woke: false } })
+  // Said by the receipt each was given with. The ids go too, for a connector from before receipts, which reads nothing else
+  const receipts = clicks.flatMap((c) => (typeof c.receipt === 'string' ? [{ id: c.id, receipt: c.receipt }] : []))
+  if (clicks.length) await local('/ack', { method: 'POST', body: { ids: clicks.map((c) => c.id), ...(receipts.length ? { receipts } : {}), woke: false } })
 }
 
 export async function hook(harness: string): Promise<void> {
