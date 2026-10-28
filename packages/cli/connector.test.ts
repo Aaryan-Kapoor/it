@@ -4537,6 +4537,31 @@ describe.skipIf(process.platform === 'win32')('a thread of T3 Code that is switc
     expect([stand.t3.sent[0]!.thread, stand.t3.asked]).toEqual(['t3-next-door', []])
   })
 
+  test('a search for a conversation’s thread that is under way when the thread is found to run the conversation ends there, and the click goes to that thread', async () => {
+    stand.t3.running = true
+    stand.t3.slow = true
+    await start('socket', BOTH)
+    handing(0)
+    // A click for a Codex conversation that has not been heard from begins a search for its thread
+    stand.watching.get('delivery:inboxPage')!([click(codex)])
+    await until(() => stand.t3.asked.length === 1)
+    // Its hook is heard from before the search says anything, and T3 Code says which thread runs it
+    stand.t3.runs.set('t3-thread', { now: codex, before: [] })
+    await codexTurn(false)
+    await until(() => stand.t3.looked.length === 1)
+    // The click goes to that thread without waiting for the search
+    await until(() => stand.t3.sent.length === 1)
+    expect(stand.t3.sent[0]!.thread).toBe('t3-thread')
+    // What the search says in the end counts for nothing, and no other search begins
+    stand.t3.asked[0]!.answer({ status: 'limited' })
+    await settled()
+    stand.watching.get('delivery:inboxPage')!([{ ...click(codex), id: 'click-2' }])
+    await until(() => stand.t3.sent.length === 2)
+    expect(stand.t3.sent[1]!.thread).toBe('t3-thread')
+    expect(stand.t3.asked).toHaveLength(1)
+    expect(stand.codex).toEqual([])
+  })
+
   test('where T3 Code is not running nothing is asked of it and nothing changes hands, and a click on a page that went goes where the page went', async () => {
     await start('socket', BOTH)
     handing(1)
