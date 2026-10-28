@@ -234,11 +234,49 @@ export async function takePage(ctx: MutationCtx, a: Doc<'artifacts'>, machine: D
   if (a.tour !== null) await ctx.db.patch(a._id, { tour: null })
   if (a.machineId === machine._id && a.session?.harness === mine.harness && a.session?.id === mine.id) return { took: false }
   await rateLimit(ctx, 'take', a.userId)
-  await ctx.db.patch(a._id, { machineId: machine._id, session: mine, agent: agent?.slice(0, 60) ?? a.agent })
-  // Clicks already waiting on the page go where the page went
-  await ctx.scheduler.runAfter(0, internal.actions.readdress, { artifactId: a._id })
+  await handTo(ctx, a, machine, mine, agent?.slice(0, 60) ?? a.agent)
   return { took: true }
 }
+
+/** Gives a page to a conversation, with the clicks already waiting on it. */
+async function handTo(ctx: MutationCtx, a: Doc<'artifacts'>, machine: Doc<'machines'>, to: { harness: string; id: string }, agent: string | undefined) {
+  await ctx.db.patch(a._id, { machineId: machine._id, session: to, agent })
+  // Clicks already waiting on the page go where the page went
+  await ctx.scheduler.runAfter(0, internal.actions.readdress, { artifactId: a._id })
+}
+
+/**
+ * A conversation on this machine carries on as another. T3 Code runs a conversation for each of
+ * its threads, and a thread that is switched to another agent app runs another conversation from
+ * then on, under another id: the connector, which T3 Code tells which conversations a thread
+ * has run, says which conversation the earlier one is now. Every page the earlier one has on
+ * this machine goes to the later one, as when a conversation takes a page, with what is waiting
+ * on it. A page the earlier one has on another machine stays where it is: the conversation there
+ * is another, whatever its id.
+ */
+export const carryOn = mutation({
+  args: { from: session, to: session },
+  handler: async (ctx, { from, to }) => {
+    const { user, machine } = await requireMachine(ctx)
+    for (const s of [from, to]) if (s.harness.length > 40 || s.id.length > 200) fail('invalid', 'That is not a session.')
+    if (from.harness === to.harness && from.id === to.id) return { moved: 0 }
+    const pages = (
+      await ctx.db
+        .query('artifacts')
+        .withIndex('by_user_conversation', (q) => q.eq('userId', user._id).eq('session.harness', from.harness).eq('session.id', from.id))
+        .take(QUOTA.artifacts)
+    ).filter((a) => a.machineId === machine._id)
+    if (!pages.length) return { moved: 0 }
+    await rateLimit(ctx, 'take', user._id)
+    for (const a of pages) {
+      // As when a conversation takes a page, the page is no tour's from then on
+      if (a.tour !== null && a.tour !== undefined) await ctx.db.patch(a._id, { tour: null })
+      // The app's name goes with it, where the page goes by that name, and a name the agent gave it stays
+      await handTo(ctx, a, machine, to, a.agent === undefined || a.agent === from.harness ? to.harness : a.agent)
+    }
+    return { moved: pages.length }
+  },
+})
 
 type Connection = {
   harness: string

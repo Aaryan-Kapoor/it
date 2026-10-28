@@ -567,30 +567,198 @@ describe('whether some Codex has a conversation open', () => {
     const lock = (thread: string) => path.join(locks, `${thread}.lock`)
     // No Codex has ever had it open, or Codex has put its file away again
     expect(codexHeld('thread-none', codexHome)).toBe(false)
-    // Open in some Codex: the file is there, and a program has it open (this one stands in for Codex)
+    // Open in some Codex: the file is there, and a program has it open (this one stands in for
+    // Codex). Windows is asked for the lock Codex holds on the file, which this program does not
+    // take, and a file that is only open is not held there: the tests that follow hold that.
     writeFileSync(lock('thread-open'), '')
     const held = openSync(lock('thread-open'), 'r')
     try {
-      expect(codexHeld('thread-open', codexHome)).toBe(process.platform === 'win32' ? null : true)
+      expect(codexHeld('thread-open', codexHome)).toBe(process.platform !== 'win32')
     } finally {
       closeSync(held)
     }
     // Left behind by a Codex that was ended without warning: where the system says who has a file
-    // open, that is not taken for an open conversation. Elsewhere the file is all there is to go by.
+    // open, or who holds a lock on it, that is not taken for an open conversation. Elsewhere the
+    // file is all there is to go by.
     writeFileSync(lock('thread-left'), '')
-    expect(codexHeld('thread-left', codexHome)).toBe(process.platform === 'linux' || process.platform === 'darwin' ? false : null)
+    expect(codexHeld('thread-left', codexHome)).toBe(['linux', 'darwin', 'win32'].includes(process.platform) ? false : null)
     // What was found is good for a moment only: closed a moment later, it is found closed
     const t = Date.now()
     writeFileSync(lock('thread-then'), '')
     const then = openSync(lock('thread-then'), 'r')
-    expect(codexHeld('thread-then', codexHome, t)).toBe(process.platform === 'win32' ? null : true)
+    expect(codexHeld('thread-then', codexHome, t)).toBe(process.platform !== 'win32')
     closeSync(then)
     rmSync(lock('thread-then'))
-    expect(codexHeld('thread-then', codexHome, t + 500)).toBe(process.platform === 'win32' ? null : true)
+    expect(codexHeld('thread-then', codexHome, t + 500)).toBe(process.platform !== 'win32')
     expect(codexHeld('thread-then', codexHome, t + 2000)).toBe(false)
     // An id that is not one Codex makes names no file at all
     expect(codexHeld('../thread-open', codexHome)).toBe(false)
   })
+
+  test('on Windows, a read refused for a lock says that the conversation is open, and no other refusal says anything either way', () => {
+    const platform = process.platform
+    const { openSync: open, readSync: read } = fs
+    const codexHome = path.join(scratch, 'codex-home')
+    const locks = path.join(codexHome, 'thread-writer-locks')
+    mkdirSync(locks, { recursive: true })
+    // What Windows answers, as Node and Bun give it: the opening, or the read of the first byte, refused with a code
+    type Refusal = { at: 'open' | 'read'; code: string } | null
+    let refused: Refusal = null
+    const ours = new Set<number>()
+    const refusal = (code: string) => Object.assign(new Error(code), { code })
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      fs.openSync = new Proxy(open, {
+        apply(target, self, args) {
+          const asked = String(args[0]).startsWith(locks)
+          if (asked && refused?.at === 'open') throw refusal(refused.code)
+          const fd = Reflect.apply(target, self, args)
+          if (asked) ours.add(fd)
+          return fd
+        },
+      })
+      fs.readSync = new Proxy(read, {
+        apply(target, self, args) {
+          if (ours.has(args[0]) && refused?.at === 'read') throw refusal(refused.code)
+          return Reflect.apply(target, self, args)
+        },
+      })
+      syncBuiltinESMExports()
+      const said: [Refusal, boolean | null][] = [
+        // Read, so that nothing holds a lock on it: a Codex that held it has gone
+        [null, false],
+        // The read refused for the lock that a Codex holds while it writes the conversation
+        [{ at: 'read', code: 'EBUSY' }, true],
+        [{ at: 'read', code: 'EIO' }, null],
+        // Refused at the opening, EBUSY is another program's having the file to itself, or its being removed: not a lock
+        [{ at: 'open', code: 'EBUSY' }, null],
+        [{ at: 'open', code: 'EPERM' }, null],
+        // Gone between the look for it and the opening: Codex put it away
+        [{ at: 'open', code: 'ENOENT' }, false],
+      ]
+      said.forEach(([how, held], n) => {
+        writeFileSync(path.join(locks, `thread-${n}.lock`), '')
+        refused = how
+        expect(codexHeld(`thread-${n}`, codexHome), JSON.stringify(how)).toBe(held)
+      })
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform })
+      fs.openSync = open
+      fs.readSync = read
+      syncBuiltinESMExports()
+    }
+  })
+})
+
+// Codex holds the lock on a conversation's file with a call that Windows alone has, so only a
+// program on Windows can stand in for it, and only there is that lock what It asks for.
+if (process.platform !== 'win32')
+  console.log('  skip  the tests of the lock Codex holds on a conversation’s file on Windows: only Windows has that lock, and only there is it asked for')
+describe.skipIf(process.platform !== 'win32')('whether some Codex has a conversation open, on Windows', () => {
+  // What opens the file as Codex does, for reading and writing, made where it is not there, and
+  // shared with every other program for all three. With `lock` it then takes the lock Codex
+  // takes, as Rust's File::try_lock takes it: LockFileEx, to itself and without waiting, over
+  // every byte from the first. With `alone` it lets no other program open the file at all.
+  const HOLDER = `$ErrorActionPreference = 'Stop'
+$share = if ($env:IT_TEST_HOW -eq 'alone') { [System.IO.FileShare]::None } else { [System.IO.FileShare]'ReadWrite, Delete' }
+$file = [System.IO.File]::Open($env:IT_TEST_FILE, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, $share)
+if ($env:IT_TEST_HOW -eq 'lock') {
+  Add-Type -Namespace ItTest -Name Kernel32 -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true)] public static extern bool LockFileEx(Microsoft.Win32.SafeHandles.SafeFileHandle file, uint flags, uint reserved, uint lengthLow, uint lengthHigh, ref System.Threading.NativeOverlapped overlapped);'
+  $overlapped = New-Object System.Threading.NativeOverlapped
+  if (-not [ItTest.Kernel32]::LockFileEx($file.SafeFileHandle, 3, 0, [uint32]::MaxValue, [uint32]::MaxValue, [ref]$overlapped)) { exit 3 }
+}
+[Console]::Out.WriteLine('holding')
+[Console]::Out.Flush()
+Start-Sleep -Seconds 600
+`
+  const ending: (() => Promise<void>)[] = []
+  afterEach(async () => {
+    // Every program that holds a file is ended and waited for before the scratch folder is removed
+    await Promise.all(ending.splice(0).map((end) => end()))
+  })
+  /** Starts a program that holds the file as it is told, and says when it does. Ending it ends it as a crash would, without warning. */
+  const holding = (file: string, how: 'lock' | 'alone') =>
+    new Promise<{ end: () => Promise<void> }>((resolve, reject) => {
+      const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(HOLDER, 'utf16le').toString('base64')], {
+        env: { ...process.env, IT_TEST_FILE: file, IT_TEST_HOW: how },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+      const gone = new Promise<void>((done) => child.once('exit', () => done()))
+      const end = async () => {
+        if (child.exitCode === null && child.signalCode === null) child.kill()
+        await gone
+      }
+      ending.push(end)
+      let said = ''
+      child.stdout.on('data', (bytes) => {
+        said += bytes
+        if (said.includes('holding')) resolve({ end })
+      })
+      child.stderr.on('data', (bytes) => {
+        said += bytes
+      })
+      child.once('error', reject)
+      child.once('exit', (code) => reject(new Error(`the program that holds the file ended with ${code} before it held it: ${said}`)))
+    })
+  const codexHome = () => path.join(scratch, 'codex-home')
+  const lockOf = (thread: string) => {
+    const locks = path.join(codexHome(), 'thread-writer-locks')
+    mkdirSync(locks, { recursive: true })
+    return path.join(locks, `${thread}.lock`)
+  }
+  /** What reading the first byte of a file gives: what it read, or the code it was refused with. */
+  const readFirst = (file: string) => {
+    const fd = openSync(file, 'r')
+    try {
+      return `read ${fs.readSync(fd, Buffer.alloc(1), 0, 1, 0)}`
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code
+    } finally {
+      closeSync(fd)
+    }
+  }
+
+  test('a conversation whose Codex holds the lock on its file is open, and one whose Codex was ended without warning is not, though the file is left', async () => {
+    const thread = '019a0000-0000-7000-8000-000000000001'
+    const lock = lockOf(thread)
+    // A file that a Codex left behind and nothing holds: it is not open, and asking took nothing
+    // that keeps a Codex from opening the conversation and taking the lock after
+    writeFileSync(lock, '')
+    let t = Date.now()
+    expect(codexHeld(thread, codexHome(), t)).toBe(false)
+    const codex = await holding(lock, 'lock')
+    // Codex writes nothing into the file: Windows refuses to read it while the lock is held
+    expect(readFirst(lock)).toBe('EBUSY')
+    t += 2000
+    expect(codexHeld(thread, codexHome(), t)).toBe(true)
+    // Asking does not take the lock, nor loosen it: it is held all the same after
+    t += 2000
+    expect(codexHeld(thread, codexHome(), t)).toBe(true)
+    await codex.end()
+    // Ended as a crash ends it, Codex leaves the file. The system lets go of the lock as it closes
+    // what the program had open, which may be a moment after the program has gone.
+    expect(existsSync(lock)).toBe(true)
+    const until = Date.now() + 10_000
+    let held: boolean | null
+    do {
+      t += 2000
+      held = codexHeld(thread, codexHome(), t)
+      if (held !== false) await new Promise((r) => setTimeout(r, 200))
+    } while (held !== false && Date.now() < until)
+    expect(held).toBe(false)
+    expect(readFirst(lock)).toBe('read 0')
+  }, 120_000)
+
+  test('a conversation whose file another program has to itself is not known to be open or closed', async () => {
+    const thread = '019a0000-0000-7000-8000-000000000002'
+    const lock = lockOf(thread)
+    const other = await holding(lock, 'alone')
+    // Nothing can be read of the file, so nothing is known of a lock on it: the click waits, as for a conversation that may be open
+    expect(codexHeld(thread, codexHome())).toBeNull()
+    await other.end()
+    expect(codexHeld(thread, codexHome(), Date.now() + 2000)).toBe(false)
+  }, 120_000)
 })
 
 describe('how often a conversation is reopened', () => {
@@ -1001,6 +1169,43 @@ describe.skipIf(process.platform === 'win32')('ending a run that was noted befor
         fs.readdirSync = list
         fs.readFileSync = read
         syncBuiltinESMExports()
+      }
+    },
+  )
+
+  test.skipIf(process.platform !== 'linux')(
+    'a command carrying the run’s name is ended though another process of the same person’s cannot be read, and the run stays uncertain',
+    async () => {
+      const candidate = process.pid
+      const list = fs.readdirSync
+      const read = fs.readFileSync
+      // The run's own command, in a group of its own, which nothing but the run's name says is the run's
+      const command = spawn('sleep', ['300'], { detached: true, stdio: 'ignore', env: { ...process.env, IT_RUN: 'a-run-with-company' } })
+      command.unref()
+      await until(() => identity([command.pid!]).has(command.pid!))
+      try {
+        fs.readdirSync = new Proxy(list, {
+          apply(target, self, args) {
+            return args[0] === '/proc' ? [String(candidate), String(command.pid)] : Reflect.apply(target, self, args)
+          },
+        })
+        // And a process of the same person's, begun since, whose environment cannot be read
+        fs.readFileSync = new Proxy(read, {
+          apply(target, self, args) {
+            if (args[0] === `/proc/${candidate}/stat`) return `${candidate} (tool) ${['S', ...Array(18).fill('0'), '1'].join(' ')}`
+            if (args[0] === `/proc/${candidate}/environ`) throw Object.assign(new Error('the environment cannot be read'), { code: 'EACCES' })
+            return Reflect.apply(target, self, args)
+          },
+        })
+        syncBuiltinESMExports()
+        const of = { harness: 'pi', session: 'with-company', run: 'a-run-with-company', told: SINCE_TOLD }
+        expect(await endTree(process.pid, 'tick 0', of)).toBe('unknown')
+        await until(() => !identity([command.pid!]).has(command.pid!))
+      } finally {
+        fs.readdirSync = list
+        fs.readFileSync = read
+        syncBuiltinESMExports()
+        if (identity([command.pid!]).has(command.pid!)) process.kill(command.pid!, 'SIGKILL')
       }
     },
   )

@@ -69,9 +69,29 @@ export const psQuote = (v: string) => `'${v.replace(/['\u2018\u2019\u201a\u201b]
 
 /** The private queue of literal paths Windows removes after uninstall has ended. */
 export const WINDOWS_CLEANUP = 'HKCU\\Software\\It\\PendingRemoval'
-/** The RunOnce command carries only the queue entry's name, never the executable's path. */
-export function windowsDeletionCommand(entry: string): string | undefined {
-  if (!/^ItRemoved[0-9]+[a-z0-9-]*$/.test(entry)) return undefined
+/** Where Windows keeps what it runs once, the next time this person signs in. */
+export const RUN_ONCE = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'
+/**
+ * The longest path Windows PowerShell 5.1 can be counted on to delete, counted as Windows
+ * counts it, in UTF-16 code units. Windows holds a path to MAX_PATH, 260 characters with the
+ * null that ends it, unless the machine's LongPathsEnabled policy is on and the program says in
+ * its manifest that it takes longer paths (Microsoft's "Maximum Path Length Limitation").
+ * Windows PowerShell 5.1 says so in its manifest, and the .NET Framework under it hands a longer
+ * path on to Windows, where for a program built for 4.6.1 or earlier it would refuse the path
+ * itself (".NET 4.6.2 and long paths on Windows 10", from the .NET team). The policy is off
+ * unless someone has turned it on, so a longer path is deleted on some machines and not on
+ * others.
+ */
+export const WINDOWS_PATH_MOST = 259
+/**
+ * The line RunOnce is given to delete a file the next time this person signs in. It carries
+ * only the queue entry's name, never the file's path, which is kept under WINDOWS_CLEANUP as
+ * literal registry data. There is no line where the name is not one It makes, where the line
+ * would not fit the 260 characters RunOnce takes, or where the file's path is longer than
+ * Windows PowerShell can be counted on to delete.
+ */
+export function windowsDeletionCommand(entry: string, file: string): string | undefined {
+  if (!/^ItRemoved[0-9]+[a-z0-9-]*$/.test(entry) || file.length > WINDOWS_PATH_MOST) return undefined
   const script = `$k='HKCU:\\Software\\It\\PendingRemoval';$n='${entry}';try{[IO.File]::Delete((gpv -LiteralPath $k -Name $n));rp -LiteralPath $k -Name $n}catch{exit 1}`
   const line = `powershell.exe -NoProfile -NonInteractive -Command "${script}"`
   return line.length <= 260 ? line : undefined
@@ -1295,6 +1315,19 @@ async function issuerAt(door: string, ending?: AbortSignal): Promise<string | un
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null)) as { issuer?: unknown } | null
   return typeof said?.issuer === 'string' ? said.issuer : undefined
+}
+
+/**
+ * Whether the It this machine asks takes a later form of a call (one of `TAKES`), as it says at
+ * its door. False only on its own word that it does not: an It of an earlier version names none
+ * there. Nothing when it could not be asked.
+ */
+export async function backendTakes(form: string): Promise<boolean | undefined> {
+  const said = (await direct(`${backend().site}/cli/config`, { signal: within(15_000) })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)) as { issuer?: unknown; takes?: unknown } | null
+  if (typeof said?.issuer !== 'string') return undefined
+  return Array.isArray(said.takes) && said.takes.includes(form)
 }
 
 /** What a machine is told when It does not take it for one of the person's machines any more, with how it becomes one again. */

@@ -2883,13 +2883,14 @@ span.card-fallback {
   color: var(--fg);
 }
 
-/* The network as three ways to choose from, each with what it lets in said under it */
+/* The network as three ways to choose from, each with what it lets in said under it, and where the links agents give are, each with its address */
 .net {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
-.net-ways {
+.net-ways,
+.link-ways {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -2898,7 +2899,8 @@ span.card-fallback {
   border: 0;
   min-width: 0;
 }
-.net-way {
+.net-way,
+.link-way {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -2906,7 +2908,8 @@ span.card-fallback {
   border-radius: 10px;
   cursor: pointer;
 }
-.net-way[data-on] {
+.net-way[data-on],
+.link-way[data-on] {
   background: var(--interactive);
 }
 .net-radio {
@@ -2916,12 +2919,14 @@ span.card-fallback {
   margin: 3px 0 0;
   accent-color: var(--ok);
 }
-.net-way b {
+.net-way b,
+.link-way b {
   display: block;
   font-size: 14px;
   font-weight: 600;
 }
-.net-way small {
+.net-way small,
+.link-way small {
   display: block;
   font-size: 12.5px;
   line-height: 1.45;

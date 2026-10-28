@@ -9,7 +9,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { PORTS } from '@it/protocol'
+import { PORTS, TAKES } from '@it/protocol'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { build } from 'esbuild'
@@ -212,6 +212,20 @@ describe('what the service tells the backend of how it stands', () => {
     // A door kept to the tailnet says so, and one that is shut is never said to be kept to it
     expect(standsAs({ network: true, tailnet: true }, true, 21000).tailnet).toBe(true)
     expect(standsAs({ network: false, tailnet: true }, false, 21000).tailnet).toBe(false)
+  })
+
+  test('it says the machine’s name on the tailnet only where the door answers to it, and asks Tailscale for it nowhere else', () => {
+    const named = vi.fn(() => 'studio.tail1234.ts.net')
+    // Shut, the door answers to no name of the tailnet's, and Tailscale is not asked
+    expect(standsAs({ network: false, tailnet: true }, true, 21000, named)).not.toHaveProperty('tailnetName')
+    expect(named).not.toHaveBeenCalled()
+    // Kept to the tailnet, it answers to the name
+    expect(standsAs({ network: true, tailnet: true }, true, 21000, named).tailnetName).toBe('studio.tail1234.ts.net')
+    // Open to every network, it answers to the name where this machine is on a tailnet, and has none to answer to where it is on none
+    const open = standsAs({ network: true }, true, 21000, named)
+    expect('tailnetName' in open).toBe(open.canTailnet)
+    // Where Tailscale does not say the name, nothing is said of one
+    expect(standsAs({ network: true, tailnet: true }, true, 21000, () => undefined)).not.toHaveProperty('tailnetName')
   })
 
   test.skipIf(process.platform === 'win32')(
@@ -472,6 +486,10 @@ describe('what the service takes of the notes the backend made for the counts of
   }
 
   test('a reply delayed past a reporting reset is discarded before the sender can count it under the new identity', async () => {
+    // The sender does not send on a decision that took it longer than a quarter of a second by
+    // the clock `performance` keeps, which a busy machine's disk can take. This test is about
+    // which notes are sent, so that clock is its own. Nothing here waits on a timer.
+    vi.useFakeTimers({ toFake: ['performance'] })
     usage.begin()
     const id = () => (usage.counting() ? JSON.parse(readFileSync(path.join(folder, 'telemetry.json'), 'utf8')).installation : undefined)
     const first = id()
@@ -527,6 +545,7 @@ describe('what the service takes of the notes the backend made for the counts of
       expect(JSON.parse(posts[0]!).events).toHaveLength(1)
     } finally {
       sender.stop()
+      vi.useRealTimers()
     }
   })
 
@@ -1732,6 +1751,67 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
       await connector?.ended
       rmSync(other, { recursive: true, force: true })
     }
+  }, 180_000)
+
+  test('`it actions` lists for each conversation what waits on its own pages and on pages no conversation has, for a command no conversation ran everything, and with --all which are another’s', async () => {
+    expect(await well(run(['setup', '--none', '--no-service']))).toBe(0)
+    run(['serve', '--log', path.join(folder, 'service.log')])
+    expect(await until(() => lines().some((line) => /^connector \S+ started/.test(line)))).toBe(true)
+    const door = `http://127.0.0.1:${process.env.IT_PORT}`
+    const fn = (name: string) => makeFunctionReference<'mutation'>(name)
+    // A browser paired as the owner's, through the door, which is what a person acts on a page with
+    const site = run(['site', '--no-open'])
+    expect(await well(site)).toBe(0)
+    const asSite = { origin: door, 'x-it-site': '1', 'content-type': 'application/json' }
+    const redeemed = await fetch(`${door}/session/redeem`, {
+      method: 'POST',
+      headers: asSite,
+      body: JSON.stringify({ code: new URL(JSON.parse(site.out()).url).hash.slice(1) }),
+    })
+    const cookie = redeemed.headers.getSetCookie()[0]!.split(';')[0]!
+    const session = (await (await fetch(`${door}/session/token`, { method: 'POST', headers: { ...asSite, cookie } })).json()) as { token: string }
+    const browser = new ConvexHttpClient(door, { logger: false })
+    browser.setAuth(session.token)
+    const displayKey = 'a-display-key-000001'
+    await browser.mutation(fn('displays:register'), { key: displayKey, userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/144.0' })
+    const press = async (slug: string) => {
+      const page = (await browser.query(makeFunctionReference<'query'>('artifacts:get'), { slug })) as { id: string }
+      const { until } = (await browser.mutation(fn('actions:replayGrant'), {})) as { until: number }
+      return browser.mutation(fn('actions:submit'), {
+        replayUntil: until,
+        artifactId: page.id,
+        displayKey,
+        envelope: { v: 1, clientActionId: `click-on-${slug}`, name: 'approve', payload: '{"n":1}', contentVersion: 1 },
+      })
+    }
+    const said = async (args: string[], env: Record<string, string> = {}) => {
+      const ran = run(args, env)
+      expect([args[0], await well(ran)]).toEqual([args[0], 0])
+      return JSON.parse(ran.out())
+    }
+    // It says at its door that its list takes a conversation, which a machine that joined it reads where it is refused one
+    expect(((await (await fetch(`${door}/cli/config`)).json()) as { takes?: string[] }).takes).toContain(TAKES.conversationsWaiting)
+    // Two conversations each make a page, and a page is made from a plain terminal, which no conversation has
+    const first = { IT_HARNESS: 'pi', IT_SESSION: 'conversation-1' }
+    const second = { IT_HARNESS: 'opencode', IT_SESSION: 'conversation-2' }
+    await said(['create', 'Workout', '--id', 'workout', '--html', '<p>hi</p>'], first)
+    await said(['create', 'Creatine', '--id', 'creatine', '--html', '<p>hi</p>'], second)
+    await said(['create', 'Shopping', '--id', 'shopping', '--html', '<p>hi</p>'])
+    for (const slug of ['workout', 'creatine', 'shopping']) await press(slug)
+    // No agent app is connected here, so all three wait
+    const listed = async (env: Record<string, string>, args: string[] = []) =>
+      ((await said(['actions', ...args], env)) as { page: string; forAnotherConversation?: true }[])
+        .map((c) => `${c.page}${c.forAnotherConversation ? ' (another’s)' : ''}`)
+        .sort()
+    expect(await listed(first)).toEqual(['shopping', 'workout'])
+    expect(await listed(second)).toEqual(['creatine', 'shopping'])
+    expect(await listed({})).toEqual(['creatine', 'shopping', 'workout'])
+    expect(await listed(first, ['--all'])).toEqual(['creatine (another’s)', 'shopping', 'workout'])
+    expect(await listed(second, ['--all'])).toEqual(['creatine', 'shopping', 'workout (another’s)'])
+    // A page that the first conversation takes takes what waits on it along
+    await said(['create', 'Creatine', '--id', 'creatine', '--html', '<p>again</p>', '--take'], first)
+    expect(await until(async () => (await listed(first)).join() === 'creatine,shopping,workout')).toBe(true)
+    expect(await listed(second)).toEqual(['shopping'])
   }, 180_000)
 
   test('`it serve` where another program has one of the door’s ports says so at once, before the backend program is started', async () => {

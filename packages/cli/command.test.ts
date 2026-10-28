@@ -24,7 +24,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { behindMark, MARK, PORTS, WHEN } from '@it/protocol'
+import { behindMark, MARK, PORTS, TAKES, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
@@ -39,6 +39,7 @@ import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
 import { instanceName } from './src/serve/config'
 import { bases, holdBase } from './test-ports'
+import { standInZsh, zsh } from './test-zsh'
 
 // Every test here starts the program, and some start it a dozen times over. Each is given the
 // time that takes on a machine that is busy with other things as well.
@@ -173,6 +174,8 @@ interface Asked {
   path: string
   args: Record<string, unknown>
 }
+/** What the stand-in backend answers with for a call that failed and was not refused by It's own code. */
+const SERVER_ERROR = Symbol.for('server-error')
 /** What the stand-in backend answers with when it refuses a call, as the backend's own code refuses one. */
 class Refusal {
   constructor(readonly data: { code: string; message: string }) {}
@@ -204,13 +207,18 @@ async function backend(
   }
   const live: string[] = []
   const token = { asked: 0, answer: (): [status: number, body: unknown] => [200, { token: 'a-token', expires_in: 300 }] }
+  /** What it says at `/cli/config`, and how often it was asked. Unless a test says otherwise, it names no later form of a call, as a backend of an earlier version does. */
+  const config = { asked: 0, answer: (): Record<string, unknown> => ({ protocol: 1, issuer: 'http://127.0.0.1:23001' }) }
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = []
     req
       .on('data', (c: Buffer) => chunks.push(c))
       .on('end', async () => {
         const json = (value: unknown, status = 200) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
-        if (req.method === 'GET' && req.url === '/cli/config') return json({ protocol: 1, issuer: 'http://127.0.0.1:23001' })
+        if (req.method === 'GET' && req.url === '/cli/config') {
+          config.asked++
+          return json(config.answer())
+        }
         // Asked how it is, it says that it is It, as the backend does
         if (req.method === 'GET' && req.url === '/health') return json({ ok: true, it: true })
         if (req.method === 'POST' && req.url === '/bridge/token') {
@@ -246,6 +254,9 @@ async function backend(
           return
         }
         if (said instanceof Refusal) return json({ status: 'error', errorMessage: 'refused', errorData: said.data, logLines: [] })
+        // A call that failed for any reason but a refusal of It's own, a call whose arguments are not of the shape the
+        // function takes among them, as the backend program answers it: it keeps why from its callers, and says this alone
+        if (said === SERVER_ERROR) return json({ status: 'error', errorMessage: '[Request ID: 5f3c0a9e1b2d4c6a] Server Error', logLines: [] }, 560)
         json({ status: 'success', value: said ?? null, logLines: [] })
       })
   })
@@ -265,6 +276,7 @@ async function backend(
     download,
     live,
     token,
+    config,
     env: { IT_URL: url, IT_SITE_URL: url },
     close: () =>
       new Promise<void>((r) => {
@@ -1231,6 +1243,54 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       await b.close()
     }
   })
+
+  test.each([
+    ['the machine It runs on', true],
+    ['a machine that joined', false],
+  ])(
+    'on %s, the url printed is at the place the owner chose for links, and where It cannot be reached there it is this machine’s own, with a note that says why',
+    async (_, here) => {
+      const m = machine(true, here)
+      const chosen = 'http://studio.tail1234.ts.net:21000/p/plan'
+      let finished: Record<string, unknown> = {}
+      const b = await backend(m, ({ path: fn, args }) => {
+        if (fn === 'publish:begin') return { artifactId: 'artifact-1', slug: args.slug, version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+        // The backend names the site as the machine It runs on reaches it
+        if (fn === 'publish:finish') return { slug: 'plan', version: 1, url: `${SITE}/p/plan`, ...finished }
+        return null
+      })
+      /** Where this machine reaches the site: by its own name on the machine It runs on, and at the door it was told of on one that joined. */
+      const own = here ? `${SITE}/p/plan` : `${b.url}/p/plan`
+      const made = async () => printed(await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], b.env))
+      try {
+        // Nothing chosen: this machine's own, as ever, and nothing said of it
+        expect(await made()).toMatchObject({ url: own })
+        expect(await made()).not.toHaveProperty('urlNote')
+        // Chosen, and It can be reached there: the link is there on either machine, and is not taken for the site's on this one
+        finished = { link: chosen }
+        const linked = await made()
+        expect([linked.url, 'urlNote' in linked]).toEqual([chosen, false])
+        // Chosen, and It cannot be reached there just now: this machine's own, and why
+        finished = { unlinked: { to: 'tailnet', why: 'off' } }
+        const fell = await made()
+        expect(fell.url).toBe(own)
+        expect(fell.urlNote).toBe(
+          'Links are set to be at It’s name on the tailnet, and It cannot be reached there now: it answers only the machine it runs on. So this url is the one this machine reaches It by. Tell the user that when you give it.',
+        )
+        finished = { unlinked: { to: 'network', why: 'kept_to_tailnet' } }
+        expect((await made()).urlNote).toContain(
+          'Links are set to be at It’s address on the network, and It cannot be reached there now: it is kept to the tailnet.',
+        )
+        // What is no page's link on the site is not given as one
+        for (const link of ['javascript:alert(1)', 'http://studio.tail1234.ts.net:21000/elsewhere', 'https://example.com/p/plan']) {
+          finished = { link }
+          expect([link, (await made()).url]).toEqual([link, own])
+        }
+      } finally {
+        await b.close()
+      }
+    },
+  )
 
   test('an explicit publishing label is distinguished from the inferred app name', async () => {
     const m = machine()
@@ -2913,6 +2973,66 @@ test('a wait that follows keeps only the latest receipt ids, and acknowledges an
 })
 
 describe.skipIf(process.platform === 'win32')('the note of which folder each conversation works in', () => {
+  test('is written for a publication only once It has accepted it, so that one It refuses, as after everything was erased, leaves none', async () => {
+    const m = machine()
+    const record = path.join(m.it, 'conversations.json')
+    let refuse: 'begin' | 'finish' | null = 'begin'
+    let lose = 0
+    const b = await backend(m, ({ path: fn, args }) => {
+      if (fn === 'publish:begin' || fn === 'publish:resume') {
+        if (refuse === 'begin') return new Refusal({ code: 'unauthenticated', message: 'This browser is not paired with It, or this machine is not enrolled.' })
+        return { artifactId: 'artifact-1', slug: args.slug ?? 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+      }
+      if (fn === 'publish:finish') {
+        if (refuse === 'finish') return new Refusal({ code: 'invalid', message: 'One file did not arrive intact. Publish again.' })
+        if (lose-- > 0) return Symbol.for('drop-answer')
+        return { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+      }
+      return null
+    })
+    const publish = (session: string) =>
+      run(m, ['create', 'Plan', '--id', 'plan', '--html', `<p>${session}</p>`], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: session })
+    try {
+      // Refused as it begins, and refused once its files are up
+      expect((await publish('refused-at-once')).code).toBe(1)
+      refuse = 'finish'
+      expect((await publish('refused-at-the-end')).code).toBe(2)
+      expect(existsSync(record)).toBe(false)
+      // Accepted, it is noted
+      refuse = null
+      expect((await publish('accepted')).code).toBe(0)
+      expect(Object.keys(JSON.parse(readFileSync(record, 'utf8')))).toEqual(['pi:accepted'])
+      expect(JSON.parse(readFileSync(record, 'utf8'))['pi:accepted'].cwd).toBe(realpathSync(m.home))
+      // One whose answer was lost is not known to be accepted until the same command recovers it
+      lose = 3
+      expect((await publish('recovered')).code).toBe(1)
+      expect(Object.keys(JSON.parse(readFileSync(record, 'utf8')))).toEqual(['pi:accepted'])
+      expect((await publish('recovered')).code).toBe(0)
+      expect(b.asked.some((x) => x.path === 'publish:resume')).toBe(true)
+      expect(Object.keys(JSON.parse(readFileSync(record, 'utf8'))).sort()).toEqual(['pi:accepted', 'pi:recovered'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('is written for a page brought up only once It has shown it', async () => {
+    const m = machine()
+    const record = path.join(m.it, 'conversations.json')
+    let shown = false
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show' ? (shown ? { displays: ['Desk'] } : new Refusal({ code: 'not_found', message: 'No such page.' })) : null,
+    )
+    try {
+      expect((await run(m, ['open', 'board'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'refused' })).code).not.toBe(0)
+      expect(existsSync(record)).toBe(false)
+      shown = true
+      expect((await run(m, ['open', 'board'], { ...b.env, IT_HARNESS: 'pi', IT_SESSION: 'shown' })).code).toBe(0)
+      expect(Object.keys(JSON.parse(readFileSync(record, 'utf8')))).toEqual(['pi:shown'])
+    } finally {
+      await b.close()
+    }
+  })
+
   test('a writer suspended for more than ten seconds keeps its lock and another command leaves its record alone', async () => {
     const m = machine()
     const b = await backend(m, (asked) => (asked.path === 'artifacts:take' ? { took: false } : asked.path === 'displays:show' ? { displays: ['Desk'] } : null))
@@ -2995,6 +3115,131 @@ syncBuiltinESMExports();
       await b.close()
     }
   }, 90_000)
+})
+
+describe('what is waiting, listed', () => {
+  const now = { harness: 'pi', id: 'after-it-was-cleared' }
+  const earlier = { harness: 'pi', id: 'before-it-was-cleared' }
+  const another = { harness: 'codex', id: 'thread-2' }
+  const click = (artifact: string, at: number, session: { harness: string; id: string } | null) => ({
+    id: `on-${artifact}`,
+    artifact,
+    title: `Title of ${artifact}`,
+    name: 'approve',
+    payload: '{}',
+    at,
+    attended: true,
+    session,
+  })
+  const waiting = [click('creatine', 4, another), click('workout', 3, now), click('plan', 2, earlier), click('shopping', 1, null)]
+  /** The backend as it answers: for a conversation, what waits on its pages and on pages no conversation has, and for none, everything, newest first. */
+  const answer = ({ path: fn, args }: Asked) => {
+    if (fn !== 'delivery:allWaiting') return null
+    const s = args.for as { harness: string; id: string } | undefined
+    return s ? waiting.filter((c) => !c.session || (c.session.harness === s.harness && c.session.id === s.id)) : waiting
+  }
+  const listed = (b: { asked: Asked[] }) => b.asked.filter((x) => x.path === 'delivery:allWaiting').map((x) => JSON.stringify(x.args))
+  const agent = (s: { harness: string; id: string }) => ({ IT_HARNESS: s.harness, IT_SESSION: s.id })
+
+  test('an agent is listed the actions on its own conversation’s pages, under every id it has had, and on pages no conversation has, and never another’s', async () => {
+    const m = machine()
+    // The connector's record of a conversation that was cleared and carries on under a new id
+    writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ [`pi:${earlier.id}`]: `pi:${now.id}` }))
+    const b = await backend(m, answer)
+    try {
+      const ran = await run(m, ['actions'], { ...b.env, ...agent(now) })
+      expect(printed(ran).map((c: { page: string }) => c.page)).toEqual(['workout', 'plan', 'shopping'])
+      // Each id is asked for by itself, and every click that waits is asked for by nobody
+      expect(listed(b).sort()).toEqual([JSON.stringify({ for: now }), JSON.stringify({ for: earlier })].sort())
+      const other = await run(m, ['actions'], { ...b.env, ...agent(another) })
+      expect(printed(other).map((c: { page: string }) => c.page)).toEqual(['creatine', 'shopping'])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a command that no conversation ran is listed everything, and so is one given --all, which says which are another conversation’s by their page alone', async () => {
+    const m = machine()
+    writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ [`pi:${earlier.id}`]: `pi:${now.id}` }))
+    const b = await backend(m, answer)
+    try {
+      const ran = await run(m, ['actions'], b.env)
+      expect(printed(ran).map((c: { page: string }) => c.page)).toEqual(['creatine', 'workout', 'plan', 'shopping'])
+      expect(listed(b)).toEqual([JSON.stringify({})])
+      expect(printed(ran).some((c: Record<string, unknown>) => 'forAnotherConversation' in c)).toBe(false)
+      const all = await run(m, ['actions', '--all'], { ...b.env, ...agent(now) })
+      expect(printed(all).map((c: { page: string; forAnotherConversation?: true }) => [c.page, c.forAnotherConversation ?? false])).toEqual([
+        ['creatine', true],
+        ['workout', false],
+        ['plan', false],
+        ['shopping', false],
+      ])
+      // And no conversation is named by its own id in what is printed
+      for (const s of [now, earlier, another]) expect(all.out).not.toContain(s.id)
+    } finally {
+      await b.close()
+    }
+  })
+
+  /** A backend of an earlier version, whose list takes no conversation: it fails a call that names one, as the backend program fails a call whose arguments are not of the function's shape. */
+  const older = (asked: Asked) => (asked.path === 'delivery:allWaiting' && 'for' in asked.args ? SERVER_ERROR : answer(asked))
+
+  test('against an It of an earlier version, whose list takes no conversation, an agent is listed what of the newest there is its own or no conversation’s, and told that may not be all', async () => {
+    const m = machine()
+    writeFileSync(path.join(m.it, 'aliases.json'), JSON.stringify({ [`pi:${earlier.id}`]: `pi:${now.id}` }))
+    const b = await backend(m, older)
+    try {
+      const ran = await run(m, ['actions'], { ...b.env, ...agent(now) })
+      expect([ran.code, printed(ran).map((c: { page: string }) => c.page)]).toEqual([0, ['workout', 'plan', 'shopping']])
+      // That It was asked what it takes once it had failed the call, and then asked for everything, which it does take
+      expect(b.config.asked).toBe(1)
+      expect(listed(b).at(-1)).toBe(JSON.stringify({}))
+      // The note says plainly why the list may be short, and what makes it whole
+      const notes = ran.err
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line).note as string)
+      expect(notes).toEqual([expect.stringContaining('lists only the newest 50 actions across every conversation')])
+      expect(notes[0]).toContain('may not be all of them until that It is updated')
+      for (const s of [now, earlier, another]) expect(ran.out + ran.err).not.toContain(s.id)
+      // --all lists everything the newest there are, as anywhere, and marks the other conversation's by its page
+      const all = await run(m, ['actions', '--all'], { ...b.env, ...agent(now) })
+      expect(printed(all).map((c: { page: string; forAnotherConversation?: true }) => [c.page, c.forAnotherConversation ?? false])).toEqual([
+        ['creatine', true],
+        ['workout', false],
+        ['plan', false],
+        ['shopping', false],
+      ])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('against an It that says it takes a conversation for its list, a failed call is said as it is, and nothing is listed in its place', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) => (asked.path === 'delivery:allWaiting' ? SERVER_ERROR : null))
+    b.config.answer = () => ({ protocol: 1, issuer: 'http://127.0.0.1:23001', takes: [TAKES.conversationsWaiting] })
+    try {
+      const ran = await run(m, ['actions'], { ...b.env, ...agent(now) })
+      expect([ran.code, ran.out, error(ran).message]).toEqual([1, '', expect.stringContaining('Server Error')])
+      expect(b.config.asked).toBe(1)
+      expect(listed(b)).toEqual([JSON.stringify({ for: now })])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('--id and --all together are refused, before It is asked anything', async () => {
+    const m = machine()
+    const b = await backend(m, answer)
+    try {
+      const ran = await run(m, ['actions', '--id', 'plan', '--all'], b.env)
+      expect([ran.code, error(ran).code]).toEqual([2, 'invalid'])
+      expect(b.asked.filter((x) => x.path.startsWith('delivery:'))).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('a wait', () => {
@@ -4956,11 +5201,15 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
   /**
    * A stand-in for whatever opens an address in a browser on this system: it writes down what
    * it was given. With `each`, it writes down every address it is ever given, one to a line.
+   * A single address is written under another name and then given the one the test reads, since
+   * the shell makes a file before it writes to it: a test that finds the file finds all of it.
    */
   const opener = (m: { home: string; bin: string }, each = false) => {
     const opened = path.join(m.home, 'opened')
+    const write = each ? `printf '%s\\n' "$1" >> '${opened}'` : `printf '%s' "$1" > '${opened}.part' && mv '${opened}.part' '${opened}'`
     for (const name of ['xdg-open', 'open']) {
-      writeFileSync(path.join(m.bin, name), `#!/bin/sh\nprintf '${each ? '%s\\n' : '%s'}' "$1" ${each ? '>>' : '>'} '${opened}'\n`)
+      // The command is given no PATH but the test's own folder, and `mv` is the system's
+      writeFileSync(path.join(m.bin, name), `#!/bin/sh\nPATH=/bin:/usr/bin\n${write}\n`)
       chmodSync(path.join(m.bin, name), 0o755)
     }
     return opened
@@ -5995,28 +6244,53 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
 })
 
 describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent will find `it`', () => {
-  const zsh = [process.env.IT_TEST_ZSH, '/bin/zsh', '/usr/bin/zsh'].find((file): file is string => Boolean(file && existsSync(file)))
-  test.skipIf(!zsh)('does not accept an unused zsh profile as proof that a new terminal will find It', async () => {
+  /**
+   * Sets It up twice where SHELL names `shell` and .zshenv sends zsh to a folder other than the
+   * home, without exporting ZDOTDIR: first with It's line only in the file `unused` names, which a
+   * new zsh does not read, and then with the line also in the .zshrc it does read, after what
+   * `zshrc` holds there already.
+   */
+  async function zshProof(shell: (m: ReturnType<typeof machine>) => string, unused: (m: ReturnType<typeof machine>) => string, zshrc = '') {
     const m = machine()
     const dir = path.join(m.home, 'zsh-files')
     mkdirSync(dir)
     writeFileSync(path.join(m.home, '.zshenv'), `ZDOTDIR='${dir}'\n`)
+    if (zshrc) writeFileSync(path.join(dir, '.zshrc'), zshrc)
     const line = `export PATH='${path.join(m.it, 'bin')}':"$PATH"`
-    writeFileSync(path.join(m.home, '.zshrc'), `${line}\n`)
+    mkdirSync(path.dirname(unused(m)), { recursive: true })
+    writeFileSync(unused(m), `${line}\n`)
     const b = await backend({ it: m.it })
     try {
-      const env = { ...b.env, SHELL: zsh! }
-      const unused = await run(m, ['setup', '--yes', '--no-service'], env)
-      expect(unused.code).toBe(0)
-      expect(unused.err).toContain('`it` is not on your PATH yet')
-      writeFileSync(path.join(dir, '.zshrc'), `${line}\n`)
-      const active = await run(m, ['setup', '--yes', '--no-service'], env)
-      expect(active.code).toBe(0)
-      expect(active.err).not.toContain('`it` is not on your PATH yet')
+      const env = { ...b.env, SHELL: shell(m) }
+      const notRead = await run(m, ['setup', '--yes', '--no-service'], env)
+      expect(notRead.code).toBe(0)
+      expect(notRead.err).toContain('`it` is not on your PATH yet')
+      writeFileSync(path.join(dir, '.zshrc'), `${zshrc}${line}\n`)
+      const read = await run(m, ['setup', '--yes', '--no-service'], env)
+      expect(read.code).toBe(0)
+      expect(read.err).not.toContain('`it` is not on your PATH yet')
     } finally {
       await b.close()
     }
-  })
+  }
+  test.skipIf(!zsh)('does not accept an unused zsh profile as proof that a new terminal will find It', () =>
+    zshProof(
+      () => zsh!,
+      (m) => path.join(m.home, '.zshrc'),
+    ),
+  )
+  test.skipIf(!zsh)('does not accept the profile of a folder that .zshrc moves ZDOTDIR to, after zsh has read .zshrc', () =>
+    zshProof(
+      () => zsh!,
+      (m) => path.join(m.home, 'elsewhere', '.zshrc'),
+      'ZDOTDIR="$HOME/elsewhere"\n',
+    ),
+  )
+  test('does not accept an unused zsh profile, where a stand-in for zsh says which folder it reads', () =>
+    zshProof(
+      (m) => standInZsh(path.join(m.home, 'stand-in')),
+      (m) => path.join(m.home, '.zshrc'),
+    ))
 
   test('says that It’s folder of programs is not on the PATH, with the line that puts it there, and says nothing once it is', async () => {
     // A home with an apostrophe in its name: the line must still be one a shell reads as meant
