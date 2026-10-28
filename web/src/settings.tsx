@@ -7,7 +7,7 @@ import { version } from '../package.json'
 import { About } from './about'
 import { Dialog } from './dialog'
 import { ago, api, doneLeaving, forgetAll, type Id, noteErased, refusal, serverNow, startLeaving, useNow, useOpener } from './lib'
-import { NetworkSwitch, NoAddress, OtherAddresses, useNetwork, useWhere } from './network'
+import { LinkChoice, NetworkSwitch, NoAddress, OtherAddresses, useNetwork, useWhere } from './network'
 import { thisPairing } from './outbox'
 import { goesAlong, type Paired, PairedBrowsers } from './paired'
 import { pushSupport, turnOffPush, turnOnPush } from './push'
@@ -210,6 +210,7 @@ export function Displays({ thisDisplay }: { thisDisplay?: string }) {
         ))}
       </ul>
       <Network />
+      <Links />
       <PairedBrowsers />
       {adding && <AddDisplay onClose={done} />}
     </main>
@@ -238,6 +239,30 @@ function Network() {
             {net.addresses.length > 1 ? `, or at one of ${net.addresses.length - 1} more that “Add a display” lists.` : '.'}
           </p>
         )}
+      </div>
+    </section>
+  )
+}
+
+/**
+ * Where the links agents give are, beside who can reach It, since that is what decides which
+ * places there are. A browser is paired for the address it opened It at, which is said here so
+ * that a link at another place is opened where it shows something. Left out where the backend
+ * says nothing of links, as one of an earlier It does.
+ */
+function Links() {
+  const said = useQuery(api.network.get, {}) as { links?: unknown } | undefined
+  if (!said?.links) return null
+  return (
+    <section>
+      <div className="section-head">
+        <h3>Links agents give</h3>
+      </div>
+      <div className="panel panel-pad">
+        <p className="panel-said">
+          The address in the link an agent gives you for a page. A browser is paired for one address, so open the link in a browser that was paired at it.
+        </p>
+        <LinkChoice />
       </div>
     </section>
   )

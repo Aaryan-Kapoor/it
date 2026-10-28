@@ -219,6 +219,8 @@ describe('the network as a switch on the site', () => {
       exposed: null,
       asked: null,
       answered: null,
+      link: 'local',
+      links: { local: 'http://localhost:39000' },
     })
   })
 
@@ -299,5 +301,136 @@ describe('the network as a switch on the site', () => {
     expect(await rows(t)).toEqual([])
     await owner.mutation(api.network.ask, { to: 'on' })
     expect(await rows(t)).toMatchObject([{ on: false, wanted: false, addresses: [], asked: { to: 'on' } }])
+  })
+})
+
+describe('where the links agents give are', () => {
+  /** A name on a tailnet, made up for these tests, and the machine's address there. */
+  const NAME = 'studio.tail1234.ts.net'
+  const NAMED = `http://${NAME}:39000`
+  const TAIL = 'http://100.101.102.103:39000'
+  const HERE = 'http://localhost:39000'
+  const PLACES = ['local', 'tailnet', 'network'] as const
+  /** What the service says under each network setting, and the places the links can then be at, each at its address. */
+  const settings = [
+    { as: 'off', said: { on: false, wanted: false, addresses: [], tailnet: false, canTailnet: true, tailnetName: NAME }, links: { local: HERE } },
+    {
+      as: 'kept to the tailnet, with its name known',
+      said: { on: true, wanted: true, addresses: [NAMED, TAIL], tailnet: true, canTailnet: true, tailnetName: NAME },
+      links: { local: HERE, tailnet: NAMED },
+    },
+    {
+      as: 'kept to the tailnet, with no name for it',
+      said: { on: true, wanted: true, addresses: [TAIL], tailnet: true, canTailnet: true },
+      links: { local: HERE },
+    },
+    {
+      as: 'on for every network, on a machine that is on a tailnet',
+      said: { on: true, wanted: true, addresses: [LAN, TAIL], tailnet: false, canTailnet: true, tailnetName: NAME },
+      links: { local: HERE, tailnet: NAMED, network: LAN },
+    },
+    {
+      as: 'on for every network, on a machine on no tailnet',
+      said: { on: true, wanted: true, addresses: [LAN], tailnet: false, canTailnet: false },
+      links: { local: HERE, network: LAN },
+    },
+    { as: 'on, with the machine on no network', said: { on: true, wanted: true, addresses: [], tailnet: false, canTailnet: false }, links: { local: HERE } },
+  ]
+
+  test.each(settings)('with the network $as, only where It can be reached is offered and taken, and the links are then there', async ({ said, links }) => {
+    const { t, owner } = await household()
+    await t.mutation(internal.network.report, said)
+    expect(await owner.query(api.network.get, {})).toMatchObject({ link: 'local', links })
+    for (const to of PLACES) {
+      const offered = Object.hasOwn(links, to)
+      expect([to, await refusal(owner.mutation(api.network.link, { to }))]).toEqual([to, offered ? 'ok' : 'invalid'])
+      if (!offered) continue
+      expect((await owner.query(api.network.get, {})).link).toBe(to)
+      // This computer's own is each machine's to say for itself: nothing is given for it
+      expect(await t.query(internal.network.linkFor, {})).toEqual(to === 'local' ? null : { at: links[to as keyof typeof links] })
+    }
+  })
+
+  test('a place that cannot be had is refused with why, in a sentence the owner reads, and nothing is changed', async () => {
+    const { t, owner } = await household()
+    const why = (to: 'tailnet' | 'network') =>
+      owner.mutation(api.network.link, { to }).then(
+        () => 'taken',
+        (err) => String((err as { data?: unknown }).data ?? err),
+      )
+    // Before the service has said anything
+    expect(await why('tailnet')).toContain('It answers only the machine it runs on, so no other device could open a link there.')
+    expect(await rows(t)).toEqual([])
+    await t.mutation(internal.network.report, settings[0]!.said)
+    expect(await why('network')).toContain('It answers only the machine it runs on')
+    await t.mutation(internal.network.report, settings[2]!.said)
+    expect(await why('tailnet')).toContain('Tailscale has not said the machine’s name on the tailnet')
+    expect(await why('network')).toContain('It is kept to your tailnet, and answers nothing at its address on the network.')
+    await t.mutation(internal.network.report, settings[4]!.said)
+    expect(await why('tailnet')).toContain('The machine It runs on is on no tailnet.')
+    await t.mutation(internal.network.report, settings[5]!.said)
+    expect(await why('network')).toContain('The machine It runs on has no address on a network just now.')
+    expect((await rows(t))[0]!.link).toBeUndefined()
+  })
+
+  test('a choice It can no longer be reached at is kept, the links are this computer’s meanwhile with which place and why, and they are back there once It can be reached', async () => {
+    const { t, owner } = await household()
+    await t.mutation(internal.network.report, settings[1]!.said)
+    await owner.mutation(api.network.link, { to: 'tailnet' })
+    expect(await t.query(internal.network.linkFor, {})).toEqual({ at: NAMED })
+    // The network was turned off
+    await t.mutation(internal.network.report, settings[0]!.said)
+    expect(await t.query(internal.network.linkFor, {})).toEqual({ unlinked: { to: 'tailnet', why: 'off' } })
+    expect(await owner.query(api.network.get, {})).toMatchObject({ link: 'tailnet', links: { local: HERE } })
+    // On again, and Tailscale no longer says the name
+    await t.mutation(internal.network.report, settings[2]!.said)
+    expect(await t.query(internal.network.linkFor, {})).toEqual({ unlinked: { to: 'tailnet', why: 'no_name' } })
+    // On for every network, with the machine off its tailnet
+    await t.mutation(internal.network.report, settings[4]!.said)
+    expect(await t.query(internal.network.linkFor, {})).toEqual({ unlinked: { to: 'tailnet', why: 'no_tailnet' } })
+    // And the name is there again
+    await t.mutation(internal.network.report, settings[3]!.said)
+    expect(await t.query(internal.network.linkFor, {})).toEqual({ at: NAMED })
+    // The same of the address on the network: kept to the tailnet, and then on with no address
+    await owner.mutation(api.network.link, { to: 'network' })
+    expect(await t.query(internal.network.linkFor, {})).toEqual({ at: LAN })
+    await t.mutation(internal.network.report, settings[1]!.said)
+    expect(await t.query(internal.network.linkFor, {})).toEqual({ unlinked: { to: 'network', why: 'kept_to_tailnet' } })
+    await t.mutation(internal.network.report, settings[5]!.said)
+    expect(await t.query(internal.network.linkFor, {})).toEqual({ unlinked: { to: 'network', why: 'no_address' } })
+    // Chosen back to this computer, nothing is given and nothing is said
+    await owner.mutation(api.network.link, { to: 'local' })
+    expect(await t.query(internal.network.linkFor, {})).toBeNull()
+    expect((await rows(t))[0]!.link).toBeUndefined()
+  })
+
+  test('the name is kept only as a name and only while the network is on, and what is written down holds neither it nor an address', async () => {
+    const { t, owner } = await household()
+    for (const tailnetName of [
+      'not a name',
+      'studio',
+      `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(63)}`,
+      'http://studio.tail1234.ts.net',
+    ]) {
+      await t.mutation(internal.network.report, { ...settings[3]!.said, tailnetName })
+      expect([tailnetName, (await rows(t))[0]!.tailnetName]).toEqual([tailnetName, undefined])
+    }
+    await t.mutation(internal.network.report, settings[3]!.said)
+    expect((await rows(t))[0]!.tailnetName).toBe(NAME)
+    await owner.mutation(api.network.link, { to: 'tailnet' })
+    await t.mutation(internal.network.report, settings[0]!.said)
+    expect((await rows(t))[0]!.tailnetName).toBeUndefined()
+    expect(written.some((line) => line.includes('network.linked'))).toBe(true)
+    for (const line of written) for (const secret of [NAME, '192.168.1.20', '100.101.102.103']) expect(line).not.toContain(secret)
+  })
+
+  test('only the owner’s browser chooses: a screen, a machine and a stranger are refused and change nothing', async () => {
+    const { t, owner, screen, machine } = await household()
+    await t.mutation(internal.network.report, settings[3]!.said)
+    expect(await refusal(screen.mutation(api.network.link, { to: 'tailnet' }))).toBe('forbidden')
+    expect(await refusal(machine.mutation(api.network.link, { to: 'tailnet' }))).toBe('forbidden')
+    expect(await refusal(t.mutation(api.network.link, { to: 'tailnet' }))).toBe('unauthenticated')
+    expect((await rows(t))[0]!.link).toBeUndefined()
+    expect(await refusal(owner.mutation(api.network.link, { to: 'tailnet' }))).toBe('ok')
   })
 })
