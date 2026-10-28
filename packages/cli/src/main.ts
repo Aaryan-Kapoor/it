@@ -352,8 +352,9 @@ const ELSEWHERE = 'To show it elsewhere, run this again with `--on "<display>"`,
  * What is printed of where a page was asked to be shown: `shownOn` names the displays it is
  * shown on, and `notShownOn` each other display, with the reason beside it: `not_paired` for one
  * whose browser's pairing was ended, which shows nothing until that browser is paired again;
- * `agents_off` for one the user said agents may not use; and `not_chosen` for one passed over
- * for the display in use, where no display was named. The `hint` says in words where the page
+ * `agents_off` for one the user said agents may not use; `locked` for one the user locked to
+ * another page; and `not_chosen` for one passed over for the display in use, where no display
+ * was named. The `hint` says in words where the page
  * went and why, and where no display was there to be asked at all, how one is paired.
  */
 function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: string; reason: string }[]; hint?: string } {
@@ -381,6 +382,11 @@ function shownAs(shown: Shown): { shownOn: string[]; notShownOn?: { display: str
     if (off.length)
       said.push(
         `Agents may not use ${andJoined(off)}: the user turned that off for ${off.length === 1 ? 'it' : 'each of them'}, on the display itself or on the site under Displays, and only the user can turn it on again.`,
+      )
+    const held = of('locked')
+    if (held.length)
+      said.push(
+        `The user locked ${andJoined(held)} to another page, and only the user’s own browser can unlock ${held.length === 1 ? 'it' : 'them'}, under Displays on the site.`,
       )
     if (!shown.displays.length && !notShownOn.length) said.push(noDisplay())
   }
@@ -2475,7 +2481,8 @@ Displays
                                  Bring a ${NOUN.one} up on the display in use: of the displays with
                                  the site open, the one used last, and with none open, the one
                                  used last of all. --on names a display, and --on all asks
-                                 every display. None is asked that the person closed to agents.
+                                 every display. None is asked that the person closed to agents,
+                                 or locked to another ${NOUN.one}.
   it notify "<text>" [--id <id>] [--on "<display>" | --on all] [--sticky] [--button "Label=action"]…
                                  Sent to a display in the same way.
   it displays
@@ -3050,7 +3057,10 @@ async function main(argv: string[]): Promise<void> {
       return out(notified(sent))
     }
     case 'displays': {
-      const shown = await call<{ name: string; paired?: boolean; lastSeenAt?: number; agents?: boolean }[]>('query', api.displays.list)
+      const shown = await call<{ name: string; paired?: boolean; lastSeenAt?: number; agents?: boolean; lockedTo?: { slug: string } | null }[]>(
+        'query',
+        api.displays.list,
+      )
       if (!forPerson(a)) return out(shown)
       if (!shown.length) return tell(['No display is paired. `it site` opens the site in a browser on this machine and pairs that browser.'])
       return tell([
@@ -3058,7 +3068,7 @@ async function main(argv: string[]): Promise<void> {
         ...columns(
           shown.map((d) => [
             `  ${d.name}`,
-            `${d.paired === false ? 'not paired any more' : 'paired'}${d.agents === false ? ', closed to agents' : ''}`,
+            `${d.paired === false ? 'not paired any more' : 'paired'}${d.agents === false ? ', closed to agents' : ''}${d.lockedTo ? `, locked to ${d.lockedTo.slug}` : ''}`,
             d.lastSeenAt ? `seen ${ago(d.lastSeenAt)}` : 'never seen',
           ]),
         ),

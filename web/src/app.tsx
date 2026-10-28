@@ -16,6 +16,7 @@ import {
   hasSignOutToken,
   isLeaving,
   keepSignOutToken,
+  keepTo,
   learnClock,
   navigate,
   noteRegistered,
@@ -207,6 +208,12 @@ function NotPaired() {
     sessionStorage.removeItem('it.signout.note')
     return had
   })
+  // This display was forgotten from the owner's browser, which signed this one out
+  const [forgotten] = useState(() => {
+    const had = sessionStorage.getItem('it.forgotten.note')
+    sessionStorage.removeItem('it.forgotten.note')
+    return had
+  })
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
   const erased = wasErasedHere()
@@ -220,6 +227,12 @@ function NotPaired() {
         {note && (
           <p className="door-note" role="status">
             This browser is signed out. A page that was open on this display may go on working for a moment yet; close its tab to be sure.
+          </p>
+        )}
+        {forgotten && (
+          <p className="door-note" role="status">
+            This display was forgotten on the Displays page, so this browser is signed out.
+            {forgotten === 'locked' && ' It was locked to a page, and the lock ended with it.'}
           </p>
         )}
         {erased && (
@@ -384,6 +397,18 @@ function Paired() {
   )
 }
 
+/** Said on a display whose lock ended because the page it was locked to was deleted, until it is read. */
+function LockEnded({ onSeen }: { onSeen: () => void }) {
+  return (
+    <p className="notice" role="status">
+      <span>The page this display was locked to was deleted, so the display is not locked any more.</span>
+      <button type="button" onClick={onSeen}>
+        OK
+      </button>
+    </p>
+  )
+}
+
 /**
  * Said to the owner who opened, in their own browser, the address they made for another screen.
  * The code in it was not used here: used, it would have made this browser a screen. It is still
@@ -528,6 +553,21 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
     if (pushOn) void mendPush(convex)
   }, [pushOn, convex])
 
+  // A display locked to a page keeps to it, whatever address the person opens on it: all but its
+  // settings, where a screen signs itself out, lead back to the page. Nothing on the site takes it
+  // elsewhere while it is locked (`keepTo`), and an address typed or kept from before is put right here
+  const lockedTo = display?.lockedTo?.slug
+  keepTo(lockedTo === undefined ? null : `/p/${encodeURIComponent(lockedTo)}`)
+  useEffect(() => () => keepTo(null), [])
+  useEffect(() => {
+    if (lockedTo === undefined) return
+    const page = `/p/${encodeURIComponent(lockedTo)}`
+    if (path !== page && path !== '/settings') navigate(page, true)
+  }, [lockedTo, path])
+  /** Whether this display was locked when it was last heard of, to say so if it is forgotten from somewhere else. */
+  const wasLocked = useRef(false)
+  if (display) wasLocked.current = display.lockedTo !== null
+
   // This display was forgotten from somewhere else: it is signed out here too
   const wasRegistered = useRef(false)
   /** Whether this part of the site is still on screen: what was started for it stops when it is not. */
@@ -564,6 +604,8 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
           }
           startLeaving()
           abandonOutbox(user)
+          // Said on the pairing screen this browser is about to show
+          sessionStorage.setItem('it.forgotten.note', wasLocked.current ? 'locked' : 'yes')
           // If signing out does not work, the site starts again: registering is then refused, and
           // that screen says what happened and offers to try again
           void Promise.race([endSession(), new Promise<boolean>((r) => setTimeout(() => r(false), 15_000))]).then(
@@ -708,7 +750,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const view = (
     <Guard key={path} shown={slug}>
       {slug ? (
-        <PageView slug={slug} user={user} owner={owner} />
+        <PageView slug={slug} user={user} owner={owner} display={display ?? null} />
       ) : owner && path === '/machines' ? (
         <Machines />
       ) : owner && path === '/displays' ? (
@@ -734,6 +776,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
   const notices = (
     <>
       <ServiceNotice />
+      {display?.lockEnded && <LockEnded onSeen={() => void convex.mutation(api.displays.lockEndedSeen, { key }).catch(() => {})} />}
       {code === 'owner' && <CodeForAnotherScreen />}
       {code === 'screen' && <ScreenOffered onDecline={codeSeen} />}
     </>
@@ -750,6 +793,7 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
           <TopBar
             display={display ?? null}
             owner={owner}
+            locked={lockedTo !== undefined}
             count={pages?.length}
             onSignOut={signOut}
             search={path === '/' && (pages?.length ?? 0) > 0 ? { query, onQuery: setQuery, onFind: () => setFinding(true) } : null}
@@ -759,7 +803,8 @@ function Shell({ user, owner }: { user: string; owner: boolean }) {
           {view}
         </Site>
       )}
-      {finding && pages && <Finder pages={pages} onClose={closeFinder} />}
+      {/* A display locked to a page is offered no other page to find */}
+      {finding && pages && lockedTo === undefined && <Finder pages={pages} onClose={closeFinder} />}
       {tour && <TourDialog onClose={closeTour} />}
       <Toasts />
     </div>
@@ -793,6 +838,7 @@ interface Search {
 function TopBar({
   display,
   owner,
+  locked = false,
   count,
   search,
   onSignOut,
@@ -800,6 +846,8 @@ function TopBar({
 }: {
   display: DisplayView | null
   owner: boolean
+  /** Whether this display is locked to a page: the bar then offers no other part of the site, and only the settings it is open on and signing out. */
+  locked?: boolean
   count: number | undefined
   search: Search | null
   onSignOut: () => void
@@ -846,11 +894,13 @@ function TopBar({
         >
           <Mark />
         </a>
-        <nav aria-label="Sections">
-          {tab('/', NOUN.Many)}
-          {owner && tab('/machines', 'Machines')}
-          {owner && tab('/displays', 'Displays')}
-        </nav>
+        {!locked && (
+          <nav aria-label="Sections">
+            {tab('/', NOUN.Many)}
+            {owner && tab('/machines', 'Machines')}
+            {owner && tab('/displays', 'Displays')}
+          </nav>
+        )}
       </div>
       <div className="grid-header-spacer" />
       {search && (
@@ -880,9 +930,11 @@ function TopBar({
       </div>
       <div className="grid-actions">
         <Bell />
-        <button type="button" className="grid-icon-btn" title="Take the tour" aria-label="Take the tour" onClick={onTour}>
-          <IconGuide />
-        </button>
+        {!locked && (
+          <button type="button" className="grid-icon-btn" title="Take the tour" aria-label="Take the tour" onClick={onTour}>
+            <IconGuide />
+          </button>
+        )}
         <div className="menu" ref={box}>
           <button
             type="button"

@@ -48,7 +48,7 @@ export const send = mutation({
     // To the display named, to every display with `all`, or else to the one display the person
     // is most likely looking at, as a page is shown. Where nothing is open, that is first of all
     // a display that takes notifications, which is how one reaches a closed display
-    const aimed = await aim(ctx, user._id, display, true)
+    const aimed = await aim(ctx, user._id, display, { pushed: true })
     const every = display?.trim().toLowerCase() === EVERY_DISPLAY
     const sent = { displays: aimed.to.map(nameOf), notShown: aimed.notShown, ...(aimed.chosen ? { chosen: aimed.chosen } : {}) }
     // A display that was named and cannot take it is sent nothing, and the refusal says why: its

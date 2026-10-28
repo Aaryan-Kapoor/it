@@ -1362,6 +1362,48 @@ main:has(.modal-overlay) {
   transform: scale(0.94);
 }
 
+/* What a display locked to the page it shows says of that, in the bar above the page and never over it */
+.lock-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin-right: 4px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.lock-mark svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+.lock-mark-how {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.lock-mark:hover {
+  background: var(--interactive);
+}
+/* The page a display is locked to, chosen on the Displays page */
+.lock-pick select {
+  max-width: 12rem;
+  font: inherit;
+}
+
+@media (max-width: 520px) {
+  .lock-mark-how {
+    display: none;
+  }
+}
+
 .page-frame {
   flex: 1;
   border: none;

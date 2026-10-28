@@ -1741,6 +1741,7 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
           ? [
               { id: 'd1', name: 'Kitchen', paired: true, lastSeenAt: now - 10_000, agents: true },
               { id: 'd2', name: 'TV', paired: true, lastSeenAt: now - 7_200_000, agents: false },
+              { id: 'd3', name: 'Hall', paired: true, lastSeenAt: now - 7_200_000, agents: true, lockedTo: { id: 'a1', slug: 'calendar', title: 'Calendar' } },
             ]
           : asked.path === 'machines:me'
             ? { id: 'machine-1', name: 'the desk', wanted: ['pi'], harnesses: [{ id: 'pi', addon: 'connected' }], wakes: [{ harness: 'pi', since: 1 }] }
@@ -1754,9 +1755,10 @@ describe.skipIf(process.platform === 'win32' || !python)('the lists a person ask
         '',
       ])
       expect((await atTerminal(m, ['displays'], b.env)).shown.split('\n')).toEqual([
-        '2 displays:',
-        '  Kitchen  paired                    seen just now',
-        '  TV       paired, closed to agents  seen 2 h ago',
+        '3 displays:',
+        '  Kitchen  paired                      seen just now',
+        '  TV       paired, closed to agents    seen 2 h ago',
+        '  Hall     paired, locked to calendar  seen 2 h ago',
         '',
       ])
       expect((await atTerminal(m, ['whoami'], b.env)).shown.split('\n')).toEqual([
@@ -3924,6 +3926,28 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
     }
   })
 
+  test('a display locked to another page is said to be that, by name, with who can unlock it', async () => {
+    const m = machine()
+    const b = await backend(m, (asked) =>
+      asked.path === 'displays:show'
+        ? {
+            displays: ['Laptop'],
+            notShown: [
+              { display: 'Hall', reason: 'locked' },
+              { display: 'Kitchen', reason: 'locked' },
+            ],
+          }
+        : null,
+    )
+    try {
+      expect(printed(await run(m, ['open', 'plan', '--on', 'all'], b.env)).hint).toBe(
+        'The user locked "Hall" and "Kitchen" to another page, and only the user’s own browser can unlock them, under Displays on the site.',
+      )
+    } finally {
+      await b.close()
+    }
+  })
+
   test('`--on all` asked of an It of an earlier version, which refuses "all" as the name of no display, is asked once more with no display named, and says so', async () => {
     const m = machine()
     // As every earlier It refuses a name that no display has, and shows what names no display on every display
@@ -3997,8 +4021,9 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
 
   test('`it notify` with no display named, where none can take it, is refused with each display and why, and with nothing paired says how to pair one', async () => {
     const m = machine(true, true)
-    let displays: { name: string; paired: boolean; agents: boolean }[] = [
+    let displays: { name: string; paired: boolean; agents: boolean; lockedTo?: { id: string; slug: string; title: string } }[] = [
       { name: 'TV', paired: true, agents: false },
+      { name: 'Hall', paired: true, agents: true, lockedTo: { id: 'a1', slug: 'calendar', title: 'Calendar' } },
       { name: 'Wall', paired: false, agents: true },
     ]
     const b = await backend(m, (asked) =>
@@ -4016,7 +4041,7 @@ describe.skipIf(process.platform === 'win32')('a page shown when no display is p
         {
           code: 'nowhere',
           message: 'No display can take it now, so nothing was sent.',
-          hint: '"TV" is closed to agents and "Wall" is not paired any more. With --on all it is kept for every display, which has it once it can take it.',
+          hint: '"TV" is closed to agents, "Hall" is locked to a page and "Wall" is not paired any more. With --on all it is kept for every display, which has it once it can take it.',
         },
       ])
       displays = []

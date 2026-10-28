@@ -3,7 +3,7 @@
 import { ALIVE, LIMITS, NOUN, WAKE_BACK_MS } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { copy, IconBack, IconLink, IconPin, IconSay, IconSend, IconStop, IconX, Mark } from './brand'
+import { copy, IconBack, IconLink, IconLock, IconPin, IconSay, IconSend, IconSettings, IconStop, IconX, Mark } from './brand'
 import { agentName, ago, api, type Id, navigate, refusal, useNow } from './lib'
 import { Mount } from './mount'
 import { Bell, say } from './notifications'
@@ -300,7 +300,80 @@ function Empty({ owner, notice }: { owner: boolean; notice?: ReactNode }) {
  */
 export const wasShown = new Set<string>()
 
-export function PageView({ slug, user, owner }: { slug: string; user: string; owner: boolean }) {
+/** The display a page is shown on, as far as locking it goes: which it is, and the page it is locked to. */
+export interface LockableDisplay {
+  id: string
+  lockedTo: { id: string; slug: string; title: string } | null
+}
+
+/**
+ * Locking the display a page is shown on to that page, from the page itself, and what a locked
+ * display shows of it: a small mark in the bar above the page, never over it, that says the
+ * display is locked and how it is unlocked, and beside it the way to the display's settings,
+ * which is the one other place a locked display leads to. The owner's browser unlocks it there.
+ * A screen may lock itself and not unlock itself, and is asked first, since it cannot take it
+ * back: the settings are how it still signs itself out.
+ */
+function Lock({ display, owner, page, here }: { display: LockableDisplay; owner: boolean; page: { id: string; title: string }; here: boolean }) {
+  const lock = useMutation(api.displays.lock)
+  const unlock = useMutation(api.displays.unlock)
+  const failed = (err: unknown) => say(refusal(err).message)
+  if (here)
+    return (
+      <>
+        <button
+          type="button"
+          className="lock-mark"
+          title={
+            owner
+              ? 'Agents cannot show another page on this display while it is locked. Press to unlock it.'
+              : 'Agents cannot show another page on this display while it is locked. The browser paired as yours unlocks it, under Displays.'
+          }
+          onClick={() =>
+            owner
+              ? void unlock({ displayId: display.id as Id<'displays'> }).catch(failed)
+              : say('The browser paired as yours unlocks this display, under Displays.')
+          }
+        >
+          <IconLock />
+          <span>Locked here</span>
+          <span className="lock-mark-how">{owner ? 'Unlock' : 'Unlock it from your own browser'}</span>
+        </button>
+        {/* This display's own settings, where a screen signs itself out, are the one other place a locked display leads to */}
+        <button
+          type="button"
+          className="nav-action"
+          title="This display’s settings: whether agents may use it, and signing out"
+          aria-label="This display’s settings"
+          onClick={() => navigate('/settings')}
+        >
+          <IconSettings />
+        </button>
+      </>
+    )
+  return (
+    <button
+      type="button"
+      className="nav-action"
+      title="Lock this display to this page"
+      aria-label="Lock this display to this page"
+      onClick={() => {
+        if (
+          !owner &&
+          !confirm(
+            `Lock this display to “${page.title}”? Agents will not be able to show another page here, and only the browser paired as yours can unlock it.`,
+          )
+        )
+          return
+        void lock({ displayId: display.id as Id<'displays'>, artifactId: page.id as Id<'artifacts'> }).catch(failed)
+      }}
+    >
+      <IconLock />
+    </button>
+  )
+}
+
+export function PageView({ slug, user, owner, display = null }: { slug: string; user: string; owner: boolean; display?: LockableDisplay | null }) {
   const { service } = useSession()
   const page = useQuery(api.artifacts.get, service?.functions === 'current' ? { slug, history: false } : { slug })
   const now = useNow()
@@ -323,32 +396,43 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
       document.title = 'It'
     }
   }, [page])
+  // A display locked to this page keeps to it: there is no way back from it while it is locked
+  const lockedHere = display?.lockedTo?.slug === slug
   // Escape goes back, from wherever on the site's own part of the screen the keyboard is. With
   // something open over the page, the notifications among them, it closes that and no more
   useEffect(() => {
+    if (lockedHere) return
     const key = (e: KeyboardEvent) =>
       e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.modal-overlay, .finder-overlay, .notif-panel') && navigate('/')
     document.addEventListener('keydown', key)
     return () => document.removeEventListener('keydown', key)
-  }, [])
+  }, [lockedHere])
   if (!page) return <main className="page-view" role="status" />
   return (
     <main className="page-view">
       <header className="page-bar page-nav">
         {underWay && <span className="page-progress" aria-hidden="true" />}
-        <button type="button" className="back-btn" aria-label={`Back to your ${NOUN.many}`} title="Back (esc)" onClick={() => navigate('/')}>
-          <IconBack />
-        </button>
-        <a
-          className="page-nav-mark"
-          href="/"
-          onClick={(e) => {
-            e.preventDefault()
-            navigate('/')
-          }}
-        >
-          <Mark />
-        </a>
+        {!lockedHere && (
+          <button type="button" className="back-btn" aria-label={`Back to your ${NOUN.many}`} title="Back (esc)" onClick={() => navigate('/')}>
+            <IconBack />
+          </button>
+        )}
+        {lockedHere ? (
+          <span className="page-nav-mark">
+            <Mark />
+          </span>
+        ) : (
+          <a
+            className="page-nav-mark"
+            href="/"
+            onClick={(e) => {
+              e.preventDefault()
+              navigate('/')
+            }}
+          >
+            <Mark />
+          </a>
+        )}
         <div className="page-nav-titlewrap">
           <h1 className="page-title page-nav-title">{page.title}</h1>
           <div className="page-meta page-nav-meta">
@@ -419,6 +503,7 @@ export function PageView({ slug, user, owner }: { slug: string; user: string; ow
               <IconSay />
             </button>
           )}
+          {display && page.version !== null && <Lock display={display} owner={owner} page={{ id: page.id, title: page.title }} here={lockedHere} />}
           <Bell compact />
           <button
             type="button"

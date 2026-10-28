@@ -183,6 +183,17 @@ describe('a browser that is not paired', () => {
     expect(names()).toEqual(['/session/token'])
   })
 
+  test('one whose display was just forgotten from the owner’s browser says so, and that a lock it had ended with it, once', async () => {
+    // The browser was kept for the person whose display it was, who is still there
+    localStorage.setItem('it.person', 'user-1')
+    sessionStorage.setItem('it.forgotten.note', 'locked')
+    await start()
+    expect(host.querySelector('.door-note')!.textContent).toBe(
+      'This display was forgotten on the Displays page, so this browser is signed out. It was locked to a page, and the lock ended with it.',
+    )
+    expect(sessionStorage.getItem('it.forgotten.note')).toBeNull()
+  })
+
   test('a code typed there pairs it, and it registers as a display at once, saying only which browser it is', async () => {
     await start()
     await typeCode('owne rcod e000 0000 0001')
@@ -630,6 +641,128 @@ describe('a page an agent brings up on this display', () => {
     })
     expect(location.pathname).toBe('/p/tour-menu')
     expect(host.querySelector('.modal-panel')).toBeNull()
+  })
+})
+
+describe('a display locked to a page', () => {
+  const PAGE = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: Date.now(), agent: 'pi', machine: 'here', run: null, pending: 0 }
+  const locked = { ...DISPLAY, lockedTo: { id: 'page-1', slug: 'plan', title: 'Plan' }, lockEnded: false }
+
+  test('keeps to its page wherever it is opened, but for its settings, and says in the bar above the page that it is locked and how it is unlocked', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:get'] = PAGE
+    watched['displays:mine'] = locked
+    await start('/')
+    expect(location.pathname).toBe('/p/plan')
+    const mark = host.querySelector('header .lock-mark')!
+    expect(mark.textContent).toBe('Locked hereUnlock')
+    // Nothing takes it back to the person's pages while it is locked
+    expect(host.querySelector('.back-btn')).toBeNull()
+    const { navigate } = await import('./lib')
+    await act(async () => navigate('/displays'))
+    expect(location.pathname).toBe('/p/plan')
+    await act(async () => navigate('/settings'))
+    expect(location.pathname).toBe('/settings')
+    // The owner's browser unlocks it from the mark
+    await act(async () => navigate('/p/plan'))
+    await act(async () => void host.querySelector<HTMLButtonElement>('header .lock-mark')!.click())
+    expect(names()).toContain('displays:unlock')
+  })
+
+  test('stays on its page, which is not shown afresh, whatever on the site would take it elsewhere: Escape, the mark in the bar, the browser’s way back or a link to another page', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:get'] = PAGE
+    watched['displays:mine'] = locked
+    answers['mounts:create'] = () => ({ mountId: 'mount-1', version: 1 })
+    answers['mounts:ticket'] = () => ({ ticket: 'ticket-1' })
+    await start('/p/plan')
+    await vi.waitFor(() => expect(host.querySelector('.mount iframe')).not.toBeNull())
+    const frame = host.querySelector('.mount iframe')
+    const view = host.querySelector('main.page-view')
+    const same = () => [location.pathname, host.querySelector('.mount iframe') === frame, host.querySelector('main.page-view') === view]
+    // Escape, from the bar above the page, where it otherwise goes back to the person's pages
+    await act(async () => {
+      host.querySelector('header .lock-mark')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    // The mark in the bar, which otherwise leads to the person's pages, leads nowhere
+    expect(host.querySelector('header a.page-nav-mark')).toBeNull()
+    await act(async () => {
+      host.querySelector<HTMLElement>('header .page-nav-mark')!.click()
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    // The browser's own way back
+    await act(async () => {
+      history.pushState(null, '', '/')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    // A link to another page, as a notification or the finder offers one
+    const { navigate } = await import('./lib')
+    await act(async () => {
+      navigate('/p/another')
+      await tick()
+    })
+    expect(same()).toEqual(['/p/plan', true, true])
+    expect(names().filter((what) => what === 'mounts:create')).toHaveLength(1)
+  })
+
+  test('a screen that is locked reaches its settings from the bar, and signs itself out there, and is led back to its page and to no other', async () => {
+    cookie = CODES.screencode0000000002!
+    watched['artifacts:get'] = PAGE
+    watched['displays:mine'] = locked
+    await start('/p/plan')
+    const toSettings = () => host.querySelector<HTMLButtonElement>('header button[aria-label="This display’s settings"]')!
+    // The screen cannot unlock itself: the mark says how, and beside it is the way to its settings
+    expect(host.querySelector('header .lock-mark')!.textContent).toBe('Locked hereUnlock it from your own browser')
+    await act(async () => {
+      toSettings().click()
+      await tick()
+    })
+    expect(location.pathname).toBe('/settings')
+    expect(host.textContent).toContain('Paired as a screen')
+    expect(host.querySelector('label.switch')!.textContent).toBe('Open to agents')
+    // Settings offers no other part of the site, nor any other page: no sections, no tour, and nothing to find
+    expect([host.querySelector('nav[aria-label="Sections"]'), button('Take the tour')]).toEqual([null, undefined])
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }))
+      await tick()
+    })
+    expect(host.querySelector('.finder-overlay')).toBeNull()
+    // Whatever would lead elsewhere leads back to the page
+    const { navigate } = await import('./lib')
+    await act(async () => {
+      navigate('/p/another')
+      await tick()
+    })
+    expect(location.pathname).toBe('/p/plan')
+    // And from the settings, the way back is said in so many words
+    await act(async () => {
+      toSettings().click()
+      await tick()
+    })
+    expect(host.textContent).toContain('This display is locked to “Plan”.')
+    await press('Back to the page')
+    expect(location.pathname).toBe('/p/plan')
+    // The screen signs itself out from its settings
+    await act(async () => {
+      toSettings().click()
+      await tick()
+    })
+    await press('Sign out')
+    await vi.waitFor(() => expect(names()).toEqual(expect.arrayContaining(['displays:signOut', '/session/end'])), 10_000)
+  }, 20_000)
+
+  test('says that its lock ended when the page it was locked to was deleted, until that is read', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['displays:mine'] = { ...DISPLAY, lockedTo: null, lockEnded: true }
+    await start('/')
+    expect(host.textContent).toContain('The page this display was locked to was deleted, so the display is not locked any more.')
+    await press('OK')
+    expect(names()).toContain('displays:lockEndedSeen')
   })
 })
 

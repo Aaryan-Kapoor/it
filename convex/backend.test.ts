@@ -3643,6 +3643,88 @@ describe('which display an agent’s page goes to', () => {
     expect(await show()).toMatchObject({ displays: ['TV'], chosen: 'last_used' })
   })
 
+  test('a display locked to a page is asked by no agent to show another, is never the one chosen, and the others still are', async () => {
+    const { t, m, laptop, tv, phone, says, show, asked, clear } = await household()
+    await publish(m, 'board')
+    const page = async (slug: string) => (await t.run((ctx) => ctx.db.query('artifacts').collect())).find((a) => a.slug === slug)!._id
+    const tvShows = async () => (await tv.browser.query(api.displays.mine, { key: tv.key }))?.showing?.slug
+    // The owner's browser locks the TV to the board, from the Displays page: the board comes up there at once
+    await laptop.browser.mutation(api.displays.lock, { displayId: tv.display.id, artifactId: await page('board') })
+    expect(await tvShows()).toBe('board')
+    expect(await tv.browser.query(api.displays.mine, { key: tv.key })).toMatchObject({ lockedTo: { slug: 'board', title: 'Title of board' }, lockEnded: false })
+    // The TV is the display in use, and is passed over all the same
+    await clear()
+    await vi.advanceTimersByTimeAsync(60_000)
+    await says(tv, { visible: true, used: true })
+    expect(await show()).toMatchObject({ notShown: expect.arrayContaining([{ display: 'TV', reason: 'locked' }]) })
+    expect(await asked()).not.toContain('TV')
+    // Asked for by name, it is refused, with why; with all, every other display is asked
+    await clear()
+    expect(await show('tv')).toEqual({ displays: [], notShown: [{ display: 'TV', reason: 'locked' }], took: false })
+    expect(await show('all')).toEqual({ displays: ['Laptop', 'Phone'], notShown: [{ display: 'TV', reason: 'locked' }], took: false })
+    expect(await asked()).toEqual(['Laptop', 'Phone'])
+    // The page it is locked to is the one page an agent may still bring up there
+    expect(await m.as.mutation(api.displays.show, { slug: 'board', display: 'TV' })).toMatchObject({ displays: ['TV'] })
+    // A notification is no page: one sent to the TV by name still goes there
+    expect(await m.as.mutation(api.notifications.send, { text: 'Dinner is ready', display: 'TV' })).toMatchObject({ displays: ['TV'] })
+    // A screen locks itself, and no other display
+    expect(await code(phone.browser.mutation(api.displays.lock, { displayId: laptop.display.id, artifactId: await page('plan') }))).toBe('not_found')
+    await phone.browser.mutation(api.displays.lock, { displayId: phone.display.id, artifactId: await page('board') })
+    expect(await show('all')).toMatchObject({ displays: ['Laptop'] })
+    // It does not unlock itself, nor the TV: only the browser paired as the owner's does
+    expect(await code(phone.browser.mutation(api.displays.unlock, { displayId: phone.display.id }))).toBe('forbidden')
+    expect(await code(tv.browser.mutation(api.displays.unlock, { displayId: tv.display.id }))).toBe('forbidden')
+    await laptop.browser.mutation(api.displays.unlock, { displayId: tv.display.id })
+    await laptop.browser.mutation(api.displays.unlock, { displayId: phone.display.id })
+    await clear()
+    expect(await show('all')).toEqual({ displays: ['Laptop', 'TV', 'Phone'], notShown: [], took: false })
+    expect((await m.as.query(api.displays.list, {})).map((d) => d.lockedTo)).toEqual([null, null, null])
+  })
+
+  test('a screen that is locked may lock itself to the same page again, and only the owner’s browser locks it to another', async () => {
+    const { t, m, laptop, phone } = await household()
+    await publish(m, 'board')
+    const page = async (slug: string) => (await t.run((ctx) => ctx.db.query('artifacts').collect())).find((a) => a.slug === slug)!._id
+    const lockedTo = async () => (await phone.browser.query(api.displays.mine, { key: phone.key }))?.lockedTo?.slug
+    await phone.browser.mutation(api.displays.lock, { displayId: phone.display.id, artifactId: await page('board') })
+    // Locking it to another page would undo the owner's lock as unlocking it would, and is refused as that is
+    expect(await code(phone.browser.mutation(api.displays.lock, { displayId: phone.display.id, artifactId: await page('plan') }))).toBe('forbidden')
+    expect(await lockedTo()).toBe('board')
+    expect((await phone.browser.query(api.displays.mine, { key: phone.key }))?.showing?.slug).toBe('board')
+    // Locking it to the page it is locked to changes nothing of the lock, and brings the page up again
+    expect(await code(phone.browser.mutation(api.displays.lock, { displayId: phone.display.id, artifactId: await page('board') }))).toBe('ok')
+    expect(await lockedTo()).toBe('board')
+    // The owner's browser locks it to another page
+    await laptop.browser.mutation(api.displays.lock, { displayId: phone.display.id, artifactId: await page('plan') })
+    expect(await lockedTo()).toBe('plan')
+  })
+
+  test('a lock outlives a reload and the pairing of its browser being renewed, and ends with its page or its display', async () => {
+    const { t, m, laptop, tv } = await household()
+    const plan = (await t.run((ctx) => ctx.db.query('artifacts').collect()))[0]!._id
+    await laptop.browser.mutation(api.displays.lock, { displayId: tv.display.id, artifactId: plan })
+    // The TV's pairing ends, and its browser is paired again, under a session of its own, and registers as the display it was
+    await laptop.browser.mutation(api.sessions.end, { session: tv.session as never })
+    const again = await paired(t, 'alice', 'screen', tv.key, TV)
+    expect(again.display.id).toBe(tv.display.id)
+    expect(await again.browser.query(api.displays.mine, { key: tv.key })).toMatchObject({ lockedTo: { slug: 'plan' } })
+    // The page is deleted: the lock ends, and the display is to say so
+    await m.as.mutation(api.artifacts.remove, { slug: 'plan' })
+    expect(await again.browser.query(api.displays.mine, { key: tv.key })).toMatchObject({ lockedTo: null, lockEnded: true })
+    await again.browser.mutation(api.displays.lockEndedSeen, { key: tv.key })
+    expect((await again.browser.query(api.displays.mine, { key: tv.key }))?.lockEnded).toBe(false)
+    // Locked again, to another page, and then forgotten: the lock goes with the display
+    await publish(m, 'board')
+    const board = (await t.run((ctx) => ctx.db.query('artifacts').collect())).find((a) => a.slug === 'board')!._id
+    await publish(m, 'notes')
+    await laptop.browser.mutation(api.displays.lock, { displayId: tv.display.id, artifactId: board })
+    expect(await m.as.mutation(api.displays.show, { slug: 'notes', display: 'TV' })).toMatchObject({ notShown: [{ display: 'TV', reason: 'locked' }] })
+    await laptop.browser.mutation(api.displays.forget, { displayId: tv.display.id })
+    expect(await t.run(async (ctx) => (await ctx.db.query('displays').collect()).filter((d) => d.lockedTo !== undefined).length)).toBe(0)
+    // The owner's browser cannot lock a display to a page that is not there
+    expect(await code(laptop.browser.mutation(api.displays.lock, { displayId: laptop.display.id, artifactId: plan }))).toBe('not_found')
+  })
+
   test('a display says whether its site is visible and when it was used, and it is written only as that changes', async () => {
     const { t, laptop, says } = await household()
     const record = async () => (await t.run((ctx) => ctx.db.query('displays').collect())).find((d) => d.name === 'Laptop')!
@@ -4543,6 +4625,32 @@ describe('notifications', () => {
     await t.run((ctx) => ctx.db.patch(alice.session as never, { endedAt: Date.now() }))
     expect(await refusal({ text: 'to nobody' })).toMatchObject({ code: 'forbidden', notSent: 'nowhere' })
     expect(await kept()).toEqual([['to every display', 'every display']])
+  })
+
+  test('with no display named and every display locked to a page, a notification is refused and none of the locked displays has it', async () => {
+    const t = backend()
+    const alice = await person(t, 'alice')
+    const m = await machineOf(t, 'alice')
+    const phoneKey = 'alice-phone-key-0001'
+    const phone = await paired(t, 'alice', 'screen', phoneKey, 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/605')
+    await phone.browser.mutation(api.displays.rename, { displayId: phone.display.id, name: 'Phone' })
+    await alice.browser.mutation(api.push.subscribe, { key: phoneKey, endpoint: PUSH('phone'), p256dh: 'p', auth: 'a' })
+    const p = await publish(m, 'calendar')
+    for (const d of [alice.display.id, phone.display.id]) await alice.browser.mutation(api.displays.lock, { displayId: d, artifactId: p.artifactId })
+    const refused = await m.as.mutation(api.notifications.send, { text: 'to nobody' }).then(
+      () => null,
+      (e) => (e instanceof ConvexError ? JSON.parse(typeof e.data === 'string' ? e.data : JSON.stringify(e.data)) : String(e)),
+    )
+    expect(refused).toMatchObject({ code: 'forbidden', notSent: 'nowhere' })
+    expect(await t.run((ctx) => ctx.db.query('notifications').collect())).toEqual([])
+    expect([
+      await alice.browser.query(api.notifications.list, { key: displayKey('alice') }),
+      await phone.browser.query(api.notifications.list, { key: phoneKey }),
+    ]).toEqual([[], []])
+    // A notification is no page: named, or sent to every display in so many words, it still reaches a locked display
+    expect(await m.as.mutation(api.notifications.send, { text: 'to the phone', display: 'phone' })).toMatchObject({ displays: ['Phone'] })
+    expect(await m.as.mutation(api.notifications.send, { text: 'to every display', display: 'all' })).toMatchObject({ displays: ['Chrome on Linux', 'Phone'] })
+    expect((await phone.browser.query(api.notifications.list, { key: phoneKey })).map((n) => n.text).sort()).toEqual(['to every display', 'to the phone'])
   })
 
   test('with no display open, a notification goes first to one that takes notifications, which is how it reaches a closed one', async () => {

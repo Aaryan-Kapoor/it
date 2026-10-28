@@ -353,9 +353,33 @@ const subscribe = (fn: () => void) => {
     window.removeEventListener('popstate', fn)
   }
 }
+/**
+ * The address of the page a display is locked to, while it is locked, or null. The site then
+ * goes to no other address but the display's settings, where a screen signs itself out: what
+ * would take it elsewhere, a link, a key, a notification or the browser's own way back, keeps it
+ * on that page. From the page itself nothing moves, so the page is not shown afresh, and loses
+ * nothing that was done on it and not yet saved.
+ */
+let keptTo: string | null = null
+/** Whether going to `path` would leave the page this display is locked to. */
+const leaves = (path: string): boolean => keptTo !== null && path !== keptTo && path !== '/settings'
+/**
+ * Says which page the site keeps to, or null for none. Said as the display is drawn, and not
+ * after, so that whatever the same drawing does already goes by it: the lock and the page it
+ * names go together, and where the page was deleted the lock went with it.
+ */
+export function keepTo(path: string | null): void {
+  keptTo = path
+}
+// The browser's own way back is kept to the page as well. This is heard before anything the
+// site draws hears of it, so the page is never drawn without the page it is locked to.
+window.addEventListener('popstate', () => {
+  if (leaves(location.pathname)) history.replaceState(null, '', keptTo)
+})
 export function navigate(path: string, replace = false): void {
-  if (path === location.pathname) return
-  history[replace ? 'replaceState' : 'pushState'](null, '', path)
+  const to = leaves(path) ? keptTo! : path
+  if (to === location.pathname) return
+  history[replace ? 'replaceState' : 'pushState'](null, '', to)
   for (const fn of listeners) fn()
 }
 export const usePath = () => useSyncExternalStore(subscribe, () => location.pathname)
