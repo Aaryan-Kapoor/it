@@ -76,19 +76,26 @@ test.each(['{"version":1,', '{"version":9}', '{"version":1,"waiters":null}'])(
   },
 )
 
-test('the global waiter bound applies across conversations and restored copies make room for new ones', async () => {
-  const store = open()
-  for (let i = 0; i < WAITERS_MOST; i++) await store.keepWaiters([{ ...copy.click, id: `action-${i}` }], `codex:thread-${i}`)
-  expect(store.waiterRoom('codex:other', new Map(), (key) => key)).toBe(0)
-  await expect(store.keepWaiters([{ ...copy.click, id: 'too-many' }], 'codex:other')).rejects.toThrow('full')
-  await store.close()
-  const restored = open()
-  expect(restored.waiterRoom('codex:other', new Map(), (key) => key)).toBe(200)
-  await restored.keepWaiters([{ ...copy.click, id: 'new' }], 'codex:other')
-  expect(restored.waiters.size).toBe(WAITERS_MOST)
-  expect(restored.waiters.has('action-0')).toBe(false)
-  expect(open().waiters.has('new')).toBe(true)
-})
+test(
+  'the global waiter bound applies across conversations and restored copies make room for new ones',
+  async () => {
+    const store = open()
+    for (let i = 0; i < WAITERS_MOST; i++) await store.keepWaiters([{ ...copy.click, id: `action-${i}` }], `codex:thread-${i}`)
+    expect(store.waiterRoom('codex:other', new Map(), (key) => key)).toBe(0)
+    await expect(store.keepWaiters([{ ...copy.click, id: 'too-many' }], 'codex:other')).rejects.toThrow('full')
+    await store.close()
+    const restored = open()
+    expect(restored.waiterRoom('codex:other', new Map(), (key) => key)).toBe(200)
+    await restored.keepWaiters([{ ...copy.click, id: 'new' }], 'codex:other')
+    expect(restored.waiters.size).toBe(WAITERS_MOST)
+    expect(restored.waiters.has('action-0')).toBe(false)
+    expect(open().waiters.has('new')).toBe(true)
+  },
+  // Filling the bound takes as many saves as it holds copies, one conversation at a time, and
+  // each save writes the whole record and flushes it and its folder to the disk. On CI's
+  // Windows runners that has taken from nine seconds to past thirty
+  process.platform === 'win32' ? 120_000 : 30_000,
+)
 
 test('a failed expiry write preserves copies until a retry, without removing delivery receipts', async () => {
   const store = open()

@@ -64,9 +64,14 @@ mkdirSync(out, { recursive: true })
 const sums = []
 for (const target of TARGETS) {
   const name = `it-${target}${target.startsWith('windows') ? '.exe' : ''}`
-  // Without a CPU variant, Bun inherits the builder's baseline mode. Name the standard x64
-  // variant explicitly so every builder produces the runtime described in docs/install.md.
-  const compileTarget = `bun-${target}${target.endsWith('-x64') ? '-modern' : ''}`
+  // The programs for Linux and Windows on Intel and AMD processors carry Bun's baseline runtime,
+  // which needs SSE4.2 and POPCNT, where its other runtime needs AVX2. The backend program needs
+  // no more than the baseline: it uses AVX2 and anything newer only where the processor says it
+  // has them. Bun builds one runtime for an Intel Mac, which needs AVX2, and gives it out under
+  // both names, so that program is built from it by the name that says so. docs/install.md has
+  // these minimums, and the install scripts check them. The variant is named outright, since
+  // without one Bun takes the one it was itself built as, and two builders could differ.
+  const compileTarget = `bun-${target}${target === 'darwin-x64' ? '-modern' : target.endsWith('-x64') ? '-baseline' : ''}`
   execFileSync('bun', ['build', path.join(here, 'src/main.ts'), '--compile', '--minify', `--target=${compileTarget}`, '--outfile', path.join(out, name)], {
     stdio: ['ignore', 'ignore', 'inherit'],
   })

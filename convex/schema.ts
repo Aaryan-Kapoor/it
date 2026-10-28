@@ -523,6 +523,19 @@ export default defineSchema({
     /** Why turning the network on there opens It to the internet, in words that finish "This machine …", where it would. */
     exposed: v.optional(v.string()),
     /**
+     * The machine's name on its tailnet, such as `studio.tail1234.ts.net`, while the door is open
+     * to the network and answers to that name: kept to the tailnet, or open to every network on
+     * a machine that is on one. Nothing where Tailscale does not say it.
+     */
+    tailnetName: v.optional(v.string()),
+    /**
+     * Where the links that agents give are, as the owner chose on the site: at the machine's name
+     * on the tailnet, or at its first address on the network. Nothing is this computer's own
+     * name, which is where they are until another is chosen. The choice is kept while It cannot
+     * be reached there, and the links are there again once it can.
+     */
+    link: v.optional(v.union(v.literal('tailnet'), v.literal('network'))),
+    /**
      * What the owner asked of the network on the site, until the service has said what became
      * of it. When it was asked is also the name the asking goes by. `taken` once the service
      * has taken it up: it stays here until it is answered, so that one the service could not

@@ -78,6 +78,10 @@ interface Stands {
   asked?: { to: Way; at: number } | null
   /** What became of the last asking that was answered, and under `asked` which asking that was. */
   answered?: { to: Way; at: number; ok: boolean; why?: string; asked?: number } | null
+  /** Where the links agents give are to be. Kept as chosen while It cannot be reached there. */
+  link?: LinkWay
+  /** Each place the links can be at as the network stands, by the address a link there is at. */
+  links?: Partial<Record<LinkWay, string>> & { local: string }
 }
 /** How long an asking may go untaken before the person is told that It has not taken it. The service looks every second. */
 export const UNTAKEN_MS = 8000
@@ -274,4 +278,93 @@ export function NoAddress({ where }: { where: Where }) {
     )
   if (where.state === 'nowhere') return <p className="modal-lede">The network is on, but the machine It runs on has no address on a network just now.</p>
   return null
+}
+
+/** Where the links that agents give can be: at this computer's own name, at the machine's name on the tailnet, or at its address on the network. */
+export type LinkWay = 'local' | 'tailnet' | 'network'
+const LINK_WAYS: LinkWay[] = ['local', 'tailnet', 'network']
+
+/**
+ * Where the links agents give are, for the owner to choose. Only a place It can be reached at as
+ * the network stands is offered, each with the address a link there is at, so that nobody is
+ * given a link that opens nothing. A choice It can no longer be reached at is kept, and is shown
+ * as it is, chosen and marked as not reachable now, with what the links use meanwhile: they are
+ * at it again once It can be reached there. Shown as this computer's instead, it could not be
+ * given up, since choosing what is already chosen asks nothing. Nothing is shown by a backend
+ * that says nothing of links, as one of an earlier It does.
+ */
+export function LinkChoice() {
+  const said = useQuery(api.network.get, {}) as Stands | undefined
+  const choosing = useMutation(api.network.link)
+  const group = useId()
+  /** What is being chosen, until the backend has taken it. */
+  const [turning, setTurning] = useState<LinkWay | null>(null)
+  /** Why what was last chosen here was not taken, in a sentence, until something else is chosen. */
+  const [failed, setFailed] = useState('')
+  const links = said?.links
+  if (!links || !said?.link) return null
+  const offered = LINK_WAYS.filter((to) => links[to] !== undefined)
+  /** The place chosen, where It cannot be reached at it as the network stands. */
+  const unreachable = offered.includes(said.link) ? null : said.link
+  const ways = LINK_WAYS.filter((to) => offered.includes(to) || to === unreachable)
+  const shown = turning ?? said.link
+  const choose = (to: LinkWay) => {
+    setFailed('')
+    setTurning(to)
+    choosing({ to }).then(
+      () => setTurning(null),
+      (err) => {
+        setTurning(null)
+        setFailed(refusal(err).message)
+      },
+    )
+  }
+  const label: Record<LinkWay, string> = {
+    local: 'This computer',
+    tailnet: 'My tailnet',
+    network: said.exposed ? 'Its address on the network' : 'My home network',
+  }
+  const hint: Record<LinkWay, string> = {
+    local: 'Opens only on the machine It runs on. An agent on a machine that joined gives the address that machine reaches It at.',
+    tailnet: 'Opens on your own devices that are signed in to Tailscale.',
+    network: said.exposed ? 'Opens wherever that address can be reached from.' : 'Opens on other devices on the same network.',
+  }
+  return (
+    <div className="net">
+      <fieldset className="link-ways" disabled={turning !== null}>
+        <legend className="sr-only">Where the links agents give are</legend>
+        {ways.map((to) => (
+          <label key={to} className="link-way" data-on={shown === to || undefined}>
+            <input
+              type="radio"
+              className="net-radio"
+              name={group}
+              checked={shown === to}
+              // Chosen already, and not to be chosen again until It can be reached there
+              disabled={to === unreachable}
+              onChange={() => choose(to)}
+            />
+            <span>
+              <b>
+                {label[to]}
+                {to === unreachable && <span className="chip quiet">Not reachable now</span>}
+              </b>
+              {links[to] && <small className="mono">{links[to]}</small>}
+              <small>
+                {to === unreachable
+                  ? 'It cannot be reached there as the network stands, so agents give this computer’s link until it can. Choose This computer to keep the links there.'
+                  : hint[to]}
+              </small>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      {ways.length === 1 && <p className="net-said">Another place is offered here once another device can reach It.</p>}
+      {failed && (
+        <p className="net-said error" role="alert">
+          {failed}
+        </p>
+      )}
+    </div>
+  )
 }
