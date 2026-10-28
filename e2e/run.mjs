@@ -2678,6 +2678,31 @@ try {
     fromScreen.action === 'approve' && fromScreen.data?.plan === PLAN,
     JSON.stringify(fromScreen),
   )
+  // What a page stores on one display is shown on the others at once, however fast it stores
+  // it: fifty values set in half a second on the screen are all on the owner's display within
+  // two seconds, and none of them is refused
+  await page.goto(`${APP}/p/${slug}`)
+  const onTheOwners = await pageIn(page, { id: slug })
+  const storedFrom = await pageIn(two.page, { id: slug })
+  const burstBegan = Date.now()
+  await storedFrom.evaluate(() => {
+    window.burstRefused = 0
+    for (let i = 0; i < 50; i++) setTimeout(() => It.store.set(`burst-${i}`, { i }).catch(() => window.burstRefused++), i * 10)
+  })
+  const allShown = await until(
+    () => onTheOwners.evaluate(() => Array.from({ length: 50 }, (_, i) => It.store.get(`burst-${i}`)?.i === i).every(Boolean)),
+    2000,
+    25,
+  )
+  const burstTook = Date.now() - burstBegan
+  check(
+    'fifty values a page stores in half a second on one display are all shown on another within two seconds, and none is refused',
+    allShown && (await storedFrom.evaluate(() => window.burstRefused)) === 0,
+    `${burstTook} ms`,
+  )
+  // And taken away again, so that the page is as it was
+  await storedFrom.evaluate(() => Promise.all(Array.from({ length: 50 }, (_, i) => It.store.set(`burst-${i}`, null))))
+  await until(() => onTheOwners.evaluate(() => It.store.get('burst-49') === undefined), 5000)
   await two.page.goto(`${APP}/`)
   await two.page.locator('.chip.ask', { hasText: 'Name this display' }).click()
   await two.page.locator('.reminders input').fill(SCREEN)

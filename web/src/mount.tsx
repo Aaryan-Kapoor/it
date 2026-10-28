@@ -12,11 +12,24 @@
 // this action for itself, with these files", and how much it may ask of the site is bounded
 // here, before anything reaches the backend. The site never opens a file a page sent: it keeps
 // and sends its bytes as they are.
-import { contentPort, FAULT, fileMarker, isStoreKey, LIMITS, MESSAGE, type PageToSite, parseJson, SANDBOX, type SiteToPage } from '@it/protocol'
-import { useConvex, useQuery } from 'convex/react'
+import {
+  CHANNEL_VERSION,
+  contentPort,
+  FAULT,
+  isStoreKey,
+  jsonText,
+  LIMITS,
+  MESSAGE,
+  type PageToSite,
+  SANDBOX,
+  type SiteToPage,
+  STORE_EVERY_MS,
+} from '@it/protocol'
+import { useConvex } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { askTwice } from './backend'
 import { api, displayKey, type Id, note, refusal } from './lib'
+import { useLiveState } from './live'
 import { type Sent, submit } from './outbox'
 
 type Phase = { is: 'loading' } | { is: 'shown' } | { is: 'failed'; why: string }
@@ -24,6 +37,13 @@ const REMOUNT_EVERY_MS = 10_000
 /** A page that asks for more than this is told to slow down, without the backend hearing of it. */
 const BURST = 20
 const PER_SECOND = 5
+/**
+ * What a page keeps for itself is counted apart, and allowed more: twice what the script in a
+ * page sends at its fastest, which is one write each STORE_EVERY_MS, each with whatever was set
+ * in between. A page refused here is told how long to wait, and the script in it sends again then.
+ */
+const STORE_BURST = 40
+const STORE_PER_SECOND = 2 * (1000 / STORE_EVERY_MS)
 /** How long after the person last did something in a page an action from it still counts as theirs. */
 const ATTENDED_MS = 30_000
 /**
@@ -48,59 +68,6 @@ const READY_MS = 20_000
  * reached at and by the same name, so that a page is reached wherever the site is.
  */
 const pages = () => `${location.protocol}//${location.hostname}:${contentPort(Number(location.port) || (location.protocol === 'https:' ? 443 : 80))}`
-
-/**
- * JSON text and nothing else: what crosses from a page is copied, so it cannot carry anything
- * live. Where `files` is given, a file the page put in it (a `File` or a `Blob`, which the
- * channel copies as the file it is) is taken out, put in `files`, and stands in the text as
- * which of them it is, counted from 1. The same file put in twice is one file.
- */
-export function jsonText(value: unknown, max: number, files?: Blob[]): string {
-  // Looked over before it is written out, within a fixed amount of work. What a page sends can
-  // be a small thing that names the same piece many times over, level upon level, and writing
-  // that out in full would take all the memory the site has.
-  let looks = 20_000
-  let letters = 0
-  const look = (v: unknown, depth: number): void => {
-    if (--looks < 0 || depth > 40) throw new Error('That is too large to send.')
-    if (v instanceof Blob) {
-      if (!files) throw new Error('A file cannot be kept with It.store. Send it with It.action, which takes files beside what it carries.')
-      return
-    }
-    if (typeof v === 'string') letters += v.length
-    else if (Array.isArray(v)) {
-      // Its length is counted before anything is done with it: a list can be mostly holes
-      if (v.length > looks) throw new Error('That is too large to send.')
-      for (const x of v) look(x, depth + 1)
-    } else if (v && typeof v === 'object') {
-      // Only plain objects, which is all that JSON has. Anything else a page can send (a block
-      // of bytes, a map, a date) could be enormous in ways that are only found by unpacking it.
-      const kind = Object.getPrototypeOf(v)
-      if (kind !== Object.prototype && kind !== null) throw new Error('That cannot be sent.')
-      // One entry at a time, so the count applies as it goes
-      for (const k in v) {
-        if (!Object.hasOwn(v, k)) continue
-        letters += k.length
-        look((v as Record<string, unknown>)[k], depth + 1)
-      }
-    }
-    if (letters > max) throw new Error('That is too large to send.')
-  }
-  look(value, 0)
-  const numbered = new Map<Blob, number>()
-  const text = JSON.stringify(
-    value === undefined ? null : value,
-    files
-      ? (_key, v: unknown) => {
-          if (!(v instanceof Blob)) return v
-          if (!numbered.has(v)) numbered.set(v, files.push(v))
-          return fileMarker(numbered.get(v)!)
-        }
-      : undefined,
-  )
-  if (typeof text !== 'string') throw new Error('That cannot be sent.')
-  return text
-}
 
 export function Mount({
   artifactId,
@@ -130,9 +97,7 @@ export function Mount({
   told.current = onFault
   /** The version of the page whose agent this showing has told that its script failed: it is told once for a version. */
   const faulted = useRef<number | null>(null)
-  const state = useQuery(api.state.get, { artifactId })
-  const latest = useRef(state)
-  latest.current = state
+  const liveState = useLiveState(artifactId)
   const again = useCallback(() => setAttempt((n) => n + 1), [])
 
   // 1 and 2. a fresh mount for every showing, and its one ticket
@@ -176,6 +141,8 @@ export function Mount({
     let answered = ''
     let tokens = BURST
     let filled = Date.now()
+    let storeTokens = STORE_BURST
+    let storeFilled = Date.now()
     const timer = setTimeout(() => live && setPhase({ is: 'failed', why: 'The page did not load. Check the connection.' }), READY_MS)
     /** The framing again that a showing which ran out too soon after the last one is waiting for. */
     let later: ReturnType<typeof setTimeout> | undefined
@@ -240,6 +207,15 @@ export function Mount({
       tokens -= 1
       return true
     }
+    /** Whether the page may keep something now, or else how long until it may. */
+    const storeAllowed = (): number => {
+      const now = Date.now()
+      storeTokens = Math.min(STORE_BURST, storeTokens + (Math.max(0, now - storeFilled) / 1000) * STORE_PER_SECOND)
+      storeFilled = now
+      if (storeTokens < 1) return Math.ceil(((1 - storeTokens) / STORE_PER_SECOND) * 1000)
+      storeTokens -= 1
+      return 0
+    }
     const fromPage = async (from: MessagePort, message: PageToSite) => {
       if (!message || typeof message !== 'object') return
       if (message.type === 'it:lapsed') {
@@ -294,8 +270,15 @@ export function Mount({
       }
       if (message.type !== 'it:action' && message.type !== 'it:store') return
       const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 100) : ''
+      if (message.type === 'it:store') {
+        const wait = storeAllowed()
+        if (wait > 0) {
+          toPage(from, { type: 'it:result', requestId, ok: false, error: 'This page is storing too much at once. Try again in a moment.', retryAfterMs: wait })
+          return
+        }
+      }
       try {
-        if (!allowed()) throw new Error('This page is sending too much at once. Try again in a moment.')
+        if (message.type === 'it:action' && !allowed()) throw new Error('This page is sending too much at once. Try again in a moment.')
         if (message.type === 'it:action') {
           const e = message.envelope
           // The name of what a person types above a page is the site's own, and no page's to send under
@@ -320,20 +303,37 @@ export function Mount({
           const done = await submit(convex, user, artifactId, envelope, () => live && port.current === from, typeof was === 'function' ? was : undefined, files)
           toPage(from, { type: 'it:result', requestId, ok: true, actionId: done.actionId })
         } else {
-          // The same rule the backend keeps, kept here so that nothing long is sent only to be refused
-          if (!isStoreKey(message.key)) throw new Error('A store key is 1 to 64 letters, digits, dashes or underscores.')
-          const value = jsonText(message.value, LIMITS.storeValueBytes)
-          if (new TextEncoder().encode(value).length > LIMITS.storeValueBytes) throw new Error(`A stored value is at most ${LIMITS.storeValueBytes / 1024} KB.`)
-          await convex.mutation(api.state.storeSet, { artifactId, key: message.key, value })
-          toPage(from, { type: 'it:result', requestId, ok: true })
+          // The same rules the backend keeps, kept here so that nothing long is sent only to be refused.
+          // A page's script that takes the site for one taking a value at a time sends one by itself,
+          // as it is: it is written out here, as the site always wrote such a value out
+          const changes =
+            'changes' in message ? message.changes : 'key' in message ? [[message.key, jsonText(message.value, LIMITS.storeValueBytes)]] : undefined
+          if (!Array.isArray(changes) || changes.length === 0 || changes.length > LIMITS.storeKeysAtOnce)
+            throw new Error(`One write keeps 1 to ${LIMITS.storeKeysAtOnce} values.`)
+          const sent: { key: string; value: string }[] = []
+          let total = 0
+          for (const change of changes) {
+            const [key, value] = Array.isArray(change) ? change : []
+            if (!isStoreKey(key)) throw new Error('A store key is 1 to 64 letters, digits, dashes or underscores.')
+            if (typeof value !== 'string') throw new Error('That cannot be sent.')
+            // Its length in letters first: never more than its length in bytes, and known without reading it
+            const bytes = value.length > LIMITS.storeValueBytes ? value.length : new TextEncoder().encode(value).length
+            if (bytes > LIMITS.storeValueBytes) throw new Error(`A stored value is at most ${LIMITS.storeValueBytes / 1024} KB.`)
+            total += bytes
+            if (total > LIMITS.stateBytes) throw new Error(`A page's state is at most ${LIMITS.stateBytes / 1024} KB.`)
+            sent.push({ key, value })
+          }
+          const { revision } = await convex.mutation(api.state.store, { artifactId, changes: sent })
+          toPage(from, { type: 'it:result', requestId, ok: true, revision })
         }
       } catch (err) {
-        const said = refusal(err)
+        const said = refusal(err) as ReturnType<typeof refusal> & { retryAfterMs?: unknown }
         toPage(from, {
           type: 'it:result',
           requestId,
           ok: false,
           error: said.code === 'error' && err instanceof Error && !('data' in err) ? err.message : said.message,
+          ...(said.code === 'rate_limited' && typeof said.retryAfterMs === 'number' ? { retryAfterMs: said.retryAfterMs } : {}),
         })
       }
     }
@@ -365,9 +365,9 @@ export function Mount({
         channel.port1.onmessage = (m) => void fromPage(channel.port1, m.data as PageToSite)
         // Sent to whatever document the page has put in its frame. The channel is for this one
         // showing, and gives a document there nothing the page did not already have.
-        ;(e.source as Window).postMessage({ type: 'it:port' }, '*', [channel.port2])
-        const s = latest.current
-        if (s) toPage(channel.port1, { type: 'it:state', state: parseJson(s.json) ?? {}, revision: s.revision })
+        ;(e.source as Window).postMessage({ type: 'it:port', v: CHANNEL_VERSION }, '*', [channel.port2])
+        const whole = liveState.whole()
+        if (whole) toPage(channel.port1, whole)
       }
     }
     window.addEventListener('message', onMessage)
@@ -380,12 +380,10 @@ export function Mount({
       port.current?.close()
       port.current = null
     }
-  }, [convex, artifactId, mount, user, again])
+  }, [convex, artifactId, mount, user, again, liveState])
 
-  // State flows down: every change goes to whatever the frame is showing now
-  useEffect(() => {
-    if (state && port.current) port.current.postMessage({ type: 'it:state', state: parseJson(state.json) ?? {}, revision: state.revision } satisfies SiteToPage)
-  }, [state])
+  // State flows down: what changed goes to whatever the frame is showing now
+  useEffect(() => liveState.listen((message) => port.current?.postMessage(message)), [liveState])
 
   // A display nobody is standing at puts itself right: a failed showing is tried again, less and
   // less often, and at once when the connection or the tab comes back

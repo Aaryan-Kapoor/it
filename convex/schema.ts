@@ -305,8 +305,11 @@ export default defineSchema({
     .index('by_artifact_status', ['artifactId', 'status', 'n'])
     .index('by_status_created', ['status', 'createdAt']),
 
-  // A page's state, as JSON text. Text, because a page may use any keys it likes and the
-  // database's own objects may not.
+  // The agent's part of a page's state, as JSON text. Text, because a page may use any keys it
+  // likes and the database's own objects may not. What the page keeps for itself is in
+  // `stored`, one record for each value: here it is only in a state last written before that
+  // was so, under the key `_page`, until the state is next written. `revision` is the page's
+  // revision when the agent's part last changed.
   // `agentAt` is when the page's agent last changed the state, as opposed to the page itself:
   // it is how the site tells that an agent has answered what was done on the page
   states: defineTable({ artifactId: v.id('artifacts'), userId: v.id('users'), json: v.string(), revision: v.number(), agentAt: v.optional(v.number()) }).index(
@@ -324,7 +327,43 @@ export default defineSchema({
   // whoever only needs to know whether it has changed should not have to read it. With it,
   // when the page's agent last changed the state, which is nothing where it never did. A
   // record from before that was kept here does not say, and the state is read for it.
-  revisions: defineTable({ artifactId: v.id('artifacts'), revision: v.number(), agentAt: v.optional(v.number()) }).index('by_artifact', ['artifactId']),
+  //
+  // It also keeps count of what the page holds, so that a change to one value is made without
+  // reading the rest: the revision at which the agent's part last changed and how large that
+  // part is, how many values the page keeps for itself and how large they are together, how
+  // many names it took a value away from are still kept (`gone`), and the revision before which
+  // a display is sent the whole state again rather than what changed (`floor`). A record that
+  // does not say how many values the page keeps has none of these, and they are counted afresh.
+  revisions: defineTable({
+    artifactId: v.id('artifacts'),
+    revision: v.number(),
+    agentAt: v.optional(v.number()),
+    agentRevision: v.optional(v.number()),
+    agentBytes: v.optional(v.number()),
+    keys: v.optional(v.number()),
+    keptBytes: v.optional(v.number()),
+    gone: v.optional(v.number()),
+    floor: v.optional(v.number()),
+  }).index('by_artifact', ['artifactId']),
+
+  // What a page keeps for itself with It.store, one record for each name it keeps something
+  // under: a page that changes one value writes that value alone, and a display that shows the
+  // page is sent that value alone. A name the page took its value away from is kept a while
+  // with no value (`gone`), so that a display which had the value is told that it went.
+  // `revision` is the page's revision when the value was last set or taken away, and `bytes`
+  // is what the value comes to in the page's state as JSON, under its name.
+  stored: defineTable({
+    artifactId: v.id('artifacts'),
+    key: v.string(),
+    /** JSON text. Absent where the value was taken away. */
+    json: v.optional(v.string()),
+    gone: v.boolean(),
+    revision: v.number(),
+    bytes: v.number(),
+  })
+    .index('by_artifact_key', ['artifactId', 'key'])
+    .index('by_artifact_gone', ['artifactId', 'gone', 'revision'])
+    .index('by_artifact_revision', ['artifactId', 'revision']),
 
   // Something a person did on a page. Stored before anything tries to deliver it.
   actions: defineTable({

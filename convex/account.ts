@@ -14,6 +14,7 @@ import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
 import { endSession, pairedOf } from './sessions'
+import { wholeState } from './state'
 
 /** Starts an export: counts it against the limit, and answers with what there is to fetch. */
 export const exportStart = mutation({
@@ -64,10 +65,8 @@ export const exportPage = query({
   handler: async (ctx, { artifactId }) => {
     const { user } = await requireOwner(ctx)
     const a = await ownArtifact(ctx, user._id, artifactId)
-    const state = await ctx.db
-      .query('states')
-      .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
-      .unique()
+    // The whole state, with what the page kept for itself under `_page`
+    const { state } = await wholeState(ctx, a._id)
     // Every version that was published and is still kept: there are never more than a handful.
     // Attempts that were never finished are not part of the page and are left out.
     const versions = []
@@ -88,7 +87,7 @@ export const exportPage = query({
       currentVersion: a.currentVersion ?? null,
       agent: a.agent ?? null,
       /** JSON text. */
-      state: state?.json ?? '{}',
+      state: JSON.stringify(state),
       versions: versions.map((x) => ({ n: x.n, status: x.status, bytes: x.bytes, files: x.files })),
     }
   },
